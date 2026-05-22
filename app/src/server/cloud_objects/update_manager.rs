@@ -1,16 +1,16 @@
-use std::collections::{HashMap, HashSet};
-use std::future::Future;
-use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
-use std::time::Duration;
-
 use chrono::{DateTime, Utc};
 use futures::channel::oneshot::{self, Receiver};
 use futures::stream::AbortHandle;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
+use std::time::Duration;
 use warp_core::features::FeatureFlag;
+use warp_core::report_error;
 use warp_graphql::mcp_gallery_template::MCPGalleryTemplate;
 use warp_graphql::object_permissions::AccessLevel;
 use warp_graphql::scalars::time::ServerTimestamp;
@@ -26,6 +26,7 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::scheduled::{
     CloudScheduledAmbientAgentModel, ScheduledAmbientAgent,
 };
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -127,10 +128,19 @@ pub struct ObjectOperationResult {
 
 #[derive(Debug)]
 pub enum UpdateManagerEvent {
-    ObjectOperationComplete { result: ObjectOperationResult },
-    CloudPreferencesUpdated { updated: Vec<Preference> },
-    MCPGalleryUpdated { templates: Vec<MCPGalleryTemplate> },
-    AmbientTaskUpdated { timestamp: DateTime<Utc> },
+    ObjectOperationComplete {
+        result: ObjectOperationResult,
+    },
+    CloudPreferencesUpdated {
+        updated: Vec<Preference>,
+    },
+    MCPGalleryUpdated {
+        templates: Vec<MCPGalleryTemplate>,
+    },
+    AmbientTaskUpdated {
+        task_id: AmbientAgentTaskId,
+        timestamp: DateTime<Utc>,
+    },
 }
 
 /// An enum for choosing the behavior of the fetch_single_cloud_object function.
@@ -1110,11 +1120,20 @@ impl UpdateManager {
 
     fn handle_ambient_task_changed(
         &mut self,
-        _task_id: String,
+        task_id: String,
         timestamp: DateTime<Utc>,
         ctx: &mut ModelContext<UpdateManager>,
     ) {
-        ctx.emit(UpdateManagerEvent::AmbientTaskUpdated { timestamp });
+        let task_id = match task_id.parse::<AmbientAgentTaskId>() {
+            Ok(task_id) => task_id,
+            Err(err) => {
+                report_error!(anyhow::Error::from(err).context(format!(
+                    "AmbientTaskUpdated has unparseable task_id: {task_id}"
+                )));
+                return;
+            }
+        };
+        ctx.emit(UpdateManagerEvent::AmbientTaskUpdated { task_id, timestamp });
     }
 
     /// Fetches environment "last used" timestamps from the server and merges them

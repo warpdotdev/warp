@@ -105,9 +105,9 @@ fn test_on_ambient_agent_execution_ended_enables_followup_input_for_editable_non
 
         terminal.update(&mut app, |view, ctx| {
             let mut model = view.model.lock();
-            model.set_shared_session_source_type(SessionSourceType::AmbientAgent {
-                task_id: Some(task_id.to_string()),
-            });
+            model.set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                task_id.to_string(),
+            )));
             model.set_shared_session_status(SharedSessionStatus::FinishedViewer);
             drop(model);
 
@@ -490,7 +490,7 @@ fn test_on_session_share_ended_does_not_insert_tombstone_for_ambient_session_und
         terminal.update(&mut app, |view, ctx| {
             view.model
                 .lock()
-                .set_shared_session_source_type(SessionSourceType::AmbientAgent { task_id: None });
+                .set_shared_session_source(SharedSessionSource::ambient_agent(None));
             view.on_session_share_ended(ctx);
         });
 
@@ -626,9 +626,9 @@ fn configure_ambient_details_panel_test(
     terminal.update(app, |view, _| {
         view.model
             .lock()
-            .set_shared_session_source_type(SessionSourceType::AmbientAgent {
-                task_id: Some(task_id.to_string()),
-            });
+            .set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                task_id.to_string(),
+            )));
     });
     task_id
 }
@@ -1088,9 +1088,9 @@ fn test_on_session_share_ended_enables_followup_input_without_tombstone_for_owne
         terminal.update(&mut app, |view, ctx| {
             view.model
                 .lock()
-                .set_shared_session_source_type(SessionSourceType::AmbientAgent {
-                    task_id: Some(task_id.to_string()),
-                });
+                .set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                    task_id.to_string(),
+                )));
             view.on_session_share_ended(ctx);
         });
 
@@ -1142,9 +1142,9 @@ fn test_on_session_share_ended_hides_input_for_no_cta_tombstone() {
             });
             view.model
                 .lock()
-                .set_shared_session_source_type(SessionSourceType::AmbientAgent {
-                    task_id: Some(task_id.to_string()),
-                });
+                .set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                    task_id.to_string(),
+                )));
 
             view.on_session_share_ended(ctx);
         });
@@ -1194,9 +1194,9 @@ fn test_on_session_share_ended_does_not_insert_tombstone_for_owned_ambient_sessi
         terminal.update(&mut app, |view, ctx| {
             view.model
                 .lock()
-                .set_shared_session_source_type(SessionSourceType::AmbientAgent {
-                    task_id: Some(task_id.to_string()),
-                });
+                .set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                    task_id.to_string(),
+                )));
             view.on_session_share_ended(ctx);
         });
 
@@ -1245,9 +1245,9 @@ fn test_on_session_share_ended_clears_frozen_followup_input_for_owned_ambient_se
             });
             view.model
                 .lock()
-                .set_shared_session_source_type(SessionSourceType::AmbientAgent {
-                    task_id: Some(task_id.to_string()),
-                });
+                .set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                    task_id.to_string(),
+                )));
             view.on_session_share_ended(ctx);
         });
 
@@ -1280,7 +1280,7 @@ fn test_on_session_share_ended_does_not_insert_tombstone_for_non_ambient_session
         terminal.update(&mut app, |view, ctx| {
             view.model
                 .lock()
-                .set_shared_session_source_type(SessionSourceType::default());
+                .set_shared_session_source(SharedSessionSource::user(None));
             view.on_session_share_ended(ctx);
         });
 
@@ -1312,9 +1312,9 @@ fn test_on_ambient_agent_execution_ended_inserts_tombstone_when_handoff_enabled(
         terminal.update(&mut app, |view, ctx| {
             view.model
                 .lock()
-                .set_shared_session_source_type(SessionSourceType::AmbientAgent {
-                    task_id: Some(task_id.to_string()),
-                });
+                .set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                    task_id.to_string(),
+                )));
             view.on_ambient_agent_execution_ended(ctx);
             view.on_ambient_agent_execution_ended(ctx);
         });
@@ -1346,9 +1346,9 @@ fn test_on_ambient_agent_execution_ended_enables_followup_for_owned_task_without
 
         terminal.update(&mut app, |view, ctx| {
             let mut model = view.model.lock();
-            model.set_shared_session_source_type(SessionSourceType::AmbientAgent {
-                task_id: Some(task_id.to_string()),
-            });
+            model.set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                task_id.to_string(),
+            )));
             model.set_shared_session_status(SharedSessionStatus::NotShared);
             drop(model);
 
@@ -1396,9 +1396,9 @@ fn test_on_ambient_agent_execution_ended_enables_followup_input_without_tombston
 
         terminal.update(&mut app, |view, ctx| {
             let mut model = view.model.lock();
-            model.set_shared_session_source_type(SessionSourceType::AmbientAgent {
-                task_id: Some(task_id.to_string()),
-            });
+            model.set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                task_id.to_string(),
+            )));
             model.set_shared_session_status(SharedSessionStatus::NotShared);
             drop(model);
 
@@ -1439,9 +1439,9 @@ fn test_restored_owned_tombstone_hides_input_until_continue() {
 
         terminal.update(&mut app, |view, ctx| {
             let mut model = view.model.lock();
-            model.set_shared_session_source_type(SessionSourceType::AmbientAgent {
-                task_id: Some(task_id.to_string()),
-            });
+            model.set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                task_id.to_string(),
+            )));
             model.set_shared_session_status(SharedSessionStatus::NotShared);
             drop(model);
 
@@ -1504,9 +1504,9 @@ fn test_deep_linked_ambient_continuation_refreshes_when_task_data_arrives() {
             // conversation metadata, so it first renders the conservative
             // ended-session UI.
             let mut model = view.model.lock();
-            model.set_shared_session_source_type(SessionSourceType::AmbientAgent {
-                task_id: Some(task_id.to_string()),
-            });
+            model.set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                task_id.to_string(),
+            )));
             model.set_shared_session_status(SharedSessionStatus::FinishedViewer);
             drop(model);
 
@@ -1581,9 +1581,9 @@ fn test_on_ambient_agent_execution_ended_keeps_live_owned_session_on_session_sha
 
         terminal.update(&mut app, |view, ctx| {
             let mut model = view.model.lock();
-            model.set_shared_session_source_type(SessionSourceType::AmbientAgent {
-                task_id: Some(task_id.to_string()),
-            });
+            model.set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                task_id.to_string(),
+            )));
             model.set_shared_session_status(SharedSessionStatus::executor());
             drop(model);
             view.on_ambient_agent_execution_ended(ctx);
@@ -1615,9 +1615,9 @@ fn test_try_submit_pending_cloud_followup_allows_repeat_submission_for_owned_tas
 
         terminal.update(&mut app, |view, ctx| {
             let mut model = view.model.lock();
-            model.set_shared_session_source_type(SessionSourceType::AmbientAgent {
-                task_id: Some(task_id.to_string()),
-            });
+            model.set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                task_id.to_string(),
+            )));
             model.set_shared_session_status(SharedSessionStatus::executor());
             drop(model);
 
@@ -1772,9 +1772,9 @@ fn test_non_owned_tombstone_is_removed_for_followup_and_reinserted_after_complet
 
         terminal.update(&mut app, |view, ctx| {
             let mut model = view.model.lock();
-            model.set_shared_session_source_type(SessionSourceType::AmbientAgent {
-                task_id: Some(task_id.to_string()),
-            });
+            model.set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                task_id.to_string(),
+            )));
             model.set_shared_session_status(SharedSessionStatus::FinishedViewer);
             drop(model);
 
@@ -1875,9 +1875,9 @@ fn test_on_ambient_agent_execution_ended_refreshes_open_details_panel_to_termina
 
         terminal.update(&mut app, |view, ctx| {
             let mut model = view.model.lock();
-            model.set_shared_session_source_type(SessionSourceType::AmbientAgent {
-                task_id: Some(task_id.to_string()),
-            });
+            model.set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                task_id.to_string(),
+            )));
             model.set_shared_session_status(SharedSessionStatus::executor());
             drop(model);
 

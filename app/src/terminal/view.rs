@@ -67,6 +67,7 @@ pub use action::{AgentOnboardingVersion, OnboardingIntention, OnboardingVersion,
 use ai::api_keys::{ApiKeyManager, AwsCredentialsState};
 use ai::index::full_source_code_embedding::manager::{BuildSource, CodebaseIndexManager};
 use async_channel::{Receiver, Sender};
+use base64::Engine as _;
 use block_banner::{render_warpification_banner, WarpificationMode, WarpifyBannerState};
 pub use block_banner::{WithinBlockBanner, BLOCK_BANNER_HEIGHT};
 use block_onboarding::onboarding_agentic_suggestions_block::{
@@ -113,7 +114,7 @@ use session_sharing_protocol::common::{
     RoleRequestResponse, ServerConversationToken as SessionSharingServerConversationToken,
     WindowSize as SessionSharingWindowSize,
 };
-use session_sharing_protocol::sharer::{RoleUpdateReason, SessionEndedReason, SessionSourceType};
+use session_sharing_protocol::sharer::{RoleUpdateReason, SessionEndedReason};
 use settings::{Setting, ToggleableSetting};
 use shared_session::cloud_conversation_continuation::CloudConversationContinuationUiState;
 use shared_session::{SharedSessionAdapter, Viewer};
@@ -255,6 +256,7 @@ use crate::ai::blocklist::telemetry_banner::{should_collect_ai_ugc_telemetry, Te
 use crate::ai::blocklist::usage::conversation_usage_view::{
     ConversationUsageInfo, ConversationUsageView, TimingInfo,
 };
+use crate::ai::blocklist::PendingAttachment;
 use crate::ai::blocklist::{
     ai_brand_color, block_context_from_terminal_model,
     get_ai_block_overflow_menu_element_position_id, get_attached_blocks_chip_element_position_id,
@@ -262,9 +264,9 @@ use crate::ai::blocklist::{
     BlocklistAIContextModel, BlocklistAIController, BlocklistAIControllerEvent,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel,
     ClientIdentifiers, ConversationStatusUpdate, InputConfig, InputType,
-    LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent,
-    MaaPassiveSuggestionsModel, PassiveSuggestionsModels, PendingQueryState,
-    RequestFileEditsFormatKind, ShellCommandExecutor, ShellCommandExecutorEvent,
+    InputTypeAutoDetectionSource, LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel,
+    MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel, PassiveSuggestionsModels,
+    PendingQueryState, RequestFileEditsFormatKind, ShellCommandExecutor, ShellCommandExecutorEvent,
     SlashCommandRequest, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
     ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, PRE_REWIND_PREFIX,
 };
@@ -460,7 +462,8 @@ use crate::terminal::shared_session::role_change_modal::{
     RoleChangeCloseSource, RoleChangeOpenSource,
 };
 use crate::terminal::shared_session::{
-    SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionStatus,
+    SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
+    SharedSessionStatus,
 };
 use crate::terminal::ssh::ssh_detection::SshInteractiveSessionDetected;
 use crate::terminal::view::block_onboarding::onboarding_prompt_block::OnboardingPromptBlock;
@@ -1741,7 +1744,7 @@ pub enum Event {
     },
     StartSharingCurrentSession {
         scrollback_type: SharedSessionScrollbackType,
-        source_type: SessionSourceType,
+        source: SharedSessionSource,
     },
     EstablishedSharedSession {
         session_id: session_sharing_protocol::common::SessionId,
@@ -2897,6 +2900,23 @@ pub struct BlockSelectionDetails {
     is_shift_down: bool,
 }
 
+/// Why `apply_block_metadata_update` is being invoked. The two sources have
+/// different cardinalities — precmd fires exactly once per block, whereas OSC 7
+/// can fire many times mid-block from chatty prompts. Once-per-block work
+/// (git-repo detection on unchanged CWDs, `block_completed_callbacks` drain)
+/// must be gated on this distinction.
+#[derive(Copy, Clone, Debug)]
+enum BlockMetadataUpdateSource {
+    /// `Event::BlockMetadataReceived` — the shell's precmd hook fired between
+    /// blocks. Run all once-per-block work.
+    Precmd,
+    /// `Event::BlockWorkingDirectoryUpdated` — the running command emitted an
+    /// OSC 7 sequence (`\e]7;file://host/path\a`). Skip repo detection unless
+    /// the CWD actually changed, and never run block-completion callbacks
+    /// (the block hasn't completed).
+    Osc7,
+}
+
 impl TerminalView {
     /// Returns the path to the current repository, if any.
     pub fn current_repo_path(&self) -> Option<&LocalOrRemotePath> {
@@ -3405,7 +3425,7 @@ impl TerminalView {
             if !model.is_autodetection_enabled_for_current_context(ctx) {
                 if let Some(input_config) = initial_input_config {
                     let is_input_buffer_empty = true;
-                    model.set_input_config(input_config, is_input_buffer_empty, ctx);
+                    model.set_input_config(input_config, is_input_buffer_empty, None, ctx);
                 }
             }
             model
@@ -5368,7 +5388,8 @@ impl TerminalView {
             | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. }
             | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
             | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
-            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. } => None,
+            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
+            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => None,
         }
     }
 
@@ -5847,7 +5868,8 @@ impl TerminalView {
             | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. }
             | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
             | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
-            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. } => {}
+            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
+            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => {}
         }
         ctx.notify();
     }
@@ -6044,7 +6066,11 @@ impl TerminalView {
 
             // Set input config to AI mode, preserving user's autodetect preference
             self.ai_input_model.update(ctx, |input_model, ctx| {
-                input_model.set_input_type(InputType::AI, ctx);
+                input_model.set_input_type(
+                    InputType::AI,
+                    Some(InputTypeAutoDetectionSource::ContinueConversation),
+                    ctx,
+                );
             });
         }
 
@@ -6370,7 +6396,11 @@ impl TerminalView {
         self.input.update(ctx, |input, ctx| {
             // Remove the @-trigger text (e.g. "@uncom") that was used to open the context menu.
             input.replace_at_symbol_with_text(&attachment_reference, ctx);
-            input.ensure_agent_mode_for_ai_features(true, ctx);
+            input.ensure_agent_mode_for_ai_features(
+                true,
+                Some(InputTypeAutoDetectionSource::AttachmentForcedAi),
+                ctx,
+            );
         });
 
         // Load the diff data asynchronously and complete the attachment when done
@@ -7101,6 +7131,16 @@ impl TerminalView {
             .as_ref(app)
             .agent_view_state()
             .active_conversation_id()
+    }
+
+    pub fn active_conversation_task_id(&self, app: &AppContext) -> Option<AmbientAgentTaskId> {
+        let history = BlocklistAIHistoryModel::as_ref(app);
+        let conversation_id = self.active_conversation_id(app).or_else(|| {
+            self.ai_context_model
+                .as_ref(app)
+                .selected_conversation_id(app)
+        })?;
+        history.conversation(&conversation_id)?.task_id()
     }
 
     pub fn ambient_agent_view_model(
@@ -10809,6 +10849,262 @@ impl TerminalView {
         });
     }
 
+    /// Apply a block metadata update from either the precmd hook
+    /// ([`Event::BlockMetadataReceived`]) or an OSC 7 sequence emitted
+    /// mid-block ([`Event::BlockWorkingDirectoryUpdated`]). The `source`
+    /// controls work that's safe to do once per block but wrong to do
+    /// repeatedly mid-block — see [`BlockMetadataUpdateSource`].
+    fn apply_block_metadata_update(
+        &mut self,
+        block_metadata: &BlockMetadata,
+        is_after_in_band_command: bool,
+        is_done_bootstrapping: bool,
+        source: BlockMetadataUpdateSource,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // In-band commands don't change the CWD, git state, or session
+        // metadata. Skip the expensive processing (git repo detection,
+        // directory indexing, re-renders) to avoid an infinite loop where
+        // a re-render triggers completions which fire another in-band
+        // command. See also the complementary guard in
+        // Input::set_active_block_metadata.
+        if is_after_in_band_command {
+            self.active_block_metadata = Some(block_metadata.clone());
+            self.input.update(ctx, |view, ctx| {
+                view.set_active_block_metadata(
+                    block_metadata.clone(),
+                    true, // is_after_in_band_command
+                    ctx,
+                );
+            });
+            return;
+        }
+
+        if let Some(prev_block_metadata) = self.active_block_metadata.take() {
+            // Only send event to save app state when the block is post bootstrap
+            // and working directory has changed.
+            if prev_block_metadata.current_working_directory()
+                != block_metadata.current_working_directory()
+                && is_done_bootstrapping
+            {
+                ctx.emit(Event::AppStateChanged);
+            }
+
+            // Update the shell launch data for the active session.
+            if prev_block_metadata.session_id() != block_metadata.session_id()
+                && is_done_bootstrapping
+            {
+                let shell_launch_data = self.shell_launch_data_if_local(ctx);
+                self.on_active_shell_launch_data_updated(shell_launch_data, ctx);
+            }
+
+            // Check if the block is done bootstrapping and the directory is set.
+            if let Some(active_directory) = block_metadata.current_working_directory() {
+                // See `BlockMetadataUpdateSource` for why OSC 7 needs the
+                // CWD-changed gate; precmd keeps its once-per-block semantics.
+                let should_run_detection = match source {
+                    BlockMetadataUpdateSource::Precmd => true,
+                    BlockMetadataUpdateSource::Osc7 => {
+                        prev_block_metadata.current_working_directory()
+                            != block_metadata.current_working_directory()
+                    }
+                };
+                if is_done_bootstrapping && should_run_detection {
+                    // Derive locality directly from the incoming block's
+                    // session_id. We cannot use `active_session_is_local(ctx)`
+                    // here because `active_block_metadata` was just consumed
+                    // via `take()` above, so it would always return `None`
+                    // and misclassify every local session as Remote.
+                    //
+                    // `session_is_local` keeps the shared-session viewer /
+                    // conversation-transcript guard intact.
+                    let session_id = block_metadata.session_id();
+                    let session_type = session_id.map(|sid| {
+                        if self.session_is_local(sid, ctx) {
+                            RepoDetectionSessionType::Local
+                        } else {
+                            RepoDetectionSessionType::Remote { session_id: sid }
+                        }
+                    });
+                    if let Some(session_type) = session_type {
+                        let is_local = matches!(session_type, RepoDetectionSessionType::Local);
+
+                        // For local sessions, convert the shell-native CWD
+                        // (e.g. "/c/Users/..." for Git Bash/MSYS2) to a
+                        // Windows-native path before repo detection.
+                        let directory_for_detection = if is_local {
+                            block_metadata
+                                .session_id()
+                                .and_then(|sid| self.sessions.as_ref(ctx).get(sid))
+                                .and_then(|session| {
+                                    session.launch_data().and_then(|data| {
+                                        data.maybe_convert_absolute_path(active_directory)
+                                    })
+                                })
+                                .map(|path| path.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| active_directory.to_string())
+                        } else {
+                            active_directory.to_string()
+                        };
+
+                        let fut = detect_possible_git_repo(
+                            session_type,
+                            &directory_for_detection,
+                            RepoDetectionSource::TerminalNavigation,
+                            ctx,
+                        );
+
+                        ctx.spawn(fut, move |me, repo_path_opt, ctx| {
+                            let old_repo_path = me.current_repo_path.clone();
+                            me.current_repo_path = repo_path_opt.clone();
+
+                            if old_repo_path != me.current_repo_path {
+                                ctx.emit(Event::Pane(PaneEvent::RepoChanged));
+                            }
+
+                            // `block_completed_callbacks` are scheduled via
+                            // `on_next_block_completed` and expect the block
+                            // to have finished. OSC 7 fires mid-block, so
+                            // draining them here would run callbacks like
+                            // `maybe_set_pending_repo_init_path`'s project
+                            // init before the actual command (e.g. `git
+                            // clone`) finishes.
+                            if matches!(source, BlockMetadataUpdateSource::Precmd) {
+                                let callbacks =
+                                    me.block_completed_callbacks.drain(..).collect_vec();
+                                for callback in callbacks {
+                                    callback(me, ctx);
+                                }
+                            }
+
+                            match &repo_path_opt {
+                                Some(LocalOrRemotePath::Remote(remote_path)) => {
+                                    #[cfg(not(target_family = "wasm"))]
+                                    DetectedRepositories::handle(ctx).update(
+                                        ctx,
+                                        |repos, _| {
+                                            repos.register_remote_repo_root(remote_path.clone());
+                                        },
+                                    );
+
+                                    // Remote sessions can only materialize their working
+                                    // directory after repo detection has resolved the host.
+                                    // Re-run app-state propagation now that the remote path
+                                    // is known so the active session's working directory catches up.
+                                    ctx.emit(Event::AppStateChanged);
+
+                                    if FeatureFlag::AIContextMenuEnabled.is_enabled() {
+                                        me.input.update(ctx, |input, ctx| {
+                                            input
+                                                .check_and_update_ai_context_menu_disabled_state(
+                                                    ctx,
+                                                );
+                                        });
+                                    }
+                                    ctx.emit(Event::Pane(PaneEvent::RemoteRepoNavigated {
+                                        remote_path: remote_path.clone(),
+                                    }));
+                                }
+                                Some(LocalOrRemotePath::Local(repo_path)) => {
+                                    #[cfg(feature = "local_fs")]
+                                    {
+                                        let Some(active_directory) =
+                                            me.active_session_path_if_local(ctx)
+                                        else {
+                                            me.clear_git_repo_status(ctx);
+                                            return;
+                                        };
+
+                                        let Ok(active_directory) =
+                                            repo_metadata::CanonicalizedPath::try_from(
+                                                active_directory,
+                                            )
+                                        else {
+                                            return;
+                                        };
+
+                                        let is_ancestor = active_directory
+                                            .as_path_buf()
+                                            .ancestors()
+                                            .any(|ancestor| ancestor == repo_path.as_path());
+                                        if !is_ancestor {
+                                            return;
+                                        }
+
+                                        PersistedWorkspace::handle(ctx).update(
+                                            ctx,
+                                            |manager, _| {
+                                                manager.navigated_to_path(
+                                                    active_directory.as_path_buf(),
+                                                );
+                                            },
+                                        );
+
+                                        if old_repo_path
+                                            .as_ref()
+                                            .and_then(|p| p.to_local_path())
+                                            != Some(repo_path.as_path())
+                                        {
+                                            me.git_repo_status = None;
+                                            me.update_git_status_subscription(ctx);
+                                        }
+
+                                        me.input.update(ctx, |input, ctx| {
+                                            input.update_repo_path(
+                                                Some(repo_path.clone()),
+                                                ctx,
+                                            );
+                                        });
+
+                                        if FeatureFlag::AIContextMenuEnabled.is_enabled() {
+                                            me.input.update(ctx, |input, ctx| {
+                                                input
+                                                    .check_and_update_ai_context_menu_disabled_state(
+                                                        ctx,
+                                                    );
+                                            });
+                                        }
+
+                                        me.start_lsp_server_in_active_pwd(ctx);
+
+                                        me.update_repo_banner_state(repo_path.clone(), ctx);
+                                    }
+                                    #[cfg(not(feature = "local_fs"))]
+                                    let _ = repo_path;
+                                }
+                                None => {
+                                    #[cfg(feature = "local_fs")]
+                                    me.clear_git_repo_status(ctx);
+                                    ctx.notify();
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+        }
+
+        self.active_block_metadata = Some(block_metadata.clone());
+
+        if let Some(session) = block_metadata
+            .session_id()
+            .and_then(|id| self.sessions.as_ref(ctx).get(id))
+        {
+            let shell_host = ShellHost::from_session(session.as_ref());
+            self.model
+                .lock()
+                .block_list_mut()
+                .set_active_shell_host(shell_host);
+        }
+
+        self.input.update(ctx, |view, ctx| {
+            view.set_active_block_metadata(block_metadata.clone(), is_after_in_band_command, ctx);
+            // Now that we've received the metadata for the active block, redraw the
+            // prompt area so it's up to date.
+            ctx.notify();
+        });
+    }
+
     fn handle_terminal_event(&mut self, event: &ModelEvent, ctx: &mut ViewContext<Self>) {
         match event {
             ModelEvent::TerminalClear => {
@@ -11595,267 +11891,43 @@ impl TerminalView {
                 self.handle_control_master_error(ctx);
             }
             ModelEvent::BlockMetadataReceived(block_metadata_received_event) => {
-                let block_metadata = &block_metadata_received_event.block_metadata;
-
-                // In-band commands don't change the CWD, git state, or session
-                // metadata. Skip the expensive processing (git repo detection,
-                // directory indexing, re-renders) to avoid an infinite loop where
-                // a re-render triggers completions which fire another in-band
-                // command. See also the complementary guard in
-                // Input::set_active_block_metadata.
-                if block_metadata_received_event.is_after_in_band_command {
-                    self.active_block_metadata = Some(block_metadata.clone());
-                    self.input.update(ctx, |view, ctx| {
-                        view.set_active_block_metadata(
-                            block_metadata.clone(),
-                            true, // is_after_in_band_command
-                            ctx,
-                        );
-                    });
-                    return;
-                }
-
-                if let Some(prev_block_metadata) = self.active_block_metadata.take() {
-                    // Only send event to save app state when the block is post bootstrap
-                    // and working directory has changed.
-                    if prev_block_metadata.current_working_directory()
-                        != block_metadata.current_working_directory()
-                        && block_metadata_received_event.is_done_bootstrapping
-                    {
-                        ctx.emit(Event::AppStateChanged);
-                    }
-
-                    // Update the shell launch data for the active session.
-                    if prev_block_metadata.session_id() != block_metadata.session_id()
-                        && block_metadata_received_event.is_done_bootstrapping
-                    {
-                        let shell_launch_data = self.shell_launch_data_if_local(ctx);
-                        self.on_active_shell_launch_data_updated(shell_launch_data, ctx);
-                    }
-
-                    // Check if the block is done bootstrapping and the directory is set.
-                    if let Some(active_directory) = block_metadata_received_event
-                        .block_metadata
-                        .current_working_directory()
-                    {
-                        if block_metadata_received_event.is_done_bootstrapping {
-                            // Derive locality directly from the incoming block's
-                            // session_id. We cannot use `active_session_is_local(ctx)`
-                            // here because `active_block_metadata` was just consumed
-                            // via `take()` above, so it would always return `None`
-                            // and misclassify every local session as Remote.
-                            //
-                            // `session_is_local` keeps the shared-session viewer /
-                            // conversation-transcript guard intact.
-                            let session_id = block_metadata.session_id();
-                            let session_type = session_id.map(|sid| {
-                                if self.session_is_local(sid, ctx) {
-                                    RepoDetectionSessionType::Local
-                                } else {
-                                    RepoDetectionSessionType::Remote { session_id: sid }
-                                }
-                            });
-                            let Some(session_type) = session_type else {
-                                // Skip detection entirely when session type can't be determined.
-                                self.active_block_metadata = Some(block_metadata.clone());
-                                self.input.update(ctx, |view, ctx| {
-                                    view.set_active_block_metadata(
-                                        block_metadata.clone(),
-                                        block_metadata_received_event.is_after_in_band_command,
-                                        ctx,
-                                    );
-                                    ctx.notify();
-                                });
-                                return;
-                            };
-                            let is_local = matches!(session_type, RepoDetectionSessionType::Local);
-
-                            // For local sessions, convert the shell-native CWD
-                            // (e.g. "/c/Users/..." for Git Bash/MSYS2) to a
-                            // Windows-native path before repo detection.
-                            let directory_for_detection = if is_local {
-                                block_metadata_received_event
-                                    .block_metadata
-                                    .session_id()
-                                    .and_then(|sid| self.sessions.as_ref(ctx).get(sid))
-                                    .and_then(|session| {
-                                        session.launch_data().and_then(|data| {
-                                            data.maybe_convert_absolute_path(active_directory)
-                                        })
-                                    })
-                                    .map(|path| path.to_string_lossy().into_owned())
-                                    .unwrap_or_else(|| active_directory.to_string())
-                            } else {
-                                active_directory.to_string()
-                            };
-
-                            let fut = detect_possible_git_repo(
-                                session_type,
-                                &directory_for_detection,
-                                RepoDetectionSource::TerminalNavigation,
-                                ctx,
-                            );
-
-                            ctx.spawn(fut, move |me, repo_path_opt, ctx| {
-                                let old_repo_path = me.current_repo_path.clone();
-                                me.current_repo_path = repo_path_opt.clone();
-
-                                if old_repo_path != me.current_repo_path {
-                                    ctx.emit(Event::Pane(PaneEvent::RepoChanged));
-                                }
-
-                                let callbacks = me.block_completed_callbacks.drain(..).collect_vec();
-                                for callback in callbacks {
-                                    callback(me, ctx);
-                                }
-
-                                match &repo_path_opt {
-                                    Some(LocalOrRemotePath::Remote(remote_path)) => {
-                                        #[cfg(not(target_family = "wasm"))]
-                                        DetectedRepositories::handle(ctx).update(
-                                            ctx,
-                                            |repos, _| {
-                                                repos.register_remote_repo_root(
-                                                    remote_path.clone(),
-                                                );
-                                            },
-                                        );
-
-                                        // Force the workspace to re-evaluate
-                                        // ActiveSession::working_directory. The
-                                        // AppStateChanged at line 11671 already ran
-                                        // update_active_session once, but for remote
-                                        // sessions pwd_as_local_or_remote() may have
-                                        // returned None at that point because host_id
-                                        // wasn't set yet. Now that remote repo
-                                        // detection succeeded we know host_id is
-                                        // available, so a second pass populates
-                                        // working_directory correctly.
-                                        // Local sessions don't need this because
-                                        // pwd_as_local_or_remote always succeeds for
-                                        // local paths (no host_id dependency).
-                                        ctx.emit(Event::AppStateChanged);
-
-                                        if FeatureFlag::AIContextMenuEnabled.is_enabled() {
-                                            me.input.update(ctx, |input, ctx| {
-                                                input
-                                                    .check_and_update_ai_context_menu_disabled_state(
-                                                        ctx,
-                                                    );
-                                            });
-                                        }
-
-                                        ctx.emit(Event::Pane(PaneEvent::RemoteRepoNavigated {
-                                            remote_path: remote_path.clone(),
-                                        }));
-                                    }
-                                    Some(LocalOrRemotePath::Local(repo_path)) => {
-                                        #[cfg(feature = "local_fs")]
-                                        {
-                                            let Some(active_directory) =
-                                                me.active_session_path_if_local(ctx)
-                                            else {
-                                                me.clear_git_repo_status(ctx);
-                                                return;
-                                            };
-
-                                            let Ok(active_directory) =
-                                                repo_metadata::CanonicalizedPath::try_from(
-                                                    active_directory,
-                                                )
-                                            else {
-                                                return;
-                                            };
-
-                                            let is_ancestor = active_directory
-                                                .as_path_buf()
-                                                .ancestors()
-                                                .any(|ancestor| {
-                                                    ancestor == repo_path.as_path()
-                                                });
-                                            if !is_ancestor {
-                                                return;
-                                            }
-
-                                            PersistedWorkspace::handle(ctx).update(
-                                                ctx,
-                                                |manager, _| {
-                                                    manager.navigated_to_path(
-                                                        active_directory.as_path_buf(),
-                                                    );
-                                                },
-                                            );
-
-                                            if old_repo_path
-                                                .as_ref()
-                                                .and_then(|p| p.to_local_path())
-                                                != Some(repo_path.as_path())
-                                            {
-                                                me.git_repo_status = None;
-                                                me.update_git_status_subscription(ctx);
-                                            }
-
-                                            me.input.update(ctx, |input, ctx| {
-                                                input.update_repo_path(
-                                                    Some(repo_path.clone()),
-                                                    ctx,
-                                                );
-                                            });
-
-                                            if FeatureFlag::AIContextMenuEnabled.is_enabled() {
-                                                me.input.update(ctx, |input, ctx| {
-                                                    input
-                                                        .check_and_update_ai_context_menu_disabled_state(
-                                                            ctx,
-                                                        );
-                                                });
-                                            }
-
-                                            me.start_lsp_server_in_active_pwd(ctx);
-
-                                            me.update_repo_banner_state(
-                                                repo_path.clone(),
-                                                ctx,
-                                            );
-                                        }
-                                        #[cfg(not(feature = "local_fs"))]
-                                        let _ = repo_path;
-                                    }
-                                    None => {
-                                        #[cfg(feature = "local_fs")]
-                                        me.clear_git_repo_status(ctx);
-                                        ctx.notify();
-                                    }
-                                }
-                            });
-                        }
-                    }
-                }
-
-                self.active_block_metadata = Some(block_metadata.clone());
-
-                if let Some(session) = block_metadata
-                    .session_id()
-                    .and_then(|id| self.sessions.as_ref(ctx).get(id))
-                {
-                    let shell_host = ShellHost::from_session(session.as_ref());
-                    self.model
-                        .lock()
-                        .block_list_mut()
-                        .set_active_shell_host(shell_host);
-                }
-
-                self.input.update(ctx, |view, ctx| {
-                    view.set_active_block_metadata(
-                        block_metadata.clone(),
-                        block_metadata_received_event.is_after_in_band_command,
-                        ctx,
-                    );
-                    // Now that we've received the metadata for the active block, redraw the
-                    // prompt area so it's up to date.
-                    ctx.notify();
-                });
+                self.apply_block_metadata_update(
+                    &block_metadata_received_event.block_metadata,
+                    block_metadata_received_event.is_after_in_band_command,
+                    block_metadata_received_event.is_done_bootstrapping,
+                    BlockMetadataUpdateSource::Precmd,
+                    ctx,
+                );
             }
+            ModelEvent::BlockWorkingDirectoryUpdated(block_working_directory_updated_event) => {
+                self.apply_block_metadata_update(
+                    &block_working_directory_updated_event.block_metadata,
+                    block_working_directory_updated_event.is_for_in_band_command,
+                    block_working_directory_updated_event.is_done_bootstrapping,
+                    BlockMetadataUpdateSource::Osc7,
+                    ctx,
+                );
+                // Recompute Warp-prompt chip values (notably the
+                // `WorkingDirectory` chip text that feeds the vertical-tab
+                // subtitle via `display_working_directory`). The chip
+                // generator reads from `CurrentPrompt::latest_context`, which
+                // is only refreshed through `refresh_warp_prompt` →
+                // `current_prompt.update_context`. In the normal precmd flow
+                // that refresh is triggered by `BlockCompleted`, but an OSC 7
+                // fires mid-command — the block never completes — so without
+                // this call the chip text stays stuck on the previous CWD
+                // even though the underlying block metadata is up to date.
+                //
+                // Skip in-band-command blocks for the same reason
+                // `apply_block_metadata_update` bails early on them: in-band
+                // commands don't change CWD, and refreshing the prompt here
+                // can re-fire chip generators that schedule another in-band
+                // command, leading to a refresh loop.
+                if !block_working_directory_updated_event.is_for_in_band_command {
+                    self.refresh_warp_prompt(ctx);
+                }
+            }
+
             ModelEvent::TerminalModeSwapped(mode) => {
                 #[cfg(feature = "local_tty")]
                 {
@@ -12770,18 +12842,16 @@ impl TerminalView {
 
         // If we were waiting to share this session once it was bootstrapped,
         // we can now attempt to share it.
-        let source_type_opt = match self.model.lock().shared_session_status() {
-            SharedSessionStatus::SharePendingPreBootstrap { source_type } => {
-                Some(source_type.clone())
-            }
+        let pending_share = match self.model.lock().shared_session_status() {
+            SharedSessionStatus::SharePendingPreBootstrap { source } => Some(source.clone()),
             _ => None,
         };
-        if let Some(source_type) = source_type_opt {
+        if let Some(source) = pending_share {
             log::info!("Terminal bootstrapped with pending shared session; attempting to share");
             self.attempt_to_share_session(
                 SharedSessionScrollbackType::All,
                 None,
-                source_type,
+                source,
                 false,
                 ctx,
             );
@@ -14238,7 +14308,11 @@ impl TerminalView {
                 OnboardingQuery::AgentPrompt(text) => {
                     input.replace_buffer_content(text, ctx);
                     // Force agent mode, overriding any shell lock
-                    input.ensure_agent_mode_for_ai_features(true, ctx);
+                    input.ensure_agent_mode_for_ai_features(
+                        true,
+                        Some(InputTypeAutoDetectionSource::OnboardingAgentPrompt),
+                        ctx,
+                    );
                 }
                 _ => {}
             }
@@ -18690,6 +18764,7 @@ impl TerminalView {
                     is_locked: true,
                 },
                 query.is_none(),
+                Some(InputTypeAutoDetectionSource::AskAi),
                 ctx,
             );
         });
@@ -18746,7 +18821,11 @@ impl TerminalView {
         }
 
         self.ai_input_model.update(ctx, |ai_input, ctx| {
-            ai_input.set_input_type(InputType::AI, ctx);
+            ai_input.set_input_type(
+                InputType::AI,
+                Some(InputTypeAutoDetectionSource::AskAi),
+                ctx,
+            );
         });
 
         if !context_block_indices.is_empty() {
@@ -20901,10 +20980,13 @@ impl TerminalView {
                 self.open_share_session_modal(SharedSessionActionSource::FooterChip, ctx);
             }
             InputEvent::StartRemoteControl => {
+                let source = SharedSessionSource::user(
+                    self.active_conversation_task_id(ctx).map(|t| t.to_string()),
+                );
                 self.attempt_to_share_session(
                     SharedSessionScrollbackType::All,
                     Some(SharedSessionActionSource::FooterChip),
-                    SessionSourceType::default(),
+                    source,
                     true,
                     ctx,
                 );
@@ -21891,6 +21973,7 @@ impl TerminalView {
                         .with_input_type(InputType::AI)
                         .unlocked_if_autodetection_enabled(false, ctx),
                     true,
+                    Some(InputTypeAutoDetectionSource::InlineCodeReviewSend),
                     ctx,
                 );
             });
@@ -25266,6 +25349,7 @@ impl TypedActionView for TerminalView {
             | GenerateCodebaseIndex
             | LoadAgentModeConversation
             | DeleteAttachment { .. }
+            | OpenAttachmentLightbox { .. }
             | WriteCodebaseIndex
             | ToggleAutoexecuteMode
             | ToggleQueueNextPrompt
@@ -25960,6 +26044,63 @@ impl TypedActionView for TerminalView {
             DeleteAttachment { index } => {
                 self.ai_context_model.update(ctx, |context_model, ctx| {
                     context_model.remove_pending_attachment(*index, ctx);
+                });
+            }
+            OpenAttachmentLightbox { index } => {
+                let pending_images = self
+                    .ai_context_model
+                    .as_ref(ctx)
+                    .pending_attachments()
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(attachment_index, attachment)| match attachment {
+                        PendingAttachment::Image(image) => Some((attachment_index, image.clone())),
+                        PendingAttachment::File(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                let mut images = Vec::new();
+                let mut initial_index = None;
+                for (attachment_index, image) in pending_images {
+                    let image_bytes =
+                        match base64::engine::general_purpose::STANDARD.decode(&image.data) {
+                            Ok(image_bytes) => image_bytes,
+                            Err(error) => {
+                                log::warn!(
+                                "Failed to decode pending image attachment for lightbox: {error}"
+                            );
+                                continue;
+                            }
+                        };
+
+                    let asset_id = format!("pending-attachment-lightbox-{attachment_index}");
+                    AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
+                        asset_cache.insert_raw_asset_bytes::<ImageType>(
+                            asset_id.clone(),
+                            &image_bytes,
+                            ctx,
+                        );
+                    });
+
+                    if attachment_index == *index {
+                        initial_index = Some(images.len());
+                    }
+                    images.push(ui_components::lightbox::LightboxImage {
+                        source: ui_components::lightbox::LightboxImageSource::Resolved {
+                            asset_source: warpui::assets::asset_cache::AssetSource::Raw {
+                                id: asset_id,
+                            },
+                        },
+                        description: Some(image.file_name.clone()),
+                    });
+                }
+
+                let Some(initial_index) = initial_index else {
+                    return;
+                };
+
+                ctx.dispatch_typed_action(&WorkspaceAction::OpenLightbox {
+                    images,
+                    initial_index,
                 });
             }
             WriteCodebaseIndex => {

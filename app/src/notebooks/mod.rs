@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use warpui::AppContext;
 
@@ -232,15 +231,6 @@ pub fn init(app: &mut AppContext) {
     self::notebook::init(app);
     self::file::init(app);
     self::editor::view::init(app);
-}
-
-/// Post process a notebook's content read from an external system. This cleans up extra
-/// whitespace, and, in the future, may filter out unsupported syntax extensions.
-///
-/// See CLD-944.
-pub fn post_process_notebook(data: &str) -> String {
-    // TODO(kevin): We should not strip out newlines in the code block.
-    data.lines().filter(|line| !line.is_empty()).join("\n")
 }
 
 /// Translate a notebook's Markdown content into an external Markdown format.

@@ -857,8 +857,8 @@ impl MessageProvider<AgentMessageArgs<'_>> for AutodetectedBashModeMessageProduc
             input_buffer_model,
             input_model,
             appearance,
-            slash_command_model,
             app,
+            slash_command_model,
             ..
         } = args;
         if input_model.is_ai_input_enabled()
@@ -948,42 +948,25 @@ struct ExitBashModeMessageProducer;
 impl MessageProvider<AgentMessageArgs<'_>> for ExitBashModeMessageProducer {
     fn produce_message(&self, args: AgentMessageArgs<'_>) -> Option<Message> {
         let AgentMessageArgs {
-            input_buffer_model,
             input_model,
             appearance,
+            app,
             ..
         } = args;
         if input_model.is_ai_input_enabled() || !input_model.is_input_type_locked() {
             return None;
         }
+        let set_input_mode_agent_keystroke =
+            keybinding_name_to_keystroke(SET_INPUT_MODE_AGENT_ACTION_NAME, app)?;
 
-        let (text_color, keystroke_color_override, keystroke_bg_color_override) =
-            if input_buffer_model.current_value().is_empty() {
-                (appearance.theme().ansi_fg_blue(), None, None)
-            } else {
-                (
-                    Fill::from(appearance.theme().ansi_fg_blue())
-                        .with_opacity(60)
-                        .into_solid(),
-                    Some(
-                        appearance
-                            .theme()
-                            .sub_text_color(appearance.theme().background())
-                            .into_solid(),
-                    ),
-                    Some(blended_colors::neutral_1(appearance.theme())),
-                )
-            };
+        let text_color = appearance.theme().ansi_fg_blue();
 
         Some(
             Message::new(vec![
                 MessageItem::Keystroke {
-                    keystroke: Keystroke {
-                        key: "backspace".to_owned(),
-                        ..Default::default()
-                    },
-                    color: keystroke_color_override,
-                    background_color: keystroke_bg_color_override,
+                    keystroke: set_input_mode_agent_keystroke,
+                    color: None,
+                    background_color: None,
                 },
                 MessageItem::text("to exit shell mode"),
             ])

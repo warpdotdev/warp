@@ -3684,6 +3684,10 @@ impl ansi::Handler for BlockList {
         self.latest_block_finished_time = Some(instant::SystemTime::now());
     }
 
+    fn set_current_working_directory(&mut self, path: String) {
+        delegate_to_block!(self.set_current_working_directory(path));
+    }
+
     /// Receives metadata for the prompt and the next command, and
     /// responsible for sending the `AfterBlockCompleted` event to
     /// the view. This is where we want to perform any costly

@@ -13,9 +13,11 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::{self, Theme, ThemeSet};
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
+use ui_components::lightbox::{LightboxImage, LightboxImageSource};
 use warp_completer::signatures::CommandRegistry;
 use warp_editor::content::anchor::Anchor;
 use warp_editor::content::buffer::{Buffer, BufferEvent, EditOrigin};
+use warp_editor::content::mermaid_diagram::mermaid_asset_source;
 use warp_editor::content::selection_model::BufferSelectionModel;
 use warp_editor::content::text::{
     BlockType, BufferBlockStyle, CodeBlockType, CODE_BLOCK_DEFAULT_DISPLAY_LANG,
@@ -66,6 +68,7 @@ use crate::view_components::dropdown::DropdownAction;
 use crate::view_components::Dropdown;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::WorkflowType;
+use crate::workspace::WorkspaceAction;
 use crate::ASSETS;
 
 lazy_static! {
@@ -91,6 +94,7 @@ struct MouseStateHandles {
     copy_button_state: MouseStateHandle,
     mermaid_raw_button_state: MouseStateHandle,
     mermaid_rendered_button_state: MouseStateHandle,
+    mermaid_fullscreen_button_state: MouseStateHandle,
 }
 
 struct CachedHighlightKey {
@@ -722,6 +726,43 @@ impl RunnableCommandModel for NotebookCommand {
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
                 .finish(),
             );
+
+            if !is_raw {
+                let fullscreen_model = self.handle.clone();
+                footer.add_child(
+                    Align::new(
+                        block_footer_action_button(
+                            appearance,
+                            Icon::Maximize,
+                            self.mouse_state_handles
+                                .mermaid_fullscreen_button_state
+                                .clone(),
+                            "Open full screen",
+                            None,
+                        )
+                        .on_click(move |ctx, app, _| {
+                            if let Some(command_model) = fullscreen_model.upgrade(app) {
+                                if let Some(source) = command_model.as_ref(app).command(app) {
+                                    if !source.trim().is_empty() {
+                                        ctx.dispatch_typed_action(WorkspaceAction::OpenLightbox {
+                                            images: vec![LightboxImage {
+                                                source: LightboxImageSource::Resolved {
+                                                    asset_source: mermaid_asset_source(&source),
+                                                },
+                                                description: None,
+                                            }],
+                                            initial_index: 0,
+                                        });
+                                    }
+                                }
+                            }
+                        })
+                        .finish(),
+                    )
+                    .right()
+                    .finish(),
+                );
+            }
         }
         footer.add_child(Shrinkable::new(1.0, Empty::new().finish()).finish());
         footer.add_child(

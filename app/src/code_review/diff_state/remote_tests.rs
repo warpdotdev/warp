@@ -4,12 +4,14 @@ use warp_core::SessionId;
 use warp_util::remote_path::RemotePath;
 
 use super::InternalRemoteDiffState;
+use crate::auth::AuthStateProvider;
 use crate::code_review::diff_size_limits::DiffSize;
 use crate::code_review::diff_state::{
     DiffHunk, DiffLine, DiffLineType, DiffMetadata, DiffMetadataAgainstBase, DiffMode, DiffState,
     DiffStateModelEvent, DiffStats, FileDiff, FileDiffAndContent, GitDiffData,
     GitDiffWithBaseContent, GitFileStatus, RemoteDiffStateModel,
 };
+use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::util::git::{Commit, PrInfo};
 
 impl RemoteDiffStateModel {
@@ -28,6 +30,7 @@ impl RemoteDiffStateModel {
             session_id: SessionId::default(),
             state,
             metadata,
+            tracked_diff_load_start_time: None,
         }
     }
 }
@@ -131,6 +134,10 @@ fn test_metadata(branch: &str) -> DiffMetadata {
     }
 }
 
+fn initialize_test_app(app: &mut warpui::App) {
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
+}
 #[test]
 fn apply_snapshot_loaded_with_diffs() {
     warpui::App::test((), |mut app| async move {
@@ -171,7 +178,10 @@ fn apply_snapshot_loaded_preserves_content_at_base_in_event() {
             let emitted_content = emitted_content.clone();
             app.update(|ctx| {
                 ctx.subscribe_to_model(&handle, move |_, event, _| {
-                    if let DiffStateModelEvent::NewDiffsComputed(Some(diffs)) = event {
+                    if let DiffStateModelEvent::NewDiffsComputed {
+                        diffs: Some(diffs), ..
+                    } = event
+                    {
                         emitted_content
                             .lock()
                             .expect("emitted content mutex should not be poisoned")
@@ -211,6 +221,7 @@ fn apply_snapshot_loaded_preserves_content_at_base_in_event() {
 #[test]
 fn apply_snapshot_loaded_without_diffs_becomes_error() {
     warpui::App::test((), |mut app| async move {
+        initialize_test_app(&mut app);
         let handle = app.add_model(|_ctx| {
             RemoteDiffStateModel::new_for_test(
                 DiffMode::Head,
@@ -251,6 +262,7 @@ fn apply_snapshot_not_in_repository() {
 #[test]
 fn apply_snapshot_error_stores_message() {
     warpui::App::test((), |mut app| async move {
+        initialize_test_app(&mut app);
         let handle = app.add_model(|_ctx| {
             RemoteDiffStateModel::new_for_test(
                 DiffMode::Head,
@@ -450,7 +462,10 @@ fn apply_snapshot_emits_event_with_repo_relative_paths() {
             let emitted_paths = emitted_paths.clone();
             app.update(|ctx| {
                 ctx.subscribe_to_model(&handle, move |_, event, _| {
-                    if let DiffStateModelEvent::NewDiffsComputed(Some(diffs)) = event {
+                    if let DiffStateModelEvent::NewDiffsComputed {
+                        diffs: Some(diffs), ..
+                    } = event
+                    {
                         emitted_paths
                             .lock()
                             .expect("emitted paths mutex should not be poisoned")

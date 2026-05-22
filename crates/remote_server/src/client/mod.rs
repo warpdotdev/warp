@@ -23,7 +23,8 @@ use crate::proto::{
     IndexCodebase, Initialize, InitializeResponse, LoadRepoMetadataDirectoryResponse,
     NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, ReadFileContextRequest,
     ReadFileContextResponse, ResyncCodebase, RunCommandRequest, RunCommandResponse, SaveBuffer,
-    ServerMessage, SessionBootstrapped, TextEdit, UnsubscribeDiffState, WriteFile,
+    ServerMessage, SessionBootstrapped, TextEdit, UnsubscribeDiffState, UploadHandoffSnapshot,
+    UploadHandoffSnapshotResponse, WriteFile,
 };
 use crate::repo_metadata_proto::{proto_snapshot_to_update, proto_to_repo_metadata_update};
 
@@ -1125,6 +1126,42 @@ impl RemoteServerClient {
                 safe_error!(
                     safe: ("Remote server unexpected response for RunCommand"),
                     full: ("Remote server unexpected response for RunCommand: response={other:?}")
+                );
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Sends an `UploadHandoffSnapshot` request to the remote server and
+    /// awaits the `UploadHandoffSnapshotResponse`.
+    pub async fn upload_handoff_snapshot(
+        &self,
+        paths: Vec<StandardizedPath>,
+    ) -> Result<UploadHandoffSnapshotResponse, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::UploadHandoffSnapshot(
+                UploadHandoffSnapshot {
+                    paths: paths.into_iter().map(|p| p.to_string()).collect(),
+                },
+            )),
+        };
+
+        let response = self
+            .send_request(
+                request_id,
+                msg,
+                crate::manager::RemoteServerOperation::UploadHandoffSnapshot,
+            )
+            .await?;
+
+        match response.message {
+            Some(server_message::Message::UploadHandoffSnapshotResponse(resp)) => Ok(resp),
+            other => {
+                safe_error!(
+                    safe: ("Remote server unexpected response for UploadHandoffSnapshot"),
+                    full: ("Remote server unexpected response for UploadHandoffSnapshot: response={other:?}")
                 );
                 Err(ClientError::UnexpectedResponse)
             }
