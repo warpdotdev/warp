@@ -156,7 +156,7 @@ impl SetupTimelineEvent {
 pub(crate) enum SetupStep {
     TeamMetadataRefresh,
     WarpDriveSync,
-    TaskMetadataSecretsAttachmentsGitCredentialsFetch,
+    TaskDataFetch,
     EnvironmentResolution,
     SkillRepoClone,
     TerminalBootstrap,
@@ -184,9 +184,7 @@ impl SetupStep {
         match self {
             Self::TeamMetadataRefresh => "setup_team_metadata_refresh",
             Self::WarpDriveSync => "setup_warp_drive_sync",
-            Self::TaskMetadataSecretsAttachmentsGitCredentialsFetch => {
-                "setup_task_metadata_secrets_attachments_git_credentials_fetch"
-            }
+            Self::TaskDataFetch => "setup_task_metadata_secrets_attachments_git_credentials_fetch",
             Self::EnvironmentResolution => "setup_environment_resolution",
             Self::SkillRepoClone => "setup_skill_repo_clone",
             Self::TerminalBootstrap => "setup_terminal_bootstrap",

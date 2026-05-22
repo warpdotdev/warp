@@ -915,7 +915,7 @@ impl AgentDriverRunner {
         let task_conversation_id = if let Some(task_id_str) = task_id_str {
             setup_events
                 .record_result(
-                    SetupStep::TaskMetadataSecretsAttachmentsGitCredentialsFetch,
+                    SetupStep::TaskDataFetch,
                     Self::fetch_secrets_and_attachments(
                         foreground,
                         task_id_str,
