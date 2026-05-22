@@ -101,6 +101,7 @@ pub struct AgentConversationDisplayData {
     pub working_directory: Option<String>,
     pub environment_id: Option<String>,
     pub harness: Option<Harness>,
+    pub computer_use_enabled: Option<bool>,
     pub artifacts: Vec<Artifact>,
 }
 
@@ -362,6 +363,12 @@ fn task_harness(task: &AmbientAgentTask) -> Option<Harness> {
     })
 }
 
+fn task_computer_use_enabled(task: &AmbientAgentTask) -> Option<bool> {
+    task.agent_config_snapshot
+        .as_ref()
+        .and_then(|config| config.computer_use_enabled)
+}
+
 fn conversation_title(
     metadata: &ConversationMetadata,
     history_model: &BlocklistAIHistoryModel,
@@ -485,6 +492,7 @@ pub(super) fn entry_for_task(
                 .as_ref()
                 .and_then(|snapshot| snapshot.environment_id.clone()),
             harness: task_harness(task),
+            computer_use_enabled: task_computer_use_enabled(task),
             artifacts: task.artifacts.clone(),
         },
         backing: AgentConversationBackingData {
@@ -599,6 +607,7 @@ fn entry_for_conversation_parts(
                 .and_then(|metadata| metadata.server_conversation_metadata.as_ref())
                 .map(|metadata| Harness::from(metadata.harness))
                 .or(Some(Harness::Oz)),
+            computer_use_enabled: None,
             artifacts: conversation_artifacts(&metadata, history_model),
         },
         backing: AgentConversationBackingData {
