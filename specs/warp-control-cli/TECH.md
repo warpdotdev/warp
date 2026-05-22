@@ -88,6 +88,7 @@ Recommended local trust model:
 - The app rejects missing/invalid local credentials before action resolution.
 - Health metadata exposed without credentials, if needed for stale-record pruning, must not reveal mutating capabilities or sensitive target state.
 This keeps the protocol local and scriptable without creating an ambient browser-to-localhost control surface.
+For agent-facing permissions, local authentication must evolve from a single bearer token into scoped credentials before higher-risk surfaces ship. A scoped credential should encode caller class, instance binding, granted permission tiers, issue time, and optional expiry. The app bridge must authenticate the credential and enforce the required action tier server-side before selector resolution or mutation. The first slice can use the discovery bearer token for human same-user CLI use only because it is limited to discovery and `tab.create`.
 ### 4. App-side request bridge onto the UI/application context
 The HTTP handler runs on a Tokio runtime thread owned by the local-control server. It cannot directly access or mutate Warp's UI models, views, or app context because all WarpUI state is single-threaded and owned by the main app event loop. The bridge solves this by sending a closure from the Tokio handler thread to the main thread, executing it in the model's context, and returning the result to the waiting HTTP handler.
 #### Thread model
@@ -122,7 +123,7 @@ LocalControlBridge::handle_request (main thread)
   │   └─ ActionKind::TabCreate
   │       ├─ validate_tab_create_target(&request.target)
   │       ├─ ctx.windows().active_window()
-  │       │   └─ fallback: ctx.windows().ordered_window_ids().first()
+  │       │   └─ if none: return invalid_selector / missing_target
   │       ├─ ctx.views_of_type::<Workspace>(window_id)
   │       └─ workspace.update(ctx, |workspace, ctx| {
   │             workspace.handle_action(
@@ -138,6 +139,7 @@ LocalControlBridge::handle_request (main thread)
 - **Synchronous result.** Unlike fire-and-forget patterns (e.g., URI intent dispatch in `app/src/uri/mod.rs`), the `spawn` call returns a concrete `Result<R, ModelDropped>`, so the HTTP handler can produce a structured success or error response.
 - **Reuses existing infrastructure.** `ModelSpawner` is already used throughout the codebase for background-to-main-thread communication (e.g., async file I/O results, network responses). No new concurrency primitive is needed.
 - **Action dispatch reuses existing app behavior.** The bridge calls `workspace.handle_action(&WorkspaceAction::AddTerminalTab { ... }, ctx)` — the exact same method the UI keybinding system uses. This ensures the control CLI produces identical behavior to the corresponding user action, including side effects like tab count updates, focus changes, and event emissions.
+- **Deterministic targeting.** The bridge must not silently fall back from the active window to an arbitrary ordered window for mutating actions. If the caller relies on the default active selector and no active window exists, return a structured missing-target or invalid-selector error. If future command forms allow explicit window IDs, resolve the explicit ID exactly or return `stale_target`.
 #### Adding new action handlers
 To add a new action to the bridge:
 1. Add a variant to `ActionKind` in `crates/local_control/src/protocol.rs`.

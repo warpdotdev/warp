@@ -200,6 +200,14 @@ The protocol and product should support per-caller permission policies keyed to 
   - A "mutate destructive" grant that additionally permits closing targets, injecting input, and executing commands.
 - The permission model should be expressible in the protocol (e.g., a capability or scope field in the authentication material) so that the app bridge can enforce it server-side, not just client-side.
 - When an agent attempts an action above its granted tier, the bridge should return a structured `insufficient_permissions` error that identifies the required tier, rather than silently downgrading or returning a generic failure.
+### Scoped credentials and caller identity
+The local discovery bearer token is not sufficient for differentiated human vs. agent permissions. If the same full-access token is readable by both humans and agents, the server cannot enforce agent-specific read-only defaults. Before agent-facing read/write or destructive actions ship, the product must introduce scoped credentials.
+- The discovery record may expose a human CLI credential for same-user interactive use, but agent runtimes should not receive that full-access credential by default.
+- Agent callers should receive a separate scoped credential minted by Warp or by a trusted local broker. The credential must identify the caller class (`human`, `local_agent`, `cloud_agent`, `third_party_automation`) and granted permission tiers.
+- Scoped credentials should be bound to a specific Warp instance, protocol version, issued-at time, optional expiry time, and allowed action tiers. The bridge must validate those fields before action dispatch.
+- The bridge, not the CLI frontend, enforces permission tiers by mapping every `ActionKind` to a required tier and comparing that tier to the credential's grants.
+- If a process presents the human discovery credential, the bridge treats it as human interactive use. If a process presents an agent credential, the bridge applies the agent policy even if the process runs under the same local user account.
+- The first implementation slice may ship a same-user human credential only because it implements discovery and `tab create`; any slice that exposes terminal data, input mutation, command execution, or other agent-consumable automation must add scoped credential issuance first.
 ### Future entity extensibility: files and Warp Drive objects
 The selector and action model should be designed to accommodate entity types beyond the current window/tab/pane/session hierarchy. Two important future entity families are **local files** and **Warp Drive objects** (workflows, notebooks, environment variables, prompts). Neither is in scope for the first implementation, but the protocol should not preclude them.
 **Files.** Warp already supports file opening via deep links and the built-in editor. A future `file` namespace could support:
