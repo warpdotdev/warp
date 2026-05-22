@@ -111,7 +111,17 @@ impl EventLoop {
             });
         }
 
+        log::info!(
+            "[orch-viewer-loading] EventLoop::new \
+             catching_up_to_event_no={catching_up_to_event_no:?} \
+             load_mode={load_mode:?} (None ⇒ immediate ActiveViewer; \
+             Some(N) ⇒ wait until next_event_no >= N)"
+        );
         if catching_up_to_event_no.is_none() {
+            log::info!(
+                "[orch-viewer-loading] EventLoop::new: no catch-up target, transitioning \
+                 ViewPending → ActiveViewer immediately"
+            );
             terminal_model
                 .lock()
                 .set_shared_session_status(SharedSessionStatus::ActiveViewer {
@@ -162,6 +172,16 @@ impl EventLoop {
         event: OrderedTerminalEvent,
         ctx: &mut ModelContext<Self>,
     ) {
+        log::debug!(
+            "[orch-viewer-loading] EventLoop received OrderedTerminalEvent \
+             event_no={} event_type={:?} (current next_event_no={} \
+             catching_up_to_event_no={:?} buffer_len_before={})",
+            event.event_no,
+            event.event_type,
+            self.next_event_no,
+            self.catching_up_to_event_no,
+            self.buffer.len(),
+        );
         // Add the event to the buffer.
         self.buffer.insert(event.event_no, event.event_type);
 
@@ -347,27 +367,80 @@ impl EventLoop {
                 }
             }
 
-            if Some(self.next_event_no) == self.catching_up_to_event_no {
-                if let Some(view) = self.terminal_view.upgrade(ctx) {
-                    // TODO (suraj): reconsider how we query the role here.
-                    if let Some(presence_manager) =
-                        view.read(ctx, |view, _| view.shared_session_presence_manager())
-                    {
-                        // Role is set to the presence manager's role to stay as up-to-date as possible.
-                        // This avoids a race condition if a viewer gets a new role before catching up,
-                        // by ensuring we're not overwriting the new role.
-                        if let Some(role) = presence_manager.as_ref(ctx).role() {
-                            self.terminal_model.lock().set_shared_session_status(
-                                SharedSessionStatus::ActiveViewer { role },
-                            );
-                        }
-                    }
-                }
-            }
-
             self.channel_event_listener.send_wakeup_event();
 
             self.next_event_no += 1;
+
+            // Catch-up gate: transition ViewPending → ActiveViewer once
+            // `next_event_no` has reached the catch-up target.
+            //
+            // Why the check moved to AFTER the increment and uses `>=`
+            // instead of `==`:
+            //
+            // 1. The semantic of `catching_up_to_event_no` (which is the
+            //    `latest_event_no` value from the server's
+            //    `JoinedSuccessfully` message) is the count of events the
+            //    viewer must process before being considered caught up.
+            //    Empirically, when the server reports e.g. 335, the viewer
+            //    receives events with `event_no` 0..334 (335 events). The
+            //    previous `==`-before-increment check fired only DURING
+            //    processing of event_no == target, which (under the
+            //    "target == count" semantic) is a future event that
+            //    doesn't arrive until the run emits its next event —
+            //    typically at termination. That matched the observed
+            //    "loading clears only when the run terminates" symptom.
+            //
+            // 2. Using `>=` (instead of `==`) is robust to either
+            //    interpretation of `latest_event_no` and to slight
+            //    overshoots when buffered live events are drained
+            //    immediately after the catch-up event.
+            //
+            // We clear `catching_up_to_event_no` only on successful
+            // transition so that if the presence_manager / role gates
+            // race (e.g. on_session_share_joined hasn't set up the
+            // adapter yet), the next event re-evaluates the gate and
+            // retries.
+            if self
+                .catching_up_to_event_no
+                .is_some_and(|target| self.next_event_no >= target)
+            {
+                let view_handle = self.terminal_view.upgrade(ctx);
+                let presence_manager = view_handle.as_ref().and_then(|view| {
+                    view.read(ctx, |view, _| view.shared_session_presence_manager())
+                });
+                // Role is read from the presence manager to stay as
+                // up-to-date as possible. This avoids a race condition if
+                // a viewer gets a new role before catching up, by ensuring
+                // we're not overwriting the new role.
+                let role = presence_manager
+                    .as_ref()
+                    .and_then(|pm| pm.as_ref(ctx).role());
+                if let Some(role) = role {
+                    log::info!(
+                        "[orch-viewer-loading] EventLoop: catch-up complete \
+                         (next_event_no={} target={:?}); transitioning \
+                         ViewPending → ActiveViewer role={role:?}",
+                        self.next_event_no,
+                        self.catching_up_to_event_no,
+                    );
+                    self.terminal_model
+                        .lock()
+                        .set_shared_session_status(SharedSessionStatus::ActiveViewer { role });
+                    self.catching_up_to_event_no = None;
+                } else {
+                    log::warn!(
+                        "[orch-viewer-loading] EventLoop: catch-up target reached \
+                         (next_event_no={} target={:?}) but ActiveViewer gates not yet \
+                         ready (view_handle.is_some={} presence_manager.is_some={} \
+                         role.is_some={}); will retry on next event",
+                        self.next_event_no,
+                        self.catching_up_to_event_no,
+                        view_handle.is_some(),
+                        presence_manager.is_some(),
+                        false,
+                    );
+                }
+            }
         }
     }
 }
