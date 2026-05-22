@@ -45,12 +45,12 @@ The current `AuthSecretEntry` contains only `name`, but server `ManagedSecret` r
    )
    ```
 
-   The method should call `ManagedSecretManager::delete_secret(owner, name.clone())`. On success, remove the matching entry from `AuthSecretFetchState::Loaded` for that harness and emit a new event. On failure, leave the cache unchanged, report the error, and emit a failure event with the harness/name/error.
+   The method should call `ManagedSecretManager::delete_secret(owner, name.clone())`. On success, remove the matching owner/name entry from `AuthSecretFetchState::Loaded` for that harness and emit a new event. On failure, leave the cache unchanged, report the error, and emit a failure event with the harness/name/owner/error.
 
    Add events:
 
-   - `AuthSecretDeleted { harness, name }`
-   - `AuthSecretDeletionFailed { harness, name, error }`
+   - `AuthSecretDeleted { harness, name, owner }`
+   - `AuthSecretDeletionFailed { harness, name, owner, error }`
 
    Existing subscribers that only care about menu freshness should refresh on `AuthSecretDeleted`; subscribers that do not care should explicitly ignore both new events so match exhaustiveness remains clear.
 
@@ -111,10 +111,10 @@ The current `AuthSecretEntry` contains only `name`, but server `ManagedSecret` r
 
    In the selector's `HarnessAvailabilityModel` subscription:
 
-   - On `AuthSecretDeleted` for the active harness, clear pending state for the matching secret, refresh menu/button, and show a success toast.
-   - If the deleted name equals `AmbientAgentViewModel::selected_harness_auth_secret_name()`, call `set_harness_auth_secret_name(None, ctx)`.
-   - Remove `CloudAgentSettings.last_selected_auth_secret[harness.config_name()]` if it equals the deleted name.
-   - On `AuthSecretDeletionFailed`, clear pending state, refresh menu, and show a failure toast containing the user-facing error when available.
+   - On `AuthSecretDeleted`, clear pending state for the matching `(harness, name, owner)` target and show a success toast when this selector initiated that exact deletion.
+   - Always remove `CloudAgentSettings.last_selected_auth_secret[harness.config_name()]` if it equals the deleted name, even when the user has switched to another active harness before the server responds.
+   - Only when the deleted harness is still active, clear `AmbientAgentViewModel::selected_harness_auth_secret_name()` if it matches the deleted name and refresh the visible menu/button state.
+   - On `AuthSecretDeletionFailed`, clear pending state for the matching `(harness, name, owner)` target, refresh the visible menu only when that harness is active, and show a failure toast containing the user-facing error when available.
 
    Use `DismissibleToast::success(...)` and `DismissibleToast::error(...)` via `ToastStack::add_ephemeral_toast`, matching nearby toast patterns.
 
@@ -124,7 +124,7 @@ The current `AuthSecretEntry` contains only `name`, but server `ManagedSecret` r
 
 ## Testing and Validation
 
-Per the current implementation pass, automated test additions and test execution are deferred by request. The implementation should remain structured so the following cases are straightforward to cover later:
+No new helper-only unit tests are retained in this implementation pass. The following behaviors remain suitable for future targeted coverage if higher-value seams are introduced:
 
 1. Cache update behavior for PRODUCT behaviors 8, 10, and 11:
    - Successful deletion removes only the matching auth secret from the loaded list and emits `AuthSecretDeleted`.

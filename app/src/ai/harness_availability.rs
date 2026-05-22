@@ -85,10 +85,12 @@ pub enum HarnessAvailabilityEvent {
     AuthSecretDeleted {
         harness: Harness,
         name: String,
+        owner: SecretOwner,
     },
     AuthSecretDeletionFailed {
         harness: Harness,
         name: String,
+        owner: SecretOwner,
         error: String,
     },
 }
@@ -307,15 +309,21 @@ impl HarnessAvailabilityModel {
         ctx: &mut ModelContext<Self>,
     ) {
         let manager = ManagedSecretManager::handle(ctx);
-        let delete_future = manager.as_ref(ctx).delete_secret(owner, name.clone());
+        let delete_future = manager
+            .as_ref(ctx)
+            .delete_secret(owner.clone(), name.clone());
         ctx.spawn(delete_future, move |me, result, ctx| match result {
             Ok(()) => {
                 if let Some(AuthSecretFetchState::Loaded(entries)) =
                     me.auth_secrets.get_mut(&harness)
                 {
-                    entries.retain(|entry| entry.name != name);
+                    remove_deleted_auth_secret_entry(entries, &name, &owner);
                 }
-                ctx.emit(HarnessAvailabilityEvent::AuthSecretDeleted { harness, name });
+                ctx.emit(HarnessAvailabilityEvent::AuthSecretDeleted {
+                    harness,
+                    name,
+                    owner,
+                });
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -323,6 +331,7 @@ impl HarnessAvailabilityModel {
                 ctx.emit(HarnessAvailabilityEvent::AuthSecretDeletionFailed {
                     harness,
                     name,
+                    owner,
                     error: msg,
                 });
             }
@@ -387,6 +396,13 @@ fn secret_owner_from_space(space: &warp_graphql::object::Space) -> SecretOwner {
     }
 }
 
+fn remove_deleted_auth_secret_entry(
+    entries: &mut Vec<AuthSecretEntry>,
+    name: &str,
+    owner: &SecretOwner,
+) {
+    entries.retain(|entry| entry.name.as_str() != name || &entry.owner != owner);
+}
 fn harness_to_graphql_harness(harness: Harness) -> Option<warp_graphql::ai::AgentHarness> {
     match harness {
         Harness::Oz => Some(warp_graphql::ai::AgentHarness::Oz),

@@ -38,13 +38,13 @@ Figma: none provided. The prompt includes screenshots of the auth selector delet
 
 8. Deletion is server-backed. A secret is considered deleted only after the server delete request succeeds. The UI must not present deletion as successful before the server confirms it.
 
-9. While deletion is pending, the user should not be able to fire duplicate delete requests for the same secret from the same open menu. Acceptable treatments include disabling the `X` button for that row, closing the menu, or otherwise preventing a second click.
+9. While deletion is pending, the user should not be able to fire duplicate delete requests for the same harness-owned secret from the same open menu. Pending delete state must stay scoped to the deletion target rather than every same-named secret. Acceptable treatments include disabling the `X` button for that row, closing the menu, or otherwise preventing a second click.
 
 10. On successful deletion:
    - The deleted secret disappears from the selector menu the next time the menu is shown, and ideally immediately if the menu remains open.
    - A success toast is shown.
    - If the deleted secret was currently selected for the active harness, the selected auth secret is cleared and the chip falls back to the no-secret/inherit label.
-   - Any persisted last-selected secret for the active harness is cleared if it points to the deleted secret.
+   - Any persisted last-selected secret for the deleted harness is cleared if it points to the deleted secret, even if the user changes active harnesses before the server response arrives.
 
 11. On failed deletion:
    - The secret remains available in the selector menu.
