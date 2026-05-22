@@ -38,10 +38,14 @@ use super::{FindLinkArg, TerminalEditor};
 #[cfg(feature = "local_fs")]
 const PREFIXES_TO_REMOVE: [&str; 2] = ["a/", "b/"];
 
-/// "@" is a suffix that can be added to symlinks. It appears in Git Bash's default configuration
-/// for `ls`.
+/// Suffixes that should be stripped from a candidate path before filesystem validation.
+///
+/// - "@" is appended to symlinks by Git Bash's default `ls` configuration.
+/// - Trailing sentence punctuation (`.`, `,`, `;`, `!`, `?`) commonly appears when a file
+///   path is embedded in natural-language prose (e.g. "See `docs/plan.md`."). These characters
+///   cannot legitimately end a filename on Windows or POSIX, so stripping them is safe.
 #[cfg(feature = "local_fs")]
-const SUFFIXES_TO_REMOVE: [&str; 1] = ["@"];
+const SUFFIXES_TO_REMOVE: [&str; 6] = ["@", ".", ",", ";", "!", "?"];
 
 /// Highlighted link within a terminal model grid.
 #[derive(Debug, Clone)]
@@ -506,8 +510,44 @@ impl super::TerminalView {
         let mut link = None;
         'path_loop: for within_model_possible_path in possible_paths {
             let possible_path = within_model_possible_path.get_inner();
-            // We want to check if the clean path result is a valid path and get the canonical
-            // absolute path back.
+
+            // Try suffix-stripped variants first. On Windows the NT kernel
+            // transparently normalizes trailing dots (e.g. "file.md." resolves
+            // to "file.md"), so a raw candidate with trailing punctuation would
+            // pass validation but produce an incorrect highlight range. By
+            // checking suffix-stripped paths first we ensure the visible link
+            // excludes the trailing punctuation on all platforms.
+            for suffix in SUFFIXES_TO_REMOVE {
+                if let Some(new_possible_path) = possible_path.path.path.strip_suffix(suffix) {
+                    let new_possible_cleaned_path = CleanPathResult {
+                        path: new_possible_path.into(),
+                        line_and_column_num: possible_path.path.line_and_column_num,
+                    };
+                    let absolute_path = absolute_path_if_valid(
+                        &new_possible_cleaned_path,
+                        ShellPathType::ShellNative(working_directory.to_string()),
+                        shell_launch_data.as_ref(),
+                    );
+
+                    if let Some(absolute_path) = absolute_path {
+                        let new_end_point = possible_path
+                            .range
+                            .end()
+                            .wrapping_sub(max_columns, suffix.len());
+
+                        link = Some(Self::create_valid_link(
+                            absolute_path,
+                            new_possible_cleaned_path.line_and_column_num,
+                            *possible_path.range.start()..=new_end_point,
+                            &within_model_possible_path,
+                        ));
+
+                        break 'path_loop;
+                    }
+                }
+            }
+
+            // Try the raw candidate as-is.
             let absolute_path = absolute_path_if_valid(
                 &possible_path.path,
                 ShellPathType::ShellNative(working_directory.to_string()),
@@ -536,7 +576,6 @@ impl super::TerminalView {
                         shell_launch_data.as_ref(),
                     );
 
-                    // check if new_possible_path is valid
                     if let Some(absolute_path) = absolute_path {
                         let new_start_point = possible_path
                             .range
@@ -550,39 +589,6 @@ impl super::TerminalView {
                             &within_model_possible_path,
                         ));
 
-                        // break outer_loop
-                        break 'path_loop;
-                    }
-                }
-            }
-
-            for suffix in SUFFIXES_TO_REMOVE {
-                if let Some(new_possible_path) = possible_path.path.path.strip_suffix(suffix) {
-                    let new_possible_cleaned_path = CleanPathResult {
-                        path: new_possible_path.into(),
-                        line_and_column_num: possible_path.path.line_and_column_num,
-                    };
-                    let absolute_path = absolute_path_if_valid(
-                        &new_possible_cleaned_path,
-                        ShellPathType::ShellNative(working_directory.to_string()),
-                        shell_launch_data.as_ref(),
-                    );
-
-                    // check if new_possible_path is valid
-                    if let Some(absolute_path) = absolute_path {
-                        let new_end_point = possible_path
-                            .range
-                            .end()
-                            .wrapping_sub(max_columns, suffix.len());
-
-                        link = Some(Self::create_valid_link(
-                            absolute_path,
-                            new_possible_cleaned_path.line_and_column_num,
-                            *possible_path.range.start()..=new_end_point,
-                            &within_model_possible_path,
-                        ));
-
-                        // break outer_loop
                         break 'path_loop;
                     }
                 }
