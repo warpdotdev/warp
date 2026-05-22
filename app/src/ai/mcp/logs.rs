@@ -1,7 +1,6 @@
-use simple_logger::manager::resolve_log_path;
-use simple_logger::RotationConfig;
 use std::path::PathBuf;
 
+use simple_logger::manager::resolve_log_path;
 use uuid::Uuid;
 
 /// Per-server MCP log rotation policy.
@@ -27,6 +26,6 @@ pub fn log_file_path_from_uuid(uuid: &Uuid) -> PathBuf {
 /// if a future change accidentally sets one of the cap constants to zero;
 /// callers can treat `None` as "rotation disabled" and the existing
 /// truncate-on-create behavior is preserved.
-pub fn mcp_log_rotation_config() -> Option<RotationConfig> {
-    RotationConfig::new(MCP_LOG_MAX_FILE_SIZE_BYTES, MCP_LOG_MAX_ROTATION)
+pub fn mcp_log_rotation_config() -> Option<simple_logger::RotationConfig> {
+    simple_logger::RotationConfig::new(MCP_LOG_MAX_FILE_SIZE_BYTES, MCP_LOG_MAX_ROTATION)
 }

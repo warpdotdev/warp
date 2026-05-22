@@ -1,11 +1,13 @@
-use crate::{LogFileWriter, RotationConfig, SimpleLogger};
 use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
+
 use thiserror::Error;
 use warpui::r#async::executor::Background;
 use warpui::{Entity, SingletonEntity};
+
+use crate::{LogFileWriter, SimpleLogger};
 
 #[derive(Error, Debug)]
 pub enum LogManagerError {
@@ -132,7 +134,7 @@ impl LogManager {
         namespace: &str,
         relative_path: impl AsRef<Path>,
         executor: Arc<Background>,
-        rotation: Option<RotationConfig>,
+        rotation: Option<crate::RotationConfig>,
     ) -> Result<SimpleLogger, LogManagerError> {
         if !self.namespaces.contains(namespace) {
             return Err(LogManagerError::UnknownNamespace {
@@ -147,7 +149,7 @@ impl LogManager {
         &mut self,
         path: PathBuf,
         executor: Arc<Background>,
-        rotation: Option<RotationConfig>,
+        rotation: Option<crate::RotationConfig>,
     ) -> Result<SimpleLogger, LogManagerError> {
         if let Some(existing) = self.loggers.get(&path) {
             if let Some(writer) = existing.upgrade() {

@@ -1,7 +1,5 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::{Arc, Weak},
-};
+use std::path::PathBuf;
+use std::sync::{Arc, Weak};
 
 use async_channel::Sender;
 use async_fs::OpenOptions;
@@ -236,7 +234,7 @@ impl SimpleLogger {
 }
 
 /// Open `path` for writing with truncation, ensuring the parent directory exists.
-async fn open_truncated(path: &Path) -> std::io::Result<async_fs::File> {
+async fn open_truncated(path: &std::path::Path) -> std::io::Result<async_fs::File> {
     OpenOptions::new()
         .write(true)
         .create(true)
@@ -248,7 +246,7 @@ async fn open_truncated(path: &Path) -> std::io::Result<async_fs::File> {
 /// Open `path` for appending. Used by the rotation-failure recovery path so
 /// existing log data is preserved when `perform_rotation` could not move the
 /// active file to its rotated slot.
-async fn open_append(path: &Path) -> std::io::Result<async_fs::File> {
+async fn open_append(path: &std::path::Path) -> std::io::Result<async_fs::File> {
     OpenOptions::new()
         .create(true)
         .append(true)
@@ -268,7 +266,10 @@ async fn open_append(path: &Path) -> std::io::Result<async_fs::File> {
 /// Rename failures for intermediate `.N` files are tolerated (the file may not
 /// exist yet if fewer than `max_rotation` rotations have occurred). A failure to
 /// rename the current active file is reported back to the caller.
-pub(crate) async fn perform_rotation(base_path: &Path, max_rotation: usize) -> std::io::Result<()> {
+pub(crate) async fn perform_rotation(
+    base_path: &std::path::Path,
+    max_rotation: usize,
+) -> std::io::Result<()> {
     // Step 1 — drop the file that would otherwise become `.{max_rotation + 1}`.
     // Tolerate ENOENT silently: it just means we haven't accumulated enough
     // rotations yet.
@@ -308,7 +309,7 @@ pub(crate) async fn perform_rotation(base_path: &Path, max_rotation: usize) -> s
 /// becomes `mcp/srv.log.2`. Operating on the raw `OsString` rather than via
 /// `set_extension` is intentional — we append a suffix, we don't replace one,
 /// and `set_extension("log.2")` would strip a legitimate trailing `.log`.
-pub(crate) fn path_with_suffix(base: &Path, n: usize) -> PathBuf {
+pub(crate) fn path_with_suffix(base: &std::path::Path, n: usize) -> PathBuf {
     let mut s = base.as_os_str().to_owned();
     s.push(format!(".{n}"));
     PathBuf::from(s)
