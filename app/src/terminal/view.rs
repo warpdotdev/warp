@@ -222,11 +222,11 @@ use crate::ai::{
         inline_action::code_diff_view::{CodeDiffView, FileDiff},
         summarization_cancel_dialog::SummarizationCancelDialog,
         telemetry_banner::{should_collect_ai_ugc_telemetry, TelemetryBanner},
-        AIBlock, AIBlockEvent, AppLevelHeuristic, AppLevelOverride, BlocklistAIActionEvent,
-        BlocklistAIActionModel, BlocklistAIContextEvent, BlocklistAIContextModel,
-        BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
-        BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel,
-        ConversationStatusUpdate, InputConfig, InputType, LegacyPassiveSuggestionsEvent,
+        AIBlock, AIBlockEvent, BlocklistAIActionEvent, BlocklistAIActionModel,
+        BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
+        BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+        BlocklistAIInputEvent, BlocklistAIInputModel, ConversationStatusUpdate, InputConfig,
+        InputType, InputTypeAutoDetectionSource, LegacyPassiveSuggestionsEvent,
         LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel,
         PassiveSuggestionsModels, PendingQueryState, RequestFileEditsFormatKind,
         ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
@@ -3458,7 +3458,7 @@ impl TerminalView {
                     model.set_input_config(
                         input_config,
                         is_input_buffer_empty,
-                        Some(AppLevelOverride::SettingDisabled.into()),
+                        Some(InputTypeAutoDetectionSource::SettingDisabled),
                         ctx,
                     );
                 }
@@ -6101,7 +6101,7 @@ impl TerminalView {
             self.ai_input_model.update(ctx, |input_model, ctx| {
                 input_model.set_input_type(
                     InputType::AI,
-                    Some(AppLevelHeuristic::ContinueConversation.into()),
+                    Some(InputTypeAutoDetectionSource::ContinueConversation),
                     ctx,
                 );
             });
@@ -6431,7 +6431,7 @@ impl TerminalView {
             input.replace_at_symbol_with_text(&attachment_reference, ctx);
             input.ensure_agent_mode_for_ai_features(
                 true,
-                Some(AppLevelOverride::AttachmentForcedAi.into()),
+                Some(InputTypeAutoDetectionSource::AttachmentForcedAi),
                 ctx,
             );
         });
@@ -14303,7 +14303,7 @@ impl TerminalView {
                     // Force agent mode, overriding any shell lock
                     input.ensure_agent_mode_for_ai_features(
                         true,
-                        Some(AppLevelHeuristic::OnboardingAgentPrompt.into()),
+                        Some(InputTypeAutoDetectionSource::OnboardingAgentPrompt),
                         ctx,
                     );
                 }
@@ -18757,7 +18757,7 @@ impl TerminalView {
                     is_locked: true,
                 },
                 query.is_none(),
-                Some(AppLevelHeuristic::AskAi.into()),
+                Some(InputTypeAutoDetectionSource::AskAi),
                 ctx,
             );
         });
@@ -18814,7 +18814,11 @@ impl TerminalView {
         }
 
         self.ai_input_model.update(ctx, |ai_input, ctx| {
-            ai_input.set_input_type(InputType::AI, Some(AppLevelHeuristic::AskAi.into()), ctx);
+            ai_input.set_input_type(
+                InputType::AI,
+                Some(InputTypeAutoDetectionSource::AskAi),
+                ctx,
+            );
         });
 
         if !context_block_indices.is_empty() {
@@ -21961,7 +21965,7 @@ impl TerminalView {
                         .with_input_type(InputType::AI)
                         .unlocked_if_autodetection_enabled(false, ctx),
                     true,
-                    Some(AppLevelHeuristic::InlineCodeReviewSend.into()),
+                    Some(InputTypeAutoDetectionSource::InlineCodeReviewSend),
                     ctx,
                 );
             });

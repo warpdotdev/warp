@@ -144,7 +144,7 @@ use crate::{
             prompt::prompt_alert::{PromptAlertEvent, PromptAlertView},
             render_ai_agent_mode_icon, render_ai_follow_up_icon,
             telemetry_banner::should_collect_ai_ugc_telemetry,
-            AppLevelHeuristic, AppLevelOverride, BlocklistAIContextEvent, BlocklistAIContextModel,
+            BlocklistAIContextEvent, BlocklistAIContextModel,
             BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
             BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig,
             InputType, InputTypeAutoDetectionSource, BLOCK_CONTEXT_ATTACHMENT_REGEX,
@@ -3097,7 +3097,7 @@ impl Input {
                     ai_input_model.set_input_config(
                         *input_config,
                         is_buffer_empty,
-                        Some(AppLevelHeuristic::RestoreSavedConfig.into()),
+                        Some(InputTypeAutoDetectionSource::RestoreSavedConfig),
                         ctx,
                     );
                 });
@@ -3190,7 +3190,7 @@ impl Input {
                             if is_auto_detection_enabled {
                                 ai_input_model.set_input_type(
                                     InputType::AI,
-                                    Some(AppLevelHeuristic::ConversationContextRender.into()),
+                                    Some(InputTypeAutoDetectionSource::ConversationContextRender),
                                     ctx,
                                 );
                             }
@@ -3816,7 +3816,7 @@ impl Input {
                     is_locked: true,
                 },
                 is_input_buffer_empty,
-                Some(AppLevelHeuristic::CloudHandoffEnter.into()),
+                Some(InputTypeAutoDetectionSource::CloudHandoffEnter),
                 ctx,
             );
         });
@@ -3902,7 +3902,7 @@ impl Input {
                 }
                 .unlocked_if_autodetection_enabled(true, ctx),
                 is_input_buffer_empty,
-                Some(AppLevelHeuristic::CloudHandoffExit.into()),
+                Some(InputTypeAutoDetectionSource::CloudHandoffExit),
                 ctx,
             );
         });
@@ -3970,7 +3970,7 @@ impl Input {
                     is_locked: true,
                 },
                 is_input_buffer_empty,
-                Some(AppLevelHeuristic::CloudHandoffEnter.into()),
+                Some(InputTypeAutoDetectionSource::CloudHandoffEnter),
                 ctx,
             );
         });
@@ -4990,13 +4990,13 @@ impl Input {
                                 is_locked: true,
                             },
                             false,
-                            Some(AppLevelHeuristic::FullscreenInlineHistoryCycling.into()),
+                            Some(InputTypeAutoDetectionSource::FullscreenInlineHistoryCycling),
                             ctx,
                         );
                     } else {
                         ai_input_model.set_input_type(
                             InputType::Shell,
-                            Some(AppLevelHeuristic::HistorySelection.into()),
+                            Some(InputTypeAutoDetectionSource::HistorySelection),
                             ctx,
                         );
                     }
@@ -5010,7 +5010,7 @@ impl Input {
                 self.ai_input_model.update(ctx, |ai_input_model, ctx| {
                     ai_input_model.set_input_type(
                         InputType::AI,
-                        Some(AppLevelHeuristic::HistorySelection.into()),
+                        Some(InputTypeAutoDetectionSource::HistorySelection),
                         ctx,
                     );
                 });
@@ -6010,7 +6010,10 @@ impl Input {
         from: &voice_input::VoiceInputToggledFrom,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.enter_ai_mode(Some(AppLevelHeuristic::VoiceInputToggle.into()), ctx);
+        self.enter_ai_mode(
+            Some(InputTypeAutoDetectionSource::VoiceInputToggle),
+            ctx,
+        );
         let did_start_listening = self
             .editor
             .update(ctx, |editor, ctx| editor.toggle_voice_input(from, ctx));
@@ -6023,7 +6026,7 @@ impl Input {
         self.focus_input_box(ctx);
         self.ensure_agent_mode_for_ai_features(
             true,
-            Some(AppLevelOverride::AttachmentForcedAi.into()),
+            Some(InputTypeAutoDetectionSource::AttachmentForcedAi),
             ctx,
         );
 
@@ -6176,7 +6179,7 @@ impl Input {
                         model.set_input_config(
                             new_config,
                             is_input_buffer_empty,
-                            Some(AppLevelOverride::ManualToggle.into()),
+                            Some(InputTypeAutoDetectionSource::ManualToggle),
                             ctx,
                         );
                         false
@@ -6222,7 +6225,7 @@ impl Input {
                 if !FeatureFlag::AgentView.is_enabled() {
                     self.ensure_agent_mode_for_ai_features(
                         false,
-                        Some(AppLevelHeuristic::SlashCommand.into()),
+                        Some(InputTypeAutoDetectionSource::SlashCommand),
                         ctx,
                     );
                 }
@@ -6515,7 +6518,7 @@ impl Input {
                                     is_locked: true,
                                 },
                                 is_input_buffer_empty,
-                                Some(AppLevelOverride::SettingDisabled.into()),
+                                Some(InputTypeAutoDetectionSource::SettingDisabled),
                                 ctx,
                             );
                         });
@@ -7332,7 +7335,7 @@ impl Input {
         self.ai_input_model.update(ctx, |input_model, ctx| {
             input_model.set_input_type(
                 input_type,
-                Some(AppLevelHeuristic::WorkflowInsertion.into()),
+                Some(InputTypeAutoDetectionSource::WorkflowInsertion),
                 ctx,
             );
         });
@@ -7893,7 +7896,7 @@ impl Input {
                             };
                             ai_input_model.set_input_type(
                                 input_type,
-                                Some(AppLevelHeuristic::HistorySelection.into()),
+                                Some(InputTypeAutoDetectionSource::HistorySelection),
                                 ctx,
                             );
                         });
@@ -8160,7 +8163,7 @@ impl Input {
                             is_locked: original_input_was_locked,
                         },
                         original_buffer.is_empty(),
-                        Some(AppLevelHeuristic::RestoreSavedConfig.into()),
+                        Some(InputTypeAutoDetectionSource::RestoreSavedConfig),
                         ctx,
                     );
                 });
@@ -9522,7 +9525,7 @@ impl Input {
                     if Self::buffer_contains_attachment_patterns(&buffer_text) {
                         self.ensure_agent_mode_for_ai_features(
                             false,
-                            Some(AppLevelOverride::AttachmentForcedAi.into()),
+                            Some(InputTypeAutoDetectionSource::AttachmentForcedAi),
                             ctx,
                         );
                     }
@@ -9709,7 +9712,7 @@ impl Input {
                                         is_locked: true,
                                     },
                                     is_input_buffer_empty,
-                                    Some(AppLevelHeuristic::AgentModePrefix.into()),
+                                    Some(InputTypeAutoDetectionSource::AgentModePrefix),
                                     ctx,
                                 );
                             });
@@ -9817,7 +9820,7 @@ impl Input {
                                         is_locked: true,
                                     },
                                     is_input_buffer_empty,
-                                    Some(AppLevelOverride::ShellPrefix.into()),
+                                    Some(InputTypeAutoDetectionSource::ShellPrefix),
                                     ctx,
                                 );
                             });
@@ -10190,7 +10193,7 @@ impl Input {
                         self.ai_input_model.update(ctx, |input_model, ctx| {
                             input_model.set_input_type(
                                 InputType::Shell,
-                                Some(AppLevelHeuristic::CommandAutosuggestionAccepted.into()),
+                                Some(InputTypeAutoDetectionSource::CommandAutosuggestionAccepted),
                                 ctx,
                             );
                         });
@@ -10230,7 +10233,7 @@ impl Input {
                         }
                         // Switch to AI input mode but preserve current lock state when accepting an Agent Mode query autosuggestion.
                         self.enter_ai_mode(
-                            Some(AppLevelHeuristic::AgentQueryAutosuggestionAccepted.into()),
+                            Some(InputTypeAutoDetectionSource::AgentQueryAutosuggestionAccepted),
                             ctx,
                         );
                         self.ai_context_model.update(ctx, |context_model, ctx| {
@@ -10472,7 +10475,7 @@ impl Input {
                             .should_run_input_autodetection(ctx)
                         {
                             self.enter_ai_mode(
-                                Some(AppLevelHeuristic::AtContextMenuInsert.into()),
+                                Some(InputTypeAutoDetectionSource::AtContextMenuInsert),
                                 ctx,
                             );
                         }
@@ -13842,14 +13845,14 @@ impl Input {
                     is_locked: true,
                 };
                 let decision_source = if has_locking_attachment {
-                    AppLevelOverride::AttachmentForcedAi
+                    InputTypeAutoDetectionSource::AttachmentForcedAi
                 } else {
-                    AppLevelOverride::ManualToggle
+                    InputTypeAutoDetectionSource::ManualToggle
                 };
                 ai_input_model.set_input_config(
                     new_config,
                     is_input_buffer_empty,
-                    Some(decision_source.into()),
+                    Some(decision_source),
                     ctx,
                 );
             });
@@ -13875,7 +13878,7 @@ impl Input {
             ai_input_model.set_input_config(
                 new_config,
                 is_input_buffer_empty,
-                Some(AppLevelOverride::ManualToggle.into()),
+                Some(InputTypeAutoDetectionSource::ManualToggle),
                 ctx,
             );
         });
@@ -13901,7 +13904,7 @@ impl Input {
             model.set_input_config(
                 config,
                 is_input_buffer_empty,
-                Some(AppLevelHeuristic::SessionSharingApply.into()),
+                Some(InputTypeAutoDetectionSource::SessionSharingApply),
                 ctx,
             );
         });
@@ -13935,7 +13938,7 @@ impl Input {
             ai_input_model.set_input_config(
                 new_config,
                 true,
-                Some(AppLevelOverride::ShellPrefix.into()),
+                Some(InputTypeAutoDetectionSource::ShellPrefix),
                 ctx,
             );
         });
@@ -14165,7 +14168,7 @@ impl Input {
                     false,
                     new_config
                         .is_locked
-                        .then_some(AppLevelOverride::SettingDisabled.into()),
+                        .then_some(InputTypeAutoDetectionSource::SettingDisabled),
                     ctx,
                 );
             });
@@ -15070,7 +15073,10 @@ impl TypedActionView for Input {
                             ctx,
                         );
                     });
-                    self.enter_ai_mode(Some(AppLevelHeuristic::StartNewConversation.into()), ctx);
+                    self.enter_ai_mode(
+                        Some(InputTypeAutoDetectionSource::StartNewConversation),
+                        ctx,
+                    );
                 }
             }
             InputAction::OpenInlineHistoryMenu => {

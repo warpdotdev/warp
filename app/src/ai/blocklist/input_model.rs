@@ -19,17 +19,23 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonE
 
 pub use input_classifier::{InputType, NldDecision};
 
-/// App-level overrides that bypass the NLD pipeline entirely.
+/// The source of the final input type decision applied to the user input.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AppLevelOverride {
-    
-    ,
-    // SettingDisabled,
-}
-
-/// App-level heuristics that change input type as a side effect of unrelated UI flows.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AppLevelHeuristic {
+pub enum InputTypeAutoDetectionSource {
+    /// Decision produced by the NLD classifier pipeline.
+    NldDecision(NldDecision),
+    /// User explicitly toggled the input type via cmd + I.
+    ManualToggle,
+    /// `!` shell prefix force-locked the input to Shell mode.
+    ShellPrefix,
+    /// Image / file attachment in progress force-locked AI mode.
+    AttachmentForcedAi,
+    /// First token matched the autodetection command denylist.
+    Denylist,
+    /// Buffer text closely matched a recent shell history entry.
+    HistoryMatch,
+    /// Input was classified as a follow-up to a preceding AI block.
+    AgentFollowUp,
     /// Inline history menu / history-up suggestion selection set the input type.
     HistorySelection,
     /// Inserting a workflow into the input set the input type based on workflow kind.
@@ -72,71 +78,6 @@ pub enum AppLevelHeuristic {
     VoiceInputToggle,
     /// Inserting from the AI `@` context menu forced AI mode.
     AtContextMenuInsert,
-}
-
-/// The source of the final input type decision applied to the user input.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum InputTypeAutoDetectionSource {
-    NldDecision(NldDecision),
-    ManualToggle,
-    ShellPrefix,
-    AttachmentForcedAi,
-    Denylist,
-    HistoryMatch,
-    AgentFollowUp,
-    HistorySelection,
-    /// Inserting a workflow into the input set the input type based on workflow kind.
-    WorkflowInsertion,
-    /// Accepting a shell command autosuggestion forced Shell mode.
-    CommandAutosuggestionAccepted,
-    /// Accepting an Agent Mode query autosuggestion forced AI mode.
-    AgentQueryAutosuggestionAccepted,
-    /// Empty-buffer conversation context render forced AI so conversation context renders.
-    ConversationContextRender,
-    /// "Continue conversation" button forced AI mode.
-    ContinueConversation,
-    /// Onboarding tutorial agent prompt forced AI mode.
-    OnboardingAgentPrompt,
-    /// Starting a new agent conversation forced AI mode.
-    StartNewConversation,
-    /// Ask-AI flow (text/block selection, programmatic Ask-AI lock) forced AI mode.
-    AskAi,
-    /// Detected/composing slash or skill command forced AI mode.
-    SlashCommand,
-    /// Entering inline agent view force-locked AI without an explicit user toggle.
-    InlineAgentViewEntry,
-    /// Activating cloud handoff compose (`&` prefix or programmatic) force-locked AI.
-    CloudHandoffEnter,
-    /// Exiting cloud handoff compose restored AI / unlocked-if-autodetect.
-    CloudHandoffExit,
-    /// Legacy non-AgentView `?` AI prefix path force-locked AI.
-    AgentModePrefix,
-    /// Inline code review send overrode the input mode to AI.
-    InlineCodeReviewSend,
-    /// External input config update from session sharing applied.
-    SessionSharingApply,
-    /// Fullscreen AgentView inline history command cycling force-locked Shell.
-    FullscreenInlineHistoryCycling,
-    /// Closing history suggestions restored the previously saved config.
-    RestoreSavedConfig,
-    /// `set_input_config_for_classic_mode` reset (CtrlC, delete-all-left, etc.).
-    ClassicModeReset,
-    /// Toggling voice input forced AI mode.
-    VoiceInputToggle,
-    /// Inserting from the AI `@` context menu forced AI mode.
-    AtContextMenuInsert,
-}
-
-impl From<AppLevelOverride> for InputTypeAutoDetectionSource {
-    fn from(value: AppLevelOverride) -> Self {
-        Self::AppLevelOverride(value)
-    }
-}
-
-impl From<AppLevelHeuristic> for InputTypeAutoDetectionSource {
-    fn from(value: AppLevelHeuristic) -> Self {
-        Self::AppLevelHeuristic(value)
-    }
 }
 
 impl From<NldDecision> for InputTypeAutoDetectionSource {
@@ -342,7 +283,8 @@ impl BlocklistAIInputModel {
                                 is_locked: !is_nld_enabled,
                                 input_type: InputType::AI,
                             },
-                            (!is_nld_enabled).then_some(AppLevelOverride::SettingDisabled.into()),
+                            (!is_nld_enabled)
+                                .then(None),
                             ctx,
                         );
                     }
@@ -359,7 +301,7 @@ impl BlocklistAIInputModel {
                             ..me.input_config()
                         },
                         (!is_autodetection_enabled)
-                            .then_some(AppLevelOverride::SettingDisabled.into()),
+                            .then(None),
                         ctx,
                     );
                 }
@@ -373,7 +315,7 @@ impl BlocklistAIInputModel {
                             is_locked: !is_nld_enabled,
                             input_type: InputType::Shell,
                         },
-                        (!is_nld_enabled).then_some(AppLevelOverride::SettingDisabled.into()),
+                        (!is_nld_enabled).then(None),
                         ctx,
                     );
                 }
@@ -389,17 +331,12 @@ impl BlocklistAIInputModel {
                     ..
                 } => {
                     if display_mode.is_inline() {
-                        // Entering inline agent view isn't a manual NLD mode toggle
-                        // (the user opened the agent view, not the type-switch UI),
-                        // but it does change the input mode as a side effect; attribute
-                        // it as an app-level heuristic so the source is captured on
-                        // submission.
                         me.set_input_config_internal(
                             InputConfig {
                                 input_type: InputType::AI,
                                 is_locked: true,
                             },
-                            Some(AppLevelHeuristic::InlineAgentViewEntry.into()),
+                            Some(InputTypeAutoDetectionSource::InlineAgentViewEntry),
                             ctx,
                         );
                     } else if matches!(origin, AgentViewEntryOrigin::ClearBuffer) {
@@ -411,7 +348,7 @@ impl BlocklistAIInputModel {
                                 is_locked: !is_autodetection_enabled,
                             },
                             (!is_autodetection_enabled)
-                                .then_some(AppLevelOverride::SettingDisabled.into()),
+                                .then(None),
                             ctx,
                         );
                     } else if me.has_locking_attachment(ctx) {
@@ -424,7 +361,7 @@ impl BlocklistAIInputModel {
                                 input_type: InputType::AI,
                                 is_locked: true,
                             },
-                            Some(AppLevelOverride::AttachmentForcedAi.into()),
+                            Some(InputTypeAutoDetectionSource::AttachmentForcedAi),
                             ctx,
                         );
                     } else {
@@ -444,7 +381,7 @@ impl BlocklistAIInputModel {
                                 is_locked: !is_autodetection_enabled,
                             },
                             (!is_autodetection_enabled)
-                                .then_some(AppLevelOverride::SettingDisabled.into()),
+                                .then_some(InputTypeAutoDetectionSource::SettingDisabled),
                             ctx,
                         );
                     }
@@ -464,7 +401,7 @@ impl BlocklistAIInputModel {
                                 is_locked: !is_nld_in_terminal_enabled,
                             },
                             (!is_nld_in_terminal_enabled)
-                                .then_some(AppLevelOverride::SettingDisabled.into()),
+                                .then(None),
                             ctx,
                         );
                     }
@@ -479,7 +416,7 @@ impl BlocklistAIInputModel {
             AISettings::as_ref(ctx).is_ai_autodetection_enabled(ctx)
         };
         let initial_decision_source =
-            (!is_autodetection_enabled).then_some(AppLevelOverride::SettingDisabled.into());
+            (!is_autodetection_enabled).then(None);
         Self {
             input_config: InputConfig {
                 input_type: InputType::Shell,
@@ -547,15 +484,13 @@ impl BlocklistAIInputModel {
         }
         self.set_input_config_internal(
             new_config,
-            Some(AppLevelHeuristic::ClassicModeReset.into()),
+            Some(InputTypeAutoDetectionSource::ClassicModeReset),
             ctx,
         );
     }
 
     /// Swaps between Agent/Shell input types while preserving lock state. Temporarily disables
-    /// autodetection. Callers should attribute the transition via `decision_source` (typically
-    /// an [`AppLevelHeuristic`]); pass `None` only for paths where attribution is intentionally
-    /// left unset (e.g. tests).
+    /// autodetection. 
     pub fn set_input_type(
         &mut self,
         input_type: InputType,
@@ -823,7 +758,7 @@ impl BlocklistAIInputModel {
                     input_type: InputType::Shell,
                     ..self.input_config()
                 },
-                Some(NldDecision::Denylist.into()),
+                Some(InputTypeAutoDetectionSource::Denylist),
                 ctx,
             );
             return;
@@ -879,7 +814,7 @@ impl BlocklistAIInputModel {
                     if is_agent_follow_up
                         && is_agent_follow_up_input(&buffer_cloned.trim().to_lowercase())
                     {
-                        return (InputType::AI, NldDecision::AgentFollowUp.into());
+                        return (InputType::AI, InputTypeAutoDetectionSource::AgentFollowUp);
                     }
 
                     // If we have history entries (i.e., a live session), check for
@@ -892,7 +827,7 @@ impl BlocklistAIInputModel {
                         )
                         .await
                         {
-                            return (InputType::Shell, NldDecision::HistoryMatch.into());
+                            return (InputType::Shell, InputTypeAutoDetectionSource::HistoryMatch);
                         }
                     }
 

@@ -5473,7 +5473,7 @@ fn test_input_type_button_explicit_lock() {
         });
         assert_eq!(
             after_click_source,
-            Some(AppLevelOverride::ManualToggle.into())
+            Some(InputTypeAutoDetectionSource::ManualToggle)
         );
 
         // Explicitly click Terminal button - should lock to Shell mode
@@ -5500,7 +5500,7 @@ fn test_input_type_button_explicit_lock() {
                 ai_input.last_ai_autodetection_source()
             })
         });
-        assert_eq!(final_source, Some(AppLevelOverride::ManualToggle.into()));
+        assert_eq!(final_source, Some(InputTypeAutoDetectionSource::ManualToggle));
     });
 }
 
@@ -6175,7 +6175,7 @@ fn test_terminal_prefix_sets_shell_prefix_decision_source() {
                 assert!(input_model.is_input_type_locked());
                 assert_eq!(
                     input_model.last_ai_autodetection_source(),
-                    Some(AppLevelOverride::ShellPrefix.into())
+                    Some(InputTypeAutoDetectionSource::ShellPrefix)
                 );
             });
         });
@@ -6198,7 +6198,7 @@ fn test_source_less_locked_config_clears_decision_source() {
                 input_model.set_input_config(
                     locked_shell_config,
                     true,
-                    Some(AppLevelOverride::ShellPrefix.into()),
+                    Some(InputTypeAutoDetectionSource::ShellPrefix),
                     ctx,
                 );
                 input_model.set_input_config(locked_shell_config, true, None, ctx);
@@ -6318,7 +6318,7 @@ fn test_image_attachment_preserves_lock_state() {
         });
         assert_eq!(
             locked_source,
-            Some(AppLevelOverride::AttachmentForcedAi.into())
+            Some(InputTypeAutoDetectionSource::AttachmentForcedAi)
         );
 
         // Test with unlocked Shell mode
@@ -6362,7 +6362,7 @@ fn test_image_attachment_preserves_lock_state() {
         });
         assert_eq!(
             unlocked_source,
-            Some(AppLevelOverride::AttachmentForcedAi.into())
+            Some(InputTypeAutoDetectionSource::AttachmentForcedAi)
         );
     });
 }
@@ -6872,7 +6872,7 @@ fn test_terminal_only_escape_locks_shell_mode() {
                 ai_input.last_ai_autodetection_source()
             })
         });
-        assert_eq!(source, Some(AppLevelOverride::ManualToggle.into()));
+        assert_eq!(source, Some(InputTypeAutoDetectionSource::ManualToggle));
     });
 }
 

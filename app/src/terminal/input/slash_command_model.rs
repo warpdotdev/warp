@@ -3,7 +3,9 @@ use input_classifier::InputType;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
-use crate::ai::blocklist::{AppLevelHeuristic, BlocklistAIInputEvent, BlocklistAIInputModel};
+use crate::ai::blocklist::{
+    BlocklistAIInputEvent, BlocklistAIInputModel, InputTypeAutoDetectionSource,
+};
 use crate::ai::skills::SkillManager;
 use crate::search::slash_command_menu::StaticCommand;
 use crate::settings::InputSettings;
@@ -195,7 +197,7 @@ impl SlashCommandModel {
             self.ai_input_model.update(ctx, |input_model, ctx| {
                 input_model.set_input_type(
                     InputType::Shell,
-                    Some(AppLevelHeuristic::SlashCommand.into()),
+                    Some(InputTypeAutoDetectionSource::SlashCommand),
                     ctx,
                 );
             });
@@ -338,7 +340,7 @@ impl SlashCommandModel {
                     self.ai_input_model.update(ctx, |input_model, ctx| {
                         input_model.set_input_type(
                             InputType::AI,
-                            Some(AppLevelHeuristic::SlashCommand.into()),
+                            Some(InputTypeAutoDetectionSource::SlashCommand),
                             ctx,
                         );
                     });
@@ -356,7 +358,7 @@ impl SlashCommandModel {
                 self.ai_input_model.update(ctx, |input_model, ctx| {
                     input_model.set_input_type(
                         InputType::AI,
-                        Some(AppLevelHeuristic::SlashCommand.into()),
+                        Some(InputTypeAutoDetectionSource::SlashCommand),
                         ctx,
                     );
                 });
@@ -387,7 +389,7 @@ impl SlashCommandModel {
                     self.ai_input_model.update(ctx, |input_model, ctx| {
                         input_model.set_input_type(
                             InputType::AI,
-                            Some(AppLevelHeuristic::SlashCommand.into()),
+                            Some(InputTypeAutoDetectionSource::SlashCommand),
                             ctx,
                         );
                     });
