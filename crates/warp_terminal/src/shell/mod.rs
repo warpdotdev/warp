@@ -334,20 +334,15 @@ impl ShellType {
 
     /// Returns the potential paths to the RC file relative to the `home` directory.
     ///
-    /// The path separator is chosen based on the target OS rather than the host OS,
-    /// because the resulting path is rendered into a shell command executed on the
-    /// target (e.g. via SSH or Auto-Warpify). Using `PathBuf::join` here would pick
-    /// the host's separator and produce strings like `~\.zshrc` on a Windows host
-    /// when targeting a Unix shell, which the remote shell cannot resolve.
-    pub fn rc_file_paths(&self, os: TargetOS) -> Vec<PathBuf> {
-        let home_dir = match os {
-            TargetOS::Windows => "$HOME",
-            _ => "~",
-        };
-        let separator = match os {
-            TargetOS::Windows => '\\',
-            _ => '/',
-        };
+    /// The returned [`TypedPathBuf`]s are encoded for the target OS rather than the
+    /// host OS, because the resulting path is rendered into a shell command executed
+    /// on the target (e.g. via SSH or Auto-Warpify). A plain `PathBuf` would pick the
+    /// host's separator and produce strings like `~\.zshrc` on a Windows host when
+    /// targeting a Unix shell, which the remote shell cannot resolve. Encoding for
+    /// the target OS lets `TypedPathBuf` enforce the correct separator.
+    pub fn rc_file_paths(&self, os: TargetOS) -> Vec<TypedPathBuf> {
+        let is_windows = matches!(os, TargetOS::Windows);
+        let home_dir = if is_windows { "$HOME" } else { "~" };
         let relative_paths: Vec<&str> = match (self, os) {
             (ShellType::PowerShell, TargetOS::Windows) => {
                 vec![".config/powershell/Microsoft.PowerShell_profile.ps1"]
@@ -365,7 +360,17 @@ impl ShellType {
         };
         relative_paths
             .iter()
-            .map(|relative_path| PathBuf::from(format!("{home_dir}{separator}{relative_path}")))
+            .map(|relative_path| {
+                let mut path = if is_windows {
+                    TypedPathBuf::from_windows(home_dir)
+                } else {
+                    TypedPathBuf::from_unix(home_dir)
+                };
+                // `push` uses the separator of the encoding picked above, so the
+                // result follows the target OS regardless of the host.
+                path.push(relative_path);
+                path
+            })
             .collect()
     }
 

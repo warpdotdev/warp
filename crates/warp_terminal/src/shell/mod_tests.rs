@@ -279,27 +279,31 @@ fn test_should_add_command_to_history() {
 /// Previously this used `PathBuf::join`, which uses the host's separator and
 /// produced strings like `~\.zshrc` on a Windows host targeting a Unix shell —
 /// the remote zsh then errored with "no such user or named directory".
+/// `rc_file_paths` now returns `TypedPathBuf`s encoded for the target OS, so the
+/// separator is enforced by the encoding rather than the host.
 #[test]
 fn test_rc_file_paths_use_target_os_separator() {
     for os in [TargetOS::Linux, TargetOS::MacOS] {
         assert_eq!(
             ShellType::Zsh.rc_file_paths(os.clone()),
-            vec![PathBuf::from("~/.zshrc")],
+            vec![TypedPathBuf::from_unix("~/.zshrc")],
             "Zsh rc path on {os:?} should use forward slash regardless of host",
         );
         assert_eq!(
             ShellType::Bash.rc_file_paths(os.clone()),
-            vec![PathBuf::from("~/.bashrc")],
+            vec![TypedPathBuf::from_unix("~/.bashrc")],
         );
         assert_eq!(
             ShellType::Fish.rc_file_paths(os.clone()),
-            vec![PathBuf::from("~/.config/fish/config.fish")],
+            vec![TypedPathBuf::from_unix("~/.config/fish/config.fish")],
         );
         assert_eq!(
             ShellType::PowerShell.rc_file_paths(os),
             vec![
-                PathBuf::from("~/Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
-                PathBuf::from("~/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
+                TypedPathBuf::from_unix("~/Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
+                TypedPathBuf::from_unix(
+                    "~/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"
+                ),
             ],
         );
     }
@@ -310,7 +314,7 @@ fn test_rc_file_paths_use_target_os_separator() {
     // are left as-is (PowerShell accepts forward slashes on Windows).
     assert_eq!(
         ShellType::PowerShell.rc_file_paths(TargetOS::Windows),
-        vec![PathBuf::from(
+        vec![TypedPathBuf::from_windows(
             "$HOME\\.config/powershell/Microsoft.PowerShell_profile.ps1"
         )],
     );
