@@ -957,22 +957,16 @@ impl MessageProvider<AgentMessageArgs<'_>> for ExitBashModeMessageProducer {
             return None;
         }
         let set_input_mode_agent_keystroke =
-            keybinding_name_to_keystroke(SET_INPUT_MODE_AGENT_ACTION_NAME, app).unwrap_or_else(
-                || Keystroke {
-                    key: "backspace".to_owned(),
-                    ..Default::default()
-                },
-            );
+            keybinding_name_to_keystroke(SET_INPUT_MODE_AGENT_ACTION_NAME, app)?;
 
         let text_color = appearance.theme().ansi_fg_blue();
-        let (keystroke_color_override, keystroke_bg_color_override) = (None, None);
 
         Some(
             Message::new(vec![
                 MessageItem::Keystroke {
                     keystroke: set_input_mode_agent_keystroke,
-                    color: keystroke_color_override,
-                    background_color: keystroke_bg_color_override,
+                    color: None,
+                    background_color: None,
                 },
                 MessageItem::text("to exit shell mode"),
             ])
