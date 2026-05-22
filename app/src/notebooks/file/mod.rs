@@ -591,6 +591,22 @@ impl FileNotebookView {
 
         let host_id = remote_path.host_id.clone();
         let manager = remote_server::manager::RemoteServerManager::handle(ctx);
+
+        // Subscribe to host connect/disconnect events so the disconnection
+        // banner appears/disappears when the remote session state changes.
+        let watched_host_id = host_id.clone();
+        ctx.subscribe_to_model(&manager, move |_me, _handle, event, ctx| {
+            use remote_server::manager::RemoteServerManagerEvent;
+            match event {
+                RemoteServerManagerEvent::HostDisconnected { host_id }
+                | RemoteServerManagerEvent::HostConnected { host_id }
+                    if *host_id == watched_host_id =>
+                {
+                    ctx.notify();
+                }
+                _ => {}
+            }
+        });
         let client = manager.as_ref(ctx).client_for_host(&host_id).cloned();
 
         let Some(client) = client else {
