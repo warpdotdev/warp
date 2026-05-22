@@ -149,22 +149,6 @@ fn logout_parses() {
 }
 
 #[test]
-fn tab_create_parses_local_control_command() {
-    let args = Args::try_parse_from(["warp", "tab", "create", "--instance", "inst_123"])
-        .expect("tab create parses");
-
-    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
-        panic!("Expected `warp tab create` command");
-    };
-    let CliCommand::Tab(crate::local_control::TabCommand::Create(target)) = boxed_cmd.as_ref()
-    else {
-        panic!("Expected `warp tab create` command");
-    };
-
-    assert_eq!(target.instance.as_deref(), Some("inst_123"));
-}
-
-#[test]
 fn agent_run_accepts_file() {
     let args = Args::try_parse_from([
         "warp",

@@ -210,23 +210,19 @@ The allowlist must clearly indicate `requires_authenticated_user` for every acti
 If an authenticated-user action is invoked while the selected app has no logged-in user, the CLI reports a structured authenticated-user error. It must not silently return partial logged-out data as success.
 ### Execution context policy
 `warpctrl` should distinguish verified invocations from inside Warp-managed terminal sessions from external invocations.
-- **Verified Warp-terminal invocation:** a `warpctrl` process started inside a Warp-managed terminal session and able to present an app-issued execution-context proof. The top-level setting for this context should default to on. When the selected app has a logged-in Warp user, this context can receive authenticated-user grants if the user's Scripting permissions allow that grant.
-- **External invocation:** a `warpctrl` process started outside Warp's terminal, such as from another terminal app, launch agent, IDE, or background script. The top-level setting for this context must default to off. When disabled, external invocations receive no local-control credentials, including logged-out-safe metadata credentials.
+- **Verified Warp-terminal invocation:** a `warpctrl` process started inside a Warp-managed terminal session and able to present an app-issued execution-context proof. The top-level setting for this context should default to on. When the selected app has a logged-in Warp user, this context can receive authenticated-user grants if the user's Scripting permissions and action policy allow that grant.
+- **External invocation:** a `warpctrl` process started outside Warp's terminal, such as from another terminal app, launch agent, IDE, or background script. The top-level setting for this context must default to off. When disabled, external invocations receive no local-control credentials, including logged-out-safe read-only credentials.
 - The app must not trust a caller-declared label. Environment variables may help discover the context, but the broker must verify a session-bound capability or equivalent proof before issuing in-Warp-only grants.
 ### Settings surface
 Warp should add a new top-level Settings pane page named **Scripting**. This page should own settings for local scripting and automation surfaces, including Warp control. For Warp control, it should include two top-level toggles:
-- **Allow Warp control from inside Warp:** default on. Controls `warpctrl` invocations from verified Warp-managed terminal sessions.
-- **Allow Warp control from outside Warp:** default off. Controls `warpctrl` invocations from external terminals, scripts, IDEs, launch agents, and other same-user processes.
-The Scripting page should explain that inside-Warp control is scoped to commands launched from Warp-managed terminals, while outside-Warp control allows other local apps and scripts to talk to Warp's control plane. Disabling either top-level toggle should invalidate credentials for that invocation context.
+- **Warp control within Warp:** default on. Controls `warpctrl` invocations from verified Warp-managed terminal sessions.
+- **Warp control outside Warp:** default off. Controls `warpctrl` invocations from external terminals, scripts, IDEs, launch agents, and other same-user processes.
+The Scripting page should explain that within-Warp control is scoped to commands launched from Warp-managed terminals, while outside-Warp control allows other local apps and scripts to talk to Warp's control plane. Disabling either top-level toggle should invalidate credentials for that invocation context and hide that context's child permission controls.
 ### Granular local-control permissions
-The Scripting settings page should expose granular permissions beneath the inside-Warp and outside-Warp toggles. Recommended controls:
-- Allow local read-only metadata.
-- Allow terminal data reads.
-- Allow non-destructive local mutations.
-- Allow destructive or execution actions.
-- Allow authenticated-user actions from verified Warp terminals.
-- Allow authenticated-user actions from external clients, default off and separate from the in-Warp permission.
-These settings define the maximum grants the broker may issue. The app bridge still enforces the action's risk tier, authenticated-user requirement, execution-context requirement, and target scope for every request.
+The Scripting settings page should expose two child permissions beneath each enabled parent context:
+- **Allow read-only control:** permits Warp control commands to query information.
+- **Allow read-write control:** permits Warp control commands to change Warp app state.
+When a parent context is disabled, its read-only and read-write child controls should not be shown. These settings define the maximum grants the broker may issue for that invocation context. The app bridge still enforces the action's risk tier, authenticated-user requirement, execution-context requirement, and target scope for every request.
 ### Scoped credentials
 The local discovery record must not expose a reusable full-access credential. `warpctrl` should request scoped credentials from an app-owned broker or equivalent trusted path.
 Scoped credentials should include:

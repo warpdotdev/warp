@@ -22406,39 +22406,6 @@ impl TypedActionView for Workspace {
                 self.insert_in_input(content, *replace_buffer, false, *ensure_agent_mode, ctx);
                 ctx.notify();
             }
-            ClearInputBuffer => {
-                if let Some(terminal_view) = self
-                    .active_tab_pane_group()
-                    .as_ref(ctx)
-                    .focused_session_view(ctx)
-                {
-                    terminal_view.update(ctx, |terminal_view, ctx| {
-                        terminal_view.handle_action(&TerminalAction::ClearBuffer, ctx);
-                    });
-                }
-            }
-            SetInputModeAgent => {
-                if let Some(terminal_view) = self
-                    .active_tab_pane_group()
-                    .as_ref(ctx)
-                    .focused_session_view(ctx)
-                {
-                    terminal_view.update(ctx, |terminal_view, ctx| {
-                        terminal_view.handle_action(&TerminalAction::SetInputModeAgent, ctx);
-                    });
-                }
-            }
-            SetInputModeTerminal => {
-                if let Some(terminal_view) = self
-                    .active_tab_pane_group()
-                    .as_ref(ctx)
-                    .focused_session_view(ctx)
-                {
-                    terminal_view.update(ctx, |terminal_view, ctx| {
-                        terminal_view.handle_action(&TerminalAction::SetInputModeTerminal, ctx);
-                    });
-                }
-            }
             AttemptLoginGatedAIUpgrade => {
                 AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
                     auth_manager.attempt_login_gated_feature(

@@ -3,6 +3,68 @@ use uuid::Uuid;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvocationContext {
+    InsideWarp,
+    OutsideWarp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ExecutionContextProof {
+    VerifiedWarpTerminal { proof_id: String },
+    ExternalClient,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RiskTier {
+    ReadOnlyMetadata,
+    ReadOnlyTerminalData,
+    MutatingNonDestructive,
+    MutatingDestructiveOrExecution,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalControlPermission {
+    ReadOnly,
+    ReadWrite,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetScope {
+    Instance,
+    Window,
+    Tab,
+    Pane,
+    Session,
+    Settings,
+    Appearance,
+    Surface,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionImplementationStatus {
+    Implemented,
+    Stub,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActionMetadata {
+    pub kind: ActionKind,
+    pub name: String,
+    pub implementation_status: ActionImplementationStatus,
+    pub risk_tier: RiskTier,
+    pub requires_authenticated_user: bool,
+    pub allowed_invocation_contexts: Vec<InvocationContext>,
+    pub permission: LocalControlPermission,
+    pub target_scope: TargetScope,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct WindowSelector(pub String);
@@ -189,6 +251,56 @@ pub enum ActionKind {
 }
 
 impl ActionKind {
+    pub const ALL: &[Self] = &[
+        Self::AppPing,
+        Self::AppInspect,
+        Self::AppVersion,
+        Self::AppActive,
+        Self::AppFocus,
+        Self::AppSettingsOpen,
+        Self::AppCommandPaletteOpen,
+        Self::AppCommandSearchOpen,
+        Self::AppWarpDriveOpen,
+        Self::AppWarpDriveToggle,
+        Self::AppResourceCenterToggle,
+        Self::AppAiAssistantToggle,
+        Self::AppCodeReviewToggle,
+        Self::AppVerticalTabsToggle,
+        Self::WindowList,
+        Self::WindowCreate,
+        Self::WindowFocus,
+        Self::WindowClose,
+        Self::TabList,
+        Self::TabCreate,
+        Self::TabActivate,
+        Self::TabMove,
+        Self::TabRename,
+        Self::TabClose,
+        Self::PaneList,
+        Self::PaneSplit,
+        Self::PaneFocus,
+        Self::PaneNavigate,
+        Self::PaneClose,
+        Self::PaneMaximize,
+        Self::PaneResize,
+        Self::PaneSessionPrevious,
+        Self::PaneSessionNext,
+        Self::SessionList,
+        Self::InputInsert,
+        Self::InputReplace,
+        Self::InputClear,
+        Self::InputModeSet,
+        Self::ThemeList,
+        Self::ThemeSet,
+        Self::AppearanceGet,
+        Self::AppearanceSet,
+        Self::AppearanceFontSize,
+        Self::AppearanceZoom,
+        Self::SettingGet,
+        Self::SettingList,
+        Self::SettingSet,
+        Self::SettingToggle,
+    ];
     pub fn as_str(self) -> &'static str {
         match self {
             Self::AppPing => "app.ping",
@@ -239,6 +351,164 @@ impl ActionKind {
             Self::SettingList => "setting.list",
             Self::SettingSet => "setting.set",
             Self::SettingToggle => "setting.toggle",
+        }
+    }
+
+    pub fn metadata(self) -> ActionMetadata {
+        if self == Self::TabCreate {
+            return ActionMetadata {
+                kind: self,
+                name: self.as_str().to_owned(),
+                implementation_status: ActionImplementationStatus::Implemented,
+                risk_tier: RiskTier::MutatingNonDestructive,
+                requires_authenticated_user: false,
+                allowed_invocation_contexts: vec![
+                    InvocationContext::InsideWarp,
+                    InvocationContext::OutsideWarp,
+                ],
+                permission: LocalControlPermission::ReadWrite,
+                target_scope: TargetScope::Window,
+            };
+        }
+        ActionMetadata {
+            kind: self,
+            name: self.as_str().to_owned(),
+            implementation_status: ActionImplementationStatus::Stub,
+            risk_tier: self.default_risk_tier(),
+            requires_authenticated_user: true,
+            allowed_invocation_contexts: Vec::new(),
+            permission: self.default_permission(),
+            target_scope: self.default_target_scope(),
+        }
+    }
+
+    pub fn implemented_metadata() -> Vec<ActionMetadata> {
+        Self::ALL
+            .iter()
+            .copied()
+            .map(Self::metadata)
+            .filter(|metadata| {
+                metadata.implementation_status == ActionImplementationStatus::Implemented
+            })
+            .collect()
+    }
+
+    pub fn is_implemented(self) -> bool {
+        self.metadata().implementation_status == ActionImplementationStatus::Implemented
+    }
+
+    fn default_risk_tier(self) -> RiskTier {
+        match self {
+            Self::AppPing
+            | Self::AppInspect
+            | Self::AppVersion
+            | Self::AppActive
+            | Self::WindowList
+            | Self::TabList
+            | Self::PaneList
+            | Self::SessionList
+            | Self::ThemeList
+            | Self::AppearanceGet
+            | Self::SettingGet
+            | Self::SettingList => RiskTier::ReadOnlyMetadata,
+            Self::InputInsert
+            | Self::InputReplace
+            | Self::InputClear
+            | Self::InputModeSet
+            | Self::WindowClose
+            | Self::TabClose
+            | Self::PaneClose => RiskTier::MutatingDestructiveOrExecution,
+            Self::AppFocus
+            | Self::AppSettingsOpen
+            | Self::AppCommandPaletteOpen
+            | Self::AppCommandSearchOpen
+            | Self::AppWarpDriveOpen
+            | Self::AppWarpDriveToggle
+            | Self::AppResourceCenterToggle
+            | Self::AppAiAssistantToggle
+            | Self::AppCodeReviewToggle
+            | Self::AppVerticalTabsToggle
+            | Self::WindowCreate
+            | Self::WindowFocus
+            | Self::TabCreate
+            | Self::TabActivate
+            | Self::TabMove
+            | Self::TabRename
+            | Self::PaneSplit
+            | Self::PaneFocus
+            | Self::PaneNavigate
+            | Self::PaneMaximize
+            | Self::PaneResize
+            | Self::PaneSessionPrevious
+            | Self::PaneSessionNext
+            | Self::ThemeSet
+            | Self::AppearanceSet
+            | Self::AppearanceFontSize
+            | Self::AppearanceZoom
+            | Self::SettingSet
+            | Self::SettingToggle => RiskTier::MutatingNonDestructive,
+        }
+    }
+
+    fn default_permission(self) -> LocalControlPermission {
+        match self.default_risk_tier() {
+            RiskTier::ReadOnlyMetadata | RiskTier::ReadOnlyTerminalData => {
+                LocalControlPermission::ReadOnly
+            }
+            RiskTier::MutatingNonDestructive | RiskTier::MutatingDestructiveOrExecution => {
+                LocalControlPermission::ReadWrite
+            }
+        }
+    }
+
+    fn default_target_scope(self) -> TargetScope {
+        match self {
+            Self::WindowList | Self::WindowCreate | Self::WindowFocus | Self::WindowClose => {
+                TargetScope::Window
+            }
+            Self::TabList
+            | Self::TabCreate
+            | Self::TabActivate
+            | Self::TabMove
+            | Self::TabRename
+            | Self::TabClose => TargetScope::Tab,
+            Self::PaneList
+            | Self::PaneSplit
+            | Self::PaneFocus
+            | Self::PaneNavigate
+            | Self::PaneClose
+            | Self::PaneMaximize
+            | Self::PaneResize
+            | Self::PaneSessionPrevious
+            | Self::PaneSessionNext => TargetScope::Pane,
+            Self::SessionList
+            | Self::InputInsert
+            | Self::InputReplace
+            | Self::InputClear
+            | Self::InputModeSet => TargetScope::Session,
+            Self::ThemeList
+            | Self::ThemeSet
+            | Self::AppearanceGet
+            | Self::AppearanceSet
+            | Self::AppearanceFontSize
+            | Self::AppearanceZoom => TargetScope::Appearance,
+            Self::SettingGet | Self::SettingList | Self::SettingSet | Self::SettingToggle => {
+                TargetScope::Settings
+            }
+            Self::AppSettingsOpen
+            | Self::AppCommandPaletteOpen
+            | Self::AppCommandSearchOpen
+            | Self::AppWarpDriveOpen
+            | Self::AppWarpDriveToggle
+            | Self::AppResourceCenterToggle
+            | Self::AppAiAssistantToggle
+            | Self::AppCodeReviewToggle
+            | Self::AppVerticalTabsToggle => TargetScope::Surface,
+            Self::AppPing
+            | Self::AppInspect
+            | Self::AppVersion
+            | Self::AppActive
+            | Self::AppFocus => TargetScope::Instance,
         }
     }
 }
@@ -324,16 +594,25 @@ impl ControlError {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
-    AuthenticationRequired,
-    AuthenticationFailed,
+    LocalControlDisabled,
+    UnauthorizedLocalClient,
+    InsufficientPermissions,
+    AuthenticatedUserRequired,
+    AuthenticatedUserUnavailable,
+    ExecutionContextNotAllowed,
     ProtocolVersionUnsupported,
     InvalidRequest,
     InvalidSelector,
-    InstanceNotFound,
-    AmbiguousSelector,
+    InvalidParams,
+    NoInstance,
+    AmbiguousInstance,
+    StaleTarget,
+    TargetStateConflict,
+    MissingTarget,
     TransportUnavailable,
     BridgeUnavailable,
     UnsupportedAction,
+    NotAllowlisted,
     Internal,
 }
 
@@ -363,16 +642,52 @@ mod tests {
     fn response_error_serializes_machine_code() {
         let response = ResponseEnvelope::error(
             Uuid::nil(),
-            ControlError::new(ErrorCode::AuthenticationFailed, "bad token"),
+            ControlError::new(ErrorCode::UnauthorizedLocalClient, "bad token"),
         );
         let value = serde_json::to_value(&response).expect("response serializes");
         assert_eq!(value["response"]["status"], "error");
-        assert_eq!(value["response"]["error"]["code"], "authentication_failed");
+        assert_eq!(
+            value["response"]["error"]["code"],
+            "unauthorized_local_client"
+        );
     }
 
     #[test]
     fn input_run_is_not_in_the_allowlisted_catalog() {
         let action = serde_json::from_value::<ActionKind>(serde_json::json!("input.run"));
         assert!(action.is_err());
+    }
+
+    #[test]
+    fn tab_create_metadata_is_first_slice_logged_out_safe_mutation() {
+        let metadata = ActionKind::TabCreate.metadata();
+        assert_eq!(
+            metadata.implementation_status,
+            ActionImplementationStatus::Implemented
+        );
+        assert_eq!(metadata.risk_tier, RiskTier::MutatingNonDestructive);
+        assert!(!metadata.requires_authenticated_user);
+        assert_eq!(metadata.permission, LocalControlPermission::ReadWrite);
+        assert_eq!(
+            metadata.allowed_invocation_contexts,
+            vec![
+                InvocationContext::InsideWarp,
+                InvocationContext::OutsideWarp
+            ]
+        );
+    }
+
+    #[test]
+    fn non_first_slice_actions_are_catalog_stubs() {
+        let metadata = ActionKind::WindowCreate.metadata();
+        assert_eq!(
+            metadata.implementation_status,
+            ActionImplementationStatus::Stub
+        );
+        assert!(
+            !metadata
+                .allowed_invocation_contexts
+                .contains(&InvocationContext::OutsideWarp)
+        );
     }
 }

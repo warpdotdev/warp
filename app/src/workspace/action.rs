@@ -384,9 +384,6 @@ pub enum WorkspaceAction {
         /// Whether to ensure agent mode is enabled when inserting content
         ensure_agent_mode: bool,
     },
-    ClearInputBuffer,
-    SetInputModeAgent,
-    SetInputModeTerminal,
     /// Open a new tab with its input in AI mode.
     NewTabInAgentMode {
         /// The entrypoint that triggered this action.
@@ -934,9 +931,6 @@ impl WorkspaceAction {
             | RunAISuggestedCommand { .. }
             | RunCommand { .. }
             | InsertInInput { .. }
-            | ClearInputBuffer
-            | SetInputModeAgent
-            | SetInputModeTerminal
             | InsertForkSlashCommand
             | QueuePromptForConversation { .. }
             | AttemptLoginGatedAIUpgrade

@@ -20,7 +20,7 @@ pub fn select_instance(
             .cloned()
             .ok_or_else(|| {
                 ControlError::new(
-                    ErrorCode::InstanceNotFound,
+                    ErrorCode::NoInstance,
                     format!("no Warp instance with id {}", instance_id.0),
                 )
             }),
@@ -30,7 +30,7 @@ pub fn select_instance(
             .cloned()
             .ok_or_else(|| {
                 ControlError::new(
-                    ErrorCode::InstanceNotFound,
+                    ErrorCode::NoInstance,
                     format!("no Warp instance with pid {pid}"),
                 )
             }),
@@ -40,12 +40,12 @@ pub fn select_instance(
 fn select_active(records: &[InstanceRecord]) -> Result<InstanceRecord, ControlError> {
     match records {
         [] => Err(ControlError::new(
-            ErrorCode::InstanceNotFound,
+            ErrorCode::NoInstance,
             "no local Warp control instances were discovered",
         )),
         [record] => Ok(record.clone()),
         _ => Err(ControlError::new(
-            ErrorCode::AmbiguousSelector,
+            ErrorCode::AmbiguousInstance,
             "multiple local Warp control instances were discovered; pass --instance",
         )),
     }
@@ -70,8 +70,10 @@ mod tests {
             started_at: Utc::now(),
             executable_path: None,
             endpoint: ControlEndpoint::localhost(4000),
-            auth_token: "token".to_owned(),
-            capabilities: vec![ActionKind::AppPing],
+            credential_broker: crate::discovery::CredentialBrokerReference {
+                endpoint: ControlEndpoint::localhost(4000),
+            },
+            actions: vec![ActionKind::TabCreate.metadata()],
         }
     }
 
@@ -87,6 +89,6 @@ mod tests {
     fn active_selector_rejects_ambiguity() {
         let records = vec![record("one", 1), record("two", 2)];
         let err = select_instance(&records, &InstanceSelector::Active).expect_err("ambiguous");
-        assert_eq!(err.code, ErrorCode::AmbiguousSelector);
+        assert_eq!(err.code, ErrorCode::AmbiguousInstance);
     }
 }

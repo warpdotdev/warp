@@ -532,50 +532,6 @@ pub enum CliCommand {
     #[command(subcommand)]
     Integration(crate::integration::IntegrationCommand),
 
-    /// Control a running local Warp app instance.
-    #[command(subcommand)]
-    App(crate::local_control::AppCommand),
-
-    /// Inspect local Warp app instances.
-    #[command(subcommand)]
-    Instance(crate::local_control::InstanceCommand),
-
-    /// Control local Warp windows.
-    #[command(subcommand)]
-    Window(crate::local_control::WindowCommand),
-
-    /// Control local Warp tabs.
-    #[command(subcommand)]
-    Tab(crate::local_control::TabCommand),
-
-    /// Control local Warp panes.
-    #[command(subcommand)]
-    Pane(crate::local_control::PaneCommand),
-
-    /// Inspect local Warp sessions.
-    #[command(subcommand)]
-    Session(crate::local_control::SessionCommand),
-
-    /// Control local Warp input buffers.
-    #[command(subcommand)]
-    Input(crate::local_control::InputCommand),
-
-    /// Inspect or update the active theme.
-    #[command(subcommand)]
-    Theme(crate::local_control::ThemeCommand),
-
-    /// Adjust font size in a running Warp app.
-    #[command(subcommand, name = "font-size")]
-    FontSize(crate::local_control::FontSizeCommand),
-
-    /// Adjust UI zoom in a running Warp app.
-    #[command(subcommand)]
-    Zoom(crate::local_control::ZoomCommand),
-
-    /// Read or mutate allowlisted Warp settings.
-    #[command(subcommand)]
-    Setting(crate::local_control::SettingCommand),
-
     /// Create and manage scheduled Oz agents. Scheduled agents run a user-defined task periodically, according to a cron schedule.
     ///
     /// As a shorthand, the `schedule` command behaves identically to `schedule create`.

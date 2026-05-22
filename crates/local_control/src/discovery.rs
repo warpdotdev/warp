@@ -4,8 +4,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::auth::AuthToken;
-use crate::protocol::{ActionKind, ControlError, ErrorCode, PROTOCOL_VERSION};
+use crate::protocol::{ActionMetadata, ControlError, ErrorCode, PROTOCOL_VERSION};
 
 const DISCOVERY_DIR_ENV: &str = "WARP_LOCAL_CONTROL_DISCOVERY_DIR";
 
@@ -42,6 +41,15 @@ impl ControlEndpoint {
     pub fn url(&self) -> String {
         format!("http://{}:{}/v1/control", self.host, self.port)
     }
+
+    pub fn credential_url(&self) -> String {
+        format!("http://{}:{}/v1/control/credentials", self.host, self.port)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialBrokerReference {
+    pub endpoint: ControlEndpoint,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,18 +63,17 @@ pub struct InstanceRecord {
     pub started_at: DateTime<Utc>,
     pub executable_path: Option<PathBuf>,
     pub endpoint: ControlEndpoint,
-    pub auth_token: String,
-    pub capabilities: Vec<ActionKind>,
+    pub credential_broker: CredentialBrokerReference,
+    pub actions: Vec<ActionMetadata>,
 }
 
 impl InstanceRecord {
     pub fn for_current_process(
         endpoint: ControlEndpoint,
-        auth_token: &AuthToken,
         channel: impl Into<String>,
         app_id: impl Into<String>,
         app_version: Option<String>,
-        capabilities: Vec<ActionKind>,
+        actions: Vec<ActionMetadata>,
     ) -> Self {
         Self {
             protocol_version: PROTOCOL_VERSION,
@@ -77,14 +84,12 @@ impl InstanceRecord {
             app_version,
             started_at: Utc::now(),
             executable_path: std::env::current_exe().ok(),
+            credential_broker: CredentialBrokerReference {
+                endpoint: endpoint.clone(),
+            },
             endpoint,
-            auth_token: auth_token.secret().to_owned(),
-            capabilities,
+            actions,
         }
-    }
-
-    pub fn auth(&self) -> AuthToken {
-        AuthToken::from_secret(self.auth_token.clone())
     }
 }
 
@@ -215,19 +220,33 @@ mod tests {
     #[test]
     fn registered_instance_round_trips_discovery_record() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let token = AuthToken::from_secret("token");
         let record = InstanceRecord::for_current_process(
             ControlEndpoint::localhost(4000),
-            &token,
             "local",
             "dev.warp.WarpLocal",
             Some("test".to_owned()),
-            vec![ActionKind::AppPing],
+            crate::protocol::ActionKind::implemented_metadata(),
         );
         let _registered = RegisteredInstance::register_in_dir_for_test(record.clone(), dir.path())
             .expect("registered");
         let records = list_instances_from_dir(dir.path());
         assert_eq!(records, vec![record]);
+    }
+
+    #[test]
+    fn serialized_discovery_record_does_not_contain_raw_credential_material() {
+        let raw_secret = "raw-secret-token-material";
+        let record = InstanceRecord::for_current_process(
+            ControlEndpoint::localhost(4000),
+            "local",
+            "dev.warp.WarpLocal",
+            Some("test".to_owned()),
+            crate::protocol::ActionKind::implemented_metadata(),
+        );
+        let serialized = serde_json::to_string_pretty(&record).expect("serialize");
+        assert!(!serialized.contains(raw_secret));
+        assert!(!serialized.contains("auth_token"));
+        assert!(!serialized.contains("bearer_token"));
     }
 
     impl RegisteredInstance {

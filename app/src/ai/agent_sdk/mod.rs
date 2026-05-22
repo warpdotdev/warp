@@ -90,8 +90,7 @@ mod harness_support;
 mod integration;
 #[cfg(not(target_family = "wasm"))]
 mod integration_output;
-#[cfg(not(target_family = "wasm"))]
-mod local_control;
+
 mod mcp;
 mod mcp_config;
 mod model;
@@ -169,64 +168,6 @@ fn dispatch_command(
         #[cfg(target_family = "wasm")]
         CliCommand::Integration(_) => {
             return Err(anyhow::anyhow!("invalid value 'integration'"));
-        }
-        #[cfg(not(target_family = "wasm"))]
-        CliCommand::App(app_cmd) => {
-            local_control::run_app_command(app_cmd, global_options.output_format)
-        }
-        #[cfg(not(target_family = "wasm"))]
-        CliCommand::Instance(instance_cmd) => {
-            local_control::run_instance_command(instance_cmd, global_options.output_format)
-        }
-        #[cfg(not(target_family = "wasm"))]
-        CliCommand::Window(window_cmd) => {
-            local_control::run_window_command(window_cmd, global_options.output_format)
-        }
-        #[cfg(not(target_family = "wasm"))]
-        CliCommand::Tab(tab_cmd) => {
-            local_control::run_tab_command(tab_cmd, global_options.output_format)
-        }
-        #[cfg(not(target_family = "wasm"))]
-        CliCommand::Pane(pane_cmd) => {
-            local_control::run_pane_command(pane_cmd, global_options.output_format)
-        }
-        #[cfg(not(target_family = "wasm"))]
-        CliCommand::Session(session_cmd) => {
-            local_control::run_session_command(session_cmd, global_options.output_format)
-        }
-        #[cfg(not(target_family = "wasm"))]
-        CliCommand::Input(input_cmd) => {
-            local_control::run_input_command(input_cmd, global_options.output_format)
-        }
-        #[cfg(not(target_family = "wasm"))]
-        CliCommand::Theme(theme_cmd) => {
-            local_control::run_theme_command(theme_cmd, global_options.output_format)
-        }
-        #[cfg(not(target_family = "wasm"))]
-        CliCommand::FontSize(font_size_cmd) => {
-            local_control::run_font_size_command(font_size_cmd, global_options.output_format)
-        }
-        #[cfg(not(target_family = "wasm"))]
-        CliCommand::Zoom(zoom_cmd) => {
-            local_control::run_zoom_command(zoom_cmd, global_options.output_format)
-        }
-        #[cfg(not(target_family = "wasm"))]
-        CliCommand::Setting(setting_cmd) => {
-            local_control::run_setting_command(setting_cmd, global_options.output_format)
-        }
-        #[cfg(target_family = "wasm")]
-        CliCommand::App(_)
-        | CliCommand::Instance(_)
-        | CliCommand::Window(_)
-        | CliCommand::Tab(_)
-        | CliCommand::Pane(_)
-        | CliCommand::Session(_)
-        | CliCommand::Input(_)
-        | CliCommand::Theme(_)
-        | CliCommand::FontSize(_)
-        | CliCommand::Zoom(_)
-        | CliCommand::Setting(_) => {
-            return Err(anyhow::anyhow!("local control is not available on web"));
         }
         CliCommand::Schedule(schedule_cmd) => {
             if !FeatureFlag::ScheduledAmbientAgents.is_enabled() {
@@ -1462,17 +1403,6 @@ fn command_requires_auth(command: &CliCommand) -> bool {
         CliCommand::Whoami => true,
         CliCommand::Provider(_) => true,
         CliCommand::Integration(_) => true,
-        CliCommand::App(_) => false,
-        CliCommand::Instance(_) => false,
-        CliCommand::Window(_) => false,
-        CliCommand::Tab(_) => false,
-        CliCommand::Pane(_) => false,
-        CliCommand::Session(_) => false,
-        CliCommand::Input(_) => false,
-        CliCommand::Theme(_) => false,
-        CliCommand::FontSize(_) => false,
-        CliCommand::Zoom(_) => false,
-        CliCommand::Setting(_) => false,
         CliCommand::Schedule(_) => true,
         CliCommand::Secret(_) => true,
         CliCommand::Federate(_) => true,
@@ -1660,17 +1590,6 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
             IntegrationCommand::Update(_) => CliTelemetryEvent::IntegrationUpdate,
             IntegrationCommand::List => CliTelemetryEvent::IntegrationList,
         },
-        CliCommand::App(_)
-        | CliCommand::Window(_)
-        | CliCommand::Tab(_)
-        | CliCommand::Pane(_)
-        | CliCommand::Session(_)
-        | CliCommand::Input(_)
-        | CliCommand::Theme(_)
-        | CliCommand::FontSize(_)
-        | CliCommand::Zoom(_)
-        | CliCommand::Setting(_) => CliTelemetryEvent::LocalControlApp,
-        CliCommand::Instance(_) => CliTelemetryEvent::LocalControlInstance,
         CliCommand::Schedule(c) => match c.subcommand() {
             None | Some(ScheduleSubcommand::Create(_)) => CliTelemetryEvent::ScheduleCreate,
             Some(ScheduleSubcommand::List) => CliTelemetryEvent::ScheduleList,

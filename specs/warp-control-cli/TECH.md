@@ -39,7 +39,7 @@ Required security gates:
 - The app rejects disabled, unauthenticated, expired, revoked, insufficient-scope, unsupported, malformed, ambiguous, missing-target, and stale-target requests with structured errors.
 - Every action has a documented risk tier and the app bridge enforces the required tier locally before selector resolution or handler dispatch.
 - Every action has a documented `requires_authenticated_user` value and allowed execution contexts. New actions default to requiring an authenticated user unless explicitly reviewed as logged-out-safe.
-- Granular local-control settings under Settings > Scripting gate the maximum grants for metadata reads, terminal-data reads, non-destructive mutations, destructive/execution actions, authenticated-user actions from Warp terminals, and authenticated-user actions from external clients.
+- Granular local-control settings under each Settings > Scripting parent context gate the maximum grants for read-only queries and read-write app-state changes.
 - Safety tiers are treated as user-intent and accident-prevention guardrails, not as strong same-user malicious-app isolation.
 - Remote control remains out of scope for the local same-machine credential model.
 The first implementation slice should include the protected enablement gate, credential issuance checks, and app-side tier enforcement even if the only mutating action initially implemented is `tab.create`. Shipping `tab.create` without the enablement and validation architecture would create the wrong foundation for the full catalog.
@@ -223,14 +223,14 @@ The first `warpctrl` implementation slice should land the minimum cross-cutting 
 - Shared protocol types and error envelopes.
 - New top-level Settings > Scripting page with separate protected inside-Warp and outside-Warp enablement states.
 - Protected local-only enablement storage where inside-Warp control defaults on and outside-Warp control defaults off.
-- Granular local-control permission storage under Settings > Scripting for at least metadata, non-destructive local mutations, and authenticated-user-action categories.
+- Granular local-control permission storage under Settings > Scripting for read-only and read-write grants in both within-Warp and outside-Warp contexts.
 - Discovery registry and CLI instance selection.
 - A standalone `warpctrl` binary or artifact path that runs control commands without starting the GUI app runtime.
 - Per-process authenticated local-control server that refuses sensitive work when the request's inside-Warp or outside-Warp context is disabled.
 - Scoped credential issuance/storage with no raw credentials in plaintext discovery records, including execution-context fields and authenticated-user grant fields.
 - App-side request bridge and selector resolver.
 - Action-tier mapping and app-side safety-grant enforcement.
-- Action metadata for `tab.create` that deliberately classifies it as a logged-out-safe non-destructive local mutation only when the user's granular local-control settings allow that category.
+- Action metadata for `tab.create` that deliberately classifies it as a logged-out-safe read-write app-state change only when the user's granular local-control settings allow that category.
 - Read-only `ping/version` plus `warpctrl instance list` or equivalent minimal discovery command.
 - End-to-end `warpctrl tab create` for the selected instance, reusing the same app behavior as the user-visible new-terminal-tab action.
 Why `tab.create` first:
