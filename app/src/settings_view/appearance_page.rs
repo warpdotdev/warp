@@ -91,7 +91,7 @@ use crate::window_settings::{
 use crate::workspace::header_toolbar_editor::HeaderToolbarInlineEditor;
 use crate::workspace::tab_settings::{
     DirectoryTabColor, PreserveActiveTabColor, ShowCodeReviewButton, ShowIndicatorsButton,
-    ShowVerticalTabPanelInRestoredWindows, TabCloseButtonPosition, TabSettings,
+    ShowTabNumbers, ShowVerticalTabPanelInRestoredWindows, TabCloseButtonPosition, TabSettings,
     TabSettingsChangedEvent, UseLatestUserPromptAsConversationTitleInTabNames, UseVerticalTabs,
     WorkspaceDecorationVisibility,
 };
@@ -444,6 +444,7 @@ pub enum AppearancePageAction {
     ToggleMatchNotebookToMonospaceFontSize,
     ToggleMatchAIToTerminalFontFamily,
     ToggleTabIndicators,
+    ToggleShowTabNumbers,
     ToggleShowCodeReviewButton,
     TogglePreserveActiveTabColor,
     ToggleVerticalTabs,
@@ -583,6 +584,7 @@ impl TypedActionView for AppearanceSettingsPageView {
                 ctx.open_url(url);
             }
             ToggleTabIndicators => self.toggle_tab_indicators(ctx),
+            ToggleShowTabNumbers => self.toggle_show_tab_numbers(ctx),
             ToggleShowCodeReviewButton => self.toggle_show_code_review_button(ctx),
             TogglePreserveActiveTabColor => self.toggle_preserve_active_tab_color(ctx),
             ToggleVerticalTabs => self.toggle_vertical_tabs(ctx),
@@ -1357,6 +1359,7 @@ impl AppearanceSettingsPageView {
         let tab_settings = TabSettings::as_ref(ctx);
         let mut tab_settings_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
             vec![Box::new(TabIndicatorWidget::default())];
+        tab_settings_widgets.push(Box::new(ShowTabNumbersWidget::default()));
         if !FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
             tab_settings_widgets.push(Box::new(CodeReviewButtonWidget::default()));
         }
@@ -2269,6 +2272,15 @@ impl AppearanceSettingsPageView {
             TelemetryEvent::ToggleTabIndicators { enabled: new_value },
             ctx
         );
+    }
+
+    fn toggle_show_tab_numbers(&mut self, ctx: &mut ViewContext<Self>) {
+        let tab_settings = TabSettings::handle(ctx);
+        let new_value = !*tab_settings.as_ref(ctx).show_tab_numbers.value();
+
+        ctx.update_model(&tab_settings, move |tab_settings, ctx| {
+            report_if_error!(tab_settings.show_tab_numbers.set_value(new_value, ctx));
+        });
     }
 
     fn toggle_show_code_review_button(&mut self, ctx: &mut ViewContext<Self>) {
@@ -4453,6 +4465,51 @@ impl SettingsWidget for TabIndicatorWidget {
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(AppearancePageAction::ToggleTabIndicators);
+                })
+                .finish(),
+            None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct ShowTabNumbersWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for ShowTabNumbersWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "tab number index position cmd shortcut switch"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let tab_settings = TabSettings::as_ref(app);
+
+        render_body_item::<AppearancePageAction>(
+            "Show tab numbers".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                ShowTabNumbers::storage_key(),
+                ShowTabNumbers::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*tab_settings.show_tab_numbers)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AppearancePageAction::ToggleShowTabNumbers);
                 })
                 .finish(),
             None,

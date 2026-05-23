@@ -451,6 +451,15 @@ define_settings_group!(TabSettings, settings: [
         toml_path: "appearance.tabs.show_indicators_button",
         description: "Whether to show activity indicators on tabs.",
     },
+    show_tab_numbers: ShowTabNumbers {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "appearance.tabs.show_tab_numbers",
+        description: "Whether to show each tab's position number (matching the Cmd+1..9 switch shortcuts) before its title.",
+    },
     show_code_review_button: ShowCodeReviewButton {
         type: bool,
         default: true,
