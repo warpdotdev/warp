@@ -29,8 +29,11 @@ pub enum RiskTier {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LocalControlPermission {
-    ReadOnly,
-    ReadWrite,
+    MetadataRead,
+    UnderlyingDataRead,
+    AppStateMutation,
+    MetadataConfigurationMutation,
+    UnderlyingDataMutation,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -366,7 +369,7 @@ impl ActionKind {
                     InvocationContext::InsideWarp,
                     InvocationContext::OutsideWarp,
                 ],
-                permission: LocalControlPermission::ReadWrite,
+                permission: LocalControlPermission::AppStateMutation,
                 target_scope: TargetScope::Window,
             };
         }
@@ -453,10 +456,25 @@ impl ActionKind {
     fn default_permission(self) -> LocalControlPermission {
         match self.default_risk_tier() {
             RiskTier::ReadOnlyMetadata | RiskTier::ReadOnlyTerminalData => {
-                LocalControlPermission::ReadOnly
+                if matches!(self.default_risk_tier(), RiskTier::ReadOnlyTerminalData) {
+                    LocalControlPermission::UnderlyingDataRead
+                } else {
+                    LocalControlPermission::MetadataRead
+                }
             }
-            RiskTier::MutatingNonDestructive | RiskTier::MutatingDestructiveOrExecution => {
-                LocalControlPermission::ReadWrite
+            RiskTier::MutatingNonDestructive => match self.default_target_scope() {
+                TargetScope::Settings | TargetScope::Appearance => {
+                    LocalControlPermission::MetadataConfigurationMutation
+                }
+                TargetScope::Instance
+                | TargetScope::Window
+                | TargetScope::Tab
+                | TargetScope::Pane
+                | TargetScope::Session
+                | TargetScope::Surface => LocalControlPermission::AppStateMutation,
+            },
+            RiskTier::MutatingDestructiveOrExecution => {
+                LocalControlPermission::UnderlyingDataMutation
             }
         }
     }
@@ -667,7 +685,10 @@ mod tests {
         );
         assert_eq!(metadata.risk_tier, RiskTier::MutatingNonDestructive);
         assert!(!metadata.requires_authenticated_user);
-        assert_eq!(metadata.permission, LocalControlPermission::ReadWrite);
+        assert_eq!(
+            metadata.permission,
+            LocalControlPermission::AppStateMutation
+        );
         assert_eq!(
             metadata.allowed_invocation_contexts,
             vec![

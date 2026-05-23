@@ -98,7 +98,9 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     EmacsBindingsSettings::register(ctx);
     SameLinePromptBlockSettings::register(ctx);
     SemanticSelection::register(ctx);
-    LocalControlSettings::register(ctx);
+    if FeatureFlag::WarpControlCli.is_enabled() {
+        LocalControlSettings::register(ctx);
+    }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     super::LinuxAppConfiguration::register(ctx);

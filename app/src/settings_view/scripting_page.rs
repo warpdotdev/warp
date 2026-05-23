@@ -15,8 +15,8 @@ use crate::settings::{
 use settings::{Setting as _, ToggleableSetting as _};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use warp_core::settings::SyncToCloud;
-use warpui::elements::{Container, Element, MouseStateHandle};
+use warp_core::{features::FeatureFlag, settings::SyncToCloud};
+use warpui::elements::{Container, Element, Empty, MouseStateHandle};
 use warpui::ui_components::components::UiComponent;
 use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
@@ -125,6 +125,14 @@ impl ScriptingToggle {
     }
 }
 
+fn scripting_settings_enabled() -> bool {
+    cfg!(not(target_family = "wasm")) && FeatureFlag::WarpControlCli.is_enabled()
+}
+
+#[cfg(test)]
+#[path = "scripting_page_tests.rs"]
+mod tests;
+
 #[derive(Clone, Debug)]
 pub enum ScriptingSettingsPageAction {
     Toggle(ScriptingToggle),
@@ -137,9 +145,11 @@ pub struct ScriptingSettingsPageView {
 
 impl ScriptingSettingsPageView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        ctx.subscribe_to_model(&LocalControlSettings::handle(ctx), |_, _, _, ctx| {
-            ctx.notify();
-        });
+        if scripting_settings_enabled() {
+            ctx.subscribe_to_model(&LocalControlSettings::handle(ctx), |_, _, _, ctx| {
+                ctx.notify();
+            });
+        }
 
         Self {
             page: PageType::new_uncategorized(
@@ -225,6 +235,9 @@ impl View for ScriptingSettingsPageView {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
+        if !scripting_settings_enabled() {
+            return Empty::new().finish();
+        }
         self.page.render(self, app)
     }
 }
@@ -235,10 +248,13 @@ impl SettingsPageMeta for ScriptingSettingsPageView {
     }
 
     fn should_render(&self, _ctx: &AppContext) -> bool {
-        cfg!(not(target_family = "wasm"))
+        scripting_settings_enabled()
     }
 
     fn update_filter(&mut self, query: &str, ctx: &mut ViewContext<Self>) -> MatchData {
+        if !scripting_settings_enabled() {
+            return false.into();
+        }
         self.page.update_filter(query, ctx)
     }
 
@@ -302,6 +318,9 @@ impl SettingsWidget for ScriptingToggleWidget {
     }
 
     fn should_render(&self, app: &AppContext) -> bool {
+        if !scripting_settings_enabled() {
+            return false;
+        }
         let settings = LocalControlSettings::as_ref(app);
         match self.toggle.parent_context() {
             Some(context) => settings.is_context_enabled(context),

@@ -6,7 +6,9 @@ use crate::settings::{
     LocalControlInvocationContext, LocalControlPermissionCategory, LocalControlSettings,
 };
 use ::local_control::auth::{CredentialGrant, CredentialRequest, ScopedCredential};
-use ::local_control::protocol::{PaneTarget, TabTarget, TargetSelector, WindowTarget};
+use ::local_control::protocol::{
+    ExecutionContextProof, PaneTarget, TabTarget, TargetSelector, WindowTarget,
+};
 use ::local_control::{
     ActionKind, AuthToken, ControlEndpoint, ControlError, ControlResponse, ErrorCode,
     ErrorResponseEnvelope, InstanceId, InstanceRecord, RegisteredInstance, RequestEnvelope,
@@ -22,6 +24,7 @@ use axum::{Json, Router};
 use chrono::Duration;
 use serde_json::json;
 use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
 use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity, TypedActionView};
 
 use crate::workspace::{Workspace, WorkspaceAction};
@@ -46,6 +49,12 @@ impl SingletonEntity for LocalControlServer {}
 
 impl LocalControlServer {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
+        if !warp_control_cli_enabled() {
+            return Self {
+                _runtime: None,
+                _registered_instance: None,
+            };
+        }
         match Self::start(ctx) {
             Ok(server) => server,
             Err(error) => {
@@ -59,6 +68,9 @@ impl LocalControlServer {
     }
 
     fn start(ctx: &mut ModelContext<Self>) -> Result<Self, ControlError> {
+        if !warp_control_cli_enabled() {
+            return Err(warp_control_cli_disabled_error());
+        }
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_io()
@@ -89,19 +101,26 @@ impl LocalControlServer {
                 err.to_string(),
             )
         })?;
-        let record = InstanceRecord::for_current_process(
-            ControlEndpoint::localhost(port.port()),
-            ChannelState::channel().to_string(),
-            ChannelState::app_id().to_string(),
-            ChannelState::app_version().map(str::to_owned),
-            ActionKind::implemented_metadata(),
-        );
-        let instance_id = record.instance_id.clone();
+        let endpoint = ControlEndpoint::localhost(port.port());
+        let outside_warp_enabled = LocalControlSettings::as_ref(ctx)
+            .is_context_enabled(LocalControlInvocationContext::OutsideWarp);
+        let (instance_id, registered_instance) = if outside_warp_enabled {
+            let record = InstanceRecord::for_current_process(
+                endpoint,
+                ChannelState::channel().to_string(),
+                ChannelState::app_id().to_string(),
+                ChannelState::app_version().map(str::to_owned),
+                ActionKind::implemented_metadata(),
+            );
+            let instance_id = record.instance_id.clone();
+            (instance_id, Some(RegisteredInstance::register(record)?))
+        } else {
+            (InstanceId::new(), None)
+        };
         let bridge_spawner = LocalControlBridge::handle(ctx).update(ctx, |bridge, ctx| {
             bridge.set_instance_id(instance_id.clone());
             ctx.spawner()
         });
-        let registered_instance = RegisteredInstance::register(record)?;
         let state = ControlServerState {
             bridge_spawner,
             instance_id,
@@ -118,7 +137,7 @@ impl LocalControlServer {
         });
         Ok(Self {
             _runtime: Some(runtime),
-            _registered_instance: Some(registered_instance),
+            _registered_instance: registered_instance,
         })
     }
 }
@@ -148,6 +167,9 @@ impl LocalControlBridge {
         grant: CredentialGrant,
         ctx: &mut ModelContext<Self>,
     ) -> ResponseEnvelope {
+        if !warp_control_cli_enabled() {
+            return ResponseEnvelope::error(request.request_id, warp_control_cli_disabled_error());
+        }
         if request.protocol_version != PROTOCOL_VERSION {
             return ResponseEnvelope::error(
                 request.request_id,
@@ -249,6 +271,13 @@ async fn handle_credential_request(
     State(state): State<ControlServerState>,
     payload: Result<Json<CredentialRequest>, JsonRejection>,
 ) -> Response {
+    if !warp_control_cli_enabled() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponseEnvelope::new(warp_control_cli_disabled_error())),
+        )
+            .into_response();
+    }
     let request = match payload {
         Ok(Json(request)) => request,
         Err(err) => {
@@ -284,6 +313,13 @@ async fn handle_credential_request(
                     request.action.as_str()
                 ),
             ))),
+        )
+            .into_response();
+    }
+    if let Err(error) = verify_execution_context(&request) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponseEnvelope::new(error)),
         )
             .into_response();
     }
@@ -364,6 +400,13 @@ async fn handle_control_request(
     headers: HeaderMap,
     payload: Result<Json<RequestEnvelope>, JsonRejection>,
 ) -> Response {
+    if !warp_control_cli_enabled() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponseEnvelope::new(warp_control_cli_disabled_error())),
+        )
+            .into_response();
+    }
     let auth_header = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok());
@@ -461,23 +504,16 @@ fn validate_tab_create_target(target: &TargetSelector) -> Result<(), ControlErro
 fn target_window_id(
     ctx: &mut ModelContext<LocalControlBridge>,
 ) -> Result<warpui::WindowId, ControlError> {
-    preferred_window_id(
-        ctx.windows().active_window(),
-        ctx.windows().frontmost_window_id(),
-    )
-    .ok_or_else(|| {
+    preferred_window_id(ctx.windows().active_window()).ok_or_else(|| {
         ControlError::new(
             ErrorCode::MissingTarget,
-            "tab.create requires an active or previously active Warp window",
+            "tab.create requires an active Warp window",
         )
     })
 }
 
-fn preferred_window_id(
-    active_window: Option<warpui::WindowId>,
-    frontmost_window: Option<warpui::WindowId>,
-) -> Option<warpui::WindowId> {
-    active_window.or(frontmost_window)
+fn preferred_window_id(active_window: Option<warpui::WindowId>) -> Option<warpui::WindowId> {
+    active_window
 }
 
 #[cfg(test)]
@@ -488,17 +524,52 @@ fn capabilities() -> Vec<ActionKind> {
         .collect()
 }
 
+fn warp_control_cli_enabled() -> bool {
+    FeatureFlag::WarpControlCli.is_enabled()
+}
+
+fn warp_control_cli_disabled_error() -> ControlError {
+    ControlError::new(
+        ErrorCode::LocalControlDisabled,
+        "Warp Control CLI is disabled by feature flag",
+    )
+}
+
 fn local_invocation_context(context: InvocationContext) -> LocalControlInvocationContext {
     match context {
         InvocationContext::InsideWarp => LocalControlInvocationContext::InsideWarp,
         InvocationContext::OutsideWarp => LocalControlInvocationContext::OutsideWarp,
     }
 }
+fn verify_execution_context(request: &CredentialRequest) -> Result<(), ControlError> {
+    match request.invocation_context {
+        InvocationContext::InsideWarp => {
+            if matches!(
+                request.execution_context_proof,
+                Some(ExecutionContextProof::VerifiedWarpTerminal { .. })
+            ) {
+                Ok(())
+            } else {
+                Err(ControlError::new(
+                    ErrorCode::ExecutionContextNotAllowed,
+                    "inside-Warp credentials require a verified Warp terminal execution proof",
+                ))
+            }
+        }
+        InvocationContext::OutsideWarp => Ok(()),
+    }
+}
 
 fn local_permission(permission: LocalControlPermission) -> LocalControlPermissionCategory {
     match permission {
-        LocalControlPermission::ReadOnly => LocalControlPermissionCategory::ReadOnly,
-        LocalControlPermission::ReadWrite => LocalControlPermissionCategory::ReadWrite,
+        LocalControlPermission::MetadataRead | LocalControlPermission::UnderlyingDataRead => {
+            LocalControlPermissionCategory::ReadOnly
+        }
+        LocalControlPermission::AppStateMutation
+        | LocalControlPermission::MetadataConfigurationMutation
+        | LocalControlPermission::UnderlyingDataMutation => {
+            LocalControlPermissionCategory::ReadWrite
+        }
     }
 }
 

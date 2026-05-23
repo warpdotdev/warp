@@ -731,6 +731,7 @@ ligatures = []
 trim_trailing_blank_lines = []
 cli_agent_rich_input = []
 list_skills = []
+warp_control_cli = []
 # This feature is enabled in build.rs when compiling for platforms which
 # support having a local tty/shell session.  It can be used to conditionally
 # include dependencies that should only exist in such environments.
