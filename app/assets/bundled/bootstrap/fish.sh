@@ -544,12 +544,12 @@ function black_finish_update
 end
 
 
-# Check if the warp apt source file has been renamed to `warpdotdev.list.distUpgrade` due to an ubuntu version update.
+# Check if the black apt source file has been renamed to `warpdotdev.list.distUpgrade` due to an ubuntu version update.
 # If this occurred, we want to rename the source file back to `warpdotdev.list` to ensure updates can proceed.
 # We purposefully skip this if either the `warpdotdev.list` file already exists (indicating that the user has already
 # done this themselves) _or_ if a `warpdotdev.sources` file exists (which is the new Deb822 format for source files).
 # The `.sources` file could only exist if a user manually created it; Ubuntu doesn't create one automatically for the
-# warp source file due to a bug in its update flow where it considers our source file to be "invalid" because it
+# black source file due to a bug in its update flow where it considers our source file to be "invalid" because it
 # contains a `signed-by` key.
 function black_handle_dist_upgrade
   set -l source_file_name "$argv[1]"

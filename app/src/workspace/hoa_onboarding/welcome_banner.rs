@@ -43,7 +43,7 @@ const FEATURE_ITEMS: &[FeatureItem] = &[
     FeatureItem {
         icon: Icon::MessageCheckSquare,
         title: "Native code review",
-        description: "Send inline comments from Warp's code review directly to Claude Code, Codex, or OpenCode",
+        description: "Send inline comments from Black's code review directly to Claude Code, Codex, or OpenCode",
     },
 ];
 
@@ -105,7 +105,7 @@ pub fn render_welcome_banner(
 
     // Title
     let title = Text::new(
-        "Introducing universal agent support: level up any coding agent with Warp",
+        "Introducing universal agent support: level up any coding agent with Black",
         appearance.ui_font_family(),
         20.,
     )

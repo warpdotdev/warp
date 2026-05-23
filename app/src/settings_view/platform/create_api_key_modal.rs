@@ -45,7 +45,7 @@ impl ApiKeyType {
     fn description(&self) -> &'static str {
         match self {
             ApiKeyType::Personal => {
-                "This API key is tied to your user and can make requests against your Warp account."
+                "This API key is tied to your user and can make requests against your Black account."
             }
             ApiKeyType::Team => {
                 "This API key is tied to your team and can make requests on behalf of your team."

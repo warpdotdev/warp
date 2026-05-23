@@ -135,7 +135,7 @@ impl ProjectSlide {
 
         let subtitle = appearance
             .ui_builder()
-            .paragraph("Set up a project to optimize it for coding in Warp.")
+            .paragraph("Set up a project to optimize it for coding in Black.")
             .with_style(UiComponentStyles {
                 font_size: Some(20.),
                 font_weight: Some(Weight::Normal),
@@ -299,7 +299,7 @@ impl ProjectSlide {
                 if theme_picker_last {
                     "Next"
                 } else {
-                    "Get Warping"
+                    "Get started"
                 },
                 Keystroke::parse("enter").unwrap_or_default(),
                 ProjectSlideAction::NextClicked,

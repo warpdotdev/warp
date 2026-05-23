@@ -725,7 +725,7 @@ impl AuthSecretFtuxView {
             .map(|info| info.learn_more_url)
             .unwrap_or_else(|| learn_more_url_for_harness(self.harness));
         let learn_more_label =
-            format!("Learn more about authentication for {harness_name} in Warp.");
+            format!("Learn more about authentication for {harness_name} in Black.");
         let learn_more = Hoverable::new(self.learn_more_mouse_state.clone(), move |state| {
             let color = if state.is_hovered() {
                 accent_color

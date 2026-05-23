@@ -22,24 +22,24 @@ use black_core::{execution_mode, report_error};
 
 pub mod headers {
     /// Custom Black header indicating the version of the Black app.
-    pub const CLIENT_RELEASE_VERSION_HEADER_KEY: &str = "X-Warp-Client-Version";
+    pub const CLIENT_RELEASE_VERSION_HEADER_KEY: &str = "X-Black-Client-Version";
 
     /// Custom Black header indicating the OS category the request was sent from.
-    pub(crate) const WARP_OS_CATEGORY: &str = "X-Warp-OS-Category";
+    pub(crate) const WARP_OS_CATEGORY: &str = "X-Black-OS-Category";
     /// Custom Black header indicating the OS name the request was sent from. On Linux this is the
     /// name of the distribution. On all other platforms it should be equivalent to
     /// `WARP_OS_CATEGORY`.
-    pub(crate) const WARP_OS_NAME: &str = "X-Warp-OS-Name";
+    pub(crate) const WARP_OS_NAME: &str = "X-Black-OS-Name";
     /// Custom Black header indicating the version of the operating system. On Linux this is the
     /// version of the distribution, not the Linux kernel version.
-    pub(crate) const WARP_OS_VERSION: &str = "X-Warp-OS-Version";
+    pub(crate) const WARP_OS_VERSION: &str = "X-Black-OS-Version";
 
     /// Custom Black header indicating the linux kernel version. This is only sent from Linux.
-    pub(crate) const WARP_OS_LINUX_KERNEL_VERSION: &str = "X-Warp-OS-Linux-Kernel-Version";
+    pub(crate) const WARP_OS_LINUX_KERNEL_VERSION: &str = "X-Black-OS-Linux-Kernel-Version";
 
     /// Custom Black header indicating the client role. We don't use the User-Agent header
     /// because it can't be set from WASM.
-    pub(crate) const WARP_CLIENT_ID: &str = "X-Warp-Client-ID";
+    pub(crate) const WARP_CLIENT_ID: &str = "X-Black-Client-ID";
 }
 
 /// The environment variable containing extra HTTP headers to attach to requests.

@@ -1555,7 +1555,7 @@ fn report_fatal_error(err: anyhow::Error, ctx: &mut AppContext) {
         if let Ok(path) = log_file_path() {
             let _ = write!(
                 message,
-                "\n\nFor more information, check Warp logs at {}",
+                "\n\nFor more information, check Black logs at {}",
                 path.display()
             );
         }

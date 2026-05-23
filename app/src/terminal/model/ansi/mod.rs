@@ -1147,14 +1147,14 @@ where
             // Received a Black OSC used for in-band generators.
             WARP_IN_BAND_GENERATOR_OSC_MARKER => match params.get(1) {
                 Some(&WARP_IN_BAND_GENERATOR_START_BYTE) => {
-                    log::info!("Received a Warp OSC marker for starting in-band command output.");
+                    log::info!("Received a Black OSC marker for starting in-band command output.");
                     self.handler.start_in_band_command_output();
                 }
                 Some(&WARP_IN_BAND_GENERATOR_END_BYTE) => {
                     self.handler.end_in_band_command_output(true);
                 }
                 _ => {
-                    log::warn!("Received a Warp OSC marker missing required param.");
+                    log::warn!("Received a Black OSC marker missing required param.");
                 }
             },
 
@@ -1180,8 +1180,8 @@ where
                             return;
                         };
                         safe_debug!(
-                            safe: ("Received Warp OSC string for shell hook"),
-                            full: ("Received Warp OSC string for shell hook with JSON payload: {:?}", data_str)
+                            safe: ("Received Black OSC string for shell hook"),
+                            full: ("Received Black OSC string for shell hook with JSON payload: {:?}", data_str)
                         );
                         let decoded_data = hex::decode(&*data_str);
                         self.handle_decoded_data(decoded_data);
@@ -1196,8 +1196,8 @@ where
                             return;
                         };
                         safe_debug!(
-                            safe: ("Received Warp OSC string for shell hook"),
-                            full: ("Received Warp OSC string for shell hook with JSON payload: {:?}", data_str)
+                            safe: ("Received Black OSC string for shell hook"),
+                            full: ("Received Black OSC string for shell hook with JSON payload: {:?}", data_str)
                         );
                         let hook = serde_json::from_str::<DProtoHook>(&data_str);
                         self.handle_unencoded_hook(hook)
@@ -1210,7 +1210,7 @@ where
             }
 
             WARP_RESET_GRID_OSC_MARKER => {
-                log::debug!("Received Warp OSC string for reset grid");
+                log::debug!("Received Black OSC string for reset grid");
                 self.handler.on_reset_grid();
             }
 
@@ -1276,7 +1276,7 @@ where
                             );
                         }
                         _ => {
-                            log::warn!("Invalid Warp OSC marker parameter for completions match metadata: {parameter}");
+                            log::warn!("Invalid Black OSC marker parameter for completions match metadata: {parameter}");
                         }
                     }
                 }
@@ -1284,7 +1284,7 @@ where
                     self.handler.send_completions_prompt();
                 }
                 _ => {
-                    log::warn!("Received a Warp OSC completions marker missing required param.");
+                    log::warn!("Received a Black OSC completions marker missing required param.");
                 }
             },
 

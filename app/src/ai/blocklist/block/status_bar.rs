@@ -1081,11 +1081,11 @@ fn render_fallback_explanation<V: View>(
     .finish()
 }
 
-/// If the current exchange is using a fallback model, returns the warping message to display
-/// (e.g. "Warping with Claude 3.5 Haiku."). When the current exchange's output doesn't have
+/// If the current exchange is using a fallback model, returns the working message to display
+/// (e.g. "Working with Claude 3.5 Haiku."). When the current exchange's output doesn't have
 /// model info yet (the ModelUsed message hasn't arrived), we check the most recent previous
 /// exchange as a best guess — if the conversation already fell back, the next exchange likely
-/// will too. This avoids a flicker from "Warping..." to "Warping with {name}." on follow-ups.
+/// will too. This avoids a flicker from "Working..." to "Working with {name}." on follow-ups.
 ///
 /// We skip the lookback for new user queries because the underlying model may have recovered
 /// since the previous exchange. For agent-initiated follow-up exchanges (action results, etc.)
@@ -1120,8 +1120,8 @@ fn resolve_fallback_warping_message<V: View>(
         return None;
     }
     Some(match display_name.as_deref() {
-        Some(name) => format!("Warping with {name}."),
-        None => "Warping with another model.".to_owned(),
+        Some(name) => format!("Working with {name}."),
+        None => "Working with another model.".to_owned(),
     })
 }
 

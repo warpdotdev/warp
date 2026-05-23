@@ -21,9 +21,9 @@ const TITLE_FONT_SIZE: f32 = 20.;
 const TITLE_MARGIN_BOTTOM: f32 = 25.;
 // Constants for the subtitle
 const SUBTITLE_SENT_REFERRAL: &str =
-    "You earned an exclusive Warp theme for referring someone to Warp.";
+    "You earned an exclusive Black theme for referring someone to Black.";
 const SUBTITLE_RECEIVED_REFERRAL: &str =
-    "You earned an exclusive Warp theme for being referred to Warp.";
+    "You earned an exclusive Black theme for being referred to Black.";
 const SUBTITLE_FONT_SIZE: f32 = 14.;
 const SUBTITLE_MARGIN_BOTTOM: f32 = 40.;
 // Constants for the button

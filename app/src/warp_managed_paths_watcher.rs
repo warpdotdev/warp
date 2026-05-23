@@ -30,7 +30,7 @@ pub(crate) fn ensure_warp_watch_roots_exist() {
     let data_dir = warp_data_dir();
     if let Err(err) = fs::create_dir_all(&data_dir) {
         log::warn!(
-            "Failed to create Warp data directory {}: {err}",
+            "Failed to create Black data directory {}: {err}",
             data_dir.display()
         );
     }
@@ -39,7 +39,7 @@ pub(crate) fn ensure_warp_watch_roots_exist() {
     if config_local_dir != data_dir {
         if let Err(err) = fs::create_dir_all(&config_local_dir) {
             log::warn!(
-                "Failed to create Warp config directory {}: {err}",
+                "Failed to create Black config directory {}: {err}",
                 config_local_dir.display()
             );
         }
@@ -397,7 +397,7 @@ mod tests {
                 assert_eq!(path.config_path, warp_home_mcp_config_path);
             }
             (_, _, None) => {}
-            _ => panic!("Expected Warp MCP path when home directory is available"),
+            _ => panic!("Expected Black MCP path when home directory is available"),
         }
     }
 

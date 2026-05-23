@@ -258,7 +258,7 @@ impl TelemetryEventDesc for AgentManagementTelemetryEventDiscriminants {
             #[cfg(not(target_family = "wasm"))]
             Self::SlashCommandContinueLocally => "AgentManagement.SlashCommandContinueLocally",
             #[cfg(target_family = "wasm")]
-            Self::TombstoneOpenInWarp => "AgentManagement.TombstoneOpenInWarp",
+            Self::TombstoneOpenInWarp => "AgentManagement.TombstoneOpenInBlack",
             Self::CloudRunCancelled => "AgentManagement.CloudRunCancelled",
             Self::ConversationForked => "AgentManagement.ConversationForked",
         }
@@ -299,7 +299,7 @@ impl TelemetryEventDesc for AgentManagementTelemetryEventDiscriminants {
                 "User invoked /continue-locally to fork a cloud conversation locally"
             }
             #[cfg(target_family = "wasm")]
-            Self::TombstoneOpenInWarp => "User clicked Open in Warp in the tombstone",
+            Self::TombstoneOpenInWarp => "User clicked Open in Black in the tombstone",
             Self::CloudRunCancelled => "User cancelled a cloud run",
             Self::ConversationForked => "User forked a conversation",
         }

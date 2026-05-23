@@ -36,7 +36,7 @@ pub fn assert_warp_drive_is_open() -> AssertionCallback {
         workspace.read(app, |workspace, _| {
             async_assert!(
                 workspace.is_warp_drive_open(),
-                "Expected Warp Drive to be open, but it was closed"
+                "Expected Black Drive to be open, but it was closed"
             )
         })
     })
@@ -49,7 +49,7 @@ pub fn assert_warp_drive_is_closed() -> AssertionCallback {
         workspace.read(app, |workspace, _| {
             async_assert!(
                 !workspace.is_warp_drive_open(),
-                "Expected Warp Drive to be closed, but it was open"
+                "Expected Black Drive to be closed, but it was open"
             )
         })
     })

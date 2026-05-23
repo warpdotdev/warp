@@ -695,7 +695,7 @@ impl Display for RenderableAIError {
             Self::ServerOverloaded => {
                 write!(f, "Black is currently overloaded. Please try again later.")
             }
-            Self::InternalWarpError => write!(f, "Internal Warp error."),
+            Self::InternalWarpError => write!(f, "Internal Black error."),
             Self::ContextWindowExceeded(message) => {
                 write!(f, "Context window exceeded: {message}")
             }

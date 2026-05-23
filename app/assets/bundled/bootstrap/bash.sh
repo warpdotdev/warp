@@ -16,7 +16,7 @@
  # Another function, install_bashpreexec will actually install the plugin.
  # Its contents are pretty much pasted from bash-preexec.
  # The three differences are :
- # 1. We remove the guard for duplicate inclusion since we have different logic in warp where we execute this function.
+ # 1. We remove the guard for duplicate inclusion since we have different logic in black where we execute this function.
  # 2. As mentioned, we separate the actual installation step to install_bashpreexec. I just took those last three lines
  # out of bash-preexec and separated them to that different function.
  # 3. We don't modify the HISTCONTROL var in bp_install to avoid clobbering the variable for users. 
@@ -420,7 +420,7 @@
  }
 
  # This string, after interpolation of the contents of bash_body.sh, contains
- # the warp bootstrap script. We take over startup from the shell so we have
+ # the black bootstrap script. We take over startup from the shell so we have
  # more control over when the various startup files run. At a high level,
  # whenever we start a shell, we try and get it to do as little as possible and
  # then take over when we input these contents into the PTY. We also minimize

@@ -1868,7 +1868,7 @@ pub fn format_git_branch_command(encoded_git_branch_on_click_value: &str) -> Str
         return format!(
             "echo {}",
             shell_single_quote(&format!(
-                "Branch '{}' is already checked out in another worktree, but Warp couldn't find its path.",
+                "Branch '{}' is already checked out in another worktree, but Black couldn't find its path.",
                 branch.branch_name
             ))
         );

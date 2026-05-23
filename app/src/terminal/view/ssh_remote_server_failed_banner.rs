@@ -15,7 +15,7 @@ use crate::terminal::model::session::SessionId;
 use crate::ui_components::icons::Icon;
 use crate::Appearance;
 
-const BANNER_TITLE: &str = "Couldn't connect to the Warp SSH extension";
+const BANNER_TITLE: &str = "Couldn't connect to the Black SSH extension";
 
 const BANNER_BODY: &str =
     "While advanced features like file browsing and code review are currently \

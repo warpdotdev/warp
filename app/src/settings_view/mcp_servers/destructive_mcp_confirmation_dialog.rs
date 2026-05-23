@@ -64,13 +64,13 @@ impl From<&DestructiveMCPConfirmationDialogVariant>
             ),
             DestructiveMCPConfirmationDialogVariant::DeleteShared => DestructiveMCPConfirmationDialogDisplayOptions::new(
                 "Delete shared MCP server?".to_string(),
-                "This will not only delete this MCP server for yourself, but also uninstall and remove this MCP server from Warp and across all of your teammates' devices.".to_string(),
+                "This will not only delete this MCP server for yourself, but also uninstall and remove this MCP server from Black and across all of your teammates' devices.".to_string(),
                 "Delete MCP".to_string(),
                 "Cancel".to_string(),
             ),
             DestructiveMCPConfirmationDialogVariant::Unshare => DestructiveMCPConfirmationDialogDisplayOptions::new(
                 "Remove shared MCP server from team?".to_string(),
-                "This will uninstall and remove this MCP server from Warp and across all of your teammates' devices.".to_string(),
+                "This will uninstall and remove this MCP server from Black and across all of your teammates' devices.".to_string(),
                 "Remove from team".to_string(),
                 "Cancel".to_string(),
             ),

@@ -280,7 +280,7 @@ impl OrchestrationLaunchModal {
 
     fn render_description(appearance: &Appearance) -> Box<dyn Element> {
         Text::new(
-            "We've made major improvements to Warp's cloud agent orchestration platform, Oz.",
+            "We've made major improvements to Black's cloud agent orchestration platform, Oz.",
             appearance.ui_font_family(),
             14.,
         )

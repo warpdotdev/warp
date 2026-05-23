@@ -5997,10 +5997,10 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "InitialWorkingDirectoryConfigurationChanged"
             }
             Self::InputModeChanged => "Input Mode Changed",
-            Self::OpenedWarpAI => "Opened Warp AI",
+            Self::OpenedWarpAI => "Opened Black AI",
             Self::WarpAIRequestIssued => "Black AI Request Issued",
             Self::WarpAIAction => "Black AI Action",
-            Self::UsedWarpAIPreparedPrompt => "Used Warp AI Prepared Prompt",
+            Self::UsedWarpAIPreparedPrompt => "Used Black AI Prepared Prompt",
             Self::WarpAICharacterLimitExceeded => "Black AI Character Limit Exceeded",
             Self::OpenInputContextMenu => "OpenInputBoxContextMenu",
             Self::InputCutSelectedText => "InputBoxCutSelectedText",
@@ -6028,7 +6028,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::RemoveAddedSubshellCommand => "Remove Added Subshell Command",
             Self::ReceivedSubshellRcFileDcs => "Received Subshell RC File DCS",
             Self::ToggleSshTmuxWrapper => "Toggle SSH Tmux Wrapper",
-            Self::ToggleSshWarpification => "Toggle SSH Warpification",
+            Self::ToggleSshWarpification => "Toggle SSH Blackification",
             Self::SetSshExtensionInstallMode => "Set SSH Extension Install Mode",
             Self::SshRemoteServerChoiceDoNotAskAgainToggled => {
                 "SSH Remote Server Choice Do Not Ask Again Toggled"
@@ -6041,8 +6041,8 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::BlackifyFooterShown => "Blackify Footer Shown",
             Self::AgentToolbarDismissed => "Agent Toolbar Dismissed",
             Self::BlackifyFooterAcceptedBlackify => "Blackify Footer Accepted Blackify",
-            Self::SshTmuxWarpificationSuccess => "SSH Tmux Warpification Succeeded",
-            Self::SshTmuxWarpificationErrorBlock => "SSH Tmux Warpification Error Block",
+            Self::SshTmuxWarpificationSuccess => "SSH Tmux Blackification Succeeded",
+            Self::SshTmuxWarpificationErrorBlock => "SSH Tmux Blackification Error Block",
             Self::SshInstallTmuxBlockDisplayed => "SSH Install Tmux Block Displayed",
             Self::SshInstallTmuxBlockAccepted => "SSH Install Tmux Block Accepted",
             Self::SshInstallTmuxBlockDismissed => "SSH Install Tmux Block Dismissed",
@@ -6052,7 +6052,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::InitiateReauth => "Initiate Reauth",
             Self::NeedsReauth => "Needs Reauth",
             Self::WarpDriveOpened => "Black Drive Opened",
-            Self::ToggleWarpAI => "Toggle Warp AI",
+            Self::ToggleWarpAI => "Toggle Black AI",
             Self::ToggleSecretRedaction => "Toggle Secret Redaction",
             Self::CustomSecretRegexAdded => "Custom Secret Regex Added",
             Self::ToggleObfuscateSecret => "Toggle Obfuscate Secret",
@@ -6383,7 +6383,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::InitiateAnonymousUserSignup => "An anonymous user initiated the sign up flow",
             Self::AnonymousUserExpirationLockout => {
-                "An anonymous user opened Warp after their conversion deadline and was locked out"
+                "An anonymous user opened Black after their conversion deadline and was locked out"
             }
             Self::AnonymousUserLinkedFromBrowser => {
                 "Received an auth payload from anonymous user after linking in browser"
@@ -6496,9 +6496,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "Database write error when trying to write app state for session restoration"
             }
             Self::AppStartup => "App is launched",
-            Self::LoggedOutStartup => "Started Warp in the logged-out / signed-out state",
+            Self::LoggedOutStartup => "Started Black in the logged-out / signed-out state",
             Self::DownloadSource => {
-                "Whether the Warp was installed from the home page or through homebrew"
+                "Whether Black was installed from the home page or through homebrew"
             }
             Self::SSHBootstrapAttempt => "Attempted bootstrapping for an SSH session",
             Self::SSHControlMasterError => {
@@ -6533,13 +6533,13 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::NotificationSent => "Sent desktop notification",
             Self::NotificationFailedToSend => "Failed to send desktop notification",
-            Self::NotificationClicked => "Clicked desktop notification sent from Warp",
+            Self::NotificationClicked => "Clicked desktop notification sent from Black",
             Self::ToggleShowAgentTips => "Toggled the Show Agent Tips setting in AI settings",
             Self::ToggleFindOption => "Changed settings in Find Toggle",
             Self::SignUpButtonClicked => "Clicked \"Sign Up\" button",
             Self::LoginButtonClicked => "Clicked on \"Log in\" button",
             Self::OpenNewSessionFromFilePath => {
-                "Dragged a file, folder, etc. into Warp to start a session"
+                "Dragged a file, folder, etc. into Black to start a session"
             }
             Self::OpenTeamFromURI => {
                 "Showed settings view of their newly joined team within the app"
@@ -6591,16 +6591,16 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "Opened the launch config YAML file from modal once saved successfully"
             }
             Self::OpenLaunchConfig => "Opened launch config for a session",
-            Self::TeamCreated => "Created a Warp Drive team",
-            Self::TeamJoined => "Joined a Warp Drive team",
-            Self::TeamLeft => "Left a Warp Drive team",
-            Self::TeamLinkCopied => "Copied a Warp Drive team link",
-            Self::RemovedUserFromTeam => "Remove user from Warp Drive team",
-            Self::DeletedWorkflow => "Deleted workflow from Warp Drive team",
-            Self::DeletedNotebook => "Deleted notebook from Warp Drive team",
+            Self::TeamCreated => "Created a Black Drive team",
+            Self::TeamJoined => "Joined a Black Drive team",
+            Self::TeamLeft => "Left a Black Drive team",
+            Self::TeamLinkCopied => "Copied a Black Drive team link",
+            Self::RemovedUserFromTeam => "Remove user from Black Drive team",
+            Self::DeletedWorkflow => "Deleted workflow from Black Drive team",
+            Self::DeletedNotebook => "Deleted notebook from Black Drive team",
             Self::ToggleApprovalsModal => "Opened or closed teams modal",
             Self::ChangedInviteViewOption => "Toggled between link and invite for invite",
-            Self::SendEmailInvites => "Sent email invites for Warp Drive team",
+            Self::SendEmailInvites => "Sent email invites for Black Drive team",
             Self::CommandCorrection => "Accepted command correction",
             Self::SetLineHeight => "Set line height through Settings -> Appearance",
             Self::ResourceCenterOpened => "Opened Resource Center pane",
@@ -6631,7 +6631,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::QuitModalCancel => "`Cancel` button on the alert modal was pressed",
             Self::QuitModalDisabled => {
-                "The quit modal dialog has been disabled and will not popup when a user closes Warp while a session is running"
+                "The quit modal dialog has been disabled and will not popup when a user closes Black while a session is running"
             }
             Self::UserInitiatedLogOut => {
                 "Confirms a user has explicitly logged out of the application"
@@ -6656,14 +6656,14 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::InitialWorkingDirectoryConfigurationChanged => {
                 "Replaced the default working directory with a different path"
             }
-            Self::OpenedWarpAI => "Activated Warp AI",
-            Self::WarpAIRequestIssued => "Issued a question to Warp AI",
-            Self::WarpAIAction => "Executed a Warp AI action: Restart, Copy, Insert into terminal",
+            Self::OpenedWarpAI => "Activated Black AI",
+            Self::WarpAIRequestIssued => "Issued a question to Black AI",
+            Self::WarpAIAction => "Executed a Black AI action: Restart, Copy, Insert into terminal",
             Self::UsedWarpAIPreparedPrompt => {
-                "Used one of the Warp-provided prompts, like \"Show examples\""
+                "Used one of the Black-provided prompts, like \"Show examples\""
             }
             Self::WarpAICharacterLimitExceeded => {
-                "Attempted to ask a question longer than 1k chars to Warp AI"
+                "Attempted to ask a question longer than 1k chars to Black AI"
             }
             Self::OpenInputContextMenu => "Opened the Input Editor's context menu",
             Self::InputCutSelectedText => {
@@ -6682,7 +6682,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::InputAICommandSearch => {
                 "Opened AI Command Search via the Input Editor's context menu (right clicking the buffer)"
             }
-            Self::InputAskBlackAI => "Clicked \"Ask Warp AI\" from the Input Editor's context menu",
+            Self::InputAskBlackAI => "Clicked \"Ask Black AI\" from the Input Editor's context menu",
             Self::SaveAsWorkflowModal => {
                 "Opened the modal to create a new workflow using a Block's context--command, etc."
             }
@@ -6713,34 +6713,34 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "Enabled or disabled preserving the active tab color"
             }
             Self::ShowSubshellBanner => {
-                "Displayed the banner asking whether Warp should Blackify the current session via Warp's subshell wrapper"
+                "Displayed the banner asking whether Black should Blackify the current session via Black's subshell wrapper"
             }
             Self::SshTmuxBlackifyBannerDisplayed => {
-                "Displayed the banner asking whether Warp should Blackify the current SSH session via Warp's SSH Wrapper"
+                "Displayed the banner asking whether Black should Blackify the current SSH session via Black's SSH Wrapper"
             }
             Self::DeclineSubshellBootstrap => {
-                "Developer declined the Warp banner to Blackify the current session"
+                "Developer declined the Black banner to Blackify the current session"
             }
             Self::TriggerSubshellBootstrap => {
-                "Attempted to Blackify the current session via Warp's subshell wrapper"
+                "Attempted to Blackify the current session via Black's subshell wrapper"
             }
             Self::AddDenylistedSubshellCommand => {
-                "Explicitly prevent a command from being Warpified via Warp's subshell wrapper"
+                "Explicitly prevent a command from being Blackified via Black's subshell wrapper"
             }
             Self::RemoveDenylistedSubshellCommand => {
-                "Removed a command from the list of commands to IGNORE when trying to Blackify via Warp's subshell wrapper"
+                "Removed a command from the list of commands to IGNORE when trying to Blackify via Black's subshell wrapper"
             }
             Self::AddAddedSubshellCommand => {
-                "Added a command to be automatically Warpified via Warp's subshell wrapper"
+                "Added a command to be automatically Blackified via Black's subshell wrapper"
             }
             Self::RemoveAddedSubshellCommand => {
-                "Removed a command from the list of commands to automatically Blackify via Warp's subshell wrapper"
+                "Removed a command from the list of commands to automatically Blackify via Black's subshell wrapper"
             }
-            Self::ReceivedSubshellRcFileDcs => "Spawned a subshell to be automatically Warpified",
+            Self::ReceivedSubshellRcFileDcs => "Spawned a subshell to be automatically Blackified",
             Self::ToggleSshTmuxWrapper => {
                 "Changed the setting for SSH sessions to prompt for Tmux Wrapper"
             }
-            Self::ToggleSshWarpification => "Changed the setting for SSH sessions to be warified",
+            Self::ToggleSshWarpification => "Changed the setting for SSH sessions to be blackified",
             Self::SetSshExtensionInstallMode => {
                 "Changed the SSH extension install mode (always ask / always allow / always skip)"
             }
@@ -6762,13 +6762,13 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::AgentToolbarDismissed => "User dismissed the use-agent toolbar",
             Self::BlackifyFooterAcceptedBlackify => "User clicked Blackify in the blackify footer",
-            Self::SshTmuxWarpificationSuccess => "Ssh tmux warpification succeeded",
-            Self::SshTmuxWarpificationErrorBlock => "Ssh tmux warpification errored out",
+            Self::SshTmuxWarpificationSuccess => "Ssh tmux blackification succeeded",
+            Self::SshTmuxWarpificationErrorBlock => "Ssh tmux blackification errored out",
             Self::SshInstallTmuxBlockDisplayed => "Displayed an ssh install tmux block",
             Self::SshInstallTmuxBlockAccepted => "User accepted an ssh install tmux block",
             Self::SshInstallTmuxBlockDismissed => "User dismissed an ssh install tmux block",
             Self::ShowAliasExpansionBanner => {
-                "Displayed the banner asking whether Warp should automatically expand aliases within the Input Editor"
+                "Displayed the banner asking whether Black should automatically expand aliases within the Input Editor"
             }
             Self::EnableAliasExpansionFromBanner => {
                 "Enabled automatic alias expansion within the Input Editor from the banner"
@@ -6777,7 +6777,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "Dismissed the banner to enable automatic alias expansion within the Input Editor"
             }
             Self::ShowVimKeybindingsBanner => {
-                "Displayed the banner asking whether Warp should enable Vim keybindings in the Input Editor"
+                "Displayed the banner asking whether Black should enable Vim keybindings in the Input Editor"
             }
             Self::EnableVimKeybindingsFromBanner => {
                 "Enabled Vim keybindings in the Input Editor from the banner"
@@ -6787,9 +6787,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::InitiateReauth => "Started the flow to re-authenticate the client",
             Self::NeedsReauth => "User needs to re-authenticate",
-            Self::WarpDriveOpened => "Opened Warp Drive panel",
+            Self::WarpDriveOpened => "Opened Black Drive panel",
             Self::ToggleWarpAI => {
-                "Toggled Warp AI--an AI assistant to help you debug errors, look up forgotten commands and more"
+                "Toggled Black AI--an AI assistant to help you debug errors, look up forgotten commands and more"
             }
             Self::ToggleSecretRedaction => {
                 "Toggled on/off the setting for Secret Redaction - attempts to redact secrets and sensitive information"
@@ -6798,18 +6798,18 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ToggleObfuscateSecret => "Revealed or hid a secret",
             Self::CopySecret => "Copied a secret's obfuscated contents to clipboard",
             Self::AutoGenerateMetadataSuccess => {
-                "Successfully generated metadata for a workflow using Warp AI"
+                "Successfully generated metadata for a workflow using Black AI"
             }
             Self::AutoGenerateMetadataError => {
-                "Failed to generate metadata for a workflow using Warp AI"
+                "Failed to generate metadata for a workflow using Black AI"
             }
-            Self::UpdateSortingChoice => "Modified the sorting scheme for Warp Drive objects",
+            Self::UpdateSortingChoice => "Modified the sorting scheme for Black Drive objects",
             Self::UndoClose => "Re-opened a closed tab or window (undo closing a tab or window)",
             Self::PtyThroughput => "A sample of the max PTY throughput in bytes/sec",
-            Self::DuplicateObject => "Cloned a Warp Drive object",
-            Self::ExportObject => "Exported a Warp Drive object",
+            Self::DuplicateObject => "Cloned a Black Drive object",
+            Self::ExportObject => "Exported a Black Drive object",
             Self::CommandFileRun => {
-                "Opened a .cmd or unix executable file and ran it directly in Warp"
+                "Opened a .cmd or unix executable file and ran it directly in Black"
             }
             Self::PageUpDownInEditorPressed => {
                 "Pressed `PAGE-UP` or `PAGE-DOWN` within the Input Editor"
@@ -6817,7 +6817,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::StartedSharingCurrentSession => "Started sharing the current session",
             Self::StoppedSharingCurrentSession => "Halted sharing the current session",
             Self::JoinedSharedSession => {
-                "When you join another instance of Warp using shared sessions"
+                "When you join another instance of Black using shared sessions"
             }
             Self::SharedSessionModalUpgradePressed => {
                 "Pressed upgrade after reaching max session sharing limit"
@@ -6839,12 +6839,12 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "Black Drive object on the web was opened on the desktop"
             }
             Self::DriveSharingOnboardingBlockShown => {
-                "Showed onboarding block for Warp Drive sharing"
+                "Showed onboarding block for Black Drive sharing"
             }
-            Self::UnsupportedShell => "Booted Warp with a shell that isn't supported",
-            Self::LogOut => "Logged out of the Warp client",
+            Self::UnsupportedShell => "Booted Black with a shell that isn't supported",
+            Self::LogOut => "Logged out of the Black client",
             Self::SettingsImportInitiated => "Started the import settings flow for new users",
-            Self::InviteTeammates => "Sent emails to invite teammates to join Warp Drive team",
+            Self::InviteTeammates => "Sent emails to invite teammates to join Black Drive team",
             Self::CopyObjectToClipboard => "Copied an object to the user's keyboard",
             Self::OpenAndBlackifyDockerSubshell => {
                 "Blackifying a docker subshell from using the docker extension"
@@ -6993,18 +6993,18 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::AgentModeOpenedCitation => "Opened a citation that was surfaced in agent mode",
             Self::OpenedSharingDialog => {
-                "Opened the sharing settings dialog for a session or Warp Drive object"
+                "Opened the sharing settings dialog for a session or Black Drive object"
             }
             Self::ToggleGlobalAI => "Toggled global AI enablement.",
             Self::ToggleActiveAI => "Toggled active AI enablement.",
             Self::ToggleLigatureRendering => "Toggled ligature rendering",
-            Self::WorkflowAliasAdded => "Added an alias to a Warp Drive workflow",
-            Self::WorkflowAliasRemoved => "Removed an alias from a Warp Drive workflow",
+            Self::WorkflowAliasAdded => "Added an alias to a Black Drive workflow",
+            Self::WorkflowAliasRemoved => "Removed an alias from a Black Drive workflow",
             Self::WorkflowAliasArgumentEdited => {
-                "Edited an argument in a Warp Drive workflow alias"
+                "Edited an argument in a Black Drive workflow alias"
             }
             Self::WorkflowAliasEnvVarsAttached => {
-                "Added or removed environment variables for a Warp Drive workflow alias"
+                "Added or removed environment variables for a Black Drive workflow alias"
             }
             Self::ToggledAgentModeAutoexecuteReadonlyCommandsSetting => {
                 "Toggled setting to autoexecute readonly Agent Mode requested commands"
@@ -7036,11 +7036,11 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             #[cfg(windows)]
             Self::AutoupdateMutexTimeout => {
-                "The Windows auto-update installer timed out waiting for Warp to release its mutex; a force-kill was attempted"
+                "The Windows auto-update installer timed out waiting for Black to release its mutex; a force-kill was attempted"
             }
             #[cfg(windows)]
             Self::AutoupdateForcekillFailed { .. } => {
-                "The Windows auto-update installer failed to force-kill Warp after the mutex timeout"
+                "The Windows auto-update installer failed to force-kill Black after the mutex timeout"
             }
             #[cfg(windows)]
             Self::AutoupdateMinidumpCleanupFailed { .. } => {
@@ -7162,7 +7162,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "User copied a session link from the Agent Management View"
             }
             Self::DetectedIsolationPlatform { .. } => {
-                "Detected that Warp is running in an isolated sandbox"
+                "Detected that Black is running in an isolated sandbox"
             }
             Self::AgentTipShown => "Selected an Agent Tip to show in the Agent Mode status bar",
             Self::AgentTipClicked => "User clicked a link or action in an Agent Tip",

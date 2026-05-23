@@ -63,13 +63,13 @@ use crate::{settings_view, ChannelState};
 
 pub const FETCH_CHANNEL_VERSIONS_TIMEOUT: std::time::Duration = Duration::from_secs(60);
 
-const EXPERIMENT_ID_HEADER: &str = "X-Warp-Experiment-Id";
+const EXPERIMENT_ID_HEADER: &str = "X-Black-Experiment-Id";
 
 /// We use a special error code header `X-Black-Error-Code` to allow the server to send
 /// more specific error code information, so that the client can discern between different
 /// errors with the same error code.
 /// See errors/http_error_codes.go on the server for possible values.
-const WARP_ERROR_CODE_HEADER: &str = "X-Warp-Error-Code";
+const WARP_ERROR_CODE_HEADER: &str = "X-Black-Error-Code";
 
 /// An error indicating the user is out of credits. The server sends 429s to communicate this
 /// state, but if Cloud Run is overloaded, it can also send 429s that aren't credit-related.
@@ -1465,9 +1465,9 @@ impl ServerApi {
             .append_pair("include_changelogs", &include_changelogs.to_string());
 
         if include_changelogs {
-            log::info!("Fetching channel versions and changelogs from Warp server");
+            log::info!("Fetching channel versions and changelogs from Black server");
         } else {
-            log::info!("Fetching channel versions (without changelogs) from Warp server");
+            log::info!("Fetching channel versions (without changelogs) from Black server");
         }
 
         let mut request_builder = self
@@ -1491,7 +1491,7 @@ impl ServerApi {
 
         let response = request_builder.send().await?;
         let versions: ChannelVersions = response.json().await?;
-        log::info!("Received channel versions from Warp server: {versions}");
+        log::info!("Received channel versions from Black server: {versions}");
         Ok(versions)
     }
 }

@@ -1186,11 +1186,11 @@ impl BillingAndUsagePageV2View {
                     let credits = option.credits.separate_with_commas();
                     let price = format!("${:.2}", option.price_usd_cents as f64 / 100.0);
                     format!(
-                        "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Warp will automatically purchase {credits} credits for {price} and add them to your balance."
+                        "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Black will automatically purchase {credits} credits for {price} and add them to your balance."
                     )
                 }
                 None => {
-                    "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Warp will automatically purchase add-on credits and add them to your balance.".to_string()
+                    "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Black will automatically purchase add-on credits and add them to your balance.".to_string()
                 }
             };
             return AddonCreditsPanelState::AutoreloadNonAdmin {

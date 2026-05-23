@@ -126,7 +126,7 @@ impl TipsView {
         let tip_items = vec![
             TipItem::new(
                 "Command Palette".to_string(),
-                "Easily discover everything you can do in Warp without your hands leaving the keyboard.".to_string(),
+                "Easily discover everything you can do in Black without your hands leaving the keyboard.".to_string(),
                 TipAction::CommandPalette,
                 ctx,
             ),
@@ -151,7 +151,7 @@ impl TipsView {
             ),
             TipItem::new(
                 "Theme Picker".to_string(),
-                "Make Warp your own by choosing a built-in theme. Or create your own.".to_string(),
+                "Make Black your own by choosing a built-in theme. Or create your own.".to_string(),
                 TipAction::ThemePicker,
                 ctx,
             ),

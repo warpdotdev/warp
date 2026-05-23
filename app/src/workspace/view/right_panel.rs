@@ -96,7 +96,7 @@ impl ReviewTerminalUnavailableReason {
             Self::NoSelectedRepo => "no repo is selected for code review",
             Self::SessionPathUnavailable => "session cwd is unavailable or not local",
             Self::SessionOutsideSelectedRepo => "session cwd is not inside selected repo",
-            Self::AIDisabled => "AI is disabled for Warp review destinations",
+            Self::AIDisabled => "AI is disabled for Black review destinations",
             Self::TerminalExecuting => "terminal is currently executing a command",
             Self::InputBoxNotVisible => "terminal input box is not visible",
         }

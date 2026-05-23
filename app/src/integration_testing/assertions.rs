@@ -43,7 +43,7 @@ pub fn go_online() -> TestStep {
 }
 
 pub fn join_a_workspace() -> TestStep {
-    TestStep::new("Join a Warp Drive workspace")
+    TestStep::new("Join a Black Drive workspace")
         .with_action(move |app, _, _| {
             UserWorkspaces::handle(app).update(app, |user_workspaces, ctx| {
                 let workspace_uid = "workspace_uid123456789".to_string().into();

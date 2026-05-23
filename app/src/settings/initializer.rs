@@ -67,7 +67,7 @@ impl SettingsInitializer {
                 if !settings.input_box_type.is_value_explicitly_set()
                     && *settings.input_box_type.value() == InputBoxType::Classic
                 {
-                    log::debug!("Setting default input type to Warp prompt for new user");
+                    log::debug!("Setting default input type to Black prompt for new user");
                     report_if_error!(settings
                         .input_box_type
                         .set_value(InputBoxType::Universal, ctx));

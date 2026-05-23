@@ -111,7 +111,7 @@ $null = New-Module -Name Black-Module -ScriptBlock {
 
                 # If the generator command returns multi-line output,
                 # we make sure to join the lines together with a newline, so
-                # they are properly parsed by warp
+                # they are properly parsed by black
                 $stringifiedOutput = $rawOutput -join "$([char]0x0a)"
 
                 # This is a best-effort attempt to get an error code.
@@ -242,7 +242,7 @@ $null = New-Module -Name Black-Module -ScriptBlock {
             Black-Stop-ActiveThread
         }
 
-        # Clean up any completed warp jobs so they do not show up on the user's 'get-job'
+        # Clean up any completed black jobs so they do not show up on the user's 'get-job'
         # commands
         Black-Clean-CompletedThread
 
@@ -367,7 +367,7 @@ $null = New-Module -Name Black-Module -ScriptBlock {
             Black-Redraw-Prompt
         }
 
-        # Sets the prompt mode to warp prompt
+        # Sets the prompt mode to black prompt
         # Is the equivalent of black_change_prompt_modes_to_black_prompt in other shells
         Set-PSReadLineKeyHandler -Chord 'Alt+w' -ScriptBlock {
             $env:BLACK_HONOR_PS1 = '0'
@@ -623,7 +623,7 @@ $null = New-Module -Name Black-Module -ScriptBlock {
             $command = $_.Command
 
             # Creates a powershell instance on one of our inner runspaces
-            # that first loads all the warp common functions, and then
+            # that first loads all the black common functions, and then
             # executes the in-band generator in the current directory
             $ps = [powershell]::Create()
             $ps.RunspacePool = $script:innerRunspacePool
@@ -952,7 +952,7 @@ $null = New-Module -Name Black-Module -ScriptBlock {
     # NOTE: NO non-bootstrap / non-user calls below this line #
     ###########################################################
 
-    # Send a precmd message to the terminal to differentiate between the warp
+    # Send a precmd message to the terminal to differentiate between the black
     # bootstrap logic pasted into the PTY and the output of shell startup files.
     Black-Precmd -status $global:? -code $global:LASTEXITCODE
 

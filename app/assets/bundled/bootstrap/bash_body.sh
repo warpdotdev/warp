@@ -519,7 +519,7 @@ if [ -z "$BLACK_BOOTSTRAPPED" ]; then
         # Flush history
         history -a
 
-        # Reset the custom kill-whole-line binding as the user's bashrc (which is sourced after bashrc_warp)
+        # Reset the custom kill-whole-line binding as the user's bashrc (which is sourced after bashrc_black)
         # could have added another bind. This won't have any user-impact because these shortcuts are only run
         # in the context of the bash editor, which isn't displayed in Black.
         bind -r '"\C-p"'
@@ -905,12 +905,12 @@ if [ -z "$BLACK_BOOTSTRAPPED" ]; then
       fi
     }
 
-    # Check if the warp apt source file has been renamed to `warpdotdev.list.distUpgrade` due to an ubuntu version update.
+    # Check if the black apt source file has been renamed to `warpdotdev.list.distUpgrade` due to an ubuntu version update.
     # If this occurred, we want to rename the source file back to `warpdotdev.list` to ensure updates can proceed.
     # We purposefully skip this if either the `warpdotdev.list` file already exists (indicating that the user has already
     # done this themselves) _or_ if a `warpdotdev.sources` file exists (which is the new Deb822 format for source files).
     # The `.sources` file could only exist if a user manually created it; Ubuntu doesn't create one automatically for the
-    # warp source file due to a bug in its update flow where it considers our source file to be "invalid" because it
+    # black source file due to a bug in its update flow where it considers our source file to be "invalid" because it
     # contains a `signed-by` key.
     function black_handle_dist_upgrade {
       local source_file_name="$1"
@@ -1082,7 +1082,7 @@ esac
     fi
 
 
-    # Send a precmd message to the terminal to differentiate between the warp
+    # Send a precmd message to the terminal to differentiate between the black
     # bootstrap logic pasted into the PTY and the output of shell startup files.
     black_precmd
 

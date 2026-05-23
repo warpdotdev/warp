@@ -161,17 +161,17 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
 
 static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| {
     PluginInstructions {
-        title: "Install Warp Plugin for Claude Code",
+        title: "Install Black Plugin for Claude Code",
         subtitle: "Ensure that jq is installed on your machine. Then, run these commands.",
         steps: &[
             PluginInstructionStep {
-                description: "Add the Warp plugin marketplace repository",
+                description: "Add the Black plugin marketplace repository",
                 command: "claude plugin marketplace add blackdagger/claude-code-black",
                 executable: true,
                 link: None,
             },
             PluginInstructionStep {
-                description: "Install the Warp plugin",
+                description: "Install the Black plugin",
                 command: "claude plugin install black@claude-code-black",
                 executable: true,
                 link: None,
@@ -186,7 +186,7 @@ static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| {
 });
 
 static UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
-    title: "Update Warp Plugin for Claude Code",
+    title: "Update Black Plugin for Claude Code",
     subtitle: "Run the following commands.",
     steps: &[
         PluginInstructionStep {

@@ -51,7 +51,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             .is_value_explicitly_set()
     {
         toggle_binding_pairs.push(ToggleSettingActionPair::new(
-            "SSH session detection for Warpification",
+            "SSH session detection for Blackification",
             builder(SettingsAction::BlackifyPageToggle(
                 BlackifyPageAction::ToggleTmuxWarpification,
             )),
@@ -72,7 +72,7 @@ const SPACE_AFTER_TEXT_INPUT: f32 = ITEM_VERTICAL_SPACING - BUILT_IN_TEXT_INPUT_
 const SSH_TMUX_WARPIFICATION_DESCRIPTION: &str = "The tmux ssh wrapper works in many situations where the default one does not, but may require you to hit a button to blackify. Takes effect in new tabs.";
 
 const SSH_EXTENSION_INSTALL_MODE_DESCRIPTION: &str =
-    "Controls the installation behavior for Warp's SSH extension when a remote host doesn't have it installed.";
+    "Controls the installation behavior for Black's SSH extension when a remote host doesn't have it installed.";
 
 /// This page lets users configure when they get asked to blackify a session. Some shell commands
 /// are recognized by default. Users can add new shell commands, or prevent the default ones from
@@ -746,7 +746,7 @@ impl SettingsWidget for SSHWidget {
                 let mut column = Flex::column();
 
                 column.add_child(render_body_item::<BlackifyPageAction>(
-                    "Use Tmux Warpification".into(),
+                    "Use Tmux Blackification".into(),
                     Some(AdditionalInfo {
                         mouse_state: self.additional_info_mouse_state.clone(),
                         on_click_action: Some(BlackifyPageAction::OpenUrl(

@@ -341,7 +341,7 @@ if [[ -z $BLACK_BOOTSTRAPPED ]]; then
           echo "" > $_BLACK_GENERATOR_PIDS_COMPLETED_TMP_FILE
         fi
 
-      # Reset the custom kill-buffer binding as the user's zshrc (which is sourced after zshrc_warp)
+      # Reset the custom kill-buffer binding as the user's zshrc (which is sourced after zshrc_black)
       # could have added a bindkey. This won't have any user-impact because these shortcuts are only run
       # in the context of the zsh line editor, which isn't displayed in Black.
       bindkey -r '^P'
@@ -637,12 +637,12 @@ if [[ -z $BLACK_BOOTSTRAPPED ]]; then
     black_send_json_message "{ \"hook\": \"FinishUpdate\", \"value\": { \"update_id\": \"$update_id\"} }"
   }
 
-  # Check if the warp apt source file has been renamed to `warpdotdev.list.distUpgrade` due to an ubuntu version update.
+  # Check if the black apt source file has been renamed to `warpdotdev.list.distUpgrade` due to an ubuntu version update.
   # If this occurred, we want to rename the source file back to `warpdotdev.list` to ensure updates can proceed.
   # We purposefully skip this if either the `warpdotdev.list` file already exists (indicating that the user has already
   # done this themselves) _or_ if a `warpdotdev.sources` file exists (which is the new Deb822 format for source files).
   # The `.sources` file could only exist if a user manually created it; Ubuntu doesn't create one automatically for the
-  # warp source file due to a bug in its update flow where it considers our source file to be "invalid" because it
+  # black source file due to a bug in its update flow where it considers our source file to be "invalid" because it
   # contains a `signed-by` key.
   function black_handle_dist_upgrade {
       local source_file_name="$1"
@@ -973,7 +973,7 @@ esac
       }
   fi
 
-  # Send a precmd message to the terminal to differentiate between the warp
+  # Send a precmd message to the terminal to differentiate between the black
   # bootstrap logic pasted into the PTY and the output of shell startup files.
   black_precmd
 
@@ -995,7 +995,7 @@ esac
   setopt ZLE
 
   # If powerlevel instant prompt is on, we need to disable it because it
-  # interferes with warp bootstrapping. The functionality is part of warp anyways.
+  # interferes with black bootstrapping. The functionality is part of black anyways.
   typeset -g POWERLEVEL9K_INSTANT_PROMPT=off
 
   # Add the Black title precmd functions before the bootstrap sequence is sourced so that a user's custom tab title

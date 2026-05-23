@@ -38,7 +38,7 @@ async fn main() {
 
     let args = Args::parse();
 
-    println!("Serving Warp on http://localhost:{}", args.port);
+    println!("Serving Black on http://localhost:{}", args.port);
     serve(make_router(&args.directory), args.port).await
 }
 

@@ -560,7 +560,7 @@ impl Window {
                 ),
             };
             if native_window == nil {
-                return Err(anyhow!("WarpWindow returned nil from initializer"));
+                return Err(anyhow!("BlackWindow returned nil from initializer"));
             }
 
             if options.fullscreen_state == FullscreenState::Fullscreen {

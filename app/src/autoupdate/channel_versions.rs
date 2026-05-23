@@ -29,7 +29,7 @@ pub async fn fetch_channel_versions(
     let channel_versions = server_api
         .fetch_channel_versions(include_changelogs, is_daily)
         .await
-        .context("Failed to retrieve channel versions from Warp server");
+        .context("Failed to retrieve channel versions from Black server");
     match channel_versions {
         channel_versions @ Ok(_) => channel_versions,
         Err(err) => {

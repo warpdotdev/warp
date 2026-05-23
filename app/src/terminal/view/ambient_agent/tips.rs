@@ -93,7 +93,7 @@ pub fn get_cloud_mode_tips() -> Vec<CloudModeTip> {
             Some("https://blackdagger.io/agent-platform/cloud-agents/platform"),
         ),
         CloudModeTip::new(
-            "Fork a completed Oz cloud agent session into Warp to continue the work locally.",
+            "Fork a completed Oz cloud agent session into Black to continue the work locally.",
             Some("https://blackdagger.io/agent-platform/cloud-agents/viewing-cloud-agent-runs"),
         ),
         CloudModeTip::new(
@@ -117,7 +117,7 @@ pub fn get_cloud_mode_tips() -> Vec<CloudModeTip> {
             Some("https://blackdagger.io/agent-platform/capabilities/mcp"),
         ),
         CloudModeTip::new(
-            "Use `oz agent run` to kick off tasks without opening the Warp terminal.",
+            "Use `oz agent run` to kick off tasks without opening the Black terminal.",
             Some("https://blackdagger.io/agent-platform/cloud-agents/platform"),
         ),
         CloudModeTip::new(

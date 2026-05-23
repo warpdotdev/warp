@@ -32,7 +32,7 @@ const SUBSCRIBE_ITEMS: &[&str] = &[
     "Access to Reload credits and volume-based discounts",
     "Extended cloud agents access",
     "Highest codebase indexing limits",
-    "Unlimited Warp Drive objects and collaboration",
+    "Unlimited Black Drive objects and collaboration",
     "Private email support",
     "Unlimited cloud conversation storage",
 ];
@@ -123,8 +123,8 @@ impl FreeUserNoAiSlide {
             appearance,
             0,
             Icon::Code2,
-            "Agent driven development with Warp's built-in agent",
-            "Iterate, plan, and build with Oz: Warp's built-in agent. Available locally or in the cloud.",
+            "Agent driven development with Black's built-in agent",
+            "Iterate, plan, and build with Oz: Black's built-in agent. Available locally or in the cloud.",
             agent_price_badge.to_string(),
             true, // badge is green
             self.agent_mouse_state.clone(),
@@ -318,7 +318,7 @@ impl FreeUserNoAiSlide {
             self.next_button.render(
                 appearance,
                 button::Params {
-                    content: button::Content::Label("Get Warping".into()),
+                    content: button::Content::Label("Get started".into()),
                     theme: &button::themes::Primary,
                     options: button::Options {
                         keystroke: Some(enter),
@@ -370,7 +370,7 @@ impl FreeUserNoAiSlide {
         let text_sub = internal_colors::text_sub(theme, internal_colors::neutral_2(theme));
 
         let title = FormattedTextElement::from_str(
-            "Subscribe to access agent driven development in Warp.",
+            "Subscribe to access agent driven development in Black.",
             ui_font_family,
             24.,
         )

@@ -48,7 +48,7 @@ impl OpenInWarpBannerState {
 fn file_title_text(openable_path: &OpenablePath) -> String {
     match openable_path.file_type {
         OpenableFileType::Markdown => {
-            "Did you know that Warp can directly display Markdown files?".to_string()
+            "Did you know that Black can directly display Markdown files?".to_string()
         }
         OpenableFileType::Code | OpenableFileType::Text => {
             cfg_if::cfg_if! {
@@ -59,13 +59,13 @@ fn file_title_text(openable_path: &OpenablePath) -> String {
 
                     match language.as_ref().map(|language| language.display_name()) {
                         Some(display_name) => {
-                            format!("Did you know that Warp can directly edit {display_name} files?")
+                            format!("Did you know that Black can directly edit {display_name} files?")
                         }
-                        None => "Did you know that Warp can directly edit code?".to_string(),
+                        None => "Did you know that Black can directly edit code?".to_string(),
                     }
                 } else {
                     // The `languages` crate is not available on WASM, so use a fallback message.
-                    "Did you know that Warp can directly edit code?".to_string()
+                    "Did you know that Black can directly edit code?".to_string()
                 }
             }
         }
@@ -78,8 +78,8 @@ pub fn render_open_in_warp_banner(
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let button_text = match state.target.file_type {
-        OpenableFileType::Markdown => "View in Warp",
-        OpenableFileType::Code | OpenableFileType::Text => "Edit in Warp",
+        OpenableFileType::Markdown => "View in Black",
+        OpenableFileType::Code | OpenableFileType::Text => "Edit in Black",
     };
 
     let open_button = InlineBannerTextButton {

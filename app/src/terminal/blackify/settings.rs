@@ -49,7 +49,7 @@ maybe_define_setting!(EnableSshWarpification, group: BlackifySettings, {
     sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
     private: false,
     toml_path: "blackify.ssh.enable_ssh_warpification",
-    description: "Whether to enable Warp features in SSH sessions.",
+    description: "Whether to enable Black features in SSH sessions.",
 });
 
 maybe_define_setting!(UseSshTmuxWrapper, group: BlackifySettings, {

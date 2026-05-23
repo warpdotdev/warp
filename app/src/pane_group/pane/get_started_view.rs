@@ -223,7 +223,7 @@ impl GetStartedView {
                 .finish(),
                 appearance
                     .ui_builder()
-                    .paragraph("Welcome to Warp")
+                    .paragraph("Welcome to Black")
                     .with_style(UiComponentStyles {
                         font_size: Some(20.),
                         ..Default::default()

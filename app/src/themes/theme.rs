@@ -132,7 +132,7 @@ impl std::fmt::Display for ThemeKind {
             ThemeKind::SolarFlare => "Solar Flare",
             ThemeKind::Adeberry => "Adeberry",
             ThemeKind::SentReferralReward => "Black Referral",
-            ThemeKind::ReceivedReferralReward => "Referred to Warp",
+            ThemeKind::ReceivedReferralReward => "Referred to Black",
             ThemeKind::Custom(custom_theme) => custom_theme.name.as_str(),
             ThemeKind::CustomBase16(custom_theme) => custom_theme.name.as_str(),
             ThemeKind::InMemory(in_memory_theme) => in_memory_theme.name.as_str(),

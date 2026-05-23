@@ -657,7 +657,7 @@ fn enable_decorations_if_needed(window: &winit::window::Window, adapter_info: &A
     if adapter_has_rendering_offset_bug(adapter_info) {
         log::warn!(
             "Enabling native window decorations to work around a rendering offset bug in the \
-            selected GPU adapter ({}). See: https://github.com/warpdotdev/Warp/issues/6120",
+            selected GPU adapter ({}). See: https://blackdagger.io/support",
             adapter_info.name,
         );
         window.set_decorations(true);

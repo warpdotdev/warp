@@ -64,7 +64,7 @@ pub fn render_aws_bedrock_login_banner(
 
     // Use sub_text_color for description to differentiate from title
     let description_text = black_ui::elements::Text::new(
-        "Your Warp admin has enabled AWS Bedrock for your team.",
+        "Your Black admin has enabled AWS Bedrock for your team.",
         appearance.ui_font_family(),
         appearance.monospace_font_size() - 2.,
     )

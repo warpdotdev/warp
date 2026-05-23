@@ -234,7 +234,7 @@ fn main() {
     root.insert(
         "description".to_string(),
         Value::String(format!(
-            "JSON Schema for Warp settings ({channel} channel, {entry_count} settings)"
+            "JSON Schema for Black settings ({channel} channel, {entry_count} settings)"
         )),
     );
     root.insert("type".to_string(), Value::String("object".to_string()));

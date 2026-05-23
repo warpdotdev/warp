@@ -2149,9 +2149,9 @@ impl TeamsWidget {
         has_admin_permissions: bool,
     ) -> Box<dyn Element> {
         let prorated_message = if has_admin_permissions {
-            "You'll be charged for a portion of the team member's usage of Warp."
+            "You'll be charged for a portion of the team member's usage of Black."
         } else {
-            "Your admin will be charged for a portion of the team member's usage of Warp."
+            "Your admin will be charged for a portion of the team member's usage of Black."
         };
 
         let additional_members_cost_money_msg = if let Some((monthly_cost, yearly_cost)) =
@@ -3242,7 +3242,7 @@ impl TeamsWidget {
 
         let domain = current_user_email.split('@').nth(1).unwrap_or("");
         let team_discoverability_instructions =
-            format!("Allow Warp users with an @{domain} email to find and join the team.");
+            format!("Allow Black users with an @{domain} email to find and join the team.");
         let subtext = self.render_sub_text(
             team_discoverability_instructions,
             appearance,
@@ -3995,9 +3995,9 @@ impl TeamsWidget {
             .with_margin_left(-4.)
             .finish();
             let checkbox_row_text = if let Some(domain) = view.auth_state.user_email_domain() {
-                format!("Allow Warp users with an @{domain} email to find and join the team.")
+                format!("Allow Black users with an @{domain} email to find and join the team.")
             } else {
-                "Allow Warp users with the same email domain as you to find and join the team."
+                "Allow Black users with the same email domain as you to find and join the team."
                     .to_string()
             };
             let checkbox_row = Container::new(

@@ -152,7 +152,7 @@ pub fn assert_open_in_warp_banner_open(tab_index: usize, pane_index: usize) -> A
         terminal.read(app, |view, _ctx| {
             async_assert!(
                 view.is_open_in_warp_banner_open(),
-                "Expected the 'Open in Warp' banner to be open"
+                "Expected the 'Open in Black' banner to be open"
             )
         })
     })
