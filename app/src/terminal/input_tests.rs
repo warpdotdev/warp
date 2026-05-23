@@ -97,6 +97,10 @@ use warp_util::user_input::UserInput;
 use workflows::workflow::{Argument, ArgumentType, Workflow};
 
 use crate::context_chips::prompt::Prompt;
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
+    CLIAgentSessionStatus,
+};
 use crate::terminal::general_settings::UserDefaultShellUnsupportedBannerState;
 use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
@@ -6936,6 +6940,435 @@ fn test_custom_terminal_page_scroll_binding_applies_when_prompt_is_focused() {
                 terminal.scroll_position(),
                 ScrollPosition::FixedAtPosition { .. }
             ));
+        });
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Issue #11588 — Rich Input submit on Ctrl+Enter toggle
+//
+// The four-cell matrix from the AC, plus the shell-mode regression case and a
+// settings smoke test.  These tests were written BEFORE the implementation and
+// are intentionally compiled against the un-stashed (baseline) tree first to
+// confirm RED, then against the implementation to confirm GREEN.
+//
+// Helper: open the CLI-agent rich input for the terminal view under test.
+fn open_rich_input_for_terminal(terminal: &ViewHandle<TerminalView>, app: &mut App) {
+    terminal.update(app, |view, ctx| {
+        let view_id = view.view_id();
+        CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+            sessions.set_session(
+                view_id,
+                CLIAgentSession {
+                    agent: crate::terminal::CLIAgent::Claude,
+                    status: CLIAgentSessionStatus::InProgress,
+                    session_context: CLIAgentSessionContext::default(),
+                    input_state: CLIAgentInputState::Closed,
+                    should_auto_toggle_input: false,
+                    listener: None,
+                    remote_host: None,
+                    plugin_version: None,
+                    draft_text: None,
+                    custom_command_prefix: None,
+                },
+                ctx,
+            );
+        });
+        CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+            sessions.open_input(
+                view_id,
+                CLIAgentInputEntrypoint::CtrlG,
+                crate::ai::blocklist::InputConfig {
+                    input_type: crate::ai::blocklist::InputType::AI,
+                    is_locked: true,
+                },
+                false,
+                false,
+                ctx,
+            );
+        });
+    });
+}
+
+// ---------------------------------------------------------------------------
+// AC#1 / AC#4 smoke test: setting compiles, defaults to false, round-trips
+// ---------------------------------------------------------------------------
+
+/// The `submit_on_ctrl_enter` setting must exist in `AISettings`, default to
+/// `false` (preserve current Enter-submits behaviour), and survive a TOML
+/// round-trip.
+#[test]
+fn submit_on_ctrl_enter_setting_defaults_to_false_and_round_trips() {
+    App::test((), |mut app| async move {
+        let _cli_agent_flag = FeatureFlag::CLIAgentRichInput.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        // Default must be false so existing Enter-submits behaviour is preserved.
+        let default_value =
+            AISettings::handle(&app).read(&app, |settings, _| *settings.submit_on_ctrl_enter);
+        assert!(!default_value, "submit_on_ctrl_enter must default to false");
+
+        // Round-trip: set to true, read back.
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .submit_on_ctrl_enter
+                .set_value(true, ctx)
+                .expect("setting value must succeed");
+        });
+        let after_set =
+            AISettings::handle(&app).read(&app, |settings, _| *settings.submit_on_ctrl_enter);
+        assert!(after_set, "submit_on_ctrl_enter should read back as true");
+    });
+}
+
+// ---------------------------------------------------------------------------
+// AC#3 behavioural matrix — cell 1: setting=false, Enter submits
+// ---------------------------------------------------------------------------
+
+/// When `submit_on_ctrl_enter` is `false` (the default) and the CLI agent
+/// rich input is open, pressing Enter must emit `Event::SubmitCLIAgentInput`.
+#[test]
+fn enter_submits_when_submit_on_ctrl_enter_is_false() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    App::test((), |mut app| async move {
+        let _cli_agent_flag = FeatureFlag::CLIAgentRichInput.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        // Ensure the setting is false (the default).
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .submit_on_ctrl_enter
+                .set_value(false, ctx)
+                .expect("setting value must succeed");
+        });
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        open_rich_input_for_terminal(&terminal, &mut app);
+
+        // Capture SubmitCLIAgentInput events.
+        let submitted: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let submitted_clone = submitted.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event, _| {
+                if let Event::SubmitCLIAgentInput { text } = event {
+                    submitted_clone.borrow_mut().push(text.clone());
+                }
+            });
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("hello", ctx);
+        });
+        input.update(&mut app, |input, ctx| {
+            input.input_enter(ctx);
+        });
+
+        assert_eq!(
+            submitted.borrow().len(),
+            1,
+            "Enter should submit once when submit_on_ctrl_enter=false"
+        );
+        assert_eq!(
+            submitted.borrow()[0],
+            "hello",
+            "submitted text should match buffer contents"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// AC#3 behavioural matrix — cell 2: setting=false, Ctrl+Enter emits CtrlEnter
+// ---------------------------------------------------------------------------
+
+/// When `submit_on_ctrl_enter` is `false` (the default) and the CLI agent
+/// rich input is open, pressing Ctrl+Enter must emit the existing
+/// `Event::CtrlEnter` and must NOT emit `Event::SubmitCLIAgentInput`.
+#[test]
+fn ctrl_enter_emits_ctrl_enter_event_when_submit_on_ctrl_enter_is_false() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    App::test((), |mut app| async move {
+        let _cli_agent_flag = FeatureFlag::CLIAgentRichInput.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        // Ensure the setting is false (the default).
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .submit_on_ctrl_enter
+                .set_value(false, ctx)
+                .expect("setting value must succeed");
+        });
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        open_rich_input_for_terminal(&terminal, &mut app);
+
+        let ctrl_enter_fired: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
+        let submitted: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let ctrl_enter_clone = ctrl_enter_fired.clone();
+        let submitted_clone = submitted.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event, _| match event {
+                Event::CtrlEnter => *ctrl_enter_clone.borrow_mut() = true,
+                Event::SubmitCLIAgentInput { text } => {
+                    submitted_clone.borrow_mut().push(text.clone())
+                }
+                _ => {}
+            });
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("hello", ctx);
+        });
+        // Call the ctrl-enter handler (new method — fails until implemented).
+        input.update(&mut app, |input, ctx| {
+            input.input_ctrl_enter(ctx);
+        });
+
+        assert!(
+            *ctrl_enter_fired.borrow(),
+            "Ctrl+Enter should emit Event::CtrlEnter when submit_on_ctrl_enter=false"
+        );
+        assert!(
+            submitted.borrow().is_empty(),
+            "Ctrl+Enter must NOT submit when submit_on_ctrl_enter=false"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// AC#3 behavioural matrix — cell 3: setting=true, Enter inserts newline
+// ---------------------------------------------------------------------------
+
+/// When `submit_on_ctrl_enter` is `true` and the CLI agent rich input is open,
+/// pressing Enter must insert a newline and must NOT emit
+/// `Event::SubmitCLIAgentInput`.
+#[test]
+fn enter_inserts_newline_when_submit_on_ctrl_enter_is_true() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    App::test((), |mut app| async move {
+        let _cli_agent_flag = FeatureFlag::CLIAgentRichInput.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .submit_on_ctrl_enter
+                .set_value(true, ctx)
+                .expect("setting value must succeed");
+        });
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        open_rich_input_for_terminal(&terminal, &mut app);
+
+        let submitted: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let submitted_clone = submitted.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event, _| {
+                if let Event::SubmitCLIAgentInput { text } = event {
+                    submitted_clone.borrow_mut().push(text.clone());
+                }
+            });
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("hello", ctx);
+        });
+        input.update(&mut app, |input, ctx| {
+            input.input_enter(ctx);
+        });
+
+        // No submission should have occurred.
+        assert!(
+            submitted.borrow().is_empty(),
+            "Enter must NOT submit when submit_on_ctrl_enter=true"
+        );
+
+        // The buffer should now contain a newline after the original text.
+        input.read(&app, |input, ctx| {
+            let text = input.buffer_text(ctx);
+            assert!(
+                text.contains('\n'),
+                "Enter should insert a newline when submit_on_ctrl_enter=true; got: {text:?}"
+            );
+        });
+    });
+}
+
+// ---------------------------------------------------------------------------
+// AC#3 behavioural matrix — cell 4: setting=true, Ctrl+Enter submits
+// ---------------------------------------------------------------------------
+
+/// When `submit_on_ctrl_enter` is `true` and the CLI agent rich input is open,
+/// pressing Ctrl+Enter must emit `Event::SubmitCLIAgentInput` with the buffer
+/// text and must NOT emit `Event::CtrlEnter`.
+#[test]
+fn ctrl_enter_submits_when_submit_on_ctrl_enter_is_true() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    App::test((), |mut app| async move {
+        let _cli_agent_flag = FeatureFlag::CLIAgentRichInput.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .submit_on_ctrl_enter
+                .set_value(true, ctx)
+                .expect("setting value must succeed");
+        });
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        open_rich_input_for_terminal(&terminal, &mut app);
+
+        let submitted: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let ctrl_enter_fired: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
+        let submitted_clone = submitted.clone();
+        let ctrl_enter_clone = ctrl_enter_fired.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event, _| match event {
+                Event::SubmitCLIAgentInput { text } => {
+                    submitted_clone.borrow_mut().push(text.clone())
+                }
+                Event::CtrlEnter => *ctrl_enter_clone.borrow_mut() = true,
+                _ => {}
+            });
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("world", ctx);
+        });
+        // Call the ctrl-enter handler (new method — fails until implemented).
+        input.update(&mut app, |input, ctx| {
+            input.input_ctrl_enter(ctx);
+        });
+
+        assert_eq!(
+            submitted.borrow().len(),
+            1,
+            "Ctrl+Enter should submit once when submit_on_ctrl_enter=true"
+        );
+        assert_eq!(
+            submitted.borrow()[0],
+            "world",
+            "submitted text should match buffer contents"
+        );
+        assert!(
+            !*ctrl_enter_fired.borrow(),
+            "Ctrl+Enter must NOT emit Event::CtrlEnter when submit_on_ctrl_enter=true"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// AC#3 regression: shell-mode locked + Ctrl+Enter + setting=true
+// ---------------------------------------------------------------------------
+
+/// When `submit_on_ctrl_enter` is `true`, the user is in shell mode (buffer
+/// starts with the `!` prefix), and they press Ctrl+Enter, the submission must:
+///   1. Prepend `TERMINAL_INPUT_PREFIX` ("!") to the text.
+///   2. Exit shell mode (switch back to AI mode).
+///   3. Emit `Event::SubmitCLIAgentInput` with the prefixed text.
+///
+/// This mirrors the existing `input_enter` shell-mode path so that the
+/// Ctrl+Enter submit is functionally equivalent.
+#[test]
+fn ctrl_enter_with_shell_mode_locked_prepends_prefix_and_exits_shell_mode_when_setting_true() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    App::test((), |mut app| async move {
+        let _cli_agent_flag = FeatureFlag::CLIAgentRichInput.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .submit_on_ctrl_enter
+                .set_value(true, ctx)
+                .expect("setting value must succeed");
+        });
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        open_rich_input_for_terminal(&terminal, &mut app);
+
+        // Lock input into shell mode (the `!` prefix state).
+        input.update(&mut app, |input, ctx| {
+            input.ai_input_model().update(ctx, |ai_input, ctx| {
+                ai_input.set_input_config(
+                    crate::ai::blocklist::InputConfig {
+                        input_type: crate::ai::blocklist::InputType::Shell,
+                        is_locked: true,
+                    },
+                    true,
+                    ctx,
+                );
+            });
+        });
+
+        let submitted: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let submitted_clone = submitted.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event, _| {
+                if let Event::SubmitCLIAgentInput { text } = event {
+                    submitted_clone.borrow_mut().push(text.clone());
+                }
+            });
+        });
+
+        // The buffer text the user typed (without the `!` — the UI strips the prefix).
+        let shell_text = "ls -la";
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert(shell_text, ctx);
+        });
+
+        // Ctrl+Enter should submit with the `!` prefix prepended.
+        input.update(&mut app, |input, ctx| {
+            input.input_ctrl_enter(ctx);
+        });
+
+        assert_eq!(
+            submitted.borrow().len(),
+            1,
+            "Ctrl+Enter should submit once in shell-locked mode when submit_on_ctrl_enter=true"
+        );
+        assert_eq!(
+            submitted.borrow()[0],
+            format!("!{shell_text}"),
+            "submitted text must include the TERMINAL_INPUT_PREFIX ('!')"
+        );
+
+        // After submission, shell mode must have been exited (input type back to AI).
+        input.read(&app, |input, ctx| {
+            let config = input.ai_input_model().as_ref(ctx).input_config();
+            assert_eq!(
+                config.input_type,
+                crate::ai::blocklist::InputType::AI,
+                "shell mode must be exited after Ctrl+Enter submission"
+            );
         });
     });
 }

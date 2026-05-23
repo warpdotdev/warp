@@ -10212,7 +10212,19 @@ impl Input {
             EditorEvent::Enter => self.input_enter(ctx),
             EditorEvent::CmdEnter => self.input_cmd_enter(ctx),
             EditorEvent::CtrlEnter => {
-                ctx.emit(Event::CtrlEnter);
+                // When the user has opted in to Ctrl+Enter submission and the CLI
+                // agent rich input is open, treat Ctrl+Enter as the submit key.
+                // The editor already inserted a trailing newline (its default
+                // InsertNewLineIfMultiLine behaviour), so we backspace it out
+                // before submitting.
+                if CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id)
+                    && *AISettings::as_ref(ctx).submit_on_ctrl_enter
+                {
+                    self.editor.update(ctx, |editor, ctx| {
+                        editor.backspace(ctx);
+                    });
+                }
+                self.input_ctrl_enter(ctx);
             }
             EditorEvent::Escape => self.editor_escape(ctx),
             EditorEvent::CtrlC { cleared_buffer_len } => {
@@ -12476,15 +12488,16 @@ impl Input {
                 return;
             }
 
-            // When the `!` prefix was stripped (shell mode in CLI agent input),
-            // prepend it back so the CLI agent receives the mode-switch prefix,
-            // then exit shell mode so the next prompt starts in AI mode.
-            let mut text = self.editor.as_ref(ctx).buffer_text(ctx);
-            if self.is_locked_in_shell_mode(ctx) {
-                text = format!("{TERMINAL_INPUT_PREFIX}{text}");
-                self.exit_shell_mode_to_ai(ctx);
+            // When submit_on_ctrl_enter is enabled, Enter inserts a newline
+            // rather than submitting (Ctrl+Enter handles submission in that mode).
+            if *AISettings::as_ref(ctx).submit_on_ctrl_enter {
+                self.editor.update(ctx, |editor, ctx| {
+                    editor.user_initiated_insert("\n", PlainTextEditorViewAction::NewLine, ctx);
+                });
+                return;
             }
-            ctx.emit(Event::SubmitCLIAgentInput { text });
+
+            self.emit_submit_cli_agent_input(ctx);
             return;
         }
         let command = self.editor.as_ref(ctx).buffer_text(ctx);
@@ -12865,6 +12878,44 @@ impl Input {
             ai_settings.mark_quota_banner_as_dismissed(ctx);
             ctx.notify();
         });
+    }
+
+    /// Handles the Ctrl+Enter keypress in the CLI agent rich input.
+    ///
+    /// When `submit_on_ctrl_enter` is enabled and the rich input is open,
+    /// submits the current buffer contents (same as Enter does in default mode).
+    /// When `submit_on_ctrl_enter` is disabled, emits [`Event::CtrlEnter`]
+    /// (the existing fallback behaviour).
+    ///
+    /// Exposed as `pub(crate)` so that unit tests can exercise the Ctrl+Enter
+    /// behavioural matrix directly without needing to drive through the editor
+    /// event dispatch path.
+    pub(crate) fn input_ctrl_enter(&mut self, ctx: &mut ViewContext<Self>) {
+        if CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id)
+            && *AISettings::as_ref(ctx).submit_on_ctrl_enter
+        {
+            self.emit_submit_cli_agent_input(ctx);
+        } else {
+            ctx.emit(Event::CtrlEnter);
+        }
+    }
+
+    /// Emits [`Event::SubmitCLIAgentInput`] with the current buffer contents.
+    ///
+    /// This is the shared submit path for both the Enter key (default mode) and
+    /// the Ctrl+Enter key (when `submit_on_ctrl_enter` is enabled). It assumes
+    /// the caller has already handled any menu-intercept cases (@ context menu,
+    /// prompts menu, etc.) and that the CLI agent rich input is open.
+    fn emit_submit_cli_agent_input(&mut self, ctx: &mut ViewContext<Self>) {
+        // When the `!` prefix was stripped (shell mode in CLI agent input),
+        // prepend it back so the CLI agent receives the mode-switch prefix,
+        // then exit shell mode so the next prompt starts in AI mode.
+        let mut text = self.editor.as_ref(ctx).buffer_text(ctx);
+        if self.is_locked_in_shell_mode(ctx) {
+            text = format!("{TERMINAL_INPUT_PREFIX}{text}");
+            self.exit_shell_mode_to_ai(ctx);
+        }
+        ctx.emit(Event::SubmitCLIAgentInput { text });
     }
 
     fn input_cmd_enter(&mut self, ctx: &mut ViewContext<Self>) {
