@@ -77,7 +77,7 @@ pub fn test_session_restoration() -> Builder {
 /// always get added. The mock data for this case looks like this:
 /// | command            | output       | shell | user       | host          |
 /// | ------------------ | ------------ | ----- | ---------- | ------------- |
-/// | echo $TERM_PROGRAM | WarpTerminal | zsh   | local:user | local:host    |
+/// | echo $TERM_PROGRAM | BlackTerminal | zsh   | local:user | local:host    |
 /// | pwd                | /            | bash  | local:user | local:host    |
 /// | uname              | Linux        | zsh   | andy       | ubuntu-test   |
 /// | mkdir secrets      | secrets      | NULL  | NULL       | NULL          |

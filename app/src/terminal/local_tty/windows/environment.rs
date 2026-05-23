@@ -90,7 +90,7 @@ pub(super) fn get_shell_environment_variables(options: &PtyOptions) -> Vec<u16> 
         map_key(TERM_PROGRAM_NAME.into()),
         EnvEntry {
             preferred_key: TERM_PROGRAM_NAME.into(),
-            value: "WarpTerminal".into(),
+            value: "BlackTerminal".into(),
         },
     );
 

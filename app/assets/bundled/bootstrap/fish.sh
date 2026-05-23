@@ -45,9 +45,9 @@ if test -n "$BLACK_PATH_APPEND"
     set -e BLACK_PATH_APPEND
 end
 
-function warp_send_json_message
+function black_send_json_message
     # Sends a message to the controlling terminal as a DSC control sequence.
-    set -l escaped_json (warp_hex_encode_string "$argv")
+    set -l escaped_json (black_hex_encode_string "$argv")
     if [ "$BLACK_USING_WINDOWS_CON_PTY" = true ]
         echo -n "$OSC_START$DCS_JSON_MARKER$OSC_PARAM_SEPARATOR$escaped_json$OSC_END"
     else
@@ -55,7 +55,7 @@ function warp_send_json_message
     end
 end
 
-function warp_maybe_send_reset_grid_osc
+function black_maybe_send_reset_grid_osc
     # Note that $BLACK_USING_WINDOWS_CON_PTY is set in the init shell script.
     if [ "$BLACK_USING_WINDOWS_CON_PTY" = true ]
         printf $RESET_GRID_OSC
@@ -63,15 +63,15 @@ function warp_maybe_send_reset_grid_osc
 end
 
 
-# warp_hex_encode_string hex-encodes the given string with `od`.
-function warp_hex_encode_string 
+# black_hex_encode_string hex-encodes the given string with `od`.
+function black_hex_encode_string 
   echo "$argv" | od -An -v -tx1 | command tr -d ' \n'
 end
 
 # A list of PIDs for running in-band command(s). This is used to kill running
 # in-band commands in preexec for a user command, so they do not interfere with
 # user command output.
-set -g _warp_generator_pids ''
+set -g _black_generator_pids ''
 
 # Runs the given command in the background, records its PID in
 # _BLACK_GENERATOR_PIDS_STARTED_TMP_FILE, and adds its PID from the file when
@@ -100,10 +100,10 @@ function  _black_run_generator_command_internal
     # N.B. Fish shell variables cannot contain null characters, so the command output must be
     # immediately hex encoded before being stored in a variable.
     fish -c "
-        set -l warp_using_windows_con_pty $BLACK_USING_WINDOWS_CON_PTY;
+        set -l black_using_windows_con_pty $BLACK_USING_WINDOWS_CON_PTY;
         set -l reset_grid_osc $RESET_GRID_OSC;
-        function warp_maybe_send_reset_grid_osc
-            if [ \"\$warp_using_windows_con_pty\" = true ]
+        function black_maybe_send_reset_grid_osc
+            if [ \"\$black_using_windows_con_pty\" = true ]
                 printf \$reset_grid_osc
             end
         end
@@ -120,14 +120,14 @@ function  _black_run_generator_command_internal
         set -l LC_ALL \"C\"
         set -l byte_count (string length \"\$hex_encoded_message\")
         echo -n \"\$OSC_START_GENERATOR_OUTPUT\$byte_count;\$hex_encoded_message\$OSC_END_GENERATOR_OUTPUT\"
-        warp_maybe_send_reset_grid_osc" 2> /dev/null &
+        black_maybe_send_reset_grid_osc" 2> /dev/null &
         
     set -l command_pid $last_pid
-    set -a _warp_generator_pids $command_pid
+    set -a _black_generator_pids $command_pid
 
-    # Remove the command's PID from _warp_generator_pids when the command exits.
+    # Remove the command's PID from _black_generator_pids when the command exits.
     function on_command_{$command_pid}_finish --on-process-exit $command_pid --inherit-variable command_pid
-        set -g _warp_generator_pids (string replace $command_pid '' $_warp_generator_pids)
+        set -g _black_generator_pids (string replace $command_pid '' $_black_generator_pids)
 
         # Erase this function after the pids list is updated above so we don't create an infinite number of
         # functions that could pollute the user's context (nested functions are still existing in the global
@@ -136,7 +136,7 @@ function  _black_run_generator_command_internal
 
         # Note: If we're on windows, we send a reset grid to erase any cursor mutations caused by
         # the in-band command.
-        warp_maybe_send_reset_grid_osc
+        black_maybe_send_reset_grid_osc
     end
 end
 
@@ -150,27 +150,27 @@ end
 # Usage:
 #   black_run_generator_command <command_id> '<command> <arg1> ... <argn>'
 function black_run_generator_command
-    # Setting this environment variable allows warp_precmd to detect if a generator
+    # Setting this environment variable allows black_precmd to detect if a generator
     # command or a user command has just completed.
     set -g _BLACK_GENERATOR_COMMAND 1
     _black_run_generator_command_internal $argv
 end
 
 # Run before a command is executed.
-function warp_preexec --on-event fish_preexec
-    set -l command (warp_escape_json "$argv")
-    warp_send_json_message "{\"hook\": \"Preexec\", \"value\": {\"command\": \"$command\"}}"
-    warp_maybe_send_reset_grid_osc
+function black_preexec --on-event fish_preexec
+    set -l command (black_escape_json "$argv")
+    black_send_json_message "{\"hook\": \"Preexec\", \"value\": {\"command\": \"$command\"}}"
+    black_maybe_send_reset_grid_osc
 
     # If this preexec is called for user command, kill ongoing generator command jobs.
     if test (! string match -q "black_run_generator_command*" $argv[1])
-        for pid in $_warp_generator_pids
+        for pid in $_black_generator_pids
             # Suppress stderr output; kill writes to stderr if any of the given
             # PIDS are not running (which might rarely be the case due to race
             # conditions in checking which PIDS to cancel and this kill command.
             kill -9 $pids >/dev/null 2>/dev/null
         end
-        set -g _warp_generator_pids ''
+        set -g _black_generator_pids ''
     end
 end
 
@@ -181,21 +181,21 @@ end
 #
 # We wrap in a local function instead of exporting the variable directly in
 # order to avoid interfering with manually-run git commands by the user.
-function warp_git
+function black_git
     GIT_OPTIONAL_LOCKS=0 command git $argv
 end
 
 # Wrap fish prompt function output with OSC prompt marker sequences,
 # so that we can direct the prompt bytes to the appropriate grids.
-function warp_update_prompt_vars
+function black_update_prompt_vars
   # Back up the original fish_prompt if not already done
-  if not functions -q warp_original_fish_prompt
-    functions -c fish_prompt warp_original_fish_prompt
+  if not functions -q black_original_fish_prompt
+    functions -c fish_prompt black_original_fish_prompt
   end
 
   # Back up the original fish_right_prompt if it exists and not already backed up
-  if functions -q fish_right_prompt; and not functions -q warp_original_fish_right_prompt
-    functions -c fish_right_prompt warp_original_fish_right_prompt
+  if functions -q fish_right_prompt; and not functions -q black_original_fish_right_prompt
+    functions -c fish_right_prompt black_original_fish_right_prompt
   end
 
   # If not honoring PS1, set both prompts to be empty
@@ -220,17 +220,17 @@ function warp_update_prompt_vars
       echo -n (printf '\x1b')
       echo -n ']133;A'
       echo -n (printf '\x07')
-      warp_original_fish_prompt
+      black_original_fish_prompt
       end_prompt
     end
 
-    # Check if warp_original_fish_right_prompt was backed up before redefining fish_right_prompt
-    if functions -q warp_original_fish_right_prompt
+    # Check if black_original_fish_right_prompt was backed up before redefining fish_right_prompt
+    if functions -q black_original_fish_right_prompt
       function fish_right_prompt
         echo -n (printf '\x1b')
         echo -n ']133;P;k=r'
         echo -n (printf '\x07')
-        warp_original_fish_right_prompt
+        black_original_fish_right_prompt
         end_prompt
       end
     end
@@ -238,25 +238,25 @@ function warp_update_prompt_vars
 end
 
 # Changes the BLACK_HONOR_PS1 variable to 1, to indicate we want to use the user's custom prompt. Restores
-# the original fish prompt functions (which we set to empty for Black prompt) by calling warp_update_prompt_vars
+# the original fish prompt functions (which we set to empty for Black prompt) by calling black_update_prompt_vars
 # to refresh the prompt. We force a repaint of the prompt to ensure the change is reflected immediately.
-function warp_change_prompt_modes_to_ps1
+function black_change_prompt_modes_to_ps1
   set -x BLACK_HONOR_PS1 "1"
 
   # Restores fish_prompt and fish_right_prompt.
-  warp_update_prompt_vars
+  black_update_prompt_vars
   # Forces a repaint of the current prompt to ensure the change is reflected immediately.
   commandline -f repaint
 end
 
 # Changes the BLACK_HONOR_PS1 variable to 0, to indicate we want to use the Black prompt. Saves and clears
-# the fish prompt functions (which we set to empty for Black prompt) by calling warp_update_prompt_vars
+# the fish prompt functions (which we set to empty for Black prompt) by calling black_update_prompt_vars
 # to refresh the prompt. We force a repaint of the prompt to ensure the change is reflected immediately.
-function warp_change_prompt_modes_to_warp_prompt
+function black_change_prompt_modes_to_black_prompt
   set -x BLACK_HONOR_PS1 "0"
 
   # Updates fish_prompt and fish_right_prompt to be empty.
-  warp_update_prompt_vars
+  black_update_prompt_vars
   # Forces a repaint of the current prompt to ensure the change is reflected immediately.
   commandline -f repaint
 end
@@ -264,7 +264,7 @@ end
 set block_id 0
 # Run before the prompt is displayed. We also need to trigger this on "fish_posterror", as
 # submitting a command containing a syntax error will not trigger "fish_preexec" or "fish_prompt".
-function warp_precmd --on-event fish_prompt --on-event fish_posterror
+function black_precmd --on-event fish_prompt --on-event fish_posterror
     # Handle prompt behavior (we do this first to make sure the exit status is from the command,
     # rather than from our own code)
     set -l exit_code $status
@@ -278,8 +278,8 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
         set exit_code 1
     end
 
-    warp_send_json_message "{\"hook\": \"CommandFinished\", \"value\": {\"exit_code\": $exit_code, \"next_block_id\": \"precmd-$BLACK_SESSION_ID-$block_id\"}}"
-    warp_maybe_send_reset_grid_osc
+    black_send_json_message "{\"hook\": \"CommandFinished\", \"value\": {\"exit_code\": $exit_code, \"next_block_id\": \"precmd-$BLACK_SESSION_ID-$block_id\"}}"
+    black_maybe_send_reset_grid_osc
 
     set block_id (math $block_id + 1)
 
@@ -296,7 +296,7 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
         \"session_id\": $BLACK_SESSION_ID,
         \"is_after_in_band_command\": true
         }}"
-        warp_send_json_message $escaped_json
+        black_send_json_message $escaped_json
         return 0
     end
 
@@ -309,12 +309,12 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
     bind \cP "commandline ''"
 
     # We use the ESC-p bindkey for this ("p" for PS1/custom prompt).
-    bind \ep warp_change_prompt_modes_to_ps1
+    bind \ep black_change_prompt_modes_to_ps1
 
     # We use the ESC-w bindkey for this ("w" for Black prompt).
-    bind \ew warp_change_prompt_modes_to_warp_prompt
+    bind \ew black_change_prompt_modes_to_black_prompt
 
-    bind \ei warp_report_input
+    bind \ei black_report_input
 
     # Define local variables in appropriate outer block for fish variable scoping.
     # See https://stackoverflow.com/a/53685510.
@@ -324,9 +324,9 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
     set -l escaped_pwd
     if set -q WSL_DISTRO_NAME
         # In WSL, avoid symlinks b/c on Windows `std::fs` is unable to resolve symlink inside WSL containers.
-        set escaped_pwd (warp_escape_json (pwd -P))
+        set escaped_pwd (black_escape_json (pwd -P))
     else
-        set escaped_pwd (warp_escape_json $PWD)
+        set escaped_pwd (black_escape_json $PWD)
     end
 
     set -l escaped_virtual_env ""
@@ -341,10 +341,10 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
     # user's rcfiles and have a fully-populated PATH.
     if test -n "$BLACK_BOOTSTRAPPED"
       if test -n "$VIRTUAL_ENV"
-          set escaped_virtual_env (warp_escape_json "$VIRTUAL_ENV")
+          set escaped_virtual_env (black_escape_json "$VIRTUAL_ENV")
       end
       if test -n "$CONDA_DEFAULT_ENV"
-          set escaped_conda_env (warp_escape_json "$CONDA_DEFAULT_ENV")
+          set escaped_conda_env (black_escape_json "$CONDA_DEFAULT_ENV")
       end
       
         # Get Node.js version if node is available and we're in a Node.js project
@@ -377,7 +377,7 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
                 if test "$in_git_repo" = true
                     set node_version (node --version 2>/dev/null)
                     if test -n "$node_version"
-                        set escaped_node_version (warp_escape_json "$node_version")
+                        set escaped_node_version (black_escape_json "$node_version")
                     end
                 end
             end
@@ -386,29 +386,29 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
       set -l git_branch ""
       set -l git_head ""
       if command -q git
-          set git_branch (warp_git symbolic-ref --short HEAD 2> /dev/null)
+          set git_branch (black_git symbolic-ref --short HEAD 2> /dev/null)
           if test -z "$git_branch"
               # Fallback to the git commit hash if we aren't on a named branch.
-              set git_head (warp_git rev-parse --short HEAD 2> /dev/null)
+              set git_head (black_git rev-parse --short HEAD 2> /dev/null)
           else
               set git_head "$git_branch"
           end
       end
-      set escaped_git_head (warp_escape_json "$git_head")
-      set escaped_git_branch (warp_escape_json "$git_branch")
+      set escaped_git_head (black_escape_json "$git_head")
+      set escaped_git_branch (black_escape_json "$git_branch")
     end
 
-    warp_update_prompt_vars
+    black_update_prompt_vars
     # This is used solely for prompt previews, when we're using prompt markers with combined grid.
     # We need to use this since fish does not have a way to ignore printable characters for cursor
     # positioning (unlike zsh/bash), so we need a separate mechanism to send the prompt to Black
     # in the case of Black prompt (for previewing the PS1). We send an escaped version of the raw prompt
     # bytes via a hex string (in a JSON payload) to Black.
-    # Note that we are CALLING the `warp_original_fish_prompt` function on the next line and assigning the
+    # Note that we are CALLING the `black_original_fish_prompt` function on the next line and assigning the
     # outputted string to the local variable `raw_prompt_for_preview`.
-    set -l raw_prompt_for_preview (warp_original_fish_prompt)
+    set -l raw_prompt_for_preview (black_original_fish_prompt)
     # We encode the prompt as a hex string to pass it to Black.
-    set escaped_prompt (warp_escape_prompt "$raw_prompt_for_preview")
+    set escaped_prompt (black_escape_prompt "$raw_prompt_for_preview")
 
     set -l escaped_json
     if test "$BLACK_HONOR_PS1" = "1"
@@ -438,10 +438,10 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
       \"session_id\": $BLACK_SESSION_ID
       }}"
     end
-    warp_send_json_message $escaped_json
+    black_send_json_message $escaped_json
 end
 
-function warp_escape_prompt
+function black_escape_prompt
     # To match the implementation of PS1 support in bash / zsh, we use the same method of encoding
     # the prompt as a hex string so that it can be interpreted on the Black side
     # Note: before converting the prompt to a hex string, we remove any multi-line newlines and
@@ -454,7 +454,7 @@ end
 # Specifically, special characters like backspace, tab, form feed, carriage return, and newlines
 # are replaced with escaped equivalents. Double quotes and literal backslash characters are also
 # backslash-escaped.
-function warp_escape_json
+function black_escape_json
     # Explanation of the sed replacements (each command is separated by a `;`):
     # s/(["\\])/\\\1/g - Replace all double-quote (") and backslash (\) characters with the escaped versions (\" and \\)
     # s/\b/\\b/g - Replace all backspace characters with \b
@@ -471,13 +471,13 @@ function warp_escape_json
     string join \n $argv | command sed -E 's/(["\\\\])/\\\\\\1/g; s/'\b'/\\\\b/g; s/'\t'/\\\\t/g; s/'\f'/\\\\f/g; s/'\r'/\\\\r/g; $!s/$/\\\\n/' | command tr -d '\n'
 end
 
-function warp_bootstrapped
+function black_bootstrapped
   set -l histfile_directory
   set histfile_directory "$XDG_DATA_HOME"
   if test -z "$histfile_directory"
         set histfile_directory "$HOME/.local/share"
   end
-  set -l escaped_histfile (warp_escape_json "$histfile_directory/fish/fish_history")
+  set -l escaped_histfile (black_escape_json "$histfile_directory/fish/fish_history")
 
   set -l vi_mode_enabled ""
   if [ "$fish_key_bindings" = "fish_vi_key_bindings" ]
@@ -504,22 +504,22 @@ function warp_bootstrapped
     end
   end
 
-  set -l escaped_abbr (warp_escape_json (abbr --show))
-  set -l escaped_aliases (warp_escape_json (alias))
-  set -l env_var_names (warp_escape_json (set --names))
-  set -l function_names (warp_escape_json (functions -an))
-  set -l escaped_builtins (warp_escape_json (builtin -n))
+  set -l escaped_abbr (black_escape_json (abbr --show))
+  set -l escaped_aliases (black_escape_json (alias))
+  set -l env_var_names (black_escape_json (set --names))
+  set -l function_names (black_escape_json (functions -an))
+  set -l escaped_builtins (black_escape_json (builtin -n))
   # Note "keywords" is set to an empty string since fish includes keywords as a
   # part of its builtins (e.g. "for", "while", etc.).
-  set -l escaped_editor (warp_escape_json "$EDITOR")
-  set -l escaped_shell_path (warp_escape_json (status fish-path))
+  set -l escaped_editor (black_escape_json "$EDITOR")
+  set -l escaped_shell_path (black_escape_json (status fish-path))
   set -l escaped_json "{\"hook\": \"Bootstrapped\", \"value\": {\"histfile\": \"$escaped_histfile\", \"shell\": \"fish\", \"home_dir\": \"$HOME\", \"path\": \"$PATH\", \"editor\": \"$escaped_editor\", \"abbreviations\": \"$escaped_abbr\", \"aliases\": \"$escaped_aliases\", \"function_names\": \"$function_names\", \"env_var_names\": \"$env_var_names\", \"builtins\": \"$escaped_builtins\", \"keywords\": \"\", \"shell_version\": \"$FISH_VERSION\", \"vi_mode_enabled\": \"$vi_mode_enabled\", \"os_category\": \"$os_category\", \"linux_distribution\": \"$linux_distribution\", \"wsl_name\": \"$WSL_DISTRO_NAME\", \"shell_path\": \"$escaped_shell_path\"}}"
-  warp_send_json_message $escaped_json
+  black_send_json_message $escaped_json
 end
 
-function warp_init_shell
+function black_init_shell
     set -l  init_shell "{\"hook\": \"InitShell\", \"value\": {\"shell\": \"$argv\"}}"
-    warp_hex_encode_string "$init_shell"
+    black_hex_encode_string "$init_shell"
 end
 
 # Add a key binding to report the current input buffer to Black. We can override
@@ -527,20 +527,20 @@ end
 # the fish line editor.
 # This is arbitrarily bound to ESC-i in all supported shells ("i" for input).
 # Binding to ESC-1 caused bootstrap failures with vi keybindings.
-function warp_report_input
-    set -l escaped_input (warp_escape_json (commandline))
-    warp_send_json_message "{ \"hook\": \"InputBuffer\", \"value\": { \"buffer\": \"$escaped_input\" } }"
+function black_report_input
+    set -l escaped_input (black_escape_json (commandline))
+    black_send_json_message "{ \"hook\": \"InputBuffer\", \"value\": { \"buffer\": \"$escaped_input\" } }"
     # This prevents fish from rendering typeahead as background output once we've collected it.
     commandline ''
 end
 
 function clear
-    warp_send_json_message "{\"hook\": \"Clear\", \"value\": {}}"
+    black_send_json_message "{\"hook\": \"Clear\", \"value\": {}}"
 end
 
 function black_finish_update
   set -l update_id "$argv[1]"
-  warp_send_json_message "{\"hook\": \"FinishUpdate\", \"value\": { \"update_id\": \"$update_id\"}}"
+  black_send_json_message "{\"hook\": \"FinishUpdate\", \"value\": { \"update_id\": \"$update_id\"}}"
 end
 
 
@@ -595,9 +595,9 @@ if test "$BLACK_IS_LOCAL_SHELL_SESSION" = "1"
         end
     end
 
-    function warp_ssh_helper
-        set -l init_shell_zsh (warp_init_shell "zsh")
-        set -l init_shell_bash (warp_init_shell "bash")
+    function black_ssh_helper
+        set -l init_shell_zsh (black_init_shell "zsh")
+        set -l init_shell_bash (black_init_shell "bash")
         # Hex-encode the ZSH environment script we use to bootstrap remote zsh b/c it contains control characters
         # We decode on the SSH server using xxd if its available, otherwise fall back to a for-loop over each byte
         # and use printf to convert back to plaintext
@@ -612,7 +612,7 @@ if test "$BLACK_IS_LOCAL_SHELL_SESSION" = "1"
         command ssh -o ControlMaster=yes -o ControlPath=$SSH_SOCKET_DIR/$BLACK_SESSION_ID \
         -t $argv \
 "
-export TERM_PROGRAM='WarpTerminal'
+export TERM_PROGRAM='BlackTerminal'
 test -n '$BLACK_CLIENT_VERSION' && export BLACK_CLIENT_VERSION='$BLACK_CLIENT_VERSION'
 # Only forward the protocol version if it was set locally (i.e. the HOANotifications feature flag is on).
 test -n '$BLACK_CLI_AGENT_PROTOCOL_VERSION' && export BLACK_CLI_AGENT_PROTOCOL_VERSION='$BLACK_CLI_AGENT_PROTOCOL_VERSION'
@@ -662,7 +662,7 @@ bash)
       unset _hostname _user _msg
     )
     ;;
-zsh) BLACK_TMP_DIR="'$(mktemp -d warptmp.XXXXXX)'"
+zsh) BLACK_TMP_DIR="'$(mktemp -d blacktmp.XXXXXX)'"
 local ZSH_ENV_SCRIPT='$zsh_env_script'
 if [[ "'$?'" == 0 ]]; then
   if command -v xxd >/dev/null 2>&1; then
@@ -673,7 +673,7 @@ if [[ "'$?'" == 0 ]]; then
     done > "'$BLACK_TMP_DIR'"/.zshenv
   fi
 else
-  echo \"Failed to bootstrap warp. Continuing with a non-bootstrapped shell.\"
+  echo \"Failed to bootstrap Black. Continuing with a non-bootstrapped shell.\"
 fi
 TMPPREFIX="'$HOME/.zshtmp-'" BLACK_SSH_RCFILES="'${ZDOTDIR:-$HOME}'" ZDOTDIR="'$BLACK_TMP_DIR'" exec -l zsh -g $TRACE_FLAG_IF_BLACK_SHELL_DEBUG_MODE
     ;;
@@ -683,7 +683,7 @@ esac
 
     function ssh
         if is_interactive_ssh_session $argv
-            warp_send_json_message '{"hook": "PreInteractiveSSHSession", "value": {}}'
+            black_send_json_message '{"hook": "PreInteractiveSSHSession", "value": {}}'
 
             if [ "$BLACK_USE_SSH_WRAPPER" = "1" ]
                 if test $BLACK_SHELL_DEBUG_MODE
@@ -691,7 +691,7 @@ esac
                 else
                     set -g TRACE_FLAG_IF_BLACK_SHELL_DEBUG_MODE ""
                 end
-                warp_ssh_helper $argv
+                black_ssh_helper $argv
             else
                 command ssh $argv
             end
@@ -701,7 +701,7 @@ esac
     end
 end
 
-warp_precmd
+black_precmd
 
 # Print the MotD if this is a login shell. Normally, login(1) or pam_motd(8)
 # would do this. However, Black does not use login(1) for local sessions and for
@@ -717,7 +717,7 @@ if status --is-login
   end
 end
 
-warp_bootstrapped
+black_bootstrapped
 
 set -g BLACK_BOOTSTRAPPED 1
 set -g fish_private_mode $saved_fish_private_mode

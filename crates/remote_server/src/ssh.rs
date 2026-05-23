@@ -52,7 +52,7 @@ pub fn ssh_args(socket_path: &Path) -> Vec<String> {
 /// without waiting for multiplexed channels to finish draining.
 ///
 /// The user's interactive ssh is spawned with `-o ControlMaster=yes` by
-/// `warp_ssh_helper`, so it is both the interactive session and the
+/// `black_ssh_helper`, so it is both the interactive session and the
 /// multiplex master. When the user's remote shell exits, that ssh can
 /// hang waiting for half-closed slave channels (e.g. from
 /// `ssh ... remote-server-proxy`) to finish cleanup on the remote

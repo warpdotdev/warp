@@ -584,7 +584,7 @@ fn arguments_for_session_spawning_command(
              * 4. Process substitution i.e. <() send the output of a process via
              * /dev/fd/<n> (or temp files if this is unavailable) to another process
              * 5. Send an InitShell message to Warp through escape sequences.
-             * The warp_send_message function is inlined here.
+             * The black_send_message function is inlined here.
              * 6. We disable PS2 and the line editor to work around a gnarly bug involving
              * garbage being inserted in every line. We further disable PS1 and echo'ing
              * in order to show nothing to the user when we input characters. We later

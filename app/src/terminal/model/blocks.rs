@@ -288,7 +288,7 @@ pub struct BlockList {
     ///
     /// This isn't a simple boolean 'is_in_band_command_in_flight' because it is possible that
     /// with two in-band commands queued in quick succession, the second command may be written
-    /// to the PTY before warp_precmd is executed after the first command. `warp_precmd` is used
+    /// to the PTY before black_precmd is executed after the first command. `black_precmd` is used
     /// to emit the `CommandFinished` hook, and so it would be possible to mistakenly mark the
     /// boolean `false`.
     in_flight_in_band_command_count: usize,

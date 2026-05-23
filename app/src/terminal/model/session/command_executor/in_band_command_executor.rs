@@ -413,7 +413,7 @@ impl CommandExecutor for InBandCommandExecutor {
     /// "Cancels" active in-band commands.
     ///
     /// In reality, this does not cancel command execution (that is, however, actually done on the
-    /// shell side in `warp_preexec`). This merely clears the running and pending command IDs from
+    /// shell side in `black_preexec`). This merely clears the running and pending command IDs from
     /// the executor's, such that subsequently calling `handle_executed_command_event` with
     /// a cleared command ID is a no-op.
     fn cancel_active_commands(&self) {
