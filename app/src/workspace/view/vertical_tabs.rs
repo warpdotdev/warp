@@ -782,6 +782,7 @@ struct VerticalTabsSummaryData {
     primary_labels: Vec<VerticalTabsSummaryPrimaryLabel>,
     working_directories: Vec<String>,
     branch_entries: Vec<VerticalTabsSummaryBranchEntry>,
+    has_unread_activity: bool,
 }
 
 impl TabGroupColorMode {
@@ -2434,7 +2435,10 @@ fn has_unread_activity(typed: &TypedPane<'_>, app: &AppContext) -> bool {
         return false;
     };
     let terminal_view = terminal_pane.terminal_view(app);
-    let terminal_view_id = terminal_view.as_ref(app).id();
+    has_unread_activity_for_terminal_view(terminal_view.as_ref(app).id(), app)
+}
+
+fn has_unread_activity_for_terminal_view(terminal_view_id: EntityId, app: &AppContext) -> bool {
     AgentNotificationsModel::as_ref(app)
         .notifications()
         .has_unread_for_terminal_view(terminal_view_id)
@@ -2713,6 +2717,7 @@ fn build_vertical_tabs_summary_data(
     let mut working_directories = Vec::new();
     let mut working_directory_seen = HashMap::new();
     let mut branch_entries = Vec::new();
+    let mut has_unread_activity = false;
 
     for pane_id in visible_pane_ids {
         let Some(pane) = pane_group.pane_by_id(*pane_id) else {
@@ -2731,6 +2736,8 @@ fn build_vertical_tabs_summary_data(
             TypedPane::Terminal(terminal_pane) => {
                 let terminal_view = terminal_pane.terminal_view(app);
                 let terminal_view = terminal_view.as_ref(app);
+                has_unread_activity |=
+                    has_unread_activity_for_terminal_view(terminal_view.id(), app);
                 let title_text = terminal_view.terminal_title_from_shell();
                 let working_directory = resolved_terminal_working_directory(terminal_view, app);
                 let working_directory_text = working_directory
@@ -2826,6 +2833,7 @@ fn build_vertical_tabs_summary_data(
         primary_labels,
         working_directories,
         branch_entries: coalesce_summary_branch_entries(branch_entries),
+        has_unread_activity,
     }
 }
 
@@ -3637,6 +3645,9 @@ fn render_summary_tab_item(
 
     // Title region. A custom-title or rename override short-circuits the per-label list and
     // renders as a single line (no prefix slot, no overflow line).
+    let mut title_region = Flex::column()
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_cross_axis_alignment(CrossAxisAlignment::Start);
     if let Some(title_override) = render_title_override(
         &props,
         12.,
@@ -3645,9 +3656,9 @@ fn render_summary_tab_item(
         appearance,
         app,
     ) {
-        text_col.add_child(title_override);
+        title_region.add_child(title_override);
     } else if summary.primary_labels.is_empty() {
-        text_col.add_child(render_text_line(
+        title_region.add_child(render_text_line(
             &props.title,
             main_text_color,
             ClipConfig::end(),
@@ -3668,7 +3679,7 @@ fn render_summary_tab_item(
                 main_text_color,
                 appearance,
             );
-            text_col.add_child(if idx == 0 {
+            title_region.add_child(if idx == 0 {
                 line
             } else {
                 Container::new(line)
@@ -3680,7 +3691,7 @@ fn render_summary_tab_item(
         let hidden_label_count =
             summary_overflow_count(summary.primary_labels.len(), MAX_VISIBLE_PRIMARY_LABELS);
         if hidden_label_count > 0 {
-            text_col.add_child(
+            title_region.add_child(
                 Container::new(render_summary_overflow_line(
                     hidden_label_count,
                     sub_text_color,
@@ -3690,6 +3701,24 @@ fn render_summary_tab_item(
                 .finish(),
             );
         }
+    }
+    let title_region = title_region.finish();
+    if summary.has_unread_activity {
+        text_col.add_child(
+            Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(Shrinkable::new(1., title_region).finish())
+                .with_child(
+                    Container::new(render_title_indicator(theme))
+                        .with_margin_left(4.)
+                        .finish(),
+                )
+                .finish(),
+        );
+    } else {
+        text_col.add_child(title_region);
     }
 
     // Working-directory region.
