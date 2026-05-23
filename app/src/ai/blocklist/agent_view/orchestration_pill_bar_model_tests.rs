@@ -1,11 +1,12 @@
-use super::*;
 use std::collections::HashSet;
 
+use warpui::App;
+
+use super::*;
 use crate::ai::agent::conversation::AIConversation;
 use crate::persistence::ModelEvent;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
-use warpui::App;
 
 #[test]
 fn toggle_pin_in_set_flips_membership_for_each_call() {

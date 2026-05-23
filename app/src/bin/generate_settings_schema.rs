@@ -10,7 +10,6 @@ use std::io::Write;
 
 use schemars::SchemaGenerator;
 use serde_json::{Map, Value};
-
 use settings::schema::SettingSchemaEntry;
 use warp_core::features::{FeatureFlag, DEBUG_FLAGS, DOGFOOD_FLAGS, PREVIEW_FLAGS, RELEASE_FLAGS};
 

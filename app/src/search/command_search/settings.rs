@@ -1,6 +1,5 @@
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud,
-};
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 
 define_settings_group!(CommandSearchSettings, settings: [
     show_global_workflows_in_universal_search: ShowGlobalWorkflowsInUniversalSearch {

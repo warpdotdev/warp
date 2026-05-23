@@ -1,23 +1,24 @@
 #![allow(dead_code)]
 
-use crate::ai::blocklist::TextLocation;
-use crate::terminal::model::index::Point;
+use std::collections::HashMap;
+use std::ops::{Not, RangeInclusive};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
 use anyhow::anyhow;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use rangemap::{RangeInclusiveMap, StepLite};
-use std::collections::HashMap;
-use std::ops::{Not, RangeInclusive};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use warpui::elements::SecretRange;
 use warpui::EntityId;
 
 use super::grid::grid_handler::GridHandler;
 use super::grid::{Dimensions as _, RespectDisplayedOutput};
 use super::terminal_model::RangeInModel;
+use crate::ai::blocklist::TextLocation;
 use crate::terminal::model::find::RegexDFAs;
+use crate::terminal::model::index::Point;
 
 /// A regex pattern that can be used to detect secrets in text.
 pub struct SecretsRegex {

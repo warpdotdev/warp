@@ -3,12 +3,10 @@
 use itertools::Itertools;
 use warp_command_signatures::{FlagStyle, Signature as SpecSignature};
 
-use crate::completer::{
-    describe::OptionCaseSensitivity,
-    engine::LocationType,
-    matchers::{Match, MatchStrategy},
-    suggest::{MatchRequirement, MatchedSuggestion, Suggestion, SuggestionType},
-};
+use crate::completer::describe::OptionCaseSensitivity;
+use crate::completer::engine::LocationType;
+use crate::completer::matchers::{Match, MatchStrategy};
+use crate::completer::suggest::{MatchRequirement, MatchedSuggestion, Suggestion, SuggestionType};
 use crate::meta::Spanned;
 use crate::parsers::SignatureAtTokenIndex;
 

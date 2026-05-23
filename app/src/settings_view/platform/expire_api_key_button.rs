@@ -1,11 +1,12 @@
-use crate::server::{ids::ApiKeyUid, server_api::auth::AuthClient};
 use warp_core::ui::appearance::Appearance;
-use warpui::{
-    elements::MouseStateHandle, ui_components::components::UiComponent, AppContext, Element,
-    Entity, SingletonEntity, TypedActionView, View, ViewContext,
-};
+use warpui::elements::MouseStateHandle;
+use warpui::ui_components::components::UiComponent;
+use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
-use crate::ui_components::{buttons::icon_button, icons::Icon};
+use crate::server::ids::ApiKeyUid;
+use crate::server::server_api::auth::AuthClient;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
 
 #[derive(PartialEq, Eq)]
 enum RequestState {

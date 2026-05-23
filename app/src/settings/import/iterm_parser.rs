@@ -7,29 +7,22 @@ use palette::Srgba;
 use pathfinder_color::ColorU;
 use plist::{Dictionary, Value};
 use warp_core::ui::theme::{AnsiColors, TerminalColors, WarpTheme};
-use warpui::{
-    fonts::FontInfo, keymap::Keystroke, platform::mac::utils::unicode_char_to_key, DisplayIdx,
-};
-
-use crate::{
-    root_view::QuakeModePinPosition,
-    settings::{
-        import::config::HotkeyError, ExtraMetaKeys, DEFAULT_MONOSPACE_FONT_NAME,
-        DEFAULT_MONOSPACE_FONT_SIZE,
-    },
-    terminal::{
-        local_tty::shell::is_valid_path_or_command_for_supported_shell,
-        session_settings::{
-            StartupShell, WorkingDirectoryConfig, WorkingDirectoryMode,
-            WorkingDirectoryPerSourceConfig,
-        },
-    },
-};
+use warpui::fonts::FontInfo;
+use warpui::keymap::Keystroke;
+use warpui::platform::mac::utils::unicode_char_to_key;
+use warpui::DisplayIdx;
 
 use super::config::{
     calculate_accent_color, Config, ConfigError, GlobalHotkey, ImportableSetting, ImportedFont,
     MouseAndScrollReporting, OpacitySettings, ParseableConfig, QuakeModeWindow, SettingType,
     ThemeError, ThemeType,
+};
+use crate::root_view::QuakeModePinPosition;
+use crate::settings::import::config::HotkeyError;
+use crate::settings::{ExtraMetaKeys, DEFAULT_MONOSPACE_FONT_NAME, DEFAULT_MONOSPACE_FONT_SIZE};
+use crate::terminal::local_tty::shell::is_valid_path_or_command_for_supported_shell;
+use crate::terminal::session_settings::{
+    StartupShell, WorkingDirectoryConfig, WorkingDirectoryMode, WorkingDirectoryPerSourceConfig,
 };
 
 extern crate plist;

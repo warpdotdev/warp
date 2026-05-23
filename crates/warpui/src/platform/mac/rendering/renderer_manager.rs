@@ -1,9 +1,7 @@
 use pathfinder_geometry::vector::Vector2F;
 
-use super::{
-    metal,
-    renderer::{Device, Renderer},
-};
+use super::metal;
+use super::renderer::{Device, Renderer};
 
 pub struct RendererManager {
     metal_renderer_manager: metal::RendererManager,

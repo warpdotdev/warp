@@ -1,18 +1,16 @@
+use chrono::{DateTime, Utc};
+use serde_json::{json, Value};
+use warp_core::channel::{Channel, ChannelState};
+use warp_core::execution_mode;
+use warpui::telemetry::EventPayload;
+
 use super::telemetry::rudder_message::{
     BatchMessage as RudderBatchMessage, BatchMessageItem as RudderBatchMessageItem,
     Identify as RudderIdentify, Track as RudderTrack,
 };
 use super::telemetry::secret_redaction::redact_secrets_in_value;
-use crate::auth::UserUid;
-use chrono::{DateTime, Utc};
-use serde_json::{json, Value};
-use warp_core::{
-    channel::{Channel, ChannelState},
-    execution_mode,
-};
-use warpui::telemetry::EventPayload;
-
 use super::telemetry::telemetry_context;
+use crate::auth::UserUid;
 
 pub trait TelemetryExt {
     fn to_rudder_batch_message(self) -> RudderBatchMessage;

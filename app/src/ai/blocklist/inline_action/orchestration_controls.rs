@@ -6,12 +6,17 @@
 //! consumers impl [`OrchestrationControlAction`] to provide the mapping
 //! from field-change events to their own action enum.
 
+use std::collections::HashMap;
+use std::fmt::Debug;
+
 use ai::agent::action::RunAgentsExecutionMode;
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationExecutionMode};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
-use std::collections::HashMap;
-use std::fmt::Debug;
+use settings::Setting;
+use warp_cli::agent::Harness;
+use warp_core::features::FeatureFlag;
+use warp_core::ui::theme::Fill;
 use warpui::elements::{
     Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
     Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
@@ -26,11 +31,6 @@ use warpui::{
     SingletonEntity, SizeConstraint, View, ViewContext, ViewHandle,
 };
 
-use settings::Setting;
-use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::Fill;
-
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
 use crate::ai::blocklist::inline_action::host_picker::HostPicker;
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
@@ -44,14 +44,14 @@ use crate::ai::local_child_harnesses::{
     local_child_harness_disabled_message, local_child_harness_is_enabled,
 };
 use crate::appearance::Appearance;
+use crate::cloud_object::CloudObjectLookup as _;
 use crate::menu::{MenuItem, MenuItemFields};
-use crate::report_if_error;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::view_components::dropdown::{Dropdown, DropdownAction, DropdownStyle};
 use crate::view_components::FilterableDropdown;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::LLMPreferences;
+use crate::{report_if_error, LLMPreferences};
 
 /// Env var override for the workspace default host (developer testing).
 /// Mirrors the single-agent ambient flow.

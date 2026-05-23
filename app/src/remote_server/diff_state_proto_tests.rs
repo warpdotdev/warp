@@ -1,11 +1,13 @@
+use std::sync::Arc;
+
+use warp_util::standardized_path::StandardizedPath;
+
 use super::super::proto;
 use crate::code_review::diff_size_limits::DiffSize;
 use crate::code_review::diff_state::{
     DiffMetadata, DiffMetadataAgainstBase, DiffMode, DiffState, FileDiff, FileDiffAndContent,
     FileStatusInfo, GitDiffWithBaseContent, GitFileStatus,
 };
-use std::sync::Arc;
-use warp_util::standardized_path::StandardizedPath;
 
 // ── FileStatusInfo path validation (TryFrom) ────────────────────
 

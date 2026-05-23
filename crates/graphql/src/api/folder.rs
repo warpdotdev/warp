@@ -1,8 +1,6 @@
-use crate::{
-    object::{CloudObject, ObjectMetadata},
-    object_permissions::ObjectPermissions,
-    schema,
-};
+use crate::object::{CloudObject, ObjectMetadata};
+use crate::object_permissions::ObjectPermissions;
+use crate::schema;
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct Folder {

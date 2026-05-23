@@ -1,36 +1,28 @@
 mod header_revamp;
 
-use crate::code_review::code_review_view::{
-    CodeReviewHeaderFields, CodeReviewView, CONTENT_TOP_MARGIN,
-};
-use crate::{
-    appearance::Appearance,
-    code_review::{
-        code_review_view::{get_discard_button_disabled_tooltip, CodeReviewAction, LoadedState},
-        diff_state::DiffStateModel,
-    },
-    menu::Menu,
-    ui_components::icons::Icon,
-    view_components::action_button::ActionButton,
-};
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
-use warpui::elements::{Hoverable, ParentElement};
-use warpui::platform::Cursor;
-use warpui::ui_components::components::{Coords, UiComponent};
-use warpui::{
-    elements::{
-        Align, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CrossAxisAlignment,
-        Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
-        ParentOffsetBounds, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Stack,
-    },
-    fonts::{Properties, Weight},
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::UiComponentStyles,
-    },
-    AppContext, Element, ModelHandle, ViewHandle,
+use warpui::elements::{
+    Align, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CrossAxisAlignment, Flex,
+    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch,
+    Stack,
 };
+use warpui::fonts::{Properties, Weight};
+use warpui::platform::Cursor;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, ModelHandle, ViewHandle};
+
+use crate::appearance::Appearance;
+use crate::code_review::code_review_view::{
+    get_discard_button_disabled_tooltip, CodeReviewAction, CodeReviewHeaderFields, CodeReviewView,
+    LoadedState, CONTENT_TOP_MARGIN,
+};
+use crate::code_review::diff_state::DiffStateModel;
+use crate::menu::Menu;
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::ActionButton;
 
 // This is a best effort guess of the size of all of the elements in the header to know when we should start to wrap to the second row
 const HEADER_WRAP_BREAKPOINT: f32 = 450.;

@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
 use warp_core::features::FeatureFlag;
+use warp_core::send_telemetry_from_ctx;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, ViewHandle, WindowId};
-
-use crate::settings::AISettings;
 
 use crate::ai::active_agent_views_model::{ActiveAgentViewsEvent, ActiveAgentViewsModel};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
@@ -14,6 +13,7 @@ use crate::ai::agent_management::notifications::{
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, ConversationStatusUpdate};
 use crate::server::telemetry::TelemetryEvent;
+use crate::settings::AISettings;
 use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
@@ -21,7 +21,6 @@ use crate::terminal::{CLIAgent, TerminalView};
 use crate::workspace::util::is_terminal_view_in_same_tab;
 use crate::workspace::{Workspace, WorkspaceRegistry};
 use crate::BlocklistAIHistoryModel;
-use warp_core::send_telemetry_from_ctx;
 
 /// Singleton model responsible for triggering in-app notifications on blocking conversation
 /// status updates and tracking/storing these notifications for the notifications mailbox.

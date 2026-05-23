@@ -1,3 +1,9 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
+use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
+
 use super::history_model::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
 };
@@ -9,10 +15,6 @@ use crate::server::server_api::ServerApiProvider;
 use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
-use std::collections::HashMap;
-use std::sync::Arc;
-use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
-use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
 
 /// Listens for conversation status changes and CLI agent session status
 /// changes, then reports the corresponding task state to the server via

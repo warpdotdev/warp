@@ -1,36 +1,13 @@
-use self::telemetry::SettingsTelemetryEvent;
-use crate::pane_group::focus_state::PaneFocusHandle;
-use crate::server::telemetry::MCPServerCollectionPaneEntrypoint;
-use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
-use crate::TelemetryEvent;
-use crate::{
-    ai::execution_profiles::profiles::ClientProfileId,
-    appearance::Appearance,
-    editor::{
-        EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
-        TextColors, TextOptions,
-    },
-    menu::{self, Menu, MenuItem, MenuItemFields},
-    pane_group::{
-        pane::view, BackingView, Direction, PaneConfiguration, PaneEvent, SplitPaneState,
-    },
-    server::server_api::ServerApiProvider,
-    settings::{AISettings, BlockVisibilitySettings, SettingsFileError},
-    settings_view::mcp_servers_page::MCPServersSettingsPageEvent,
-    terminal::{model::blockgrid::BlockGrid, SizeInfo},
-    ui_components::icons,
-    util::bindings::{keybinding_name_to_display_string, BindingGroup, CustomAction},
-    view_components::ToastFlavor,
-    workspace::WorkspaceAction,
-    GlobalResourceHandlesProvider,
-};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::str::FromStr;
+
 use about_page::AboutPageView;
 use ai_page::{AISettingsPageAction, AISettingsPageEvent, AISettingsPageView, AISubpage};
 use appearance_page::{AppearancePageAction, AppearanceSettingsPageView};
 use billing_and_usage_dispatch::BillingAndUsageDispatchView;
 use billing_and_usage_page::BillingAndUsagePageEvent;
-use code_page::CodeSubpage;
-use code_page::{CodeSettingsPageAction, CodeSettingsPageEvent};
+use code_page::{CodeSettingsPageAction, CodeSettingsPageEvent, CodeSubpage};
 use environments_page::EnvironmentsPageView;
 use features_page::{FeaturesPageView, FeaturesSettingsPageEvent};
 use itertools::Itertools as _;
@@ -48,32 +25,51 @@ use settings_page::{
     HEADER_PADDING,
 };
 use show_blocks_view::{ShowBlocksEvent, ShowBlocksView};
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::str::FromStr;
 use teams_page::{TeamsPageView, TeamsPageViewEvent};
+use warp_core::channel::ChannelState;
+use warp_core::context_flag::ContextFlag;
+use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
-use warp_core::{
-    channel::ChannelState, context_flag::ContextFlag, features::FeatureFlag,
-    settings::ToggleableSetting as _, ui::theme::color::internal_colors,
-};
+use warp_core::settings::ToggleableSetting as _;
+use warp_core::ui::theme::color::internal_colors;
 use warp_editor::editor::NavigationKey;
 use warpify_page::{WarpifyPageAction, WarpifyPageView};
-use warpui::Element;
-use warpui::{
-    elements::{
-        Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle,
-        ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        DispatchEventResult, Empty, EventHandler, Expanded, Fill, Flex, MainAxisSize,
-        OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
-        ScrollbarWidth, Shrinkable, Stack, Text,
-    },
-    fonts::{Properties, Weight},
-    id,
-    keymap::{ContextPredicate, EnabledPredicate, FixedBinding},
-    Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView as _,
-    View, ViewContext, ViewHandle,
+use warpui::elements::{
+    Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty,
+    EventHandler, Expanded, Fill, Flex, MainAxisSize, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, Shrinkable, Stack,
+    Text,
 };
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::{ContextPredicate, EnabledPredicate, FixedBinding};
+use warpui::{
+    id, Action, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView,
+    UpdateView as _, View, ViewContext, ViewHandle,
+};
+
+use self::telemetry::SettingsTelemetryEvent;
+use crate::ai::execution_profiles::profiles::ClientProfileId;
+use crate::appearance::Appearance;
+use crate::editor::{
+    EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
+    TextColors, TextOptions,
+};
+use crate::menu::{self, Menu, MenuItem, MenuItemFields};
+use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::pane::view;
+use crate::pane_group::{BackingView, Direction, PaneConfiguration, PaneEvent, SplitPaneState};
+use crate::server::server_api::ServerApiProvider;
+use crate::server::telemetry::MCPServerCollectionPaneEntrypoint;
+use crate::settings::{AISettings, BlockVisibilitySettings, SettingsFileError};
+use crate::settings_view::mcp_servers_page::{MCPServersSettingsPage, MCPServersSettingsPageEvent};
+use crate::terminal::model::blockgrid::BlockGrid;
+use crate::terminal::SizeInfo;
+use crate::ui_components::icons;
+use crate::util::bindings::{keybinding_name_to_display_string, BindingGroup, CustomAction};
+use crate::view_components::ToastFlavor;
+use crate::workspace::WorkspaceAction;
+use crate::{GlobalResourceHandlesProvider, TelemetryEvent};
 
 mod about_page;
 mod admin_actions;
@@ -175,10 +171,8 @@ pub(super) fn render_model_chips(
     appearance: &Appearance,
     text_color: warp_core::ui::theme::Fill,
 ) -> Box<dyn Element> {
-    use warpui::ui_components::{
-        chip::Chip,
-        components::{UiComponent, UiComponentStyles},
-    };
+    use warpui::ui_components::chip::Chip;
+    use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 
     let theme = appearance.theme();
     let chip_border = internal_colors::neutral_4(theme).into();
@@ -265,8 +259,9 @@ pub enum SettingsSection {
     OzCloudAPIKeys,
 }
 
-use crate::util::bindings::custom_tag_to_keystroke;
 use std::fmt::{self, Display};
+
+use crate::util::bindings::custom_tag_to_keystroke;
 
 impl Display for SettingsSection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

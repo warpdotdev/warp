@@ -1,7 +1,8 @@
 //! Unit tests for the `coerce_integer_args` helper.
 
-use super::*;
 use serde_json::json;
+
+use super::*;
 
 fn obj(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
     match value {

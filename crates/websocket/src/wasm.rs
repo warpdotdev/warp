@@ -1,8 +1,7 @@
 use futures::{Sink, Stream, StreamExt};
 use itertools::Itertools;
-use ws_stream_wasm::{WsErr, WsMessage, WsMeta};
-
 pub use ws_stream_wasm::WsMessage as Message;
+use ws_stream_wasm::{WsErr, WsMessage, WsMeta};
 
 use crate::WebsocketMessage;
 

@@ -1,5 +1,5 @@
+use settings::Setting as _;
 use warpui::keymap::FixedBinding;
-
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use crate::chip_configurator::{
@@ -7,15 +7,12 @@ use crate::chip_configurator::{
     ChipConfiguratorAction, ChipConfiguratorLayout, ChipEditorModalConfig, ChipEditorMouseHandles,
     ChipEditorSectionsConfig, ConfigurableItem, ControlItemRenderer,
 };
-use crate::report_if_error;
 use crate::settings::AISettings;
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::tab_settings::{
     HeaderToolbarChipSelection, TabSettings, TabSettingsChangedEvent,
 };
-use crate::Appearance;
-
-use settings::Setting as _;
+use crate::{report_if_error, Appearance};
 
 const MODAL_TITLE: &str = "Edit toolbar";
 

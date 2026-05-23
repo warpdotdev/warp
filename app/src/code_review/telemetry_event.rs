@@ -1,12 +1,16 @@
-use crate::server::telemetry::CLIAgentType;
-use crate::view_components::find::FindDirection;
-use crate::{code_review::diff_state::DiffMode, features::FeatureFlag};
+use std::fmt::Display;
+use std::time::Duration;
+
 use serde::Serialize;
 use serde_json::json;
 use serde_with::SerializeDisplay;
-use std::fmt::Display;
 use strum_macros::{EnumDiscriminants, EnumIter};
 use warp_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
+
+use crate::code_review::diff_state::DiffMode;
+use crate::features::FeatureFlag;
+use crate::server::telemetry::CLIAgentType;
+use crate::view_components::find::FindDirection;
 
 /// Identifies which git button the user clicked in the code review header.
 /// Each variant maps to one of the primary action button / dropdown items.
@@ -180,6 +184,7 @@ pub enum PaneStateChange {
 pub enum CodeReviewTelemetryEvent {
     /// Emitted when the code review pane is opened.
     PaneOpened {
+        is_local: Option<bool>,
         entrypoint: CodeReviewPaneEntrypoint,
         is_code_mode_v2: bool,
         /// The CLI agent type if opened from a CLI agent footer (e.g., Claude Code).
@@ -187,32 +192,64 @@ pub enum CodeReviewTelemetryEvent {
     },
     /// Emitted when a user adds content to AI context from code review.
     AddToContext {
+        is_local: Option<bool>,
         origin: AddToContextOrigin,
         destination: CodeReviewContextDestination,
         diff_set_scope: Option<DiffSetContextScope>,
     },
     /// Emitted when a user clicks the revert hunk button.
-    RevertHunkClicked,
+    RevertHunkClicked { is_local: Option<bool> },
     /// Emitted when a file is saved in the code review pane.
-    FileSaved,
+    FileSaved { is_local: Option<bool> },
     /// Emitted when the code review pane is minimized or maximized.
-    PaneStateChanged { state_change: PaneStateChange },
+    PaneStateChanged {
+        is_local: Option<bool>,
+        state_change: PaneStateChange,
+    },
     /// Emitted when the diff base is changed (e.g., from uncommitted to main branch).
     BaseChanged {
+        is_local: Option<bool>,
         /// The new diff mode.
         mode: DiffMode,
     },
     /// Failure when we are calculating the diff metadata.
-    CalculateDiffMetadataFailed { error: String },
+    LoadMetadataFailed {
+        is_local: Option<bool>,
+        mode: DiffMode,
+        error: String,
+    },
     /// Failure when we are loading the actual diff content.
-    LoadDiffFailed { error: String },
+    LoadDiffFailed {
+        is_local: Option<bool>,
+        mode: DiffMode,
+        error: String,
+        /// Time elapsed between when the tracked diff load was requested and
+        /// when this failure was observed. `None` if no tracked load was in
+        /// flight (e.g. a background invalidation error).
+        load_duration: Option<Duration>,
+    },
+    /// Emitted when a full diff load completes successfully.
+    DiffLoadCompleted {
+        is_local: Option<bool>,
+        mode: DiffMode,
+        file_count: usize,
+        files_changed: usize,
+        total_additions: usize,
+        total_deletions: usize,
+        /// Time elapsed between when the diff load was requested and when the
+        /// diffs were ready. `None` if the load was not initiated through a
+        /// tracked entry point (e.g. background refresh).
+        load_duration: Option<Duration>,
+    },
     /// Emitted when the code review find bar is opened or closed.
     FindBarToggled {
+        is_local: Option<bool>,
         /// Whether the find bar is now open.
         is_open: bool,
     },
     /// Emitted when search mode settings are changed.
     FindBarModeChanged {
+        is_local: Option<bool>,
         /// Whether case-sensitive search is enabled.
         case_sensitive: bool,
         /// Whether regex search is enabled.
@@ -220,24 +257,30 @@ pub enum CodeReviewTelemetryEvent {
     },
     /// Emitted when the user navigates to the next or previous match.
     FindNavigated {
+        is_local: Option<bool>,
         /// Direction of navigation.
         direction: FindDirection,
     },
     /// Emitted when the inline comment editor is opened in the code review pane.
-    CommentEditorOpened,
+    CommentEditorOpened { is_local: Option<bool> },
     /// Emitted when a new comment is added to the inline review.
-    CommentAdded,
+    CommentAdded { is_local: Option<bool> },
     /// Emitted when an existing comment is edited.
-    CommentEdited,
+    CommentEdited { is_local: Option<bool> },
     /// Emitted when a comment is deleted from the inline review.
-    CommentDeleted { is_imported: bool },
+    CommentDeleted {
+        is_local: Option<bool>,
+        is_imported: bool,
+    },
     /// Emitted when the bottom comment list panel is expanded.
     CommentListExpanded {
+        is_local: Option<bool>,
         /// Number of comments currently in the list.
         comment_count: usize,
     },
     /// Emitted when the user submits an inline review to the agent.
     ReviewSubmitted {
+        is_local: Option<bool>,
         /// Number of comments in the submitted review.
         comment_count: usize,
         /// Number of unique files with comments.
@@ -246,9 +289,10 @@ pub enum CodeReviewTelemetryEvent {
         destination: CodeReviewContextDestination,
     },
     /// Emitted when a comment in the list view is clicked to jump to its location.
-    CommentListItemClicked,
+    CommentListItemClicked { is_local: Option<bool> },
     /// Emitted when one or more comments fail to be precisely relocated after code changes.
     CommentRelocationFailed {
+        is_local: Option<bool>,
         /// Number of comments that could not be matched to an exact line and had to fall back.
         fallback_count: usize,
     },
@@ -259,6 +303,7 @@ pub enum CodeReviewTelemetryEvent {
     },
     /// Emitted when the agent's insert_code_review_comments tool call is received and processed.
     CommentsReceived {
+        is_local: Option<bool>,
         /// Number of raw InsertReviewComment items from the tool call.
         raw_count: usize,
         /// Number of successfully converted PendingImportedReviewComments.
@@ -268,6 +313,7 @@ pub enum CodeReviewTelemetryEvent {
     },
     /// Emitted after newly-imported comments are relocated against editor lines.
     CommentsAttached {
+        is_local: Option<bool>,
         /// Number of non-outdated imported comments after relocation.
         active_count: usize,
         /// Number of outdated imported comments after relocation.
@@ -275,10 +321,14 @@ pub enum CodeReviewTelemetryEvent {
     },
     /// Emitted when a user clicks a git operation button in the code review
     /// header (primary button or dropdown item).
-    GitButtonTriggered { button: GitButtonKind },
+    GitButtonTriggered {
+        is_local: Option<bool>,
+        button: GitButtonKind,
+    },
     /// Emitted when a git dialog reaches a terminal state — either the async
     /// op succeeded / failed, or the user cancelled before confirming.
     GitDialogCompleted {
+        is_local: Option<bool>,
         /// The git operation that ran or would have run (e.g. `commit_and_push`
         /// for the commit dialog with that chained intent).
         operation: GitOperationKind,
@@ -297,93 +347,157 @@ impl TelemetryEvent for CodeReviewTelemetryEvent {
     fn payload(&self) -> Option<serde_json::Value> {
         match self {
             CodeReviewTelemetryEvent::PaneOpened {
+                is_local,
                 entrypoint,
                 is_code_mode_v2,
                 cli_agent,
-            } => Some(
-                json!({ "entrypoint": entrypoint, "is_code_mode_v2": is_code_mode_v2, "agent_name": cli_agent}),
-            ),
+            } => Some(json!({
+                "is_local": is_local,
+                "entrypoint": entrypoint,
+                "is_code_mode_v2": is_code_mode_v2,
+                "agent_name": cli_agent,
+            })),
             CodeReviewTelemetryEvent::AddToContext {
+                is_local,
                 origin,
                 destination,
                 diff_set_scope,
             } => Some(json!({
+                "is_local": is_local,
                 "origin": origin,
                 "destination": destination,
                 "diff_set_scope": diff_set_scope,
             })),
-            CodeReviewTelemetryEvent::RevertHunkClicked => None,
-            CodeReviewTelemetryEvent::FileSaved => None,
-            CodeReviewTelemetryEvent::PaneStateChanged { state_change } => {
-                Some(json!({ "state_change": state_change }))
+            CodeReviewTelemetryEvent::RevertHunkClicked { is_local } => {
+                Some(json!({ "is_local": is_local }))
             }
-            CodeReviewTelemetryEvent::BaseChanged { mode } => Some(json!({ "mode": mode })),
-            CodeReviewTelemetryEvent::CalculateDiffMetadataFailed { error } => {
-                Some(json!({ "error": error }))
+            CodeReviewTelemetryEvent::FileSaved { is_local } => {
+                Some(json!({ "is_local": is_local }))
             }
-            CodeReviewTelemetryEvent::LoadDiffFailed { error } => Some(json!({ "error": error })),
-            CodeReviewTelemetryEvent::FindBarToggled { is_open } => {
-                Some(json!({ "is_open": is_open }))
+            CodeReviewTelemetryEvent::PaneStateChanged {
+                is_local,
+                state_change,
+            } => Some(json!({ "is_local": is_local, "state_change": state_change })),
+            CodeReviewTelemetryEvent::BaseChanged { is_local, mode } => {
+                Some(json!({ "is_local": is_local, "mode": mode }))
+            }
+            CodeReviewTelemetryEvent::LoadMetadataFailed {
+                is_local,
+                mode,
+                error,
+            } => Some(json!({ "is_local": is_local, "mode": mode, "error": error })),
+            CodeReviewTelemetryEvent::LoadDiffFailed {
+                is_local,
+                mode,
+                error,
+                load_duration,
+            } => Some(json!({
+                "is_local": is_local,
+                "mode": mode,
+                "error": error,
+                "load_duration": load_duration,
+            })),
+            CodeReviewTelemetryEvent::DiffLoadCompleted {
+                is_local,
+                mode,
+                file_count,
+                files_changed,
+                total_additions,
+                total_deletions,
+                load_duration,
+            } => Some(json!({
+                "is_local": is_local,
+                "mode": mode,
+                "file_count": file_count,
+                "files_changed": files_changed,
+                "total_additions": total_additions,
+                "total_deletions": total_deletions,
+                "load_duration": load_duration,
+            })),
+            CodeReviewTelemetryEvent::FindBarToggled { is_local, is_open } => {
+                Some(json!({ "is_local": is_local, "is_open": is_open }))
             }
             CodeReviewTelemetryEvent::FindBarModeChanged {
+                is_local,
                 case_sensitive,
                 regex,
             } => Some(json!({
+                "is_local": is_local,
                 "case_sensitive": case_sensitive,
                 "regex": regex,
             })),
-            CodeReviewTelemetryEvent::FindNavigated { direction } => {
-                Some(json!({ "direction": direction }))
+            CodeReviewTelemetryEvent::FindNavigated {
+                is_local,
+                direction,
+            } => Some(json!({ "is_local": is_local, "direction": direction })),
+            CodeReviewTelemetryEvent::CommentEditorOpened { is_local } => {
+                Some(json!({ "is_local": is_local }))
             }
-            CodeReviewTelemetryEvent::CommentEditorOpened => None,
-            CodeReviewTelemetryEvent::CommentAdded => None,
-            CodeReviewTelemetryEvent::CommentEdited => None,
-            CodeReviewTelemetryEvent::CommentDeleted { is_imported } => {
-                Some(json!({ "is_imported": is_imported }))
+            CodeReviewTelemetryEvent::CommentAdded { is_local } => {
+                Some(json!({ "is_local": is_local }))
             }
-            CodeReviewTelemetryEvent::CommentListExpanded { comment_count } => {
-                Some(json!({ "comment_count": comment_count }))
+            CodeReviewTelemetryEvent::CommentEdited { is_local } => {
+                Some(json!({ "is_local": is_local }))
             }
+            CodeReviewTelemetryEvent::CommentDeleted {
+                is_local,
+                is_imported,
+            } => Some(json!({ "is_local": is_local, "is_imported": is_imported })),
+            CodeReviewTelemetryEvent::CommentListExpanded {
+                is_local,
+                comment_count,
+            } => Some(json!({ "is_local": is_local, "comment_count": comment_count })),
             CodeReviewTelemetryEvent::ReviewSubmitted {
+                is_local,
                 comment_count,
                 file_count,
                 destination,
             } => Some(json!({
+                "is_local": is_local,
                 "comment_count": comment_count,
                 "file_count": file_count,
                 "destination": destination,
             })),
-            CodeReviewTelemetryEvent::CommentListItemClicked => None,
-            CodeReviewTelemetryEvent::CommentRelocationFailed { fallback_count } => {
-                Some(json!({ "fallback_count": fallback_count }))
+            CodeReviewTelemetryEvent::CommentListItemClicked { is_local } => {
+                Some(json!({ "is_local": is_local }))
             }
+            CodeReviewTelemetryEvent::CommentRelocationFailed {
+                is_local,
+                fallback_count,
+            } => Some(json!({ "is_local": is_local, "fallback_count": fallback_count })),
             CodeReviewTelemetryEvent::CommentResolved { resolved_count } => {
                 Some(json!({ "resolved_count": resolved_count }))
             }
             CodeReviewTelemetryEvent::CommentsReceived {
+                is_local,
                 raw_count,
                 converted_count,
                 thread_count,
             } => Some(json!({
+                "is_local": is_local,
                 "raw_count": raw_count,
                 "converted_count": converted_count,
                 "thread_count": thread_count,
             })),
             CodeReviewTelemetryEvent::CommentsAttached {
+                is_local,
                 active_count,
                 outdated_count,
             } => Some(json!({
+                "is_local": is_local,
                 "active_count": active_count,
                 "outdated_count": outdated_count,
             })),
-            CodeReviewTelemetryEvent::GitButtonTriggered { button } => {
-                Some(json!({ "button": button }))
+            CodeReviewTelemetryEvent::GitButtonTriggered { is_local, button } => {
+                Some(json!({ "is_local": is_local, "button": button }))
             }
             CodeReviewTelemetryEvent::GitDialogCompleted {
+                is_local,
                 operation,
                 status,
                 error,
             } => Some(json!({
+                "is_local": is_local,
                 "operation": operation,
                 "status": status,
                 "error": error,
@@ -423,8 +537,9 @@ impl TelemetryEventDesc for CodeReviewTelemetryEventDiscriminants {
             Self::FileSaved => "CodeReview.FileSaved",
             Self::PaneStateChanged => "CodeReview.PaneStateChanged",
             Self::BaseChanged => "CodeReview.BaseChanged",
-            Self::CalculateDiffMetadataFailed => "CodeReview.CalculateDiffMetadataFailed",
+            Self::LoadMetadataFailed => "CodeReview.LoadMetadataFailed",
             Self::LoadDiffFailed => "CodeReview.LoadDiffFailed",
+            Self::DiffLoadCompleted => "CodeReview.DiffLoadCompleted",
             Self::FindBarToggled => "CodeReview.FindBarToggled",
             Self::FindBarModeChanged => "CodeReview.FindBarModeChanged",
             Self::FindNavigated => "CodeReview.FindNavigated",
@@ -452,8 +567,9 @@ impl TelemetryEventDesc for CodeReviewTelemetryEventDiscriminants {
             Self::FileSaved => "File saved in code review pane",
             Self::PaneStateChanged => "Code review pane minimized or maximized",
             Self::BaseChanged => "Diff base changed in code review",
-            Self::CalculateDiffMetadataFailed => "Failure when calculating diff metadata",
+            Self::LoadMetadataFailed => "Failure when calculating diff metadata",
             Self::LoadDiffFailed => "Failure when loading diff content",
+            Self::DiffLoadCompleted => "Diff content loaded successfully",
             Self::FindBarToggled => "Code review find bar opened or closed",
             Self::FindBarModeChanged => "Search mode changed in code review find bar",
             Self::FindNavigated => "Navigated to next or previous match in code review find bar",

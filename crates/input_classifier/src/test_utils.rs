@@ -1,10 +1,9 @@
-use std::{collections::HashSet, sync::Arc};
+use std::collections::HashSet;
+use std::sync::Arc;
 
 use smol_str::SmolStr;
-use warp_completer::{
-    completer::{GeneratorContext, PathCompletionContext},
-    signatures::CommandRegistry,
-};
+use warp_completer::completer::{GeneratorContext, PathCompletionContext};
+use warp_completer::signatures::CommandRegistry;
 
 /// An implementation of `CompletionContext` for testing purposes.
 pub struct CompletionContext {

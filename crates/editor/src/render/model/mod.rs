@@ -1,83 +1,66 @@
 use core::slice;
-use std::{
-    any::Any,
-    cell::{Cell, Ref, RefCell},
-    collections::{HashMap, HashSet},
-    fmt, mem,
-    ops::{Add, AddAssign, Range, Sub, SubAssign},
-    sync::Arc,
-};
-
-use parking_lot::Mutex;
-use rangemap::RangeSet;
+use std::any::Any;
+use std::cell::{Cell, Ref, RefCell};
+use std::collections::{HashMap, HashSet};
+use std::ops::{Add, AddAssign, Range, Sub, SubAssign};
+use std::sync::Arc;
+use std::{fmt, mem};
 
 use float_cmp::ApproxEq;
 use itertools::Itertools;
 use markdown_parser::TableAlignment;
 use num_traits::SaturatingSub;
 use ordered_float::OrderedFloat;
+use parking_lot::Mutex;
+use rangemap::RangeSet;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Mapping;
+use string_offset::{CharOffset, impl_offset};
 use sum_tree::{SeekBias, SumTree};
 use vec1::Vec1;
 use vim::vim::{MotionType, VimMode};
-use warp_core::{
-    channel::ChannelState,
-    ui::{Icon, theme::Fill as ThemeFill},
+use warp_core::channel::ChannelState;
+use warp_core::ui::Icon;
+use warp_core::ui::theme::Fill as ThemeFill;
+use warpui::assets::asset_cache::AssetSource;
+use warpui::color::ColorU;
+use warpui::elements::{
+    Border, Fill, ListIndentLevel, ListNumbering, Margin, MouseStateHandle, Padding, ScrollData,
 };
-use warpui::{
-    AppContext, Entity, EntityId, ModelContext, ModelHandle,
-    assets::asset_cache::AssetSource,
-    color::ColorU,
-    elements::{Border, Fill, ListNumbering, Margin, MouseStateHandle, Padding, ScrollData},
-    fonts::{FamilyId, Properties, Weight},
-    geometry::{
-        rect::RectF,
-        vector::{Vector2F, vec2f},
-    },
-    platform::LineStyle,
-    text_layout::CaretPosition,
-    text_layout::{LayoutCache, Line, TextFrame},
-    text_selection_utils::{
-        NewlineTickParams, calculate_tick_width, create_newline_tick_rect,
-        selection_crosses_newline_offset_based,
-    },
-    units::{IntoPixels, Pixels},
+use warpui::fonts::{FamilyId, Properties, Weight};
+use warpui::geometry::rect::RectF;
+use warpui::geometry::vector::{Vector2F, vec2f};
+use warpui::platform::LineStyle;
+use warpui::text_layout::{CaretPosition, LayoutCache, Line, TextFrame};
+use warpui::text_selection_utils::{
+    NewlineTickParams, calculate_tick_width, create_newline_tick_rect,
+    selection_crosses_newline_offset_based,
 };
+use warpui::units::{IntoPixels, Pixels};
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
 
+use self::location::WrapDirection;
 pub use self::location::{HitTestOptions, Location};
 pub use self::offset_map::{OffsetMap, SelectableTextRun};
 pub use self::positioned::Positioned;
-use self::{
-    location::WrapDirection,
-    saved_positions::SavedPositions,
-    viewport::{ScrollPositionSnapshot, SizeInfo},
+use self::positioned::PositionedCursor;
+use self::saved_positions::SavedPositions;
+use self::viewport::{
+    ScrollPositionSnapshot, SizeInfo, ViewportItem, ViewportIterator, ViewportState,
 };
-use self::{
-    positioned::PositionedCursor,
-    viewport::{ViewportItem, ViewportIterator, ViewportState},
+use super::BLOCK_FOOTER_HEIGHT;
+use super::element::broken_embedding::RenderableBrokenEmbedding;
+use super::element::{CursorData, RenderContext, RenderableBlock};
+use super::layout::{TextLayout, line_height};
+use crate::content::edit::{
+    EditDelta, LaidOutRenderDelta, ParsedUrl, TemporaryBlock, layout_temporary_blocks,
 };
-use crate::{
-    content::{
-        edit::{EditDelta, LaidOutRenderDelta, ParsedUrl, TemporaryBlock, layout_temporary_blocks},
-        hidden_lines_model::HiddenLinesModel,
-        markdown::MarkdownStyle,
-        text::{BlockHeaderSize, BufferBlockStyle, CodeBlockType, FormattedTable},
-        version::BufferVersion,
-    },
-    editor::EmbeddedItemModel,
-    render::model::debug::Describe,
-};
-use string_offset::{CharOffset, impl_offset};
-use warpui::elements::ListIndentLevel;
-
-use super::{
-    BLOCK_FOOTER_HEIGHT,
-    element::{RenderableBlock, broken_embedding::RenderableBrokenEmbedding},
-    layout::{TextLayout, line_height},
-};
-
-use super::element::{CursorData, RenderContext};
+use crate::content::hidden_lines_model::HiddenLinesModel;
+use crate::content::markdown::MarkdownStyle;
+use crate::content::text::{BlockHeaderSize, BufferBlockStyle, CodeBlockType, FormattedTable};
+use crate::content::version::BufferVersion;
+use crate::editor::EmbeddedItemModel;
+use crate::render::model::debug::Describe;
 
 pub mod bounds;
 pub(crate) mod debug;
@@ -107,7 +90,7 @@ const TABLE_SCROLL_REVEAL_MARGIN: Pixels = Pixels::new(8.);
 pub const EMBEDDED_ITEM_FIRST_LINE_HEIGHT: f32 = 24.;
 
 pub const TEXT_SPACING: BlockSpacing = BlockSpacing {
-    margin: Margin::uniform(4.).with_right(16.),
+    margin: Margin::uniform(0.).with_right(16.),
     padding: Padding::uniform(0.),
 };
 
@@ -139,8 +122,8 @@ pub const BROKEN_LINK_SPACING: BlockSpacing = BlockSpacing {
 
 pub const HEADER_SPACING: BlockSpacing = BlockSpacing {
     margin: Margin::uniform(4.)
-        .with_top(12.)
-        .with_bottom(12.)
+        .with_top(4.)
+        .with_bottom(4.)
         .with_right(16.),
     padding: Padding::uniform(0.),
 };

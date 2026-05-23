@@ -20,8 +20,7 @@ use command::blocking::Command;
 use command::r#async::Command as AsyncCommand;
 use warp_cli::skill::SkillSpec;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
-use warpui::AppContext;
-use warpui::SingletonEntity as _;
+use warpui::{AppContext, SingletonEntity as _};
 
 use super::SkillManager;
 use crate::warp_managed_paths_watcher::warp_managed_skill_dirs;

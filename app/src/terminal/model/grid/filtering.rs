@@ -1,18 +1,15 @@
-use std::{
-    cmp::{max, min},
-    ops::{Range, RangeInclusive},
-    sync::Arc,
-};
+use std::cmp::{max, min};
+use std::ops::{Range, RangeInclusive};
+use std::sync::Arc;
 
 use itertools::Itertools as _;
 
-use crate::terminal::model::{
-    find::RegexDFAs,
-    grid::displayed_output::{DisplaySource, DisplayedOutput, DisplayedRows},
-    index::Point,
-};
-
 use super::GridHandler;
+use crate::terminal::model::find::RegexDFAs;
+use crate::terminal::model::grid::displayed_output::{
+    DisplaySource, DisplayedOutput, DisplayedRows,
+};
+use crate::terminal::model::index::Point;
 
 /// Structure that represents a filter applied to a block's output.
 #[derive(Clone, Debug)]

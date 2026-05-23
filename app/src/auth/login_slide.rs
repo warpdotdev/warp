@@ -1,3 +1,30 @@
+use std::cell::Cell;
+
+use onboarding::slides::{layout, slide_content};
+use onboarding::{OnboardingIntention, AI_FEATURES, WARP_DRIVE_FEATURES};
+use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::vec2f;
+use ui_components::{button, Component as _, Options as _};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::Icon;
+use warpui::actions::StandardAction;
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::{
+    Align, Border, CacheOption, ChildAnchor, ClippedScrollStateHandle, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Dismiss, Fill, Flex, FormattedTextElement,
+    HighlightedHyperlink, Image, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack,
+};
+use warpui::fonts::Weight;
+use warpui::keymap::{FixedBinding, Keystroke};
+use warpui::text_layout::TextAlignment;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{
+    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, UpdateModel, View,
+    ViewContext, ViewHandle,
+};
+
 use crate::appearance::Appearance;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::auth_view_modal::AuthRedirectPayload;
@@ -11,34 +38,6 @@ use crate::settings::PrivacySettings;
 use crate::themes::theme::Fill as ThemeFill;
 use crate::util::bindings::CustomAction;
 use crate::{send_telemetry_from_ctx, send_telemetry_sync_from_ctx};
-
-use onboarding::slides::{layout, slide_content};
-use onboarding::{OnboardingIntention, AI_FEATURES, WARP_DRIVE_FEATURES};
-use pathfinder_color::ColorU;
-use ui_components::{button, Component as _, Options as _};
-use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::Icon;
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::{
-    Align, Border, CacheOption, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Dismiss, Fill, Flex, FormattedTextElement, HighlightedHyperlink, Image,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement, Radius,
-    Shrinkable, Stack,
-};
-use warpui::fonts::Weight;
-use warpui::keymap::{FixedBinding, Keystroke};
-use warpui::text_layout::TextAlignment;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
-    actions::StandardAction, AppContext, Element, Entity, FocusContext, SingletonEntity,
-    TypedActionView, UpdateModel, View, ViewContext, ViewHandle,
-};
-
-use std::cell::Cell;
-
-use pathfinder_geometry::vector::vec2f;
-use warpui::elements::{ChildAnchor, ParentAnchor, ParentOffsetBounds};
 
 const TOS_URL: &str = "https://www.warp.dev/terms-of-service";
 

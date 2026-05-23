@@ -1,34 +1,29 @@
-use crate::rendering::atlas::{AllocatedRegion, TextureId};
-use crate::rendering::{get_best_dash_gap, GlyphCache, GlyphRasterBoundsFn, RasterizeGlyphFn};
-use warpui_core::{
-    fonts::{self, SubpixelAlignment},
-    rendering::{self, texture_cache::TextureCache},
-};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::Write;
+use std::mem;
+use std::os::raw::c_void;
+use std::sync::Once;
 
-use super::frame_capture::capture_frame;
-use crate::platform::mac::rendering::renderer::Device;
-use crate::platform::mac::window::WindowState;
 use metal::{
     Function, MTLBlendFactor, MTLBlendOperation, MTLIndexType, MTLPrimitiveType,
     MTLResourceOptions, RenderPipelineDescriptor,
 };
 use objc::{msg_send, sel, sel_impl};
-use warpui_core::platform::CapturedFrame;
-
 use pathfinder_color::{ColorF, ColorU};
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
-};
-use warpui_core::fonts::{canvas, RasterizedGlyph};
-use warpui_core::scene::{CornerRadius, GlyphFade, Icon, Image, Layer, Scene};
+use pathfinder_geometry::rect::{RectF, RectI};
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warpui_core::fonts::{self, canvas, RasterizedGlyph, SubpixelAlignment};
+use warpui_core::platform::CapturedFrame;
+use warpui_core::rendering::texture_cache::TextureCache;
+use warpui_core::rendering::{self};
+use warpui_core::scene::{CornerRadius, GlyphFade, GlyphKey, Icon, Image, Layer, Scene};
 
-use std::collections::HashMap;
-
-use pathfinder_geometry::rect::RectI;
-use std::{fs::File, mem, sync::Once};
-use std::{io::Write, os::raw::c_void};
-use warpui_core::scene::GlyphKey;
+use super::frame_capture::capture_frame;
+use crate::platform::mac::rendering::renderer::Device;
+use crate::platform::mac::window::WindowState;
+use crate::rendering::atlas::{AllocatedRegion, TextureId};
+use crate::rendering::{get_best_dash_gap, GlyphCache, GlyphRasterBoundsFn, RasterizeGlyphFn};
 
 const METAL_LIB_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders.metallib"));
 static WRITE_LIB_TO_FILE: Once = Once::new();

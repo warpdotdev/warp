@@ -1,13 +1,12 @@
 use warpui::{App, ModelHandle};
 
-use crate::content::{
-    buffer::{AutoScrollBehavior, Buffer, BufferEditAction, BufferSelectAction, EditOrigin},
-    find::{Match, SearchResults},
-    selection_model::BufferSelectionModel,
-    text::IndentBehavior,
-};
-
 use super::Searcher;
+use crate::content::buffer::{
+    AutoScrollBehavior, Buffer, BufferEditAction, BufferSelectAction, EditOrigin,
+};
+use crate::content::find::{Match, SearchResults};
+use crate::content::selection_model::BufferSelectionModel;
+use crate::content::text::IndentBehavior;
 
 #[test]
 fn test_literal_search() {

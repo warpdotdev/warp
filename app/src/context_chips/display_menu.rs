@@ -3,52 +3,46 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
 use instant::Instant;
 use pathfinder_geometry::vector::vec2f;
-
-use crate::{
-    ai::cloud_environments::CloudAmbientAgentEnvironment,
-    cloud_object::model::generic_string_model::StringModel,
-    editor::{
-        EditorOptions, EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys,
-        TextOptions,
-    },
-    server::ids::{ClientId, HashableId, ServerId, SyncId},
-    ui_components::icons::Icon,
-    view_components::copyable_text_field::{
-        render_copyable_text_field, CopyButtonPlacement, CopyableTextFieldConfig,
-        COPY_FEEDBACK_DURATION,
-    },
-};
-use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::builder::MIN_FONT_SIZE;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::{appearance::Appearance, builder::MIN_FONT_SIZE, theme::Fill};
+use warp_core::ui::theme::Fill;
 use warp_editor::editor::NavigationKey;
+use warpui::clipboard::ClipboardContent;
+use warpui::color::ColorU;
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
+    Container, CornerRadius, CrossAxisAlignment, Dismiss, DispatchEventResult, DropShadow, Empty,
+    EventHandler, Flex, Highlight, Hoverable, MainAxisAlignment, MainAxisSize, MouseInBehavior,
+    MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, SavePosition, ScrollStateHandle, Scrollable,
+    ScrollableElement, ScrollbarWidth, Shrinkable, Stack, Text, UniformList, UniformListState,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::FixedBinding;
+use warpui::r#async::Timer;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::Pixels;
 use warpui::{
-    color::ColorU,
-    elements::Highlight,
-    fonts::{Properties, Weight},
-    ui_components::components::{Coords, UiComponentStyles},
-};
-use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable,
-        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, DispatchEventResult,
-        DropShadow, Empty, EventHandler, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-        MouseInBehavior, MouseStateHandle, OffsetPositioning, ParentElement,
-        PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition,
-        ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth, Shrinkable, Stack, Text,
-        UniformList, UniformListState,
-    },
-    keymap::FixedBinding,
-    ui_components::components::UiComponent,
     AppContext, Element, Entity, FocusContext, SingletonEntity as _, TypedActionView, View,
     ViewContext, ViewHandle, WindowId,
 };
 
-use warpui::clipboard::ClipboardContent;
-use warpui::r#async::Timer;
+use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::cloud_object::CloudObjectLookup as _;
+use crate::editor::{
+    EditorOptions, EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, TextOptions,
+};
+use crate::server::ids::{ClientId, HashableId, ServerId, SyncId};
+use crate::ui_components::icons::Icon;
+use crate::view_components::copyable_text_field::{
+    render_copyable_text_field, CopyButtonPlacement, CopyableTextFieldConfig,
+    COPY_FEEDBACK_DURATION,
+};
 
 /// Trait for items that can be displayed in a generic menu
 pub trait GenericMenuItem: Debug + 'static {

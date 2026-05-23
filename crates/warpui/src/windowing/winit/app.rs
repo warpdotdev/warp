@@ -1,22 +1,16 @@
-use futures_util::future::LocalBoxFuture;
 use std::mem::ManuallyDrop;
-
-use crate::{
-    clipboard::ClipboardContent,
-    integration::TestDriver,
-    keymap,
-    platform::{self, TerminationMode},
-    AppContext, AssetProvider, WindowId,
-};
-use derivative::Derivative;
-
-use super::window::{IntegrationTestWindowManager, WindowManager};
-use crate::notification::RequestPermissionsOutcome;
-
-use crate::platform::NotificationInfo;
-
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use std::sync::OnceLock;
+
+use derivative::Derivative;
+use futures_util::future::LocalBoxFuture;
+
+use super::window::{IntegrationTestWindowManager, WindowManager};
+use crate::clipboard::ClipboardContent;
+use crate::integration::TestDriver;
+use crate::notification::RequestPermissionsOutcome;
+use crate::platform::{self, NotificationInfo, TerminationMode};
+use crate::{keymap, AppContext, AssetProvider, WindowId};
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub static WINDOWING_SYSTEM: OnceLock<WindowingSystem> = OnceLock::new();

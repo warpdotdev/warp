@@ -1,10 +1,14 @@
-use itertools::Itertools;
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
+use itertools::Itertools;
+use ui_components::lightbox::{LightboxImage, LightboxImageSource};
 #[cfg(feature = "local_fs")]
 use warpui::assets::asset_cache::AssetSource;
-use warpui::App;
+use warpui::elements::Empty;
+use warpui::{App, Element};
 
 #[cfg(feature = "local_fs")]
 use super::{blocklist_image_asset_source, ResolvedBlocklistImageSources};
@@ -14,16 +18,12 @@ use super::{
     query_prefix_highlight_len, render_scrollable_collapsible_content, text_sections_with_indices,
     CollapsibleElementState, CollapsibleExpansionState, VisualMarkdownLightboxCollection,
 };
-use crate::{
-    ai::agent::{
-        AIAgentInput, AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout,
-        AgentOutputMermaidDiagram, MessageId, UserQueryMode,
-    },
-    features::FeatureFlag,
-    search::slash_command_menu::static_commands::commands,
+use crate::ai::agent::{
+    AIAgentInput, AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout,
+    AgentOutputMermaidDiagram, MessageId, UserQueryMode,
 };
-use ui_components::lightbox::{LightboxImage, LightboxImageSource};
-use warpui::{elements::Empty, Element};
+use crate::features::FeatureFlag;
+use crate::search::slash_command_menu::static_commands::commands;
 
 #[test]
 fn query_prefix_highlight_len_highlights_invoke_skill_inputs() {

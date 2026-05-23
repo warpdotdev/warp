@@ -1,20 +1,21 @@
-use super::{workflow::Workflow, CloudWorkflowModel};
-use crate::{
-    cloud_object::{model::persistence::CloudModel, GenericCloudObject, Owner},
-    drive::OpenWarpDriveObjectSettings,
-    pane_group::{PaneContent, WorkflowPane},
-    safe_warn,
-    server::{
-        cloud_objects::update_manager::{
-            ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
-        },
-        ids::{ClientId, SyncId},
-    },
-    workflows::{workflow_view::WorkflowView, WorkflowViewMode},
-    PaneViewLocator, WindowId,
-};
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
+
+use super::workflow::Workflow;
+use super::CloudWorkflowModel;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{GenericCloudObject, Owner};
+use crate::drive::OpenWarpDriveObjectSettings;
+use crate::pane_group::{PaneContent, WorkflowPane};
+use crate::server::cloud_objects::update_manager::{
+    ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
+};
+use crate::server::ids::{ClientId, SyncId};
+use crate::workflows::workflow_view::WorkflowView;
+use crate::workflows::WorkflowViewMode;
+use crate::{safe_warn, PaneViewLocator, WindowId};
 
 pub struct WorkflowManager {
     panes_by_hashed_id: HashMap<String, WorkflowPaneData>,

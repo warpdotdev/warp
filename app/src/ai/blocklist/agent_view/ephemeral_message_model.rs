@@ -4,9 +4,8 @@ use std::time::Duration;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, ModelContext};
 
-use crate::terminal::input::message_bar::{Message, MessageProvider};
-
 use super::agent_message_bar::AgentMessageArgs;
+use crate::terminal::input::message_bar::{Message, MessageProvider};
 
 const DEFAULT_MESSAGE_DURATION: Duration = Duration::from_millis(1500);
 

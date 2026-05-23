@@ -1,18 +1,16 @@
-use std::{fmt, marker::PhantomData};
-
-use serde_json::Value;
-use strum::IntoEnumIterator;
-use warpui::{AppContext, Entity, SingletonEntity};
+use std::fmt;
+use std::marker::PhantomData;
 
 // Re-export for macro use.
 #[doc(hidden)]
 #[cfg(not(target_family = "wasm"))]
 pub use inventory::submit;
+use serde_json::Value;
+use strum::IntoEnumIterator;
+use warpui::{AppContext, Entity, SingletonEntity};
 
-use crate::{
-    channel::{Channel, ChannelState},
-    features::FeatureFlag,
-};
+use crate::channel::{Channel, ChannelState};
+use crate::features::FeatureFlag;
 
 /// Core trait defining telemetry event behavior.
 ///

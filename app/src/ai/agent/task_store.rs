@@ -2,18 +2,11 @@ use std::collections::HashMap;
 
 use warp_multi_agent_api as api;
 
-use crate::ai::{
-    agent::{AIAgentContext, AIAgentInput},
-    skills::SkillDescriptor,
-};
-
-use super::{
-    task::{
-        helper::{MessageExt, ToolCallExt},
-        Task, TaskId,
-    },
-    AIAgentExchange, AIAgentExchangeId, AIAgentOutputMessageType,
-};
+use super::task::helper::{MessageExt, ToolCallExt};
+use super::task::{Task, TaskId};
+use super::{AIAgentExchange, AIAgentExchangeId, AIAgentOutputMessageType};
+use crate::ai::agent::{AIAgentContext, AIAgentInput};
+use crate::ai::skills::SkillDescriptor;
 
 #[derive(Debug, Clone)]
 struct ExchangeRef {
@@ -343,9 +336,8 @@ impl TaskStore {
 
 #[cfg(test)]
 mod testing {
-    use crate::ai::agent::task::TaskId;
-
     use super::TaskStore;
+    use crate::ai::agent::task::TaskId;
 
     impl TaskStore {
         pub fn contains(&self, task_id: &TaskId) -> bool {

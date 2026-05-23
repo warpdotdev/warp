@@ -1,22 +1,22 @@
-use num_traits::SaturatingSub;
 use std::ops::Range;
-use vec1::Vec1;
-use warpui::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, units::Pixels};
 
-use crate::{
-    content::{
-        buffer::{
-            AutoScrollBehavior, Buffer, BufferEvent, BufferSelectAction, SelectionOffsets,
-            ToBufferCharOffset, ToBufferPoint,
-        },
-        hidden_lines_model::HiddenLinesModel,
-        selection_model::BufferSelectionModel,
-        text::{BlockType, BufferBlockStyle, CodeBlockType},
-    },
-    render::model::{RenderState, SoftWrapPoint},
-};
+use num_traits::SaturatingSub;
 use string_offset::CharOffset;
-use warpui::text::{TextBuffer, point::Point, word_boundaries::WordBoundariesPolicy};
+use vec1::Vec1;
+use warpui::text::TextBuffer;
+use warpui::text::point::Point;
+use warpui::text::word_boundaries::WordBoundariesPolicy;
+use warpui::units::Pixels;
+use warpui::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle};
+
+use crate::content::buffer::{
+    AutoScrollBehavior, Buffer, BufferEvent, BufferSelectAction, SelectionOffsets,
+    ToBufferCharOffset, ToBufferPoint,
+};
+use crate::content::hidden_lines_model::HiddenLinesModel;
+use crate::content::selection_model::BufferSelectionModel;
+use crate::content::text::{BlockType, BufferBlockStyle, CodeBlockType};
+use crate::render::model::{RenderState, SoftWrapPoint};
 
 #[cfg(test)]
 #[path = "selection_tests.rs"]

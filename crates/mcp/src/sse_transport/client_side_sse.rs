@@ -3,15 +3,14 @@
 // Used under the terms of the Apache License, Version 2.0.
 // See https://github.com/modelcontextprotocol/rust-sdk/blob/main/LICENSE for the full license text.
 
-use std::{
-    future::Future,
-    pin::Pin,
-    sync::Arc,
-    task::{ready, Poll},
-    time::Duration,
-};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{ready, Poll};
+use std::time::Duration;
 
-use futures::{stream::BoxStream, Stream};
+use futures::stream::BoxStream;
+use futures::Stream;
 use rmcp::model::ServerJsonRpcMessage;
 use sse_stream::{Error as SseError, Sse};
 

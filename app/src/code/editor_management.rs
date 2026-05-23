@@ -1,23 +1,19 @@
-use std::{
-    collections::{hash_map::Entry, HashMap},
-    path::PathBuf,
-};
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+use std::path::PathBuf;
 
-use super::buffer_location::LocalOrRemotePath;
-use crate::ai::skills::SkillOpenOrigin;
 use ai::skills::SkillReference;
 use serde::{Deserialize, Serialize};
 use warp_util::path::LineAndColumnArg;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, ViewHandle, WindowId};
 
-use crate::{
-    ai::agent::AIAgentActionId,
-    code_review::code_review_view::CodeReviewView,
-    pane_group::{PaneGroup, PaneId},
-    workspace::PaneViewLocator,
-};
-
+use super::buffer_location::LocalOrRemotePath;
 use super::view::CodeView;
+use crate::ai::agent::AIAgentActionId;
+use crate::ai::skills::SkillOpenOrigin;
+use crate::code_review::code_review_view::CodeReviewView;
+use crate::pane_group::{PaneGroup, PaneId};
+use crate::workspace::PaneViewLocator;
 
 pub struct CodeEditorSummary<'a> {
     pub unsaved_changes: Vec<&'a CodeEditorStatus>,

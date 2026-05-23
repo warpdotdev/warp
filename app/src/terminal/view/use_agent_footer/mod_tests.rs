@@ -1,36 +1,31 @@
 use std::rc::Rc;
 
-use session_sharing_protocol::sharer::SessionSourceType;
 use warp_core::settings::Setting as _;
 use warpui::{App, AppContext, SingletonEntity, ViewContext};
 
-use crate::{
-    ai::{
-        agent::{
-            conversation::AIConversationId, task::TaskId, AIAgentInput, ServerOutputId,
-            UserQueryMode,
-        },
-        blocklist::{
-            agent_view::AgentViewEntryOrigin,
-            block::cli_controller::UserTakeOverReason,
-            model::{AIBlockModel, AIBlockOutputStatus, AIRequestType, OutputStatusUpdateCallback},
-            AIBlock, ClientIdentifiers,
-        },
-        llms::LLMId,
-    },
-    features::FeatureFlag,
-    settings::AISettings,
-    terminal::cli_agent_sessions::{
-        CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
-        CLIAgentSessionsModel,
-    },
-    terminal::model::ansi::{BootstrappedValue, Handler as _, InitShellValue},
-    terminal::CLIAgent,
-    test_util::{add_window_with_terminal, terminal::initialize_app_for_terminal_view},
-};
-
 use super::super::{AIBlockMetadata, RichContentMetadata, RichContentType};
 use super::*;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{AIAgentInput, ServerOutputId, UserQueryMode};
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::blocklist::block::cli_controller::UserTakeOverReason;
+use crate::ai::blocklist::model::{
+    AIBlockModel, AIBlockOutputStatus, AIRequestType, OutputStatusUpdateCallback,
+};
+use crate::ai::blocklist::{AIBlock, ClientIdentifiers};
+use crate::ai::llms::LLMId;
+use crate::features::FeatureFlag;
+use crate::settings::AISettings;
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
+    CLIAgentSessionsModel,
+};
+use crate::terminal::model::ansi::{BootstrappedValue, Handler as _, InitShellValue};
+use crate::terminal::shared_session::SharedSessionSource;
+use crate::terminal::CLIAgent;
+use crate::test_util::add_window_with_terminal;
+use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 struct PendingAIBlockModel {
     conversation_id: AIConversationId,
@@ -306,7 +301,7 @@ fn use_agent_footer_hidden_during_cloud_agent_setup_lrc() {
             // NO CLIAgentSession registered yet.
             view.model
                 .lock()
-                .set_shared_session_source_type(SessionSourceType::AmbientAgent { task_id: None });
+                .set_shared_session_source(SharedSessionSource::ambient_agent(None));
             assert!(view.model.lock().is_shared_ambient_agent_session());
             assert!(
                 CLIAgentSessionsModel::as_ref(ctx)
@@ -350,7 +345,7 @@ fn cli_agent_footer_renders_for_viewer_of_shared_cloud_agent_session() {
             // what the viewer's terminal manager does on `JoinedSuccessfully`.
             view.model
                 .lock()
-                .set_shared_session_source_type(SessionSourceType::AmbientAgent { task_id: None });
+                .set_shared_session_source(SharedSessionSource::ambient_agent(None));
             assert!(view.model.lock().is_shared_ambient_agent_session());
 
             // Inject a CLI agent session as `apply_cli_agent_state_update` would on

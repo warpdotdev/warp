@@ -1,11 +1,10 @@
-use crate::content::{
-    cursor::BufferSumTree,
-    text::{
-        BlockHeaderSize, BufferBlockItem, BufferBlockStyle, BufferText, BufferTextStyle, MarkerDir,
-    },
-};
 use sum_tree::SumTree;
 use warpui::elements::ListIndentLevel;
+
+use crate::content::cursor::BufferSumTree;
+use crate::content::text::{
+    BlockHeaderSize, BufferBlockItem, BufferBlockStyle, BufferText, BufferTextStyle, MarkerDir,
+};
 
 #[test]
 #[should_panic(

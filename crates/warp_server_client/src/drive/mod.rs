@@ -1,9 +1,7 @@
 pub mod sharing;
 
-use crate::{
-    cloud_object::{GenericStringObjectFormat, ObjectIdType, ObjectType},
-    ids::{HashedSqliteId, ObjectUid, ServerId, SyncId},
-};
+use crate::cloud_object::{GenericStringObjectFormat, ObjectIdType, ObjectType};
+use crate::ids::{HashedSqliteId, ObjectUid, ServerId, SyncId};
 
 /// Enum to use to pass down type and id between actions to avoid multiplying actions whenever we
 /// need to pass the object id, etc.

@@ -1,18 +1,12 @@
 use itertools::Itertools;
 use sum_tree::SumTree;
-
-use warpui::{
-    SizeConstraint,
-    geometry::vector::vec2f,
-    units::{IntoPixels, Pixels},
-};
-
-use crate::render::model::{
-    RenderState,
-    test_utils::{TEST_STYLES, mock_paragraph},
-};
+use warpui::SizeConstraint;
+use warpui::geometry::vector::vec2f;
+use warpui::units::{IntoPixels, Pixels};
 
 use super::ViewportState;
+use crate::render::model::RenderState;
+use crate::render::model::test_utils::{TEST_STYLES, mock_paragraph};
 
 #[test]
 fn test_viewport_offsets() {
@@ -26,7 +20,7 @@ fn test_viewport_offsets() {
     content.push(mock_paragraph(80., 100., 1));
     render_state.set_content(content);
 
-    // Double-check the heights with margins+padding, as later tests rely on them.
+    // Double-check the heights, as later tests rely on them.
     let heights = render_state
         .content
         .borrow()
@@ -34,7 +28,7 @@ fn test_viewport_offsets() {
         .iter()
         .map(|item| item.height().as_f32())
         .collect_vec();
-    assert_eq!(heights, vec![32., 68., 108., 38., 88., 32.]);
+    assert_eq!(heights, vec![24., 60., 100., 30., 80., 24.]);
 
     let content = render_state.content();
     let offsets = content
@@ -53,12 +47,14 @@ fn test_viewport_offsets() {
         vec![
             // The first item is fully above the viewport.
             // The second item is slightly above the viewport.
-            (-8., 1),
+            (-16., 1),
             // The third is fully within the viewport
-            (60., 2),
+            (44., 2),
             // The fourth is slightly past the viewport, and cut off.
-            (168., 4)
-        ] // The fifth item is fully after the viewport.
+            (144., 4),
+            // The fifth is slightly past the viewport, and cut off.
+            (174., 7)
+        ]
     );
 }
 

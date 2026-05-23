@@ -1,7 +1,5 @@
-use std::{
-    iter::{Enumerate, Peekable},
-    ops::Range,
-};
+use std::iter::{Enumerate, Peekable};
+use std::ops::Range;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ParsedArgument {

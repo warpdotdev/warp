@@ -1,5 +1,7 @@
+use winit::keyboard::Key::Character;
+use winit::keyboard::{KeyCode, NativeKeyCode, PhysicalKey, SmolStr};
+
 use super::{get_input_key, us_qwerty_fallback_for_chord};
-use winit::keyboard::{Key::Character, KeyCode, NativeKeyCode, PhysicalKey, SmolStr};
 
 #[test]
 fn test_get_input_key() {

@@ -1,6 +1,7 @@
+use std::path::{Path, PathBuf};
+
 use super::MerkleHash;
 use crate::index::full_source_code_embedding::chunker::Fragment;
-use std::path::{Path, PathBuf};
 
 #[test]
 fn test_fragment_hash_from_content() {

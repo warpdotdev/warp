@@ -1,7 +1,8 @@
-use crate::integration_testing::agent_mode::util::get_base_server_url;
 use anyhow::Result;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+
+use crate::integration_testing::agent_mode::util::get_base_server_url;
 
 #[derive(Debug, Serialize)]
 pub struct LLMGenerateRequest {

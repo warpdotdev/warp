@@ -5,12 +5,12 @@ use rangemap::RangeSet;
 use string_offset::CharOffset;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 
+use super::anchor::{Anchor, AnchorSide};
+use crate::content::buffer::Buffer;
 use crate::content::edit::EditDelta;
 use crate::content::selection_model::BufferSelectionModel;
+use crate::content::text::LineCount;
 use crate::content::version::BufferVersion;
-use crate::content::{buffer::Buffer, text::LineCount};
-
-use super::anchor::{Anchor, AnchorSide};
 
 /// A model that tracks hidden line ranges independently of the buffer content.
 /// This allows multiple editors to have different hidden line states for the same buffer.

@@ -1,9 +1,8 @@
 use float_cmp::assert_approx_eq;
 
+use super::*;
 use crate::scene::ZIndex;
 use crate::App;
-
-use super::*;
 
 #[test]
 fn test_laid_out_text_height() {

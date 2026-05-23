@@ -13,57 +13,46 @@ mod resize;
 mod secrets;
 
 use std::borrow::Cow;
-use std::cmp::max;
+use std::cmp::{max, min, Ordering};
 use std::collections::{HashMap, HashSet};
+use std::mem;
 use std::num::NonZeroUsize;
 use std::ops::{Range, RangeInclusive};
-use std::{
-    cmp::{min, Ordering},
-    mem,
-};
 
 use bounded_vec_deque::BoundedVecDeque;
+use filtering::FilterState;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use string_offset::ByteOffset;
 use unicode_general_category::{get_general_category, GeneralCategory};
 use unicode_width::UnicodeWidthChar;
 use urlocator::{UrlLocation, UrlLocator};
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::{SemanticSelection, SMART_SELECT_MATCH_WINDOW_LIMIT};
 use warp_core::{safe_assert, safe_assert_eq};
-use warp_terminal::model::grid::CellType;
-use warp_terminal::model::grid::FlatStorage;
+use warp_terminal::model::grid::{CellType, FlatStorage};
 pub use warp_terminal::model::TermMode;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warp_util::path::CleanPathResult;
 use warpui::color::ColorU;
 
-use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::model::ansi::{self, Color, CursorStyle, Handler, NamedColor};
-use crate::terminal::model::cell::{Cell, Flags, LineLength, DEFAULT_CHAR};
-use crate::terminal::model::char_or_str::{CharOrStr, PushCharOrStr};
-use crate::terminal::model::grid::{Dimensions, GridStorage};
-use crate::terminal::model::image_map::ImageMap;
-use crate::terminal::model::index::{IndexRange, Point, VisibleRow};
-use crate::terminal::model::secrets::{ObfuscateSecrets, SecretMap};
-use crate::terminal::SizeInfo;
-use crate::util::extensions::TrimStringExt;
-
-use crate::terminal::model::grid::RespectDisplayedOutput;
-use crate::terminal::model::secrets::RespectObfuscatedSecrets;
-use crate::terminal::model::terminal_model::RangeInModel;
-use crate::terminal::model::{
-    find::{Match, RegexDFAs},
-    index::Direction,
-};
-use crate::terminal::model::{Secret, SecretHandle};
-
 use super::displayed_output::DisplayedOutput;
 use super::grapheme_cursor::{self, GraphemeCursor};
 use super::row::Row;
 use super::{ConvertToAbsolute as _, Cursor, SelectionCursor};
-use filtering::FilterState;
-use string_offset::ByteOffset;
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::ansi::{self, Color, CursorStyle, Handler, NamedColor};
+use crate::terminal::model::cell::{Cell, Flags, LineLength, DEFAULT_CHAR};
+use crate::terminal::model::char_or_str::{CharOrStr, PushCharOrStr};
+use crate::terminal::model::find::{Match, RegexDFAs};
+use crate::terminal::model::grid::{Dimensions, GridStorage, RespectDisplayedOutput};
+use crate::terminal::model::image_map::ImageMap;
+use crate::terminal::model::index::{Direction, IndexRange, Point, VisibleRow};
+use crate::terminal::model::secrets::{ObfuscateSecrets, RespectObfuscatedSecrets, SecretMap};
+use crate::terminal::model::terminal_model::RangeInModel;
+use crate::terminal::model::{Secret, SecretHandle};
+use crate::terminal::SizeInfo;
+use crate::util::extensions::TrimStringExt;
 
 /// Used to match equal brackets, when performing a bracket-pair selection.
 const BRACKET_PAIRS: [(char, char); 4] = [('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')];
