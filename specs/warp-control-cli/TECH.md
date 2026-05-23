@@ -1,6 +1,6 @@
 # Context
 `PRODUCT.md` defines a standalone local Warp control CLI binary, provisionally named `warpctrl`, with an allowlisted action catalog, deterministic addressing across multiple running Warp app processes, and an incremental implementation plan.
-`SECURITY.md` is the normative security architecture for this feature. Implementation work must follow it for separate inside-Warp and outside-Warp enablement, the top-level Settings > Scripting surface, protected enablement storage, granular permissions, discovery metadata, credential storage, scoped safety grants, verified execution context, authenticated-user requirements, localhost/browser protections, action-tier enforcement, deterministic target resolution, and local app-side validation. If this technical plan and `SECURITY.md` disagree, update the plan before implementing rather than treating the security architecture as optional follow-up work.
+`SECURITY.md` is the normative security architecture for this feature. Implementation work must follow it for separate inside-Warp and outside-Warp enablement, the top-level Settings > Scripting surface, protected enablement storage, granular permissions, discovery metadata, credential storage, scoped safety grants, verified execution context, authenticated-user requirements, localhost/browser protections, permission-category enforcement, deterministic target resolution, and local app-side validation. If this technical plan and `SECURITY.md` disagree, update the plan before implementing rather than treating the security architecture as optional follow-up work.
 The existing app already has three relevant building blocks:
 - `crates/http_server/src/lib.rs (7-61)` runs a native-only loopback Axum server on fixed port `9277`.
 - `app/src/lib.rs (1993-2001)` registers that HTTP server in the native app and currently merges only installation-detection and profiling routers.
@@ -37,28 +37,41 @@ Required security gates:
 - External invocations default to a smaller logged-out-safe action set that does not touch user-authenticated data.
 - Verified Warp-terminal invocations may receive authenticated-user grants only when the selected app has a true logged-in Warp user and local-control settings allow authenticated-user actions from Warp terminals.
 - The app rejects disabled, unauthenticated, expired, revoked, insufficient-scope, unsupported, malformed, ambiguous, missing-target, and stale-target requests with structured errors.
-- Every action has a documented risk tier and the app bridge enforces the required tier locally before selector resolution or handler dispatch.
+- Every action has a documented state/data category and the app bridge enforces the required permission category locally before selector resolution or handler dispatch.
 - Every action has a documented `requires_authenticated_user` value and allowed execution contexts. New actions default to requiring an authenticated user unless explicitly reviewed as logged-out-safe.
-- Granular local-control settings under each Settings > Scripting parent context gate the maximum grants for read-only queries and read-write app-state changes.
-- Safety tiers are treated as user-intent and accident-prevention guardrails, not as strong same-user malicious-app isolation.
+- Granular local-control settings under Settings > Scripting gate the maximum grants for metadata reads, underlying data reads, app-state mutations, metadata/configuration mutations, underlying data mutations, authenticated-user actions from Warp terminals, and authenticated-user actions from external clients.
+- Permission categories are treated as user-intent and accident-prevention guardrails, not as strong same-user malicious-app isolation.
 - Remote control remains out of scope for the local same-machine credential model.
-The first implementation slice should include the protected enablement gate, credential issuance checks, and app-side tier enforcement even if the only mutating action initially implemented is `tab.create`. Shipping `tab.create` without the enablement and validation architecture would create the wrong foundation for the full catalog.
+The first implementation slice should include the protected enablement gate, credential issuance checks, and app-side permission-category enforcement even if the only mutating action initially implemented is `tab.create`. Shipping `tab.create` without the enablement and validation architecture would create the wrong foundation for the full catalog.
 ### 1. Protocol crate and stable envelope
 Create a small shared protocol crate or equivalent shared module used by both the app server and standalone CLI client. It should define:
 - Protocol version metadata.
 - Discovery/health response types.
 - Execution-context proof/request types for verified Warp-terminal invocations versus external invocations.
-- Action metadata describing risk tier, required grant, `requires_authenticated_user`, allowed execution contexts, and target families.
+- Action metadata describing state/data category, required permission grant, `requires_authenticated_user`, allowed execution contexts, and target families.
 - Selector types:
   - `InstanceSelector`
   - `WindowSelector`
   - `TabSelector`
   - `PaneSelector`
   - `SessionSelector`
+  - `BlockSelector`
+  - `FileSelector`
+  - `DriveObjectSelector`
 - Opaque protocol-facing ID newtypes for instance/window/tab/pane/session identifiers.
 - Allowlisted `ControlAction` variants and typed parameter payloads.
 - Success/error envelopes with stable machine-readable error codes.
 The protocol should treat target IDs as opaque. The app may encode existing runtime identifiers internally, but the public wire contract should not require callers to understand `EntityId`, `PaneId`, or other implementation types.
+Recommended selector variants:
+- `InstanceSelector`: `Active`, `Id(InstanceId)`, `Pid(u32)`.
+- `WindowSelector`: `Active`, `Id(WindowId)`, `Index(u32)`, `Title(String)`.
+- `TabSelector`: `Active`, `Id(TabId)`, `Index(u32)`, `Title(String)`.
+- `PaneSelector`: `Active`, `Id(PaneId)`, `Index(u32)`.
+- `SessionSelector`: `Active`, `Id(SessionId)`, `Index(u32)`.
+- `BlockSelector`: `Id(BlockId)`.
+- `FileSelector`: `Path { path, line, column }`.
+- `DriveObjectSelector`: `Id(DriveObjectId)` or `Lookup { object_type, name_or_path }`.
+Index selectors are resolved only within their parent selector context, so tab index resolution requires a resolved window and pane/session index resolution requires a resolved tab or pane. Title and name/path lookup selectors are ergonomic helpers for interactive use and must fail on ambiguity rather than choosing the first match.
 Recommended top-level request shape for `tab.create`:
 ```json
 {
@@ -85,7 +98,7 @@ Recommended response shape:
   "result": {}
 }
 ```
-Error payloads should include stable codes defined in `SECURITY.md`, including `local_control_disabled`, `unauthorized_local_client`, `insufficient_permissions`, `authenticated_user_required`, `authenticated_user_unavailable`, `execution_context_not_allowed`, `ambiguous_instance`, `stale_target`, `invalid_selector`, `unsupported_action`, `not_allowlisted`, `invalid_params`, `target_state_conflict`, `missing_target`, and `no_instance`.
+Error payloads should include stable codes defined in `SECURITY.md`, including `local_control_disabled`, `unauthorized_local_client`, `insufficient_permissions`, `authenticated_user_required`, `authenticated_user_unavailable`, `execution_context_not_allowed`, `ambiguous_instance`, `ambiguous_target`, `stale_target`, `invalid_selector`, `unsupported_action`, `not_allowlisted`, `invalid_params`, `target_state_conflict`, `missing_target`, and `no_instance`.
 ### 2. Per-process discovery instead of fixed-port-only routing
 Keep the existing fixed-port HTTP behavior intact for installation detection/profiling compatibility. Add a separate local-control listener that follows the same native Axum/Tokio pattern but supports multiple local Warp app processes.
 Recommended design:
@@ -114,11 +127,11 @@ Recommended local trust model:
 - The broker verifies whether the invocation originated from a Warp-managed terminal session before issuing in-Warp-only grants.
 - The broker issues authenticated-user grants only when the selected app has a true logged-in Warp user and the relevant local-control permission is enabled.
 - The app rejects disabled-state, missing, malformed, invalid, expired, or revoked credentials before selector resolution or mutation.
-- The app maps every action to a risk tier and rejects insufficient grants before selector resolution or mutation.
+- The app maps every action to a state/data category and rejects insufficient grants before selector resolution or mutation.
 - The app maps every action to a `requires_authenticated_user` value and allowed execution contexts, rejecting mismatches before selector resolution or mutation.
 - Health metadata exposed without credentials, if needed for stale-record pruning, must not reveal mutating capabilities, credentials, or sensitive target state.
 This keeps the protocol local and scriptable without creating an ambient browser-to-localhost control surface.
-Do not ship the first slice as a plaintext discovery bearer token, even for same-user human CLI use. The first slice is the foundation for higher-risk terminal data, input injection, command execution, and destructive operations, so it must establish the protected enablement, credential storage, scoped grant, and app-side enforcement model from `SECURITY.md`.
+Do not ship the first slice as a plaintext discovery bearer token, even for same-user human CLI use. The first slice is the foundation for underlying data reads, app-state mutations, metadata/configuration mutations, and underlying data mutations, so it must establish the protected enablement, credential storage, scoped grant, and app-side enforcement model from `SECURITY.md`.
 ### 4. App-side request bridge onto the UI/application context
 The HTTP handler runs on a Tokio runtime thread owned by the local-control server. It cannot directly access or mutate Warp's UI models, views, or app context because all WarpUI state is single-threaded and owned by the main app event loop. The bridge solves this by sending a closure from the Tokio handler thread to the main thread, executing it in the model's context, and returning the result to the waiting HTTP handler.
 #### Thread model
@@ -151,9 +164,9 @@ HTTP handler (Tokio thread)
 LocalControlBridge::handle_request (main thread)
   │
   ├─ verify protected context-specific enablement state is still enabled
-  ├─ map action to required risk tier
+  ├─ map action to required permission category
   ├─ map action to authenticated-user and execution-context requirements
-  ├─ verify presented credential grants that tier, target family, execution context, and authenticated-user access
+  ├─ verify presented credential grants that category, target family, execution context, and authenticated-user access
   ├─ match request.action.kind
   │   └─ ActionKind::TabCreate
   │       ├─ validate_tab_create_target(&request.target)
@@ -178,9 +191,9 @@ LocalControlBridge::handle_request (main thread)
 #### Adding new action handlers
 To add a new action to the bridge:
 1. Add a variant to `ActionKind` in `crates/local_control/src/protocol.rs`.
-2. Document its `SECURITY.md` risk tier, required grant, `requires_authenticated_user` value, and allowed execution contexts.
+2. Document its `SECURITY.md` state/data category, required permission grant, `requires_authenticated_user` value, and allowed execution contexts.
 3. Add a match arm in `LocalControlBridge::handle_request` in `app/src/local_control/mod.rs`.
-4. Before selector resolution or dispatch, verify local control is enabled and the presented credential grants the action tier, target family, execution context, and authenticated-user access if required.
+4. Before selector resolution or dispatch, verify local control is enabled and the presented credential grants the action category, target family, execution context, and authenticated-user access if required.
 5. Inside the match arm, use `ctx` (which is a `&mut ModelContext<LocalControlBridge>` that derefs to `&mut AppContext`) to resolve selectors and dispatch the action onto existing app types.
 6. Return a `ResponseEnvelope::ok(...)` or `ResponseEnvelope::error(...)` with the result.
 The bridge closure has access to the full `AppContext` API surface, including `ctx.windows()`, `ctx.window_ids()`, `ctx.views_of_type::<T>(window_id)`, `handle.update(ctx, ...)`, and `handle.read(ctx, ...)`. This makes it straightforward to wire new actions to existing UI behavior without introducing new concurrency concerns.
@@ -192,16 +205,27 @@ Recommended resolution order:
 3. Resolve tab within the window.
 4. Resolve pane within the tab/pane-group context.
 5. Resolve session only for session-scoped commands.
+6. Resolve block/file/Drive selectors only for commands whose action metadata declares that target family.
 Selector behavior:
 - `active` resolves from current app focus/selection state.
 - Explicit opaque IDs must resolve exactly or return `stale_target`.
-- Index selectors are allowed only for user-visible indexed concepts such as tabs and should resolve to a concrete opaque ID before execution.
+- Index selectors are allowed only for user-visible indexed concepts and should resolve to a concrete opaque ID before execution.
+- Title, name, and path selectors are convenience selectors. They must be exact by default, document any future fuzzy behavior explicitly, and return `ambiguous_target` when more than one target matches.
 - A session-scoped request against a non-terminal pane returns `target_state_conflict`.
 Target resolution must happen after protected enablement, authentication, and safety-grant checks. This prevents denied requests from learning more target state than necessary and keeps enforcement centralized.
 Implementation references:
 - Window-level active selection already exists inside the app through `WindowManager`.
 - Pane scoping can build on the conceptual model of `PaneViewLocator` in `app/src/workspace/util.rs (12-18)`.
 - Existing URI intent routing in `app/src/uri/mod.rs (895-1093)` shows how to locate workspaces/windows and avoid silently acting in the wrong place.
+#### CLI selector grammar
+`crates/warp_cli/src/local_control.rs` should expose a shared selector argument group that is flattened into every command that accepts app targets. The parser must support:
+- Instance selectors: `--instance <instance_id>` and `--pid <pid>`, with clap conflicts.
+- Window selectors: `--window <active|id:<id>|index:<n>|title:<title>>`, `--window-id <id>`, `--window-index <n>`, and `--window-title <title>`, with one form allowed.
+- Tab selectors: `--tab <active|id:<id>|index:<n>|title:<title>>`, `--tab-id <id>`, `--tab-index <n>`, and `--tab-title <title>`, with one form allowed.
+- Pane selectors: `--pane <active|id:<id>|index:<n>>`, `--pane-id <id>`, and `--pane-index <n>`, with one form allowed.
+- Session selectors: `--session <active|id:<id>|index:<n>>`, `--session-id <id>`, and `--session-index <n>`, with one form allowed.
+- Block/file/Drive selectors only on commands that need them: `--block-id <id>`, path arguments or `--path <path>` plus `--line`/`--column`, and Drive object ID arguments or `--drive-id <id>`.
+The CLI converts these flags into the protocol `TargetSelector` before sending the request. It must not rely on positional entity IDs for commands like `window close 1`; target entities are selected through the shared selector flags so command arguments remain reserved for action parameters.
 ### 6. Allowlisted handler families
 Use one handler module per action family. The protocol layer owns parsing/validation; handler modules own target resolution and delegation to existing app logic.
 Recommended modules/families:
@@ -221,16 +245,17 @@ Do not use a generic “dispatch action by string” endpoint. Every handler sho
 ### 7. First slice: prove discovery and `tab.create`
 The first `warpctrl` implementation slice should land the minimum cross-cutting architecture plus a single representative tab mutation:
 - Shared protocol types and error envelopes.
-- New top-level Settings > Scripting page with separate protected inside-Warp and outside-Warp enablement states.
+- `FeatureFlag::WarpControlCli` and Cargo feature `warp_control_cli`, with app-side runtime gating for settings, discovery, bridge registration, and local-control endpoints.
+- New top-level Settings > Scripting page with separate protected inside-Warp and outside-Warp enablement states, rendered only while `FeatureFlag::WarpControlCli` is enabled.
 - Protected local-only enablement storage where inside-Warp control defaults on and outside-Warp control defaults off.
-- Granular local-control permission storage under Settings > Scripting for read-only and read-write grants in both within-Warp and outside-Warp contexts.
+- Granular local-control permission storage under Settings > Scripting for metadata reads, underlying data reads, app-state mutations, metadata/configuration mutations, underlying data mutations, and authenticated-user-action categories.
 - Discovery registry and CLI instance selection.
 - A standalone `warpctrl` binary or artifact path that runs control commands without starting the GUI app runtime.
 - Per-process authenticated local-control server that refuses sensitive work when the request's inside-Warp or outside-Warp context is disabled.
 - Scoped credential issuance/storage with no raw credentials in plaintext discovery records, including execution-context fields and authenticated-user grant fields.
 - App-side request bridge and selector resolver.
-- Action-tier mapping and app-side safety-grant enforcement.
-- Action metadata for `tab.create` that deliberately classifies it as a logged-out-safe read-write app-state change only when the user's granular local-control settings allow that category.
+- Action-category mapping and app-side safety-grant enforcement.
+- Action metadata for `tab.create` that deliberately classifies it as a logged-out-safe app-state mutation only when the user's granular local-control settings allow app-state mutation.
 - Read-only `ping/version` plus `warpctrl instance list` or equivalent minimal discovery command.
 - End-to-end `warpctrl tab create` for the selected instance, reusing the same app behavior as the user-visible new-terminal-tab action.
 Why `tab.create` first:
@@ -271,6 +296,79 @@ Startup and dependency expectations:
 Naming decision:
 - Product examples use provisional `warpctrl ...` command lines for the standalone local-control binary.
 - Final artifact filenames, channelized aliases, and installer exposure should be chosen before broad rollout to avoid churn in bundle scripts, docs, shell completions, and release workflow files.
+## Implementation Plan
+### Branch stack
+Use raw git for the stack; do not use Graphite for these branches.
+The intended stack is:
+1. `zach/warp-cli-specs` — spec-only branch. This branch owns `specs/warp-control-cli/PRODUCT.md`, `TECH.md`, `SECURITY.md`, and supporting docs. It should not contain implementation changes.
+2. `zach/warp-cli` — first implementation branch. This stays as the core scaffolding slice: protocol crate, discovery/auth scaffolding, Scripting settings surface, local-control server/bridge, standalone `warpctrl` binary, packaging hooks, and only the single `warpctrl tab create` mutation needed to prove the end-to-end path.
+3. `zach/warp-cli-readonly` — create this branch directly from `zach/warp-cli`. It implements the read-only command set from `PRODUCT.md` without adding additional mutations beyond the existing `tab create` proof command.
+4. `zach/warp-cli-read-write` — create this branch directly from `zach/warp-cli-readonly`. It implements the mutating command set from `PRODUCT.md` after the read-only branch has established selectors, metadata result shapes, and inspection APIs.
+Recommended raw-git setup:
+```bash
+git fetch origin
+git checkout zach/warp-cli
+git checkout -b zach/warp-cli-readonly
+git push -u origin zach/warp-cli-readonly
+git checkout -b zach/warp-cli-read-write
+git push -u origin zach/warp-cli-read-write
+```
+If `zach/warp-cli-readonly` changes after `zach/warp-cli-read-write` exists, rebase the read-write branch onto the updated read-only branch with raw git (`git checkout zach/warp-cli-read-write && git rebase zach/warp-cli-readonly`) and resolve conflicts by preserving both read-only API shape and mutating handlers.
+### Feature flag and rollout gate
+The entire feature should be gated behind a Warp feature flag, proposed as `FeatureFlag::WarpControlCli` with Cargo feature `warp_control_cli`.
+Implementation should follow the existing runtime feature-flag conventions:
+- Add `warp_control_cli = []` under `[features]` in `app/Cargo.toml`, not under the default feature set until launch.
+- Add `WarpControlCli` to the `FeatureFlag` enum in `crates/warp_features/src/lib.rs`.
+- Add the `#[cfg(feature = "warp_control_cli")] FeatureFlag::WarpControlCli` entry in `app/src/features.rs` so the compile-time feature initializes the runtime flag.
+- Enable the flag for dogfood or preview by adding it to `DOGFOOD_FLAGS` or `PREVIEW_FLAGS` only when the rollout plan calls for that exposure.
+- Prefer runtime checks with `FeatureFlag::WarpControlCli.is_enabled()` over broad `#[cfg]` gates except where code cannot compile without the Cargo feature.
+When `FeatureFlag::WarpControlCli` is disabled in the Warp app:
+- the Scripting settings page should not expose Warp control settings;
+- `LocalControlSettings` should not register user-visible controls for Warp control;
+- the app should not create `LocalControlBridge` or `LocalControlServer`;
+- no local-control discovery record should be written;
+- no `/v1/control` or `/v1/control/credentials` local server endpoints should be exposed;
+- command-palette/keybinding entries related specifically to installing, configuring, or using `warpctrl` should be hidden;
+- tests should cover both enabled and disabled flag states with the repo's normal feature-flag override helpers.
+The standalone `warpctrl` binary can still exist in a build where the app feature is disabled, but it should find no compatible enabled app instance and should return a structured no-instance or feature-disabled error rather than relying on hidden server state.
+### Read-only branch sharding with Oz cloud agents
+Use Oz cloud agents to shard `zach/warp-cli-readonly` by API family. Each agent should work from `zach/warp-cli-readonly` or a short-lived shard branch based on it, push a branch or return a patch, and report changed files plus validation results. A lead integrator merges/cherry-picks accepted shard work into `zach/warp-cli-readonly` using raw git.
+Suggested shards:
+- `readonly-protocol-cli` owns `crates/local_control` action variants, typed read-only params/results, CLI parser/output for read-only commands, and serde tests.
+- `readonly-app-targets` owns app-side handlers and target resolvers for `app`, `window`, `tab`, `pane`, and `session` structural metadata.
+- `readonly-underlying-data` owns read-only underlying-data commands such as block listing/output, input-buffer reads, history reads, file content reads if added, and Drive object content reads, with extra tests that content is denied without underlying-data-read permission.
+- `readonly-settings-appearance` owns theme, appearance, settings, keybinding, and action/capability inspection commands.
+- `readonly-files-drive-skill-docs` owns app-state file/project reads, authenticated Warp Drive read-only commands, operator docs, and the first version of the built-in `warpctrl` Agent skill.
+Read-only branch acceptance criteria:
+- all read-only commands in `PRODUCT.md` parse and serialize stable request envelopes;
+- structural metadata reads return opaque protocol IDs and do not expose terminal, file, Drive object, or AI conversation content;
+- underlying-data reads require the separate underlying-data-read grant;
+- authenticated Warp Drive metadata reads require a logged-in user and authenticated-user grant, and object-content reads additionally require the underlying-data-read grant;
+- disabled feature flag state exposes no settings, discovery records, or endpoints;
+- `cargo nextest run --no-fail-fast --workspace <relevant tests>` and targeted `cargo check` pass for the changed crates.
+### Read-write branch sharding with Oz cloud agents
+Start `zach/warp-cli-read-write` only after the read-only branch has a coherent target-resolution and result-shape baseline. Each mutating shard should add action metadata, typed params/results, CLI parser surface, app bridge handlers, permission checks, and tests for allowed and denied paths.
+Suggested shards:
+- `mutate-window-tab-pane` owns window creation/focus/close, tab create/activate/move/rename/color/close, and pane split/focus/navigate/resize/maximize/rename/close.
+- `mutate-input-session` owns session activation/cycling/reopen, input insert/replace/clear, and terminal-vs-agent input mode changes as app-state mutations. It may define `input run`, but execution must be classified as an underlying data mutation and can be handed to `mutate-underlying-data` if that keeps review cleaner.
+- `mutate-metadata-config` owns theme selection, system theme toggles, font/zoom controls, tab/pane metadata updates, and allowlisted setting set/toggle commands as metadata/configuration mutations.
+- `mutate-surfaces-files-drive` owns settings/palette/search/panel surface commands and file/project/Drive open commands as app-state mutations.
+- `mutate-underlying-data` owns terminal command execution, file create/write/append/delete commands, Warp Drive workflow execution, and Warp Drive object CRUD. This shard must require the underlying-data-mutation permission and authenticated-user grants where applicable.
+- `mutate-tests-docs-skill` owns cross-family integration tests, command help/shell completion checks, README updates, and updates to the built-in `warpctrl` Agent skill once the mutating command surface stabilizes.
+Read-write branch acceptance criteria:
+- every mutating command in `PRODUCT.md` has an explicit state/data category, required permission category, and authenticated-user classification;
+- app-state mutations, metadata/configuration mutations, and underlying-data mutations require distinct permissions;
+- command execution, file writes, Warp Drive CRUD, and other underlying-data mutations require the underlying-data-mutation permission, not merely read-write/app-state permission;
+- selector resolution happens after auth and permission checks and never silently retargets stale explicit selectors;
+- all mutating handlers reuse existing user-visible app behavior rather than duplicating business logic;
+- disabled feature flag state continues to hide settings and withhold endpoints;
+- the branch can be reviewed as a stacked PR whose base is `zach/warp-cli-readonly`.
+### Merge and review strategy
+Keep PR boundaries aligned with the stack:
+- PR1: `zach/warp-cli` into `master` for core scaffolding plus `tab create` only.
+- PR2: `zach/warp-cli-readonly` into `zach/warp-cli` or the merged successor of PR1 for read-only command expansion.
+- PR3: `zach/warp-cli-read-write` into `zach/warp-cli-readonly` or the merged successor of PR2 for mutating command expansion.
+If PR1 merges before PR2 is ready, rebase `zach/warp-cli-readonly` onto the new `master`. If PR2 merges before PR3 is ready, rebase `zach/warp-cli-read-write` onto the new `master` or onto the updated read-only branch, depending on the active review base. Use raw git for all rebases, conflict resolution, and pushes.
 ## End-to-end flow
 ```mermaid
 sequenceDiagram
@@ -293,7 +391,7 @@ sequenceDiagram
     CLI->>HTTP: Authenticated POST tab.create request
     HTTP->>HTTP: Verify context-specific enablement + credential + execution context
     HTTP->>BRIDGE: Typed request + response channel
-    BRIDGE->>BRIDGE: Recheck enablement + tier + auth-user policy
+    BRIDGE->>BRIDGE: Recheck enablement + permission + auth-user policy
     BRIDGE->>RES: Resolve window/tab/pane/session selectors
     RES-->>BRIDGE: Concrete target handles or typed error
     BRIDGE->>ACT: Execute allowlisted ControlAction
@@ -311,7 +409,7 @@ Map tests directly to `PRODUCT.md` behavior.
   - Tests proving discovery in disabled state exposes no actionable endpoint authority or credential reference.
   - Credential-storage tests proving raw credentials are not written into plaintext discovery records.
   - Execution-context tests proving external clients cannot receive grants reserved for verified Warp-terminal invocations.
-  - Tier-enforcement tests proving insufficient grants fail with `insufficient_permissions` before selector resolution or handler dispatch.
+  - Permission-category enforcement tests proving insufficient grants fail with `insufficient_permissions` before selector resolution or handler dispatch, including separate denial cases for app-state mutation, metadata/configuration mutation, and underlying-data mutation.
   - Authenticated-user tests proving user-authenticated actions fail without a logged-in app user or authenticated-user grant.
   - Settings > Scripting tests proving both top-level toggles and granular disabled categories invalidate credentials and prevent new grants.
   - Structured-error tests for disabled, unauthenticated, expired, revoked, insufficient-scope, execution-context-denied, authenticated-user-required, authenticated-user-unavailable, unsupported, malformed, ambiguous, missing-target, stale-target, and invalid-selector requests.
@@ -322,6 +420,8 @@ Map tests directly to `PRODUCT.md` behavior.
 - Behavior 7-13:
   - Selector-resolution unit tests for active, explicit ID, index, stale target, ambiguous target, and non-terminal session target.
   - Tests that no lower-level selector silently retargets after an explicit stale selector fails.
+  - CLI selector parsing tests for every generic and explicit alias form: `--window`, `--window-id`, `--window-index`, `--window-title`, `--tab`, `--tab-id`, `--tab-index`, `--tab-title`, `--pane`, `--pane-id`, `--pane-index`, `--session`, `--session-id`, and `--session-index`.
+  - CLI conflict tests proving only one selector form per entity family is accepted and that positional target IDs are rejected where the command expects selector flags.
 - Behavior 15-28:
   - Parser/serde tests for every first-slice `ControlAction` variant.
   - Router tests proving unknown/unallowlisted actions are rejected.
@@ -335,30 +435,51 @@ Map tests directly to `PRODUCT.md` behavior.
   - `--artifact cli`-style bundle smoke tests or script-level checks for each supported platform path touched by the first slice.
   - Startup-path tests or focused checks confirming `warpctrl` dispatches commands without entering GUI-app launch code.
   - Shell completions/help output checks once final command naming is selected.
+### Computer-use CLI verification
+Before any stacked PR is considered ready for review, run an end-to-end computer-use verification pass against a Claude-built validation artifact from that branch. The validation artifact is a Warp app build and standalone `warpctrl` binary built by the validation agent from the exact commit under review, with `warp_control_cli` compiled in and `FeatureFlag::WarpControlCli` enabled at runtime.
+The verifier must launch the built Warp app, enable the Scripting settings needed for the command category under test, and capture screenshots or screen recordings that prove the user-visible result of each basic command family. Screenshots should be saved as durable artifacts and named by branch, invocation context, command family, and command name.
+The verifier must exercise both invocation contexts:
+- **Inside Warp terminal:** run `warpctrl` from a terminal session inside the feature-flag-enabled Warp app. This path must prove the app-issued Warp-terminal execution-context proof is accepted and that inside-Warp settings gate the command categories.
+- **Outside Warp terminal:** run the same `warpctrl` binary from an external terminal or automation shell outside the built Warp app. This path must prove outside-Warp control is default-off, then works only after enabling outside-Warp scripting and the required granular permissions in Settings > Scripting.
+The verification matrix should cover every implemented command in `PRODUCT.md` at least once in JSON output mode and, where there is a visible UI effect, with a screenshot after the command runs. At minimum:
+- read-only metadata commands show successful CLI output and, for active/focus/list commands, a visible target that matches the output;
+- underlying data read commands show successful CLI output only when the underlying-data-read permission is enabled and a denial screenshot/output when it is disabled;
+- app-state mutation commands show before/after screenshots proving the visible Warp UI changed;
+- metadata/configuration mutation commands show before/after screenshots proving the persisted setting or label changed;
+- underlying data mutation commands run only in a disposable test workspace/session with test files and test Warp Drive objects, show denial without the underlying-data-mutation permission, then show success with the permission enabled;
+- authenticated-user commands show both the logged-out or missing-grant denial path and the enabled authenticated path when a test account/environment is available.
+The verifier should produce a verification manifest checked into or attached to the PR artifacts. The manifest should list each command, branch under test, invocation context, required permission category, expected result, actual result, screenshot artifact path, and any skipped case with a reason. Missing screenshots for visible commands block review readiness.
 ## Parallelization
-The first slice should stay mostly sequential because protocol envelope, discovery, authentication, selector resolution, and `tab.create` are tightly coupled and need one coherent architecture.
-The follow-up catalog expansion is a strong fit for remote Oz cloud-agent fan-out after the first slice lands. Proposed parallel workstreams:
-- `control-window-tab-pane` — remote agent owns window/tab/pane action expansion, including CLI syntax, protocol variants, app handlers, and tests. Branch suggestion: `zach/warp-control-cli-window-tab-pane`.
-- `control-settings-appearance` — remote agent owns settings/theme/font/zoom allowlist expansion and validation. Branch suggestion: `zach/warp-control-cli-settings-appearance`.
-- `control-input-surfaces` — remote agent owns session/input plus panel/palette/settings-surface commands, with extra care around command execution risk. Branch suggestion: `zach/warp-control-cli-input-surfaces`.
-- `control-introspection-packaging` — remote agent owns richer list/read commands, documentation/examples, and any follow-on bundle/release plumbing not completed in PR1. Branch suggestion: `zach/warp-control-cli-introspection-packaging`.
+The first slice on `zach/warp-cli` should stay mostly sequential because protocol envelope, discovery, authentication, feature-flag gating, selector resolution, and `tab.create` are tightly coupled and need one coherent architecture.
+The read-only and read-write follow-up branches are strong fits for Oz cloud-agent fan-out, but the fan-out should happen inside the stacked branch strategy from `## Implementation Plan`, not as unrelated sibling feature branches.
+Read-only fan-out:
+- Launch agents against `zach/warp-cli-readonly` or short-lived shard branches based on it.
+- Use the shard names from `### Read-only branch sharding with Oz cloud agents`: `readonly-protocol-cli`, `readonly-app-targets`, `readonly-underlying-data`, `readonly-settings-appearance`, and `readonly-files-drive-skill-docs`.
+- The lead integrator merges accepted work into `zach/warp-cli-readonly` with raw git, then validates the full read-only API before the branch is used as the base for mutations.
+Read-write fan-out:
+- Launch agents against `zach/warp-cli-read-write` only after read-only target resolution and result shapes are stable.
+- Use the shard names from `### Read-write branch sharding with Oz cloud agents`: `mutate-window-tab-pane`, `mutate-input-session`, `mutate-metadata-config`, `mutate-surfaces-files-drive`, `mutate-underlying-data`, and `mutate-tests-docs-skill`.
+- The lead integrator merges accepted work into `zach/warp-cli-read-write` with raw git and keeps the branch rebased on the current read-only base.
 Merge strategy:
-- Each remote agent works from the first slice’s merged baseline or a designated follow-up integration base.
-- Each returns a branch or compact patch plus validation notes.
-- A lead integrator folds accepted slices into one combined second PR so the public protocol remains coherent.
+- One stacked PR per durable branch: `zach/warp-cli`, then `zach/warp-cli-readonly`, then `zach/warp-cli-read-write`.
+- Shard branches should not become independent long-lived PRs unless the lead intentionally splits review; their default purpose is to feed the durable stacked branch.
+- Use raw git for branch creation, merges, cherry-picks, rebases, conflict resolution, and pushes. Do not use Graphite commands.
 ```mermaid
 flowchart LR
-    P1["First slice merged<br/>protocol + discovery + bridge + tab.create"] --> Launch["Launch follow-up cloud agents"]
-    Launch --> A["control-window-tab-pane"]
-    Launch --> B["control-settings-appearance"]
-    Launch --> C["control-input-surfaces"]
-    Launch --> D["control-introspection-packaging"]
-    A --> Merge["Lead integrates protocol additions"]
-    B --> Merge
-    C --> Merge
-    D --> Merge
-    Merge --> Validate["Full validation + docs review"]
-    Validate --> P2["Single PR2 with remaining allowlist"]
+    Specs["zach/warp-cli-specs<br/>spec-only"] --> Core["zach/warp-cli<br/>core + tab.create"]
+    Core --> RO["zach/warp-cli-readonly<br/>read-only API"]
+    RO --> RW["zach/warp-cli-read-write<br/>mutating API"]
+    ROShardA["readonly-protocol-cli"] --> RO
+    ROShardB["readonly-app-targets"] --> RO
+    ROShardC["readonly-underlying-data"] --> RO
+    ROShardD["readonly-settings-appearance"] --> RO
+    ROShardE["readonly-files-drive-skill-docs"] --> RO
+    RWShardA["mutate-window-tab-pane"] --> RW
+    RWShardB["mutate-input-session"] --> RW
+    RWShardC["mutate-metadata-config"] --> RW
+    RWShardD["mutate-surfaces-files-drive"] --> RW
+    RWShardE["mutate-underlying-data"] --> RW
+    RWShardF["mutate-tests-docs-skill"] --> RW
 ```
 ## Risks and mitigations
 - Fixed-port server assumptions:
