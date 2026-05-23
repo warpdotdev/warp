@@ -14,8 +14,8 @@ pub use parse_skill::{
 };
 pub use read_skills::read_skills;
 pub use skill_provider::{
-    get_provider_for_path, home_skills_path, provider_rank, SkillProvider, SkillProviderDefinition,
-    SkillScope, SKILL_PROVIDER_DEFINITIONS,
+    get_provider_for_location, get_provider_for_path, home_skills_path, provider_rank,
+    SkillProvider, SkillProviderDefinition, SkillScope, SKILL_PROVIDER_DEFINITIONS,
 };
 pub use skill_reference::SkillReference;
 pub(crate) use skill_reference::{decode_api_path_reference, encode_api_path_reference};

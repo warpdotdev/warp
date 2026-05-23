@@ -12,6 +12,7 @@ use strum_macros::{Display, EnumString, VariantNames};
 use warp_core::ui::color::CLAUDE_ORANGE;
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::Fill;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 /// Represents a skill provider/origin (Agents, Claude, Codex, or Warp).
 #[derive(
@@ -194,6 +195,27 @@ pub fn get_provider_for_path(path: &Path) -> Option<SkillProvider> {
     None
 }
 
+/// Returns the skill provider for a location without discarding remote host identity.
+///
+/// Local locations retain home-directory-aware matching. Remote project locations are
+/// classified only by their provider-directory structure, because their paths do not
+/// belong to the local filesystem.
+pub fn get_provider_for_location(path: &LocalOrRemotePath) -> Option<SkillProvider> {
+    match path {
+        LocalOrRemotePath::Local(path) => get_provider_for_path(path),
+        LocalOrRemotePath::Remote(remote) => SKILL_PROVIDER_DEFINITIONS
+            .iter()
+            .find(|definition| {
+                let provider_path = definition.skills_path.to_string_lossy();
+                remote
+                    .path
+                    .ancestors()
+                    .any(|ancestor| ancestor.ends_with(provider_path.as_ref()))
+            })
+            .map(|definition| definition.provider),
+    }
+}
+
 /// Returns the skill scope (Home or Project) for a given path.
 /// A skill is considered a "Home" skill if its path starts with the user's home directory.
 /// Otherwise, it's a "Project" skill.
@@ -212,8 +234,13 @@ pub fn get_scope_for_path(path: &Path) -> SkillScope {
 #[cfg(test)]
 mod tests {
     use super::{
-        get_provider_for_path, get_scope_for_path, home_skills_path, SkillProvider, SkillScope,
+        get_provider_for_location, get_provider_for_path, get_scope_for_path, home_skills_path,
+        SkillProvider, SkillScope,
     };
+    use warp_util::host_id::HostId;
+    use warp_util::local_or_remote_path::LocalOrRemotePath;
+    use warp_util::remote_path::RemotePath;
+    use warp_util::standardized_path::StandardizedPath;
 
     #[test]
     fn warp_home_skills_path_uses_warp_home_path() {
@@ -233,5 +260,28 @@ mod tests {
 
         assert_eq!(get_provider_for_path(&path), Some(SkillProvider::Warp));
         assert_eq!(get_scope_for_path(&path), SkillScope::Home);
+    }
+
+    #[test]
+    fn remote_provider_path_is_classified_by_structure() {
+        let path = LocalOrRemotePath::Remote(RemotePath::new(
+            HostId::new("remote-host".to_string()),
+            StandardizedPath::try_new("/repo/.claude/skills/my-skill/SKILL.md").unwrap(),
+        ));
+
+        assert_eq!(
+            get_provider_for_location(&path),
+            Some(SkillProvider::Claude)
+        );
+    }
+
+    #[test]
+    fn foreign_encoded_remote_provider_path_is_classified_by_structure() {
+        let path = LocalOrRemotePath::Remote(RemotePath::new(
+            HostId::new("remote-host".to_string()),
+            StandardizedPath::try_new(r"C:\repo\.codex\skills\my-skill\SKILL.md").unwrap(),
+        ));
+
+        assert_eq!(get_provider_for_location(&path), Some(SkillProvider::Codex));
     }
 }
