@@ -55,7 +55,7 @@ use crate::{report_if_error, LLMPreferences};
 
 /// Env var override for the workspace default host (developer testing).
 /// Mirrors the single-agent ambient flow.
-const DEFAULT_HOST_ENV_VAR: &str = "WARP_CLOUD_MODE_DEFAULT_HOST";
+const DEFAULT_HOST_ENV_VAR: &str = "BLACK_CLOUD_MODE_DEFAULT_HOST";
 
 // ── Shared constants ────────────────────────────────────────────────
 

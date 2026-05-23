@@ -130,7 +130,7 @@ impl ChannelState {
     /// supported in release builds.
     pub fn data_profile() -> Option<String> {
         if cfg!(debug_assertions) {
-            std::env::var("WARP_DATA_PROFILE").ok()
+            std::env::var("BLACK_DATA_PROFILE").ok()
         } else {
             None
         }

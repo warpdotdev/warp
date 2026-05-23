@@ -566,7 +566,7 @@ impl ServerApi {
             .join("/api/v1/oauth/device/auth")
             .expect("Invalid device URL");
 
-        oauth2::basic::BasicClient::new(oauth2::ClientId::new("warp-cli".to_string()))
+        oauth2::basic::BasicClient::new(oauth2::ClientId::new("black-cli".to_string()))
             .set_token_uri(oauth2::TokenUrl::from_url(token_url))
             .set_device_authorization_url(oauth2::DeviceAuthorizationUrl::from_url(device_url))
     }

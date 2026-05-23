@@ -1,4 +1,4 @@
-# Note that WARP_SESSION_ID is expected to have been set when executing commands to
+# Note that BLACK_SESSION_ID is expected to have been set when executing commands to
 # emit the InitShell payload, which includes the session ID.
 begin
 # We wrap ourselves in a begin block because these are effectively injected
@@ -34,21 +34,21 @@ set -g OSC_PARAM_SEPARATOR ';'
 
 set -g RESET_GRID_OSC (printf '\e]9279\a')
 
-if test -n "$WARP_INITIAL_WORKING_DIR"
-    cd "$WARP_INITIAL_WORKING_DIR" >/dev/null 2>&1
-    set -e WARP_INITIAL_WORKING_DIR
+if test -n "$BLACK_INITIAL_WORKING_DIR"
+    cd "$BLACK_INITIAL_WORKING_DIR" >/dev/null 2>&1
+    set -e BLACK_INITIAL_WORKING_DIR
 end
 
-# Append additional PATH entries if provided via WARP_PATH_APPEND.
-if test -n "$WARP_PATH_APPEND"
-    set -gx --path PATH "$PATH:$WARP_PATH_APPEND"
-    set -e WARP_PATH_APPEND
+# Append additional PATH entries if provided via BLACK_PATH_APPEND.
+if test -n "$BLACK_PATH_APPEND"
+    set -gx --path PATH "$PATH:$BLACK_PATH_APPEND"
+    set -e BLACK_PATH_APPEND
 end
 
 function warp_send_json_message
     # Sends a message to the controlling terminal as a DSC control sequence.
     set -l escaped_json (warp_hex_encode_string "$argv")
-    if [ "$WARP_USING_WINDOWS_CON_PTY" = true ]
+    if [ "$BLACK_USING_WINDOWS_CON_PTY" = true ]
         echo -n "$OSC_START$DCS_JSON_MARKER$OSC_PARAM_SEPARATOR$escaped_json$OSC_END"
     else
         echo -n "$DCS_START$DCS_JSON_MARKER$escaped_json$DCS_END"
@@ -56,8 +56,8 @@ function warp_send_json_message
 end
 
 function warp_maybe_send_reset_grid_osc
-    # Note that $WARP_USING_WINDOWS_CON_PTY is set in the init shell script.
-    if [ "$WARP_USING_WINDOWS_CON_PTY" = true ]
+    # Note that $BLACK_USING_WINDOWS_CON_PTY is set in the init shell script.
+    if [ "$BLACK_USING_WINDOWS_CON_PTY" = true ]
         printf $RESET_GRID_OSC
     end
 end
@@ -74,7 +74,7 @@ end
 set -g _warp_generator_pids ''
 
 # Runs the given command in the background, records its PID in
-# _WARP_GENERATOR_PIDS_STARTED_TMP_FILE, and adds its PID from the file when
+# _BLACK_GENERATOR_PIDS_STARTED_TMP_FILE, and adds its PID from the file when
 # the job is completed.
 #
 # Usage:
@@ -100,7 +100,7 @@ function  _warp_run_generator_command_internal
     # N.B. Fish shell variables cannot contain null characters, so the command output must be
     # immediately hex encoded before being stored in a variable.
     fish -c "
-        set -l warp_using_windows_con_pty $WARP_USING_WINDOWS_CON_PTY;
+        set -l warp_using_windows_con_pty $BLACK_USING_WINDOWS_CON_PTY;
         set -l reset_grid_osc $RESET_GRID_OSC;
         function warp_maybe_send_reset_grid_osc
             if [ \"\$warp_using_windows_con_pty\" = true ]
@@ -152,7 +152,7 @@ end
 function warp_run_generator_command
     # Setting this environment variable allows warp_precmd to detect if a generator
     # command or a user command has just completed.
-    set -g _WARP_GENERATOR_COMMAND 1
+    set -g _BLACK_GENERATOR_COMMAND 1
     _warp_run_generator_command_internal $argv
 end
 
@@ -199,7 +199,7 @@ function warp_update_prompt_vars
   end
 
   # If not honoring PS1, set both prompts to be empty
-  if test "$WARP_HONOR_PS1" = "0"
+  if test "$BLACK_HONOR_PS1" = "0"
     function fish_prompt; echo -n ""; end
     function fish_right_prompt; echo -n ""; end
   # If honoring PS1, add prefix/suffix to both prompts
@@ -207,7 +207,7 @@ function warp_update_prompt_vars
 
     function end_prompt        
       echo -n (printf '\x1b')
-      if test "$WARP_HONOR_PS1" != "1" && [ "$WARP_USING_WINDOWS_CON_PTY" = true ]
+      if test "$BLACK_HONOR_PS1" != "1" && [ "$BLACK_USING_WINDOWS_CON_PTY" = true ]
         echo -n "]133;B$RESET_GRID_OSC"
       else
         echo -n ']133;B'
@@ -237,11 +237,11 @@ function warp_update_prompt_vars
   end
 end
 
-# Changes the WARP_HONOR_PS1 variable to 1, to indicate we want to use the user's custom prompt. Restores
+# Changes the BLACK_HONOR_PS1 variable to 1, to indicate we want to use the user's custom prompt. Restores
 # the original fish prompt functions (which we set to empty for Warp prompt) by calling warp_update_prompt_vars
 # to refresh the prompt. We force a repaint of the prompt to ensure the change is reflected immediately.
 function warp_change_prompt_modes_to_ps1
-  set -x WARP_HONOR_PS1 "1"
+  set -x BLACK_HONOR_PS1 "1"
 
   # Restores fish_prompt and fish_right_prompt.
   warp_update_prompt_vars
@@ -249,11 +249,11 @@ function warp_change_prompt_modes_to_ps1
   commandline -f repaint
 end
 
-# Changes the WARP_HONOR_PS1 variable to 0, to indicate we want to use the Warp prompt. Saves and clears
+# Changes the BLACK_HONOR_PS1 variable to 0, to indicate we want to use the Warp prompt. Saves and clears
 # the fish prompt functions (which we set to empty for Warp prompt) by calling warp_update_prompt_vars
 # to refresh the prompt. We force a repaint of the prompt to ensure the change is reflected immediately.
 function warp_change_prompt_modes_to_warp_prompt
-  set -x WARP_HONOR_PS1 "0"
+  set -x BLACK_HONOR_PS1 "0"
 
   # Updates fish_prompt and fish_right_prompt to be empty.
   warp_update_prompt_vars
@@ -278,13 +278,13 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
         set exit_code 1
     end
 
-    warp_send_json_message "{\"hook\": \"CommandFinished\", \"value\": {\"exit_code\": $exit_code, \"next_block_id\": \"precmd-$WARP_SESSION_ID-$block_id\"}}"
+    warp_send_json_message "{\"hook\": \"CommandFinished\", \"value\": {\"exit_code\": $exit_code, \"next_block_id\": \"precmd-$BLACK_SESSION_ID-$block_id\"}}"
     warp_maybe_send_reset_grid_osc
 
     set block_id (math $block_id + 1)
 
-    if ! test -z $_WARP_GENERATOR_COMMAND
-        set -e _WARP_GENERATOR_COMMAND
+    if ! test -z $_BLACK_GENERATOR_COMMAND
+        set -e _BLACK_GENERATOR_COMMAND
         set -l escaped_json "{\"hook\": \"Precmd\", \"value\": {
         \"pwd\": \"\",
         \"ps1\": \"\",
@@ -293,7 +293,7 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
         \"virtual_env\": \"\",
         \"conda_env\": \"\",
         \"node_version\": \"\",
-        \"session_id\": $WARP_SESSION_ID,
+        \"session_id\": $BLACK_SESSION_ID,
         \"is_after_in_band_command\": true
         }}"
         warp_send_json_message $escaped_json
@@ -339,7 +339,7 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
     # blocks created during the bootstrap process don't have visible
     # prompts, and we don't want to invoke `git` before we've sourced the
     # user's rcfiles and have a fully-populated PATH.
-    if test -n "$WARP_BOOTSTRAPPED"
+    if test -n "$BLACK_BOOTSTRAPPED"
       if test -n "$VIRTUAL_ENV"
           set escaped_virtual_env (warp_escape_json "$VIRTUAL_ENV")
       end
@@ -411,7 +411,7 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
     set escaped_prompt (warp_escape_prompt "$raw_prompt_for_preview")
 
     set -l escaped_json
-    if test "$WARP_HONOR_PS1" = "1"
+    if test "$BLACK_HONOR_PS1" = "1"
       # Don't send lprompt or rprompt in this case - we'll use prompt markers for both directly!
       set escaped_json "{\"hook\": \"Precmd\", \"value\": {
       \"pwd\": \"$escaped_pwd\",
@@ -422,7 +422,7 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
       \"virtual_env\": \"$escaped_virtual_env\",
       \"conda_env\": \"$escaped_conda_env\",
       \"node_version\": \"$escaped_node_version\",
-      \"session_id\": $WARP_SESSION_ID
+      \"session_id\": $BLACK_SESSION_ID
       }}"
     else
       # We send an lprompt to use for prompt preview purposes only (we still use prompt markers for active prompts).
@@ -435,7 +435,7 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
       \"virtual_env\": \"$escaped_virtual_env\",
       \"conda_env\": \"$escaped_conda_env\",
       \"node_version\": \"$escaped_node_version\",
-      \"session_id\": $WARP_SESSION_ID
+      \"session_id\": $BLACK_SESSION_ID
       }}"
     end
     warp_send_json_message $escaped_json
@@ -570,7 +570,7 @@ end
 
 # The SSH logic only applies to local sessions, because we don't yet have support for bootstrapping
 # recursive SSH sessions.
-if test "$WARP_IS_LOCAL_SHELL_SESSION" = "1"
+if test "$BLACK_IS_LOCAL_SHELL_SESSION" = "1"
     function is_interactive_ssh_session
         # Parse through all ssh options, as defined in the ssh man pages.  Send
         # stderr to /dev/null to silence argparse output when an option is invalid.
@@ -601,7 +601,7 @@ if test "$WARP_IS_LOCAL_SHELL_SESSION" = "1"
         # Hex-encode the ZSH environment script we use to bootstrap remote zsh b/c it contains control characters
         # We decode on the SSH server using xxd if its available, otherwise fall back to a for-loop over each byte
         # and use printf to convert back to plaintext
-        set -l zsh_env_script (printf '%s' 'unsetopt ZLE; unset RCS; unset GLOBAL_RCS; WARP_SESSION_ID="$(command -p date +%s)$RANDOM"; WARP_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@; WARP_HONOR_PS1='$WARP_HONOR_PS1'; _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || uname -n); _user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER); _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $WARP_SESSION_ID, \"shell\": \"zsh\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d " \n"); printf '"'"'\x1b\x50\x24\x64%s\x1b\x5c'"'"' $_msg; unset _hostname _user _msg' | command od -An -v -tx1 | command tr -d ' \n')
+        set -l zsh_env_script (printf '%s' 'unsetopt ZLE; unset RCS; unset GLOBAL_RCS; BLACK_SESSION_ID="$(command -p date +%s)$RANDOM"; BLACK_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@; BLACK_HONOR_PS1='$BLACK_HONOR_PS1'; _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || uname -n); _user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER); _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $BLACK_SESSION_ID, \"shell\": \"zsh\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d " \n"); printf '"'"'\x1b\x50\x24\x64%s\x1b\x5c'"'"' $_msg; unset _hostname _user _msg' | command od -An -v -tx1 | command tr -d ' \n')
 
         # Note that in this command, we're passing a string to the remote shell. Any variable expansions need to be
         # escaped with "''" to avoid the local shell from expanding them before they're passed to the remote shell.
@@ -609,14 +609,14 @@ if test "$WARP_IS_LOCAL_SHELL_SESSION" = "1"
         # determine what shell is the login shell on the remote machine.  We perform a preliminary check to see if
         # the remote shell is the Bourne shell to avoid asking it to parse later lines that use syntax it doesn't
         # support.
-        command ssh -o ControlMaster=yes -o ControlPath=$SSH_SOCKET_DIR/$WARP_SESSION_ID \
+        command ssh -o ControlMaster=yes -o ControlPath=$SSH_SOCKET_DIR/$BLACK_SESSION_ID \
         -t $argv \
 "
 export TERM_PROGRAM='WarpTerminal'
-test -n '$WARP_CLIENT_VERSION' && export WARP_CLIENT_VERSION='$WARP_CLIENT_VERSION'
+test -n '$BLACK_CLIENT_VERSION' && export BLACK_CLIENT_VERSION='$BLACK_CLIENT_VERSION'
 # Only forward the protocol version if it was set locally (i.e. the HOANotifications feature flag is on).
-test -n '$WARP_CLI_AGENT_PROTOCOL_VERSION' && export WARP_CLI_AGENT_PROTOCOL_VERSION='$WARP_CLI_AGENT_PROTOCOL_VERSION'
-hook="'$(printf "{\"hook\": \"SSH\", \"value\": {\"socket_path\": \"'$SSH_SOCKET_DIR/$WARP_SESSION_ID'\", \"remote_shell\": \"%s\"}}" "${SHELL##*/}" | command od -An -v -tx1 | command tr -d " \n")'"
+test -n '$BLACK_CLI_AGENT_PROTOCOL_VERSION' && export BLACK_CLI_AGENT_PROTOCOL_VERSION='$BLACK_CLI_AGENT_PROTOCOL_VERSION'
+hook="'$(printf "{\"hook\": \"SSH\", \"value\": {\"socket_path\": \"'$SSH_SOCKET_DIR/$BLACK_SESSION_ID'\", \"remote_shell\": \"%s\"}}" "${SHELL##*/}" | command od -An -v -tx1 | command tr -d " \n")'"
 printf '$DCS_START$DCS_JSON_MARKER%s$DCS_END' "'$hook'"
 
 if test "'"${SHELL##*/}" != "bash" -a "${SHELL##*/}" != "zsh"'"; then
@@ -651,31 +651,31 @@ bash)
       stty raw
       HISTCONTROL=ignorespace
       HISTIGNORE=" *"
-      WARP_SESSION_ID="$(command -p date +%s)$RANDOM"
-      WARP_HONOR_PS1="'$WARP_HONOR_PS1'"
+      BLACK_SESSION_ID="$(command -p date +%s)$RANDOM"
+      BLACK_HONOR_PS1="'$BLACK_HONOR_PS1'"
       _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || uname -n)
       _user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER)
-      _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $WARP_SESSION_ID, \"shell\": \"bash\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d " \n")'"
-      WARP_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@
-      if [[ "'$OS'" == Windows_NT ]]; then WARP_IN_MSYS2=true; else WARP_IN_MSYS2=false; fi
+      _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $BLACK_SESSION_ID, \"shell\": \"bash\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d " \n")'"
+      BLACK_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@
+      if [[ "'$OS'" == Windows_NT ]]; then BLACK_IN_MSYS2=true; else BLACK_IN_MSYS2=false; fi
       printf '\''"'\x1b\x50\x24\x64%s\x1b\x5c'"'\'' \""'$_msg'"\"'
       unset _hostname _user _msg
     )
     ;;
-zsh) WARP_TMP_DIR="'$(mktemp -d warptmp.XXXXXX)'"
+zsh) BLACK_TMP_DIR="'$(mktemp -d warptmp.XXXXXX)'"
 local ZSH_ENV_SCRIPT='$zsh_env_script'
 if [[ "'$?'" == 0 ]]; then
   if command -v xxd >/dev/null 2>&1; then
-    echo "'$ZSH_ENV_SCRIPT'" | command xxd -p -r > "'$WARP_TMP_DIR'"/.zshenv
+    echo "'$ZSH_ENV_SCRIPT'" | command xxd -p -r > "'$BLACK_TMP_DIR'"/.zshenv
   else
     for i in {0..\$((\${#ZSH_ENV_SCRIPT} - 1))..2}; do
       builtin printf "'"\x${ZSH_ENV_SCRIPT:$i:2}"'"
-    done > "'$WARP_TMP_DIR'"/.zshenv
+    done > "'$BLACK_TMP_DIR'"/.zshenv
   fi
 else
   echo \"Failed to bootstrap warp. Continuing with a non-bootstrapped shell.\"
 fi
-TMPPREFIX="'$HOME/.zshtmp-'" WARP_SSH_RCFILES="'${ZDOTDIR:-$HOME}'" ZDOTDIR="'$WARP_TMP_DIR'" exec -l zsh -g $TRACE_FLAG_IF_WARP_SHELL_DEBUG_MODE
+TMPPREFIX="'$HOME/.zshtmp-'" BLACK_SSH_RCFILES="'${ZDOTDIR:-$HOME}'" ZDOTDIR="'$BLACK_TMP_DIR'" exec -l zsh -g $TRACE_FLAG_IF_BLACK_SHELL_DEBUG_MODE
     ;;
 esac
 "
@@ -685,11 +685,11 @@ esac
         if is_interactive_ssh_session $argv
             warp_send_json_message '{"hook": "PreInteractiveSSHSession", "value": {}}'
 
-            if [ "$WARP_USE_SSH_WRAPPER" = "1" ]
-                if test $WARP_SHELL_DEBUG_MODE
-                    set -g TRACE_FLAG_IF_WARP_SHELL_DEBUG_MODE "-x"
+            if [ "$BLACK_USE_SSH_WRAPPER" = "1" ]
+                if test $BLACK_SHELL_DEBUG_MODE
+                    set -g TRACE_FLAG_IF_BLACK_SHELL_DEBUG_MODE "-x"
                 else
-                    set -g TRACE_FLAG_IF_WARP_SHELL_DEBUG_MODE ""
+                    set -g TRACE_FLAG_IF_BLACK_SHELL_DEBUG_MODE ""
                 end
                 warp_ssh_helper $argv
             else
@@ -719,6 +719,6 @@ end
 
 warp_bootstrapped
 
-set -g WARP_BOOTSTRAPPED 1
+set -g BLACK_BOOTSTRAPPED 1
 set -g fish_private_mode $saved_fish_private_mode
 end

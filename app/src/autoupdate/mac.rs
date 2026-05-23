@@ -143,8 +143,8 @@ pub(super) fn relaunch() -> Result<()> {
     // If we're testing with a local copy of channel_versions.json, have the
     // newly-started binary also reference that same file (so we can test
     // displaying an updated changelog after an autoupdate).
-    if let Ok(path) = env::var("WARP_CHANNEL_VERSIONS_PATH") {
-        launch_command.push(format!(" --env WARP_CHANNEL_VERSIONS_PATH={path}"));
+    if let Ok(path) = env::var("BLACK_CHANNEL_VERSIONS_PATH") {
+        launch_command.push(format!(" --env BLACK_CHANNEL_VERSIONS_PATH={path}"));
     }
 
     // We need to make sure that the current Warp process is no longer running

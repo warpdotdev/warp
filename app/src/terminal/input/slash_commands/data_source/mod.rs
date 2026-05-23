@@ -298,7 +298,7 @@ impl SlashCommandDataSource {
         }
 
         // Hide /host when no default host is configured (env var or workspace setting).
-        let has_default_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
+        let has_default_host = std::env::var("BLACK_CLOUD_MODE_DEFAULT_HOST")
             .ok()
             .filter(|s| !s.is_empty())
             .is_some()

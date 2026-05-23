@@ -4,20 +4,20 @@ Version=1.0
 
 Type=Application
 
-Name=WarpLocal
+Name=Black
 GenericName=TerminalEmulator
 
-Exec=warp-terminal-local %U
-StartupWMClass=dev.warp.WarpLocal
+Exec=black-terminal %U
+StartupWMClass=io.blackdagger.Black-Stable
 
 Keywords=shell;prompt;command;commandline;cmd;
 
-Icon=dev.warp.WarpLocal
+Icon=io.blackdagger.Black-Stable
 
 Categories=System;TerminalEmulator;
 
 # Don't run this application within a terminal.
 Terminal=false
 
-# Register ourselves as the handler for warplocal:// URLs.
-MimeType=x-scheme-handler/warplocal;
+# Register ourselves as the handler for black:// URLs.
+MimeType=x-scheme-handler/black;

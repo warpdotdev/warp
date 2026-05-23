@@ -219,7 +219,7 @@ impl AppearanceManager {
             log::debug!("Setting app icon in memory to: {icon_name}");
             // Locate the plugin bundle.
             let plugins_path: id = msg_send![bundle, builtInPlugInsPath];
-            let plugin_name = make_nsstring("WarpDockTilePlugin.docktileplugin");
+            let plugin_name = make_nsstring("BlackDockTilePlugin.docktileplugin");
             let plugin_path: id =
                 msg_send![plugins_path, stringByAppendingPathComponent: plugin_name];
             let plugin_bundle: id = msg_send![class!(NSBundle), bundleWithPath: plugin_path];

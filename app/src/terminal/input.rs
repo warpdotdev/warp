@@ -2286,7 +2286,7 @@ impl Input {
                             HostSelector::new(menu_positioning_provider.clone(), ctx)
                         });
                         // Env var takes priority over workspace setting for developer testing.
-                        let effective_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
+                        let effective_host = std::env::var("BLACK_CLOUD_MODE_DEFAULT_HOST")
                             .ok()
                             .filter(|s| !s.is_empty())
                             .or_else(|| {
@@ -2337,7 +2337,7 @@ impl Input {
                                 if !matches!(event, UserWorkspacesEvent::TeamsChanged) {
                                     return;
                                 }
-                                let effective_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
+                                let effective_host = std::env::var("BLACK_CLOUD_MODE_DEFAULT_HOST")
                                     .ok()
                                     .filter(|s| !s.is_empty())
                                     .or_else(|| {

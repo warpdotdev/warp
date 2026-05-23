@@ -48,8 +48,8 @@ fn main() -> Result<()> {
             .compile("black_objc");
 
         // Build the dock tile plugin
-        println!("cargo:rerun-if-changed=DockTilePlugin/WarpDockTilePlugin.m");
-        println!("cargo:rerun-if-changed=DockTilePlugin/WarpDockTilePlugin.h");
+        println!("cargo:rerun-if-changed=DockTilePlugin/BlackDockTilePlugin.m");
+        println!("cargo:rerun-if-changed=DockTilePlugin/BlackDockTilePlugin.h");
         println!("cargo:rerun-if-changed=DockTilePlugin/Info.plist");
         println!("cargo:rerun-if-changed=DockTilePlugin/Makefile");
 
@@ -67,8 +67,8 @@ fn main() -> Result<()> {
         // Copy the dock tile plugin to the output directory
         let profile = get_build_profile_name();
         let target_dir = app_target_dir(&profile).expect("Failed to get app target directory");
-        let plugin_src = Path::new("DockTilePlugin/WarpDockTilePlugin.docktileplugin");
-        let plugin_dst = target_dir.join("WarpDockTilePlugin.docktileplugin");
+        let plugin_src = Path::new("DockTilePlugin/BlackDockTilePlugin.docktileplugin");
+        let plugin_dst = target_dir.join("BlackDockTilePlugin.docktileplugin");
 
         if !status.success() {
             fs::remove_dir_all(plugin_src).expect("Failed to clean up plugin directory");
@@ -157,7 +157,7 @@ fn generate_channel_config_if_needed(target_family: &str, target_os: &str) {
         return;
     }
 
-    let config_bin = "warp-channel-config";
+    let config_bin = "black-channel-config";
 
     // Check if the config binary is available on PATH. If not, we can't generate embedded
     // configs. This is expected for external contributors building Warp OSS.
@@ -462,7 +462,7 @@ fn embed_resource_file(target_dir: &Path) {
     use std::io::Write;
 
     let version = env::var("GIT_RELEASE_TAG").unwrap_or("v0".to_owned());
-    let app_name = env::var("WARP_APP_NAME").unwrap_or("Warp".to_owned());
+    let app_name = env::var("BLACK_APP_NAME").unwrap_or("Warp".to_owned());
     let bin_name = env::var("CARGO_BIN_NAME").unwrap_or("local".to_owned());
 
     let icon_path = Path::new("channels")

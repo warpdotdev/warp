@@ -26,7 +26,7 @@ use crate::AppId;
 ///
 /// This should be used, for example, as the base directory under which
 /// repository workflows would be stored (in "./.warp/workflows").
-pub const WARP_CONFIG_DIR: &str = ".warp";
+pub const WARP_CONFIG_DIR: &str = ".black";
 
 /// The name of the folder that stores Warp execution logs and network logs.
 /// This is currently only used on Windows to maintain backwards compatibility.

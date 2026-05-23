@@ -19,12 +19,12 @@ mod namespace;
 /// Environment variable set by the server to identify the isolation platform.
 /// The value should match one of the `IsolationPlatformType` variants in snake_case.
 #[cfg(not(target_family = "wasm"))]
-const WARP_ISOLATION_PLATFORM_ENV: &str = "WARP_ISOLATION_PLATFORM";
+const WARP_ISOLATION_PLATFORM_ENV: &str = "BLACK_ISOLATION_PLATFORM";
 
 /// Environment variable containing the generic Warp-managed workload token that we use
 /// for isolation platforms that don't issue their own tokens.
 #[cfg(not(target_family = "wasm"))]
-const WARP_WORKLOAD_TOKEN_ENV: &str = "WARP_WORKLOAD_TOKEN";
+const WARP_WORKLOAD_TOKEN_ENV: &str = "BLACK_WORKLOAD_TOKEN";
 
 /// A kind of isolation platform. For our usage, isolation platforms are different ways where Warp
 /// can be sandboxed, such as VMs, containers, or cloud hosts. This may also include weaker forms

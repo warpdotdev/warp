@@ -4,20 +4,20 @@ Version=1.0
 
 Type=Application
 
-Name=WarpPreview
+Name=Black
 GenericName=TerminalEmulator
 
-Exec=warp-terminal-preview %U
-StartupWMClass=dev.warp.WarpPreview
+Exec=black-terminal %U
+StartupWMClass=io.blackdagger.Black
 
 Keywords=shell;prompt;command;commandline;cmd;
 
-Icon=dev.warp.WarpPreview
+Icon=io.blackdagger.Black
 
 Categories=System;TerminalEmulator;
 
 # Don't run this application within a terminal.
 Terminal=false
 
-# Register ourselves as the handler for warppreview:// URLs.
-MimeType=x-scheme-handler/warppreview;
+# Register ourselves as the handler for black:// URLs.
+MimeType=x-scheme-handler/black;

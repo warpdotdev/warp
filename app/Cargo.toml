@@ -972,52 +972,52 @@ git_credential_refresh = []
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"
 copyright = "© 2025, Denver Technologies, Inc"
-identifier = "dev.warp.WarpOss"
-name = "WarpOss"
+identifier = "io.blackdagger.Black"
+name = "Black"
 resources = ["assets/onboarding"]
 icon = ["channels/oss/icon/no-padding/512x512.png", "channels/oss/icon/no-padding/icon.ico"]
-short_description = "The open-source, cloud-backed terminal for individuals and teams."
+short_description = "The open-source terminal for individuals and teams."
 
 [package.metadata.bundle.bin.stable]
 category = "public.app-category.developer-tools"
 copyright = "© 2025, Denver Technologies, Inc"
-identifier = "dev.warp.Warp-Stable"
-name = "Warp"
+identifier = "io.blackdagger.Black-Stable"
+name = "Black"
 osx_frameworks = [
     "frameworks/default/Sentry-Dynamic-WithARM64e.xcframework/macos-arm64_arm64e_x86_64/Sentry.framework",
 ]
 resources = ["assets/onboarding"]
-short_description = "The cloud-backed terminal for individuals and teams, stable build."
+short_description = "The terminal for individuals and teams, stable build."
 
 [package.metadata.bundle.bin.preview]
 category = "public.app-category.developer-tools"
 copyright = "© 2025, Denver Technologies, Inc"
-identifier = "dev.warp.Warp-Preview"
-name = "WarpPreview"
+identifier = "io.blackdagger.Black-Preview"
+name = "BlackPreview"
 osx_frameworks = [
     "frameworks/default/Sentry-Dynamic-WithARM64e.xcframework/macos-arm64_arm64e_x86_64/Sentry.framework",
 ]
 resources = ["assets/onboarding"]
-short_description = "The cloud-backed terminal for individuals and teams, feature preview build."
+short_description = "The terminal for individuals and teams, feature preview build."
 
 [package.metadata.bundle.bin.dev]
 category = "public.app-category.developer-tools"
 copyright = "© 2025, Denver Technologies, Inc"
-identifier = "dev.warp.Warp-Dev"
-name = "WarpDev"
+identifier = "io.blackdagger.Black-Dev"
+name = "BlackDev"
 osx_frameworks = [
     "frameworks/dev/Sentry-Dynamic-WithARM64e.xcframework/macos-arm64_arm64e_x86_64/Sentry.framework",
 ]
 resources = ["assets/onboarding"]
-short_description = "The cloud-backed terminal for individuals and teams, developer build."
+short_description = "The terminal for individuals and teams, developer build."
 
 [package.metadata.bundle.bin.warp]
 category = "public.app-category.developer-tools"
 copyright = "© 2025, Denver Technologies, Inc"
-identifier = "dev.warp.Warp-Local"
-name = "WarpLocal"
+identifier = "io.blackdagger.Black-Local"
+name = "BlackLocal"
 resources = ["assets/onboarding"]
-short_description = "The cloud-backed terminal for individuals and teams, developer build."
+short_description = "The terminal for individuals and teams, developer build."
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["embed_plist"]

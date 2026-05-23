@@ -348,7 +348,7 @@ impl QueryFilter {
             QueryFilter::Tabs => Some("bundled/svg/terminal-input.svg"),
             QueryFilter::Conversations => Some("bundled/svg/conversation.svg"),
             QueryFilter::LaunchConfigurations => Some("bundled/svg/navigation.svg"),
-            QueryFilter::Drive => Some("bundled/svg/warp-drive.svg"),
+            QueryFilter::Drive => Some("bundled/svg/black-drive.svg"),
             QueryFilter::EnvironmentVariables => Some("bundled/svg/env-var-collection.svg"),
             QueryFilter::AgentModeWorkflows | QueryFilter::PromptHistory => {
                 Some(Icon::Prompt.into())

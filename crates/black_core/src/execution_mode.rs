@@ -21,9 +21,9 @@ impl ExecutionMode {
     /// This must stay in sync with the util/client.go constants on the server.
     pub fn client_id(&self) -> &'static str {
         match self {
-            ExecutionMode::App => "warp-app",
-            ExecutionMode::Sdk => "warp-cli",
-            ExecutionMode::RemoteServerDaemon => "warp-remote-server-daemon",
+            ExecutionMode::App => "black-app",
+            ExecutionMode::Sdk => "black-cli",
+            ExecutionMode::RemoteServerDaemon => "black-remote-server-daemon",
         }
     }
 }

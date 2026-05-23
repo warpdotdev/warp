@@ -30,7 +30,7 @@ use black_ui::AppContext;
 /// auto-launch `target/debug/{warp,openwarp,...}` at sign-in.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub fn maybe_register_app_as_login_item(ctx: &mut AppContext) {
-    if std::env::var("WARP_INTEGRATION").is_ok() {
+    if std::env::var("BLACK_INTEGRATION").is_ok() {
         log::debug!("Not registering as a login item in integration tests");
         return;
     }

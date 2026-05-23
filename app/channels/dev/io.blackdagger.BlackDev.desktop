@@ -4,20 +4,20 @@ Version=1.0
 
 Type=Application
 
-Name=Warp
+Name=BlackDev
 GenericName=TerminalEmulator
 
-Exec=warp-terminal %U
-StartupWMClass=dev.warp.Warp
+Exec=black-terminal-dev %U
+StartupWMClass=io.blackdagger.Black-Dev
 
 Keywords=shell;prompt;command;commandline;cmd;
 
-Icon=dev.warp.Warp
+Icon=io.blackdagger.Black-Dev
 
 Categories=System;TerminalEmulator;
 
 # Don't run this application within a terminal.
 Terminal=false
 
-# Register ourselves as the handler for warp:// URLs.
-MimeType=x-scheme-handler/warp;
+# Register ourselves as the handler for blackdev:// URLs.
+MimeType=x-scheme-handler/blackdev;

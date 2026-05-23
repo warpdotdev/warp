@@ -148,8 +148,8 @@ mod appimage {
         // If we're testing with a local copy of channel_versions.json, have the
         // newly-started binary also reference that same file (so we can test
         // displaying an updated changelog after an autoupdate).
-        if let Ok(path) = std::env::var("WARP_CHANNEL_VERSIONS_PATH") {
-            command.env("WARP_CHANNEL_VERSIONS_PATH", path);
+        if let Ok(path) = std::env::var("BLACK_CHANNEL_VERSIONS_PATH") {
+            command.env("BLACK_CHANNEL_VERSIONS_PATH", path);
         }
 
         log::info!("Relaunching warp for update...");
@@ -296,8 +296,8 @@ mod package_manager {
         // If we're testing with a local copy of channel_versions.json, have the
         // newly-started binary also reference that same file (so we can test
         // displaying an updated changelog after an autoupdate).
-        if let Ok(path) = std::env::var("WARP_CHANNEL_VERSIONS_PATH") {
-            command.env("WARP_CHANNEL_VERSIONS_PATH", path);
+        if let Ok(path) = std::env::var("BLACK_CHANNEL_VERSIONS_PATH") {
+            command.env("BLACK_CHANNEL_VERSIONS_PATH", path);
         }
 
         log::info!("Relaunching warp for update...");

@@ -154,8 +154,8 @@ impl ApplicationService {
 // invoking org.freedesktop.Application IPC methods.
 #[proxy(
     interface = "org.freedesktop.Application",
-    default_service = "dev.warp.WarpLocal",
-    default_path = "/dev/warp/WarpLocal",
+    default_service = "io.blackdagger.BlackLocal",
+    default_path = "/io/blackdagger/BlackLocal",
     gen_blocking = false
 )]
 trait ExistingApplication {

@@ -5,7 +5,7 @@
 use black_core::channel::ChannelConfig;
 
 /// The name of the config generator binary, expected to be on PATH.
-const CONFIG_BIN_NAME: &str = "warp-channel-config";
+const CONFIG_BIN_NAME: &str = "black-channel-config";
 
 #[macro_export]
 #[cfg(windows)]

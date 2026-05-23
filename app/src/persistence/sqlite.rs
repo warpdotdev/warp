@@ -124,7 +124,7 @@ const COMMANDS_COUNT_LIMIT: i64 = 10000;
 
 use black_server_client::persistence::{upsert_cloud_object, CloudObjectId};
 
-const WARP_SQLITE_FILE_NAME: &str = "warp.sqlite";
+const WARP_SQLITE_FILE_NAME: &str = "black.sqlite";
 
 /// When delete a cloud object, this callback is used to delete the cloud
 /// object. It takes the id of the cloud object to delete as a parameter.

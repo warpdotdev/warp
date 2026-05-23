@@ -1,6 +1,6 @@
-#include "WarpDockTilePlugin.h"
+#include "BlackDockTilePlugin.h"
 
-@implementation WarpDockTilePlugIn {
+@implementation BlackDockTilePlugIn {
     NSFileHandle *_logFileHandle;
 }
 
@@ -25,14 +25,14 @@
             NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
             [formatter setDateFormat:@"yyyy-MM-dd_HH-mm-ss"];
             NSString *timestamp = [formatter stringFromDate:[NSDate date]];
-            NSString *logPath = [NSString stringWithFormat:@"/tmp/warp_docktile_%@.log", timestamp];
+            NSString *logPath = [NSString stringWithFormat:@"/tmp/black_docktile_%@.log", timestamp];
             NSError *error = nil;
             [[NSFileManager defaultManager] createFileAtPath:logPath contents:nil attributes:nil];
             _logFileHandle = [NSFileHandle fileHandleForWritingAtPath:logPath];
-            [self logMessage:@"WarpDockTilePlugin initialized"];
+            [self logMessage:@"BlackDockTilePlugin initialized"];
         } @catch (NSException *exception) {
-            NSLog(@"Exception during initialization: %@\nStack trace: %@", 
-                  exception.reason, 
+            NSLog(@"Exception during initialization: %@\nStack trace: %@",
+                  exception.reason,
                   exception.callStackSymbols);
         }
     }
@@ -43,10 +43,10 @@
     @try {
         [self logMessage:@"updateAppIcon called"];
         // Retrieve the bundle ID for the main app from the Info.plist file in the plugin bundle
-        NSBundle *pluginBundle = [NSBundle bundleForClass:[self class]];    
+        NSBundle *pluginBundle = [NSBundle bundleForClass:[self class]];
         NSString *path = [[pluginBundle bundlePath] stringByAppendingPathComponent:@"Contents/Info.plist"];
-        NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:path];    
-        NSString *bundleId = dict[@"MainAppBundleIdentifier"];    
+        NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:path];
+        NSString *bundleId = dict[@"MainAppBundleIdentifier"];
         BOOL isDev = [bundleId containsString:@"Dev"];
         BOOL isPreview = [bundleId containsString:@"Preview"];
         BOOL isLocal = [bundleId containsString:@"Local"];
@@ -84,11 +84,11 @@
         [imageView setImageScaling:NSImageScaleProportionallyUpOrDown];
         [tile setContentView:imageView];
         [tile display];
-        
+
         [self logMessage:[NSString stringWithFormat:@"Dock tile updated with icon: %@", iconFileName]];
     } @catch (NSException *exception) {
-        [self logMessage:[NSString stringWithFormat:@"Exception updating dock tile icon: %@\nStack trace: %@\nTile: %@", 
-              exception.reason, 
+        [self logMessage:[NSString stringWithFormat:@"Exception updating dock tile icon: %@\nStack trace: %@\nTile: %@",
+              exception.reason,
               exception.callStackSymbols,
               tile ? @"valid" : @"nil"]];
     }
@@ -98,7 +98,7 @@
 - (NSString*)convertAppIconNameToFileName:(NSString*)appIconName isDev:(BOOL)isDev isLocal:(BOOL)isLocal isPreview:(BOOL)isPreview {
     // First remove quotes and convert to lowercase
     NSString* cleanName = [[appIconName stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"\""]] lowercaseString];
-    
+
     NSDictionary* mapping = @{
         @"aurora": @"aurora",
         @"classic1": @"classic_1",
@@ -114,15 +114,15 @@
         @"original": @"original",
         @"starburst": @"starburst",
         @"sticker": @"sticker",
-        @"warpone": @"blue",
+        @"blackone": @"blue",
         @"cow": @"cow"
     };
-    
+
     NSString* fileName = mapping[cleanName];
 
-    // If the mapping doesn't exist, return the default icon 
+    // If the mapping doesn't exist, return the default icon
     // conditional on whether this is a local, dev, or preview build.
-    return fileName ?: isLocal ? @"local" : isDev ? @"dev" : isPreview ? @"preview" : @"warp_2";
+    return fileName ?: isLocal ? @"local" : isDev ? @"dev" : isPreview ? @"preview" : @"black_2";
 }
 
 // Helper function to load named image from the plugin's resource bundle
@@ -137,16 +137,16 @@
     return [[NSImage alloc] initWithContentsOfFile:imagePath];
 }
 
-// Protocol method that is invoked by the system when the dock for Warp is updated.
+// Protocol method that is invoked by the system when the dock for Black is updated.
 // Note that we listen for direct changes to the AppIcon key in the user defaults.
 - (void)setDockTile:(NSDockTile *)dockTile {
     @try {
         [self logMessage:[NSString stringWithFormat:@"setDockTile called with tile: %@", dockTile ? @"valid" : @"nil"]];
         if (dockTile) {
             // Get the bundle ID for setting up user defaults observation
-            NSBundle *pluginBundle = [NSBundle bundleForClass:[WarpDockTilePlugIn class]];    
+            NSBundle *pluginBundle = [NSBundle bundleForClass:[BlackDockTilePlugIn class]];
             NSString *path = [[pluginBundle bundlePath] stringByAppendingPathComponent:@"Contents/Info.plist"];
-            NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:path];    
+            NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:path];
             NSString *bundleId = dict[@"MainAppBundleIdentifier"];
 
             [self logMessage:[NSString stringWithFormat:@"Main app bundleId: %@", bundleId]];
@@ -162,7 +162,7 @@
             [self logMessage:[NSString stringWithFormat:@"Host defaults: %@", hostDefaults]];
 
             // Make sure the icon is updated from the get-go as well.
-            [self updateAppIcon:dockTile];	        
+            [self updateAppIcon:dockTile];
         } else {
             [self logMessage:@"No docktile, clearing icon observer"];
             [[NSDistributedNotificationCenter defaultCenter] removeObserver:self.iconChangedObserver];
@@ -173,8 +173,8 @@
             }
         }
     } @catch (NSException *exception) {
-        [self logMessage:[NSString stringWithFormat:@"Exception in setDockTile: %@\nStack trace: %@\nDockTile: %@", 
-              exception.reason, 
+        [self logMessage:[NSString stringWithFormat:@"Exception in setDockTile: %@\nStack trace: %@\nDockTile: %@",
+              exception.reason,
               exception.callStackSymbols,
               dockTile ? @"valid" : @"nil"]];
     }
@@ -182,7 +182,7 @@
 
 - (void)dealloc {
     @try {
-        [self logMessage:@"WarpDockTilePlugin deallocating"];
+        [self logMessage:@"BlackDockTilePlugin deallocating"];
         if (self.iconChangedObserver) {
             [[NSDistributedNotificationCenter defaultCenter] removeObserver:self.iconChangedObserver];
             self.iconChangedObserver = nil;
@@ -191,15 +191,15 @@
             [(NSUserDefaults *)self.defaultsObserver removeObserver:self forKeyPath:@"AppIcon"];
             self.defaultsObserver = nil;
         }
-        
+
         if (_logFileHandle) {
             [self logMessage:@"Closing log file"];
             [_logFileHandle closeFile];
             _logFileHandle = nil;
         }
     } @catch (NSException *exception) {
-        NSLog(@"Exception during deallocation: %@\nStack trace: %@", 
-              exception.reason, 
+        NSLog(@"Exception during deallocation: %@\nStack trace: %@",
+              exception.reason,
               exception.callStackSymbols);
     }
 }
@@ -216,8 +216,8 @@
             [self updateAppIcon:dockTile];
         }
     } @catch (NSException *exception) {
-        [self logMessage:[NSString stringWithFormat:@"Exception in KVO handler: %@\nStack trace: %@\nKeyPath: %@\nObject: %@\nChange: %@", 
-              exception.reason, 
+        [self logMessage:[NSString stringWithFormat:@"Exception in KVO handler: %@\nStack trace: %@\nKeyPath: %@\nObject: %@\nChange: %@",
+              exception.reason,
               exception.callStackSymbols,
               keyPath,
               object,

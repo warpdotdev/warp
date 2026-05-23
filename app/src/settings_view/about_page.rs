@@ -64,9 +64,9 @@ impl SettingsWidget for AboutPageWidget {
         let ui_builder = appearance.ui_builder();
 
         let image_path = if theme.inferred_color_scheme() == ColorScheme::LightOnDark {
-            "bundled/svg/warp-logo-with-light-title.svg"
+            "bundled/svg/black-logo-with-light-title.svg"
         } else {
-            "bundled/svg/warp-logo-with-dark-title.svg"
+            "bundled/svg/black-logo-with-dark-title.svg"
         };
 
         let version = ChannelState::app_version().unwrap_or("v#.##.###");
