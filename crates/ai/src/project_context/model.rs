@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 #[cfg(feature = "local_fs")]
 use repo_metadata::repositories::RepoDetectionSource;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 use super::GlobalRules;
 

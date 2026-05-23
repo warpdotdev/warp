@@ -1,6 +1,6 @@
 use ai::skills::SkillReference;
-use warpui::elements::ChildView;
-use warpui::{Element, Entity, EntityId, ModelHandle, View, ViewContext, ViewHandle};
+use black_ui::elements::ChildView;
+use black_ui::{Element, Entity, EntityId, ModelHandle, View, ViewContext, ViewHandle};
 
 use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::search::data_source::Query;
@@ -155,7 +155,7 @@ impl View for InlineSkillSelectorView {
         "InlineSkillSelectorView"
     }
 
-    fn render(&self, _app: &warpui::AppContext) -> Box<dyn Element> {
+    fn render(&self, _app: &black_ui::AppContext) -> Box<dyn Element> {
         ChildView::new(&self.menu_view).finish()
     }
 }

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use warpui::App;
+use black_ui::App;
 
 use super::*;
 

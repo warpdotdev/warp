@@ -9,8 +9,8 @@
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
-use warpui::r#async::executor::Background;
-use warpui::{App, EntityId, ModelHandle};
+use black_ui::r#async::executor::Background;
+use black_ui::{App, EntityId, ModelHandle};
 
 use super::{BlocklistAIContextModel, PendingAttachment, PendingFile};
 use crate::ai::agent::ImageContext;

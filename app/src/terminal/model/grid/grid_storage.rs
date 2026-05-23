@@ -1,5 +1,5 @@
 // The code in this file is adapted from the alacritty_terminal crate under the
-// Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
+// Apache license; see: crates/black_terminal/src/model/LICENSE-ALACRITTY.
 
 //! A specialized 2D grid implementation optimized for use in a terminal.
 
@@ -9,7 +9,7 @@ use std::cmp::min;
 use std::ops::{Index, IndexMut, Range};
 
 use serde::{Deserialize, Serialize};
-pub use warp_terminal::model::grid::Dimensions;
+pub use black_terminal::model::grid::Dimensions;
 
 use crate::features::FeatureFlag;
 use crate::terminal::model::ansi::{CharsetIndex, StandardCharset};

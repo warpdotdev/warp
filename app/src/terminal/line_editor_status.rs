@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::{Entity, ModelContext, ModelHandle};
+use black_ui::r#async::SpawnedFutureHandle;
+use black_ui::{Entity, ModelContext, ModelHandle};
 
 use super::shell::ShellType;
 use super::{ModelEvent, ModelEventDispatcher};
@@ -113,7 +113,7 @@ impl LineEditorStatus {
         // For zsh, we use this heuristic -- 10ms after EndPrompt -- to approximate when the line
         // editor is active.
         let abort_handle = ctx.spawn_abortable(
-            async move { warpui::r#async::Timer::after(delay).await },
+            async move { black_ui::r#async::Timer::after(delay).await },
             |me, _, ctx| {
                 me.is_line_editor_active = true;
                 ctx.emit(LineEditorStatusEvent::Active);

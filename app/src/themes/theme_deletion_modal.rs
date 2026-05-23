@@ -1,10 +1,10 @@
 use std::default::Default;
 
-use warpui::fonts::Weight;
-use warpui::keymap::FixedBinding;
-use warpui::presenter::ChildView;
-use warpui::ui_components::components::{Coords, UiComponentStyles};
-use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
+use black_ui::fonts::Weight;
+use black_ui::keymap::FixedBinding;
+use black_ui::presenter::ChildView;
+use black_ui::ui_components::components::{Coords, UiComponentStyles};
+use black_ui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
 use crate::modal::Modal;
 use crate::themes::theme::ThemeKind;
@@ -28,7 +28,7 @@ pub enum ThemeDeletionModalEvent {
 }
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings([FixedBinding::new(
         "escape",

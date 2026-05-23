@@ -19,7 +19,7 @@ use lsp_types::{
 use serde_json::Value;
 #[cfg(not(target_arch = "wasm32"))]
 use simple_logger::SimpleLogger;
-use warp_util::on_cancel::OnCancelFutureExt;
+use black_util::on_cancel::OnCancelFutureExt;
 
 use crate::config::{lsp_uri_to_path, path_to_lsp_uri, LanguageId};
 use crate::types::{
@@ -357,7 +357,7 @@ impl WatchedFilesRegistry {
             return false;
         };
 
-        let path_relative = warp_util::path::normalize_relative_path_for_glob(path_relative);
+        let path_relative = black_util::path::normalize_relative_path_for_glob(path_relative);
 
         self.registrations
             .values()
@@ -415,7 +415,7 @@ impl WatchedFilesRegistry {
         };
 
         // Normalize to forward slashes so glob patterns and event paths are comparable across platforms (esp. Windows).
-        let prefix = warp_util::path::normalize_relative_path_for_glob(base_relative);
+        let prefix = black_util::path::normalize_relative_path_for_glob(base_relative);
 
         if prefix.is_empty() {
             Some(pattern)

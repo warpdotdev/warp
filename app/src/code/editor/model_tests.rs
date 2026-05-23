@@ -2,10 +2,10 @@ use std::path::Path;
 
 use futures::channel::oneshot;
 use vec1::vec1;
-use warp_editor::content::buffer::{InitialBufferState, SelectionOffsets};
-use warp_editor::multiline::MultilineString;
-use warp_util::content_version::ContentVersion;
-use warpui::App;
+use black_editor::content::buffer::{InitialBufferState, SelectionOffsets};
+use black_editor::multiline::MultilineString;
+use black_util::content_version::ContentVersion;
+use black_ui::App;
 
 use super::*;
 use crate::code::editor::line::EditorLineLocation;

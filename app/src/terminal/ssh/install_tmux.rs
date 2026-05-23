@@ -1,14 +1,14 @@
 use std::rc::Rc;
 
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
-use warp_core::ui::theme::WarpTheme;
-use warpui::elements::{
+use black_core::ui::theme::WarpTheme;
+use black_ui::elements::{
     Border, Container, CrossAxisAlignment, Flex, FormattedTextElement, HighlightedHyperlink,
     Hoverable, Icon, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
 };
-use warpui::keymap::FixedBinding;
-use warpui::ui_components::toggle_menu::ToggleMenuStateHandle;
-use warpui::{
+use black_ui::keymap::FixedBinding;
+use black_ui::ui_components::toggle_menu::ToggleMenuStateHandle;
+use black_ui::{
     AppContext, BlurContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View,
     ViewContext,
 };
@@ -114,7 +114,7 @@ pub struct SystemInstallState {
 }
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings([
         FixedBinding::new(
@@ -512,7 +512,7 @@ impl TypedActionView for SshInstallTmuxBlock {
 #[allow(unused_variables)]
 pub fn install_tmux_script(system: &SystemDetails, app: &AppContext) -> Option<String> {
     use asset_macro::bundled_asset;
-    use warpui::assets::asset_cache::{AssetCache, AssetState};
+    use black_ui::assets::asset_cache::{AssetCache, AssetState};
 
     let asset_source = match (
         system.operating_system.as_str(),
@@ -550,7 +550,7 @@ pub fn install_root_tmux_script(
     can_run_sudo: bool,
 ) -> Option<String> {
     use asset_macro::bundled_asset;
-    use warpui::assets::asset_cache::{AssetCache, AssetState};
+    use black_ui::assets::asset_cache::{AssetCache, AssetState};
 
     let asset_source = match (
         system.operating_system.as_str(),

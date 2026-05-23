@@ -1,6 +1,6 @@
 use ordered_float::OrderedFloat;
-use warpui::elements::{Empty, Text};
-use warpui::{AppContext, Element, SingletonEntity};
+use black_ui::elements::{Empty, Text};
+use black_ui::{AppContext, Element, SingletonEntity};
 
 use crate::appearance::Appearance;
 use crate::search::command_palette::mixer::CommandPaletteItemAction;

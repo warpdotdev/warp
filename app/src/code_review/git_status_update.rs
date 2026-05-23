@@ -2,8 +2,8 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "local_fs")]
-use warpui::ModelContext;
-use warpui::{Entity, SingletonEntity};
+use black_ui::ModelContext;
+use black_ui::{Entity, SingletonEntity};
 #[cfg(feature = "local_fs")]
 use {
     crate::throttle::throttle,
@@ -15,7 +15,7 @@ use {
         Repository, RepositoryUpdate,
     },
     std::{collections::HashMap, time::Duration},
-    warpui::{r#async::SpawnedFutureHandle, ModelHandle, WeakModelHandle},
+    black_ui::{r#async::SpawnedFutureHandle, ModelHandle, WeakModelHandle},
 };
 
 #[cfg(feature = "local_fs")]

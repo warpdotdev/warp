@@ -1,6 +1,6 @@
-use warp_core::ui::appearance::Appearance;
-use warpui::platform::WindowStyle;
-use warpui::App;
+use black_core::ui::appearance::Appearance;
+use black_ui::platform::WindowStyle;
+use black_ui::App;
 
 use super::DrivePanel;
 use crate::ai::blocklist::BlocklistAIHistoryModel;

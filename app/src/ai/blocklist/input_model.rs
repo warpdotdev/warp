@@ -15,9 +15,9 @@ use parking_lot::FairMutex;
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::{InputMode, InputType as ProtocolInputType};
 use settings::Setting as _;
-use warp_completer::completer::CompletionContext;
-use warp_core::features::FeatureFlag;
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+use black_completer::completer::CompletionContext;
+use black_core::features::FeatureFlag;
+use black_ui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 /// The source of the final input type decision applied to the user input.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -828,7 +828,7 @@ impl BlocklistAIInputModel {
                     futures_lite::future::yield_now().await;
 
                     let input =
-                        warp_completer::util::expand_aliases(input, &completion_context).await;
+                        black_completer::util::expand_aliases(input, &completion_context).await;
 
                     futures_lite::future::yield_now().await;
 

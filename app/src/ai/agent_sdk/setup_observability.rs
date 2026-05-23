@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use warpui::r#async::executor::Background;
+use black_ui::r#async::executor::Background;
 
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ai::{AIClient, AgentRunClientEventRequest};

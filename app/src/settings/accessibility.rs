@@ -1,6 +1,6 @@
 use settings::macros::define_settings_group;
 use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
-use warpui::accessibility::AccessibilityVerbosity;
+use black_ui::accessibility::AccessibilityVerbosity;
 
 define_settings_group!(AccessibilitySettings, settings: [
     a11y_verbosity: AccessibilityVerbosityState {

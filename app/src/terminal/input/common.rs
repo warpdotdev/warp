@@ -2,18 +2,18 @@ use std::sync::Arc;
 
 use pathfinder_geometry::vector::vec2f;
 use vim::vim::{VimMode, VimState};
-use warp_completer::completer::Description;
-use warp_core::features::FeatureFlag;
-use warpui::elements::{
+use black_completer::completer::Description;
+use black_core::features::FeatureFlag;
+use black_ui::elements::{
     AnchorPair, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     DispatchEventResult, Element, EventHandler, Flex, OffsetPositioning, OffsetType, ParentAnchor,
     ParentElement, ParentOffsetBounds, PositionedElementOffsetBounds, PositioningAxis, Radius,
     Shrinkable, Stack, Text, XAxisAnchor,
 };
-use warpui::fonts::Weight;
-use warpui::presenter::ChildView;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{AppContext, EntityId, SingletonEntity, ViewHandle};
+use black_ui::fonts::Weight;
+use black_ui::presenter::ChildView;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{AppContext, EntityId, SingletonEntity, ViewHandle};
 
 use crate::ai::llms::{is_using_api_key_for_provider, LLMPreferences};
 use crate::ai::{AIRequestUsageModel, BuyCreditsBannerDisplayState};

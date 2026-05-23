@@ -1,5 +1,5 @@
 use sum_tree::SumTree;
-use warpui::elements::ListIndentLevel;
+use black_ui::elements::ListIndentLevel;
 
 use crate::content::cursor::BufferSumTree;
 use crate::content::text::{

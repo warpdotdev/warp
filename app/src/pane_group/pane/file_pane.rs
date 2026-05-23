@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use warp_util::local_or_remote_path::LocalOrRemotePath;
-use warpui::{AppContext, ModelHandle, View, ViewContext, ViewHandle};
+use black_util::local_or_remote_path::LocalOrRemotePath;
+use black_ui::{AppContext, ModelHandle, View, ViewContext, ViewHandle};
 
 use super::notebook_pane::subscribe_to_link_model;
 use super::view::PaneView;

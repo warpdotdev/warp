@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use warpui::ViewContext;
+use black_ui::ViewContext;
 
 use super::Slide;
 use crate::server::telemetry::TelemetryEvent;

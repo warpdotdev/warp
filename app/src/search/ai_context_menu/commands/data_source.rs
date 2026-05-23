@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use fuzzy_match::FuzzyMatchResult;
-use warpui::{AppContext, SingletonEntity};
+use black_ui::{AppContext, SingletonEntity};
 
 use super::search_item::CommandSearchItem;
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
@@ -120,6 +120,6 @@ impl SyncDataSource for CommandDataSource {
     }
 }
 
-impl warpui::Entity for CommandDataSource {
+impl black_ui::Entity for CommandDataSource {
     type Event = ();
 }

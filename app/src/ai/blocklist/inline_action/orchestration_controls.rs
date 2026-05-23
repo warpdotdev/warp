@@ -14,19 +14,19 @@ use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationExecutio
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use settings::Setting;
-use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{
+use black_cli::agent::Harness;
+use black_core::features::FeatureFlag;
+use black_core::ui::theme::Fill;
+use black_ui::elements::{
     Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
     Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
     Point, Radius, Text,
 };
-use warpui::event::DispatchedEvent;
-use warpui::platform::Cursor;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponentStyles};
-use warpui::{
+use black_ui::event::DispatchedEvent;
+use black_ui::platform::Cursor;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponentStyles};
+use black_ui::{
     AfterLayoutContext, AppContext, Element, EventContext, LayoutContext, PaintContext,
     SingletonEntity, SizeConstraint, View, ViewContext, ViewHandle,
 };
@@ -380,7 +380,7 @@ pub fn picker_styles(appearance: &Appearance) -> (UiComponentStyles, PickerColor
     // card background in the config block shows through, and so that
     // gradient-background themes render correctly.
     let background_fill: Fill = theme.surface_overlay_1();
-    let background: warpui::elements::Fill = background_fill.into();
+    let background: black_ui::elements::Fill = background_fill.into();
     // Border and font colors are intentionally left to the dropdown's
     // default ButtonVariant::Secondary styling, which uses
     // theme.outline() and theme.main_text_color() — both are
@@ -407,7 +407,7 @@ pub fn picker_styles(appearance: &Appearance) -> (UiComponentStyles, PickerColor
 pub struct PickerColors {
     pub padding: Coords,
     pub corner_radius: CornerRadius,
-    pub background: warpui::elements::Fill,
+    pub background: black_ui::elements::Fill,
 }
 
 // ── Picker creation (generic over action type) ──────────────────────
@@ -1206,7 +1206,7 @@ pub fn populate_auth_secret_picker_for_harness<A: OrchestrationControlAction, V:
 ///
 /// Does NOT repopulate the picker — doing so from inside the action the
 /// picker just dispatched would re-enter the dropdown's view and trip
-/// warpui's circular-update guard. The dropdown already reflects the
+/// black_ui's circular-update guard. The dropdown already reflects the
 /// chosen value.
 pub fn apply_auth_secret_change<A: OrchestrationControlAction, V: View>(
     state: &mut OrchestrationEditState,
@@ -1770,7 +1770,7 @@ pub fn render_mode_toggle<A: OrchestrationControlAction>(
         active_segment_bg,
     );
 
-    let segment_outer_bg = warp_core::ui::theme::color::internal_colors::fg_overlay_2(theme);
+    let segment_outer_bg = black_core::ui::theme::color::internal_colors::fg_overlay_2(theme);
     let segments_row = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_main_axis_alignment(MainAxisAlignment::Start)
@@ -1821,7 +1821,7 @@ fn render_segment_button<A: OrchestrationControlAction>(
     let active_text_color = blended_colors::text_main(theme, theme.surface_1());
     let inactive_text_color = blended_colors::text_disabled(theme, theme.surface_1());
     let segment_active_bg = active_bg_override
-        .unwrap_or_else(|| warp_core::ui::theme::color::internal_colors::fg_overlay_4(theme));
+        .unwrap_or_else(|| black_core::ui::theme::color::internal_colors::fg_overlay_4(theme));
     Hoverable::new(mouse_state, move |_| {
         let text = Text::new(label_owned.clone(), font_family, font_size)
             .with_color(if is_active {
@@ -1830,7 +1830,7 @@ fn render_segment_button<A: OrchestrationControlAction>(
                 inactive_text_color
             })
             .finish();
-        let centered = warpui::elements::Align::new(text).finish();
+        let centered = black_ui::elements::Align::new(text).finish();
         let mut container = Container::new(centered)
             .with_vertical_padding(6.)
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));

@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use tower_http::trace::TraceLayer;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 // Spells "Warp" - should hopefully not conflict with other ports.
 // Does not conflict with known ports on https://en.wikipedia.org/wiki/List_of_TCP_and_UDP_port_numbers

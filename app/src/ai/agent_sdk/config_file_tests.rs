@@ -3,7 +3,7 @@
 use std::io::Write as _;
 
 use serde_json::json;
-use warp_cli::mcp::MCPSpec;
+use black_cli::mcp::MCPSpec;
 
 use crate::ai::ambient_agents::AgentConfigSnapshot;
 

@@ -10,11 +10,11 @@ use derivative::Derivative;
 use lazy_static::lazy_static;
 use regex::Regex;
 use url::Url;
-use warp_core::channel::Channel;
-use warp_core::features::FeatureFlag;
-use warp_graphql::queries::get_updated_cloud_objects::UpdatedObjectInput;
-use warp_graphql::scalars::time::ServerTimestamp;
-use warpui::{AppContext, SingletonEntity};
+use black_core::channel::Channel;
+use black_core::features::FeatureFlag;
+use black_graphql::queries::get_updated_cloud_objects::UpdatedObjectInput;
+use black_graphql::scalars::time::ServerTimestamp;
+use black_ui::{AppContext, SingletonEntity};
 
 use self::breadcrumbs::ContainingObject;
 use self::model::actions::ObjectActions;
@@ -55,7 +55,7 @@ pub mod grab_edit_access_modal;
 pub mod model;
 pub mod toast_message;
 
-pub use warp_server_client::cloud_object::*;
+pub use black_server_client::cloud_object::*;
 
 /// A CloudObject represents
 /// therefore shareable and editable (i.e. Notebooks and Workflows). In order
@@ -1200,7 +1200,7 @@ where
     >,
     S: Serializer<T>,
 {
-    type GqlType = warp_graphql::generic_string_object::GenericStringObject;
+    type GqlType = black_graphql::generic_string_object::GenericStringObject;
 
     fn try_from_gql(value: Self::GqlType) -> Result<Self> {
         let uid = ServerId::from_string_lossy(value.metadata.uid.inner());
@@ -1215,7 +1215,7 @@ where
 }
 
 impl TryFromGql for ServerFolder {
-    type GqlType = warp_graphql::folder::Folder;
+    type GqlType = black_graphql::folder::Folder;
 
     fn try_from_gql(value: Self::GqlType) -> Result<Self> {
         let uid = ServerId::from_string_lossy(value.metadata.uid.inner());
@@ -1229,7 +1229,7 @@ impl TryFromGql for ServerFolder {
 }
 
 impl TryFromGql for ServerNotebook {
-    type GqlType = warp_graphql::notebook::Notebook;
+    type GqlType = black_graphql::notebook::Notebook;
 
     fn try_from_gql(value: Self::GqlType) -> Result<Self> {
         let uid = ServerId::from_string_lossy(value.metadata.uid.inner());
@@ -1252,7 +1252,7 @@ impl TryFromGql for ServerNotebook {
 }
 
 impl TryFromGql for ServerWorkflow {
-    type GqlType = warp_graphql::workflow::Workflow;
+    type GqlType = black_graphql::workflow::Workflow;
 
     fn try_from_gql(value: Self::GqlType) -> Result<Self> {
         let uid = ServerId::from_string_lossy(value.metadata.uid.inner());

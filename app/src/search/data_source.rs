@@ -7,9 +7,9 @@ use lazy_static::lazy_static;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::Fill;
-use warpui::{Action, AppContext, Element, Entity, ModelHandle};
+use black_core::features::FeatureFlag;
+use black_core::ui::theme::Fill;
+use black_ui::{Action, AppContext, Element, Entity, ModelHandle};
 
 use super::item::SearchItem;
 use super::mixer::{AsyncDataSource, BoxFuture, DataSourceRunErrorWrapper};

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use input_classifier::{HeuristicClassifier, InputClassifier};
 #[cfg(any(feature = "nld_classifier_v1", feature = "nld_classifier_v2"))]
 use input_classifier::{OnnxClassifier, OnnxModel};
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 pub struct InputClassifierModel {
     pub classifier: Arc<dyn InputClassifier>,

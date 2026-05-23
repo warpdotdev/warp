@@ -10,7 +10,7 @@ pub use maa::{
     PassiveSuggestionsEvent as MaaPassiveSuggestionsEvent,
     PassiveSuggestionsModel as MaaPassiveSuggestionsModel,
 };
-use warpui::ModelHandle;
+use black_ui::ModelHandle;
 
 #[derive(Clone)]
 pub struct PassiveSuggestionsModels {

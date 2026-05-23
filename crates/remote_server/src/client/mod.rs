@@ -7,7 +7,7 @@ use std::time::Duration;
 use dashmap::DashMap;
 use futures::channel::oneshot;
 use futures::io::{AsyncRead, AsyncWrite};
-use warpui::r#async::{executor, FutureExt as _};
+use black_ui::r#async::{executor, FutureExt as _};
 
 use crate::codebase_index_proto::{
     proto_to_codebase_index_status_updated, proto_to_codebase_index_statuses_snapshot,
@@ -32,9 +32,9 @@ use crate::repo_metadata_proto::{proto_snapshot_to_update, proto_to_repo_metadat
 mod remote_server_log;
 #[cfg(not(target_family = "wasm"))]
 pub use remote_server_log::RemoteServerLog;
-use warp_core::{safe_error, safe_warn, SessionId};
-use warp_util::standardized_path::StandardizedPath;
-use warpui::r#async::TransportStream;
+use black_core::{safe_error, safe_warn, SessionId};
+use black_util::standardized_path::StandardizedPath;
+use black_ui::r#async::TransportStream;
 
 use crate::protocol::{self, ProtocolError, RequestId};
 

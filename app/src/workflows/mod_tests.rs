@@ -1,4 +1,4 @@
-use warpui::App;
+use black_ui::App;
 
 use super::workflow::{Argument, Workflow};
 use crate::server::ids::SyncId;

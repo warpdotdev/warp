@@ -1,7 +1,7 @@
 use ai::agent::action_result::FetchConversationResult;
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::api::ServerConversationToken;

@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
-use warpui::elements::{
+use black_ui::elements::{
     ChildView, Container, CrossAxisAlignment, Expanded, Flex, MainAxisSize, ParentElement,
 };
-use warpui::prelude::Empty;
-use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
+use black_ui::prelude::Empty;
+use black_ui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
 use super::{AgentFooterButtonTheme, USE_AGENT_KEYSTROKE};
 use crate::terminal::view::block_banner::WarpificationMode;

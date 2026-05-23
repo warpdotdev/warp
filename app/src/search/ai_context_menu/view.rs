@@ -7,17 +7,17 @@ use itertools::Itertools;
 #[cfg(not(target_family = "wasm"))]
 use repo_metadata::repositories::DetectedRepositories;
 use settings::Setting as _;
-use warp_core::features::FeatureFlag;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_ui::elements::{
     AnchorPair, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Dismiss, Empty, Fill, Flex, Hoverable, Icon, MouseStateHandle, OffsetPositioning, OffsetType,
     ParentElement, PositionedElementOffsetBounds, PositioningAxis, Radius, SavePosition,
     ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth, Shrinkable, Stack, Text,
     UniformList, UniformListState, XAxisAnchor, YAxisAnchor,
 };
-use warpui::platform::Cursor;
-use warpui::windowing::WindowManager;
-use warpui::{
+use black_ui::platform::Cursor;
+use black_ui::windowing::WindowManager;
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle, WeakViewHandle,
 };

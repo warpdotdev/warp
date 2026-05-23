@@ -12,9 +12,9 @@ mod macos;
 mod windows;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-use warp_core::channel::ChannelState;
+use black_core::channel::ChannelState;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-use warpui::AppContext;
+use black_ui::AppContext;
 
 /// Reconciles whether Warp is registered to launch at login with the user's
 /// current preference.

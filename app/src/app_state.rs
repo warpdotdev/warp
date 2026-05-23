@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use pathfinder_geometry::rect::RectF;
 use serde::{Deserialize, Serialize};
-use warpui::platform::FullscreenState;
-use warpui::{AppContext, SingletonEntity as _};
+use black_ui::platform::FullscreenState;
+use black_ui::{AppContext, SingletonEntity as _};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::AgentManagementFilters;

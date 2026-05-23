@@ -23,12 +23,12 @@ pub use ephemeral_message_model::*;
 pub use inline_agent_view_header::*;
 pub use orchestration_pill_bar::{render_orchestration_breadcrumbs, OrchestrationPillBar};
 use pathfinder_color::ColorU;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::color::blend::Blend;
-use warp_core::ui::theme::Fill;
-use warpui::fonts::Properties;
-use warpui::keymap::Keystroke;
-use warpui::{AppContext, SingletonEntity};
+use black_core::ui::appearance::Appearance;
+use black_core::ui::color::blend::Blend;
+use black_core::ui::theme::Fill;
+use black_ui::fonts::Properties;
+use black_ui::keymap::Keystroke;
+use black_ui::{AppContext, SingletonEntity};
 pub use zero_state_block::*;
 
 use crate::terminal::model::TerminalModel;

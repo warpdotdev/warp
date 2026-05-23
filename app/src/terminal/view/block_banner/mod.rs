@@ -9,11 +9,11 @@
 mod warpify;
 
 pub use warpify::*;
-use warpui::elements::{
+use black_ui::elements::{
     ConstrainedBox, Container, CornerRadius, Hoverable, MouseState, MouseStateHandle,
     ParentElement, Radius, Stack,
 };
-use warpui::Element;
+use black_ui::Element;
 
 use crate::themes::theme::WarpTheme;
 

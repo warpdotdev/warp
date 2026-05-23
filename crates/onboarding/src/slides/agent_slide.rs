@@ -3,26 +3,26 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use ui_components::button::State as ButtonState;
 use ui_components::{button, Component as _, Options as _};
-use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::icons::Icon;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::send_telemetry_from_ctx;
+use black_core::ui::appearance::Appearance;
+use black_core::ui::icons::Icon;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::Fill;
+use black_ui::elements::{
     AnchorPair, Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, Dismiss, Empty, Flex, FormattedTextElement, Hoverable,
     Icon as WarpUiIcon, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
     OffsetType, ParentElement, ParentOffsetBounds, PositioningAxis, Radius, SavePosition,
     ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Stack, Text, XAxisAnchor, YAxisAnchor,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::keymap::Keystroke;
-use warpui::platform::Cursor;
-use warpui::scene::DropShadow;
-use warpui::text_layout::TextAlignment;
-use warpui::ui_components::components::{UiComponent as _, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::keymap::Keystroke;
+use black_ui::platform::Cursor;
+use black_ui::scene::DropShadow;
+use black_ui::text_layout::TextAlignment;
+use black_ui::ui_components::components::{UiComponent as _, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, Gradient, SingletonEntity as _, TypedActionView, View, ViewContext,
 };
 
@@ -41,8 +41,8 @@ impl button::Theme for UpgradeButtonTheme {
         &self,
         button_state: ButtonState,
         appearance: &Appearance,
-    ) -> Option<warp_core::ui::theme::Fill> {
-        use warp_core::ui::color::blend::Blend;
+    ) -> Option<black_core::ui::theme::Fill> {
+        use black_core::ui::color::blend::Blend;
         let theme = appearance.theme();
         let base = theme.foreground();
         match button_state {
@@ -56,7 +56,7 @@ impl button::Theme for UpgradeButtonTheme {
 
     fn text_color(
         &self,
-        background: Option<warp_core::ui::theme::Fill>,
+        background: Option<black_core::ui::theme::Fill>,
         appearance: &Appearance,
     ) -> ColorU {
         let bg = background
@@ -148,7 +148,7 @@ pub enum AgentSlideEvent {
 }
 
 pub struct AgentSlide {
-    onboarding_state: warpui::ModelHandle<OnboardingStateModel>,
+    onboarding_state: black_ui::ModelHandle<OnboardingStateModel>,
 
     /// Mouse state handles for each model row.
     model_mouse_states: Vec<MouseStateHandle>,
@@ -197,7 +197,7 @@ fn sorted_models(models: &[OnboardingModelInfo]) -> Vec<OnboardingModelInfo> {
 
 impl AgentSlide {
     pub(crate) fn new(
-        onboarding_state: warpui::ModelHandle<OnboardingStateModel>,
+        onboarding_state: black_ui::ModelHandle<OnboardingStateModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let model_count = onboarding_state.as_ref(ctx).models().len();
@@ -230,7 +230,7 @@ impl AgentSlide {
                         me.show_plan_activated_toast = true;
                         // Auto-dismiss after the configured duration.
                         let _ = ctx.spawn(
-                            warpui::r#async::Timer::after(PLAN_ACTIVATED_TOAST_DURATION),
+                            black_ui::r#async::Timer::after(PLAN_ACTIVATED_TOAST_DURATION),
                             |me: &mut Self, _, ctx| {
                                 if me.show_plan_activated_toast {
                                     me.show_plan_activated_toast = false;
@@ -999,7 +999,7 @@ impl AgentSlide {
         );
 
         let step_index = 2;
-        let step_count = if warp_core::features::FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
+        let step_count = if black_core::features::FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
         {
             5
         } else {
@@ -1358,7 +1358,7 @@ impl View for AgentSlide {
         let mut stack = Stack::new();
         stack.add_child(slide);
         stack.add_child(
-            warpui::elements::Align::new(bottom_overlay)
+            black_ui::elements::Align::new(bottom_overlay)
                 .bottom_center()
                 .finish(),
         );

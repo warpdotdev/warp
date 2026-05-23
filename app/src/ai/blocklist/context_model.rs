@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use ai::project_context::model::ProjectContextModel;
 use parking_lot::FairMutex;
-use warp_core::features::FeatureFlag;
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+use black_core::features::FeatureFlag;
+use black_ui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::agent_view::{AgentViewController, AgentViewEntryOrigin, EnterAgentViewError};
 use super::block::DirectoryContext;
@@ -271,7 +271,7 @@ impl BlocklistAIContextModel {
         // In sandboxed/autonomous mode (SDK mode with --sandboxed flag), automatically set
         // conversations to RunToCompletion mode so they don't wait for user confirmation.
         let pending_query_state =
-            if warp_core::execution_mode::AppExecutionMode::as_ref(ctx).is_sandboxed() {
+            if black_core::execution_mode::AppExecutionMode::as_ref(ctx).is_sandboxed() {
                 PendingQueryState::New {
                     autoexecute_override: AIConversationAutoexecuteMode::RunToCompletion,
                 }

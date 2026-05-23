@@ -4,7 +4,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use anyhow::Error;
-use warpui::ModelSpawner;
+use black_ui::ModelSpawner;
 
 use super::terminal::TerminalDriver;
 use crate::ai::cloud_environments::ProvidersConfig;

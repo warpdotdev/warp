@@ -1,4 +1,4 @@
-use warpui::integration::TestStep;
+use black_ui::integration::TestStep;
 
 use crate::integration_testing::view_getters::pane_group_view;
 use crate::pane_group::tree::Direction;

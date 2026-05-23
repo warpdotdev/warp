@@ -12,10 +12,10 @@ mod package_installers;
 pub(crate) use history::UpArrowHistoryConfig;
 pub use history::{History, HistoryEntry, HistoryEvent, ShellHost};
 pub use view::{Event, TerminalView};
-pub use warp_terminal::shell::{self, ShellLaunchData};
-use warpui::geometry::vector::Vector2F;
-use warpui::units::{IntoPixels, Lines, Pixels};
-use warpui::{AppContext, WindowId};
+pub use black_terminal::shell::{self, ShellLaunchData};
+use black_ui::geometry::vector::Vector2F;
+use black_ui::units::{IntoPixels, Lines, Pixels};
+use black_ui::{AppContext, WindowId};
 mod block_list_settings;
 
 mod alias;

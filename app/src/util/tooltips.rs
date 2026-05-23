@@ -3,11 +3,11 @@
 #[cfg(feature = "local_fs")]
 use std::path::Path;
 
-use warpui::elements::{
+use black_ui::elements::{
     Border, Container, CornerRadius, Flex, MouseStateHandle, ParentElement, Radius, Text,
 };
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{AppContext, Element, EventContext, SingletonEntity};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{AppContext, Element, EventContext, SingletonEntity};
 
 use crate::appearance::Appearance;
 use crate::settings::PrivacySettings;
@@ -242,7 +242,7 @@ where
 /// - Whether Warp is an OS-level default editor (skips Markdown files)
 #[cfg(feature = "local_fs")]
 pub fn should_show_open_in_warp_link(path: &Path, app: &AppContext) -> bool {
-    use warpui::SingletonEntity;
+    use black_ui::SingletonEntity;
 
     use crate::code::view::is_binary_file;
     use crate::notebooks::file::is_markdown_file;

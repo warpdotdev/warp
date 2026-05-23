@@ -14,14 +14,14 @@ use repo_metadata::file_tree_store::{
 use repo_metadata::local_model::IndexedRepoState;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::{FileTreeEntry, RepoMetadataModel};
-use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::Fill;
-use warp_core::{send_telemetry_from_ctx, HostId};
-use warp_util::path::LineAndColumnArg;
-use warp_util::standardized_path::StandardizedPath;
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::Fill;
+use black_core::{send_telemetry_from_ctx, HostId};
+use black_util::path::LineAndColumnArg;
+use black_util::standardized_path::StandardizedPath;
+use black_ui::clipboard::ClipboardContent;
+use black_ui::elements::{
     AcceptedByDropTarget, Align, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
     CrossAxisAlignment, Dismiss, Draggable, DraggableState, Empty, Flex, FormattedTextElement,
     Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
@@ -29,11 +29,11 @@ use warpui::elements::{
     Scrollable, ScrollableElement, ScrollbarWidth, Shrinkable, Stack, Text, UniformList,
     UniformListState,
 };
-use warpui::fonts::{Properties, Style, Weight};
-use warpui::keymap::FixedBinding;
-use warpui::platform::Cursor;
-use warpui::text_layout::TextAlignment;
-use warpui::{
+use black_ui::fonts::{Properties, Style, Weight};
+use black_ui::keymap::FixedBinding;
+use black_ui::platform::Cursor;
+use black_ui::text_layout::TextAlignment;
+use black_ui::{
     id, AppContext, BlurContext, Element, Entity, EventContext, ModelHandle, SingletonEntity as _,
     TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle,
 };
@@ -995,8 +995,8 @@ impl FileTreeView {
             .collect();
 
         // Ancestor-dedup only local inputs. Shared with `GlobalSearchView`
-        // via `warp_util::path::group_roots_by_common_ancestor`.
-        let grouping = warp_util::path::group_roots_by_common_ancestor(&local_inputs);
+        // via `black_util::path::group_roots_by_common_ancestor`.
+        let grouping = black_util::path::group_roots_by_common_ancestor(&local_inputs);
 
         // Final displayed order: local surviving roots (in input order),
         // followed by preserved remote roots (in their existing order).
@@ -2252,7 +2252,7 @@ impl FileTreeView {
                 if is_remote {
                     // Emit a remote open event if we have a host ID.
                     if let Some(host_id) = &root_dir.remote_host_id {
-                        let remote_path = warp_util::remote_path::RemotePath::new(
+                        let remote_path = black_util::remote_path::RemotePath::new(
                             host_id.clone(),
                             (*metadata.path).clone(),
                         );
@@ -2686,7 +2686,7 @@ impl FileTreeView {
                         ScrollbarWidth::Auto,
                         theme.nonactive_ui_detail().into(),
                         theme.active_ui_detail().into(),
-                        warpui::elements::Fill::None,
+                        black_ui::elements::Fill::None,
                     )
                     .with_overlayed_scrollbar()
                     .finish(),
@@ -2798,7 +2798,7 @@ impl FileTreeView {
 
         // Create loading icon
         let loading_icon = Icon::Loading
-            .to_warpui_icon(warp_core::ui::theme::Fill::Solid(
+            .to_warpui_icon(black_core::ui::theme::Fill::Solid(
                 internal_colors::neutral_6(theme),
             ))
             .finish();
@@ -2820,7 +2820,7 @@ impl FileTreeView {
         header_row.add_child(loading_icon);
 
         let folder_icon = Icon::Folder
-            .to_warpui_icon(warp_core::ui::theme::Fill::Solid(
+            .to_warpui_icon(black_core::ui::theme::Fill::Solid(
                 internal_colors::neutral_6(theme),
             ))
             .finish();

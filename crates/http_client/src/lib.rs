@@ -16,9 +16,9 @@ use reqwest::IntoUrl;
 use reqwest_eventsource::RequestBuilderExt;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use warp_core::channel::{Channel, ChannelState};
-use warp_core::operating_system_info::OperatingSystemInfo;
-use warp_core::{execution_mode, report_error};
+use black_core::channel::{Channel, ChannelState};
+use black_core::operating_system_info::OperatingSystemInfo;
+use black_core::{execution_mode, report_error};
 
 pub mod headers {
     /// Custom Warp header indicating the version of the Warp app.

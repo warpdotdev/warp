@@ -16,7 +16,7 @@ mod mac {
     use libc::{setlocale, LC_ALL, LC_CTYPE};
     use objc::runtime::Object;
     use objc::{class, msg_send, sel, sel_impl};
-    use warpui::platform::mac::utils::nsstring_as_str;
+    use black_ui::platform::mac::utils::nsstring_as_str;
 
     use super::*;
 

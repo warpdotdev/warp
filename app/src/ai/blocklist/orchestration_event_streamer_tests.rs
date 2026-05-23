@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use mockall::predicate::eq;
-use warpui::App;
+use black_ui::App;
 
 use super::*;
 use crate::ai::agent::conversation::AIConversation;
@@ -250,7 +250,7 @@ fn make_server_metadata_with_harness(
 fn dormant_local_claude_child_skips_generic_sse_but_allows_wake_listener() {
     use std::sync::Arc;
 
-    use warpui::App;
+    use black_ui::App;
 
     use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
     use crate::server::server_api::ai::MockAIClient;
@@ -270,7 +270,7 @@ fn dormant_local_claude_child_skips_generic_sse_but_allows_wake_listener() {
             AIAgentHarness::ClaudeCode,
         ));
         let conversation_id = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
+        let terminal_view_id = black_ui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
             model.update_conversation_status(
@@ -291,7 +291,7 @@ fn dormant_local_claude_child_skips_generic_sse_but_allows_wake_listener() {
 
         streamer.update(&mut app, |me, _| {
             let stream = me.streams.entry(conversation_id).or_default();
-            stream.consumers.insert(warpui::EntityId::new());
+            stream.consumers.insert(black_ui::EntityId::new());
             stream.watched_run_ids.insert(run_id);
         });
 
@@ -312,7 +312,7 @@ fn dormant_local_claude_child_skips_generic_sse_but_allows_wake_listener() {
 fn persist_event_cursor_keeps_the_max_sequence_and_updates_history_model() {
     use std::sync::Arc;
 
-    use warpui::App;
+    use black_ui::App;
 
     use crate::ai::agent::conversation::{AIConversation, AIConversationId};
     use crate::persistence::ModelEvent;
@@ -336,7 +336,7 @@ fn persist_event_cursor_keeps_the_max_sequence_and_updates_history_model() {
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id(run_id.clone());
         let conversation_id: AIConversationId = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
+        let terminal_view_id = black_ui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
         });
@@ -383,7 +383,7 @@ fn persist_event_cursor_keeps_the_max_sequence_and_updates_history_model() {
 fn wake_ready_does_not_advance_cursor_before_wake_preparation() {
     use std::sync::Arc;
 
-    use warpui::App;
+    use black_ui::App;
 
     use crate::ai::agent::conversation::AIConversation;
     use crate::ai::agent_events::AgentMessageEventMetadata;
@@ -398,7 +398,7 @@ fn wake_ready_does_not_advance_cursor_before_wake_preparation() {
         let mut conversation = AIConversation::new(false, false);
         conversation.set_last_event_sequence(17);
         let conversation_id = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
+        let terminal_view_id = black_ui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
         });
@@ -448,8 +448,8 @@ fn wake_ready_does_not_advance_cursor_before_wake_preparation() {
 fn dormant_local_claude_child_uses_task_harness_when_server_metadata_missing() {
     use std::sync::Arc;
 
-    use warp_cli::agent::Harness;
-    use warpui::App;
+    use black_cli::agent::Harness;
+    use black_ui::App;
 
     use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
     use crate::server::server_api::ai::MockAIClient;
@@ -466,7 +466,7 @@ fn dormant_local_claude_child_uses_task_harness_when_server_metadata_missing() {
         conversation.set_run_id(run_id.clone());
         conversation.set_parent_conversation_id(parent_id);
         let conversation_id = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
+        let terminal_view_id = black_ui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
             model.update_conversation_status(
@@ -487,7 +487,7 @@ fn dormant_local_claude_child_uses_task_harness_when_server_metadata_missing() {
 
         streamer.update(&mut app, |me, _| {
             let stream = me.streams.entry(conversation_id).or_default();
-            stream.consumers.insert(warpui::EntityId::new());
+            stream.consumers.insert(black_ui::EntityId::new());
             stream.watched_run_ids.insert(run_id);
         });
 
@@ -579,7 +579,7 @@ async fn dormant_claude_wake_consumer_stops_on_first_target_event() {
 fn restored_conversations_skip_v2_streaming_when_orchestration_v2_disabled() {
     use std::sync::Arc;
 
-    use warpui::App;
+    use black_ui::App;
 
     use crate::ai::agent::conversation::AIConversation;
     use crate::server::server_api::ai::MockAIClient;
@@ -593,7 +593,7 @@ fn restored_conversations_skip_v2_streaming_when_orchestration_v2_disabled() {
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id("550e8400-e29b-41d4-a716-446655440500".to_string());
         let conversation_id = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
+        let terminal_view_id = black_ui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
         });
@@ -684,7 +684,7 @@ async fn sse_forwarding_consumer_skips_message_hydration_when_disabled() {
 fn finish_restore_fetch_uses_server_cursor_when_sqlite_is_absent() {
     use std::sync::Arc;
 
-    use warpui::App;
+    use black_ui::App;
 
     use crate::ai::agent::conversation::AIConversation;
     use crate::server::server_api::ai::MockAIClient;
@@ -700,7 +700,7 @@ fn finish_restore_fetch_uses_server_cursor_when_sqlite_is_absent() {
         // the in-memory cursor to be 42 (max(0, 42)).
         let conversation = AIConversation::new(false, false);
         let conversation_id = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
+        let terminal_view_id = black_ui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
         });
@@ -745,7 +745,7 @@ fn finish_restore_fetch_uses_server_cursor_when_sqlite_is_absent() {
 fn handle_event_batch_persists_max_seq_to_history_model() {
     use std::sync::Arc;
 
-    use warpui::App;
+    use black_ui::App;
 
     use crate::ai::agent::conversation::{AIConversation, AIConversationId};
     use crate::persistence::ModelEvent;
@@ -771,7 +771,7 @@ fn handle_event_batch_persists_max_seq_to_history_model() {
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id("550e8400-e29b-41d4-a716-446655440200".to_string());
         let conversation_id: AIConversationId = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
+        let terminal_view_id = black_ui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
         });
@@ -858,7 +858,7 @@ fn handle_event_batch_drops_events_for_killed_run_ids_after_persisting_cursor() 
         let mut parent_conversation = AIConversation::new(false, false);
         parent_conversation.set_run_id(parent_run_id.clone());
         let parent_conversation_id = parent_conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
+        let terminal_view_id = black_ui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![parent_conversation], ctx);
         });
@@ -981,7 +981,7 @@ fn finish_restore_fetch_no_ops_when_conversation_deleted_mid_flight() {
     // streamer state for the deleted conversation.
     use std::sync::Arc;
 
-    use warpui::App;
+    use black_ui::App;
 
     use crate::ai::agent::conversation::AIConversation;
     use crate::server::server_api::ai::MockAIClient;
@@ -995,7 +995,7 @@ fn finish_restore_fetch_no_ops_when_conversation_deleted_mid_flight() {
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id("550e8400-e29b-41d4-a716-446655440300".to_string());
         let conversation_id = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
+        let terminal_view_id = black_ui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
         });
@@ -1052,7 +1052,7 @@ fn finish_restore_fetch_err_does_not_resurrect_deleted_conversation() {
     // indefinite retry loop).
     use std::sync::Arc;
 
-    use warpui::App;
+    use black_ui::App;
 
     use crate::ai::agent::conversation::AIConversation;
     use crate::server::server_api::ai::MockAIClient;
@@ -1066,7 +1066,7 @@ fn finish_restore_fetch_err_does_not_resurrect_deleted_conversation() {
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id("550e8400-e29b-41d4-a716-446655440500".to_string());
         let conversation_id = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
+        let terminal_view_id = black_ui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
         });
@@ -1119,7 +1119,7 @@ fn on_conversation_removed_prunes_stale_child_run_id_from_parent() {
     // history model emits `RemoveConversation` after dropping the record.
     use std::sync::Arc;
 
-    use warpui::App;
+    use black_ui::App;
 
     use crate::ai::agent::conversation::AIConversation;
     use crate::server::server_api::ai::MockAIClient;
@@ -1135,7 +1135,7 @@ fn on_conversation_removed_prunes_stale_child_run_id_from_parent() {
         let child_run_id = "550e8400-e29b-41d4-a716-446655440600".to_string();
         child_conversation.set_run_id(child_run_id.clone());
         let child_id = child_conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
+        let terminal_view_id = black_ui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![child_conversation], ctx);
         });
@@ -1180,7 +1180,7 @@ fn on_conversation_removed_prunes_stale_child_run_id_from_parent() {
 fn on_conversation_removed_prunes_killed_child_run_id_from_parent_but_keeps_tombstone() {
     use std::sync::Arc;
 
-    use warpui::App;
+    use black_ui::App;
 
     use crate::ai::agent::conversation::AIConversation;
     use crate::server::server_api::ai::MockAIClient;
@@ -1233,7 +1233,7 @@ fn finish_restore_fetch_reconnects_sse_when_children_added_to_open_connection() 
     // with the updated run_id set rather than leaving children unwatched.
     use std::sync::Arc;
 
-    use warpui::App;
+    use black_ui::App;
 
     use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
     use crate::server::server_api::ai::MockAIClient;
@@ -1248,7 +1248,7 @@ fn finish_restore_fetch_reconnects_sse_when_children_added_to_open_connection() 
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id(own_run_id.to_string());
         let conversation_id = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
+        let terminal_view_id = black_ui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
             model.update_conversation_status(
@@ -1275,7 +1275,7 @@ fn finish_restore_fetch_reconnects_sse_when_children_added_to_open_connection() 
         // bail and reconnect_sse would tear the connection down instead
         // of opening a new one.
         let (_, rx) = futures::channel::mpsc::unbounded::<SseStreamItem>();
-        let consumer_id = warpui::EntityId::new();
+        let consumer_id = black_ui::EntityId::new();
         poller.update(&mut app, |me, _| {
             let stream = me.streams.entry(conversation_id).or_default();
             stream.event_cursor = 0;

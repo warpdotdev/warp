@@ -18,8 +18,8 @@ pub mod sections;
 mod view;
 use serde::{Deserialize, Serialize};
 pub use view::{ResourceCenterAction, ResourceCenterEvent, ResourceCenterPage, ResourceCenterView};
-use warpui::keymap::Keystroke;
-use warpui::{AppContext, Entity, SingletonEntity};
+use black_ui::keymap::Keystroke;
+use black_ui::{AppContext, Entity, SingletonEntity};
 
 use self::section_views::feature_section::FeatureSection;
 

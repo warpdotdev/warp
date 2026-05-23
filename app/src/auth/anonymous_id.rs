@@ -1,5 +1,5 @@
 use uuid::Uuid;
-use warp_core::user_preferences::GetUserPreferences;
+use black_core::user_preferences::GetUserPreferences;
 
 /// Key used to persist the anonymous id to user defaults. We use "ExperimentId" as the key
 /// since we use the persisted id to determine experiment groups, and we want to avoid

@@ -1,9 +1,9 @@
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
-use warp_graphql::queries::get_user::FirebaseProfile;
-use warp_graphql::scalars::time::ServerTimestamp;
-pub use warp_server_client::auth::{TEST_USER_EMAIL, TEST_USER_UID};
+use black_graphql::queries::get_user::FirebaseProfile;
+use black_graphql::scalars::time::ServerTimestamp;
+pub use black_server_client::auth::{TEST_USER_EMAIL, TEST_USER_UID};
 
 use super::UserUid;
 use crate::server::datetime_ext::DateTimeExt;
@@ -26,9 +26,9 @@ pub enum PrincipalType {
     ServiceAccount,
 }
 
-impl From<warp_graphql::queries::get_user::PrincipalType> for PrincipalType {
-    fn from(value: warp_graphql::queries::get_user::PrincipalType) -> Self {
-        use warp_graphql::queries::get_user::PrincipalType as GqlPrincipalType;
+impl From<black_graphql::queries::get_user::PrincipalType> for PrincipalType {
+    fn from(value: black_graphql::queries::get_user::PrincipalType) -> Self {
+        use black_graphql::queries::get_user::PrincipalType as GqlPrincipalType;
         match value {
             GqlPrincipalType::User => PrincipalType::User,
             GqlPrincipalType::ServiceAccount => PrincipalType::ServiceAccount,
@@ -36,18 +36,18 @@ impl From<warp_graphql::queries::get_user::PrincipalType> for PrincipalType {
     }
 }
 
-impl TryFrom<warp_graphql::mutations::create_anonymous_user::AnonymousUserType>
+impl TryFrom<black_graphql::mutations::create_anonymous_user::AnonymousUserType>
     for AnonymousUserType
 {
     type Error = anyhow::Error;
     fn try_from(
-        value: warp_graphql::mutations::create_anonymous_user::AnonymousUserType,
+        value: black_graphql::mutations::create_anonymous_user::AnonymousUserType,
     ) -> Result<Self, Self::Error> {
         match value {
-            warp_graphql::mutations::create_anonymous_user::AnonymousUserType::NativeClientAnonymousUser => Ok(AnonymousUserType::NativeClientAnonymousUser),
-            warp_graphql::mutations::create_anonymous_user::AnonymousUserType::NativeClientAnonymousUserFeatureGated => Ok(AnonymousUserType::NativeClientAnonymousUserFeatureGated),
-            warp_graphql::mutations::create_anonymous_user::AnonymousUserType::WebClientAnonymousUser => Ok(AnonymousUserType::WebClientAnonymousUser),
-            warp_graphql::mutations::create_anonymous_user::AnonymousUserType::Other(_) => {
+            black_graphql::mutations::create_anonymous_user::AnonymousUserType::NativeClientAnonymousUser => Ok(AnonymousUserType::NativeClientAnonymousUser),
+            black_graphql::mutations::create_anonymous_user::AnonymousUserType::NativeClientAnonymousUserFeatureGated => Ok(AnonymousUserType::NativeClientAnonymousUserFeatureGated),
+            black_graphql::mutations::create_anonymous_user::AnonymousUserType::WebClientAnonymousUser => Ok(AnonymousUserType::WebClientAnonymousUser),
+            black_graphql::mutations::create_anonymous_user::AnonymousUserType::Other(_) => {
                 Err(anyhow!("could not convert unknown anonymous user type"))
             },
         }
@@ -61,12 +61,12 @@ pub struct PersonalObjectLimits {
     pub workflow_limit: usize,
 }
 
-impl TryFrom<warp_graphql::queries::get_user::AnonymousUserPersonalObjectLimits>
+impl TryFrom<black_graphql::queries::get_user::AnonymousUserPersonalObjectLimits>
     for PersonalObjectLimits
 {
     type Error = anyhow::Error;
     fn try_from(
-        value: warp_graphql::queries::get_user::AnonymousUserPersonalObjectLimits,
+        value: black_graphql::queries::get_user::AnonymousUserPersonalObjectLimits,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             env_var_limit: value.env_var_limit as usize,

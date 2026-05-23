@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use futures_util::stream::AbortHandle;
 use markdown_parser::markdown_parser::parse_markdown_to_raw_text;
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::{Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle, WindowId};
+use black_ui::r#async::SpawnedFutureHandle;
+use black_ui::{Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle, WindowId};
 
 use super::notebook::NotebookView;
 use super::CloudNotebook;

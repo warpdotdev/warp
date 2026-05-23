@@ -16,11 +16,11 @@ pub use convert_from::{
 use futures_lite::Stream;
 pub use r#impl::generate_multi_agent_output;
 use serde::Serialize;
-use warp_core::channel::ChannelState;
-use warp_core::execution_mode::AppExecutionMode;
-use warp_core::features::FeatureFlag;
-use warp_core::user_preferences::GetUserPreferences;
-use warpui::{AppContext, EntityId, SingletonEntity as _};
+use black_core::channel::ChannelState;
+use black_core::execution_mode::AppExecutionMode;
+use black_core::features::FeatureFlag;
+use black_core::user_preferences::GetUserPreferences;
+use black_ui::{AppContext, EntityId, SingletonEntity as _};
 
 use super::{AIAgentInput, MCPContext, MCPServer, RequestMetadata, Suggestions};
 use crate::ai::agent::conversation::AIConversationId;

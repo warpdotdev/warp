@@ -4,14 +4,14 @@ use std::borrow::Cow;
 use std::time::Duration;
 
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::Icon;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::Icon;
+use black_ui::elements::{
     Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex,
     MainAxisAlignment, MainAxisSize, OffsetPositioning, ParentElement, PositionedElementAnchor,
     PositionedElementOffsetBounds, Radius, Rect, SavePosition, Stack, Text,
 };
-use warpui::{AppContext, Element, WindowId};
+use black_ui::{AppContext, Element, WindowId};
 
 /// The state of a progress step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

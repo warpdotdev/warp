@@ -14,8 +14,8 @@ use instant::Instant;
 #[cfg(feature = "local_fs")]
 use repo_metadata::entry::IgnoredPathStrategy;
 use repo_metadata::Repository;
-use warp_core::safe_error;
-use warpui::{Entity, ModelContext, ModelHandle};
+use black_core::safe_error;
+use black_ui::{Entity, ModelContext, ModelHandle};
 
 use super::fragment_metadata::{
     FragmentMetadata, LeafToFragmentMetadata, LeafToFragmentMetadataUpdates,
@@ -48,11 +48,11 @@ cfg_if::cfg_if! {
             full_source_code_embedding::sync_client::CodebaseIndexSyncOperation,
             full_source_code_embedding::FragmentLocation
         };
-        use warp_core::send_telemetry_from_ctx;
-        use warp_core::interval_timer::IntervalTimer;
-        use warpui::r#async::Timer;
-        use warpui::SingletonEntity;
-        use warp_core::sync_queue::SyncQueue;
+        use black_core::send_telemetry_from_ctx;
+        use black_core::interval_timer::IntervalTimer;
+        use black_ui::r#async::Timer;
+        use black_ui::SingletonEntity;
+        use black_core::sync_queue::SyncQueue;
         use sha2::Digest;
     }
 }
@@ -595,7 +595,7 @@ impl CodebaseIndex {
         let mut flushed_fragment_result = FlushFragmentResult::default();
 
         if !changed_files.deletions().is_empty() {
-            if warp_core::channel::ChannelState::enable_debug_features() {
+            if black_core::channel::ChannelState::enable_debug_features() {
                 log::info!(
                     "Trying to remove changed files: {:?}",
                     changed_files.deletions()
@@ -661,7 +661,7 @@ impl CodebaseIndex {
         }
 
         if !changed_files.upsertions.is_empty() {
-            if warp_core::channel::ChannelState::enable_debug_features() {
+            if black_core::channel::ChannelState::enable_debug_features() {
                 log::debug!(
                     "Trying to upsert changed files: {:?}",
                     &changed_files.upsertions

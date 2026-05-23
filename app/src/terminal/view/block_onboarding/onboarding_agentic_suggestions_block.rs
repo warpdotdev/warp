@@ -3,17 +3,17 @@ use markdown_parser::weight::CustomWeight;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::color::internal_colors;
+use black_ui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex,
     FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
     ParentElement, Radius, Text, Wrap,
 };
-use warpui::keymap::Keystroke;
-use warpui::platform::Cursor;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::keymap::Keystroke;
+use black_ui::platform::Cursor;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     WeakViewHandle,
 };
@@ -518,7 +518,7 @@ impl OnboardingAgenticSuggestionsBlock {
                         // Use a more muted background for disabled state
                         theme.surface_1()
                     } else {
-                        warp_core::ui::theme::Fill::Solid(internal_colors::neutral_1(theme))
+                        black_core::ui::theme::Fill::Solid(internal_colors::neutral_1(theme))
                     };
 
                     let mut button_content =

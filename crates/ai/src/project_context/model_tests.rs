@@ -297,7 +297,7 @@ fn test_merge_rediscovery_keeps_latest() {
 }
 
 // Helper for global-rules tests: inserts a synthetic global rule directly into
-// the model. Bypasses the watcher infrastructure (which requires the warpui
+// the model. Bypasses the watcher infrastructure (which requires the black_ui
 // runtime) so we can exercise `find_applicable_rules`'s layering logic.
 fn insert_global_rule(model: &mut ProjectContextModel, path: &Path, content: &str) {
     model.global_rules.rules.insert(

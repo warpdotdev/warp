@@ -8,17 +8,17 @@ use futures::stream::AbortHandle;
 use itertools::Itertools;
 #[cfg_attr(not(feature = "local_fs"), allow(unused_imports))]
 use parking_lot::{FairMutex, Mutex};
-use warp_completer::completer::{
+use black_completer::completer::{
     self, expand_command_aliases, AliasExpansionResult, CompleterOptions,
     CompletionsFallbackStrategy, MatchStrategy,
 };
-use warp_completer::meta::Spanned;
-use warp_completer::parsers::hir::{Command, Expression, FlagType};
-use warp_completer::parsers::ParsedExpression;
-use warp_core::features::FeatureFlag;
+use black_completer::meta::Spanned;
+use black_completer::parsers::hir::{Command, Expression, FlagType};
+use black_completer::parsers::ParsedExpression;
+use black_core::features::FeatureFlag;
 #[cfg(feature = "local_fs")]
-use warpui::r#async::FutureExt;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+use black_ui::r#async::FutureExt;
+use black_ui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::generate_ai_input_suggestions::{
     create_generate_ai_input_suggestions_request, get_context_messages,
@@ -42,7 +42,7 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use diesel::SqliteConnection;
         use std::path::PathBuf;
-        use warp_completer::parsers::hir::ArgType;
+        use black_completer::parsers::hir::ArgType;
     }
 }
 
@@ -57,7 +57,7 @@ const NUM_ADDITIONAL_PREV_COMMAND_CONTEXT_LLM: usize = 2;
 #[cfg(feature = "local_fs")]
 const ARG_GENERATOR_VALIDATION_TIMEOUT: Duration = Duration::from_millis(150);
 
-pub fn is_next_command_enabled(app: &warpui::AppContext) -> bool {
+pub fn is_next_command_enabled(app: &black_ui::AppContext) -> bool {
     AISettings::as_ref(app).is_intelligent_autosuggestions_enabled(app)
         && UserWorkspaces::as_ref(app).is_next_command_enabled()
 }

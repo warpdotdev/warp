@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use futures_lite::future::yield_now;
-use warpui::{AppContext, SingletonEntity};
+use black_ui::{AppContext, SingletonEntity};
 
 use super::HistorySearchItem;
 use crate::search::async_snapshot_data_source::AsyncSnapshotDataSource;

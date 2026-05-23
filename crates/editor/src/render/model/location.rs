@@ -3,7 +3,7 @@
 use num_traits::SaturatingSub;
 use string_offset::CharOffset;
 use sum_tree::SeekBias;
-use warpui::units::{IntoPixels, Pixels};
+use black_ui::units::{IntoPixels, Pixels};
 
 use super::positioned::{Positioned, PositionedCursor};
 use super::{

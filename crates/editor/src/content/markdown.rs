@@ -14,9 +14,9 @@ use markdown_parser::{
 };
 use markup5ever::ns;
 use string_offset::CharOffset;
-use warpui::elements::{ListIndentLevel, ListNumbering};
-use warpui::text::point::Point;
-use warpui::{AppContext, ModelContext, ModelHandle};
+use black_ui::elements::{ListIndentLevel, ListNumbering};
+use black_ui::text::point::Point;
+use black_ui::{AppContext, ModelContext, ModelHandle};
 
 use super::buffer::{
     ActionWithSelectionDelta, Buffer, EditOrigin, EditResult, StyledBufferBlock,

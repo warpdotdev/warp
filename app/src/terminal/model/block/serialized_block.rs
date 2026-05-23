@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use chrono::{DateTime, Local, TimeZone as _};
 use serde::{Deserialize, Serialize};
 use serde_bytes_repr::{ByteFmtDeserializer, ByteFmtSerializer};
-use warp_core::command::ExitCode;
+use black_core::command::ExitCode;
 
 use super::AgentInteractionMetadata;
 use crate::ai::agent::conversation::AIConversationId;

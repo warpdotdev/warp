@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use typed_path::TypedPath;
-use warp_util::path::{convert_wsl_to_windows_host_path, WSLPathConversionError};
+use black_util::path::{convert_wsl_to_windows_host_path, WSLPathConversionError};
 
 use crate::terminal::shell::ShellType;
 

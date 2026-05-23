@@ -19,9 +19,9 @@ use std::fmt;
 pub use index::DriveIndexVariant;
 pub use panel::{DrivePanel, DrivePanelEvent};
 use serde::{Deserialize, Serialize};
-use warp_core::user_preferences::GetUserPreferences as _;
-pub use warp_server_client::drive::CloudObjectTypeAndId;
-use warpui::AppContext;
+use black_core::user_preferences::GetUserPreferences as _;
+pub use black_server_client::drive::CloudObjectTypeAndId;
+use black_ui::AppContext;
 
 use crate::cloud_object::model::view::{CloudViewModel, UpdateTimestamp};
 use crate::cloud_object::{CloudObject, ObjectType};

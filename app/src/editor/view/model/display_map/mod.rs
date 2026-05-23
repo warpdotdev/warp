@@ -7,8 +7,8 @@ use anyhow::{Context, Result};
 pub use fold_map::BufferRows;
 use fold_map::FoldMap;
 use string_offset::CharOffset;
-use warpui::text::point::Point;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle};
+use black_ui::text::point::Point;
+use black_ui::{AppContext, Entity, ModelContext, ModelHandle};
 
 use super::buffer::{self, Anchor, Buffer, Edit, StylizedChar, ToCharOffset, ToPoint};
 use crate::editor::soft_wrap::{self, DisplayPointAndClampDirection, SoftWrapPoint, SoftWrapState};

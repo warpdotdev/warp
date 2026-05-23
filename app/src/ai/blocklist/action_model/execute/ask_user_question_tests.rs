@@ -1,6 +1,6 @@
 use ai::agent::action::AskUserQuestionItem;
 use ai::agent::action_result::{AskUserQuestionAnswerItem, AskUserQuestionResult};
-use warpui::{App, EntityId, ModelHandle};
+use black_ui::{App, EntityId, ModelHandle};
 
 use super::*;
 use crate::ai::agent::conversation::AIConversationId;

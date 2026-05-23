@@ -3,8 +3,8 @@ use std::ffi::OsString;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
 use itertools::Itertools;
-use warp_core::channel::ChannelState;
-use warp_core::features::FeatureFlag;
+use black_core::channel::ChannelState;
+use black_core::features::FeatureFlag;
 use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use winreg::enums::{RegType, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};

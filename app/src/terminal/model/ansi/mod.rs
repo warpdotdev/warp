@@ -29,9 +29,9 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::debug;
 use vte::{Params, Parser as VteParser, Perform as VtePerform};
-pub use warp_terminal::model::ansi::control_sequence_parameters::*;
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
-use warpui::color::ColorU;
+pub use black_terminal::model::ansi::control_sequence_parameters::*;
+use black_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use black_ui::color::ColorU;
 
 use super::kitty::parse_kitty_chunk;
 use super::terminal_model::TmuxInstallationState;

@@ -14,5 +14,5 @@ chrono = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
 thiserror.workspace = true
-warp_core = { workspace = true }
-warpui.workspace = true
+black_core = { workspace = true }
+black_ui.workspace = true

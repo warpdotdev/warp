@@ -12,19 +12,19 @@ use markdown_parser::{
 use pathfinder_geometry::vector::Vector2F;
 use string_offset::CharOffset;
 use vec1::vec1;
-use warp_core::features::FeatureFlag;
-use warp_editor::content::buffer::{AutoScrollBehavior, BufferSelectAction, SelectionOffsets};
-use warp_editor::content::text::{BlockType, BufferBlockStyle, CodeBlockType, TextStyles};
-use warp_editor::model::{CoreEditorModel, RichTextEditorModel};
-use warp_editor::render::model::viewport::SizeInfo;
-use warp_editor::render::model::{BlockItem, RenderEvent};
-use warp_editor::selection::{TextDirection, TextUnit};
-use warpui::elements::ListIndentLevel;
-use warpui::platform::WindowStyle;
-use warpui::presenter::ChildView;
-use warpui::r#async::{block_on, FutureId, Timer};
-use warpui::text::word_boundaries::WordBoundariesPolicy;
-use warpui::{
+use black_core::features::FeatureFlag;
+use black_editor::content::buffer::{AutoScrollBehavior, BufferSelectAction, SelectionOffsets};
+use black_editor::content::text::{BlockType, BufferBlockStyle, CodeBlockType, TextStyles};
+use black_editor::model::{CoreEditorModel, RichTextEditorModel};
+use black_editor::render::model::viewport::SizeInfo;
+use black_editor::render::model::{BlockItem, RenderEvent};
+use black_editor::selection::{TextDirection, TextUnit};
+use black_ui::elements::ListIndentLevel;
+use black_ui::platform::WindowStyle;
+use black_ui::presenter::ChildView;
+use black_ui::r#async::{block_on, FutureId, Timer};
+use black_ui::text::word_boundaries::WordBoundariesPolicy;
+use black_ui::{
     AddSingletonModel, App, AppContext, Element, Entity, ModelHandle, SingletonEntity,
     TypedActionView, View, ViewHandle,
 };
@@ -69,7 +69,7 @@ impl View for TestView {
         "TestView"
     }
 
-    fn render(&self, _app: &warpui::AppContext) -> Box<dyn warpui::Element> {
+    fn render(&self, _app: &black_ui::AppContext) -> Box<dyn black_ui::Element> {
         ChildView::new(&self.editor).finish()
     }
 }

@@ -3,13 +3,13 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use warp_cli::agent::OutputFormat;
-use warp_cli::artifact::{
+use black_cli::agent::OutputFormat;
+use black_cli::artifact::{
     ArtifactCommand, DownloadArtifactArgs, GetArtifactArgs, UploadArtifactArgs,
 };
-use warp_cli::GlobalOptions;
-use warpui::platform::TerminationMode;
-use warpui::{AppContext, ModelContext, SingletonEntity};
+use black_cli::GlobalOptions;
+use black_ui::platform::TerminationMode;
+use black_ui::{AppContext, ModelContext, SingletonEntity};
 
 use super::artifact_upload::{
     CompletedFileArtifactUpload, FileArtifactUploadRequest, FileArtifactUploader,
@@ -130,7 +130,7 @@ impl ArtifactCommandRunner {
     }
 }
 
-impl warpui::Entity for ArtifactCommandRunner {
+impl black_ui::Entity for ArtifactCommandRunner {
     type Event = ();
 }
 

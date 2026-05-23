@@ -1,7 +1,7 @@
 use std::sync::LazyLock;
 
-use warpui::keymap::Keystroke;
-use warpui::AppContext;
+use black_ui::keymap::Keystroke;
+use black_ui::AppContext;
 
 use crate::terminal::TerminalModel;
 use crate::util::bindings::keybinding_name_to_keystroke;

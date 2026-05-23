@@ -1,5 +1,5 @@
 // The code in this file is adapted from the alacritty_terminal crate under the
-// Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
+// Apache license; see: crates/black_terminal/src/model/LICENSE-ALACRITTY.
 
 #[path = "ansi_handler.rs"]
 mod ansi_handler;
@@ -27,14 +27,14 @@ use string_offset::ByteOffset;
 use unicode_general_category::{get_general_category, GeneralCategory};
 use unicode_width::UnicodeWidthChar;
 use urlocator::{UrlLocation, UrlLocator};
-use warp_core::features::FeatureFlag;
-use warp_core::semantic_selection::{SemanticSelection, SMART_SELECT_MATCH_WINDOW_LIMIT};
-use warp_core::{safe_assert, safe_assert_eq};
-use warp_terminal::model::grid::{CellType, FlatStorage};
-pub use warp_terminal::model::TermMode;
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
-use warp_util::path::CleanPathResult;
-use warpui::color::ColorU;
+use black_core::features::FeatureFlag;
+use black_core::semantic_selection::{SemanticSelection, SMART_SELECT_MATCH_WINDOW_LIMIT};
+use black_core::{safe_assert, safe_assert_eq};
+use black_terminal::model::grid::{CellType, FlatStorage};
+pub use black_terminal::model::TermMode;
+use black_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use black_util::path::CleanPathResult;
+use black_ui::color::ColorU;
 
 use super::displayed_output::DisplayedOutput;
 use super::grapheme_cursor::{self, GraphemeCursor};
@@ -2572,7 +2572,7 @@ impl GridHandler {
     /// appropriately.
     #[cfg(test)]
     pub(super) fn input_at_cursor(&mut self, text: &str) {
-        use warp_terminal::model::VisiblePoint;
+        use black_terminal::model::VisiblePoint;
 
         let columns = self.columns();
         let mut last_row = self.grid.cursor.point.row;

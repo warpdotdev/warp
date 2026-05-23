@@ -21,7 +21,7 @@ use anyhow::{anyhow, Result};
 use async_channel::Sender;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use warp_graphql::object_permissions::AccessLevel;
+use black_graphql::object_permissions::AccessLevel;
 
 use crate::cloud_object::model::actions::{ObjectActionHistory, ObjectActionType};
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;

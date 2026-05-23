@@ -1,12 +1,12 @@
 use pathfinder_color::ColorU;
-use warp_core::ui::Icon;
-use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
-use warpui::elements::{CornerRadius, Fill, Point, Radius};
-use warpui::event::DispatchedEvent;
-use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::{vec2f, Vector2F};
-use warpui::image_cache::{AnimatedImageBehavior, CacheOption, FitType, Image, ImageCache};
-use warpui::{
+use black_core::ui::Icon;
+use black_ui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
+use black_ui::elements::{CornerRadius, Fill, Point, Radius};
+use black_ui::event::DispatchedEvent;
+use black_ui::geometry::rect::RectF;
+use black_ui::geometry::vector::{vec2f, Vector2F};
+use black_ui::image_cache::{AnimatedImageBehavior, CacheOption, FitType, Image, ImageCache};
+use black_ui::{
     AfterLayoutContext, AppContext, Element, EventContext, LayoutContext, PaintContext,
     SingletonEntity as _, SizeConstraint,
 };

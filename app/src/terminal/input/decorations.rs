@@ -6,11 +6,11 @@ use std::ops::Range;
 
 use settings::Setting as _;
 use string_offset::{ByteOffset, CharOffset};
-pub use warp_completer::completer::SuggestionTypeName;
-pub use warp_completer::util::parse_current_commands_and_tokens;
-pub use warp_completer::{ParsedTokenData, ParsedTokensSnapshot};
-use warp_core::features::FeatureFlag;
-use warpui::{AppContext, SingletonEntity, ViewContext};
+pub use black_completer::completer::SuggestionTypeName;
+pub use black_completer::util::parse_current_commands_and_tokens;
+pub use black_completer::{ParsedTokenData, ParsedTokensSnapshot};
+use black_core::features::FeatureFlag;
+use black_ui::{AppContext, SingletonEntity, ViewContext};
 
 use super::Input;
 use crate::appearance::Appearance;

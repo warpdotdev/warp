@@ -8,10 +8,10 @@ use cocoa::base::{id, nil};
 use cocoa::foundation::{NSAutoreleasePool, NSString};
 use command::r#async::Command;
 use instant::Instant;
-use warp_core::channel::ChannelState;
-use warp_core::AppId;
-use warpui::platform::mac::make_nsstring;
-use warpui::ApplicationBundleInfo;
+use black_core::channel::ChannelState;
+use black_core::AppId;
+use black_ui::platform::mac::make_nsstring;
+use black_ui::ApplicationBundleInfo;
 
 use super::*;
 

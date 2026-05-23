@@ -22,22 +22,22 @@ use tree::DEFAULT_FLEX_VALUE;
 use typed_path::TypedPath;
 use url::Url;
 use uuid::Uuid;
-use warp_cli::agent::Harness;
-use warp_core::command::ExitCode;
-use warp_core::context_flag::ContextFlag;
-use warp_terminal::shell::{ShellName, ShellType};
-use warp_util::path::convert_wsl_to_windows_host_path;
+use black_cli::agent::Harness;
+use black_core::command::ExitCode;
+use black_core::context_flag::ContextFlag;
+use black_terminal::shell::{ShellName, ShellType};
+use black_util::path::convert_wsl_to_windows_host_path;
 #[cfg(feature = "local_fs")]
-use warp_util::path::LineAndColumnArg;
-use warp_util::remote_path::RemotePath;
-use warpui::elements::{
+use black_util::path::LineAndColumnArg;
+use black_util::remote_path::RemotePath;
+use black_ui::elements::{
     ChildView, Clipped, CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Flex,
     MainAxisSize, ParentElement, Shrinkable, Stack,
 };
-use warpui::keymap::{Context, EditableBinding, FixedBinding};
-use warpui::notification::NotificationSendError;
-use warpui::windowing::WindowManager;
-use warpui::{
+use black_ui::keymap::{Context, EditableBinding, FixedBinding};
+use black_ui::notification::NotificationSendError;
+use black_ui::windowing::WindowManager;
+use black_ui::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle, WeakViewHandle, WindowId,
 };
@@ -314,7 +314,7 @@ enum PaneRemovalReason {
 }
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
     app.register_binding_validator::<PaneGroup>(is_binding_pty_compliant);
 
     self::pane::init(app);

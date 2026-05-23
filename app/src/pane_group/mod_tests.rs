@@ -13,11 +13,11 @@ use repo_metadata::watcher::DirectoryWatcher;
 use repo_metadata::RepoMetadataModel;
 use shared_session::permissions_manager::SessionPermissionsManager;
 use uuid::Uuid;
-use warp_core::features::FeatureFlag;
-use warpui::platform::{WindowBounds, WindowStyle};
-use warpui::windowing::state::ApplicationStage;
-use warpui::windowing::WindowManager;
-use warpui::{App, ModelHandle};
+use black_core::features::FeatureFlag;
+use black_ui::platform::{WindowBounds, WindowStyle};
+use black_ui::windowing::state::ApplicationStage;
+use black_ui::windowing::WindowManager;
+use black_ui::{App, ModelHandle};
 use watcher::HomeDirectoryWatcher;
 
 use super::child_agent::{

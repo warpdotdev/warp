@@ -5,7 +5,7 @@ use async_channel::{Receiver, Sender};
 use async_trait::async_trait;
 use futures::io::BufReader;
 use futures::{AsyncRead, AsyncWrite};
-use warpui::r#async::executor::{Background, BackgroundTask};
+use black_ui::r#async::executor::{Background, BackgroundTask};
 
 use super::protocol::{
     receive_message, send_message, ConnectionAddress, ProtocolError, Request, Response,

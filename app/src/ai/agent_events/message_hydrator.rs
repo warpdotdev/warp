@@ -9,7 +9,7 @@ use instant::Instant;
 #[cfg(not(target_family = "wasm"))]
 use reqwest::Error as ReqwestError;
 #[cfg(not(target_family = "wasm"))]
-use warpui::r#async::Timer;
+use black_ui::r#async::Timer;
 
 use crate::ai::agent::ReceivedMessageInput;
 use crate::ai::ambient_agents::AmbientAgentTaskId;

@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use chrono::{Local, Utc};
 use persistence::model::AgentConversationData;
-use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
+use black_cli::agent::Harness;
+use black_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
-use warpui::{App, EntityId, SingletonEntity};
+use black_ui::{App, EntityId, SingletonEntity};
 
 use super::{ConversationDetailsData, PanelMode};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};

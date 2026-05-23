@@ -1,11 +1,11 @@
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::theme::AnsiColorIdentifier;
-use warpui::elements::{
+use black_core::ui::theme::AnsiColorIdentifier;
+use black_ui::elements::{
     ChildAnchor, ConstrainedBox, Container, CornerRadius, Empty, Fill, OffsetPositioning,
     ParentAnchor, ParentElement as _, ParentOffsetBounds, Radius, Stack,
 };
-use warpui::ui_components::components::UiComponentStyles;
-use warpui::Element;
+use black_ui::ui_components::components::UiComponentStyles;
+use black_ui::Element;
 
 use crate::appearance::Appearance;
 

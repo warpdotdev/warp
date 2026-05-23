@@ -4,7 +4,7 @@ pub mod success_block;
 pub mod trigger_state;
 
 use channel_versions::overrides::TargetOS;
-use warpui::AssetProvider;
+use black_ui::AssetProvider;
 
 use crate::terminal::model::terminal_model::SubshellInitializationInfo;
 use crate::terminal::shell::ShellType;

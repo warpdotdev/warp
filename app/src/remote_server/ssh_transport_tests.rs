@@ -1,4 +1,4 @@
-use warpui::r#async::BoxFuture;
+use black_ui::r#async::BoxFuture;
 
 use super::*;
 

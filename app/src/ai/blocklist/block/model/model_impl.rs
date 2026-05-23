@@ -4,7 +4,7 @@ use anyhow::{anyhow, Result};
 use chrono::{Local, TimeDelta};
 use history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use session_sharing_protocol::common::ParticipantId;
-use warpui::{AppContext, SingletonEntity, View, ViewContext};
+use black_ui::{AppContext, SingletonEntity, View, ViewContext};
 
 use super::{AIBlockModel, AIBlockOutputStatus, OutputStatusUpdateCallback};
 use crate::ai::agent::conversation::AIConversationId;

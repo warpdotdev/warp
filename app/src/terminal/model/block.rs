@@ -19,14 +19,14 @@ use lazy_static::lazy_static;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 pub use serialized_block::*;
-use warp_core::command::ExitCode;
-use warp_core::features::FeatureFlag;
-use warp_terminal::model::grid::Dimensions as _;
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
-use warp_util::path::user_friendly_path;
-use warpui::r#async::executor::Background;
-use warpui::record_trace_event;
-use warpui::units::{IntoLines, Lines};
+use black_core::command::ExitCode;
+use black_core::features::FeatureFlag;
+use black_terminal::model::grid::Dimensions as _;
+use black_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use black_util::path::user_friendly_path;
+use black_ui::r#async::executor::Background;
+use black_ui::record_trace_event;
+use black_ui::units::{IntoLines, Lines};
 
 use super::bootstrap::BootstrapStage;
 use super::find::RegexDFAs;
@@ -2195,7 +2195,7 @@ impl Block {
         let escape_char = session.shell_family().escape_char();
 
         // Parse the raw command string to get the top-level command.
-        let command = warp_completer::parsers::simple::top_level_command(
+        let command = black_completer::parsers::simple::top_level_command(
             self.command_to_string(),
             escape_char,
         )?;
@@ -2205,7 +2205,7 @@ impl Block {
             .alias_value(command.as_str())
             .map(|s| s.to_owned())
             // An alias can technically expand into an entire command (e.g. "gl" => "PAGER=0 git log").
-            .and_then(|s| warp_completer::parsers::simple::top_level_command(s, escape_char))
+            .and_then(|s| black_completer::parsers::simple::top_level_command(s, escape_char))
             // If alias expansion didn't work, then just return the original top-level command.
             .or(Some(command))
     }
@@ -2535,7 +2535,7 @@ impl Block {
 
         self.background_executor
             .spawn(async move {
-                warpui::r#async::Timer::after(std::time::Duration::from_millis(delay_ms)).await;
+                black_ui::r#async::Timer::after(std::time::Duration::from_millis(delay_ms)).await;
                 ready_to_render.store(true, Ordering::Relaxed);
                 event_proxy.send_wakeup_event();
             })
@@ -2880,7 +2880,7 @@ impl Block {
     }
 
     pub fn grid_storage_lines(&self) -> usize {
-        use warp_terminal::model::grid::Dimensions as _;
+        use black_terminal::model::grid::Dimensions as _;
 
         self.all_grids_iter()
             .map(|grid| grid.grid_storage().total_rows())

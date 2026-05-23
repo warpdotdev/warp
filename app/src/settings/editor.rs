@@ -4,7 +4,7 @@ use enum_iterator::{all, Sequence};
 use serde::{Deserialize, Serialize};
 use settings::macros::define_settings_group;
 use settings::{RespectUserSyncSetting, Setting as _, SupportedPlatforms, SyncToCloud};
-use warpui::ModelContext;
+use black_ui::ModelContext;
 
 #[derive(
     Clone,

@@ -6,8 +6,8 @@ use pathfinder_geometry::vector::Vector2F;
 use serde::{Deserialize, Serialize};
 use string_offset::{ByteOffset, CharOffset};
 use vec1::Vec1;
-use warpui::text::point::Point;
-use warpui::AppContext;
+use black_ui::text::point::Point;
+use black_ui::AppContext;
 
 use super::buffer::{Anchor, Buffer, LamportValue, ToBufferOffset, ToCharOffset, ToPoint};
 use super::display_map::{DisplayMap, ToDisplayPoint};

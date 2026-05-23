@@ -9,9 +9,9 @@ use std::sync::LazyLock;
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
 use strum_macros::{Display, EnumString, VariantNames};
-use warp_core::ui::color::CLAUDE_ORANGE;
-use warp_core::ui::icons::Icon;
-use warp_core::ui::theme::Fill;
+use black_core::ui::color::CLAUDE_ORANGE;
+use black_core::ui::icons::Icon;
+use black_core::ui::theme::Fill;
 
 /// Represents a skill provider/origin (Agents, Claude, Codex, or Warp).
 #[derive(
@@ -158,7 +158,7 @@ pub fn provider_rank(provider: SkillProvider) -> usize {
 
 pub fn home_skills_path(provider: SkillProvider) -> Option<PathBuf> {
     if provider == SkillProvider::Warp {
-        return warp_core::paths::warp_home_skills_dir();
+        return black_core::paths::warp_home_skills_dir();
     }
     let definition = SKILL_PROVIDER_DEFINITIONS
         .iter()
@@ -219,13 +219,13 @@ mod tests {
     fn warp_home_skills_path_uses_warp_home_path() {
         assert_eq!(
             home_skills_path(SkillProvider::Warp),
-            warp_core::paths::warp_home_skills_dir()
+            black_core::paths::warp_home_skills_dir()
         );
     }
 
     #[test]
     fn warp_home_skill_path_is_home_warp_skill() {
-        let Some(warp_home_skills_dir) = warp_core::paths::warp_home_skills_dir() else {
+        let Some(warp_home_skills_dir) = black_core::paths::warp_home_skills_dir() else {
             eprintln!("Skipping test: home directory not available");
             return;
         };

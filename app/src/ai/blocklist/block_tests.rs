@@ -4,8 +4,8 @@ use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode};
 use ai::agent::action_result::StartAgentVersion;
 use ai::skills::SkillReference;
 use settings::Setting;
-use warp_core::features::FeatureFlag;
-use warpui::{App, SingletonEntity};
+use black_core::features::FeatureFlag;
+use black_ui::{App, SingletonEntity};
 
 use super::{
     default_collapsible_state_for_orchestration_action, received_message_collapsible_id,

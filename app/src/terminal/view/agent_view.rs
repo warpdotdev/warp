@@ -1,8 +1,8 @@
-use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::appearance::Appearance;
-use warpui::keymap::Keystroke;
-use warpui::{EntityId, SingletonEntity, ViewContext};
+use black_core::features::FeatureFlag;
+use black_core::send_telemetry_from_ctx;
+use black_core::ui::appearance::Appearance;
+use black_ui::keymap::Keystroke;
+use black_ui::{EntityId, SingletonEntity, ViewContext};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::agent_view::{

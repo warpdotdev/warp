@@ -1,5 +1,5 @@
-use warpui::elements::{MouseStateHandle, Text};
-use warpui::Element;
+use black_ui::elements::{MouseStateHandle, Text};
+use black_ui::Element;
 
 use super::{
     render_inline_block_list_banner, InlineBannerButtonState, InlineBannerCloseButton,

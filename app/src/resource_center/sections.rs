@@ -1,6 +1,6 @@
-use warp_core::context_flag::ContextFlag;
-use warp_core::features::FeatureFlag;
-use warpui::ViewContext;
+use black_core::context_flag::ContextFlag;
+use black_core::features::FeatureFlag;
+use black_ui::ViewContext;
 
 use super::{
     ContentItem, ContentSectionData, FeatureItem, FeatureSection, FeatureSectionData,

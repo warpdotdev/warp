@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, bail};
 use regex::Regex;
-use warp_graphql::billing::{
+use black_graphql::billing::{
     AiAutonomyPolicy as GqlAiAutonomyPolicy, AmbientAgentsPolicy as GqlAmbientAgentsPolicy,
     BillingCycleUsageHistory as GqlBillingCycleUsageHistory, BillingMetadata as GqlBillingMetadata,
     BonusGrant as GqlBonusGrant, ByoApiKeyPolicy as GqlByoApiKeyPolicy,
@@ -22,12 +22,12 @@ use warp_graphql::billing::{
     UsageVisibilityGranularity as GqlUsageVisibilityGranularity,
     UsageVisibilityPolicy as GqlUsageVisibilityPolicy, WarpAiPolicy as GqlWarpAiPolicy,
 };
-use warp_graphql::object::CloudObjectWithDescendants;
-use warp_graphql::queries::get_conversation_usage as gql_usage;
-use warp_graphql::queries::get_workspaces_metadata_for_user::User as GqlUser;
-use warp_graphql::subscriptions::get_warp_drive_updates::WarpDriveUpdate;
-use warp_graphql::user::{DiscoverableTeamData as GqlDiscoverableTeamData, PublicUserProfile};
-use warp_graphql::workspace::{
+use black_graphql::object::CloudObjectWithDescendants;
+use black_graphql::queries::get_conversation_usage as gql_usage;
+use black_graphql::queries::get_workspaces_metadata_for_user::User as GqlUser;
+use black_graphql::subscriptions::get_warp_drive_updates::WarpDriveUpdate;
+use black_graphql::user::{DiscoverableTeamData as GqlDiscoverableTeamData, PublicUserProfile};
+use black_graphql::workspace::{
     AddonCreditsSettings as GqlAddonCreditsSettings,
     AdminEnablementSetting as GqlAdminEnablementSetting, AiAutonomyValue as GqlAiAutonomyValue,
     AiPermissionsSettings as GqlAiPermissionsSettings,
@@ -725,9 +725,9 @@ impl ToPathBufs for Vec<String> {
         self.into_iter().map(PathBuf::from).collect()
     }
 }
-impl From<warp_graphql::workspace::LlmModelHost> for crate::ai::llms::LLMModelHost {
-    fn from(gql_host: warp_graphql::workspace::LlmModelHost) -> Self {
-        use warp_graphql::workspace::LlmModelHost as GqlLlmModelHost;
+impl From<black_graphql::workspace::LlmModelHost> for crate::ai::llms::LLMModelHost {
+    fn from(gql_host: black_graphql::workspace::LlmModelHost) -> Self {
+        use black_graphql::workspace::LlmModelHost as GqlLlmModelHost;
         match gql_host {
             GqlLlmModelHost::DirectApi => Self::DirectApi,
             GqlLlmModelHost::AwsBedrock => Self::AwsBedrock,
@@ -742,8 +742,8 @@ impl From<warp_graphql::workspace::LlmModelHost> for crate::ai::llms::LLMModelHo
     }
 }
 
-impl From<warp_graphql::workspace::LlmHostSettings> for super::workspace::LlmHostSettings {
-    fn from(gql_settings: warp_graphql::workspace::LlmHostSettings) -> Self {
+impl From<black_graphql::workspace::LlmHostSettings> for super::workspace::LlmHostSettings {
+    fn from(gql_settings: black_graphql::workspace::LlmHostSettings) -> Self {
         Self {
             enabled: gql_settings.enabled,
             enablement_setting: gql_settings
@@ -754,8 +754,8 @@ impl From<warp_graphql::workspace::LlmHostSettings> for super::workspace::LlmHos
     }
 }
 
-impl From<warp_graphql::workspace::LlmSettings> for LlmSettings {
-    fn from(gql_settings: warp_graphql::workspace::LlmSettings) -> Self {
+impl From<black_graphql::workspace::LlmSettings> for LlmSettings {
+    fn from(gql_settings: black_graphql::workspace::LlmSettings) -> Self {
         let mut host_configs = std::collections::HashMap::new();
         for entry in gql_settings.host_configs {
             let host: crate::ai::llms::LLMModelHost = entry.host.into();
@@ -1124,55 +1124,55 @@ impl TryFrom<WarpDriveUpdate> for ObjectUpdateMessage {
     }
 }
 
-impl TryFrom<warp_graphql::object::CloudObject> for ServerCloudObject {
+impl TryFrom<black_graphql::object::CloudObject> for ServerCloudObject {
     type Error = anyhow::Error;
 
-    fn try_from(value: warp_graphql::object::CloudObject) -> Result<Self, Self::Error> {
+    fn try_from(value: black_graphql::object::CloudObject) -> Result<Self, Self::Error> {
         match value {
-            warp_graphql::object::CloudObject::AIConversation(_) => Err(anyhow::anyhow!(
+            black_graphql::object::CloudObject::AIConversation(_) => Err(anyhow::anyhow!(
                 "AIConversation is not a supported object type for this operation"
             )),
-            warp_graphql::object::CloudObject::Folder(folder) => Ok(ServerCloudObject::Folder(
+            black_graphql::object::CloudObject::Folder(folder) => Ok(ServerCloudObject::Folder(
                 ServerFolder::try_from_gql(folder)?,
             )),
-            warp_graphql::object::CloudObject::GenericStringObject(gso) => {
+            black_graphql::object::CloudObject::GenericStringObject(gso) => {
                 match gso.format {
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonEnvVarCollection => {
+                    black_graphql::generic_string_object::GenericStringObjectFormat::JsonEnvVarCollection => {
                         Ok(ServerCloudObject::EnvVarCollection(ServerEnvVarCollection::try_from_gql(gso)?))
                     }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonPreference => {
+                    black_graphql::generic_string_object::GenericStringObjectFormat::JsonPreference => {
                         Ok(ServerCloudObject::Preference(ServerPreference::try_from_gql(gso)?))
                     }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonWorkflowEnum => {
+                    black_graphql::generic_string_object::GenericStringObjectFormat::JsonWorkflowEnum => {
                         Ok(ServerCloudObject::WorkflowEnum(ServerWorkflowEnum::try_from_gql(gso)?))
                     }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIFact => {
+                    black_graphql::generic_string_object::GenericStringObjectFormat::JsonAIFact => {
                         Ok(ServerCloudObject::AIFact(ServerAIFact::try_from_gql(gso)?))
                     }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonMCPServer => {
+                    black_graphql::generic_string_object::GenericStringObjectFormat::JsonMCPServer => {
                         Ok(ServerCloudObject::MCPServer(ServerMCPServer::try_from_gql(gso)?))
                     }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIExecutionProfile => {
+                    black_graphql::generic_string_object::GenericStringObjectFormat::JsonAIExecutionProfile => {
                         Ok(ServerCloudObject::AIExecutionProfile(ServerAIExecutionProfile::try_from_gql(gso)?))
                     }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonTemplatableMCPServer => {
+                    black_graphql::generic_string_object::GenericStringObjectFormat::JsonTemplatableMCPServer => {
                         Ok(ServerCloudObject::TemplatableMCPServer(ServerTemplatableMCPServer::try_from_gql(gso)?))
                     }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonCloudEnvironment => {
+                    black_graphql::generic_string_object::GenericStringObjectFormat::JsonCloudEnvironment => {
                         Ok(ServerCloudObject::AmbientAgentEnvironment(ServerAmbientAgentEnvironment::try_from_gql(gso)?))
                     }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonScheduledAmbientAgent => {
+                    black_graphql::generic_string_object::GenericStringObjectFormat::JsonScheduledAmbientAgent => {
                         Ok(ServerCloudObject::ScheduledAmbientAgent(ServerScheduledAmbientAgent::try_from_gql(gso)?))
                     }
                 }
             }
-            warp_graphql::object::CloudObject::Notebook(notebook) => Ok(
+            black_graphql::object::CloudObject::Notebook(notebook) => Ok(
                 ServerCloudObject::Notebook(ServerNotebook::try_from_gql(notebook)?),
             ),
-            warp_graphql::object::CloudObject::Workflow(workflow) => Ok(
+            black_graphql::object::CloudObject::Workflow(workflow) => Ok(
                 ServerCloudObject::Workflow(Box::new(ServerWorkflow::try_from_gql(workflow)?)),
             ),
-            warp_graphql::object::CloudObject::Unknown => {
+            black_graphql::object::CloudObject::Unknown => {
                 Err(anyhow::anyhow!("Unable to convert cloud object type"))
             }
         }
@@ -1191,31 +1191,31 @@ impl TryFrom<CloudObjectWithDescendants> for ServerCloudObject {
                 Ok(ServerCloudObject::Folder(ServerFolder::try_from_gql(fwd.folder)?))
             }
             CloudObjectWithDescendants::GenericStringObject(gso) => match gso.format {
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonEnvVarCollection => {
+                black_graphql::generic_string_object::GenericStringObjectFormat::JsonEnvVarCollection => {
                     Ok(ServerCloudObject::EnvVarCollection(ServerEnvVarCollection::try_from_gql(gso)?))
                 }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonPreference => {
+                black_graphql::generic_string_object::GenericStringObjectFormat::JsonPreference => {
                     Ok(ServerCloudObject::Preference(ServerPreference::try_from_gql(gso)?))
                 }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonWorkflowEnum => {
+                black_graphql::generic_string_object::GenericStringObjectFormat::JsonWorkflowEnum => {
                     Ok(ServerCloudObject::WorkflowEnum(ServerWorkflowEnum::try_from_gql(gso)?))
                 }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIFact => {
+                black_graphql::generic_string_object::GenericStringObjectFormat::JsonAIFact => {
                     Ok(ServerCloudObject::AIFact(ServerAIFact::try_from_gql(gso)?))
                 }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonMCPServer => {
+                black_graphql::generic_string_object::GenericStringObjectFormat::JsonMCPServer => {
                     Ok(ServerCloudObject::MCPServer(ServerMCPServer::try_from_gql(gso)?))
                 }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIExecutionProfile => {
+                black_graphql::generic_string_object::GenericStringObjectFormat::JsonAIExecutionProfile => {
                     Ok(ServerCloudObject::AIExecutionProfile(ServerAIExecutionProfile::try_from_gql(gso)?))
                 }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonTemplatableMCPServer => {
+                black_graphql::generic_string_object::GenericStringObjectFormat::JsonTemplatableMCPServer => {
                     Ok(ServerCloudObject::TemplatableMCPServer(ServerTemplatableMCPServer::try_from_gql(gso)?))
                 }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonCloudEnvironment => {
+                black_graphql::generic_string_object::GenericStringObjectFormat::JsonCloudEnvironment => {
                     Ok(ServerCloudObject::AmbientAgentEnvironment(ServerAmbientAgentEnvironment::try_from_gql(gso)?))
                 }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonScheduledAmbientAgent => {
+                black_graphql::generic_string_object::GenericStringObjectFormat::JsonScheduledAmbientAgent => {
                     Ok(ServerCloudObject::ScheduledAmbientAgent(ServerScheduledAmbientAgent::try_from_gql(gso)?))
                 }
             }

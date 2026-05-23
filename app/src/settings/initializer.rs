@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use warp_core::features::FeatureFlag;
-use warp_core::settings::Setting;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_core::features::FeatureFlag;
+use black_core::settings::Setting;
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 use crate::auth::auth_state::AuthState;
 use crate::report_if_error;
@@ -132,7 +132,7 @@ impl SettingsInitializer {
         //
         // TODO(jefflloyd): Remove this approximately 6 weeks from 3/19/26.
         {
-            use warp_core::user_preferences::GetUserPreferences as _;
+            use black_core::user_preferences::GetUserPreferences as _;
 
             AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
                 // If the new setting already has a value in preferences, the

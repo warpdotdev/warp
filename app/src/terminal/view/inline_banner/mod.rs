@@ -32,15 +32,15 @@ pub use shared_sessions::*;
 pub use shell_process_terminated::*;
 pub use ssh::*;
 pub use vim_mode::*;
-use warpui::elements::{
+use black_ui::elements::{
     Align, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Icon,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition,
     Shrinkable, Text,
 };
-use warpui::fonts::{FamilyId, Properties, Weight};
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::Element;
+use black_ui::fonts::{FamilyId, Properties, Weight};
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::Element;
 
 pub use self::prompt_suggestions::*;
 use crate::appearance::Appearance;
@@ -177,7 +177,7 @@ fn render_inline_block_list_banner(
     let theme = appearance.theme();
     let title_font_size = appearance.ui_font_size() + 1.;
     let button_text_size = title_font_size;
-    let hover_background_fill = warpui::elements::Fill::from(
+    let hover_background_fill = black_ui::elements::Fill::from(
         theme
             .active_ui_text_color()
             .with_opacity(INLINE_BANNER_BUTTON_HOVER_OPACITY),
@@ -403,7 +403,7 @@ fn render_inline_banner_text_button(
             font_color: Some(coloru_with_opacity(button_info.text_color, text_opacity)),
             font_family_id: button_info.font.family,
             font_weight: button_info.font.weight,
-            border_color: Some(warpui::elements::Fill::Solid(coloru_with_opacity(
+            border_color: Some(black_ui::elements::Fill::Solid(coloru_with_opacity(
                 button_info.text_color,
                 text_opacity,
             ))),

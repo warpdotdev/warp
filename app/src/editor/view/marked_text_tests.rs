@@ -1,8 +1,8 @@
 use vim::vim::VimMode;
-use warp_core::features::FeatureFlag;
-use warpui::keymap::Keystroke;
-use warpui::platform::WindowStyle;
-use warpui::App;
+use black_core::features::FeatureFlag;
+use black_ui::keymap::Keystroke;
+use black_ui::platform::WindowStyle;
+use black_ui::App;
 
 use super::initialize_app;
 use crate::editor::{DisplayPoint, EditorOptions, EditorView};

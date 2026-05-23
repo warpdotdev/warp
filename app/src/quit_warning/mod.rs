@@ -2,8 +2,8 @@ use std::fmt::Write;
 
 use itertools::Itertools;
 use settings::ToggleableSetting as _;
-use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback, ModalButton};
-use warpui::{AppContext, EntityId, SingletonEntity, ViewContext, WeakViewHandle, WindowId};
+use black_ui::modals::{AlertDialogWithCallbacks, AppModalCallback, ModalButton};
+use black_ui::{AppContext, EntityId, SingletonEntity, ViewContext, WeakViewHandle, WindowId};
 
 use crate::code::editor_management::{CodeEditorStatus, CodeEditorSummary};
 use crate::pane_group::{CodePane, PaneGroup, PaneId, TerminalPane};

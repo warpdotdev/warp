@@ -1,10 +1,10 @@
 // The code in this file is adapted from the alacritty_terminal crate under the
-// Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
+// Apache license; see: crates/black_terminal/src/model/LICENSE-ALACRITTY.
 
 use string_offset::ByteOffset;
-use warp_terminal::model::grid::cell::{self, LineLength as _};
-use warp_terminal::model::grid::Dimensions as _;
-use warp_terminal::model::{Point, VisiblePoint, VisibleRow};
+use black_terminal::model::grid::cell::{self, LineLength as _};
+use black_terminal::model::grid::Dimensions as _;
+use black_terminal::model::{Point, VisiblePoint, VisibleRow};
 
 use super::{FullGridClearBehavior, GridHandler};
 use crate::terminal::model::grid::Cursor;

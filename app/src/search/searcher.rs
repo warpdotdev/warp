@@ -25,8 +25,8 @@ use tantivy::schema::{
 use tantivy::snippet::SnippetGenerator;
 use tantivy::tokenizer::{Token, TokenStream, Tokenizer};
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
-use warpui::r#async::executor::Background;
-use warpui::r#async::{block_on, Timer};
+use black_ui::r#async::executor::Background;
+use black_ui::r#async::{block_on, Timer};
 
 pub type FullTextSearchDocumentEntry = HashMap<String, FullTextSearchFieldValue>;
 

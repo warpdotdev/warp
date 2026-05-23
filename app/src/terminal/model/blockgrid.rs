@@ -6,7 +6,7 @@ use std::sync::{Arc, OnceLock};
 
 use instant::Instant;
 use pathfinder_color::ColorU;
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use black_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 
 use super::find::RegexDFAs;
 use super::grid::RespectDisplayedOutput;

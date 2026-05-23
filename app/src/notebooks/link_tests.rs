@@ -7,8 +7,8 @@ use parking_lot::Mutex;
 use settings::Setting as _;
 use tempfile::tempdir;
 use url::Url;
-use warp_util::path::LineAndColumnArg;
-use warpui::{App, ModelHandle, SingletonEntity, WindowId};
+use black_util::path::LineAndColumnArg;
+use black_ui::{App, ModelHandle, SingletonEntity, WindowId};
 
 use super::{LinkTarget, NotebookLinks, ResolveError, SessionSource};
 use crate::notebooks::file::is_markdown_file;

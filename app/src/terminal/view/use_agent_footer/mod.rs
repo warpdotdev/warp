@@ -5,7 +5,7 @@
 //! Gemini CLI, Codex), it displays a specialized footer with additional functionality.
 
 use base64::Engine;
-use warpui::clipboard::{ClipboardContent, ImageData};
+use black_ui::clipboard::{ClipboardContent, ImageData};
 
 use crate::ai::agent::ImageContext;
 use crate::ai::blocklist::agent_view::agent_input_footer::{
@@ -26,23 +26,23 @@ use std::time::Duration;
 use anyhow::anyhow;
 use parking_lot::FairMutex;
 use pathfinder_color::ColorU;
-use warp_core::features::FeatureFlag;
-use warp_core::settings::Setting;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::color::contrast::{
+use black_core::features::FeatureFlag;
+use black_core::settings::Setting;
+use black_core::ui::appearance::Appearance;
+use black_core::ui::color::contrast::{
     high_enough_contrast, pick_best_foreground_color, MinimumAllowedContrast,
 };
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::Fill as ThemeFill;
-use warp_core::{report_error, send_telemetry_from_ctx};
-use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::Fill as ThemeFill;
+use black_core::{report_error, send_telemetry_from_ctx};
+use black_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
 use warpify_footer::{WarpifyFooterView, WarpifyFooterViewEvent};
-use warpui::elements::{
+use black_ui::elements::{
     ChildView, Container, CrossAxisAlignment, Empty, Expanded, Flex, MainAxisSize, ParentElement,
 };
-use warpui::keymap::Keystroke;
-use warpui::r#async::Timer;
-use warpui::{
+use black_ui::keymap::Keystroke;
+use black_ui::r#async::Timer;
+use black_ui::{
     AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };

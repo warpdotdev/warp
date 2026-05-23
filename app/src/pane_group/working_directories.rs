@@ -13,10 +13,10 @@ use remote_server::manager::RemoteServerManager;
 #[cfg(feature = "local_fs")]
 use repo_metadata::repositories::DetectedRepositories;
 #[cfg(feature = "local_fs")]
-use warp_util::remote_path::RemotePath;
+use black_util::remote_path::RemotePath;
 #[cfg(feature = "local_fs")]
-use warpui::{AppContext, SingletonEntity as _};
-use warpui::{Entity, EntityId, ModelContext, ModelHandle, ViewHandle};
+use black_ui::{AppContext, SingletonEntity as _};
+use black_ui::{Entity, EntityId, ModelContext, ModelHandle, ViewHandle};
 
 use crate::code::buffer_location::LocalOrRemotePath;
 #[cfg(feature = "local_fs")]

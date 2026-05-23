@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use chrono::{Duration, Utc};
-use warp_core::settings::Setting;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_core::settings::Setting;
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 use crate::ai::request_usage_model::{
     AIRequestUsageModel, AIRequestUsageModelEvent, BonusGrant, BonusGrantScope,

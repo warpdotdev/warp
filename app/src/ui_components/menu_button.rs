@@ -1,11 +1,11 @@
 use pathfinder_geometry::vector::{vec2f, Vector2F};
-use warpui::elements::{
+use black_ui::elements::{
     ChildAnchor, ChildView, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
     ParentOffsetBounds, Stack,
 };
-use warpui::platform::Cursor;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{AppContext, Element, EventContext, View, ViewHandle};
+use black_ui::platform::Cursor;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{AppContext, Element, EventContext, View, ViewHandle};
 
 use super::buttons::{highlight, icon_button};
 use super::icons::Icon;
@@ -104,7 +104,7 @@ where
 {
     let button = icon_button(appearance, icon, is_menu_open, mouse_state_handle)
         .with_hovered_styles(
-            warpui::ui_components::components::UiComponentStyles::default()
+            black_ui::ui_components::components::UiComponentStyles::default()
                 .set_background(appearance.theme().surface_1().into())
                 .set_border_color(appearance.theme().surface_3().into()),
         )
@@ -141,7 +141,7 @@ where
         appearance,
     )
     .with_hovered_styles(
-        warpui::ui_components::components::UiComponentStyles::default()
+        black_ui::ui_components::components::UiComponentStyles::default()
             .set_background(appearance.theme().surface_1().into())
             .set_border_color(appearance.theme().surface_3().into()),
     );

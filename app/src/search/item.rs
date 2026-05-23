@@ -1,7 +1,7 @@
 use ordered_float::OrderedFloat;
-use warp_core::ui::theme::Fill;
-use warpui::fonts::FamilyId;
-use warpui::{Action, AppContext, Element};
+use black_core::ui::theme::Fill;
+use black_ui::fonts::FamilyId;
+use black_ui::{Action, AppContext, Element};
 
 use super::result_renderer::ItemHighlightState;
 use crate::appearance::Appearance;

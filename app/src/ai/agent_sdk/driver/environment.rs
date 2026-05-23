@@ -10,12 +10,12 @@ use ai::index::full_source_code_embedding::manager::{
 use futures::channel::oneshot;
 use futures::future::join_all;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
-use warp_cli::agent::Harness;
-use warp_completer::completer::CommandExitStatus;
-use warp_core::command::ExitCode;
-use warp_core::{safe_info, safe_warn};
-use warpui::r#async::FutureExt;
-use warpui::{ModelContext, ModelSpawner, SingletonEntity};
+use black_cli::agent::Harness;
+use black_completer::completer::CommandExitStatus;
+use black_core::command::ExitCode;
+use black_core::{safe_info, safe_warn};
+use black_ui::r#async::FutureExt;
+use black_ui::{ModelContext, ModelSpawner, SingletonEntity};
 
 use super::terminal::TerminalDriver;
 use super::AgentDriverError;

@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use futures_util::future::Either;
 use url::Url;
-use warp_util::path::{CleanPathResult, LineAndColumnArg};
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, WindowId};
+use black_util::path::{CleanPathResult, LineAndColumnArg};
+use black_ui::r#async::SpawnedFutureHandle;
+use black_ui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, WindowId};
 
 use super::file::is_markdown_file;
 use crate::drive::OpenWarpDriveObjectArgs;

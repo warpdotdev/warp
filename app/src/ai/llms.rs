@@ -5,10 +5,10 @@ use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, CustomEndpoint, CustomEndp
 pub use ai::LLMId;
 use parking_lot::FairMutex;
 use serde::{de, Deserialize, Serialize};
-use warp_core::features::FeatureFlag;
-use warp_core::ui::icons::Icon;
-use warp_core::user_preferences::GetUserPreferences;
-use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
+use black_core::features::FeatureFlag;
+use black_core::ui::icons::Icon;
+use black_core::user_preferences::GetUserPreferences;
+use black_ui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};

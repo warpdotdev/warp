@@ -17,7 +17,7 @@ use std::pin::Pin;
 
 use async_channel::Receiver;
 use serde::Serialize;
-use warpui::r#async::executor;
+use black_ui::r#async::executor;
 
 #[cfg(not(target_family = "wasm"))]
 use crate::client::RemoteServerLog;

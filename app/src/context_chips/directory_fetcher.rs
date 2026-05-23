@@ -1,10 +1,10 @@
 use std::cmp::Ordering;
 
 use typed_path::TypedPathBuf;
-use warp_completer::completer::{EngineDirEntry, EngineFileType, PathCompletionContext};
-use warp_util::file_type::is_binary_file;
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::{AppContext, Entity, ModelContext};
+use black_completer::completer::{EngineDirEntry, EngineFileType, PathCompletionContext};
+use black_util::file_type::is_binary_file;
+use black_ui::r#async::SpawnedFutureHandle;
+use black_ui::{AppContext, Entity, ModelContext};
 
 use super::display_menu::GenericMenuItem;
 use crate::completer::SessionContext;

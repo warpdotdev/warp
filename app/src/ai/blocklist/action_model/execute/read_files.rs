@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+use black_ui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{
     read_local_file_context, ActionExecution, AnyActionExecution, ExecuteActionInput,

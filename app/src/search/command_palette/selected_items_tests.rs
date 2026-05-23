@@ -1,5 +1,5 @@
 use itertools::Itertools;
-use warpui::keymap::BindingId;
+use black_ui::keymap::BindingId;
 
 use super::*;
 

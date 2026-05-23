@@ -29,7 +29,7 @@ impl ClangdCandidate {
 
     #[cfg(feature = "local_fs")]
     pub async fn find_installed_binary_in_data_dir() -> Option<PathBuf> {
-        let install_root = warp_core::paths::data_dir().join(SERVER_NAME);
+        let install_root = black_core::paths::data_dir().join(SERVER_NAME);
         if !install_root.is_dir() {
             return None;
         }

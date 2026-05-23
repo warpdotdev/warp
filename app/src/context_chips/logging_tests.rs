@@ -1,4 +1,4 @@
-use warp_completer::completer::{CommandExitStatus, CommandOutput};
+use black_completer::completer::{CommandExitStatus, CommandOutput};
 
 use super::*;
 
@@ -41,7 +41,7 @@ fn test_format_log_entry_preserves_stdout_and_stderr_sections() {
         stdout: b"https://github.com/warpdotdev/warp-internal/pull/123\n".to_vec(),
         stderr: b"warning output\n".to_vec(),
         status: CommandExitStatus::Success,
-        exit_code: Some(warp_core::command::ExitCode::from(0)),
+        exit_code: Some(black_core::command::ExitCode::from(0)),
     };
 
     let entry = format_log_entry(&ChipCommandLogEntry {

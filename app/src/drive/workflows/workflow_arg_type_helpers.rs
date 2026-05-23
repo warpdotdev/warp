@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use warpui::{AppContext, SingletonEntity, ViewHandle};
+use black_ui::{AppContext, SingletonEntity, ViewHandle};
 
 use super::enum_creation_dialog::{EnumCreationDialog, WorkflowEnumData};
 use super::workflow_arg_selector::WorkflowArgSelector;
@@ -31,10 +31,10 @@ impl ArgumentTypeEditor for super::modal::ArgumentEditorRow {
 /// Get all workflow enums in the space, filtering to only show the shared ones
 pub fn load_workflow_enums_with_owner<V>(
     owner: Owner,
-    ctx: &mut warpui::ViewContext<V>,
+    ctx: &mut black_ui::ViewContext<V>,
 ) -> HashMap<SyncId, WorkflowEnumData>
 where
-    V: warpui::View,
+    V: black_ui::View,
 {
     let cloud_model = CloudModel::as_ref(ctx);
     cloud_model
@@ -60,7 +60,7 @@ pub fn load_argument_into_selector(
     selector: &mut WorkflowArgSelector,
     argument: &Argument,
     all_workflow_enums: &mut HashMap<SyncId, WorkflowEnumData>,
-    ctx: &mut warpui::ViewContext<WorkflowArgSelector>,
+    ctx: &mut black_ui::ViewContext<WorkflowArgSelector>,
 ) {
     let selected_type = argument.arg_type.clone().into();
     selector.set_selected_type(selected_type, ctx);
@@ -148,9 +148,9 @@ pub fn extract_typed_argument_from_selector(
 pub fn save_enum<V>(
     enum_data: &WorkflowEnumData,
     owner: Option<Owner>,
-    ctx: &mut warpui::ViewContext<V>,
+    ctx: &mut black_ui::ViewContext<V>,
 ) where
-    V: warpui::View,
+    V: black_ui::View,
 {
     let Some(variants) = enum_data.new_data.clone() else {
         return;
@@ -198,10 +198,10 @@ pub fn create_enum<V, T>(
     all_workflow_enums: &mut HashMap<SyncId, WorkflowEnumData>,
     arguments_rows: &[T],
     pending_argument_editor_row: &mut Option<ArgumentEditorRowIndex>,
-    ctx: &mut warpui::ViewContext<V>,
+    ctx: &mut black_ui::ViewContext<V>,
 ) where
     T: ArgumentTypeEditor,
-    V: warpui::View,
+    V: black_ui::View,
 {
     let enum_id = enum_data.id;
     let enum_name = enum_data.name.clone();
@@ -239,10 +239,10 @@ pub fn edit_enum<V, T>(
     all_workflow_enums: &mut HashMap<SyncId, WorkflowEnumData>,
     arguments_rows: &[T],
     pending_argument_editor_row: &mut Option<ArgumentEditorRowIndex>,
-    ctx: &mut warpui::ViewContext<V>,
+    ctx: &mut black_ui::ViewContext<V>,
 ) where
     T: ArgumentTypeEditor,
-    V: warpui::View,
+    V: black_ui::View,
 {
     let enum_id = enum_data.id;
     let enum_name = &enum_data.name;
@@ -286,10 +286,10 @@ pub fn load_enum<V>(
     id: &SyncId,
     all_workflow_enums: &HashMap<SyncId, WorkflowEnumData>,
     enum_creation_dialog: &ViewHandle<EnumCreationDialog>,
-    ctx: &mut warpui::ViewContext<V>,
+    ctx: &mut black_ui::ViewContext<V>,
 ) -> bool
 where
-    V: warpui::View,
+    V: black_ui::View,
 {
     match all_workflow_enums.get(id) {
         // If we have local variants for this enum, pass them in

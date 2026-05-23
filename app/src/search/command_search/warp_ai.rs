@@ -5,9 +5,9 @@ use async_trait::async_trait;
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use serde_json::json;
-use warp_core::ui::builder;
-use warpui::elements::{ConstrainedBox, Container, Text};
-use warpui::{AppContext, Element, SingletonEntity};
+use black_core::ui::builder;
+use black_ui::elements::{ConstrainedBox, Container, Text};
+use black_ui::{AppContext, Element, SingletonEntity};
 
 use super::workflows::{WorkflowIdentity, WorkflowSearchItem};
 use crate::ai::AIRequestUsageModel;

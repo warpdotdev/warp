@@ -1,5 +1,5 @@
 use settings::Setting as _;
-use warpui::{App, SingletonEntity as _};
+use black_ui::{App, SingletonEntity as _};
 
 use super::SlashCommandEntryState;
 use crate::report_if_error;

@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use repo_metadata::file_tree_store::FileTreeEntryState;
 use repo_metadata::{FileMetadata, FileTreeEntry};
-use warp_util::standardized_path::StandardizedPath;
-use warpui::elements::MouseStateHandle;
-use warpui::ViewContext;
+use black_util::standardized_path::StandardizedPath;
+use black_ui::elements::MouseStateHandle;
+use black_ui::ViewContext;
 
 use super::{FileTreeIdentifier, FileTreeItem, FileTreeView};
 use crate::code::file_tree::view::{PendingEdit, PendingEditKind};
@@ -106,7 +106,7 @@ impl FileTreeView {
                 metadata: FileMetadata::from_standardized(path.join("new_file"), false).into(),
                 depth: depth + 1,
                 mouse_state_handle: MouseStateHandle::default(),
-                draggable_state: warpui::elements::DraggableState::default(),
+                draggable_state: black_ui::elements::DraggableState::default(),
             },
         );
 

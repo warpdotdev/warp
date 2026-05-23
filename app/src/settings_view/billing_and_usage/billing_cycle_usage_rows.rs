@@ -3,17 +3,17 @@ use std::collections::HashMap;
 use itertools::Itertools as _;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::channel::ChannelState;
-use warp_core::ui::appearance::Appearance;
-use warpui::elements::{
+use black_core::channel::ChannelState;
+use black_core::ui::appearance::Appearance;
+use black_ui::elements::{
     Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow,
     Empty, Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack,
     Text,
 };
-use warpui::platform::Cursor;
-use warpui::ui_components::components::UiComponent;
-use warpui::{AppContext, Element, EventContext, SingletonEntity};
+use black_ui::platform::Cursor;
+use black_ui::ui_components::components::UiComponent;
+use black_ui::{AppContext, Element, EventContext, SingletonEntity};
 
 use crate::auth::AuthStateProvider;
 use crate::settings_view::billing_and_usage::billing_cycle_usage_common::{

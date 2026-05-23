@@ -9,8 +9,8 @@
 use std::io::sink;
 use std::sync::Arc;
 
-use warp_core::command::ExitCode;
-use warpui::r#async::executor::Background;
+use black_core::command::ExitCode;
+use black_ui::r#async::executor::Background;
 
 use super::ansi::{CommandFinishedValue, Handler, PrecmdValue, PreexecValue, Processor};
 use super::block::{Block, BlockId, BlockSize};

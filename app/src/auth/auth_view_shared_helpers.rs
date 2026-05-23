@@ -1,20 +1,20 @@
 use pathfinder_color::ColorU;
-use warp_core::channel::ChannelState;
-use warp_core::features::FeatureFlag;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::builder::UiBuilder;
-use warp_core::ui::color::{darken, lighten};
-use warp_core::ui::theme::ColorScheme;
-use warpui::assets::asset_cache::AssetSource;
-use warpui::elements::{
+use black_core::channel::ChannelState;
+use black_core::features::FeatureFlag;
+use black_core::ui::appearance::Appearance;
+use black_core::ui::builder::UiBuilder;
+use black_core::ui::color::{darken, lighten};
+use black_core::ui::theme::ColorScheme;
+use black_ui::assets::asset_cache::AssetSource;
+use black_ui::elements::{
     Border, CacheOption, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Fill, Flex,
     Image, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable,
 };
-use warpui::fonts::Weight;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ui_components::switch::SwitchStateHandle;
-use warpui::{Action, AppContext, Element, SingletonEntity as _};
+use black_ui::fonts::Weight;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::ui_components::switch::SwitchStateHandle;
+use black_ui::{Action, AppContext, Element, SingletonEntity as _};
 
 use crate::settings::PrivacySettings;
 use crate::themes::theme::ThemeKind;

@@ -6,10 +6,10 @@
 mod channel_config;
 
 use anyhow::Result;
-use warp_core::channel::{Channel, ChannelState};
-use warp_core::features;
+use black_core::channel::{Channel, ChannelState};
+use black_core::features;
 
-// Simple wrapper around warp::run() for dev channel builds.
+// Simple wrapper around black::run() for dev channel builds.
 fn main() -> Result<()> {
     ChannelState::set(
         ChannelState::new(Channel::Dev, channel_config::load_config!("dev"))
@@ -18,5 +18,5 @@ fn main() -> Result<()> {
             .with_additional_features(features::PREVIEW_FLAGS),
     );
 
-    warp::run()
+    black::run()
 }

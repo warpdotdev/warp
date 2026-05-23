@@ -1,7 +1,7 @@
 //! Tracks the `&` prefix mode drafting state in the local input while the user
 //! writes a cloud handoff prompt, before a cloud pane/model exists.
 
-use warpui::{Entity, ModelContext};
+use black_ui::{Entity, ModelContext};
 
 use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::server::ids::SyncId;

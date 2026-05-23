@@ -1,5 +1,5 @@
 use chrono::{Duration, Utc};
-use warpui::App;
+use black_ui::App;
 
 use super::{ObjectAction, ObjectActionSubtype, ObjectActionType, ObjectActions};
 

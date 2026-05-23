@@ -9,8 +9,8 @@ use futures_lite::FutureExt;
 use fuzzy_match::FuzzyMatchResult;
 use instant::Instant;
 use itertools::Itertools;
-use warp_util::path::CleanPathResult;
-use warpui::{AppContext, Entity, SingletonEntity};
+use black_util::path::CleanPathResult;
+use black_ui::{AppContext, Entity, SingletonEntity};
 
 use super::search_item::{CreateFileSearchItem, FileSearchItem};
 use crate::code::opened_files::{OpenedFilesInRepo, OpenedFilesModel};

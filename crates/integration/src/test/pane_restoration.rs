@@ -4,16 +4,16 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use warp::cmd_or_ctrl_shift;
-use warp::features::FeatureFlag;
-use warp::integration_testing::pane_group::assert_focused_pane_index;
-use warp::integration_testing::step::new_step_with_default_assertions;
-use warp::integration_testing::terminal::util::ExpectedExitStatus;
-use warp::integration_testing::terminal::{
+use black::cmd_or_ctrl_shift;
+use black::features::FeatureFlag;
+use black::integration_testing::pane_group::assert_focused_pane_index;
+use black::integration_testing::step::new_step_with_default_assertions;
+use black::integration_testing::terminal::util::ExpectedExitStatus;
+use black::integration_testing::terminal::{
     execute_command, validate_block_output_on_finished_block, wait_until_bootstrapped_pane,
     wait_until_bootstrapped_single_pane_for_tab,
 };
-use warp::integration_testing::workspace::{assert_tab_count, trigger_undo_close};
+use black::integration_testing::workspace::{assert_tab_count, trigger_undo_close};
 
 use super::{new_builder, Builder};
 
@@ -201,23 +201,23 @@ pub fn test_undo_close_grace_period_cleanup() -> Builder {
         .with_step(
             new_step_with_default_assertions("Check pane count before undo close")
                 .add_assertion(move |app, window_id| {
-                    let workspace_view = warp::integration_testing::view_getters::workspace_view(app, window_id);
+                    let workspace_view = black::integration_testing::view_getters::workspace_view(app, window_id);
                     let initial_pane_count = workspace_view.read(app, |workspace, ctx| {
                         let pane_group_view = workspace.get_pane_group_view(0).expect("should have tab 0");
                         pane_group_view.read(ctx, |pane_group, _| pane_group.pane_count())
                     });
-                    warpui::async_assert_eq!(initial_pane_count, 1, "Should have exactly one pane after grace period expires - closed pane should be cleaned up")
+                    black_ui::async_assert_eq!(initial_pane_count, 1, "Should have exactly one pane after grace period expires - closed pane should be cleaned up")
                 }),
         )
         .with_step(trigger_undo_close()
             .add_assertion(assert_focused_pane_index(0, 0)) // Should still be focused on original pane
             .add_assertion(move |app, window_id| {
                 // Assert we still only have one pane (no restoration occurred)
-                let workspace_view = warp::integration_testing::view_getters::workspace_view(app, window_id);
+                let workspace_view = black::integration_testing::view_getters::workspace_view(app, window_id);
                 workspace_view.read(app, |workspace, ctx| {
                     let pane_group_view = workspace.get_pane_group_view(0).expect("should have tab 0");
                     let pane_count = pane_group_view.read(ctx, |pane_group, _| pane_group.pane_count());
-                    warpui::async_assert_eq!(pane_count, 1, "Should still have only one pane after attempted restore - no pane should be restored")
+                    black_ui::async_assert_eq!(pane_count, 1, "Should still have only one pane after attempted restore - no pane should be restored")
                 })
             }),
         )
@@ -272,7 +272,7 @@ pub fn test_closed_panes_cleared_on_rearrangement() -> Builder {
         ))
         .with_step(
             // Close the middle pane by using a direct operation targeting pane index 1
-            warp::integration_testing::pane_group::close_pane_by_index(
+            black::integration_testing::pane_group::close_pane_by_index(
                 0, // tab index
                 1, // pane index - the middle pane
             ),
@@ -280,27 +280,27 @@ pub fn test_closed_panes_cleared_on_rearrangement() -> Builder {
         .with_step(
             new_step_with_default_assertions("Verify we have 2 visible panes after closing one")
                 .add_assertion(move |app, window_id| {
-                    let workspace_view = warp::integration_testing::view_getters::workspace_view(app, window_id);
+                    let workspace_view = black::integration_testing::view_getters::workspace_view(app, window_id);
                     workspace_view.read(app, |workspace, ctx| {
                         let pane_group_view = workspace.get_pane_group_view(0).expect("should have tab 0");
                         let (visible_pane_count, total_pane_count) = pane_group_view.read(ctx, |pane_group, _| {
                             (pane_group.visible_pane_count(), pane_group.pane_count())
                         });
                         if visible_pane_count != 2 {
-                            warpui::integration::AssertionOutcome::failure(format!("Should have 2 visible panes after closing one (got {visible_pane_count} visible, {total_pane_count} total)"))
+                            black_ui::integration::AssertionOutcome::failure(format!("Should have 2 visible panes after closing one (got {visible_pane_count} visible, {total_pane_count} total)"))
                         } else {
-                            warpui::integration::AssertionOutcome::Success
+                            black_ui::integration::AssertionOutcome::Success
                         }
                     })
                 }),
         )
         .with_step(
             // Trigger pane rearrangement by moving panes
-            warp::integration_testing::pane_group::move_pane_by_indices(
+            black::integration_testing::pane_group::move_pane_by_indices(
                 0,
                 0,
                 1,
-                warp::pane_group::tree::Direction::Right,
+                black::pane_group::tree::Direction::Right,
             ),
         )
         .with_step(
@@ -310,31 +310,31 @@ pub fn test_closed_panes_cleared_on_rearrangement() -> Builder {
         .with_step(
             new_step_with_default_assertions("Verify pane was NOT restored - still have same visible panes")
                 .add_assertion(move |app, window_id| {
-                    let workspace_view = warp::integration_testing::view_getters::workspace_view(app, window_id);
+                    let workspace_view = black::integration_testing::view_getters::workspace_view(app, window_id);
                     workspace_view.read(app, |workspace, ctx| {
                         let pane_group_view = workspace.get_pane_group_view(0).expect("should have tab 0");
                         let visible_pane_count = pane_group_view.read(ctx, |pane_group, _| pane_group.visible_pane_count());
                         // After rearrangement, we should still have the same visible panes (no restoration)
                         // The exact count might vary based on how the move operation affects the layout
                         if visible_pane_count < 1 {
-                            warpui::integration::AssertionOutcome::failure(format!("Should have at least 1 visible pane after undo close attempt, got {visible_pane_count}"))
+                            black_ui::integration::AssertionOutcome::failure(format!("Should have at least 1 visible pane after undo close attempt, got {visible_pane_count}"))
                         } else {
-                            warpui::integration::AssertionOutcome::Success
+                            black_ui::integration::AssertionOutcome::Success
                         }
                     })
                 }),
         )
         .with_step(
             trigger_undo_close().add_assertion(move |app, window_id| {
-                let workspace_view = warp::integration_testing::view_getters::workspace_view(app, window_id);
+                let workspace_view = black::integration_testing::view_getters::workspace_view(app, window_id);
                 workspace_view.read(app, |workspace, ctx| {
                     let pane_group_view = workspace.get_pane_group_view(0).expect("should have tab 0");
                     let visible_pane_count = pane_group_view.read(ctx, |pane_group, _| pane_group.visible_pane_count());
                     // Should still have the same panes, no restoration should occur
                     if visible_pane_count < 1 {
-                        warpui::integration::AssertionOutcome::failure(format!("Should have at least 1 visible pane after second undo close attempt, got {visible_pane_count}"))
+                        black_ui::integration::AssertionOutcome::failure(format!("Should have at least 1 visible pane after second undo close attempt, got {visible_pane_count}"))
                     } else {
-                        warpui::integration::AssertionOutcome::Success
+                        black_ui::integration::AssertionOutcome::Success
                     }
                 })
             })
@@ -342,7 +342,7 @@ pub fn test_closed_panes_cleared_on_rearrangement() -> Builder {
         .with_step(
             new_step_with_default_assertions("Verify remaining pane has expected state")
                 .add_assertion(move |app, window_id| {
-                    let workspace_view = warp::integration_testing::view_getters::workspace_view(app, window_id);
+                    let workspace_view = black::integration_testing::view_getters::workspace_view(app, window_id);
                     let visible_pane_count = workspace_view.read(app, |workspace, ctx| {
                         let pane_group_view = workspace.get_pane_group_view(0).expect("should have tab 0");
                         pane_group_view.read(ctx, |pane_group, _| pane_group.visible_pane_count())
@@ -367,13 +367,13 @@ pub fn test_closed_panes_cleared_on_rearrangement() -> Builder {
                             0, 0, window_id, app,
                         );
                         match (original_result, third_result) {
-                            (warpui::integration::AssertionOutcome::Success, warpui::integration::AssertionOutcome::Success) => {
-                                warpui::integration::AssertionOutcome::Success
+                            (black_ui::integration::AssertionOutcome::Success, black_ui::integration::AssertionOutcome::Success) => {
+                                black_ui::integration::AssertionOutcome::Success
                             }
-                            _ => warpui::integration::AssertionOutcome::failure("Expected to find both original_pane and third_pane content".to_string())
+                            _ => black_ui::integration::AssertionOutcome::failure("Expected to find both original_pane and third_pane content".to_string())
                         }
                     } else {
-                        warpui::integration::AssertionOutcome::failure(format!("Unexpected pane count: {visible_pane_count}"))
+                        black_ui::integration::AssertionOutcome::failure(format!("Unexpected pane count: {visible_pane_count}"))
                     }
                 }),
         )
@@ -448,7 +448,7 @@ pub fn test_tab_closes_when_last_visible_pane_closed() -> Builder {
                 .set_pause_on_failure(std::time::Duration::from_secs(30))
                 .add_assertion(move |app, window_id| {
                     let workspace_view =
-                        warp::integration_testing::view_getters::workspace_view(app, window_id);
+                        black::integration_testing::view_getters::workspace_view(app, window_id);
                     workspace_view.read(app, |workspace, _ctx| {
                         let focused_tab_idx = workspace.active_tab_index();
 

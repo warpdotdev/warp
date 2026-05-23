@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use warp_core::channel::{Channel, ChannelState};
+use black_core::channel::{Channel, ChannelState};
 
 #[cfg(not(target_family = "wasm"))]
 mod docker;

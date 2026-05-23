@@ -5,9 +5,9 @@ use anyhow::Result;
 use clap::Parser;
 use integration::test::*;
 use integration::Builder;
-use warp_cli::WorkerCommand;
-use warp_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpServerConfig};
-use warp_core::AppId;
+use black_cli::WorkerCommand;
+use black_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpServerConfig};
+use black_core::AppId;
 
 /// The Warp integration test runner.
 #[derive(Debug, Default, Parser, Clone)]
@@ -68,7 +68,7 @@ pub fn main() -> Result<()> {
                 // GUI application), do so.  This must occur before init_logging, as the
                 // terminal server sets up its own logger, and attempting to set a second
                 // logger leads to a panic.
-                warp::terminal::local_tty::server::run_terminal_server(args);
+                black::terminal::local_tty::server::run_terminal_server(args);
                 return Ok(());
             }
             // This is a catch-all to handle the plugin host, which the integration test crate doesn't have a feature flag for.
@@ -106,7 +106,7 @@ pub fn main() -> Result<()> {
     }
 
     #[cfg_attr(not(unix), allow(unreachable_code))]
-    warp::run_integration_test(driver)
+    black::run_integration_test(driver)
 }
 
 /// Type of a function that produces an integration test builder.

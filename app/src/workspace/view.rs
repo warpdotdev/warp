@@ -59,28 +59,28 @@ use serde_json;
 use session_sharing_protocol::common::SessionId as SharedSessionId;
 #[cfg(target_family = "wasm")]
 use url::Url;
-use warp_cli::agent::Harness;
-use warp_core::context_flag::ContextFlag;
-use warp_core::execution_mode::AppExecutionMode;
-use warp_core::features::FeatureFlag;
-use warp_core::semantic_selection::SemanticSelection;
-use warp_core::ui::color::coloru_with_opacity;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::phenomenon::PhenomenonStyle;
-use warp_core::ui::theme::Fill;
-use warp_core::ui::Icon;
-use warp_core::user_preferences::GetUserPreferences as _;
-use warp_editor::editor::NavigationKey;
-use warp_util::path::{user_friendly_path, LineAndColumnArg};
+use black_cli::agent::Harness;
+use black_core::context_flag::ContextFlag;
+use black_core::execution_mode::AppExecutionMode;
+use black_core::features::FeatureFlag;
+use black_core::semantic_selection::SemanticSelection;
+use black_core::ui::color::coloru_with_opacity;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::phenomenon::PhenomenonStyle;
+use black_core::ui::theme::Fill;
+use black_core::ui::Icon;
+use black_core::user_preferences::GetUserPreferences as _;
+use black_editor::editor::NavigationKey;
+use black_util::path::{user_friendly_path, LineAndColumnArg};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use warp_util::standardized_path::StandardizedPath;
-use warpui::accessibility::{
+use black_util::standardized_path::StandardizedPath;
+use black_ui::accessibility::{
     AccessibilityContent, AccessibilityVerbosity, ActionAccessibilityContent, WarpA11yRole,
 };
-use warpui::clipboard::ClipboardContent;
+use black_ui::clipboard::ClipboardContent;
 #[cfg(target_family = "wasm")]
-use warpui::elements::Percentage;
-use warpui::elements::{
+use black_ui::elements::Percentage;
+use black_ui::elements::{
     Align, Border, CacheOption, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, Dismiss, DispatchEventResult, DraggableState, DropTarget,
     Element, Empty, EventHandler, Expanded, Fill as ElementFill, Flex, Highlight, Hoverable,
@@ -88,20 +88,20 @@ use warpui::elements::{
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
     PositionedElementOffsetBounds, Radius, Rect, SavePosition, Shrinkable, Stack, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::geometry::vector::{vec2f, Vector2F};
-use warpui::keymap::Context;
-use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
-use warpui::notification::{NotificationSendError, RequestPermissionsOutcome, UserNotification};
-use warpui::platform::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::geometry::vector::{vec2f, Vector2F};
+use black_ui::keymap::Context;
+use black_ui::modals::{AlertDialogWithCallbacks, AppModalCallback};
+use black_ui::notification::{NotificationSendError, RequestPermissionsOutcome, UserNotification};
+use black_ui::platform::{
     Cursor, FilePickerConfiguration, FullscreenState, SystemTheme, TerminationMode,
 };
-use warpui::text_layout::ClipConfig;
-use warpui::ui_components::button::{Button, ButtonVariant};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::windowing::state::ApplicationStage;
-use warpui::windowing::{StateEvent, WindowManager};
-use warpui::{
+use black_ui::text_layout::ClipConfig;
+use black_ui::ui_components::button::{Button, ButtonVariant};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::windowing::state::ApplicationStage;
+use black_ui::windowing::{StateEvent, WindowManager};
+use black_ui::{
     AppContext, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity, TypedActionView,
     UpdateModel, UpdateView, View, ViewAsRef, ViewContext, ViewHandle, WeakViewHandle, WindowId,
 };
@@ -4094,7 +4094,7 @@ impl Workspace {
                 // Open the transcript details panel by default on WASM (unless on mobile)
                 #[cfg(target_family = "wasm")]
                 {
-                    if !warpui::platform::wasm::is_mobile_device() {
+                    if !black_ui::platform::wasm::is_mobile_device() {
                         me.current_workspace_state.is_transcript_details_panel_open = true;
                         me.transcript_info_button.update(ctx, |button, ctx| {
                             button.set_active(true, ctx);
@@ -4213,7 +4213,7 @@ impl Workspace {
                             .ambient_agent_task_id();
                         if task_id.is_some() {
                             // Open the details panel for shared ambient agent sessions (unless on mobile)
-                            if !warpui::platform::wasm::is_mobile_device() {
+                            if !black_ui::platform::wasm::is_mobile_device() {
                                 me.current_workspace_state.is_transcript_details_panel_open = true;
                                 me.transcript_info_button.update(ctx, |button, ctx| {
                                     button.set_active(true, ctx);
@@ -6130,7 +6130,7 @@ impl Workspace {
     #[cfg(not(target_family = "wasm"))]
     fn view_logs(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.spawn(
-            async { tokio::task::spawn_blocking(warp_logging::create_log_bundle_zip).await },
+            async { tokio::task::spawn_blocking(black_logging::create_log_bundle_zip).await },
             |me, result, ctx| match result {
                 Ok(Ok(path)) => {
                     ctx.open_file_path_in_explorer(&path);
@@ -7730,13 +7730,13 @@ impl Workspace {
     }
 
     /// Find an active session and pre-fill the input editor the Warp executable with the
-    /// [`warp_cli::Command::DumpDebugInfo`] subcommand.
+    /// [`black_cli::Command::DumpDebugInfo`] subcommand.
     fn dump_debug_info(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(exec) = std::env::current_exe()
             .ok()
             .map(|path| path.to_string_lossy().into_owned())
         {
-            let command = format!("{exec} {}", warp_cli::dump_debug_info_flag());
+            let command = format!("{exec} {}", black_cli::dump_debug_info_flag());
             // Get the active session for this tab if it exists.
             let mut active_session_handle = self
                 .active_tab_pane_group()
@@ -8862,7 +8862,7 @@ impl Workspace {
                     .finish()
                 })
                 .with_cursor(Cursor::PointingHand)
-                .on_click(|ctx: &mut warpui::elements::EventContext, _, _| {
+                .on_click(|ctx: &mut black_ui::elements::EventContext, _, _| {
                     ctx.dispatch_typed_action(WorkspaceAction::OpenWorktreeAddRepoPicker);
                     ctx.dispatch_typed_action(crate::menu::MenuAction::Close(true));
                 })
@@ -9258,7 +9258,7 @@ impl Workspace {
                     });
                 });
             },
-            warpui::platform::FilePickerConfiguration::new().folders_only(),
+            black_ui::platform::FilePickerConfiguration::new().folders_only(),
         );
     }
 
@@ -9332,7 +9332,7 @@ impl Workspace {
             .map(crate::util::git::list_local_branches_sync)
             .unwrap_or_default();
         let branch_refs: HashSet<&str> = branches.iter().map(|s| s.as_str()).collect();
-        Some(warp_util::worktree_names::generate_worktree_branch_name(
+        Some(black_util::worktree_names::generate_worktree_branch_name(
             &branch_refs,
         ))
     }
@@ -9372,7 +9372,7 @@ impl Workspace {
         } else {
             let branches = crate::util::git::list_local_branches_sync(Path::new(repo));
             let branch_refs: HashSet<&str> = branches.iter().map(|s| s.as_str()).collect();
-            warp_util::worktree_names::generate_worktree_branch_name(&branch_refs)
+            black_util::worktree_names::generate_worktree_branch_name(&branch_refs)
         };
 
         let toml_content = crate::tab_configs::build_worktree_config_toml(
@@ -9458,7 +9458,7 @@ impl Workspace {
                     });
                 });
             },
-            warpui::platform::FilePickerConfiguration::new().folders_only(),
+            black_ui::platform::FilePickerConfiguration::new().folders_only(),
         );
     }
 
@@ -9479,7 +9479,7 @@ impl Workspace {
         };
         let branches = crate::util::git::list_local_branches_sync(Path::new(&repo_path));
         let branch_refs: HashSet<&str> = branches.iter().map(|s| s.as_str()).collect();
-        let branch_name = warp_util::worktree_names::generate_worktree_branch_name(&branch_refs);
+        let branch_name = black_util::worktree_names::generate_worktree_branch_name(&branch_refs);
         let repo_display_name = Path::new(&repo_path)
             .file_name()
             .map(|name| name.to_string_lossy().to_string())
@@ -9559,7 +9559,7 @@ impl Workspace {
                     persisted.user_added_workspace(path_buf, ctx);
                 });
             },
-            warpui::platform::FilePickerConfiguration::new().folders_only(),
+            black_ui::platform::FilePickerConfiguration::new().folders_only(),
         );
     }
 
@@ -12325,7 +12325,7 @@ impl Workspace {
 
     #[cfg(target_os = "macos")]
     pub fn sync_window_button_visibility(&self, ctx: &mut ViewContext<Self>) {
-        use warpui::platform::mac::WindowExt;
+        use black_ui::platform::mac::WindowExt;
         let show = if FeatureFlag::FullScreenZenMode.is_enabled()
             && TabSettings::as_ref(ctx)
                 .workspace_decoration_visibility
@@ -12845,12 +12845,12 @@ impl Workspace {
                             .and_then(|wd| match wd {
                                 LocalOrRemotePath::Remote(remote) => {
                                     let std_path =
-                                        warp_util::standardized_path::StandardizedPath::try_new(
+                                        black_util::standardized_path::StandardizedPath::try_new(
                                             path,
                                         )
                                         .ok()?;
                                     Some(LocalOrRemotePath::Remote(
-                                        warp_util::remote_path::RemotePath::new(
+                                        black_util::remote_path::RemotePath::new(
                                             remote.host_id.clone(),
                                             std_path,
                                         ),
@@ -17700,7 +17700,7 @@ impl Workspace {
             .with_child(
                 Text::new_inline(AI_ASSISTANT_FEATURE_NAME, appearance.ui_font_family(), 14.)
                     .with_style(Properties {
-                        weight: warpui::fonts::Weight::Bold,
+                        weight: black_ui::fonts::Weight::Bold,
                         ..Default::default()
                     })
                     .finish(),
@@ -18288,7 +18288,7 @@ impl Workspace {
             // Left: Warp logo - clickable to link to warp.dev
             let warp_logo = Hoverable::new(self.mouse_states.warp_logo.clone(), |_state| {
                 ConstrainedBox::new(
-                    warp_core::ui::Icon::Warp
+                    black_core::ui::Icon::Warp
                         .to_warpui_icon(appearance.theme().foreground())
                         .finish(),
                 )
@@ -18344,7 +18344,7 @@ impl Workspace {
             }
 
             // Hide "Open in Warp" button on mobile devices
-            if !warpui::platform::wasm::is_mobile_device() {
+            if !black_ui::platform::wasm::is_mobile_device() {
                 right_row.add_child(ChildView::new(&self.open_in_warp_button).finish());
             }
             tab_bar.add_child(right_row.finish());
@@ -20213,7 +20213,7 @@ impl Workspace {
         }
 
         #[cfg(target_family = "wasm")]
-        if !warpui::platform::wasm::is_mobile_device()
+        if !black_ui::platform::wasm::is_mobile_device()
             && self
                 .current_workspace_state
                 .is_transcript_details_panel_open
@@ -20294,7 +20294,7 @@ impl Workspace {
                 )
             }
             HeaderToolbarItemKind::ToolsPanel => {
-                if !pane_group.left_panel_open || warpui::platform::is_mobile_device() {
+                if !pane_group.left_panel_open || black_ui::platform::is_mobile_device() {
                     return None;
                 }
                 Some(ChildView::new(&self.left_panel_view).finish())
@@ -22068,7 +22068,7 @@ impl TypedActionView for Workspace {
                 // Blocking is ok here only because this action is only registered in dev and local
                 // builds to aid in debugging and development.
                 let access_token =
-                    warpui::r#async::block_on(self.server_api.get_or_refresh_access_token());
+                    black_ui::r#async::block_on(self.server_api.get_or_refresh_access_token());
                 if let Ok(token) = access_token {
                     if let Some(bearer) = token.bearer_token() {
                         ctx.clipboard().write(ClipboardContent::plain_text(bearer));
@@ -23183,7 +23183,7 @@ impl View for Workspace {
         self.sync_window_button_visibility(ctx);
     }
 
-    fn keymap_context(&self, app: &AppContext) -> warpui::keymap::Context {
+    fn keymap_context(&self, app: &AppContext) -> black_ui::keymap::Context {
         let mut context = Self::default_keymap_context();
 
         if NetworkStatus::as_ref(app).is_online() {
@@ -23418,7 +23418,7 @@ impl View for Workspace {
         #[cfg(target_family = "wasm")]
         {
             let pane_group = self.active_tab_pane_group().as_ref(app);
-            if warpui::platform::wasm::is_mobile_device() && pane_group.left_panel_open {
+            if black_ui::platform::wasm::is_mobile_device() && pane_group.left_panel_open {
                 let scrim = Rect::new()
                     .with_background(Fill::Solid(ColorU::new(
                         0,
@@ -23522,7 +23522,7 @@ impl View for Workspace {
 
         // Transcript details panel overlay (right side, mobile only)
         #[cfg(target_family = "wasm")]
-        if warpui::platform::wasm::is_mobile_device()
+        if black_ui::platform::wasm::is_mobile_device()
             && self
                 .current_workspace_state
                 .is_transcript_details_panel_open
@@ -25294,7 +25294,7 @@ fn render_cross_window_ghost_chip(
     appearance: &Appearance,
     app: &AppContext,
 ) -> Box<dyn Element> {
-    use warpui::elements::DropShadow;
+    use black_ui::elements::DropShadow;
 
     let theme = appearance.theme();
 

@@ -1,4 +1,4 @@
-use warpui::{App, ModelHandle};
+use black_ui::{App, ModelHandle};
 
 use super::Searcher;
 use crate::content::buffer::{

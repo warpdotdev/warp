@@ -1,5 +1,5 @@
 use anyhow::Context;
-use warpui::{AppContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle};
+use black_ui::{AppContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle};
 
 use super::view::PaneView;
 use super::{

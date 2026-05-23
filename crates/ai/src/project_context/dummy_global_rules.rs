@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use warpui::ModelContext;
+use black_ui::ModelContext;
 
 use super::model::{ProjectContextModel, ProjectRule};
 

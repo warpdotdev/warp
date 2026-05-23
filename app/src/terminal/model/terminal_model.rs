@@ -16,17 +16,17 @@ use session_sharing_protocol::common::{
     AICommandMetadata, OrderedTerminalEventType, ParticipantId,
 };
 use session_sharing_protocol::sharer::SessionSourceType;
-use warp_core::features::FeatureFlag;
-use warp_core::report_error;
-use warp_core::semantic_selection::SemanticSelection;
-pub use warp_terminal::model::BlockIndex;
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
-use warpui::assets::asset_cache::Asset;
-use warpui::image_cache::ImageType;
-use warpui::r#async::executor::Background;
+use black_core::features::FeatureFlag;
+use black_core::report_error;
+use black_core::semantic_selection::SemanticSelection;
+pub use black_terminal::model::BlockIndex;
+use black_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use black_ui::assets::asset_cache::Asset;
+use black_ui::image_cache::ImageType;
+use black_ui::r#async::executor::Background;
 #[cfg(not(target_family = "wasm"))]
-use warpui::util::save_as_file;
-use warpui::AppContext;
+use black_ui::util::save_as_file;
+use black_ui::AppContext;
 
 use super::super::{AltScreen, BlockList};
 use super::ansi::{
@@ -2711,7 +2711,7 @@ impl ansi::Handler for TerminalModel {
         delegate!(self.configure_charset(index, charset));
     }
 
-    fn set_color(&mut self, index: usize, color: warpui::color::ColorU) {
+    fn set_color(&mut self, index: usize, color: black_ui::color::ColorU) {
         self.override_colors[index] = Some(color);
     }
 

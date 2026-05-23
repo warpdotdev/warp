@@ -9,13 +9,13 @@ use std::time::Duration;
 use repo_metadata::RepoMetadataUpdate;
 use serde::Serialize;
 #[cfg(not(target_family = "wasm"))]
-use warp_core::channel::ChannelState;
-use warp_core::SessionId;
-use warp_util::remote_path::{RemoteNavigationResult, RemotePath};
-use warp_util::standardized_path::StandardizedPath;
+use black_core::channel::ChannelState;
+use black_core::SessionId;
+use black_util::remote_path::{RemoteNavigationResult, RemotePath};
+use black_util::standardized_path::StandardizedPath;
 #[cfg(not(target_family = "wasm"))]
-use warpui::r#async::FutureExt as _;
-use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
+use black_ui::r#async::FutureExt as _;
+use black_ui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
 
 use crate::auth::RemoteServerAuthContext;
 #[cfg(not(target_family = "wasm"))]
@@ -1189,7 +1189,7 @@ impl RemoteServerManager {
         auth_context: &RemoteServerAuthContext,
         codebase_index_limits: Option<CodebaseIndexLimits>,
         spawner: &ModelSpawner<Self>,
-        executor: &Arc<warpui::r#async::executor::Background>,
+        executor: &Arc<black_ui::r#async::executor::Background>,
     ) -> Result<InitializeHandshake, ConnectAndHandshakeError> {
         // Phase 1: Connect (establish streams, create client).
         let Connection {

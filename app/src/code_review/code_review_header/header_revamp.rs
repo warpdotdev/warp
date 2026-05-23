@@ -6,13 +6,13 @@
 //! Separated into its own module so the two codepaths are easy to distinguish.
 
 use pathfinder_geometry::vector::vec2f;
-use warp_core::features::FeatureFlag;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_ui::elements::{
     ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CrossAxisAlignment, Flex,
     MainAxisAlignment, MainAxisSize, OffsetPositioning, ParentAnchor, ParentElement,
     ParentOffsetBounds, Shrinkable, Stack,
 };
-use warpui::{Element, ViewHandle};
+use black_ui::{Element, ViewHandle};
 
 use super::CodeReviewHeader;
 use crate::appearance::Appearance;
@@ -88,8 +88,8 @@ impl CodeReviewHeader {
 
     fn render_file_nav_button(button: &ViewHandle<ActionButton>) -> Box<dyn Element> {
         ConstrainedBox::new(ChildView::new(button).finish())
-            .with_height(warp_core::ui::icons::ICON_DIMENSIONS)
-            .with_width(warp_core::ui::icons::ICON_DIMENSIONS)
+            .with_height(black_core::ui::icons::ICON_DIMENSIONS)
+            .with_width(black_core::ui::icons::ICON_DIMENSIONS)
             .finish()
     }
 
@@ -143,8 +143,8 @@ impl CodeReviewHeader {
     ) -> Box<dyn Element> {
         let button_container = Container::new(
             ConstrainedBox::new(ChildView::new(header_dropdown_button).finish())
-                .with_height(warp_core::ui::icons::ICON_DIMENSIONS)
-                .with_width(warp_core::ui::icons::ICON_DIMENSIONS)
+                .with_height(black_core::ui::icons::ICON_DIMENSIONS)
+                .with_width(black_core::ui::icons::ICON_DIMENSIONS)
                 .finish(),
         )
         .finish();

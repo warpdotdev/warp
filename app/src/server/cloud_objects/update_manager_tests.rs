@@ -5,10 +5,10 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use futures_lite::future;
 use settings::{RespectUserSyncSetting, SyncToCloud};
-use warp_core::features::FeatureFlag;
-use warp_graphql::object_permissions::AccessLevel;
-use warp_graphql::scalars::time::ServerTimestamp;
-use warpui::{App, ModelHandle, SingletonEntity};
+use black_core::features::FeatureFlag;
+use black_graphql::object_permissions::AccessLevel;
+use black_graphql::scalars::time::ServerTimestamp;
+use black_ui::{App, ModelHandle, SingletonEntity};
 
 use super::{GetCloudObjectResponse, InitialLoadResponse, UpdateManager};
 use crate::ai::cloud_environments::{
@@ -1662,7 +1662,7 @@ fn test_sync_state_after_creation_failure_item_not_in_sync_queue() {
             .await;
 
         // await long enough that all the sync queue retries are exhausted
-        warpui::r#async::Timer::after(Duration::from_secs(10)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(10)).await;
 
         // because there aren't any items in the sync queue left for this object,
         // it should be marked as errored
@@ -1754,7 +1754,7 @@ fn test_sync_state_after_update_failure_item_in_sync_queue() {
             .await;
 
         // await long enough that all the sync queue retries are exhausted
-        warpui::r#async::Timer::after(Duration::from_secs(10)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(10)).await;
 
         // because notebook updates are dependent on one another, all should have registered
         // as failed and there should be no updates left in the sync queue.
@@ -2576,7 +2576,7 @@ fn test_metadata_after_trash_item_failure() {
             .await;
 
         // await long enough that all the trash object retries are exhausted
-        warpui::r#async::Timer::after(Duration::from_secs(10)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(10)).await;
 
         assert_trashed_status_for_object(&mut app, &sync_id.uid(), false);
         assert_pending_status_for_object(&mut app, &sync_id.uid(), false);
@@ -5757,7 +5757,7 @@ fn test_move_object_personal_to_team_failure() {
             .await;
 
         // await long enough that all the move object retries are exhausted
-        warpui::r#async::Timer::after(Duration::from_secs(10)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(10)).await;
 
         assert_pending_online_only_change_for_object(&mut app, &sync_id.uid(), false);
 
@@ -6092,7 +6092,7 @@ fn test_move_workflow_with_enums_personal_to_team_failure() {
             .await;
 
         // await long enough that all the move object retries are exhausted
-        warpui::r#async::Timer::after(Duration::from_secs(10)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(10)).await;
 
         // The workflow and enum should remain in the personal space
         assert_pending_online_only_change_for_object(&mut app, &workflow_sync_id.uid(), false);
@@ -6337,7 +6337,7 @@ fn test_move_object_root_to_folder_failure() {
             .await;
 
         // await long enough that all the move object retries are exhausted
-        warpui::r#async::Timer::after(Duration::from_secs(10)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(10)).await;
 
         assert_pending_online_only_change_for_object(&mut app, &sync_id.uid(), false);
 
@@ -6529,7 +6529,7 @@ fn test_move_object_folder_to_root_failure() {
             .await;
 
         // await long enough that all the move object retries are exhausted
-        warpui::r#async::Timer::after(Duration::from_secs(10)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(10)).await;
 
         assert_pending_online_only_change_for_object(&mut app, &sync_id.uid(), false);
 
@@ -6725,7 +6725,7 @@ fn test_move_object_folder_to_folder_failure() {
             .await;
 
         // await long enough that all the move object retries are exhausted
-        warpui::r#async::Timer::after(Duration::from_secs(10)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(10)).await;
 
         assert_pending_online_only_change_for_object(&mut app, &sync_id.uid(), false);
 
@@ -7492,7 +7492,7 @@ fn test_add_guest_failure() {
                 ctx.await_spawned_future(update_manager.spawned_futures[0])
             })
             .await;
-        warpui::r#async::Timer::after(Duration::from_secs(10)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(10)).await;
 
         assert_pending_online_only_change_for_object(&mut app, &uid, false);
 

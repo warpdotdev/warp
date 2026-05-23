@@ -1,4 +1,4 @@
-use warpui::{Entity, ModelContext, SingletonEntity, WindowId};
+use black_ui::{Entity, ModelContext, SingletonEntity, WindowId};
 
 use crate::view_components::{DismissibleToast, ToastType};
 use crate::workspace::WorkspaceAction;

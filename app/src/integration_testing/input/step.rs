@@ -1,7 +1,7 @@
 use pathfinder_geometry::vector::Vector2F;
-use warpui::integration::TestStep;
-use warpui::windowing::WindowManager;
-use warpui::SingletonEntity;
+use black_ui::integration::TestStep;
+use black_ui::windowing::WindowManager;
+use black_ui::SingletonEntity;
 
 use crate::integration_testing::step::new_step_with_default_assertions;
 use crate::integration_testing::terminal::assert_context_menu_is_open;

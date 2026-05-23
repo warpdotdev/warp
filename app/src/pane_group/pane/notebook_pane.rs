@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use url::Url;
-use warpui::{AppContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle};
+use black_ui::{AppContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle};
 
 use super::super::{DefaultSessionModeBehavior, Direction};
 use super::view::PaneView;

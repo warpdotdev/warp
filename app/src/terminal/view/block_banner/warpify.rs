@@ -1,13 +1,13 @@
 use pathfinder_color::ColorU;
-use warpui::elements::{
+use black_ui::elements::{
     Align, ConstrainedBox, Container, CrossAxisAlignment, Flex, HighlightedHyperlink,
     MouseStateHandle, ParentElement, Shrinkable,
 };
-use warpui::fonts::Weight;
-use warpui::keymap::Keystroke;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{AppContext, Element};
+use black_ui::fonts::Weight;
+use black_ui::keymap::Keystroke;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{AppContext, Element};
 
 use super::{render_block_banner, BLOCK_BANNER_DESCRIPTION_MAX_HEIGHT};
 use crate::appearance::Appearance;

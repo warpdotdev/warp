@@ -1,6 +1,6 @@
-use warpui::keymap::{EditableBinding, Keystroke, Trigger};
-use warpui::platform::OperatingSystem;
-use warpui::App;
+use black_ui::keymap::{EditableBinding, Keystroke, Trigger};
+use black_ui::platform::OperatingSystem;
+use black_ui::App;
 
 use crate::terminal;
 use crate::util::bindings::{keybinding_name_to_display_string, trigger_to_keystroke};

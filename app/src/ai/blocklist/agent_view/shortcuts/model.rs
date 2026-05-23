@@ -1,5 +1,5 @@
-use warp_core::send_telemetry_from_ctx;
-use warpui::{Entity, ModelContext, ModelHandle};
+use black_core::send_telemetry_from_ctx;
+use black_ui::{Entity, ModelContext, ModelHandle};
 
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::server::telemetry::TelemetryEvent;

@@ -2,11 +2,11 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use warp_util::path::ShellFamily;
+use black_util::path::ShellFamily;
 use warp_workflows::workflows as global_workflows;
 #[cfg(not(target_family = "wasm"))]
-use warpui::platform::OperatingSystem;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+use black_ui::platform::OperatingSystem;
+use black_ui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use super::workflow::Workflow;
 use super::WorkflowSource;
@@ -183,7 +183,7 @@ pub(super) fn load_project_workflows(path: &Path) -> Vec<Workflow> {
     match git2::Repository::discover(path) {
         Ok(repository) => repository.workdir().map_or(Vec::new(), |workdir| {
             load_workflows(&workflows_dir(
-                workdir.join(warp_core::paths::WARP_CONFIG_DIR),
+                workdir.join(black_core::paths::WARP_CONFIG_DIR),
             ))
         }),
         Err(_) => Vec::new(),
@@ -209,7 +209,7 @@ pub fn tail_command_for_shell(shell_family: ShellFamily, path: &PathBuf) -> Stri
 
 #[cfg(not(target_family = "wasm"))]
 pub fn prompt_chip_logging_workflow(shell_family: ShellFamily) -> Option<Workflow> {
-    if !warp_core::channel::ChannelState::enable_debug_features() {
+    if !black_core::channel::ChannelState::enable_debug_features() {
         return None;
     }
     let log_file_path = crate::context_chips::logging::log_file_path().ok()?;

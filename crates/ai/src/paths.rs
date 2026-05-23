@@ -1,9 +1,9 @@
 use typed_path::{TypedPath, TypedPathBuf, WindowsPath};
-use warp_terminal::shell::ShellLaunchData;
-use warp_util::path::{
+use black_terminal::shell::ShellLaunchData;
+use black_util::path::{
     convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
 };
-use warpui::platform::OperatingSystem;
+use black_ui::platform::OperatingSystem;
 
 fn use_unix_paths(shell: Option<&ShellLaunchData>) -> bool {
     OperatingSystem::get().is_linux()

@@ -6,26 +6,26 @@
 use std::collections::HashMap;
 
 use settings::Setting as _;
-use warp::features::FeatureFlag;
-use warp::integration_testing::step::new_step_with_default_assertions;
-use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
-use warp::settings::{CodeSettings, DebugSettings, FontSettings};
-use warpui::integration::TestStep;
-use warpui::{async_assert, async_assert_eq, SingletonEntity};
+use black::features::FeatureFlag;
+use black::integration_testing::step::new_step_with_default_assertions;
+use black::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
+use black::settings::{CodeSettings, DebugSettings, FontSettings};
+use black_ui::integration::TestStep;
+use black_ui::{async_assert, async_assert_eq, SingletonEntity};
 
 use super::{new_builder, Builder};
 
 /// Helper: read the TOML settings file from disk and return its contents.
 /// Returns an empty string if the file does not exist.
 fn read_toml_file() -> String {
-    let path = warp::settings::user_preferences_toml_file_path();
+    let path = black::settings::user_preferences_toml_file_path();
     std::fs::read_to_string(path).unwrap_or_default()
 }
 
 /// Helper: read the JSON user preferences file from disk and return its contents.
 /// Returns an empty string if the file does not exist.
 fn read_json_prefs_file() -> String {
-    let path = warp::settings::user_preferences_file_path();
+    let path = black::settings::user_preferences_file_path();
     std::fs::read_to_string(path).unwrap_or_default()
 }
 

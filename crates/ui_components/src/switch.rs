@@ -1,9 +1,9 @@
 use std::sync::LazyLock;
 
-use warp_core::ui::appearance::Appearance;
-use warpui::elements::{MouseStateHandle, Rect};
-use warpui::prelude::stack::*;
-use warpui::prelude::*;
+use black_core::ui::appearance::Appearance;
+use black_ui::elements::{MouseStateHandle, Rect};
+use black_ui::prelude::stack::*;
+use black_ui::prelude::*;
 
 use crate::{Component, MouseEventHandler, Renderable};
 

@@ -23,8 +23,8 @@ use futures_util::stream::AbortHandle;
 use parking_lot::Mutex;
 use uuid::Uuid;
 #[cfg(not(target_family = "wasm"))]
-use warpui::ModelSpawner;
-use warpui::{Entity, SingletonEntity};
+use black_ui::ModelSpawner;
+use black_ui::{Entity, SingletonEntity};
 
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::mcp::templatable::CloudTemplatableMCPServer;
@@ -325,7 +325,7 @@ impl TemplatableMCPServerManager {
     pub fn get_active_file_based_servers(
         &self,
         cwd: &std::path::Path,
-        app: &warpui::AppContext,
+        app: &black_ui::AppContext,
     ) -> HashMap<Uuid, &TemplatableMCPServerInfo> {
         FileBasedMCPManager::as_ref(app)
             .get_servers_for_working_directory(cwd, app)

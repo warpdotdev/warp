@@ -1,9 +1,9 @@
 use pathfinder_color::ColorU;
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{Align, ChildView, Container, ParentElement, SavePosition, Stack};
-use warpui::{
+use black_core::send_telemetry_from_ctx;
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::Fill;
+use black_ui::elements::{Align, ChildView, Container, ParentElement, SavePosition, Stack};
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 

@@ -1,7 +1,7 @@
 use std::ops::{Index, IndexMut, Range, RangeFrom, RangeFull, RangeTo};
 
-use warp_terminal::model::grid::cell::Cell;
-use warp_terminal::model::grid::row::Row;
+use black_terminal::model::grid::cell::Cell;
+use black_terminal::model::grid::row::Row;
 
 use super::grid_handler::GridHandler;
 use super::GridStorage;

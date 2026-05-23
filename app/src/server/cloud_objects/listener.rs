@@ -5,8 +5,8 @@ use async_channel::Sender;
 use chrono::{DateTime, Utc};
 use futures_util::stream::AbortHandle;
 use instant::Instant;
-use warpui::r#async::Timer;
-use warpui::{Entity, ModelContext, RequestState, SingletonEntity};
+use black_ui::r#async::Timer;
+use black_ui::{Entity, ModelContext, RequestState, SingletonEntity};
 
 use super::update_manager::UpdateManager;
 use crate::cloud_object::model::actions::ObjectActionHistory;

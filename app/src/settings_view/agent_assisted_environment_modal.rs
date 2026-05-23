@@ -15,20 +15,20 @@ use ai::index::full_source_code_embedding::manager::CodebaseIndexManagerEvent;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use git2::Repository as GitRepository;
 use pathfinder_color::ColorU;
-use warp_core::features::FeatureFlag;
-use warp_core::paths::home_relative_path;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::paths::home_relative_path;
+use black_core::ui::theme::color::internal_colors;
+use black_ui::elements::{
     Align, Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
     Container, CornerRadius, CrossAxisAlignment, Dismiss, Element, Empty, Expanded, Flex,
     MainAxisSize, MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::platform::file_picker::FilePickerError;
-use warpui::platform::FilePickerConfiguration;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
-use warpui::ui_components::components::UiComponent;
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::platform::file_picker::FilePickerError;
+use black_ui::platform::FilePickerConfiguration;
+use black_ui::r#async::{SpawnedFutureHandle, Timer};
+use black_ui::ui_components::components::UiComponent;
+use black_ui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use crate::appearance::Appearance;
 use crate::modal::MODAL_BACKDROP_OPACITY;
@@ -522,7 +522,7 @@ impl AgentAssistedEnvironmentModal {
             ScrollbarWidth::Auto,
             theme.nonactive_ui_text_color().into(),
             theme.active_ui_text_color().into(),
-            warpui::elements::Fill::None,
+            black_ui::elements::Fill::None,
         )
         .with_overlayed_scrollbar()
         .with_padding_start(0.)

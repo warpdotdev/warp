@@ -10,8 +10,8 @@ use std::{
 use is_executable::IsExecutable as _;
 #[cfg(not(target_family = "wasm"))]
 use itertools::Itertools as _;
-use warp_util::local_or_remote_path::LocalOrRemotePath;
-use warpui::{AppContext, SingletonEntity};
+use black_util::local_or_remote_path::LocalOrRemotePath;
+use black_ui::{AppContext, SingletonEntity};
 
 use crate::remote_server::manager::RemoteServerManager;
 

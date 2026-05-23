@@ -2,13 +2,13 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use ui_components::tooltip::{Params as TooltipParams, Tooltip as TooltipComponent};
 use ui_components::{Component as _, Options as ComponentOptions};
-use warp_core::ui::theme::{AnsiColorIdentifier, Fill as ThemeFill};
-use warpui::elements::{
+use black_core::ui::theme::{AnsiColorIdentifier, Fill as ThemeFill};
+use black_ui::elements::{
     Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, Element, Hoverable,
     MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
     Stack,
 };
-use warpui::platform::Cursor;
+use black_ui::platform::Cursor;
 
 use crate::appearance::Appearance;
 use crate::ui_components::icons::Icon;

@@ -5,11 +5,11 @@ use std::ops::RangeInclusive;
 
 use sum_tree::SeekBias;
 use vec1::{vec1, Vec1};
-use warp_core::semantic_selection::SemanticSelection;
-use warp_terminal::model::grid::CellType;
-use warpui::text::{IsRect, SelectionType};
-use warpui::units::{IntoLines as _, Lines};
-use warpui::{AppContext, EntityId, ViewAsRef as _};
+use black_core::semantic_selection::SemanticSelection;
+use black_terminal::model::grid::CellType;
+use black_ui::text::{IsRect, SelectionType};
+use black_ui::units::{IntoLines as _, Lines};
+use black_ui::{AppContext, EntityId, ViewAsRef as _};
 
 use super::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, BlockListPoint, RichContentItem,

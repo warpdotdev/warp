@@ -198,7 +198,7 @@ pub async fn install_from_github(
 
     // Create the destination directory: {data_dir}/{server_name}/{version}
     // If it already exists, remove it first to ensure a clean installation
-    let install_dir = warp_core::paths::data_dir()
+    let install_dir = black_core::paths::data_dir()
         .join(server_name)
         .join(&metadata.version);
     if install_dir.exists() {

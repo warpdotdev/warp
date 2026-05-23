@@ -7,7 +7,7 @@ pub mod theme_creator_modal;
 pub mod theme_deletion_body;
 pub mod theme_deletion_modal;
 
-use warp_core::ui::theme::WarpTheme;
+use black_core::ui::theme::WarpTheme;
 
 pub fn onboarding_theme_picker_themes() -> [WarpTheme; 4] {
     [

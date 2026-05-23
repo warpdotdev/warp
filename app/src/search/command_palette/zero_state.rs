@@ -2,10 +2,10 @@ mod items;
 use std::collections::HashMap;
 
 pub use items::Items;
-use warp_core::context_flag::ContextFlag;
-use warp_core::features::FeatureFlag;
-use warpui::elements::{Container, Flex, MouseStateHandle, ParentElement, Shrinkable, Wrap};
-use warpui::{
+use black_core::context_flag::ContextFlag;
+use black_core::features::FeatureFlag;
+use black_ui::elements::{Container, Flex, MouseStateHandle, ParentElement, Shrinkable, Wrap};
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     WindowId,
 };

@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use command::blocking::Command;
-use warp_core::channel::ChannelState;
-use warp_util::path::ShellFamily;
+use black_core::channel::ChannelState;
+use black_util::path::ShellFamily;
 
 /// Compute the target path where the symlink should be installed, based on channel
 fn cli_install_target_path() -> PathBuf {

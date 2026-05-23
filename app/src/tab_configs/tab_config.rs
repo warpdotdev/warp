@@ -45,7 +45,7 @@ pub(crate) fn generated_worktree_repo_dir(repo_path: &Path) -> PathBuf {
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
         .unwrap_or("untitled");
-    warp_core::paths::data_dir()
+    black_core::paths::data_dir()
         .join("worktrees")
         .join(repo_name)
 }

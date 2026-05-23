@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-pub use warp_util::file_type::{is_binary_file, is_file_content_binary, is_markdown_file};
+pub use black_util::file_type::{is_binary_file, is_file_content_binary, is_markdown_file};
 
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::{settings::EditorChoice, Editor, EditorSettings};

@@ -1,7 +1,7 @@
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
-use warpui::elements::{ConstrainedBox, Container, Icon, Text};
-use warpui::{AppContext, Element, SingletonEntity};
+use black_ui::elements::{ConstrainedBox, Container, Icon, Text};
+use black_ui::{AppContext, Element, SingletonEntity};
 
 use crate::appearance::Appearance;
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
@@ -52,9 +52,9 @@ impl SearchItem for CommandSearchItem {
         )
         .with_color(highlight_state.main_text_fill(appearance).into_solid())
         .with_single_highlight(
-            warpui::elements::Highlight::new()
+            black_ui::elements::Highlight::new()
                 .with_properties(
-                    warpui::fonts::Properties::default().weight(warpui::fonts::Weight::Bold),
+                    black_ui::fonts::Properties::default().weight(black_ui::fonts::Weight::Bold),
                 )
                 .with_foreground_color(highlight_state.main_text_fill(appearance).into_solid()),
             self.match_result.matched_indices.clone(),

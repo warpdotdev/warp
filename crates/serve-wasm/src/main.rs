@@ -87,7 +87,7 @@ fn make_router(build_directory: &Path) -> Router {
             "/assets/client/wasm",
             ServeDir::new(build_directory.join("wasm")),
         )
-        // This needs to be kept in sync with warp_util::path::hashed_asset_url.
+        // This needs to be kept in sync with black_util::path::hashed_asset_url.
         .nest_service(
             "/assets/client/static",
             ServeDir::new(build_directory.join("assets")),

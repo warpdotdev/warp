@@ -1,5 +1,5 @@
-use warpui::elements::MouseStateHandle;
-use warpui::Element;
+use black_ui::elements::MouseStateHandle;
+use black_ui::Element;
 
 use super::{WarpDriveItem, WarpDriveItemId};
 use crate::appearance::Appearance;
@@ -62,7 +62,7 @@ impl WarpDriveItem for WarpDriveSpace {
         Box::new(self.clone())
     }
 
-    fn action_summary(&self, _app: &warpui::AppContext) -> Option<String> {
+    fn action_summary(&self, _app: &black_ui::AppContext) -> Option<String> {
         None
     }
 }

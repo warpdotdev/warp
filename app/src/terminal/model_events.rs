@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_channel::Receiver;
 use instant::Instant;
-use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
+use black_ui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::event::{BootstrappedEvent, SshLoginStatus};
 use super::model::ansi;

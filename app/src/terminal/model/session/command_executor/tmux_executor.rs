@@ -8,8 +8,8 @@ use async_channel::{self, Receiver, Sender};
 use async_trait::async_trait;
 use chrono::DateTime;
 use parking_lot::Mutex;
-use warp_completer::completer::{CommandExitStatus, CommandOutput};
-use warp_core::command::ExitCode;
+use black_completer::completer::{CommandExitStatus, CommandOutput};
+use black_core::command::ExitCode;
 
 use super::{CommandExecutor, ExecuteCommandOptions, ExecutorCommandEvent};
 use crate::server::datetime_ext::DateTimeExt;

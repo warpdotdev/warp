@@ -2,16 +2,16 @@ use std::sync::Arc;
 
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
-use warp_cli::agent::Harness;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{
+use black_cli::agent::Harness;
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::Fill;
+use black_ui::elements::{
     Border, ChildAnchor, ChildView, OffsetPositioning, ParentAnchor, ParentElement as _,
     ParentOffsetBounds, Stack,
 };
-use warpui::fonts::Properties;
-use warpui::{
+use black_ui::fonts::Properties;
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
@@ -356,8 +356,8 @@ impl AuthSecretSelector {
         OffsetPositioning::offset_from_save_position_element(
             MAIN_MENU_SAVE_POSITION_ID.to_string(),
             vec2f(offset_x, 0.),
-            warpui::elements::PositionedElementOffsetBounds::WindowByPosition,
-            warpui::elements::PositionedElementAnchor::BottomLeft,
+            black_ui::elements::PositionedElementOffsetBounds::WindowByPosition,
+            black_ui::elements::PositionedElementAnchor::BottomLeft,
             ChildAnchor::BottomLeft,
         )
     }
@@ -555,7 +555,7 @@ impl View for AuthSecretSelector {
         stack.add_child(ChildView::new(&self.button).finish());
 
         if self.is_menu_open {
-            let main_menu = warpui::elements::SavePosition::new(
+            let main_menu = black_ui::elements::SavePosition::new(
                 ChildView::new(&self.menu).finish(),
                 MAIN_MENU_SAVE_POSITION_ID,
             )

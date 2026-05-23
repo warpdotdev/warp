@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use warpui::{Entity, EntityId, WindowId};
+use black_ui::{Entity, EntityId, WindowId};
 
 use crate::util::bindings::CommandBinding;
 

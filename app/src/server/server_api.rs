@@ -35,12 +35,12 @@ use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use team::TeamClient;
 use url::Url;
-use warp_core::context_flag::ContextFlag;
-use warp_core::errors::{register_error, AnyhowErrorExt, ErrorExt};
-use warp_core::telemetry::TelemetryEvent;
-use warp_managed_secrets::client::ManagedSecretsClient;
-use warpui::r#async::BoxFuture;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_core::context_flag::ContextFlag;
+use black_core::errors::{register_error, AnyhowErrorExt, ErrorExt};
+use black_core::telemetry::TelemetryEvent;
+use black_managed_secrets::client::ManagedSecretsClient;
+use black_ui::r#async::BoxFuture;
+use black_ui::{Entity, ModelContext, SingletonEntity};
 use workspace::WorkspaceClient;
 
 use super::experiments::{ServerExperiment, ServerExperiments};
@@ -422,7 +422,7 @@ pub struct ServerApi {
     // We technically use OAuth2 for headless device authentication.
     oauth_client: self::auth::OAuth2Client,
     /// Cached ambient workload token for requests from ambient agents.
-    ambient_workload_token: Arc<Mutex<Option<warp_isolation_platform::WorkloadToken>>>,
+    ambient_workload_token: Arc<Mutex<Option<black_isolation_platform::WorkloadToken>>>,
     /// The ambient agent task ID for requests from cloud agents.
     ambient_agent_task_id: Arc<RwLock<Option<AmbientAgentTaskId>>>,
     /// The source of agent runs (e.g. CLI, GitHub Action). Set once at startup and immutable.
@@ -571,7 +571,7 @@ impl ServerApi {
             .set_device_authorization_url(oauth2::DeviceAuthorizationUrl::from_url(device_url))
     }
 
-    pub fn send_graphql_request<'a, QF, O: warp_graphql::client::Operation<QF> + Send + 'a>(
+    pub fn send_graphql_request<'a, QF, O: black_graphql::client::Operation<QF> + Send + 'a>(
         &'a self,
         operation: O,
         timeout: Option<Duration>,
@@ -605,7 +605,7 @@ impl ServerApi {
                 headers.insert(name.to_string(), value);
             }
 
-            let options = warp_graphql::client::RequestOptions {
+            let options = black_graphql::client::RequestOptions {
                 auth_token: auth_token.bearer_token(),
                 timeout,
                 headers,
@@ -1694,7 +1694,7 @@ mod tests {
         }
     }
 
-    impl warp_graphql::client::Operation<()> for FakeGraphqlOperation {
+    impl black_graphql::client::Operation<()> for FakeGraphqlOperation {
         fn operation_name(&self) -> Option<Cow<'_, str>> {
             Some(Cow::Borrowed("FakeGraphqlOperation"))
         }
@@ -1702,7 +1702,7 @@ mod tests {
         fn send_request(
             self,
             _client: Arc<http_client::Client>,
-            options: warp_graphql::client::RequestOptions,
+            options: black_graphql::client::RequestOptions,
         ) -> Pin<
             Box<
                 dyn Future<Output = std::result::Result<GraphQlResponse<()>, GraphQLError>>

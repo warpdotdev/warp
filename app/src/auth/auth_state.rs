@@ -5,9 +5,9 @@ use anyhow::anyhow;
 use chrono::{DateTime, Duration, Utc};
 use parking_lot::RwLock;
 use uuid::Uuid;
-use warp_core::channel::{Channel, ChannelState};
-use warp_graphql::object_permissions::OwnerType;
-use warpui::{AppContext, Entity, SingletonEntity};
+use black_core::channel::{Channel, ChannelState};
+use black_graphql::object_permissions::OwnerType;
+use black_ui::{AppContext, Entity, SingletonEntity};
 
 use super::anonymous_id::get_or_create_anonymous_id;
 use super::auth_manager::user_persistence::PersistedUser;
@@ -554,8 +554,8 @@ impl AuthState {
     }
 }
 
-// Adapter for the [`warp_managed_secrets`] crate, which needs to access the current user.
-impl warp_managed_secrets::ActorProvider for AuthState {
+// Adapter for the [`black_managed_secrets`] crate, which needs to access the current user.
+impl black_managed_secrets::ActorProvider for AuthState {
     fn actor_uid(&self) -> Option<String> {
         self.user_id().map(|uid| uid.as_string())
     }

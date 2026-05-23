@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use regex::Regex;
-use warp_core::features::FeatureFlag;
-use warp_core::settings::{ChangeEventReason, Setting};
-use warp_graphql::workspace::FeatureModelChoice;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity, Tracked};
+use black_core::features::FeatureFlag;
+use black_core::settings::{ChangeEventReason, Setting};
+use black_graphql::workspace::FeatureModelChoice;
+use black_ui::{AppContext, Entity, ModelContext, SingletonEntity, Tracked};
 
 use super::team::{DiscoverableTeam, MembershipRole, Team};
 #[cfg(test)]
@@ -113,7 +113,7 @@ pub struct WorkspacesMetadataResponse {
 // independent queries.
 pub struct WorkspacesMetadataWithPricing {
     pub metadata: WorkspacesMetadataResponse,
-    pub pricing_info: Option<warp_graphql::billing::PricingInfo>,
+    pub pricing_info: Option<black_graphql::billing::PricingInfo>,
 }
 
 pub struct CreateTeamResponse {

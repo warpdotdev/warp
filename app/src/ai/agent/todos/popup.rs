@@ -1,14 +1,14 @@
 use pathfinder_color::ColorU;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::Fill;
+use black_ui::elements::{
     Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Dismiss, DropShadow, Empty, Expanded, Flex, MainAxisSize, ParentElement,
     Radius, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Text,
 };
-use warpui::fonts::{FamilyId, Properties, Weight};
-use warpui::keymap::FixedBinding;
-use warpui::{
+use black_ui::fonts::{FamilyId, Properties, Weight};
+use black_ui::keymap::FixedBinding;
+use black_ui::{
     AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext,
 };
@@ -47,7 +47,7 @@ struct Styles {
 }
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings([FixedBinding::new(
         "escape",
@@ -121,9 +121,9 @@ impl AgentTodosPopupView {
 
     fn render_header(
         &self,
-        app: &warpui::AppContext,
+        app: &black_ui::AppContext,
         todo_list: &AIAgentTodoList,
-    ) -> Box<dyn warpui::Element> {
+    ) -> Box<dyn black_ui::Element> {
         let appearance = Appearance::as_ref(app);
         let styles = self.styles(appearance);
         let theme = appearance.theme();
@@ -156,7 +156,7 @@ impl View for AgentTodosPopupView {
         "AgentTodosPopup"
     }
 
-    fn render(&self, app: &warpui::AppContext) -> Box<dyn warpui::Element> {
+    fn render(&self, app: &black_ui::AppContext) -> Box<dyn black_ui::Element> {
         let Some(todo_list) = self
             .ai_context_model
             .as_ref(app)
@@ -268,7 +268,7 @@ impl View for AgentTodosPopupView {
             ScrollbarWidth::Auto,
             theme.nonactive_ui_detail().into(),
             theme.active_ui_detail().into(),
-            warpui::elements::Fill::None,
+            black_ui::elements::Fill::None,
         )
         .with_overlayed_scrollbar()
         .finish();

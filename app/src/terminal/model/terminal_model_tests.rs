@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Local};
 use vec1::vec1;
-use warp_core::command::ExitCode;
-use warp_terminal::model::ansi::ClearMode;
-use warpui::r#async::executor::Background;
-use warpui::text::{str_to_byte_vec, SelectionType};
+use black_core::command::ExitCode;
+use black_terminal::model::ansi::ClearMode;
+use black_ui::r#async::executor::Background;
+use black_ui::text::{str_to_byte_vec, SelectionType};
 
 use super::*;
 use crate::terminal::color;

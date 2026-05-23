@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+use black_ui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use super::MCPProvider;
 use crate::ai::mcp::templatable_installation::TemplatableMCPServerInstallation;

@@ -7,8 +7,8 @@ pub use entry::*;
 pub use harness_session_header::*;
 pub use setup_command::*;
 pub use setup_command_text::*;
-use warpui::prelude::Container;
-use warpui::{AppContext, Element, ModelHandle};
+use black_ui::prelude::Container;
+use black_ui::{AppContext, Element, ModelHandle};
 
 use super::AmbientAgentViewModel;
 use crate::ai::blocklist::block::view_impl::{

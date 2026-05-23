@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use uuid::Uuid;
-use warpui::elements::{ChildView, Container};
-use warpui::ui_components::components::{Coords, UiComponentStyles};
-use warpui::{
+use black_ui::elements::{ChildView, Container};
+use black_ui::ui_components::components::{Coords, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 

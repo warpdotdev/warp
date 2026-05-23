@@ -137,7 +137,7 @@ impl NodeDistribution {
 pub fn node_installation_dir() -> Result<PathBuf> {
     let dist = NodeDistribution::current()?;
     let folder_name = dist.folder_name(NODE_VERSION);
-    Ok(warp_core::paths::data_dir().join("node").join(folder_name))
+    Ok(black_core::paths::data_dir().join("node").join(folder_name))
 }
 
 /// Returns the path to the installed node binary.
@@ -175,7 +175,7 @@ pub async fn install_npm(client: &http_client::Client) -> Result<PathBuf> {
     let version = NODE_VERSION;
 
     let folder_name = dist.folder_name(version);
-    let node_containing_dir = warp_core::paths::data_dir().join("node");
+    let node_containing_dir = black_core::paths::data_dir().join("node");
     let node_dir = node_containing_dir.join(&folder_name);
     let node_binary = node_dir.join(NODE_BINARY_PATH);
 

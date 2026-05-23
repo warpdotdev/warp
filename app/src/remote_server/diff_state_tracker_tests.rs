@@ -1,4 +1,4 @@
-use warp_util::standardized_path::StandardizedPath;
+use black_util::standardized_path::StandardizedPath;
 
 use super::super::protocol::RequestId;
 use super::super::server_model::ConnectionId;
@@ -78,7 +78,7 @@ fn unsubscribe_last_connection_removes_model() {
     let conn = new_conn();
 
     // Simulate model insertion + subscription (what handle_get_diff_state does).
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app
             .add_model(|ctx| crate::code_review::diff_state::LocalDiffStateModel::new(None, ctx));
         model.insert_model(key.clone(), handle);
@@ -98,7 +98,7 @@ fn unsubscribe_one_of_two_keeps_model() {
     let conn_a = new_conn();
     let conn_b = new_conn();
 
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app
             .add_model(|ctx| crate::code_review::diff_state::LocalDiffStateModel::new(None, ctx));
         model.insert_model(key.clone(), handle);
@@ -119,7 +119,7 @@ fn unsubscribe_clears_pending_responses_for_that_connection() {
     let conn_a = new_conn();
     let conn_b = new_conn();
 
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app
             .add_model(|ctx| crate::code_review::diff_state::LocalDiffStateModel::new(None, ctx));
         model.insert_model(key.clone(), handle);
@@ -146,7 +146,7 @@ fn remove_connection_unsubscribes_from_all_keys() {
     let key_main = test_key("/repo", DiffMode::MainBranch);
     let conn = new_conn();
 
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let h1 = app
             .add_model(|ctx| crate::code_review::diff_state::LocalDiffStateModel::new(None, ctx));
         let h2 = app
@@ -171,7 +171,7 @@ fn remove_connection_keeps_models_with_other_subscribers() {
     let conn_a = new_conn();
     let conn_b = new_conn();
 
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app
             .add_model(|ctx| crate::code_review::diff_state::LocalDiffStateModel::new(None, ctx));
         model.insert_model(key.clone(), handle);
@@ -191,7 +191,7 @@ fn remove_connection_clears_pending_responses() {
     let key = test_key("/repo", DiffMode::Head);
     let conn = new_conn();
 
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app
             .add_model(|ctx| crate::code_review::diff_state::LocalDiffStateModel::new(None, ctx));
         model.insert_model(key.clone(), handle);
@@ -273,7 +273,7 @@ fn insert_and_get_model() {
     let mut model = RemoteDiffStateManager::new();
     let key = test_key("/repo", DiffMode::Head);
 
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app
             .add_model(|ctx| crate::code_review::diff_state::LocalDiffStateModel::new(None, ctx));
         model.insert_model(key.clone(), handle);
@@ -288,7 +288,7 @@ fn remove_model_clears_pending_and_subscriptions() {
     let key = test_key("/repo", DiffMode::Head);
     let conn = new_conn();
 
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app
             .add_model(|ctx| crate::code_review::diff_state::LocalDiffStateModel::new(None, ctx));
         model.insert_model(key.clone(), handle);

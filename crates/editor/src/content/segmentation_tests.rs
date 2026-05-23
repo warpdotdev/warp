@@ -1,11 +1,11 @@
 use itertools::Itertools;
 use markdown_parser::parse_markdown;
 use string_offset::CharOffset;
-use warp_core::features::FeatureFlag;
-use warpui::App;
-use warpui::text::TextBuffer;
-use warpui::text::point::Point;
-use warpui::text::word_boundaries::WordBoundariesPolicy;
+use black_core::features::FeatureFlag;
+use black_ui::App;
+use black_ui::text::TextBuffer;
+use black_ui::text::point::Point;
+use black_ui::text::word_boundaries::WordBoundariesPolicy;
 
 use crate::content::buffer::{Buffer, EditOrigin};
 use crate::content::selection_model::BufferSelectionModel;

@@ -1,13 +1,13 @@
-use warp_core::ui::appearance::Appearance;
-use warp_terminal::model::BlockId;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_terminal::model::BlockId;
+use black_ui::elements::{
     ConstrainedBox, CrossAxisAlignment, Flex, Hoverable, MainAxisSize, ParentElement, Shrinkable,
     Text,
 };
-use warpui::platform::Cursor;
-use warpui::prelude::{Container, MouseStateHandle};
-use warpui::text_layout::ClipConfig;
-use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+use black_ui::platform::Cursor;
+use black_ui::prelude::{Container, MouseStateHandle};
+use black_ui::text_layout::ClipConfig;
+use black_ui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use crate::terminal::view::PADDING_LEFT;
 use crate::terminal::CLIAgent;

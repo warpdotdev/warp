@@ -78,16 +78,16 @@ fn test_serialize_persisted_user() {
 }
 
 /// Test serializing and deserializing persisted user data.
-/// See warpui_extras::secure_storage::linux_test.rs for Linux-specific tests.
+/// See black_ui_extras::secure_storage::linux_test.rs for Linux-specific tests.
 #[cfg(target_os = "windows")]
 #[cfg_attr(windows, ignore = "passes locally but not in CI on Windows")]
 #[test]
 #[allow(deprecated)]
 fn test_windows_user_persistence() {
     use chrono::DateTime;
-    use warp_core::channel::ChannelState;
-    use warpui::{App, SingletonEntity};
-    use warpui_extras::secure_storage;
+    use black_core::channel::ChannelState;
+    use black_ui::{App, SingletonEntity};
+    use black_ui_extras::secure_storage;
 
     use crate::auth::{AuthManager, AuthStateProvider};
     use crate::server::datetime_ext::DateTimeExt;
@@ -101,7 +101,7 @@ fn test_windows_user_persistence() {
         app.add_singleton_model(|ctx| {
             secure_storage::register_with_dir(
                 ChannelState::data_domain().as_str(),
-                warp_core::paths::state_dir(),
+                black_core::paths::state_dir(),
                 ctx,
             );
             AuthManager::new_for_test(ctx)

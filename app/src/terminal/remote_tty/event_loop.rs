@@ -5,7 +5,7 @@ use async_channel::Receiver;
 use futures_util::SinkExt;
 use parking_lot::FairMutex;
 use serde::Serialize;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_ui::{Entity, ModelContext, SingletonEntity};
 use websocket::{Message, Sink, Stream, WebSocket, WebsocketMessage as _};
 
 use crate::terminal::bootstrap::init_shell_script_for_shell;

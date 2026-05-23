@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use itertools::Itertools;
-use warp_core::sync_queue::{IsTransientError, SyncQueue, SyncQueueTaskTrait};
+use black_core::sync_queue::{IsTransientError, SyncQueue, SyncQueueTaskTrait};
 
 use super::changed_files::ChangedFiles;
 use super::codebase_index::{build_fragments_from_metadata, SyncProgress};

@@ -9,7 +9,7 @@ use chrono::{DateTime, Duration, Utc};
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::repository::{Repository, SubscriberId};
 use repo_metadata::{DirectoryWatcher, RepoMetadataModel, RepositoryUpdate};
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+use black_ui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 use watcher::{BulkFilesystemWatcherEvent, HomeDirectoryWatcher, HomeDirectoryWatcherEvent};
 
 use super::subscribers::{
@@ -547,7 +547,7 @@ impl SkillWatcher {
             }
 
             let Ok(std_dir_path) =
-                warp_util::standardized_path::StandardizedPath::from_local_canonicalized(
+                black_util::standardized_path::StandardizedPath::from_local_canonicalized(
                     &canonical_dir,
                 )
             else {
@@ -796,7 +796,7 @@ impl SkillWatcher {
         ctx: &mut ModelContext<Self>,
     ) {
         let Ok(std_path) =
-            warp_util::standardized_path::StandardizedPath::from_local_canonicalized(path)
+            black_util::standardized_path::StandardizedPath::from_local_canonicalized(path)
         else {
             return;
         };

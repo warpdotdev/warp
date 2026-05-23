@@ -2,23 +2,23 @@ use std::collections::HashMap;
 
 use instant::Instant;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::color::blend::Blend;
-use warp_core::ui::theme::color::internal_colors;
-use warp_editor::editor::NavigationKey;
-use warp_graphql::scalars::time::ServerTimestamp;
-use warpui::elements::{
+use black_core::ui::color::blend::Blend;
+use black_core::ui::theme::color::internal_colors;
+use black_editor::editor::NavigationKey;
+use black_graphql::scalars::time::ServerTimestamp;
+use black_ui::elements::{
     Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Element, Empty, Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
     Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::prelude::ChildView;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::windowing::state::ApplicationStage;
-use warpui::windowing::{self, WindowManager};
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::prelude::ChildView;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::windowing::state::ApplicationStage;
+use black_ui::windowing::{self, WindowManager};
+use black_ui::{
     AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };
@@ -76,7 +76,7 @@ use new_environment_button::NewEnvironmentButtonView;
 #[allow(unused_imports)] // IntegrationsClient trait is used in fetch_github_repos
 use {
     crate::server::server_api::{integrations::IntegrationsClient, ServerApiProvider},
-    warp_graphql::queries::user_github_info::UserGithubInfoResult,
+    black_graphql::queries::user_github_info::UserGithubInfoResult,
 };
 
 const PAGE_TITLE_TEXT: &str = "Environments";
@@ -927,7 +927,7 @@ impl TypedActionView for EnvironmentsPageView {
             }
             EnvironmentsPageAction::CopyEnvId(sync_id, env_id_string) => {
                 ctx.clipboard()
-                    .write(warpui::clipboard::ClipboardContent::plain_text(
+                    .write(black_ui::clipboard::ClipboardContent::plain_text(
                         env_id_string.clone(),
                     ));
                 // Track when this was copied for feedback
@@ -936,7 +936,7 @@ impl TypedActionView for EnvironmentsPageView {
                 let duration = COPY_FEEDBACK_DURATION;
                 ctx.spawn(
                     async move {
-                        warpui::r#async::Timer::after(duration).await;
+                        black_ui::r#async::Timer::after(duration).await;
                     },
                     |me, _, ctx| {
                         ctx.notify();
@@ -997,8 +997,8 @@ impl TypedActionView for EnvironmentsPageView {
         &mut self,
         _action: &Self::Action,
         _ctx: &mut ViewContext<Self>,
-    ) -> warpui::accessibility::ActionAccessibilityContent {
-        warpui::accessibility::ActionAccessibilityContent::default()
+    ) -> black_ui::accessibility::ActionAccessibilityContent {
+        black_ui::accessibility::ActionAccessibilityContent::default()
     }
 }
 
@@ -1917,7 +1917,7 @@ impl EnvironmentsPageWidget {
             let icon_color: ThemeFill = if is_card_hovered {
                 theme.foreground()
             } else {
-                ThemeFill::Solid(warpui::color::ColorU::transparent_black())
+                ThemeFill::Solid(black_ui::color::ColorU::transparent_black())
             };
 
             let should_render_share_button = list_scope == EnvironmentListScope::Personal

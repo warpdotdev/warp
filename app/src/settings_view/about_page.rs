@@ -1,10 +1,10 @@
-use warpui::assets::asset_cache::AssetSource;
-use warpui::elements::{
+use black_ui::assets::asset_cache::AssetSource;
+use black_ui::elements::{
     Align, CacheOption, ConstrainedBox, Container, CrossAxisAlignment, Element, Flex, Image,
     MainAxisAlignment, MouseStateHandle, ParentElement, Wrap,
 };
-use warpui::ui_components::components::UiComponent;
-use warpui::{AppContext, Entity, View, ViewContext, ViewHandle};
+use black_ui::ui_components::components::UiComponent;
+use black_ui::{AppContext, Entity, View, ViewContext, ViewHandle};
 
 use super::settings_page::{
     MatchData, PageType, SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle,

@@ -153,8 +153,8 @@ fn default_download_filename_falls_back_to_artifact_uid_with_extension() {
 
 #[test]
 fn converts_graphql_file_artifact() {
-    let artifact = Artifact::try_from(warp_graphql::ai::AIConversationArtifact::FileArtifact(
-        warp_graphql::ai::FileArtifact {
+    let artifact = Artifact::try_from(black_graphql::ai::AIConversationArtifact::FileArtifact(
+        black_graphql::ai::FileArtifact {
             artifact_uid: "artifact-file-1".into(),
             filepath: "outputs/report.txt".to_string(),
             mime_type: "text/plain".to_string(),

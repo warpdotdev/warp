@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
-use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
+use black_graphql::ai::{AgentTaskState, PlatformErrorCode};
+use black_ui::{Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::history_model::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,

@@ -6,10 +6,10 @@ use chrono::{DateTime, Local};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
-use warp_core::ui::color::blend::Blend;
-use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
-use warpui::assets::asset_cache::AssetSource;
-use warpui::elements::{
+use black_core::ui::color::blend::Blend;
+use black_ui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
+use black_ui::assets::asset_cache::AssetSource;
+use black_ui::elements::{
     Align, Border, CacheOption, ChildAnchor, ClippedScrollStateHandle, ClippedScrollable,
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, DispatchEventResult,
     DropShadow, Element, EventHandler, Flex, Hoverable, Icon, Image, MainAxisAlignment,
@@ -18,12 +18,12 @@ use warpui::elements::{
     Radius, Rect, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable,
     Stack, Text,
 };
-use warpui::fonts::{FamilyId, Properties};
-use warpui::keymap::FixedBinding;
-use warpui::platform::Cursor;
-use warpui::text_layout::ClipConfig;
-use warpui::ui_components::components::UiComponent;
-use warpui::{
+use black_ui::fonts::{FamilyId, Properties};
+use black_ui::keymap::FixedBinding;
+use black_ui::platform::Cursor;
+use black_ui::text_layout::ClipConfig;
+use black_ui::ui_components::components::UiComponent;
+use black_ui::{
     Action, AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, WindowId,
 };
 
@@ -1636,7 +1636,7 @@ pub enum MenuAction {
 }
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings([
         FixedBinding::new(
@@ -2116,7 +2116,7 @@ impl<A: Action + Clone> SubMenu<A> {
                         ScrollbarWidth::Auto,
                         appearance.theme().nonactive_ui_detail().into(),
                         appearance.theme().active_ui_detail().into(),
-                        warpui::elements::Fill::None,
+                        black_ui::elements::Fill::None,
                     )
                     .with_overlayed_scrollbar()
                     .finish(),

@@ -1,4 +1,4 @@
-use warpui::Entity;
+use black_ui::Entity;
 
 use crate::terminal::HistoryEntry;
 

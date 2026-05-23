@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Deserializer, Serialize};
-use warp_core::command::ExitCode;
+use black_core::command::ExitCode;
 
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::SessionId;

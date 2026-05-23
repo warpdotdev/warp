@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use tantivy::tokenizer::{TextAnalyzer, Token};
-use warpui::r#async::executor::Background;
+use black_ui::r#async::executor::Background;
 
 use crate::define_search_schema;
 use crate::search::searcher::{CustomTokenizer, MIN_MEMORY_BUDGET};

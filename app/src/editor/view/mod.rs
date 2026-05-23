@@ -48,31 +48,31 @@ use vim::{
     vim_a_block, vim_a_paragraph, vim_a_quote, vim_a_word, vim_inner_block, vim_inner_paragraph,
     vim_inner_quote, vim_inner_word, vim_word_iterator_from_offset,
 };
-use warp_completer::completer::Description;
-use warp_core::semantic_selection::SemanticSelection;
-use warp_core::{safe_error, send_telemetry_from_ctx};
-use warp_editor::editor::NavigationKey;
-use warp_util::path::ShellFamily;
-use warp_util::user_input::UserInput;
-use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
-use warpui::actions::StandardAction;
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::{
+use black_completer::completer::Description;
+use black_core::semantic_selection::SemanticSelection;
+use black_core::{safe_error, send_telemetry_from_ctx};
+use black_editor::editor::NavigationKey;
+use black_util::path::ShellFamily;
+use black_util::user_input::UserInput;
+use black_ui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
+use black_ui::actions::StandardAction;
+use black_ui::clipboard::ClipboardContent;
+use black_ui::elements::{
     ChildView, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable, MainAxisSize,
     MouseStateHandle, ParentElement, Radius, Shrinkable, DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
-use warpui::fonts::{Cache as FontCache, FamilyId, Properties, Weight};
-use warpui::keymap::{EditableBinding, FixedBinding, Keystroke, PerPlatformKeystroke};
-use warpui::platform::keyboard::KeyCode;
-use warpui::platform::{Cursor, FilePickerConfiguration, OperatingSystem};
-use warpui::r#async::{SpawnedFutureHandle, Timer};
-use warpui::text::word_boundaries::WordBoundariesPolicy;
-use warpui::text::TextBuffer;
-use warpui::text_layout::TextStyle;
-use warpui::ui_components::button::ButtonTooltipPosition;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::windowing::WindowManager;
-use warpui::{
+use black_ui::fonts::{Cache as FontCache, FamilyId, Properties, Weight};
+use black_ui::keymap::{EditableBinding, FixedBinding, Keystroke, PerPlatformKeystroke};
+use black_ui::platform::keyboard::KeyCode;
+use black_ui::platform::{Cursor, FilePickerConfiguration, OperatingSystem};
+use black_ui::r#async::{SpawnedFutureHandle, Timer};
+use black_ui::text::word_boundaries::WordBoundariesPolicy;
+use black_ui::text::TextBuffer;
+use black_ui::text_layout::TextStyle;
+use black_ui::ui_components::button::ButtonTooltipPosition;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::windowing::WindowManager;
+use black_ui::{
     elements, windowing, AppContext, BlurContext, CursorInfo, Element, Entity, EntityId,
     FocusContext, ModelAsRef, ModelContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle, WindowId,
@@ -141,7 +141,7 @@ pub const VOICE_ERROR_TOAST_TEXT: &str = "An error occurred while processing you
 
 pub const MAX_IMAGES_PER_CONVERSATION: usize = 200;
 
-use warpui::clipboard_utils::CLIPBOARD_IMAGE_MIME_TYPES;
+use black_ui::clipboard_utils::CLIPBOARD_IMAGE_MIME_TYPES;
 
 #[derive(Clone, Copy)]
 pub enum AutosuggestionLocation {
@@ -183,7 +183,7 @@ pub const SELECT_UP_ACTION_NAME: &str = "editor_view:select_up";
 pub const SELECT_DOWN_ACTION_NAME: &str = "editor_view:select_down";
 
 pub fn init(ctx: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     ctx.register_fixed_bindings(vec![
         // Below are default bindings that are similar to the behavior in all other text editors.
@@ -1379,7 +1379,7 @@ type RenderDecoratorElementsFn = Box<dyn Fn(&AppContext) -> EditorDecoratorEleme
 
 /// Type alias for a closure that allows parent views to add flags to the EditorView's keymap context.
 /// The closure takes the context by mutable reference and can insert additional flags.
-pub type KeymapContextModifierFn = Box<dyn Fn(&mut warpui::keymap::Context, &AppContext)>;
+pub type KeymapContextModifierFn = Box<dyn Fn(&mut black_ui::keymap::Context, &AppContext)>;
 
 /// Enum to choose between different methods of computing the baseline offset for text.
 #[derive(Clone, Debug)]
@@ -7908,7 +7908,7 @@ impl EditorView {
         // from the filesystem (the path transformer, if any, only applies to text insertion).
         let paths_as_strings: Vec<String> = paths.iter().map(|path| path.to_string()).collect();
         let image_filepaths =
-            warpui::clipboard_utils::get_image_filepaths_from_paths(&paths_as_strings);
+            black_ui::clipboard_utils::get_image_filepaths_from_paths(&paths_as_strings);
 
         // If we have image file paths, emit event for parent to handle terminal-specific processing
         let num_image_files = image_filepaths.len();
@@ -7927,7 +7927,7 @@ impl EditorView {
         };
 
         let input =
-            warpui::clipboard_utils::escaped_paths_str(&transformed_paths, self.shell_family);
+            black_ui::clipboard_utils::escaped_paths_str(&transformed_paths, self.shell_family);
 
         self.user_insert(&input, ctx);
     }
@@ -8663,7 +8663,7 @@ impl View for EditorView {
         }
     }
 
-    fn keymap_context(&self, ctx: &AppContext) -> warpui::keymap::Context {
+    fn keymap_context(&self, ctx: &AppContext) -> black_ui::keymap::Context {
         let mut context = Self::default_keymap_context();
 
         if self.single_cursor_at_buffer_end(false /* respect_line_cap */, ctx) {

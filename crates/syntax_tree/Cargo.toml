@@ -9,8 +9,8 @@ license.workspace = true
 [dependencies]
 rangemap.workspace = true
 arborium.workspace = true
-warpui.workspace = true
-warp_editor.workspace = true
+black_ui.workspace = true
+black_editor.workspace = true
 languages.workspace = true
 futures.workspace = true
 futures-lite.workspace = true
@@ -18,8 +18,8 @@ parking_lot.workspace = true
 log.workspace = true
 string-offset.workspace = true
 streaming-iterator = "0.1.9"
-warp_util.workspace = true
+black_util.workspace = true
 
 [dev-dependencies]
-warp_editor = { workspace = true, features = ["test-util"] }
-warpui = { workspace = true, features = ["test-util"] }
+black_editor = { workspace = true, features = ["test-util"] }
+black_ui = { workspace = true, features = ["test-util"] }

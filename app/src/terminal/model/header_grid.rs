@@ -6,8 +6,8 @@ use std::io;
 
 use instant::Instant;
 use pathfinder_color::ColorU;
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
-use warpui::units::{IntoLines as _, Lines};
+use black_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use black_ui::units::{IntoLines as _, Lines};
 
 use super::ansi::{self, Attr, Handler, PrecmdValue, PreexecValue, Processor};
 use super::block::{BlockGridPoint, BlockSize};

@@ -12,10 +12,10 @@ pub use ai::document::{AIDocumentId, AIDocumentVersion};
 use chrono::{DateTime, Local, Utc};
 use itertools::Itertools;
 use uuid::Uuid;
-use warp_editor::model::RichTextEditorModel;
-use warp_editor::render::model::RichTextStyles;
-use warpui::color::ColorU;
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WindowId};
+use black_editor::model::RichTextEditorModel;
+use black_editor::render::model::RichTextStyles;
+use black_ui::color::ColorU;
+use black_ui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WindowId};
 use {anyhow, warp_multi_agent_api as maa_api};
 
 use crate::ai::agent::conversation::AIConversationId;
@@ -712,7 +712,7 @@ impl AIDocumentModel {
     pub fn get_document_content(
         &self,
         id: &AIDocumentId,
-        ctx: &warpui::AppContext,
+        ctx: &black_ui::AppContext,
     ) -> Option<String> {
         let doc = self.documents.get(id)?;
         Some(doc.editor.as_ref(ctx).markdown_unescaped(ctx))
@@ -1357,7 +1357,7 @@ impl AIDocumentModel {
 }
 
 impl AIDocumentEarlierVersion {
-    pub fn get_content(&self, ctx: &warpui::AppContext) -> String {
+    pub fn get_content(&self, ctx: &black_ui::AppContext) -> String {
         self.editor.as_ref(ctx).markdown_unescaped(ctx)
     }
 }

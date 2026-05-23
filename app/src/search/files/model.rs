@@ -7,7 +7,7 @@ use fuzzy_match::{
     contains_wildcards, match_indices_case_insensitive, match_wildcard_pattern_case_insensitive,
     FuzzyMatchResult,
 };
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+use black_ui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -20,7 +20,7 @@ cfg_if::cfg_if! {
         use repo_metadata::repositories::DetectedRepositories;
         use std::cell::RefCell;
         use std::collections::HashMap;
-        use warp_util::local_or_remote_path::LocalOrRemotePath;
+        use black_util::local_or_remote_path::LocalOrRemotePath;
     }
 }
 
@@ -84,7 +84,7 @@ impl FileSearchModel {
     pub fn repo_root_location(
         &self,
         _app: &AppContext,
-    ) -> Option<warp_util::local_or_remote_path::LocalOrRemotePath> {
+    ) -> Option<black_util::local_or_remote_path::LocalOrRemotePath> {
         None
     }
 

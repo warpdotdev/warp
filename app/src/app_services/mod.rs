@@ -12,7 +12,7 @@ mod mac;
 #[cfg(windows)]
 pub mod windows;
 
-use warpui::AppContext;
+use black_ui::AppContext;
 
 pub fn init(_ctx: &mut AppContext) {
     log::info!("Initializing app services");

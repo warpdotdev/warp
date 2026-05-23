@@ -54,7 +54,7 @@ rust-embed = { workspace = true, optional = true }
 serde.workspace = true
 smol_str.workspace = true
 tokenizers = { version = "0.21.4", optional = true }
-warp_completer.workspace = true
+black_completer.workspace = true
 
 [dev-dependencies]
-warp_features.workspace = true
+black_features.workspace = true

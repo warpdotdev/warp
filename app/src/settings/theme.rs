@@ -1,7 +1,7 @@
 use settings::macros::define_settings_group;
 use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
-use warpui::platform::SystemTheme;
-use warpui::AppContext;
+use black_ui::platform::SystemTheme;
+use black_ui::AppContext;
 
 use crate::themes::theme::{RespectSystemTheme, SelectedSystemThemes, ThemeKind};
 

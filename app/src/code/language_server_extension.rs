@@ -2,19 +2,19 @@ use lsp::{HoverContents, LspServerLogLevel, MarkupKind};
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use num_traits::SaturatingSub;
 use string_offset::CharOffset;
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::WarpTheme;
-use warp_editor::content::buffer::InitialBufferState;
-use warp_editor::render::element::VerticalExpansionBehavior;
-use warp_editor::render::model::Decoration;
-use warpui::elements::{
+use black_core::send_telemetry_from_ctx;
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::WarpTheme;
+use black_editor::content::buffer::InitialBufferState;
+use black_editor::render::element::VerticalExpansionBehavior;
+use black_editor::render::model::Decoration;
+use black_ui::elements::{
     Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, Flex, FormattedTextElement, HighlightedHyperlink, Hoverable,
     MouseStateHandle, ParentElement, Radius, Rect, ScrollbarWidth,
 };
-use warpui::{AppContext, Element, SingletonEntity, ViewContext};
+use black_ui::{AppContext, Element, SingletonEntity, ViewContext};
 
 use super::editor::view::{CodeEditorRenderOptions, CodeEditorView};
 use super::lsp_telemetry::LspTelemetryEvent;
@@ -544,7 +544,7 @@ impl LocalCodeEditorView {
             ScrollbarWidth::Auto,
             theme.disabled_ui_text_color().into(),
             theme.active_ui_text_color().into(),
-            warpui::elements::Fill::None,
+            black_ui::elements::Fill::None,
         )
         .finish();
 

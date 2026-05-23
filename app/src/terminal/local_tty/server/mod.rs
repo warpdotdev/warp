@@ -56,7 +56,7 @@ const SEND_SOCKET_FILENO: RawFd = RECV_SOCKET_FILENO + 1;
 /// This should be executed very shortly after process start; it is important
 /// to minimize the number of resources acquired that could be leaked to a child
 /// process through a fork/exec pair.
-pub fn run_terminal_server(args: &warp_cli::TerminalServerArgs) {
+pub fn run_terminal_server(args: &black_cli::TerminalServerArgs) {
     // We initialize context-independent feature flags early, as the terminal
     // server process may need to reference them. User-controlled flags are overridden
     // soon after.
@@ -178,11 +178,11 @@ impl TerminalServer {
                     }
                     Ok(())
                 })
-                .arg(warp_cli::terminal_server_subcommand())
+                .arg(black_cli::terminal_server_subcommand())
                 // Tell the terminal server process what process ID it should
                 // expect its parent to have.  This allows it to terminate
                 // itself when it detects its parent process to have changed.
-                .arg(warp_cli::parent_flag())
+                .arg(black_cli::parent_flag())
                 .spawn()
                 .context("Failed to spawn terminal server process")?;
 

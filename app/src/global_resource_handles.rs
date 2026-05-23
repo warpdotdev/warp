@@ -1,6 +1,6 @@
 use std::sync::mpsc::SyncSender;
 
-use warpui::{Entity, ModelHandle, SingletonEntity};
+use black_ui::{Entity, ModelHandle, SingletonEntity};
 
 use crate::banner::BannerState;
 use crate::persistence::ModelEvent;
@@ -59,7 +59,7 @@ pub struct GlobalResourceHandles {
 
 impl GlobalResourceHandles {
     #[cfg(any(test, feature = "integration_tests"))]
-    pub fn mock(app: &mut warpui::App) -> Self {
+    pub fn mock(app: &mut black_ui::App) -> Self {
         let referral_theme_status = app.add_model(ReferralThemeStatus::new);
         let user_default_shell_unsupported_banner_model_handle =
             app.add_model(|_| BannerState::default());

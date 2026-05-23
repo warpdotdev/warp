@@ -6,8 +6,8 @@ pub mod switch;
 pub mod tooltip;
 
 pub use keyboard_shortcut::KeyboardShortcut;
-use warp_core::ui::appearance::Appearance;
-use warpui::Element;
+use black_core::ui::appearance::Appearance;
+use black_ui::Element;
 
 /// A reusable UI component that can be rendered with configurable parameters.
 ///
@@ -30,8 +30,8 @@ use warpui::Element;
 ///
 /// ```rust
 /// use ui_components::{Component, Options, button};
-/// use warp_core::ui::appearance::Appearance;
-/// use warpui::prelude::*;
+/// use black_core::ui::appearance::Appearance;
+/// use black_ui::prelude::*;
 ///
 /// // Store component as a field in your view.
 /// struct MyView {
@@ -39,7 +39,7 @@ use warpui::Element;
 /// }
 ///
 /// impl MyView {
-///     fn render_button(&self, appearance: &Appearance) -> Box<dyn warpui::Element> {
+///     fn render_button(&self, appearance: &Appearance) -> Box<dyn black_ui::Element> {
 ///         self.my_button.render(
 ///             appearance,
 ///             button::Params {
@@ -61,8 +61,8 @@ use warpui::Element;
 ///
 /// ```rust
 /// use ui_components::Component;
-/// use warp_core::ui::appearance::Appearance;
-/// use warpui::prelude::*;
+/// use black_core::ui::appearance::Appearance;
+/// use black_ui::prelude::*;
 ///
 /// // 1. Define the component struct with any persistent state.
 /// #[derive(Default)]
@@ -135,7 +135,7 @@ pub trait Component: Default {
 ///
 /// ```rust
 /// use ui_components::{Params, Options};
-/// use warp_core::ui::appearance::Appearance;
+/// use black_core::ui::appearance::Appearance;
 ///
 /// pub struct MyParams {
 ///     pub content: String,   // Required.
@@ -176,7 +176,7 @@ pub trait Params {
 ///
 /// ```rust
 /// use ui_components::{Options, MouseEventHandler};
-/// use warp_core::ui::appearance::Appearance;
+/// use black_core::ui::appearance::Appearance;
 ///
 /// pub struct MyOptions {
 ///     pub disabled: bool,
@@ -231,8 +231,8 @@ pub trait Options {
 ///
 /// ```rust
 /// use ui_components::{Renderable, Options};
-/// use warp_core::ui::appearance::Appearance;
-/// use warpui::prelude::*;
+/// use black_core::ui::appearance::Appearance;
+/// use black_ui::prelude::*;
 ///
 /// pub struct SwitchOptions<'a> {
 ///     pub disabled: bool,
@@ -282,8 +282,8 @@ where
 /// A function that handles mouse events.
 pub type MouseEventHandler = Box<
     dyn FnMut(
-        &mut warpui::EventContext,
-        &warpui::AppContext,
+        &mut black_ui::EventContext,
+        &black_ui::AppContext,
         pathfinder_geometry::vector::Vector2F,
     ),
 >;

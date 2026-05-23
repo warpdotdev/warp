@@ -192,7 +192,7 @@ impl Engine {
         buffer: &SumTree<BufferText>,
         buffer_offset: CharOffset,
     ) -> anyhow::Result<Vec<Match>> {
-        warpui::r#async::block_on(self.find(buffer, buffer_offset))
+        black_ui::r#async::block_on(self.find(buffer, buffer_offset))
     }
 
     /// Find all matches for this pattern in the given slice of content.

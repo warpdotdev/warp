@@ -241,7 +241,7 @@ pub(crate) fn configure_git_identity(credentials: &[GitCredential]) {
 /// API call fails — these are transient failures worth retrying.
 async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<()> {
     let workload_token =
-        warp_isolation_platform::issue_workload_token(Some(Duration::from_secs(5 * 60)))
+        black_isolation_platform::issue_workload_token(Some(Duration::from_secs(5 * 60)))
             .await
             .context("Failed to issue workload token for git credentials refresh")?
             .token;
@@ -283,7 +283,7 @@ async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<()>
 /// completes.
 pub(crate) async fn refresh_loop(task_id: String, ai_client: Arc<dyn AIClient>) {
     loop {
-        warpui::r#async::Timer::after(GIT_CREDENTIALS_REFRESH_INTERVAL).await;
+        black_ui::r#async::Timer::after(GIT_CREDENTIALS_REFRESH_INTERVAL).await;
 
         log::info!("Refreshing git credentials for task {task_id}");
 
@@ -303,7 +303,7 @@ pub(crate) async fn refresh_loop(task_id: String, ai_client: Arc<dyn AIClient>) 
                         attempt + 1,
                         delay.as_secs()
                     );
-                    warpui::r#async::Timer::after(delay).await;
+                    black_ui::r#async::Timer::after(delay).await;
                     attempt += 1;
                 }
                 Err(e) => {

@@ -1,6 +1,6 @@
-use warpui::elements::{ChildView, Container, Dismiss, Empty};
-use warpui::ui_components::components::UiComponent;
-use warpui::{
+use black_ui::elements::{ChildView, Container, Dismiss, Empty};
+use black_ui::ui_components::components::UiComponent;
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 

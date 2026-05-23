@@ -1,6 +1,6 @@
 use chrono::{DateTime, FixedOffset, Utc};
 use serde::{Deserialize, Serialize};
-use warp_graphql::mutations::share_block::DisplaySetting as GqlDisplaySetting;
+use black_graphql::mutations::share_block::DisplaySetting as GqlDisplaySetting;
 
 use crate::terminal::model::block::{Block as ClientBlock, BlockTime};
 use crate::terminal::model::grid::Dimensions as _;

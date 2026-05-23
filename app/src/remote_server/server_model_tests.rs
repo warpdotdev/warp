@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use warp_util::standardized_path::StandardizedPath;
-use warpui::App;
+use black_util::standardized_path::StandardizedPath;
+use black_ui::App;
 
 use super::super::diff_state_tracker::RemoteDiffStateManager;
 use super::super::proto::{Authenticate, Initialize};

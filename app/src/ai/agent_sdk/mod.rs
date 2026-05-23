@@ -13,31 +13,31 @@ pub(crate) use driver::harness::{task_env_vars, validate_cli_installed, ClaudeHa
 pub use driver::AgentDriver;
 use driver::AgentDriverError;
 use telemetry::CliTelemetryEvent;
-use warp_cli::agent::{
+use black_cli::agent::{
     AgentCommand, AgentProfileCommand, Harness, OutputFormat, Prompt, RunAgentArgs,
 };
-use warp_cli::api_key::ApiKeyCommand;
-use warp_cli::artifact::ArtifactCommand;
-use warp_cli::environment::{EnvironmentCommand, ImageCommand};
-use warp_cli::federate::FederateCommand;
-use warp_cli::harness_support::{HarnessSupportCommand, ReportArtifactCommand, TaskStatus};
-use warp_cli::integration::IntegrationCommand;
-use warp_cli::mcp::MCPCommand;
-use warp_cli::model::ModelCommand;
-use warp_cli::provider::ProviderCommand;
-use warp_cli::schedule::ScheduleSubcommand;
-use warp_cli::secret::SecretCommand;
-use warp_cli::share::ShareRequest;
-use warp_cli::task::{MessageCommand, TaskCommand};
-use warp_cli::{CliCommand, GlobalOptions, OZ_HARNESS_ENV};
-use warp_core::features::FeatureFlag;
-use warp_graphql::object_permissions::OwnerType;
-use warp_isolation_platform::IsolationPlatformError;
+use black_cli::api_key::ApiKeyCommand;
+use black_cli::artifact::ArtifactCommand;
+use black_cli::environment::{EnvironmentCommand, ImageCommand};
+use black_cli::federate::FederateCommand;
+use black_cli::harness_support::{HarnessSupportCommand, ReportArtifactCommand, TaskStatus};
+use black_cli::integration::IntegrationCommand;
+use black_cli::mcp::MCPCommand;
+use black_cli::model::ModelCommand;
+use black_cli::provider::ProviderCommand;
+use black_cli::schedule::ScheduleSubcommand;
+use black_cli::secret::SecretCommand;
+use black_cli::share::ShareRequest;
+use black_cli::task::{MessageCommand, TaskCommand};
+use black_cli::{CliCommand, GlobalOptions, OZ_HARNESS_ENV};
+use black_core::features::FeatureFlag;
+use black_graphql::object_permissions::OwnerType;
+use black_isolation_platform::IsolationPlatformError;
 #[cfg(not(target_family = "wasm"))]
-use warp_logging::log_file_path;
-use warp_managed_secrets::ManagedSecretManager;
-use warpui::platform::TerminationMode;
-use warpui::{AppContext, ModelSpawner, SingletonEntity};
+use black_logging::log_file_path;
+use black_managed_secrets::ManagedSecretManager;
+use black_ui::platform::TerminationMode;
+use black_ui::{AppContext, ModelSpawner, SingletonEntity};
 
 use crate::ai::agent::api::convert_conversation::{
     convert_conversation_data_to_ai_conversation, RestorationMode,
@@ -573,7 +573,7 @@ fn run_task(
                 ));
             }
             match conv_cmd {
-                warp_cli::task::ConversationCommand::Get(args) => {
+                black_cli::task::ConversationCommand::Get(args) => {
                     ambient::get_conversation(ctx, args.conversation_id)
                 }
             }
@@ -594,11 +594,11 @@ fn run_task(
 /// requires spawning an async task, which requires a ModelContext.
 struct AgentDriverRunner;
 
-impl warpui::Entity for AgentDriverRunner {
+impl black_ui::Entity for AgentDriverRunner {
     type Event = ();
 }
 
-impl warpui::SingletonEntity for AgentDriverRunner {}
+impl black_ui::SingletonEntity for AgentDriverRunner {}
 
 impl AgentDriverRunner {
     async fn setup_and_run_driver(
@@ -1106,7 +1106,7 @@ impl AgentDriverRunner {
             if !FeatureFlag::GitCredentialRefresh.is_enabled() {
                 return Ok(vec![]);
             }
-            let workload_token = match warp_isolation_platform::issue_workload_token(Some(
+            let workload_token = match black_isolation_platform::issue_workload_token(Some(
                 std::time::Duration::from_secs(5 * 60),
             ))
             .await
@@ -1486,7 +1486,7 @@ fn launch_command(
         return dispatch_command(ctx, command, global_options);
     }
 
-    let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
+    let cli_name = black_cli::binary_name().unwrap_or_else(|| "warp".to_string());
 
     let auth_state = AuthStateProvider::handle(ctx).as_ref(ctx).get();
     if !auth_state.is_logged_in() {

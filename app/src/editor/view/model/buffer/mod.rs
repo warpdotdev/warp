@@ -25,12 +25,12 @@ use sum_tree::{self, Cursor, FilterCursor, SeekBias, SumTree};
 use time::{Global, Lamport};
 use undo::{LocalUndoStack, UndoHistory};
 use vec1::{vec1, Vec1};
-use warpui::color::ColorU;
-use warpui::text::point::Point;
-use warpui::text::words::is_default_word_boundary;
-use warpui::text::{BufferIndex, TextBuffer};
-use warpui::text_layout::TextStyle;
-use warpui::{Entity, ModelContext};
+use black_ui::color::ColorU;
+use black_ui::text::point::Point;
+use black_ui::text::words::is_default_word_boundary;
+use black_ui::text::{BufferIndex, TextBuffer};
+use black_ui::text_layout::TextStyle;
+use black_ui::{Entity, ModelContext};
 /// The public interfaces that we expose to the model.
 /// This should be a very limited set of APIs and should
 /// not expose the internal details of the buffer.
@@ -363,8 +363,8 @@ impl TextStyleOperation {
     ///
     /// # Example
     /// ```
-    /// use warpui::color::ColorU;
-    /// use warpui::text_layout::TextStyle;
+    /// use black_ui::color::ColorU;
+    /// use black_ui::text_layout::TextStyle;
     /// use warp::editor::TextStyleOperation;
     /// TextStyleOperation::apply_text_style_operation(
     ///     TextStyle::default(),
@@ -1645,7 +1645,7 @@ impl Buffer {
     ///
     /// # Example
     /// ```ignore
-    /// use warpui::{color::ColorU, App, ModelHandle};
+    /// use black_ui::{color::ColorU, App, ModelHandle};
     /// use warp::Assets;
     /// use warp::editor::model::buffer::{Buffer, TextStyleOperation, EditOrigin};
     /// use string_offset::CharOffset;

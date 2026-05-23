@@ -3,10 +3,10 @@ use std::fs;
 use criterion::{Criterion, criterion_group, criterion_main};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use warp_editor::content::buffer::Buffer;
-use warp_editor::content::selection_model::BufferSelectionModel;
-use warp_editor::content::text::IndentBehavior;
-use warpui::{App, ModelHandle};
+use black_editor::content::buffer::Buffer;
+use black_editor::content::selection_model::BufferSelectionModel;
+use black_editor::content::text::IndentBehavior;
+use black_ui::{App, ModelHandle};
 
 const EDIT_SAMPLE_SIZE: usize = 10;
 const MAX_EDIT_REPLACEMENT_LENGTH: usize = 20;

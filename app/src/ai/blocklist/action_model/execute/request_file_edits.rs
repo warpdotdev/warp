@@ -21,9 +21,9 @@ pub use telemetry::{
     RequestFileEditsTelemetryEvent,
 };
 use vec1::{vec1, Vec1};
-use warp_core::send_telemetry_from_ctx;
-use warp_util::file::FileSaveError;
-use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _, ViewHandle};
+use black_core::send_telemetry_from_ctx;
+use black_util::file::FileSaveError;
+use black_ui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _, ViewHandle};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::conversation::AIConversationId;

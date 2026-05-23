@@ -11,8 +11,8 @@
 use ai::diff_validation::AIRequestedCodeDiff;
 use futures::FutureExt;
 use vec1::Vec1;
-use warpui::r#async::BoxFuture;
-use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity as _};
+use black_ui::r#async::BoxFuture;
+use black_ui::{Entity, ModelContext, ModelHandle, SingletonEntity as _};
 
 use super::diff_application::{apply_edits, DiffApplicationError, FileReadResult};
 use crate::ai::agent::{AIIdentifiers, FileEdit};

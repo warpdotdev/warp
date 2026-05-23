@@ -5,28 +5,28 @@ use lsp::LspManagerModel;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::channel::{Channel, ChannelState};
-use warp_core::features::FeatureFlag;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::icons::ICON_DIMENSIONS;
-use warp_editor::render::element::VerticalExpansionBehavior;
-use warp_util::path::LineAndColumnArg;
+use black_core::channel::{Channel, ChannelState};
+use black_core::features::FeatureFlag;
+use black_core::ui::appearance::Appearance;
+use black_core::ui::icons::ICON_DIMENSIONS;
+use black_editor::render::element::VerticalExpansionBehavior;
+use black_util::path::LineAndColumnArg;
 #[cfg(feature = "local_fs")]
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::{
+use black_ui::clipboard::ClipboardContent;
+use black_ui::elements::{
     AcceptedByDropTarget, Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox,
     Container, CornerRadius, CrossAxisAlignment, Draggable, DraggableState, DropTarget, Empty,
     Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
     OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Rect,
     SavePosition, Shrinkable, Stack, Text,
 };
-use warpui::fonts::{Properties, Style, Weight};
-use warpui::keymap::EditableBinding;
-use warpui::text::point::Point;
-use warpui::text_layout::ClipConfig;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::UiComponent;
-use warpui::{
+use black_ui::fonts::{Properties, Style, Weight};
+use black_ui::keymap::EditableBinding;
+use black_ui::text::point::Point;
+use black_ui::text_layout::ClipConfig;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::UiComponent;
+use black_ui::{
     id, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle, WindowId,
 };
@@ -388,8 +388,8 @@ impl CodeView {
                             ctx,
                         )
                         .with_horizontal_scrollbar_appearance(
-                            warpui::elements::new_scrollable::ScrollableAppearance::new(
-                                warpui::elements::ScrollbarWidth::Auto,
+                            black_ui::elements::new_scrollable::ScrollableAppearance::new(
+                                black_ui::elements::ScrollbarWidth::Auto,
                                 true,
                             ),
                         )
@@ -432,8 +432,8 @@ impl CodeView {
                 ctx,
             )
             .with_horizontal_scrollbar_appearance(
-                warpui::elements::new_scrollable::ScrollableAppearance::new(
-                    warpui::elements::ScrollbarWidth::Auto,
+                black_ui::elements::new_scrollable::ScrollableAppearance::new(
+                    black_ui::elements::ScrollbarWidth::Auto,
                     true,
                 ),
             )

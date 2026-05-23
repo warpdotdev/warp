@@ -5,14 +5,14 @@ use std::sync::Arc;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use settings::Setting as _;
-use warp_completer::completer::TopLevelCommandCaseSensitivity;
-use warp_completer::parsers::classify_command;
-use warp_completer::parsers::hir::{Command, Expression};
-use warp_completer::parsers::simple::all_parsed_commands;
-use warp_completer::signatures::CommandRegistry;
-use warp_util::path::EscapeChar;
-use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
-use warpui::{SingletonEntity, ViewContext};
+use black_completer::completer::TopLevelCommandCaseSensitivity;
+use black_completer::parsers::classify_command;
+use black_completer::parsers::hir::{Command, Expression};
+use black_completer::parsers::simple::all_parsed_commands;
+use black_completer::signatures::CommandRegistry;
+use black_util::path::EscapeChar;
+use black_ui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
+use black_ui::{SingletonEntity, ViewContext};
 
 use super::{Event, InlineBannerItem, InlineBannerType, TerminalView};
 #[cfg(feature = "local_fs")]

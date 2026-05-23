@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
-use warp_core::features::FeatureFlag;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+use black_core::features::FeatureFlag;
+use black_ui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::new_session_option::{
     Direction, NewSessionConfig, NewSessionOption, NewSessionOptionId,
@@ -305,7 +305,7 @@ mod full_text_searcher {
     use std::sync::Arc;
 
     use fuzzy_match::FuzzyMatchResult;
-    use warpui::r#async::executor::Background;
+    use black_ui::r#async::executor::Background;
 
     use crate::define_search_schema;
     use crate::search::command_palette::new_session::data_source::{

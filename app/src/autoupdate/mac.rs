@@ -17,9 +17,9 @@ use futures_lite::future;
 use instant::Instant;
 use nix::errno::Errno;
 use nix::unistd::{fchown, getgid, getuid};
-use warp_core::macos::get_bundle_path;
-use warp_core::safe_error;
-use warpui::{AppContext, ModelContext, SingletonEntity};
+use black_core::macos::get_bundle_path;
+use black_core::safe_error;
+use black_ui::{AppContext, ModelContext, SingletonEntity};
 
 use super::{release_assets_directory_url, DownloadReady};
 use crate::appearance::AppearanceManager;
@@ -41,7 +41,7 @@ const OLD_EXECUTABLE_FILE_NAME: &str = "old";
 const PERMISSIONS_TMP_FILE_NAME: &str = "permission_test";
 
 fn old_executable_file_path() -> PathBuf {
-    warp_core::paths::state_dir().join(OLD_EXECUTABLE_FILE_NAME)
+    black_core::paths::state_dir().join(OLD_EXECUTABLE_FILE_NAME)
 }
 
 /// Removes the old executable dir from the app bundle. This is necessary because after an
@@ -139,7 +139,7 @@ pub(super) fn relaunch() -> Result<()> {
     launch_command.push(bundle_path.as_os_str());
     // Pass a flag to the app to let it know it was restarted as part of the
     // autoupdate process.
-    launch_command.push(format!(" --args {}", warp_cli::finish_update_flag()));
+    launch_command.push(format!(" --args {}", black_cli::finish_update_flag()));
     // If we're testing with a local copy of channel_versions.json, have the
     // newly-started binary also reference that same file (so we can test
     // displaying an updated changelog after an autoupdate).
@@ -186,7 +186,7 @@ pub async fn cleanup(update_id: &str) {
 /// This helps prevent accumulation of old update directories from failed downloads,
 /// race conditions, or incomplete cleanups.
 pub async fn cleanup_all_except(preserve_update_id: Option<&str>) {
-    let mut autoupdate_dir = warp_core::paths::cache_dir();
+    let mut autoupdate_dir = black_core::paths::cache_dir();
     autoupdate_dir.push("autoupdate");
 
     if !autoupdate_dir.exists() {
@@ -311,7 +311,7 @@ async fn verify_code_signature(component: &str, path: &Path) -> Result<()> {
         .arg("-v")
         .arg(format!(
             "-R=certificate leaf[subject.OU] = \"{}\"",
-            warp_core::macos::APPLE_TEAM_ID
+            black_core::macos::APPLE_TEAM_ID
         ))
         .arg(path)
         .output()
@@ -660,7 +660,7 @@ async fn download_dmg(
 }
 
 fn get_download_dir(update_id: &str) -> PathBuf {
-    let mut dir = warp_core::paths::cache_dir();
+    let mut dir = black_core::paths::cache_dir();
     dir.push("autoupdate");
     dir.push(update_id);
     dir

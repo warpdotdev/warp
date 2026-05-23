@@ -6,27 +6,27 @@ use std::rc::Rc;
 
 use ::settings::{Setting, SettingSection, ToggleableSetting};
 use enum_iterator::all;
-use warp_core::ui::theme::color::internal_colors;
-use warp_util::path::user_friendly_path;
-use warpui::elements::{
+use black_core::ui::theme::color::internal_colors;
+use black_util::path::user_friendly_path;
+use black_ui::elements::{
     Align, Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Dismiss, Element, Empty, Fill, Flex, FormattedTextElement, Hoverable, MainAxisAlignment,
     MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text, Wrap,
     DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
-use warpui::fonts::{FamilyId, FontInfo, Weight};
-use warpui::keymap::{ContextPredicate, FixedBinding};
-use warpui::platform::{Cursor, FilePickerConfiguration, GraphicsBackend, SystemTheme};
-use warpui::rendering::ThinStrokes;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ui_components::radio_buttons::{
+use black_ui::fonts::{FamilyId, FontInfo, Weight};
+use black_ui::keymap::{ContextPredicate, FixedBinding};
+use black_ui::platform::{Cursor, FilePickerConfiguration, GraphicsBackend, SystemTheme};
+use black_ui::rendering::ThinStrokes;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::ui_components::radio_buttons::{
     RadioButtonItem, RadioButtonLayout, RadioButtonStateHandle,
 };
-use warpui::ui_components::slider::SliderStateHandle;
-use warpui::ui_components::switch::SwitchStateHandle;
-use warpui::units::IntoPixels;
-use warpui::{
+use black_ui::ui_components::slider::SliderStateHandle;
+use black_ui::ui_components::switch::SwitchStateHandle;
+use black_ui::units::IntoPixels;
+use black_ui::{
     id, Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateModel,
     View, ViewContext, ViewHandle, WindowId,
 };
@@ -974,7 +974,7 @@ impl AppearanceSettingsPageView {
             // `all_system_fonts` API doesn't exist.
             #[cfg(not(target_family = "wasm"))]
             {
-                let all_system_fonts = warpui::fonts::Cache::handle(ctx)
+                let all_system_fonts = black_ui::fonts::Cache::handle(ctx)
                     .update(ctx, |font_cache, ctx| font_cache.all_system_fonts(ctx));
                 ctx.spawn(all_system_fonts, Self::set_system_fonts);
             }

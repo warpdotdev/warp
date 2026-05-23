@@ -2,20 +2,20 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
-use warp_core::features::FeatureFlag;
-use warp_graphql::object_permissions::OwnerType;
-use warp_graphql::queries::api_keys::ApiKeyProperties as GqlApiKeyProperties;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_graphql::object_permissions::OwnerType;
+use black_graphql::queries::api_keys::ApiKeyProperties as GqlApiKeyProperties;
+use black_ui::elements::{
     resizable_state_handle, Align, Border, ChildView, ConstrainedBox, Container,
     CrossAxisAlignment, DragBarSide, Element, Empty, Expanded, Flex, FormattedTextElement,
     HighlightedHyperlink, MainAxisSize, MouseStateHandle, Padding, ParentElement, Resizable,
     ResizableStateHandle, Shrinkable, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::text_layout::ClipConfig;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::text_layout::ClipConfig;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use super::platform::{
     CreateApiKeyModal, CreateApiKeyModalEvent, CreateApiKeyModalViewState, ExpireApiKeyButton,
@@ -200,7 +200,7 @@ impl PlatformPageView {
                         right: 24.,
                     }),
                     font_size: Some(16.),
-                    font_weight: Some(warpui::fonts::Weight::Bold),
+                    font_weight: Some(black_ui::fonts::Weight::Bold),
                     ..Default::default()
                 })
                 .with_body_style(UiComponentStyles {

@@ -25,12 +25,12 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use string_offset::{ByteOffset, CharOffset, impl_offset};
 use sum_tree::{Cursor, SeekBias, SumTree};
-use warp_core::features::FeatureFlag;
-use warpui::AppContext;
-use warpui::elements::ListIndentLevel;
-use warpui::fonts::{Properties, Style, Weight};
-use warpui::text::BlockHeaderSize as HeaderSize;
-use warpui::text::point::Point;
+use black_core::features::FeatureFlag;
+use black_ui::AppContext;
+use black_ui::elements::ListIndentLevel;
+use black_ui::fonts::{Properties, Style, Weight};
+use black_ui::text::BlockHeaderSize as HeaderSize;
+use black_ui::text::point::Point;
 
 use super::buffer::Buffer;
 use super::core::CursorType;

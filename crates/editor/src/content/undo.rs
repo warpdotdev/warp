@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use instant::Instant;
-use warp_util::content_version::ContentVersion;
+use black_util::content_version::ContentVersion;
 
 use super::core::{CoreEditorAction, ReplacementRange};
 use crate::render::model::RenderedSelectionSet;

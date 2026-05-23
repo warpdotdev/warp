@@ -1,18 +1,18 @@
 use std::fmt::Debug;
 
 use pathfinder_color::ColorU;
-use warpui::elements::{
+use black_ui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, Element, Fill, Icon,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement,
     PositionedElementAnchor, PositionedElementOffsetBounds, SavePosition, Stack,
 };
-use warpui::fonts::FamilyId;
-use warpui::geometry::vector::vec2f;
-use warpui::scene::DropShadow;
-use warpui::text_layout::ClipConfig;
-use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::FamilyId;
+use black_ui::geometry::vector::vec2f;
+use black_ui::scene::DropShadow;
+use black_ui::text_layout::ClipConfig;
+use black_ui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{
     Action, AppContext, BlurContext, Entity, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle, WeakViewHandle,
 };

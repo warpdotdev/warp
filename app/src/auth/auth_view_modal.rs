@@ -4,16 +4,16 @@ use anyhow::{anyhow, Result};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use url::Url;
-use warp_core::errors::ErrorExt;
-use warp_core::features::FeatureFlag;
-use warpui::actions::StandardAction;
-use warpui::elements::{
+use black_core::errors::ErrorExt;
+use black_core::features::FeatureFlag;
+use black_ui::actions::StandardAction;
+use black_ui::elements::{
     ChildAnchor, ChildView, Container, Fill, HighlightedHyperlink, MouseStateHandle,
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Stack,
 };
-use warpui::keymap::FixedBinding;
-use warpui::ui_components::components::{Coords, UiComponentStyles};
-use warpui::{
+use black_ui::keymap::FixedBinding;
+use black_ui::ui_components::components::{Coords, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
@@ -31,7 +31,7 @@ use crate::server::server_api::auth::UserAuthenticationError;
 use crate::util::bindings::CustomAction;
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings([
         // Bindings for paste require the StandardAction and CustomAction binding to work on all platforms.

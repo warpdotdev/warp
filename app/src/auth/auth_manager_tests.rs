@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use warpui::{App, SingletonEntity};
+use black_ui::{App, SingletonEntity};
 
 use super::{AuthManager, AuthManagerEvent};
 use crate::auth::auth_view_modal::AuthRedirectPayload;
@@ -180,7 +180,7 @@ fn test_log_out_clears_pending_auth_state() {
         // routes to `PersistedUser::remove_from_secure_storage`. That requires
         // a `SecureStorage` singleton, so register a no-op one for this test.
         app.update(|ctx| {
-            warpui_extras::secure_storage::register_noop("warp_test", ctx);
+            black_ui_extras::secure_storage::register_noop("warp_test", ctx);
         });
 
         AuthManager::handle(&app).update(&mut app, |auth_manager, ctx| {

@@ -5,11 +5,11 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId, ServerConversationToken};
-use warp_core::features::FeatureFlag;
+use black_core::features::FeatureFlag;
 use warp_multi_agent_api::client_action::Action;
 use warp_multi_agent_api::message::Message;
 use warp_multi_agent_api::response_event::{stream_finished, ClientActions};
-use warpui::{AppContext, ModelContext, SingletonEntity};
+use black_ui::{AppContext, ModelContext, SingletonEntity};
 
 use super::response_stream::ResponseStreamId;
 use super::{BlocklistAIController, RequestInput};

@@ -1,7 +1,7 @@
 use std::future::Future;
 
-use warp_util::sync::Condition;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_util::sync::Condition;
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 /// Represents whether the client is connected to the network.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]

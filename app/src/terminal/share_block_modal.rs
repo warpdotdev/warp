@@ -6,26 +6,26 @@ use parking_lot::FairMutex;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use serde::Serialize;
-use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::Fill;
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::ui::theme::Fill;
+use black_ui::clipboard::ClipboardContent;
+use black_ui::elements::{
     try_rect_with_z, Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Dismiss, Element, Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle,
     ParentElement, Point, Radius, SavePosition, ScrollData, ScrollStateHandle, Scrollable,
     ScrollableElement, ScrollbarWidth, Shrinkable, Stack, Text,
 };
-use warpui::event::{DispatchedEvent, ModifiersState};
-use warpui::fonts::{FamilyId, Properties, Style, Weight};
-use warpui::keymap::FixedBinding;
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ui_components::radio_buttons::{
+use black_ui::event::{DispatchedEvent, ModifiersState};
+use black_ui::fonts::{FamilyId, Properties, Style, Weight};
+use black_ui::keymap::FixedBinding;
+use black_ui::r#async::SpawnedFutureHandle;
+use black_ui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::ui_components::radio_buttons::{
     RadioButtonItem, RadioButtonLayout, RadioButtonStateHandle,
 };
-use warpui::units::{IntoLines, IntoPixels, Lines, Pixels};
-use warpui::{
+use black_ui::units::{IntoLines, IntoPixels, Lines, Pixels};
+use black_ui::{
     AfterLayoutContext, AppContext, ClipBounds, Entity, Event, EventContext, FocusContext,
     LayoutContext, PaintContext, SingletonEntity, SizeConstraint, TypedActionView, View,
     ViewContext, ViewHandle,
@@ -154,7 +154,7 @@ pub enum ShareBlockModalAction {
 }
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings(vec![
         FixedBinding::custom(

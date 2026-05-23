@@ -1,4 +1,4 @@
-use warp_terminal::model::Point;
+use black_terminal::model::Point;
 
 use super::{AbsolutePoint, AbsoluteRectangle, GridHandler};
 use crate::terminal::model::image_map::ImagePlacementData;

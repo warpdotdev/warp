@@ -1,19 +1,19 @@
 use chrono::{Local, TimeZone};
 use uuid::Uuid;
-use warp_core::ui::color::coloru_with_opacity;
-use warp_core::ui::external_product_icon::ExternalProductIcon;
-use warp_core::ui::icons::Icon;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::{
+use black_core::ui::color::coloru_with_opacity;
+use black_core::ui::external_product_icon::ExternalProductIcon;
+use black_core::ui::icons::Icon;
+use black_core::ui::theme::color::internal_colors;
+use black_ui::elements::{
     Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex,
     Hoverable, MainAxisAlignment, MouseStateHandle, Padding, ParentElement, Radius, Shrinkable,
     Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::platform::Cursor;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::platform::Cursor;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use crate::ai::mcp::{Author, MCPServerUpdate};
 use crate::appearance::Appearance;

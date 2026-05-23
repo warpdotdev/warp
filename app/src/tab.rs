@@ -5,11 +5,11 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use serde::{Deserialize, Serialize};
 use settings::Setting as _;
-use warp_core::context_flag::ContextFlag;
-use warp_core::ui::builder::UiBuilder;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::AnsiColors;
-use warpui::elements::{
+use black_core::context_flag::ContextFlag;
+use black_core::ui::builder::UiBuilder;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::AnsiColors;
+use black_ui::elements::{
     Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, DragAxis, Draggable, DraggableState, DropTarget, Element, Empty, Fill,
     Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, Padding,
@@ -17,11 +17,11 @@ use warpui::elements::{
     PositionedElementOffsetBounds, Radius, Rect, SavePosition, Shrinkable, SizeConstraintCondition,
     SizeConstraintSwitch, Stack, Text,
 };
-use warpui::fonts::Weight;
-use warpui::text_layout::ClipConfig;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ui_components::text_input::TextInput;
-use warpui::{AppContext, SingletonEntity, ViewHandle};
+use black_ui::fonts::Weight;
+use black_ui::text_layout::ClipConfig;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::ui_components::text_input::TextInput;
+use black_ui::{AppContext, SingletonEntity, ViewHandle};
 
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::conversation_status_ui::{render_status_element, STATUS_ELEMENT_PADDING};
@@ -1394,7 +1394,7 @@ impl<'a> TabComponent<'a> {
             let mut flex_row = Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_main_axis_alignment(MainAxisAlignment::Center)
-                .with_cross_axis_alignment(warpui::elements::CrossAxisAlignment::Center);
+                .with_cross_axis_alignment(black_ui::elements::CrossAxisAlignment::Center);
             if let Some(indicator) = self.render_indicator() {
                 flex_row.add_child(indicator);
             }
@@ -1431,7 +1431,7 @@ impl<'a> TabComponent<'a> {
             Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_main_axis_alignment(MainAxisAlignment::Center)
-                .with_cross_axis_alignment(warpui::elements::CrossAxisAlignment::Center)
+                .with_cross_axis_alignment(black_ui::elements::CrossAxisAlignment::Center)
                 .with_child(
                     ConstrainedBox::new(compact_icon)
                         .with_max_width(TAB_INDICATOR_HEIGHT)

@@ -1,4 +1,4 @@
-use warpui::AppContext;
+use black_ui::AppContext;
 
 use crate::channel::ChannelState;
 use crate::server::ids::ServerId;

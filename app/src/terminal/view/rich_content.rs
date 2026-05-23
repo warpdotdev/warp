@@ -1,5 +1,5 @@
-use warpui::prelude::ChildView;
-use warpui::{Element, EntityId, View, ViewContext, ViewHandle};
+use black_ui::prelude::ChildView;
+use black_ui::{Element, EntityId, View, ViewContext, ViewHandle};
 
 use super::{InitStepBlock, InitStepKind};
 use crate::ai::agent::conversation::AIConversationId;

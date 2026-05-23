@@ -1,6 +1,6 @@
 use anyhow::anyhow;
-use warpui::ui_components::components::UiComponent as _;
-use warpui::{AppContext, Element, Entity, SingletonEntity, View, ViewContext};
+use black_ui::ui_components::components::UiComponent as _;
+use black_ui::{AppContext, Element, Entity, SingletonEntity, View, ViewContext};
 use wasm_bindgen::prelude::*;
 
 use super::auth_manager::{AuthManager, AuthManagerEvent};

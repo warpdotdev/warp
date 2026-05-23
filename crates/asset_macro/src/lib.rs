@@ -30,7 +30,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use sha2::Digest;
 use syn::parse::Parse;
 use syn::{parse_macro_input, LitStr, Token};
-use warp_util::assets::{ASSETS_DIR, ASYNC_ASSETS_DIR, BUNDLED_ASSETS_DIR, REMOTE_ASSETS_DIR};
+use black_util::assets::{ASSETS_DIR, ASYNC_ASSETS_DIR, BUNDLED_ASSETS_DIR, REMOTE_ASSETS_DIR};
 
 struct MacroArgs {
     /// The name of the asset. E.g. `jpg/jellyfish_bg.jpg`
@@ -72,7 +72,7 @@ fn construct_bundled_asset(asset_name: &str, asset_dir: &str) -> Result<TokenStr
     if full_asset_path(asset_name, asset_dir).exists() {
         let full_location = format!("{asset_dir}/{asset_name}");
         Ok(quote! {
-            ::warpui::assets::asset_cache::AssetSource::Bundled {
+            ::black_ui::assets::asset_cache::AssetSource::Bundled {
                 path: #full_location .into(),
             }
         })
@@ -101,13 +101,13 @@ fn construct_remote_asset(asset_name: &str, asset_dir: &str) -> Result<TokenStre
     let mut hasher = sha2::Sha256::new();
     hasher.update(&contents);
     let hash: [u8; 32] = hasher.finalize().into();
-    let url = warp_util::assets::hashed_asset_url(&warp_util::assets::hashed_asset_path(
+    let url = black_util::assets::hashed_asset_url(&black_util::assets::hashed_asset_path(
         Path::new(asset_name),
         &hash,
     ));
 
     Ok(quote! {
-        ::asset_cache::url_source(::warp_util::assets::make_absolute_url( #url ))
+        ::asset_cache::url_source(::black_util::assets::make_absolute_url( #url ))
     })
 }
 

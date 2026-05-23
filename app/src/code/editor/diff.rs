@@ -12,12 +12,12 @@ use pathfinder_color::ColorU;
 use rangemap::RangeMap;
 use similar::{ChangeTag, DiffOp, TextDiff};
 use string_offset::CharOffset;
-use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
-use warp_editor::content::edit::TemporaryBlock;
-use warp_editor::content::version::BufferVersion;
-use warp_editor::multiline::{AnyMultilineString, MultilineStr, MultilineString, LF};
-use warp_editor::render::model::{Decoration, LineCount, LineDecoration};
-use warpui::{Entity, ModelContext};
+use black_core::ui::theme::{AnsiColorIdentifier, Fill};
+use black_editor::content::edit::TemporaryBlock;
+use black_editor::content::version::BufferVersion;
+use black_editor::multiline::{AnyMultilineString, MultilineStr, MultilineString, LF};
+use black_editor::render::model::{Decoration, LineCount, LineDecoration};
+use black_ui::{Entity, ModelContext};
 
 use super::super::DiffResult;
 use crate::appearance::Appearance;

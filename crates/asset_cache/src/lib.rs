@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use bytes::Bytes;
 use reqwest::Url;
-use warpui_core::assets::asset_cache::{
+use black_ui_core::assets::asset_cache::{
     Asset, AssetCache, AssetSource, AssetState, AsyncAssetId, AsyncAssetType,
 };
 

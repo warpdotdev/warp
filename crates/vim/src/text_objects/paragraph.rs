@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use string_offset::CharOffset;
-use warpui::text::TextBuffer;
+use black_ui::text::TextBuffer;
 
 use crate::{find_next_paragraph_end, find_previous_paragraph_start};
 

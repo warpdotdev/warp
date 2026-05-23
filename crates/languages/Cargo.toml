@@ -11,5 +11,5 @@ serde_yaml.workspace = true
 rust-embed.workspace = true
 arborium.workspace = true
 lazy_static.workspace = true
-warp_editor = { path = "../editor" }
-warp_util.workspace = true
+black_editor = { path = "../editor" }
+black_util.workspace = true

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use warpui::elements::MouseStateHandle;
-use warpui::fonts::Weight;
-use warpui::{Element, EntityId};
+use black_ui::elements::MouseStateHandle;
+use black_ui::fonts::Weight;
+use black_ui::{Element, EntityId};
 
 use super::{
     render_inline_block_list_banner, InlineBannerButtonState, InlineBannerCloseButton,

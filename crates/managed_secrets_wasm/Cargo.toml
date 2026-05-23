@@ -10,5 +10,5 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-warp_managed_secrets.workspace = true
+black_managed_secrets.workspace = true
 wasm-bindgen.workspace = true

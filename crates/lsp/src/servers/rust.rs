@@ -71,7 +71,7 @@ impl RustAnalyzerCandidate {
     pub async fn find_installed_binary_in_data_dir() -> Option<std::path::PathBuf> {
         use tokio::process::Command;
 
-        let install_dir = warp_core::paths::data_dir().join(SERVER_NAME);
+        let install_dir = black_core::paths::data_dir().join(SERVER_NAME);
         if !install_dir.exists() {
             return None;
         }

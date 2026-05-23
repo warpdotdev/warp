@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use anyhow::Result;
 use async_trait::async_trait;
 use rust_embed::RustEmbed;
-use warp_completer::ParsedTokensSnapshot;
+use black_completer::ParsedTokensSnapshot;
 
 use crate::parser::parse_query_into_tokens;
 use crate::util::{
@@ -146,7 +146,7 @@ impl InputClassifier for OnnxClassifier {
 
     async fn classify_input(
         &self,
-        input: warp_completer::ParsedTokensSnapshot,
+        input: black_completer::ParsedTokensSnapshot,
         context: &Context,
     ) -> anyhow::Result<ClassificationResult> {
         // If we ever panicked while running inference, we should fall back to the heuristic classifier.
@@ -228,8 +228,8 @@ impl HasPanicked {
 mod tests {
     use anyhow::Result;
     use futures::executor::block_on;
-    use warp_completer::meta::SpannedItem;
-    use warp_completer::{ParsedTokenData, ParsedTokensSnapshot};
+    use black_completer::meta::SpannedItem;
+    use black_completer::{ParsedTokenData, ParsedTokensSnapshot};
 
     use super::*;
 

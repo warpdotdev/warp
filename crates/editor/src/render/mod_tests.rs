@@ -1,8 +1,8 @@
 //! End-to-end editor tests.
 
 use string_offset::CharOffset;
-use warp_core::features::FeatureFlag;
-use warpui::{App, ModelHandle, ReadModel};
+use black_core::features::FeatureFlag;
+use black_ui::{App, ModelHandle, ReadModel};
 
 use super::model::test_utils::{TEST_STYLES, init_logging};
 use super::model::{BlockItem, RenderEvent, RenderState};

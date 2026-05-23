@@ -2,17 +2,17 @@ use itertools::Itertools;
 use pathfinder_geometry::vector::vec2f;
 use serde::Serialize;
 use settings::Setting as _;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{
+use black_core::ui::theme::Fill;
+use black_ui::elements::{
     Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Empty, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack,
 };
-use warpui::keymap::FixedBinding;
-use warpui::platform::Cursor;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::keymap::FixedBinding;
+use black_ui::platform::Cursor;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
@@ -57,7 +57,7 @@ const SHELL_PROMPT_SECTION_HEADER: &str = "Shell prompt (PS1)";
 const RESTORE_DEFAULT_BUTTON: &str = "Restore default";
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings([FixedBinding::new(
         "escape",
@@ -482,7 +482,7 @@ impl EditorModal {
             .span(MODAL_TITLE.to_string())
             .with_style(UiComponentStyles {
                 font_size: Some(MODAL_TITLE_FONT_SIZE),
-                font_weight: Some(warpui::fonts::Weight::Bold),
+                font_weight: Some(black_ui::fonts::Weight::Bold),
                 ..Default::default()
             })
             .build()
@@ -673,7 +673,7 @@ impl EditorModal {
                     .span(WARP_PROMPT_SECTION_HEADER.to_string())
                     .with_style(UiComponentStyles {
                         font_size: Some(MODAL_CONTENT_FONT_SIZE),
-                        font_weight: Some(warpui::fonts::Weight::Semibold),
+                        font_weight: Some(black_ui::fonts::Weight::Semibold),
                         ..Default::default()
                     })
                     .build()
@@ -722,7 +722,7 @@ impl EditorModal {
             .span(SHELL_PROMPT_SECTION_HEADER.to_string())
             .with_style(UiComponentStyles {
                 font_size: Some(MODAL_CONTENT_FONT_SIZE),
-                font_weight: Some(warpui::fonts::Weight::Semibold),
+                font_weight: Some(black_ui::fonts::Weight::Semibold),
                 ..Default::default()
             })
             .build()

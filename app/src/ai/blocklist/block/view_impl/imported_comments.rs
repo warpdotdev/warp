@@ -1,6 +1,6 @@
-use warpui::elements::{CrossAxisAlignment, Flex, ParentElement};
-use warpui::prelude::ChildView;
-use warpui::{AppContext, Element};
+use black_ui::elements::{CrossAxisAlignment, Flex, ParentElement};
+use black_ui::prelude::ChildView;
+use black_ui::{AppContext, Element};
 
 use crate::ai::blocklist::block::ImportedCommentGroup;
 

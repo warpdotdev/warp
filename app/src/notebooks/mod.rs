@@ -13,8 +13,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use warp_server_client::cloud_object::CloudObjectUpsertParams;
-use warpui::AppContext;
+use black_server_client::cloud_object::CloudObjectUpsertParams;
+use black_ui::AppContext;
 
 use crate::ai::document::ai_document_model::AIDocumentId;
 use crate::appearance::Appearance;
@@ -241,8 +241,8 @@ pub fn init(app: &mut AppContext) {
 /// * Includes extra context for embedded objects.
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 pub fn export_notebook(data: &str, ctx: &AppContext) -> anyhow::Result<String> {
-    use warp_editor::content::buffer::Buffer;
-    use warp_editor::content::markdown::MarkdownStyle;
+    use black_editor::content::buffer::Buffer;
+    use black_editor::content::markdown::MarkdownStyle;
 
     // Parse the Markdown directly rather than using [`Buffer::from_markdown`] so that we can
     // report errors to the exporter.

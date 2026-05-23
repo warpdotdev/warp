@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+use black_ui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use super::env_var_collection_search_item::EnvVarCollectionSearchItem;
 use super::notebook_search_item::NotebookSearchItem;
@@ -31,7 +31,7 @@ pub struct DataSource {
 impl DataSource {
     #[cfg(not(target_family = "wasm"))]
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        if warp_core::features::FeatureFlag::UseTantivySearch.is_enabled() {
+        if black_core::features::FeatureFlag::UseTantivySearch.is_enabled() {
             Self::new_full_text(ctx)
         } else {
             Self::new_fuzzy(ctx)
@@ -545,8 +545,8 @@ mod full_text_searcher {
 
     use fuzzy_match::FuzzyMatchResult;
     use itertools::Itertools;
-    use warpui::r#async::executor::Background;
-    use warpui::{AppContext, SingletonEntity};
+    use black_ui::r#async::executor::Background;
+    use black_ui::{AppContext, SingletonEntity};
 
     use crate::cloud_object::model::persistence::CloudModel;
     use crate::cloud_object::{

@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use itertools::Itertools;
-use warp_core::ui::Icon;
-use warpui::elements::{
+use black_core::ui::Icon;
+use black_ui::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, Flex, ParentElement, SavePosition, Shrinkable,
     Text,
 };
-use warpui::fonts::{Properties, Style};
-use warpui::{Action, AppContext, Element, SingletonEntity as _};
+use black_ui::fonts::{Properties, Style};
+use black_ui::{Action, AppContext, Element, SingletonEntity as _};
 
 use crate::ai::llms::{
     is_using_api_key_for_provider, should_show_bedrock_icon_for_model, DisableReason, LLMId,

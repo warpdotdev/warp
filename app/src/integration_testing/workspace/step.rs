@@ -1,5 +1,5 @@
-use warpui::integration::TestStep;
-use warpui::{async_assert, SingletonEntity};
+use black_ui::integration::TestStep;
+use black_ui::{async_assert, SingletonEntity};
 
 use crate::integration_testing::view_getters::workspace_view;
 use crate::undo_close::UndoCloseStack;

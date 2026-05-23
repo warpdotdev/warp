@@ -8,7 +8,7 @@ use repo_metadata::file_tree_update::{
     DirectoryNodeMetadata, FileNodeMetadata, FileTreeEntryUpdate, RepoMetadataUpdate,
     RepoNodeMetadata,
 };
-use warp_util::standardized_path::StandardizedPath;
+use black_util::standardized_path::StandardizedPath;
 
 use crate::proto;
 

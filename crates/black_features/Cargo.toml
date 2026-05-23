@@ -1,0 +1,14 @@
+[package]
+name = "black_features"
+version = "0.0.0"
+edition = "2021"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+integration_tests = []
+test-util = []
+
+[dependencies]
+enum-iterator.workspace = true

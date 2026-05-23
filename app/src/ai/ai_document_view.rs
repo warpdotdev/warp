@@ -3,20 +3,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::icons;
-use warp_core::ui::icons::ICON_DIMENSIONS;
-use warp_core::ui::theme::Fill as ThemeFill;
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::{
+use black_core::ui::icons;
+use black_core::ui::icons::ICON_DIMENSIONS;
+use black_core::ui::theme::Fill as ThemeFill;
+use black_ui::clipboard::ClipboardContent;
+use black_ui::elements::{
     ChildAnchor, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement,
     PositionedElementAnchor, PositionedElementOffsetBounds, SavePosition, Stack,
 };
-use warpui::keymap::{EditableBinding, FixedBinding};
-use warpui::text_layout::ClipConfig;
-use warpui::ui_components::button::ButtonTooltipPosition;
-use warpui::ui_components::components::UiComponent;
-use warpui::{
+use black_ui::keymap::{EditableBinding, FixedBinding};
+use black_ui::text_layout::ClipConfig;
+use black_ui::ui_components::button::ButtonTooltipPosition;
+use black_ui::ui_components::components::UiComponent;
+use black_ui::{
     id, AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };
@@ -80,7 +80,7 @@ pub fn init(app: &mut AppContext) {
 }
 
 #[cfg(feature = "local_fs")]
-use warp_util::path::LineAndColumnArg;
+use black_util::path::LineAndColumnArg;
 
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
@@ -738,8 +738,8 @@ impl AIDocumentView {
                                         tooltip,
                                         OffsetPositioning::offset_from_parent(
                                             vec2f(0., 4.),
-                                            warpui::elements::ParentOffsetBounds::WindowByPosition,
-                                            warpui::elements::ParentAnchor::BottomRight,
+                                            black_ui::elements::ParentOffsetBounds::WindowByPosition,
+                                            black_ui::elements::ParentAnchor::BottomRight,
                                             ChildAnchor::TopRight,
                                         ),
                                     );
@@ -988,7 +988,7 @@ impl AIDocumentView {
     }
 
     /// Bind the underlying editor model to the given window, enabling render/event processing.
-    pub fn bind_window(&self, window_id: warpui::WindowId, ctx: &mut ViewContext<Self>) {
+    pub fn bind_window(&self, window_id: black_ui::WindowId, ctx: &mut ViewContext<Self>) {
         self.editor.update(ctx, |editor_view, ctx| {
             editor_view
                 .model()
@@ -1008,7 +1008,7 @@ impl AIDocumentView {
     /// Export the current content as a markdown file.
     #[cfg(feature = "local_fs")]
     fn export(&self, ctx: &mut ViewContext<Self>) {
-        use warpui::platform::SaveFilePickerConfiguration;
+        use black_ui::platform::SaveFilePickerConfiguration;
 
         use crate::drive::export::safe_filename;
         let markdown = self.editor.as_ref(ctx).markdown_unescaped(ctx);
@@ -1066,7 +1066,7 @@ impl View for AIDocumentView {
         "AIDocumentView"
     }
 
-    fn render(&self, app: &AppContext) -> Box<dyn warpui::Element> {
+    fn render(&self, app: &AppContext) -> Box<dyn black_ui::Element> {
         let has_orchestration_config = AIDocumentModel::as_ref(app)
             .get_conversation_id_for_document_id(&self.document_id)
             .and_then(|cid| {
@@ -1098,7 +1098,7 @@ impl View for AIDocumentView {
             .with_padding_left(8.)
             .with_padding_right(8.)
             .finish();
-        content_column.add_child(warpui::elements::Expanded::new(1.0, editor).finish());
+        content_column.add_child(black_ui::elements::Expanded::new(1.0, editor).finish());
 
         let mut stack = Stack::new().with_child(content_column.finish());
 

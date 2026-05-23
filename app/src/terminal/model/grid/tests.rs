@@ -1,7 +1,7 @@
 //! Tests for the Grid.
 
 use grid_handler::GridHandler;
-use warp_terminal::model::grid::cell;
+use black_terminal::model::grid::cell;
 
 use super::*;
 use crate::features::FeatureFlag;

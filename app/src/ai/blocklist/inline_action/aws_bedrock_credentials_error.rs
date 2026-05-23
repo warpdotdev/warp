@@ -1,12 +1,12 @@
 use settings::Setting as _;
-use warp_core::ui::Icon;
-use warpui::elements::{
+use black_core::ui::Icon;
+use black_ui::elements::{
     ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, MainAxisAlignment,
     MainAxisSize, MouseStateHandle, ParentElement, Shrinkable, SizeConstraintCondition,
     SizeConstraintSwitch, Text,
 };
-use warpui::ui_components::components::UiComponent;
-use warpui::{
+use black_ui::ui_components::components::UiComponent;
+use black_ui::{
     AppContext, Element, Entity, EventContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };

@@ -1,7 +1,7 @@
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use settings::Setting as _;
-use warpui::{Entity, GetSingletonModelHandle, ModelContext, SingletonEntity, UpdateModel};
+use black_ui::{Entity, GetSingletonModelHandle, ModelContext, SingletonEntity, UpdateModel};
 
 pub use super::ContextChipKind;
 use crate::settings::{

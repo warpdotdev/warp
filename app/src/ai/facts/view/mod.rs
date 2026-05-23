@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 
-use warp_core::ui::appearance::Appearance;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_ui::elements::{
     Align, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
     CrossAxisAlignment, Expanded, Flex, MainAxisAlignment, MainAxisSize, ParentElement,
     ScrollbarWidth,
 };
-use warpui::ui_components::components::UiComponent;
-use warpui::{
+use black_ui::ui_components::components::UiComponent;
+use black_ui::{
     AppContext, Element, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };
@@ -277,7 +277,7 @@ impl View for AIFactView {
             ScrollbarWidth::Auto,
             appearance.theme().nonactive_ui_detail().into(),
             appearance.theme().active_ui_detail().into(),
-            warpui::elements::Fill::None,
+            black_ui::elements::Fill::None,
         )
         .finish()
     }
@@ -307,16 +307,16 @@ impl BackingView for AIFactView {
     fn handle_pane_header_overflow_menu_action(
         &mut self,
         _action: &Self::PaneHeaderOverflowMenuAction,
-        _ctx: &mut warpui::ViewContext<Self>,
+        _ctx: &mut black_ui::ViewContext<Self>,
     ) {
         self.handle_action(_action, _ctx)
     }
 
-    fn close(&mut self, ctx: &mut warpui::ViewContext<Self>) {
+    fn close(&mut self, ctx: &mut black_ui::ViewContext<Self>) {
         ctx.emit(AIFactViewEvent::Pane(PaneEvent::Close));
     }
 
-    fn focus_contents(&mut self, ctx: &mut warpui::ViewContext<Self>) {
+    fn focus_contents(&mut self, ctx: &mut black_ui::ViewContext<Self>) {
         self.focus(ctx);
     }
 

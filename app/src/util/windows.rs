@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use std::{env, path};
 
 use anyhow::{anyhow, Result};
-use warpui::{AppContext, SingletonEntity};
+use black_ui::{AppContext, SingletonEntity};
 
 use crate::system::SystemInfo;
 use crate::util::path::{file_exists_and_is_executable, resolve_executable};

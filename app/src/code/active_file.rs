@@ -1,7 +1,7 @@
 //! Module containing the definition of [`ActiveFileModel`],
 //! which tracks the currently focused file across an entire PaneGroup.
 
-use warpui::{Entity, ModelContext};
+use black_ui::{Entity, ModelContext};
 
 use super::buffer_location::LocalOrRemotePath;
 

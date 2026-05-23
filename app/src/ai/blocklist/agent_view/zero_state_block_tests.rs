@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use warpui::r#async::executor::Background;
+use black_ui::r#async::executor::Background;
 
 use super::{display_working_directory, format_session_location, should_render_oz_updates_section};
 use crate::ai::blocklist::agent_view::zero_state_block::current_working_directory_for_zero_state;

@@ -4,7 +4,7 @@ use markdown_parser::{compute_formatted_text_delta, parse_markdown};
 use serde_yaml::Value;
 use string_offset::CharOffset;
 use vec1::Vec1;
-use warpui::{App, ReadModel};
+use black_ui::{App, ReadModel};
 
 use super::MarkdownStyle;
 use crate::content::buffer::tests::TestEmbeddedItem;
@@ -56,7 +56,7 @@ print_endline "Hello, World!"
 #[test]
 fn test_mermaid_markdown_round_trip() {
     App::test((), |mut app| async move {
-        let _flag = warp_core::features::FeatureFlag::MarkdownMermaid.override_enabled(true);
+        let _flag = black_core::features::FeatureFlag::MarkdownMermaid.override_enabled(true);
         let markdown = "```mermaid\ngraph TD\nA --> B\n```\n";
         let (buffer, _selection) = Buffer::mock_from_markdown(
             markdown,
@@ -153,7 +153,7 @@ fn test_table_html_serialization() {
 #[test]
 fn test_gfm_table_html_serialization() {
     App::test((), |mut app| async move {
-        let _flag = warp_core::features::FeatureFlag::MarkdownTables.override_enabled(true);
+        let _flag = black_core::features::FeatureFlag::MarkdownTables.override_enabled(true);
         let markdown = "\
 | header 1 | header 2 |\n\
 | --- | --- |\n\

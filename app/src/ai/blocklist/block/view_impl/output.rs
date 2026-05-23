@@ -20,22 +20,22 @@ use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use ui_components::{button, Component as _, Options as _};
-use warp_core::channel::ChannelState;
-use warp_core::ui::theme::color::internal_colors;
+use black_core::channel::ChannelState;
+use black_core::ui::theme::color::internal_colors;
 #[allow(unused_imports)]
-use warp_util::path::{common_path, CleanPathResult};
-use warpui::elements::new_scrollable::SingleAxisConfig;
-use warpui::elements::{
+use black_util::path::{common_path, CleanPathResult};
+use black_ui::elements::new_scrollable::SingleAxisConfig;
+use black_ui::elements::{
     Align, Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Empty, Expanded, Fill, Flex, FormattedTextElement, Hoverable,
     MainAxisAlignment, MainAxisSize, NewScrollable, OffsetPositioning, ParentAnchor, ParentElement,
     ParentOffsetBounds, Radius, Shrinkable, Stack, Text, Wrap,
 };
-use warpui::keymap::Keystroke;
-use warpui::platform::{Cursor, OperatingSystem};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ui_components::radio_buttons::{RadioButtonItem, RadioButtonLayout};
-use warpui::{
+use black_ui::keymap::Keystroke;
+use black_ui::platform::{Cursor, OperatingSystem};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::ui_components::radio_buttons::{RadioButtonItem, RadioButtonLayout};
+use black_ui::{
     Action, AppContext, Element, EntityId, ModelHandle, SingletonEntity, View, ViewHandle,
 };
 
@@ -2059,7 +2059,7 @@ fn render_stopped_output(props: Props, app: &AppContext) -> Box<dyn Element> {
                 .set_background(internal_colors::fg_overlay_3(theme).into()),
         );
 
-        let resume_button = warpui::ui_components::button::Button::new(
+        let resume_button = black_ui::ui_components::button::Button::new(
             props.state_handles.resume_conversation_handle.clone(),
             button_styles,
             Some(hovered_styles),
@@ -2246,7 +2246,7 @@ fn render_suggest_new_conversation(
             ),
             SuggestNewConversationResult::Rejected => (
                 "Continuing current conversation",
-                warpui::elements::Icon::new(
+                black_ui::elements::Icon::new(
                     Icon::FlipForward.into(),
                     internal_colors::neutral_6(theme),
                 )
@@ -3398,7 +3398,7 @@ pub fn action_icon<V: View>(
     action_model: &ModelHandle<BlocklistAIActionModel>,
     ai_block_model: &dyn AIBlockModel<View = V>,
     app: &AppContext,
-) -> warpui::elements::Icon {
+) -> black_ui::elements::Icon {
     let appearance = Appearance::as_ref(app);
     let status = action_model.as_ref(app).get_action_status(action_id);
     match status {

@@ -5,8 +5,8 @@ use ai::agent::orchestration_config::{
     OrchestrationConfig, OrchestrationConfigStatus, OrchestrationExecutionMode,
 };
 use settings::Setting;
-use warp_core::execution_mode::ExecutionMode;
-use warpui::{App, EntityId, ModelHandle};
+use black_core::execution_mode::ExecutionMode;
+use black_ui::{App, EntityId, ModelHandle};
 
 use super::*;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;

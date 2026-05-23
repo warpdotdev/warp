@@ -3,7 +3,7 @@
 //! This is the landing page for new tabs if session creation isn't supported (e.g. on the web).
 //! It's barebones at the moment, but may grow into a more full-featured admin experience.
 
-use warpui::ViewContext;
+use black_ui::ViewContext;
 
 use super::view::Workspace;
 use crate::pane_group::{AnyPaneContent, FilePane};

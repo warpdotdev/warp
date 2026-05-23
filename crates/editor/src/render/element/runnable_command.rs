@@ -1,6 +1,6 @@
-use warpui::elements::{Border, CornerRadius, Empty, Radius};
-use warpui::geometry::vector::vec2f;
-use warpui::{AppContext, Element, SizeConstraint};
+use black_ui::elements::{Border, CornerRadius, Empty, Radius};
+use black_ui::geometry::vector::vec2f;
+use black_ui::{AppContext, Element, SizeConstraint};
 
 use super::{RenderContext, RenderableBlock};
 use crate::editor::RunnableCommandModel;
@@ -42,7 +42,7 @@ impl RenderableBlock for RenderableRunnableCommand {
         &self.viewport_item
     }
 
-    fn layout(&mut self, _model: &RenderState, ctx: &mut warpui::LayoutContext, app: &AppContext) {
+    fn layout(&mut self, _model: &RenderState, ctx: &mut black_ui::LayoutContext, app: &AppContext) {
         self.footer.layout(
             SizeConstraint::strict(vec2f(
                 self.viewport_item.content_size.x(),
@@ -81,7 +81,7 @@ impl RenderableBlock for RenderableRunnableCommand {
 
         // Place the button at a higher z-index for event handling. See the comment on
         // `RichTextElement::content_z_index` for context.
-        ctx.paint.scene.start_layer(warpui::ClipBounds::ActiveLayer);
+        ctx.paint.scene.start_layer(black_ui::ClipBounds::ActiveLayer);
 
         // Position the block footer right below the content area, flush with its right-hand edge.
         // This gives the footer some padding relative to the visible area with a background.
@@ -96,15 +96,15 @@ impl RenderableBlock for RenderableRunnableCommand {
         ctx.paint.scene.stop_layer();
     }
 
-    fn after_layout(&mut self, ctx: &mut warpui::AfterLayoutContext, app: &warpui::AppContext) {
+    fn after_layout(&mut self, ctx: &mut black_ui::AfterLayoutContext, app: &black_ui::AppContext) {
         self.footer.after_layout(ctx, app);
     }
 
     fn dispatch_event(
         &mut self,
         _model: &crate::render::model::RenderState,
-        event: &warpui::event::DispatchedEvent,
-        ctx: &mut warpui::EventContext,
+        event: &black_ui::event::DispatchedEvent,
+        ctx: &mut black_ui::EventContext,
         app: &AppContext,
     ) -> bool {
         self.footer.dispatch_event(event, ctx, app)

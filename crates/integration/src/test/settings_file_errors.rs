@@ -7,18 +7,18 @@
 
 use std::time::Duration;
 
-use warp::features::FeatureFlag;
-use warp::integration_testing::step::new_step_with_default_assertions;
-use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
-use warp::integration_testing::view_getters::workspace_view;
-use warpui::async_assert;
-use warpui::integration::TestStep;
+use black::features::FeatureFlag;
+use black::integration_testing::step::new_step_with_default_assertions;
+use black::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
+use black::integration_testing::view_getters::workspace_view;
+use black_ui::async_assert;
+use black_ui::integration::TestStep;
 
 use super::{new_builder, Builder};
 
 /// Helper: returns the path to the TOML settings file.
 fn toml_file_path() -> std::path::PathBuf {
-    warp::settings::user_preferences_toml_file_path()
+    black::settings::user_preferences_toml_file_path()
 }
 
 // ---------------------------------------------------------------------------

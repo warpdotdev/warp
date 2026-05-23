@@ -7,16 +7,16 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 use thiserror::Error;
 use validator::ValidateEmail;
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::{
+use black_ui::clipboard::ClipboardContent;
+use black_ui::elements::{
     Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Fill,
     Flex, FormattedTextElement, HighlightedHyperlink, Icon, MainAxisSize, MouseStateHandle,
     ParentElement, Radius, Rect, Shrinkable,
 };
-use warpui::fonts::Weight;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::Weight;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Entity, EventContext, FocusContext, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };

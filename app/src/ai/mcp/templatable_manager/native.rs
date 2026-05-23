@@ -13,12 +13,12 @@ use simple_logger::manager::LogManager;
 use simple_logger::SimpleLogger;
 use tokio::io::AsyncBufReadExt as _;
 use uuid::Uuid;
-use warp_core::execution_mode::AppExecutionMode;
-use warp_core::features::FeatureFlag;
-use warp_core::safe_error;
-use warp_core::settings::Setting as _;
-use warpui::windowing::WindowManager;
-use warpui::{AppContext, ModelContext, SingletonEntity};
+use black_core::execution_mode::AppExecutionMode;
+use black_core::features::FeatureFlag;
+use black_core::safe_error;
+use black_core::settings::Setting as _;
+use black_ui::windowing::WindowManager;
+use black_ui::{AppContext, ModelContext, SingletonEntity};
 
 use super::oauth::{self, AuthContext, FileBasedPersistedCredentialsMap, PersistedCredentialsMap};
 use super::utils::{query_resources_for, query_tools_for};
@@ -2086,8 +2086,8 @@ fn make_client_info() -> rmcp::model::ClientInfo {
     rmcp::model::ClientInfo::new(
         Default::default(),
         rmcp::model::Implementation::new(
-            warp_core::channel::ChannelState::app_id().to_string(),
-            warp_core::channel::ChannelState::app_version()
+            black_core::channel::ChannelState::app_id().to_string(),
+            black_core::channel::ChannelState::app_version()
                 .map(|v| v.to_string())
                 .unwrap_or_default(),
         ),

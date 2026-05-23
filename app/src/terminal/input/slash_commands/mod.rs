@@ -11,15 +11,15 @@ pub use cloud_mode_v2_view::{CloudModeV2SlashCommandView, Section as CloudModeV2
 pub use data_source::*;
 pub use view::{CloseReason, InlineSlashCommandView, SlashCommandsEvent};
 #[cfg(not(target_family = "wasm"))]
-use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::AnsiColorIdentifier;
+use black_cli::agent::Harness;
+use black_core::features::FeatureFlag;
+use black_core::send_telemetry_from_ctx;
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::AnsiColorIdentifier;
 #[cfg(feature = "local_fs")]
-use warp_util::path::{CleanPathResult, LineAndColumnArg};
-use warpui::clipboard::ClipboardContent;
-use warpui::{AppContext, SingletonEntity, ViewContext};
+use black_util::path::{CleanPathResult, LineAndColumnArg};
+use black_ui::clipboard::ClipboardContent;
+use black_ui::{AppContext, SingletonEntity, ViewContext};
 
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::conversation::AIConversationId;

@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use warp_core::channel::ChannelState;
-use warp_core::features::FeatureFlag;
-use warpui::{AppContext, SingletonEntity};
+use black_core::channel::ChannelState;
+use black_core::features::FeatureFlag;
+use black_ui::{AppContext, SingletonEntity};
 
 use super::llms::{LLMContextWindow, LLMId, LLMPreferences};
 use crate::cloud_object::model::generic_string_model::{

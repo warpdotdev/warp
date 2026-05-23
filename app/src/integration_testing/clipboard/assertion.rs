@@ -1,5 +1,5 @@
-use warpui::async_assert_eq;
-use warpui::integration::AssertionCallback;
+use black_ui::async_assert_eq;
+use black_ui::integration::AssertionCallback;
 
 pub fn assert_clipboard_contains_string(string: String) -> AssertionCallback {
     Box::new(move |app, _window_id| {

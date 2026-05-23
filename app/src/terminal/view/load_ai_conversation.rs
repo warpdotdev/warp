@@ -7,11 +7,11 @@ use chrono::{DateTime, Local};
 use itertools::Itertools;
 use prost::Message;
 use vec1::Vec1;
-use warp_core::channel::ChannelState;
-use warp_core::features::FeatureFlag;
+use black_core::channel::ChannelState;
+use black_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
-use warpui::units::IntoPixels;
-use warpui::{EntityId, ModelHandle, SingletonEntity, ViewContext};
+use black_ui::units::IntoPixels;
+use black_ui::{EntityId, ModelHandle, SingletonEntity, ViewContext};
 
 use super::blocklist_filter::exchanges_for_blocklist;
 use super::DEFAULT_AI_BLOCK_HEIGHT;

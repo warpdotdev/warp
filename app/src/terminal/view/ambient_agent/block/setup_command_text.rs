@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::Icon;
-use warpui::elements::ParentElement;
-use warpui::prelude::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::Icon;
+use black_ui::elements::ParentElement;
+use black_ui::prelude::{
     ConstrainedBox, Container, CrossAxisAlignment, Cursor, Flex, Hoverable, MouseStateHandle, Text,
 };
-use warpui::{
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 

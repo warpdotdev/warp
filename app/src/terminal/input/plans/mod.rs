@@ -5,7 +5,7 @@ mod view;
 
 use ai::document::AIDocumentId;
 pub use view::{InlinePlanMenuEvent, InlinePlanMenuView};
-use warpui::keymap::Keystroke;
+use black_ui::keymap::Keystroke;
 
 use crate::ai::document::ai_document_model::AIDocumentVersion;
 use crate::terminal::input::inline_menu::{

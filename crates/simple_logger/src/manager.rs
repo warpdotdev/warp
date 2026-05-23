@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
 use thiserror::Error;
-use warpui::r#async::executor::Background;
-use warpui::{Entity, SingletonEntity};
+use black_ui::r#async::executor::Background;
+use black_ui::{Entity, SingletonEntity};
 
 use crate::{LogFileWriter, SimpleLogger};
 
@@ -38,10 +38,10 @@ pub fn resolve_log_path(namespace: &str, relative_path: impl AsRef<Path>) -> Pat
 
 /// Returns the base log directory for a given namespace name.
 fn log_directory_path(namespace: &str) -> PathBuf {
-    let base_dir = warp_core::paths::secure_state_dir().unwrap_or_else(warp_core::paths::state_dir);
+    let base_dir = black_core::paths::secure_state_dir().unwrap_or_else(black_core::paths::state_dir);
     if cfg!(windows) {
         base_dir
-            .join(warp_core::paths::WARP_LOGS_DIR)
+            .join(black_core::paths::WARP_LOGS_DIR)
             .join(namespace)
     } else {
         base_dir.join(namespace)

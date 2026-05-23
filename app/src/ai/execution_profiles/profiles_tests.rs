@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use warpui::{App, SingletonEntity};
+use black_ui::{App, SingletonEntity};
 
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::{

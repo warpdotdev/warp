@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_broadcast::InactiveReceiver;
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::{Entity, ModelContext, SingletonEntity, WindowId};
+use black_ui::r#async::SpawnedFutureHandle;
+use black_ui::{Entity, ModelContext, SingletonEntity, WindowId};
 
 use crate::settings::{DebugSettings, DebugSettingsChangedEvent};
 use crate::view_components::{DismissibleToast, ToastLink};
@@ -71,7 +71,7 @@ impl PtyRecorder {
     fn recording_path(ctx: &ModelContext<Self>) -> PathBuf {
         use chrono::Local;
 
-        let recordings_dir = warp_core::paths::state_dir().join(PTY_RECORDINGS_DIR);
+        let recordings_dir = black_core::paths::state_dir().join(PTY_RECORDINGS_DIR);
         let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S");
         recordings_dir.join(format!("{timestamp}-{}.pty.recording", ctx.model_id()))
     }
@@ -100,7 +100,7 @@ impl PtyRecorder {
 
         if should_record && !self.is_recording() {
             if let Some(path) = self.start_recording(ctx) {
-                let display_path = warp_core::paths::home_relative_path(path);
+                let display_path = black_core::paths::home_relative_path(path);
                 let file_path = path.to_owned();
                 self.show_toast(
                     format!("PTY recording started: {display_path}"),
@@ -109,7 +109,7 @@ impl PtyRecorder {
                 );
             }
         } else if !should_record && self.is_recording() {
-            let display_path = warp_core::paths::home_relative_path(&self.path);
+            let display_path = black_core::paths::home_relative_path(&self.path);
             self.stop_recording();
             self.show_toast(
                 format!("PTY recording stopped: {display_path}"),

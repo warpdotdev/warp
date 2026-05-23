@@ -1,12 +1,12 @@
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{
+use black_core::ui::theme::Fill;
+use black_ui::elements::{
     Align, ChildAnchor, ChildView, Container, OffsetPositioning, ParentAnchor, ParentOffsetBounds,
     Stack,
 };
-use warpui::keymap::{FixedBinding, Keystroke};
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::keymap::{FixedBinding, Keystroke};
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
@@ -18,7 +18,7 @@ use crate::view_components::action_button::{
 };
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings([
         FixedBinding::new(
@@ -40,7 +40,7 @@ const DIALOG_WIDTH: f32 = 460.;
 pub struct DeleteConversationDialogSource {
     pub conversation_id: AIConversationId,
     pub conversation_title: String,
-    pub terminal_view_id: Option<warpui::EntityId>,
+    pub terminal_view_id: Option<black_ui::EntityId>,
 }
 
 pub struct DeleteConversationConfirmationDialog {
@@ -87,7 +87,7 @@ impl View for DeleteConversationConfirmationDialog {
         "DeleteConversationConfirmationDialog"
     }
 
-    fn on_focus(&mut self, _focus_ctx: &warpui::FocusContext, ctx: &mut ViewContext<Self>) {
+    fn on_focus(&mut self, _focus_ctx: &black_ui::FocusContext, ctx: &mut ViewContext<Self>) {
         ctx.focus_self();
     }
 

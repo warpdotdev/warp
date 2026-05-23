@@ -6,9 +6,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use settings::macros::{define_settings_group, maybe_define_setting, register_settings_events};
 use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
-use warp_core::features::FeatureFlag;
-use warp_core::report_if_error;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity, UpdateModel};
+use black_core::features::FeatureFlag;
+use black_core::report_if_error;
+use black_ui::{AppContext, Entity, ModelContext, SingletonEntity, UpdateModel};
 
 use super::cloud_preferences_syncer::CloudPreferencesSyncer;
 use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;

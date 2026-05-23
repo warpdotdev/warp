@@ -8,7 +8,7 @@ use futures::lock::Mutex as AsyncMutex;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::Value;
-use warpui::r#async::executor::Background;
+use black_ui::r#async::executor::Background;
 
 use crate::transport::Transport;
 

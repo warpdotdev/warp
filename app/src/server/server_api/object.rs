@@ -7,113 +7,113 @@ use chrono::{DateTime, Utc};
 use cynic::{MutationBuilder, QueryBuilder, SubscriptionBuilder};
 #[cfg(test)]
 use mockall::{automock, predicate::*};
-use warp_core::report_error;
-use warp_graphql::error::UserFacingErrorInterface;
-use warp_graphql::generic_string_object::GenericStringObjectInput;
-use warp_graphql::mutations::add_object_guests::{
+use black_core::report_error;
+use black_graphql::error::UserFacingErrorInterface;
+use black_graphql::generic_string_object::GenericStringObjectInput;
+use black_graphql::mutations::add_object_guests::{
     AddObjectGuests, AddObjectGuestsInput, AddObjectGuestsResult, AddObjectGuestsVariables,
 };
-use warp_graphql::mutations::bulk_create_objects::{
+use black_graphql::mutations::bulk_create_objects::{
     BulkCreateGenericStringObjectsInput, BulkCreateObjects, BulkCreateObjectsInput,
     BulkCreateObjectsResult, BulkCreateObjectsVariables,
 };
-use warp_graphql::mutations::create_folder::{
+use black_graphql::mutations::create_folder::{
     CreateFolder, CreateFolderInput, CreateFolderResult, CreateFolderVariables,
 };
-use warp_graphql::mutations::create_generic_string_object::{
+use black_graphql::mutations::create_generic_string_object::{
     CreateGenericStringObject, CreateGenericStringObjectInput, CreateGenericStringObjectResult,
     CreateGenericStringObjectVariables,
 };
-use warp_graphql::mutations::create_notebook::{
+use black_graphql::mutations::create_notebook::{
     CreateNotebook, CreateNotebookInput, CreateNotebookResult, CreateNotebookVariables,
 };
-use warp_graphql::mutations::create_workflow::{
+use black_graphql::mutations::create_workflow::{
     CreateWorkflow, CreateWorkflowInput, CreateWorkflowResult, CreateWorkflowVariables,
 };
-use warp_graphql::mutations::delete_object::{
+use black_graphql::mutations::delete_object::{
     DeleteObject, DeleteObjectInput, DeleteObjectResult, DeleteObjectVariables,
 };
-use warp_graphql::mutations::empty_trash::{
+use black_graphql::mutations::empty_trash::{
     EmptyTrash, EmptyTrashInput, EmptyTrashResult, EmptyTrashVariables,
 };
-use warp_graphql::mutations::give_up_notebook_edit_access::{
+use black_graphql::mutations::give_up_notebook_edit_access::{
     GiveUpNotebookEditAccess, GiveUpNotebookEditAccessVariables,
 };
-use warp_graphql::mutations::grab_notebook_edit_access::{
+use black_graphql::mutations::grab_notebook_edit_access::{
     GrabNotebookEditAccess, GrabNotebookEditAccessVariables,
 };
-use warp_graphql::mutations::leave_object::{
+use black_graphql::mutations::leave_object::{
     LeaveObject, LeaveObjectInput, LeaveObjectResult, LeaveObjectVariables,
 };
-use warp_graphql::mutations::move_object::{
+use black_graphql::mutations::move_object::{
     MoveObject, MoveObjectInput, MoveObjectResult, MoveObjectVariables,
 };
-use warp_graphql::mutations::record_object_action::{
+use black_graphql::mutations::record_object_action::{
     RecordObjectAction, RecordObjectActionInput, RecordObjectActionResult,
     RecordObjectActionVariables,
 };
-use warp_graphql::mutations::remove_object_guest::{
+use black_graphql::mutations::remove_object_guest::{
     RemoveObjectGuest, RemoveObjectGuestInput, RemoveObjectGuestResult, RemoveObjectGuestVariables,
 };
-use warp_graphql::mutations::remove_object_link_permissions::{
+use black_graphql::mutations::remove_object_link_permissions::{
     RemoveObjectLinkPermissions, RemoveObjectLinkPermissionsInput,
     RemoveObjectLinkPermissionsResult, RemoveObjectLinkPermissionsVariables,
 };
-use warp_graphql::mutations::set_object_link_permissions::{
+use black_graphql::mutations::set_object_link_permissions::{
     SetObjectLinkPermissions, SetObjectLinkPermissionsInput, SetObjectLinkPermissionsResult,
     SetObjectLinkPermissionsVariables,
 };
-use warp_graphql::mutations::transfer_generic_string_object_owner::{
+use black_graphql::mutations::transfer_generic_string_object_owner::{
     TransferGenericStringObjectOwner, TransferGenericStringObjectOwnerInput,
     TransferGenericStringObjectOwnerResult, TransferGenericStringObjectOwnerVariables,
 };
-use warp_graphql::mutations::transfer_notebook_owner::{
+use black_graphql::mutations::transfer_notebook_owner::{
     TransferNotebookOwner, TransferNotebookOwnerInput, TransferNotebookOwnerResult,
     TransferNotebookOwnerVariables,
 };
-use warp_graphql::mutations::transfer_workflow_owner::{
+use black_graphql::mutations::transfer_workflow_owner::{
     TransferWorkflowOwner, TransferWorkflowOwnerInput, TransferWorkflowOwnerResult,
     TransferWorkflowOwnerVariables,
 };
-use warp_graphql::mutations::trash_object::{
+use black_graphql::mutations::trash_object::{
     TrashObject, TrashObjectInput, TrashObjectResult, TrashObjectVariables,
 };
-use warp_graphql::mutations::untrash_object::{
+use black_graphql::mutations::untrash_object::{
     UntrashObject, UntrashObjectInput, UntrashObjectVariables,
 };
-use warp_graphql::mutations::update_folder::{
+use black_graphql::mutations::update_folder::{
     UpdateFolder, UpdateFolderInput, UpdateFolderResult, UpdateFolderVariables,
 };
-use warp_graphql::mutations::update_generic_string_object::{
+use black_graphql::mutations::update_generic_string_object::{
     UpdateGenericStringObject, UpdateGenericStringObjectInput, UpdateGenericStringObjectVariables,
 };
-use warp_graphql::mutations::update_notebook::{
+use black_graphql::mutations::update_notebook::{
     NotebookUpdate, UpdateNotebook, UpdateNotebookInput, UpdateNotebookResult,
     UpdateNotebookVariables,
 };
-use warp_graphql::mutations::update_object_guests::{
+use black_graphql::mutations::update_object_guests::{
     UpdateObjectGuests, UpdateObjectGuestsInput, UpdateObjectGuestsResult,
     UpdateObjectGuestsVariables,
 };
-use warp_graphql::mutations::update_workflow::{
+use black_graphql::mutations::update_workflow::{
     UpdateWorkflow, UpdateWorkflowInput, UpdateWorkflowResult, UpdateWorkflowVariables,
     WorkflowUpdate,
 };
-use warp_graphql::notebook::{UpdateNotebookEditAccessInput, UpdateNotebookEditAccessResult};
-use warp_graphql::object::CloudObjectWithDescendants;
-use warp_graphql::object_permissions::AccessLevel;
-use warp_graphql::queries::get_cloud_environments::{
+use black_graphql::notebook::{UpdateNotebookEditAccessInput, UpdateNotebookEditAccessResult};
+use black_graphql::object::CloudObjectWithDescendants;
+use black_graphql::object_permissions::AccessLevel;
+use black_graphql::queries::get_cloud_environments::{
     GetCloudEnvironmentsQuery, GetCloudEnvironmentsQueryVariables, GetCloudEnvironmentsResult,
 };
-use warp_graphql::queries::get_cloud_object::{
+use black_graphql::queries::get_cloud_object::{
     CloudObjectInput, CloudObjectResult, GetCloudObject, GetCloudObjectVariables,
 };
-use warp_graphql::queries::get_updated_cloud_objects::{
+use black_graphql::queries::get_updated_cloud_objects::{
     GetUpdatedCloudObjects, GetUpdatedCloudObjectsVariables, UpdatedCloudObjectsInput,
     UpdatedCloudObjectsResult,
 };
-use warp_graphql::subscriptions::get_warp_drive_updates::GetWarpDriveUpdates;
-use warp_graphql::subscriptions::start_graphql_streaming_operation;
+use black_graphql::subscriptions::get_warp_drive_updates::GetWarpDriveUpdates;
+use black_graphql::subscriptions::start_graphql_streaming_operation;
 
 use crate::ai::ambient_agents::scheduled::ScheduledAmbientAgent;
 use crate::ai::cloud_environments::AmbientAgentEnvironment;
@@ -936,63 +936,63 @@ impl ObjectClient for ServerApi {
                 if let Some(objects) = output.generic_string_objects {
                     for gso in objects {
                         match gso.format {
-                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonEnvVarCollection => {
+                            black_graphql::generic_string_object::GenericStringObjectFormat::JsonEnvVarCollection => {
                                 parse_server_gso::<EnvVarCollection, JsonSerializer>(
                                     &mut updated_generic_string_objects,
                                     GenericStringObjectFormat::Json(JsonObjectType::EnvVarCollection),
                                     gso,
                                 );
                             }
-                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonPreference => {
+                            black_graphql::generic_string_object::GenericStringObjectFormat::JsonPreference => {
                                 parse_server_gso::<Preference, JsonSerializer>(
                                     &mut updated_generic_string_objects,
                                     GenericStringObjectFormat::Json(JsonObjectType::Preference),
                                     gso,
                                 );
                             }
-                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonWorkflowEnum => {
+                            black_graphql::generic_string_object::GenericStringObjectFormat::JsonWorkflowEnum => {
                                 parse_server_gso::<WorkflowEnum, JsonSerializer>(
                                     &mut updated_generic_string_objects,
                                     GenericStringObjectFormat::Json(JsonObjectType::WorkflowEnum),
                                     gso,
                                 );
                             }
-                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIFact => {
+                            black_graphql::generic_string_object::GenericStringObjectFormat::JsonAIFact => {
                                 parse_server_gso::<AIFact, JsonSerializer>(
                                     &mut updated_generic_string_objects,
                                     GenericStringObjectFormat::Json(JsonObjectType::AIFact),
                                     gso,
                                 );
                             }
-                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonMCPServer => {
+                            black_graphql::generic_string_object::GenericStringObjectFormat::JsonMCPServer => {
                                 parse_server_gso::<MCPServer, JsonSerializer>(
                                     &mut updated_generic_string_objects,
                                     GenericStringObjectFormat::Json(JsonObjectType::MCPServer),
                                     gso,
                                 );
                             }
-                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIExecutionProfile => {
+                            black_graphql::generic_string_object::GenericStringObjectFormat::JsonAIExecutionProfile => {
                                 parse_server_gso::<AIExecutionProfile, JsonSerializer>(
                                     &mut updated_generic_string_objects,
                                     GenericStringObjectFormat::Json(JsonObjectType::AIExecutionProfile),
                                     gso,
                                 );
                             }
-                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonTemplatableMCPServer => {
+                            black_graphql::generic_string_object::GenericStringObjectFormat::JsonTemplatableMCPServer => {
                                 parse_server_gso::<TemplatableMCPServer, JsonSerializer>(
                                     &mut updated_generic_string_objects,
                                     GenericStringObjectFormat::Json(JsonObjectType::TemplatableMCPServer),
                                     gso,
                                 );
                             }
-                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonCloudEnvironment => {
+                            black_graphql::generic_string_object::GenericStringObjectFormat::JsonCloudEnvironment => {
                                 parse_server_gso::<AmbientAgentEnvironment, JsonSerializer>(
                                     &mut updated_generic_string_objects,
                                     GenericStringObjectFormat::Json(JsonObjectType::CloudEnvironment),
                                     gso,
                                 );
                             }
-                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonScheduledAmbientAgent => {
+                            black_graphql::generic_string_object::GenericStringObjectFormat::JsonScheduledAmbientAgent => {
                                 parse_server_gso::<ScheduledAmbientAgent, JsonSerializer>(
                                     &mut updated_generic_string_objects,
                                     GenericStringObjectFormat::Json(JsonObjectType::ScheduledAmbientAgent),
@@ -1219,7 +1219,7 @@ impl ObjectClient for ServerApi {
         let response = self.send_graphql_request(operation, None).await?;
 
         let result = match response.untrash_object {
-            warp_graphql::mutations::untrash_object::UntrashObjectResult::UntrashObjectOutput(
+            black_graphql::mutations::untrash_object::UntrashObjectResult::UntrashObjectOutput(
                 output,
             ) => {
                 if output.success {
@@ -1558,7 +1558,7 @@ impl ObjectClient for ServerApi {
 fn parse_server_gso<T, S>(
     map: &mut HashMap<GenericStringObjectFormat, Vec<Box<dyn ServerObject>>>,
     format: GenericStringObjectFormat,
-    gso: warp_graphql::generic_string_object::GenericStringObject,
+    gso: black_graphql::generic_string_object::GenericStringObject,
 ) where
     T: StringModel<
         CloudObjectType = GenericCloudObject<GenericStringObjectId, GenericStringModel<T, S>>,

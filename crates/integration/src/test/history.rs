@@ -1,23 +1,23 @@
 use std::collections::HashMap;
 
 use settings::Setting as _;
-use warp::integration_testing::command_search::{
+use black::integration_testing::command_search::{
     assert_command_search_has_results, assert_command_search_is_open,
     assert_history_filter_is_active,
 };
-use warp::integration_testing::input::assert_workflow_info_box_is_open;
-use warp::integration_testing::step::new_step_with_default_assertions;
-use warp::integration_testing::terminal::{
+use black::integration_testing::input::assert_workflow_info_box_is_open;
+use black::integration_testing::step::new_step_with_default_assertions;
+use black::integration_testing::terminal::{
     assert_input_editor_contents, wait_until_bootstrapped_single_pane_for_tab,
 };
-use warp::integration_testing::view_getters::single_input_view;
-use warp::integration_testing::{self};
-use warp::search::command_search::settings::ShowGlobalWorkflowsInUniversalSearch;
-use warp::sqlite_testing::set_user_and_hostname_for_commands;
-use warp::terminal::input::Input;
-use warp::terminal::model::session::get_local_hostname;
-use warp::terminal::shell::ShellType;
-use warpui::{async_assert, ViewHandle};
+use black::integration_testing::view_getters::single_input_view;
+use black::integration_testing::{self};
+use black::search::command_search::settings::ShowGlobalWorkflowsInUniversalSearch;
+use black::sqlite_testing::set_user_and_hostname_for_commands;
+use black::terminal::input::Input;
+use black::terminal::model::session::get_local_hostname;
+use black::terminal::shell::ShellType;
+use black_ui::{async_assert, ViewHandle};
 
 use super::{new_builder, TEST_ONLY_ASSETS};
 use crate::util::{get_local_user, write_histfiles_for_test};

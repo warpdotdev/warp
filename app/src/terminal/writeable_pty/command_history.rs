@@ -2,7 +2,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
-use warpui::{AppContext, ModelHandle, SingletonEntity};
+use black_ui::{AppContext, ModelHandle, SingletonEntity};
 
 use crate::persistence::{ModelEvent, StartedCommandMetadata};
 use crate::terminal::model::session::Sessions;

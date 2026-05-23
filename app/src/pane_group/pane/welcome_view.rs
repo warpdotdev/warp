@@ -3,14 +3,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use itertools::Itertools as _;
-use warp_core::context_flag::ContextFlag;
-use warp_core::ui::appearance::Appearance;
-use warpui::elements::{
+use black_core::context_flag::ContextFlag;
+use black_core::ui::appearance::Appearance;
+use black_ui::elements::{
     Align, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, Icon, ParentElement,
 };
-use warpui::keymap::EditableBinding;
-use warpui::platform::FilePickerConfiguration;
-use warpui::{
+use black_ui::keymap::EditableBinding;
+use black_ui::platform::FilePickerConfiguration;
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
     ViewContext, ViewHandle, WindowId,
 };
@@ -30,7 +30,7 @@ use crate::view_components::DismissibleToast;
 use crate::workspace::{ToastStack, Workspace};
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_editable_bindings([
         EditableBinding::new(

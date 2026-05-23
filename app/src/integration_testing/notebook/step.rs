@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use string_offset::CharOffset;
-use warp_editor::model::CoreEditorModel;
-use warpui::integration::TestStep;
-use warpui::windowing::WindowManager;
-use warpui::{async_assert, App, SingletonEntity, ViewHandle, WindowId};
+use black_editor::model::CoreEditorModel;
+use black_ui::integration::TestStep;
+use black_ui::windowing::WindowManager;
+use black_ui::{async_assert, App, SingletonEntity, ViewHandle, WindowId};
 
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObjectEventEntrypoint, Space};

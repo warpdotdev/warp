@@ -4,8 +4,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use prost::Message;
-use warpui::integration::TestStep;
-use warpui::{async_assert, SingletonEntity};
+use black_ui::integration::TestStep;
+use black_ui::{async_assert, SingletonEntity};
 
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::ActionPermission;
@@ -165,9 +165,9 @@ pub fn submit_ai_query(query: &str, timeout: Duration) -> TestStep {
 /// Returns an assertion that prints the conversation ID to stdout once available.
 /// This assertion will poll until the conversation token is received from the server.
 fn print_conversation_id_assertion(
-) -> impl FnMut(&mut warpui::App, warpui::WindowId) -> warpui::integration::AssertionOutcome {
+) -> impl FnMut(&mut black_ui::App, black_ui::WindowId) -> black_ui::integration::AssertionOutcome {
     |app, window_id| {
-        use warpui::integration::AssertionOutcome;
+        use black_ui::integration::AssertionOutcome;
 
         use crate::BlocklistAIHistoryModel;
         let terminal_view = terminal_view(app, window_id, 0, 0);

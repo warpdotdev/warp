@@ -26,7 +26,7 @@ fn test_set_aliases() {
         env_vars: None,
     };
 
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         app.update(init_and_register_user_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
 
@@ -77,7 +77,7 @@ fn test_set_aliases_replacement() {
         env_vars: None,
     };
 
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         app.update(init_and_register_user_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
 
@@ -128,7 +128,7 @@ fn test_remove_aliases() {
         env_vars: None,
     };
 
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         app.update(init_and_register_user_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
 

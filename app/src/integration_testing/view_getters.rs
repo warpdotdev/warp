@@ -5,8 +5,8 @@
 //! how many panes are in each tab.
 //! See https://github.com/warpdotdev/warp-internal/pull/4785#issue-1634862270
 
-use warpui::integration::AssertionCallback;
-use warpui::{async_assert, App, Entity, View, ViewHandle, WindowId};
+use black_ui::integration::AssertionCallback;
+use black_ui::{async_assert, App, Entity, View, ViewHandle, WindowId};
 
 use crate::ai_assistant::panel::AIAssistantPanelView;
 use crate::input_suggestions::InputSuggestions;

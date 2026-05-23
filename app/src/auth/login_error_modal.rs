@@ -1,12 +1,12 @@
 use std::borrow::Cow;
 
 use pathfinder_color::ColorU;
-use warpui::elements::{
+use black_ui::elements::{
     Align, Border, ConstrainedBox, Container, CornerRadius, Flex, ParentElement, Shrinkable,
 };
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::ui_components::text::Span;
-use warpui::{AppContext, Element, SingletonEntity as _};
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::ui_components::text::Span;
+use black_ui::{AppContext, Element, SingletonEntity as _};
 
 use crate::appearance::Appearance;
 use crate::modal::MODAL_CORNER_RADIUS;

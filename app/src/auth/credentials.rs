@@ -8,7 +8,7 @@
 //!   When using Firebase, this is an OAuth2 refresh token.
 //! * [`AuthToken`], which is a short-lived token that's included in all other server requests.
 //!   When using Firebase, this is an OAuth2 access token.
-use warp_graphql::object_permissions::OwnerType;
+use black_graphql::object_permissions::OwnerType;
 
 use super::user::FirebaseAuthTokens;
 

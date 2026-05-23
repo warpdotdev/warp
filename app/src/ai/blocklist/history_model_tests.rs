@@ -5,9 +5,9 @@ use std::time::Duration;
 use chrono::{DateTime, Local, Utc};
 use itertools::Itertools;
 use uuid::Uuid;
-use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
-use warpui::{App, EntityId};
+use black_cli::agent::Harness;
+use black_core::features::FeatureFlag;
+use black_ui::{App, EntityId};
 
 use super::{
     convert_persisted_conversation_to_ai_conversation_with_metadata, AIConversationMetadata,

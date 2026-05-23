@@ -16,7 +16,7 @@
 //! To serialize input/deserialize output, callers are expected to use `bincode`.
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use warp_js::{JsFunctionId, SerializedJsValue};
+use black_js::{JsFunctionId, SerializedJsValue};
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct CallJsFunctionRequest {

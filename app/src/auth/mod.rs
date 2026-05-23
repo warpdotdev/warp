@@ -24,9 +24,9 @@ pub use auth_state::AuthStateProvider;
 use itertools::Itertools;
 pub use login_failure_notification::LoginFailureReason;
 pub use user_uid::UserUid;
-use warp_core::user_preferences::GetUserPreferences as _;
-use warpui::modals::{AlertDialogWithCallbacks, ModalButton};
-use warpui::{AppContext, SingletonEntity};
+use black_core::user_preferences::GetUserPreferences as _;
+use black_ui::modals::{AlertDialogWithCallbacks, ModalButton};
+use black_ui::{AppContext, SingletonEntity};
 
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel;

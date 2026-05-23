@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
-use warp_core::features::FeatureFlag;
-use warp_core::settings::Setting;
-use warp_util::path::ShellFamily;
+use black_core::features::FeatureFlag;
+use black_core::settings::Setting;
+use black_util::path::ShellFamily;
 
 use crate::terminal::warpify::settings::WarpifySettings;
 

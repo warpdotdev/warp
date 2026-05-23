@@ -1,5 +1,5 @@
 use serde_json::{json, Map, Value};
-use warp_cli::mcp::MCPSpec;
+use black_cli::mcp::MCPSpec;
 
 use super::build_mcp_servers_from_specs;
 

@@ -10,9 +10,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use itertools::Itertools;
-use warp_util::standardized_path::StandardizedPath;
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle};
+use black_util::standardized_path::StandardizedPath;
+use black_ui::r#async::SpawnedFutureHandle;
+use black_ui::{AppContext, Entity, ModelContext, ModelHandle};
 
 use super::protocol::RequestId;
 use super::server_model::ConnectionId;

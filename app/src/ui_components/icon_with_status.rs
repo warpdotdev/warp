@@ -1,9 +1,9 @@
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::icons::Icon as WarpIcon;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::{Fill as WarpThemeFill, WarpTheme};
-use warpui::elements::{
+use black_core::ui::icons::Icon as WarpIcon;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::{Fill as WarpThemeFill, WarpTheme};
+use black_ui::elements::{
     ChildAnchor, ConstrainedBox, Container, CornerRadius, Element, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Radius, Stack,
 };

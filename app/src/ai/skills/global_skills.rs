@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use ai::skills::{provider_rank, ParsedSkill};
-use warp_cli::skill::SkillSpec;
+use black_cli::skill::SkillSpec;
 
 use crate::ai::cloud_environments::GithubRepo;
 

@@ -1,5 +1,5 @@
-use warpui::windowing::{StateEvent, WindowManager};
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_ui::windowing::{StateEvent, WindowManager};
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 #[cfg(target_os = "macos")]
 mod mac;

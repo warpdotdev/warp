@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use warpui::elements::{
+use black_ui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult,
     DropShadow, Empty, EventHandler, Fill as ElementFill, Flex, Hoverable, MainAxisSize,
     MouseState, MouseStateHandle, ParentElement, Radius, Shrinkable, SizeConstraintCondition,
     SizeConstraintSwitch,
 };
-use warpui::platform::Cursor;
-use warpui::{Action, AppContext, Element, EventContext, SingletonEntity};
+use black_ui::platform::Cursor;
+use black_ui::{Action, AppContext, Element, EventContext, SingletonEntity};
 
 use super::data_source::QueryResult;
 use crate::appearance::Appearance;

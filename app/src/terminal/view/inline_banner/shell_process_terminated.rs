@@ -1,5 +1,5 @@
-use warpui::elements::Text;
-use warpui::Element;
+use black_ui::elements::Text;
+use black_ui::Element;
 
 use super::{
     render_inline_block_list_banner, InlineBannerContent, InlineBannerIcon, InlineBannerStyle,

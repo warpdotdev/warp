@@ -8,23 +8,23 @@ use chrono::{DateTime, Duration, Local};
 use instant::Instant;
 use parking_lot::RwLock;
 use pathfinder_color::ColorU;
-use warp_cli::agent::Harness;
-use warp_cli::skill::SkillSpec;
-use warp_core::channel::ChannelState;
-use warp_core::ui::color::coloru_with_opacity;
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::new_scrollable::{NewScrollable, SingleAxisConfig};
-use warpui::elements::{
+use black_cli::agent::Harness;
+use black_cli::skill::SkillSpec;
+use black_core::channel::ChannelState;
+use black_core::ui::color::coloru_with_opacity;
+use black_ui::clipboard::ClipboardContent;
+use black_ui::elements::new_scrollable::{NewScrollable, SingleAxisConfig};
+use black_ui::elements::{
     resizable_state_handle, Border, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, DragBarSide, Empty, Expanded, Flex, MainAxisAlignment,
     MainAxisSize, MouseStateHandle, ParentElement, Radius, Resizable, ResizableStateHandle,
     SelectableArea, SelectionHandle, Shrinkable, Text, Wrap,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::keymap::FixedBinding;
-use warpui::platform::Cursor;
-use warpui::ui_components::components::UiComponent;
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::keymap::FixedBinding;
+use black_ui::platform::Cursor;
+use black_ui::ui_components::components::UiComponent;
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
@@ -595,7 +595,7 @@ pub enum ConversationDetailsPanelAction {
 }
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings([FixedBinding::custom(
         CustomAction::Copy,
@@ -963,16 +963,16 @@ impl ConversationDetailsPanel {
             .unwrap_or_else(|| AvatarContent::DisplayName(creator.display_name.clone()));
         let avatar = Avatar::new(
             avatar_content,
-            warpui::ui_components::components::UiComponentStyles {
+            black_ui::ui_components::components::UiComponentStyles {
                 width: Some(20.),
                 height: Some(20.),
-                border_radius: Some(warpui::elements::CornerRadius::with_all(
-                    warpui::elements::Radius::Percentage(50.),
+                border_radius: Some(black_ui::elements::CornerRadius::with_all(
+                    black_ui::elements::Radius::Percentage(50.),
                 )),
                 background: Some(blended_colors::accent(theme).into()),
                 font_color: Some(ColorU::black()),
                 font_family_id: Some(appearance.ui_font_family()),
-                font_weight: Some(warpui::fonts::Weight::Bold),
+                font_weight: Some(black_ui::fonts::Weight::Bold),
                 font_size: Some(small_font_size),
                 ..Default::default()
             },
@@ -1615,7 +1615,7 @@ impl ConversationDetailsPanel {
         let duration = COPY_FEEDBACK_DURATION;
         ctx.spawn(
             async move {
-                warpui::r#async::Timer::after(duration).await;
+                black_ui::r#async::Timer::after(duration).await;
             },
             |me, _, ctx| {
                 ctx.notify();
@@ -1985,7 +1985,7 @@ impl View for ConversationDetailsPanel {
             },
             theme.nonactive_ui_detail().into(),
             theme.active_ui_detail().into(),
-            warpui::elements::Fill::None,
+            black_ui::elements::Fill::None,
         )
         .finish();
 
@@ -2018,7 +2018,7 @@ impl View for ConversationDetailsPanel {
 
         // On mobile, add background and skip Resizable
         #[cfg(target_family = "wasm")]
-        if warpui::platform::wasm::is_mobile_device() {
+        if black_ui::platform::wasm::is_mobile_device() {
             return Container::new(panel_content)
                 .with_background(theme.surface_1())
                 .finish();

@@ -1,8 +1,8 @@
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::{Container, CrossAxisAlignment, Empty, Flex, ParentElement};
-use warpui::geometry::vector::vec2f;
-use warpui::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::color::internal_colors;
+use black_ui::elements::{Container, CrossAxisAlignment, Empty, Flex, ParentElement};
+use black_ui::geometry::vector::vec2f;
+use black_ui::{
     AfterLayoutContext, AppContext, Element, LayoutContext, SingletonEntity, SizeConstraint,
 };
 
@@ -72,8 +72,8 @@ impl RenderableBlock for RenderableHiddenSection {
     fn dispatch_event(
         &mut self,
         _model: &RenderState,
-        event: &warpui::event::DispatchedEvent,
-        ctx: &mut warpui::EventContext,
+        event: &black_ui::event::DispatchedEvent,
+        ctx: &mut black_ui::EventContext,
         app: &AppContext,
     ) -> bool {
         self.element.dispatch_event(event, ctx, app)

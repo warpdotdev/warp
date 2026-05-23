@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use ai::skills::{get_provider_for_path, ParsedSkill, SkillProvider, SkillScope};
-use warp_cli::skill::SkillSpec;
+use black_cli::skill::SkillSpec;
 
 use super::{filter_skills_by_spec, resolve_skill_repos};
 use crate::ai::cloud_environments::GithubRepo;

@@ -1,9 +1,9 @@
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::color::internal_colors;
+use black_ui::elements::{
     ConstrainedBox, Container, CornerRadius, Empty, Flex, MainAxisSize, ParentElement, Radius,
 };
-use warpui::Element;
+use black_ui::Element;
 
 /// Render `n` dots with 4px radius and 8px spacing. `k` is the 0-based active dot index.
 pub(crate) fn progress_dots(n: usize, k: usize, appearance: &Appearance) -> Box<dyn Element> {

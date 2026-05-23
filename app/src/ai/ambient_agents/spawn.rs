@@ -174,8 +174,8 @@ fn poll_run_until_joinable_session(
         // We use a timeout to ensure we don't wait indefinitely for session info.
         // If no timeout is provided, we use a future that never completes.
         let mut timeout_timer = FutureExt::fuse(match timeout {
-            Some(d) => warpui::r#async::Timer::after(d),
-            None => warpui::r#async::Timer::never(),
+            Some(d) => black_ui::r#async::Timer::after(d),
+            None => black_ui::r#async::Timer::never(),
         });
         let mut last_state = None;
         // For follow-ups, the server does NOT synchronously transition the task off its
@@ -192,7 +192,7 @@ fn poll_run_until_joinable_session(
         let mut seen_working_state = matches!(&mode, RunPollMode::InitialRun);
         let mut skipped_stale_polls: usize = 0;
         loop {
-            let mut poll_timer = FutureExt::fuse(warpui::r#async::Timer::after(TASK_STATUS_POLL_INTERVAL));
+            let mut poll_timer = FutureExt::fuse(black_ui::r#async::Timer::after(TASK_STATUS_POLL_INTERVAL));
 
             select! {
                 _ = timeout_timer => {

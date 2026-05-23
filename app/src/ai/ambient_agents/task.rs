@@ -5,11 +5,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use session_sharing_protocol::common::SessionId;
 use url::Url;
-use warp_cli::agent::Harness;
-use warp_core::report_error;
-use warp_core::ui::theme::WarpTheme;
-use warpui::color::ColorU;
-use warpui::{SingletonEntity, View, ViewContext};
+use black_cli::agent::Harness;
+use black_core::report_error;
+use black_core::ui::theme::WarpTheme;
+use black_ui::color::ColorU;
+use black_ui::{SingletonEntity, View, ViewContext};
 
 use super::AmbientAgentTaskId;
 use crate::ai::artifacts::{deserialize_artifacts, Artifact};

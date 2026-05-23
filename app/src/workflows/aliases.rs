@@ -3,9 +3,9 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Error;
 use serde::{Deserialize, Serialize};
 use settings_value::SettingsValue;
-use warp_core::define_settings_group;
-use warp_core::settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
-use warpui::{AppContext, ModelContext, SingletonEntity};
+use black_core::define_settings_group;
+use black_core::settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
+use black_ui::{AppContext, ModelContext, SingletonEntity};
 
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::CloudObject as _;

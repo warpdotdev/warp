@@ -1,12 +1,12 @@
 use settings::Setting as _;
-use warpui::elements::{
+use black_ui::elements::{
     Align, CrossAxisAlignment, Flex, MainAxisSize, MouseStateHandle, ParentElement as _,
 };
-use warpui::fonts::Weight;
-use warpui::platform::Cursor;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+use black_ui::fonts::Weight;
+use black_ui::platform::Cursor;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use crate::appearance::Appearance;
 use crate::report_if_error;
@@ -78,7 +78,7 @@ impl WasmNUXDialog {
     /// behavior: if Warp is installed, redirect to it; otherwise stay on the web.
     pub fn should_display(app: &AppContext) -> bool {
         // Don't show on mobile devices - they can't use the desktop app
-        if warpui::platform::wasm::is_mobile_device() {
+        if black_ui::platform::wasm::is_mobile_device() {
             return false;
         }
 

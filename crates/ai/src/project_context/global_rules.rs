@@ -6,9 +6,9 @@ use repo_metadata::repository::{RepositorySubscriber, SubscriberId};
 use repo_metadata::{DirectoryWatcher, Repository, RepositoryUpdate};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
-use warp_core::safe_warn;
-use warp_util::standardized_path::StandardizedPath;
-use warpui::{ModelContext, ModelHandle, SingletonEntity};
+use black_core::safe_warn;
+use black_util::standardized_path::StandardizedPath;
+use black_ui::{ModelContext, ModelHandle, SingletonEntity};
 use watcher::{HomeDirectoryWatcher, HomeDirectoryWatcherEvent};
 
 use super::model::{GlobalRulesDelta, ProjectContextModel, ProjectContextModelEvent, ProjectRule};

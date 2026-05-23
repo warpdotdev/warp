@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use warp_core::settings::macros::define_settings_group;
-use warp_core::settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
+use black_core::settings::macros::define_settings_group;
+use black_core::settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 
 use crate::banner::BannerState;
 use crate::resource_center::Tip;

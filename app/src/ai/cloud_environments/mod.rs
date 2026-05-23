@@ -1,8 +1,8 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
-use warp_server_client::cloud_object::Owner;
-use warpui::{AppContext, SingletonEntity as _};
+use black_server_client::cloud_object::Owner;
+use black_ui::{AppContext, SingletonEntity as _};
 
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::generic_string_model::{

@@ -1,5 +1,5 @@
-use warpui::async_assert;
-use warpui::integration::AssertionCallback;
+use black_ui::async_assert;
+use black_ui::integration::AssertionCallback;
 
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudModelType, GenericCloudObject, Revision};

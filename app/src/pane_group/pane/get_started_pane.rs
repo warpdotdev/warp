@@ -1,4 +1,4 @@
-use warpui::{AppContext, ModelHandle, View, ViewContext, ViewHandle};
+use black_ui::{AppContext, ModelHandle, View, ViewContext, ViewHandle};
 
 use super::PaneId;
 use crate::app_state::LeafContents;

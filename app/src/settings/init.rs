@@ -1,9 +1,9 @@
 use settings::{Setting as _, SettingsManager};
-use warp_core::features::FeatureFlag;
-use warp_core::semantic_selection::SemanticSelection;
-use warpui::rendering::GPUPowerPreference;
-use warpui::{AppContext, SingletonEntity};
-use warpui_extras::user_preferences;
+use black_core::features::FeatureFlag;
+use black_core::semantic_selection::SemanticSelection;
+use black_ui::rendering::GPUPowerPreference;
+use black_ui::{AppContext, SingletonEntity};
+use black_ui_extras::user_preferences;
 
 use super::app_icon::AppIconSettings;
 use super::app_installation_detection::UserAppInstallDetectionSettings;
@@ -202,7 +202,7 @@ pub fn init(
     // push changed values into setting models.
     #[cfg(feature = "local_fs")]
     {
-        let prefs = <settings::PublicPreferences as warpui::SingletonEntity>::as_ref(ctx);
+        let prefs = <settings::PublicPreferences as black_ui::SingletonEntity>::as_ref(ctx);
         if prefs.is_settings_file() {
             ctx.subscribe_to_model(
                 &crate::user_config::WarpConfig::handle(ctx),
@@ -218,7 +218,7 @@ pub fn init(
 /// the settings file is modified, created, or deleted.
 #[cfg(feature = "local_fs")]
 fn handle_warp_config_change(
-    _: warpui::ModelHandle<crate::user_config::WarpConfig>,
+    _: black_ui::ModelHandle<crate::user_config::WarpConfig>,
     event: &crate::user_config::WarpConfigUpdateEvent,
     ctx: &mut AppContext,
 ) {
@@ -227,7 +227,7 @@ fn handle_warp_config_change(
     if !matches!(event, WarpConfigUpdateEvent::Settings) {
         return;
     }
-    let prefs = <settings::PublicPreferences as warpui::SingletonEntity>::as_ref(ctx);
+    let prefs = <settings::PublicPreferences as black_ui::SingletonEntity>::as_ref(ctx);
     if let Err(err) = prefs.reload_from_disk() {
         log::warn!("Settings file reload failed: {err}");
         WarpConfig::handle(ctx).update(ctx, |_, ctx| {
@@ -266,11 +266,11 @@ fn init_platform_native_preferences() -> user_preferences::Model {
                 }
             }
         } else if #[cfg(target_os = "windows")] {
-            let app_id = warp_core::channel::ChannelState::app_id();
+            let app_id = black_core::channel::ChannelState::app_id();
             Box::new(user_preferences::registry_backed::RegistryBackedPreferences::new(app_id.application_name()))
         } else if #[cfg(target_os = "macos")] {
             Box::new(user_preferences::user_defaults::UserDefaultsPreferencesStorage::new(
-                warp_core::channel::ChannelState::data_domain_if_not_default()
+                black_core::channel::ChannelState::data_domain_if_not_default()
             ))
         } else if #[cfg(target_family = "wasm")] {
             Box::<user_preferences::local_storage::LocalStoragePreferences>::default()
@@ -305,7 +305,7 @@ pub fn init_public_user_preferences() -> (user_preferences::Model, Option<user_p
         } else if #[cfg(target_family = "wasm")] {
             (Box::<user_preferences::local_storage::LocalStoragePreferences>::default(), None)
         } else {
-            if warp_core::features::FeatureFlag::SettingsFile.is_enabled() {
+            if black_core::features::FeatureFlag::SettingsFile.is_enabled() {
                 let (prefs, parse_error) =
                     user_preferences::toml_backed::TomlBackedUserPreferences::new(
                         super::user_preferences_toml_file_path(),
@@ -338,7 +338,7 @@ fn needs_settings_file_migration(ctx: &AppContext) -> bool {
         return false;
     }
 
-    use warp_core::user_preferences::GetUserPreferences as _;
+    use black_core::user_preferences::GetUserPreferences as _;
     ctx.private_user_preferences()
         .read_value(SETTINGS_FILE_MIGRATION_COMPLETE_KEY)
         .unwrap_or_default()
@@ -355,7 +355,7 @@ fn needs_settings_file_migration(ctx: &AppContext) -> bool {
 /// the in-memory setting, and writes to the TOML file with the correct
 /// hierarchy, `serialize_for_file` transforms, and `max_table_depth`.
 fn migrate_native_settings_to_settings_file(ctx: &mut AppContext) {
-    use warp_core::user_preferences::GetUserPreferences as _;
+    use black_core::user_preferences::GetUserPreferences as _;
 
     log::info!("Migrating public settings from native store to settings.toml");
 

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use warpui::{Entity, ModelContext};
+use black_ui::{Entity, ModelContext};
 
 use crate::workspace::view::global_search::view::GlobalSearchEvent;
 use crate::workspace::view::global_search::SearchConfig;

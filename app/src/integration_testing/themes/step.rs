@@ -1,5 +1,5 @@
-use warpui::async_assert;
-use warpui::integration::TestStep;
+use black_ui::async_assert;
+use black_ui::integration::TestStep;
 
 use crate::integration_testing::command_palette::open_command_palette_and_run_action;
 use crate::integration_testing::view_getters::workspace_view;

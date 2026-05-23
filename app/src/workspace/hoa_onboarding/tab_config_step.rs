@@ -1,11 +1,11 @@
 use std::path::Path;
 
-use warpui::elements::{
+use black_ui::elements::{
     Container, CrossAxisAlignment, Flex, MouseStateHandle, ParentElement, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::geometry::vector::Vector2F;
-use warpui::{Element, EventContext};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::geometry::vector::Vector2F;
+use black_ui::{Element, EventContext};
 
 use crate::appearance::Appearance;
 use crate::tab_configs::session_config::SessionType;

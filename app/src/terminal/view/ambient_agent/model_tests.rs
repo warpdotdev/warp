@@ -1,5 +1,5 @@
 use url::Url;
-use warpui::{App, EntityId};
+use black_ui::{App, EntityId};
 
 use super::*;
 use crate::ai::blocklist::handoff::HandoffLaunchAttachments;
@@ -46,7 +46,7 @@ fn pending_handoff_fresh_launch() -> PendingHandoff {
     }
 }
 
-fn add_model(app: &mut App) -> warpui::ModelHandle<AmbientAgentViewModel> {
+fn add_model(app: &mut App) -> black_ui::ModelHandle<AmbientAgentViewModel> {
     app.add_model(|ctx| AmbientAgentViewModel::new(EntityId::new(), ctx))
 }
 

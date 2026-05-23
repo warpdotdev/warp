@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
-use warp_core::SessionId;
-use warp_util::remote_path::RemotePath;
+use black_core::SessionId;
+use black_util::remote_path::RemotePath;
 
 use super::InternalRemoteDiffState;
 use crate::auth::AuthStateProvider;
@@ -23,7 +23,7 @@ impl RemoteDiffStateModel {
         Self {
             remote_path: RemotePath::new(
                 remote_server::HostId::new("test-host".to_string()),
-                warp_util::standardized_path::StandardizedPath::try_new("/test/repo")
+                black_util::standardized_path::StandardizedPath::try_new("/test/repo")
                     .expect("test repo path should be valid and absolute"),
             ),
             mode,
@@ -134,13 +134,13 @@ fn test_metadata(branch: &str) -> DiffMetadata {
     }
 }
 
-fn initialize_test_app(app: &mut warpui::App) {
+fn initialize_test_app(app: &mut black_ui::App) {
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
 }
 #[test]
 fn apply_snapshot_loaded_with_diffs() {
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app.add_model(|_ctx| {
             RemoteDiffStateModel::new_for_test(
                 DiffMode::Head,
@@ -165,7 +165,7 @@ fn apply_snapshot_loaded_with_diffs() {
 
 #[test]
 fn apply_snapshot_loaded_preserves_content_at_base_in_event() {
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app.add_model(|_ctx| {
             RemoteDiffStateModel::new_for_test(
                 DiffMode::Head,
@@ -220,7 +220,7 @@ fn apply_snapshot_loaded_preserves_content_at_base_in_event() {
 
 #[test]
 fn apply_snapshot_loaded_without_diffs_becomes_error() {
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         initialize_test_app(&mut app);
         let handle = app.add_model(|_ctx| {
             RemoteDiffStateModel::new_for_test(
@@ -241,7 +241,7 @@ fn apply_snapshot_loaded_without_diffs_becomes_error() {
 
 #[test]
 fn apply_snapshot_not_in_repository() {
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app.add_model(|_ctx| {
             RemoteDiffStateModel::new_for_test(
                 DiffMode::Head,
@@ -261,7 +261,7 @@ fn apply_snapshot_not_in_repository() {
 
 #[test]
 fn apply_snapshot_error_stores_message() {
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         initialize_test_app(&mut app);
         let handle = app.add_model(|_ctx| {
             RemoteDiffStateModel::new_for_test(
@@ -281,7 +281,7 @@ fn apply_snapshot_error_stores_message() {
 
 #[test]
 fn mark_disconnected_transitions_state_and_emits_connection_lost() {
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app.add_model(|_ctx| {
             RemoteDiffStateModel::new_for_test(
                 DiffMode::Head,
@@ -328,7 +328,7 @@ fn mark_disconnected_transitions_state_and_emits_connection_lost() {
 
 #[test]
 fn apply_metadata_first_time_sets_branch() {
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app.add_model(|_ctx| {
             RemoteDiffStateModel::new_for_test(
                 DiffMode::Head,
@@ -349,7 +349,7 @@ fn apply_metadata_first_time_sets_branch() {
 
 #[test]
 fn apply_metadata_branch_change_updates_branch() {
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app.add_model(|_ctx| {
             RemoteDiffStateModel::new_for_test(
                 DiffMode::Head,
@@ -370,7 +370,7 @@ fn apply_metadata_branch_change_updates_branch() {
 
 #[test]
 fn apply_file_delta_ignored_when_not_loaded() {
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app.add_model(|_ctx| {
             RemoteDiffStateModel::new_for_test(
                 DiffMode::Head,
@@ -392,7 +392,7 @@ fn apply_file_delta_ignored_when_not_loaded() {
 
 #[test]
 fn apply_file_delta_adds_file() {
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app.add_model(|_ctx| {
             RemoteDiffStateModel::new_for_test(
                 DiffMode::Head,
@@ -419,7 +419,7 @@ fn apply_file_delta_adds_file() {
 
 #[test]
 fn apply_snapshot_preserves_repo_relative_file_paths() {
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app.add_model(|_ctx| {
             RemoteDiffStateModel::new_for_test(
                 DiffMode::Head,
@@ -449,7 +449,7 @@ fn apply_snapshot_preserves_repo_relative_file_paths() {
 fn apply_snapshot_emits_event_with_repo_relative_paths() {
     // Subscribers to NewDiffsComputed should see repo-relative paths so they
     // can index into the loaded state by the same key.
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app.add_model(|_ctx| {
             RemoteDiffStateModel::new_for_test(
                 DiffMode::Head,
@@ -501,7 +501,7 @@ fn apply_snapshot_emits_event_with_repo_relative_paths() {
 
 #[test]
 fn apply_file_delta_preserves_repo_relative_file_path() {
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app.add_model(|_ctx| {
             RemoteDiffStateModel::new_for_test(
                 DiffMode::Head,
@@ -533,7 +533,7 @@ fn apply_file_delta_preserves_repo_relative_file_path() {
 fn apply_file_delta_emits_event_with_repo_relative_path() {
     // The SingleFileUpdated event payload should also use the repo-relative
     // path so subscribers can match against the stored state by key.
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app.add_model(|_ctx| {
             RemoteDiffStateModel::new_for_test(
                 DiffMode::Head,
@@ -579,7 +579,7 @@ fn apply_file_delta_emits_event_with_repo_relative_path() {
 
 #[test]
 fn apply_file_delta_preserves_content_at_base_in_event() {
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let handle = app.add_model(|_ctx| {
             RemoteDiffStateModel::new_for_test(
                 DiffMode::Head,
@@ -631,7 +631,7 @@ fn apply_file_delta_preserves_content_at_base_in_event() {
 
 #[test]
 fn apply_file_delta_none_removes_file() {
-    warpui::App::test((), |mut app| async move {
+    black_ui::App::test((), |mut app| async move {
         let existing = GitDiffData {
             files: vec![FileDiff {
                 file_path: "src/old.rs".to_string(),

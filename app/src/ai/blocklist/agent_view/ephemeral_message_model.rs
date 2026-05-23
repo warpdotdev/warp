@@ -1,8 +1,8 @@
 use std::borrow::Cow;
 use std::time::Duration;
 
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::{Entity, ModelContext};
+use black_ui::r#async::SpawnedFutureHandle;
+use black_ui::{Entity, ModelContext};
 
 use super::agent_message_bar::AgentMessageArgs;
 use crate::terminal::input::message_bar::{Message, MessageProvider};
@@ -92,7 +92,7 @@ impl EphemeralMessageModel {
         // If we are dismissing via timer, start the timer.
         if let DismissalStrategy::Timer(duration) = dismissal {
             let abort_handle = ctx.spawn_abortable(
-                async move { warpui::r#async::Timer::after(duration).await },
+                async move { black_ui::r#async::Timer::after(duration).await },
                 |me, _, ctx| {
                     me.current_message = None;
                     me.clear_timer_handle = None;

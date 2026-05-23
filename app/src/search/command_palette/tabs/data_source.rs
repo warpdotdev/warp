@@ -1,4 +1,4 @@
-use warpui::{AppContext, Entity};
+use black_ui::{AppContext, Entity};
 
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::command_palette::tabs::SearchItem;

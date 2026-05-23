@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use warp_core::ui::appearance::Appearance;
-use warpui::platform::WindowStyle;
-use warpui::{App, SingletonEntity, ViewHandle};
+use black_core::ui::appearance::Appearance;
+use black_ui::platform::WindowStyle;
+use black_ui::{App, SingletonEntity, ViewHandle};
 
 use super::WorkflowModal;
 use crate::auth::AuthStateProvider;

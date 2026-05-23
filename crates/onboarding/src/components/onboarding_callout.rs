@@ -4,20 +4,20 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use ui_components::button::Button as ButtonComponent;
 use ui_components::{button, Component, MouseEventHandler, Options as _};
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::color::coloru_with_opacity;
-use warp_core::ui::color::contrast::relative_luminance;
-use warp_core::ui::theme::phenomenon::PhenomenonStyle;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::color::coloru_with_opacity;
+use black_core::ui::color::contrast::relative_luminance;
+use black_core::ui::theme::phenomenon::PhenomenonStyle;
+use black_core::ui::theme::Fill;
+use black_ui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow, Flex,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Rect,
 };
-use warpui::fonts::Weight;
-use warpui::keymap::Keystroke;
-use warpui::prelude::*;
-use warpui::ui_components::checkbox::Checkbox as WarpCheckbox;
-use warpui::ui_components::components::{UiComponent as _, UiComponentStyles};
+use black_ui::fonts::Weight;
+use black_ui::keymap::Keystroke;
+use black_ui::prelude::*;
+use black_ui::ui_components::checkbox::Checkbox as WarpCheckbox;
+use black_ui::ui_components::components::{UiComponent as _, UiComponentStyles};
 
 const CALLOUT_WIDTH: f32 = 480.;
 const CALLOUT_BORDER_WIDTH: f32 = 1.;

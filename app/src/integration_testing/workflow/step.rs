@@ -1,6 +1,6 @@
-use warpui::integration::TestStep;
-use warpui::windowing::WindowManager;
-use warpui::{async_assert, SingletonEntity, WindowId};
+use black_ui::integration::TestStep;
+use black_ui::windowing::WindowManager;
+use black_ui::{async_assert, SingletonEntity, WindowId};
 
 use super::open_workflow_count;
 use crate::cloud_object::model::persistence::CloudModel;

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use warpui::r#async::executor::Background;
+use black_ui::r#async::executor::Background;
 
 use crate::auth::auth_state::AuthState;
 use crate::send_telemetry_on_executor;

@@ -8,10 +8,10 @@ use base64::Engine as _;
 #[cfg(not(target_family = "wasm"))]
 use session_sharing_protocol::sharer::SessionSourceType;
 use url::Url;
-use warp_cli::agent::Harness;
-use warp_core::execution_mode::AppExecutionMode;
+use black_cli::agent::Harness;
+use black_core::execution_mode::AppExecutionMode;
 use warp_multi_agent_api as multi_agent_api;
-use warpui::{
+use black_ui::{
     AppContext, EntityId, ModelHandle, SingletonEntity, ViewContext, ViewHandle, WindowId,
 };
 

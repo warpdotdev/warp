@@ -5,8 +5,8 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use warpui::elements::ClippedScrollStateHandle;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_ui::elements::ClippedScrollStateHandle;
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};

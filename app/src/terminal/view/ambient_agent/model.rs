@@ -2,12 +2,12 @@ use std::time::Duration;
 
 use instant::Instant;
 use session_sharing_protocol::common::SessionId;
-use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
-use warp_terminal::model::BlockId;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
-use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
+use black_cli::agent::Harness;
+use black_core::features::FeatureFlag;
+use black_core::send_telemetry_from_ctx;
+use black_terminal::model::BlockId;
+use black_ui::r#async::{SpawnedFutureHandle, Timer};
+use black_ui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::AmbientAgentProgressUIState;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;

@@ -2,8 +2,8 @@
 mod channel_config;
 
 use anyhow::Result;
-use warp_core::channel::{Channel, ChannelState};
-use warp_core::features;
+use black_core::channel::{Channel, ChannelState};
+use black_core::features;
 
 fn main() -> Result<()> {
     let config = channel_config::load_config!("local");
@@ -20,7 +20,7 @@ fn main() -> Result<()> {
 
     ChannelState::set(state);
 
-    warp::run()
+    black::run()
 }
 
 // If we're not using an external plist, embed the following as the Info.plist.

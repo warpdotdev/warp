@@ -9,8 +9,8 @@ use futures::executor::block_on;
 use repo_metadata::DirectoryWatcher;
 use string_offset::ByteOffset;
 use virtual_fs::{Stub, VirtualFS};
-use warp_util::standardized_path::StandardizedPath;
-use warpui::{App, SingletonEntity};
+use black_util::standardized_path::StandardizedPath;
+use black_ui::{App, SingletonEntity};
 
 use super::{
     CodebaseIndex, CodebaseIndexTimeStampMetadata, ServerSyncResult, TreeSourceSyncState,

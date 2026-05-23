@@ -1,7 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
-use warpui::{Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle};
+use black_ui::{Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle};
 
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::Owner;

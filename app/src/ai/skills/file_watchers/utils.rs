@@ -9,7 +9,7 @@ use anyhow::Error;
 use regex::Regex;
 use repo_metadata::local_model::GetContentsArgs;
 use repo_metadata::{RepoContent, RepoMetadataModel};
-use warpui::AppContext;
+use black_ui::AppContext;
 
 use crate::warp_managed_paths_watcher::warp_managed_skill_dirs;
 

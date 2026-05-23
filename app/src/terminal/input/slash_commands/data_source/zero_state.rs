@@ -1,6 +1,6 @@
 use itertools::Itertools;
-use warp_core::features::FeatureFlag;
-use warpui::{Entity, ModelHandle, SingletonEntity};
+use black_core::features::FeatureFlag;
+use black_ui::{Entity, ModelHandle, SingletonEntity};
 
 use crate::ai::skills::SkillManager;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -40,7 +40,7 @@ impl SyncDataSource for ZeroStateDataSource {
     fn run_query(
         &self,
         query: &Query,
-        app: &warpui::AppContext,
+        app: &black_ui::AppContext,
     ) -> Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper> {
         if !query.text.is_empty() {
             return Ok(vec![]);

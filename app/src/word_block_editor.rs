@@ -1,12 +1,12 @@
 use pathfinder_color::ColorU;
-use warp_editor::editor::NavigationKey;
-use warpui::elements::{
+use black_editor::editor::NavigationKey;
+use black_ui::elements::{
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisAlignment,
     MainAxisSize, MouseStateHandle, ParentElement, Radius, Wrap, WrapFill,
 };
-use warpui::fonts::FamilyId;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::FamilyId;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };

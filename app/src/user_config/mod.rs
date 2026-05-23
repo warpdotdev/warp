@@ -13,8 +13,8 @@ pub(crate) use imp::load_tab_configs;
 pub use imp::load_workflows;
 pub use imp::{load_launch_configs, load_theme_configs};
 use lazy_static::lazy_static;
-use warp_core::ui::theme::WarpTheme;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_core::ui::theme::WarpTheme;
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::tab_configs::{TabConfig, TabConfigError};
@@ -46,7 +46,7 @@ lazy_static! {
 #          commands:
 #            - exec: code .
 ",
-        warp_core::paths::home_relative_path(&crate::user_config::launch_configs_dir())
+        black_core::paths::home_relative_path(&crate::user_config::launch_configs_dir())
     );
 }
 
@@ -166,12 +166,12 @@ impl WarpConfig {
 
 /// Returns the base directory in which all of the user's data is stored.
 fn base_dir() -> PathBuf {
-    warp_core::paths::data_dir()
+    black_core::paths::data_dir()
 }
 
 /// Returns the path to the directory containing the user's custom themes.
 pub fn themes_dir() -> PathBuf {
-    warp_core::paths::themes_dir()
+    black_core::paths::themes_dir()
 }
 
 /// Returns the path to the directory containing the user's custom workflows.

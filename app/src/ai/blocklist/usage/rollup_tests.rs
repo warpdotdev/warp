@@ -1,4 +1,4 @@
-use warpui::{App, EntityId};
+use black_ui::{App, EntityId};
 
 use super::*;
 use crate::ai::agent::conversation::AIConversationId;
@@ -7,7 +7,7 @@ use crate::test_util::settings::initialize_history_persistence_for_tests;
 
 fn set_credits(
     app: &mut App,
-    history: &warpui::ModelHandle<BlocklistAIHistoryModel>,
+    history: &black_ui::ModelHandle<BlocklistAIHistoryModel>,
     id: AIConversationId,
     credits: f32,
 ) {
@@ -21,7 +21,7 @@ fn set_credits(
 
 fn spawn_child(
     app: &mut App,
-    history: &warpui::ModelHandle<BlocklistAIHistoryModel>,
+    history: &black_ui::ModelHandle<BlocklistAIHistoryModel>,
     name: &str,
     parent_id: AIConversationId,
     terminal_view_id: EntityId,

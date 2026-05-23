@@ -2,11 +2,11 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use settings::{Setting, ToggleableSetting};
-use warp_core::features::FeatureFlag;
-use warpui::elements::{Flex, MouseStateHandle, ParentElement};
-use warpui::ui_components::components::UiComponent;
-use warpui::ui_components::switch::SwitchStateHandle;
-use warpui::{Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+use black_core::features::FeatureFlag;
+use black_ui::elements::{Flex, MouseStateHandle, ParentElement};
+use black_ui::ui_components::components::UiComponent;
+use black_ui::ui_components::switch::SwitchStateHandle;
+use black_ui::{Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use crate::appearance::Appearance;
 use crate::server::telemetry::TelemetryEvent;
@@ -271,7 +271,7 @@ impl View for ExternalEditorView {
         "ExternalEditorView"
     }
 
-    fn render(&self, app: &warpui::AppContext) -> Box<dyn warpui::Element> {
+    fn render(&self, app: &black_ui::AppContext) -> Box<dyn black_ui::Element> {
         let appearance = Appearance::as_ref(app);
 
         let default_editor = render_dropdown_item(

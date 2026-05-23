@@ -5,8 +5,8 @@ use std::sync::Arc;
 use async_channel::{Receiver, Sender};
 use parking_lot::FairMutex;
 use thiserror::Error;
-use warpui::r#async::block_on;
-use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
+use black_ui::r#async::block_on;
+use black_ui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::Message;
 use crate::ai::agent::AIAgentPtyWriteMode;
@@ -475,7 +475,7 @@ impl<T: EventLoopSender> PtyController<T> {
             let chunks: Vec<Vec<u8>> = bytes.chunks(CHUNK_SIZE).map(|c| c.to_vec()).collect();
             for (i, chunk) in chunks.into_iter().enumerate() {
                 ctx.spawn(
-                    warpui::r#async::Timer::after(std::time::Duration::from_millis(i as u64 * 50)),
+                    black_ui::r#async::Timer::after(std::time::Duration::from_millis(i as u64 * 50)),
                     move |me, _, ctx| me.write_bytes(chunk, ctx),
                 );
             }
@@ -493,7 +493,7 @@ impl<T: EventLoopSender> PtyController<T> {
         shell_type: ShellType,
         ctx: &mut ModelContext<Self>,
     ) {
-        use warp_util::path::ShellFamily;
+        use black_util::path::ShellFamily;
 
         // TODO(CORE-2099): Figure out a more robust solution here. Fish users
         // can redefine these functions via fish functions. Ideally this won't

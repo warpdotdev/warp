@@ -1,11 +1,11 @@
-use warp_completer::ParsedTokensSnapshot;
-use warp_completer::util::parse_current_commands_and_tokens;
+use black_completer::ParsedTokensSnapshot;
+use black_completer::util::parse_current_commands_and_tokens;
 
 use super::*;
 use crate::test_utils::CompletionContext;
 
 async fn mock_parsed_input_token(buffer_text: String) -> ParsedTokensSnapshot {
-    warp_features::mark_initialized();
+    black_features::mark_initialized();
     let completion_context = CompletionContext::new();
     parse_current_commands_and_tokens(buffer_text, &completion_context).await
 }

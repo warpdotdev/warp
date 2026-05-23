@@ -1,11 +1,11 @@
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting;
-use warpui::elements::{
+use black_ui::elements::{
     Border, ChildAnchor, ChildView, Clipped, Container, DropTarget, Element, Empty, Flex,
     Hoverable, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, SavePosition,
     Stack,
 };
-use warpui::{AppContext, SingletonEntity};
+use black_ui::{AppContext, SingletonEntity};
 
 use super::{should_render_prompt_using_editor_decorator_elements, Input, SubshellRenderState};
 use crate::ai::blocklist::InputType;

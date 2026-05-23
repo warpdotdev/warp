@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 use strum_macros::{EnumDiscriminants, EnumIter};
-use warp_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
+use black_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
 
 use crate::features::FeatureFlag;
 
@@ -232,7 +232,7 @@ impl TelemetryEvent for CliTelemetryEvent {
     }
 
     fn event_descs() -> impl Iterator<Item = Box<dyn TelemetryEventDesc>> {
-        warp_core::telemetry::enum_events::<Self>()
+        black_core::telemetry::enum_events::<Self>()
     }
 }
 
@@ -474,4 +474,4 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
     }
 }
 
-warp_core::register_telemetry_event!(CliTelemetryEvent);
+black_core::register_telemetry_event!(CliTelemetryEvent);

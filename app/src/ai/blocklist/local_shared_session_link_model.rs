@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use session_sharing_protocol::common::SessionId;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 use super::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::agent::conversation::AIConversationId;

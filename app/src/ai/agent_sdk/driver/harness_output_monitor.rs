@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use regex::escape;
-use warpui::ModelSpawner;
+use black_ui::ModelSpawner;
 
 use super::terminal::BlockOutputMatch;
 use super::AgentDriver;
@@ -117,7 +117,7 @@ async fn confirm_stall(
     let mut previous = fetch_plaintext(block_id, foreground).await;
     let mut elapsed = Duration::ZERO;
     while elapsed < STALL_CONFIRMATION_BUDGET {
-        warpui::r#async::Timer::after(STALL_POLL_INTERVAL).await;
+        black_ui::r#async::Timer::after(STALL_POLL_INTERVAL).await;
         elapsed += STALL_POLL_INTERVAL;
         let current = fetch_plaintext(block_id, foreground).await;
         if outputs_stalled(previous.as_deref(), current.as_deref()) {
@@ -160,7 +160,7 @@ pub(crate) async fn watch_block_for_errors(
     let mut elapsed = Duration::ZERO;
 
     for &interval in SCAN_INTERVALS {
-        warpui::r#async::Timer::after(interval).await;
+        black_ui::r#async::Timer::after(interval).await;
         elapsed += interval;
 
         if find_match_once(&block_id, &dfas, foreground)

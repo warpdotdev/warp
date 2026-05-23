@@ -1,7 +1,7 @@
-use warpui::keymap::Keystroke;
+use black_ui::keymap::Keystroke;
 
 /// Whether this keystroke should dispatch an action in Warp despite the
-/// [`warpui::event::Event::KeyDown::is_composing`] being true.
+/// [`black_ui::event::Event::KeyDown::is_composing`] being true.
 ///
 /// Generally, we ignore all `KeyDown` events if the `is_composing` field is true. However it's
 /// possible to have keybinding conflicts between terminal apps which use the meta key and MacOS
@@ -14,7 +14,7 @@ use warpui::keymap::Keystroke;
 ///
 /// https://support.apple.com/guide/mac-help/enter-characters-with-accent-marks-on-mac-mh27474/mac#mchl45cdda7f
 ///
-/// This function is intended to be used when handling [`warpui::event::Event::KeyDown`] when its
+/// This function is intended to be used when handling [`black_ui::event::Event::KeyDown`] when its
 /// `is_composing` is true. Returning true _does not_ mean the keystroke is a dead key necessarily.
 /// Interpreting it that way would result in false-positives. Rather, it means the app may dispatch
 /// an action for the keystroke _despite_ the fact that `is_composing` is true.

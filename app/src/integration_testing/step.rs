@@ -1,5 +1,5 @@
-use warpui::async_assert;
-use warpui::integration::{AssertionCallback, TestStep};
+use black_ui::async_assert;
+use black_ui::integration::{AssertionCallback, TestStep};
 
 use super::terminal::assert_no_block_executing;
 use crate::integration_testing::view_getters::terminal_view;

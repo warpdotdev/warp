@@ -3,8 +3,8 @@ use std::iter::Peekable;
 use anyhow::Result;
 use itertools::{peek_nth, Either, PeekNth};
 use string_offset::CharOffset;
-use warpui::text::words::is_default_word_boundary;
-use warpui::text::TextBuffer;
+use black_ui::text::words::is_default_word_boundary;
+use black_ui::text::TextBuffer;
 
 use crate::vim::{Direction, WordBound, WordType};
 

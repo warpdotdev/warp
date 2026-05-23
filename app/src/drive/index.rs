@@ -7,12 +7,12 @@ use itertools::Itertools;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use url::Url;
-use warp_core::context_flag::ContextFlag;
-use warp_core::settings::Setting;
-use warp_core::ui::theme::color::internal_colors;
-use warp_util::sync::Condition;
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::{
+use black_core::context_flag::ContextFlag;
+use black_core::settings::Setting;
+use black_core::ui::theme::color::internal_colors;
+use black_util::sync::Condition;
+use black_ui::clipboard::ClipboardContent;
+use black_ui::elements::{
     Align, AnchorPair, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable,
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dash, DropTarget, DropTargetData,
     Empty, Flex, Highlight, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
@@ -21,13 +21,13 @@ use warpui::elements::{
     ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Text, XAxisAnchor,
     YAxisAnchor,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::keymap::FixedBinding;
-use warpui::platform::{Cursor, OperatingSystem};
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::units::IntoPixels;
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::keymap::FixedBinding;
+use black_ui::platform::{Cursor, OperatingSystem};
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::units::IntoPixels;
+use black_ui::{
     AppContext, BlurContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView,
     UpdateView, View, ViewContext, ViewHandle, WindowId,
 };
@@ -567,7 +567,7 @@ pub struct DriveIndex {
 }
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings(vec![
         FixedBinding::new("up", DriveIndexAction::FocusPreviousItem, id!("DriveIndex")),
@@ -1453,7 +1453,7 @@ impl DriveIndex {
             if let Some(focused_index) = self.focused_index {
                 if Some(&WarpDriveItemId::Space(space)) == self.ordered_items.get(focused_index) {
                     container = container.with_background(
-                        warp_core::ui::theme::color::internal_colors::fg_overlay_4(
+                        black_core::ui::theme::color::internal_colors::fg_overlay_4(
                             appearance.theme(),
                         ),
                     );
@@ -1468,7 +1468,7 @@ impl DriveIndex {
                     // If the item is hovered, set a hover background that matches the hover state of warp drive items.
                     if mouse_state.is_hovered() && !is_focused || section_state.menu_open {
                         container = container.with_background(
-                            warp_core::ui::theme::color::internal_colors::fg_overlay_2(
+                            black_core::ui::theme::color::internal_colors::fg_overlay_2(
                                 appearance.theme(),
                             ),
                         );
@@ -1562,7 +1562,7 @@ impl DriveIndex {
             font_color: Some(empty_trash_default_font_color),
             font_size: Some(14.),
             font_family_id: Some(appearance.ui_font_family()),
-            font_weight: Some(warpui::fonts::Weight::Semibold),
+            font_weight: Some(black_ui::fonts::Weight::Semibold),
             padding: Some(Coords::uniform(6.)),
             border_radius: Some(CornerRadius::with_all(Radius::Pixels(6.))),
             ..Default::default()
@@ -1656,7 +1656,7 @@ impl DriveIndex {
             if let Some(focused_index) = self.focused_index {
                 if Some(&WarpDriveItemId::Space(space)) == self.ordered_items.get(focused_index) {
                     container = container.with_background(
-                        warp_core::ui::theme::color::internal_colors::fg_overlay_4(
+                        black_core::ui::theme::color::internal_colors::fg_overlay_4(
                             appearance.theme(),
                         ),
                     );
@@ -1671,7 +1671,7 @@ impl DriveIndex {
                 // If the item is hovered, set a hover background that matches the hover state of warp drive items.
                 if mouse_state.is_hovered() && !is_focused || section_state.menu_open {
                     container = container.with_background(
-                        warp_core::ui::theme::color::internal_colors::fg_overlay_2(
+                        black_core::ui::theme::color::internal_colors::fg_overlay_2(
                             appearance.theme(),
                         ),
                     );
@@ -1842,7 +1842,7 @@ impl DriveIndex {
         if let Some(focused_index) = self.focused_index {
             if Some(&WarpDriveItemId::Trash) == self.ordered_items.get(focused_index) {
                 container = container.with_background(
-                    warp_core::ui::theme::color::internal_colors::fg_overlay_4(appearance.theme()),
+                    black_core::ui::theme::color::internal_colors::fg_overlay_4(appearance.theme()),
                 );
                 is_focused = true;
             }
@@ -1855,7 +1855,7 @@ impl DriveIndex {
                 if mouse_state.is_hovered() && !is_focused {
                     container
                         .with_background(
-                            warp_core::ui::theme::color::internal_colors::fg_overlay_2(
+                            black_core::ui::theme::color::internal_colors::fg_overlay_2(
                                 appearance.theme(),
                             ),
                         )
@@ -2905,7 +2905,7 @@ impl DriveIndex {
         section: DriveIndexSection,
         is_collapsed: bool,
         appearance: &Appearance,
-    ) -> Box<dyn warpui::Element> {
+    ) -> Box<dyn black_ui::Element> {
         let icon = if is_collapsed {
             Icon::ListCollapsed
         } else {
@@ -2938,7 +2938,7 @@ impl DriveIndex {
         .finish()
     }
 
-    fn render_warp_drive_loading_icon(&self, appearance: &Appearance) -> Box<dyn warpui::Element> {
+    fn render_warp_drive_loading_icon(&self, appearance: &Appearance) -> Box<dyn black_ui::Element> {
         // Use same padding as icon_button (4px) to center the icon within ICON_DIMENSIONS
         let icon_button_padding = (ICON_DIMENSIONS - LOADING_ICON_WIDTH) / 2.;
         let loading_icon = Container::new(
@@ -2987,7 +2987,7 @@ impl DriveIndex {
         hoverable.finish()
     }
 
-    fn render_sorting_button(&self, appearance: &Appearance) -> Box<dyn warpui::Element> {
+    fn render_sorting_button(&self, appearance: &Appearance) -> Box<dyn black_ui::Element> {
         let mut button = icon_button_with_context_menu(
             Icon::Sort,
             move |ctx, _, _| ctx.dispatch_typed_action(DriveIndexAction::ToggleSortingMenu),
@@ -3025,7 +3025,7 @@ impl DriveIndex {
         hoverable.finish()
     }
 
-    fn render_retry_button(&self, appearance: &Appearance) -> Box<dyn warpui::Element> {
+    fn render_retry_button(&self, appearance: &Appearance) -> Box<dyn black_ui::Element> {
         let ui_builder = appearance.ui_builder().clone();
 
         icon_button(
@@ -3053,7 +3053,7 @@ impl DriveIndex {
         space: Space,
         state: &DriveIndexSectionState,
         app: &AppContext,
-    ) -> Box<dyn warpui::Element> {
+    ) -> Box<dyn black_ui::Element> {
         let mut button;
         // Set color contrast correctly when focused
         if self.focused_index.is_some()
@@ -3131,7 +3131,7 @@ impl DriveIndex {
         appearance: &Appearance,
         state: &DriveIndexSectionState,
         space: Space,
-    ) -> Box<dyn warpui::Element> {
+    ) -> Box<dyn black_ui::Element> {
         let mut button = icon_button(
             appearance,
             Icon::AddTeammates,
@@ -3953,7 +3953,7 @@ impl DriveIndex {
                 Text::new_inline("Warp Drive".to_string(), appearance.ui_font_family(), 14.)
                     .with_color(theme.main_text_color(background_color).into())
                     .with_style(Properties {
-                        weight: warpui::fonts::Weight::Bold,
+                        weight: black_ui::fonts::Weight::Bold,
                         ..Default::default()
                     })
                     .finish(),
@@ -4686,7 +4686,7 @@ impl DriveIndex {
                                     .into_item(),
                             );
                         }
-                        if !warpui::platform::is_mobile_device()
+                        if !black_ui::platform::is_mobile_device()
                             && !ContextFlag::HideOpenOnDesktopButton.is_enabled()
                             && *UserAppInstallDetectionSettings::as_ref(app)
                                 .user_app_installation_detected
@@ -5067,7 +5067,7 @@ impl View for DriveIndex {
         }
     }
 
-    fn keymap_context(&self, _ctx: &AppContext) -> warpui::keymap::Context {
+    fn keymap_context(&self, _ctx: &AppContext) -> black_ui::keymap::Context {
         let mut context = Self::default_keymap_context();
 
         // Disable WD Vim keybindings when a dialog is open
@@ -5080,7 +5080,7 @@ impl View for DriveIndex {
         context
     }
 
-    fn render(&self, app: &AppContext) -> Box<dyn warpui::Element> {
+    fn render(&self, app: &AppContext) -> Box<dyn black_ui::Element> {
         let appearance = Appearance::as_ref(app);
         let workspaces = UserWorkspaces::as_ref(app);
 

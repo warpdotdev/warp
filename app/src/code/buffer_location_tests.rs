@@ -3,11 +3,11 @@ use remote_server::proto::TextEdit;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
 use repo_metadata::RepoMetadataModel;
-use warp_files::FileModel;
-use warp_util::content_version::ContentVersion;
-use warp_util::host_id::HostId;
-use warp_util::standardized_path::StandardizedPath;
-use warpui::{App, ModelHandle, SingletonEntity};
+use black_files::FileModel;
+use black_util::content_version::ContentVersion;
+use black_util::host_id::HostId;
+use black_util::standardized_path::StandardizedPath;
+use black_ui::{App, ModelHandle, SingletonEntity};
 
 use crate::code::global_buffer_model::{CharOffsetEdit, GlobalBufferModel, GlobalBufferModelEvent};
 use crate::test_util::settings::initialize_settings_for_tests;
@@ -30,7 +30,7 @@ fn gbm(app: &App) -> ModelHandle<GlobalBufferModel> {
 }
 
 /// Reads the text content of a buffer tracked by `GlobalBufferModel`.
-fn content(app: &App, file_id: warp_util::file::FileId) -> String {
+fn content(app: &App, file_id: black_util::file::FileId) -> String {
     let handle = gbm(app);
     app.read(|ctx| {
         handle
@@ -41,7 +41,7 @@ fn content(app: &App, file_id: warp_util::file::FileId) -> String {
 }
 
 /// Returns the server_version from the ServerLocal sync clock.
-fn server_version(app: &App, file_id: warp_util::file::FileId) -> ContentVersion {
+fn server_version(app: &App, file_id: black_util::file::FileId) -> ContentVersion {
     let handle = gbm(app);
     app.read(|ctx| {
         handle
@@ -642,7 +642,7 @@ fn server_push_does_not_echo_back_as_client_edit() {
             // guard (origin.from_user()) failed.
             let tx = user_edit_tx.clone();
             ctx.subscribe_to_model(&state.buffer, move |_me, event, _ctx| {
-                use warp_editor::content::buffer::BufferEvent;
+                use black_editor::content::buffer::BufferEvent;
                 if let BufferEvent::ContentChanged { origin, .. } = event {
                     if origin.from_user() {
                         let _ = tx.try_send(true);

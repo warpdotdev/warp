@@ -1,9 +1,9 @@
-use warpui::elements::{
+use black_ui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Element, Flex,
     MainAxisAlignment, MainAxisSize, ParentElement, Shrinkable, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
 
 use super::blended_colors;
 use crate::appearance::Appearance;
@@ -36,10 +36,10 @@ pub fn dialog_styles(appearance: &Appearance) -> UiComponentStyles {
         font_family_id: Some(appearance.header_font_family()),
         font_size: Some(16.),
         font_color: Some(blended_colors::text_main(theme, background)),
-        font_weight: Some(warpui::fonts::Weight::Bold),
+        font_weight: Some(black_ui::fonts::Weight::Bold),
         background: Some(background.into()),
         border_color: Some(theme.surface_3().into()),
-        border_radius: Some(CornerRadius::with_all(warpui::elements::Radius::Pixels(8.))),
+        border_radius: Some(CornerRadius::with_all(black_ui::elements::Radius::Pixels(8.))),
         border_width: Some(1.),
         ..Default::default()
     }

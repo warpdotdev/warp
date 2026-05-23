@@ -1,12 +1,12 @@
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::icons::Icon as CoreIcon;
-use warp_core::ui::theme::color::internal_colors::neutral_2;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::icons::Icon as CoreIcon;
+use black_core::ui::theme::color::internal_colors::neutral_2;
+use black_ui::elements::{
     Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Expanded, Flex,
     Hoverable, Icon, MouseStateHandle, ParentElement, Radius, Text,
 };
-use warpui::platform::Cursor;
-use warpui::{AppContext, Element, SingletonEntity};
+use black_ui::platform::Cursor;
+use black_ui::{AppContext, Element, SingletonEntity};
 
 use crate::ai::blocklist::block::view_impl::WithContentItemSpacing;
 use crate::ai::blocklist::inline_action::inline_action_header::{
@@ -103,7 +103,7 @@ impl CreateOrEditDocumentAction {
             .with_vertical_padding(INLINE_ACTION_VERTICAL_PADDING)
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
             .with_background_color(neutral_2(theme))
-            .with_border(warpui::elements::Border::all(1.).with_border_fill(theme.surface_2()))
+            .with_border(black_ui::elements::Border::all(1.).with_border_fill(theme.surface_2()))
             .finish();
 
         Hoverable::new(self.mouse_state, move |_mouse_state| content)

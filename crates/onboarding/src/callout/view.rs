@@ -1,9 +1,9 @@
 use ui_components::Component;
-use warp_core::ui::appearance::Appearance;
-use warpui::elements::Empty;
-use warpui::keymap::macros::*;
-use warpui::keymap::{FixedBinding, Keystroke};
-use warpui::{
+use black_core::ui::appearance::Appearance;
+use black_ui::elements::Empty;
+use black_ui::keymap::macros::*;
+use black_ui::keymap::{FixedBinding, Keystroke};
+use black_ui::{
     AppContext, Element, Entity, EventContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext,
 };

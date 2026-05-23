@@ -21,8 +21,8 @@ use dashmap::DashMap;
 pub use improved_palette_search_layer::{ImprovedPaletteSearch, IMPROVED_PALETTE_SEARCH_LAYER};
 use lazy_static::lazy_static;
 pub use login_layer::{AuthFlowInstructions, LOGIN_LAYER};
-use warp_core::user_preferences::GetUserPreferences as _;
-use warpui::{AppContext, SingletonEntity};
+use black_core::user_preferences::GetUserPreferences as _;
+use black_ui::{AppContext, SingletonEntity};
 
 use crate::auth::auth_state::AuthStateProvider;
 use crate::channel::{Channel, ChannelState};

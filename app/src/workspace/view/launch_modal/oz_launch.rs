@@ -1,8 +1,8 @@
 use asset_macro::bundled_or_fetched_asset;
 use markdown_parser::{FormattedTextFragment, FormattedTextLine};
-use warp_core::send_telemetry_from_ctx;
-use warpui::assets::asset_cache::AssetSource;
-use warpui::{AppContext, SingletonEntity};
+use black_core::send_telemetry_from_ctx;
+use black_ui::assets::asset_cache::AssetSource;
+use black_ui::{AppContext, SingletonEntity};
 
 use super::{CTAButton, CheckboxConfig, LaunchModalEvent, Slide};
 use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
@@ -189,7 +189,7 @@ impl Slide for OzLaunchSlide {
         ) && !matches!(ugc_setting, UgcCollectionEnablementSetting::Enable)
     }
 
-    fn on_close(&self, ctx: &mut warpui::ViewContext<super::LaunchModal<Self>>) {
+    fn on_close(&self, ctx: &mut black_ui::ViewContext<super::LaunchModal<Self>>) {
         ctx.dispatch_typed_action(&WorkspaceAction::StartAgentOnboardingTutorial(
             OnboardingTutorial::NoProject {
                 intention: OnboardingIntention::AgentDrivenDevelopment,
@@ -198,6 +198,6 @@ impl Slide for OzLaunchSlide {
     }
 }
 
-pub fn init(app: &mut warpui::AppContext) {
+pub fn init(app: &mut black_ui::AppContext) {
     super::init::<OzLaunchSlide>(app);
 }

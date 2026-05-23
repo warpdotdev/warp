@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 
-use warpui::elements::{
+use black_ui::elements::{
     Align, ConstrainedBox, Container, CrossAxisAlignment, Flex, MainAxisSize, MouseStateHandle,
     ParentElement, Shrinkable,
 };
-use warpui::platform::Cursor;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::Element;
+use black_ui::platform::Cursor;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::Element;
 
 use crate::appearance::Appearance;
 use crate::terminal::view::{InlineBannerId, TerminalAction};

@@ -1,7 +1,7 @@
 use fuzzy_match::FuzzyMatchResult;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::RepoMetadataModel;
-use warpui::{App, SingletonEntity};
+use black_ui::{App, SingletonEntity};
 
 use super::super::search_item::{FileSearchItem, FileSearchResult};
 use super::FileSearchModel;

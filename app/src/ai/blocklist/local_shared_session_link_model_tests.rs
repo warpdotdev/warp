@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use session_sharing_protocol::common::SessionId;
-use warpui::App;
+use black_ui::App;
 
 use super::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel, LocalSharedSessionLinkModel};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
@@ -30,14 +30,14 @@ fn fixed_session_id() -> SessionId {
 /// background poll to happen at least once.
 async fn pump_spawned_tasks() {
     for _ in 0..5 {
-        warpui::r#async::Timer::after(Duration::from_millis(2)).await;
+        black_ui::r#async::Timer::after(Duration::from_millis(2)).await;
     }
 }
 
 fn install_model_with_call_counter(
     app: &mut App,
 ) -> (
-    warpui::ModelHandle<LocalSharedSessionLinkModel>,
+    black_ui::ModelHandle<LocalSharedSessionLinkModel>,
     Arc<AtomicUsize>,
 ) {
     let counter = Arc::new(AtomicUsize::new(0));
@@ -66,7 +66,7 @@ fn local_shared_session_established_fires_update_agent_task_with_session_id() {
         let task_id = fixed_task_id();
         conversation.set_run_id(task_id.to_string());
         let conversation_id = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
+        let terminal_view_id = black_ui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
         });
@@ -100,7 +100,7 @@ fn local_shared_session_established_uses_correct_argument_order() {
         let task_id = fixed_task_id();
         conversation.set_run_id(task_id.to_string());
         let conversation_id = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
+        let terminal_view_id = black_ui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
         });
@@ -149,7 +149,7 @@ fn local_shared_session_established_skips_viewer_conversations() {
             AIConversation::new(/* is_viewing_shared_session */ true, false);
         conversation.set_run_id(fixed_task_id().to_string());
         let conversation_id = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
+        let terminal_view_id = black_ui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
         });
@@ -182,7 +182,7 @@ fn local_shared_session_established_skips_remote_child_conversations() {
         conversation.set_run_id(fixed_task_id().to_string());
         conversation.mark_as_remote_child();
         let conversation_id = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
+        let terminal_view_id = black_ui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
         });
@@ -214,7 +214,7 @@ fn local_shared_session_established_skips_when_task_id_missing() {
         // No set_run_id call: the conversation has no task_id yet.
         let conversation = AIConversation::new(false, false);
         let conversation_id = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
+        let terminal_view_id = black_ui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
         });

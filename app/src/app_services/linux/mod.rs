@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use futures_util::FutureExt as _;
 use itertools::Itertools as _;
-use warpui::r#async::executor::BackgroundTask;
-use warpui::{AppContext, SingletonEntity};
+use black_ui::r#async::executor::BackgroundTask;
+use black_ui::{AppContext, SingletonEntity};
 use zbus::{interface, proxy, zvariant};
 
 use crate::channel::ChannelState;
@@ -27,13 +27,13 @@ pub fn teardown(ctx: &mut AppContext) {
 /// Returns Ok if an existing instance exists and was reachable.
 #[cfg(feature = "release_bundle")]
 pub fn pass_startup_args_to_existing_instance(
-    args: &warp_cli::AppArgs,
+    args: &black_cli::AppArgs,
 ) -> Result<(), StartupArgsForwardingError> {
     if args.finish_update {
         return Err(StartupArgsForwardingError::IgnoredAfterAutoUpdate);
     }
 
-    warpui::r#async::block_on(async {
+    black_ui::r#async::block_on(async {
         let conn = zbus::Connection::session().await?;
         let proxy = ExistingApplicationProxy::builder(&conn)
             .destination(DBusServiceHost::well_known_name())?
@@ -182,7 +182,7 @@ struct DBusServiceHost {
 }
 
 impl DBusServiceHost {
-    fn new(ctx: &mut warpui::ModelContext<Self>) -> Self {
+    fn new(ctx: &mut black_ui::ModelContext<Self>) -> Self {
         let (tx, rx) = async_channel::unbounded();
 
         // Spawn a background task for the D-Bus server.
@@ -233,7 +233,7 @@ impl DBusServiceHost {
         if let Some(server_task) = self.server_task.take() {
             server_task.abort();
             // Wait until we've torn down the dbus service.
-            report_if_error!(warpui::r#async::block_on(server_task));
+            report_if_error!(black_ui::r#async::block_on(server_task));
         }
     }
 
@@ -249,7 +249,7 @@ impl DBusServiceHost {
     }
 }
 
-impl warpui::Entity for DBusServiceHost {
+impl black_ui::Entity for DBusServiceHost {
     type Event = ();
 }
 

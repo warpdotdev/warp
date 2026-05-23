@@ -7,8 +7,8 @@ use std::pin::Pin;
 
 #[cfg(feature = "local_fs")]
 use futures::{future::OptionFuture, FutureExt as _};
-use warp_util::standardized_path::StandardizedPath;
-use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle};
+use black_util::standardized_path::StandardizedPath;
+use black_ui::{Entity, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle};
 
 use crate::repository::SubscriberId;
 use crate::{RepoMetadataError, Repository};

@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 use session_sharing_protocol::common::SessionId;
-use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
-use warpui::{AppContext, SingletonEntity};
+use black_cli::agent::Harness;
+use black_core::features::FeatureFlag;
+use black_ui::{AppContext, SingletonEntity};
 
 use super::{
     artifacts_match_filter, AgentManagementFilters, AgentRunDisplayStatus, ArtifactFilter,

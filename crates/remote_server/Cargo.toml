@@ -20,9 +20,9 @@ repo_metadata.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
-warp_core.workspace = true
-warp_util.workspace = true
-warpui.workspace = true
+black_core.workspace = true
+black_util.workspace = true
+black_ui.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 async-io.workspace = true

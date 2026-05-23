@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
-use warpui::elements::PositionedElementOffsetBounds;
-use warpui::EntityId;
+use black_ui::elements::PositionedElementOffsetBounds;
+use black_ui::EntityId;
 
 use super::{
     branch_label_display, coalesce_summary_branch_entries, code_detail_kind_label,

@@ -6,9 +6,9 @@ use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use chrono::Local;
 use lazy_static::lazy_static;
 use regex::Regex;
-use warp_core::features::FeatureFlag;
-use warp_graphql::generic_string_object::GenericStringObjectFormat as GraphQLFormat;
-use warpui::{AppContext, SingletonEntity};
+use black_core::features::FeatureFlag;
+use black_graphql::generic_string_object::GenericStringObjectFormat as GraphQLFormat;
+use black_ui::{AppContext, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{

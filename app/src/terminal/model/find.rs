@@ -7,7 +7,7 @@ use regex_automata::nfa::thompson;
 use regex_automata::util::pool::Pool;
 use regex_automata::util::syntax::Config;
 use regex_automata::{Anchored, Input};
-use warp_terminal::model::grid::CellType;
+use black_terminal::model::grid::CellType;
 
 use super::grid::grapheme_cursor;
 use super::grid::grid_handler::GridHandler;

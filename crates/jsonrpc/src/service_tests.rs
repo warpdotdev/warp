@@ -3,7 +3,7 @@ mod service_tests {
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
-    use warpui::r#async::executor::Background;
+    use black_ui::r#async::executor::Background;
 
     use crate::{JsonRpcService, Transport};
 

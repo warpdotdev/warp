@@ -6,7 +6,7 @@ pub(crate) mod plugin_manager;
 use std::collections::{HashMap, HashSet};
 
 use event::{CLIAgentEvent, CLIAgentEventType};
-use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+use black_ui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use self::listener::CLIAgentSessionListener;
 use super::CLIAgent;

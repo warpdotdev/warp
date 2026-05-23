@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
-use warp_core::define_settings_group;
+use black_core::define_settings_group;
 
 #[derive(
     Debug,

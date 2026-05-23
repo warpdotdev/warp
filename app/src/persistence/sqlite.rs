@@ -26,10 +26,10 @@ use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use persistence::model::AMBIENT_AGENT_PANE_KIND;
 use uuid::Uuid;
-use warp_graphql::scalars::time::ServerTimestamp;
-use warpui::platform::FullscreenState;
-use warpui::windowing::{MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH};
-use warpui::{AppContext, SingletonEntity};
+use black_graphql::scalars::time::ServerTimestamp;
+use black_ui::platform::FullscreenState;
+use black_ui::windowing::{MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH};
+use black_ui::{AppContext, SingletonEntity};
 
 use super::agent::{delete_agent_conversations, upsert_agent_conversation};
 use super::block_list::{
@@ -122,7 +122,7 @@ diesel::define_sql_function! {
 const CHANNEL_SIZE: usize = 1024;
 const COMMANDS_COUNT_LIMIT: i64 = 10000;
 
-use warp_server_client::persistence::{upsert_cloud_object, CloudObjectId};
+use black_server_client::persistence::{upsert_cloud_object, CloudObjectId};
 
 const WARP_SQLITE_FILE_NAME: &str = "warp.sqlite";
 
@@ -351,7 +351,7 @@ pub(super) fn init_db(scope: &PersistenceScope) -> Result<SqliteConnection> {
 }
 
 fn migrate_old_sqlite_into_secure_container_if_needed(db_path: &Path) {
-    let old_db_path = warp_core::paths::state_dir().join(WARP_SQLITE_FILE_NAME);
+    let old_db_path = black_core::paths::state_dir().join(WARP_SQLITE_FILE_NAME);
     if old_db_path == db_path || !old_db_path.exists() || db_path.exists() {
         return;
     }
@@ -425,8 +425,8 @@ pub fn database_file_path_for_scope(scope: &PersistenceScope) -> PathBuf {
 }
 
 fn app_database_file_path() -> PathBuf {
-    warp_core::paths::secure_state_dir()
-        .unwrap_or_else(warp_core::paths::state_dir)
+    black_core::paths::secure_state_dir()
+        .unwrap_or_else(black_core::paths::state_dir)
         .join(WARP_SQLITE_FILE_NAME)
 }
 

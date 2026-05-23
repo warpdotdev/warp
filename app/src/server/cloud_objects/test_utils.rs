@@ -3,8 +3,8 @@ use std::sync::mpsc::{sync_channel, Receiver};
 use std::sync::Arc;
 
 use settings::manager::SettingsManager;
-use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
-use warpui::{App, ModelHandle, SingletonEntity};
+use black_core::execution_mode::{AppExecutionMode, ExecutionMode};
+use black_ui::{App, ModelHandle, SingletonEntity};
 
 use super::update_manager::UpdateManager;
 use crate::auth::auth_manager::AuthManager;

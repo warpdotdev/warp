@@ -2,17 +2,17 @@ use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::Fill;
+use black_ui::elements::{
     Border, ChildAnchor, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
     Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, DropShadow, EventHandler,
     Flex, Hoverable, MainAxisSize, MouseInBehavior, MouseStateHandle, OffsetPositioning,
     ParentElement, PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition,
     ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Stack, Text,
 };
-use warpui::platform::Cursor;
-use warpui::{
+use black_ui::platform::Cursor;
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
@@ -433,7 +433,7 @@ impl CloudModeV2SlashCommandView {
     fn rebuild_from_results(&mut self, ctx: &mut ViewContext<Self>) {
         let on_click_fn = |_idx: usize,
                            item: AcceptSlashCommandOrSavedPrompt,
-                           evt_ctx: &mut warpui::EventContext| {
+                           evt_ctx: &mut black_ui::EventContext| {
             evt_ctx.dispatch_typed_action(CloudModeV2SlashCommandAction::Accept {
                 item,
                 cmd_or_ctrl_enter: false,
@@ -1067,7 +1067,7 @@ impl CloudModeV2SlashCommandView {
             ScrollbarWidth::Auto,
             theme.nonactive_ui_detail().into(),
             theme.active_ui_detail().into(),
-            warpui::elements::Fill::None,
+            black_ui::elements::Fill::None,
         )
         .with_overlayed_scrollbar()
         .finish();
@@ -1221,7 +1221,7 @@ fn render_divider(app: &AppContext) -> Box<dyn Element> {
     let theme = appearance.theme();
     Container::new(
         ConstrainedBox::new(
-            Container::new(warpui::elements::Empty::new().finish())
+            Container::new(black_ui::elements::Empty::new().finish())
                 .with_background(theme.surface_overlay_2())
                 .finish(),
         )

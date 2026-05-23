@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
-use warp_core::settings::Setting as _;
-use warpui::{App, AppContext, SingletonEntity, ViewContext};
+use black_core::settings::Setting as _;
+use black_ui::{App, AppContext, SingletonEntity, ViewContext};
 
 use super::super::{AIBlockMetadata, RichContentMetadata, RichContentType};
 use super::*;

@@ -17,7 +17,7 @@ pub(crate) use tab_config::build_worktree_config_toml;
 pub use tab_config::{
     render_tab_config, TabConfig, TabConfigError, TabConfigParam, TabConfigParamType,
 };
-use warp_core::ui::theme::Fill;
+use black_core::ui::theme::Fill;
 
 /// Optional visual overrides for BranchPicker / RepoPicker dropdowns.
 pub struct PickerStyle {

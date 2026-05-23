@@ -9,11 +9,11 @@ use std::sync::Arc;
 use chrono::Local;
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::CLIAgentSessionState;
-use warp_cli::agent::Harness;
-use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
-use warpui::notification::UserNotification;
-use warpui::platform::WindowStyle;
-use warpui::{App, Presenter, ReadModel, WindowInvalidation};
+use black_cli::agent::Harness;
+use black_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
+use black_ui::notification::UserNotification;
+use black_ui::platform::WindowStyle;
+use black_ui::{App, Presenter, ReadModel, WindowInvalidation};
 
 use super::*;
 use crate::ai::agent::conversation::ConversationStatus;
@@ -1922,7 +1922,7 @@ fn pending_cloud_mode_query_clears_when_streaming_exchange_becomes_renderable() 
 /// Test clearing of session flag state when terminal is cleared
 #[test]
 fn test_clear_session_flag_state() {
-    use warp_terminal::shell::ShellType;
+    use black_terminal::shell::ShellType;
 
     use crate::ai::blocklist::SerializedBlockListItem;
     use crate::terminal::model::block::SerializedBlock;
@@ -2373,7 +2373,7 @@ fn test_alt_screen_select_with_sgr_mouse() {
         rerender!(app, presenter, invalidation, size_info);
         app.update(enclose!((presenter) move |ctx| {
             ctx.simulate_window_event(
-                warpui::Event::LeftMouseDown {
+                black_ui::Event::LeftMouseDown {
                     position: start_position,
                     modifiers: Default::default(),
                     click_count: 1,
@@ -2386,7 +2386,7 @@ fn test_alt_screen_select_with_sgr_mouse() {
         rerender!(app, presenter, invalidation, size_info);
         app.update(enclose!((presenter) move |ctx| {
             ctx.simulate_window_event(
-                warpui::Event::LeftMouseDragged {
+                black_ui::Event::LeftMouseDragged {
                     position: end_position,
                     modifiers: Default::default(),
                 },
@@ -2397,7 +2397,7 @@ fn test_alt_screen_select_with_sgr_mouse() {
         rerender!(app, presenter, invalidation, size_info);
         app.update(enclose!((presenter) move |ctx| {
             ctx.simulate_window_event(
-                warpui::Event::LeftMouseUp {
+                black_ui::Event::LeftMouseUp {
                     position: end_position,
                     modifiers: Default::default(),
                 },
@@ -2419,7 +2419,7 @@ fn test_alt_screen_select_with_sgr_mouse() {
         rerender!(app, presenter, invalidation, size_info);
         app.update(enclose!((presenter) move |ctx| {
             ctx.simulate_window_event(
-                warpui::Event::LeftMouseDown {
+                black_ui::Event::LeftMouseDown {
                     position: start_position,
                     modifiers: ModifiersState {
                         shift: true,
@@ -2435,7 +2435,7 @@ fn test_alt_screen_select_with_sgr_mouse() {
         rerender!(app, presenter, invalidation, size_info);
         app.update(enclose!((presenter) move |ctx| {
             ctx.simulate_window_event(
-                warpui::Event::LeftMouseDragged {
+                black_ui::Event::LeftMouseDragged {
                     position: end_position,
                     modifiers: ModifiersState {
                         shift: true,
@@ -2449,7 +2449,7 @@ fn test_alt_screen_select_with_sgr_mouse() {
         rerender!(app, presenter, invalidation, size_info);
         app.update(enclose!((presenter) move |ctx| {
             ctx.simulate_window_event(
-                warpui::Event::LeftMouseUp {
+                black_ui::Event::LeftMouseUp {
                     position: end_position,
                     modifiers: ModifiersState {
                         shift: true,
@@ -5206,7 +5206,7 @@ fn ctrl_g_closes_cli_agent_rich_input_when_editor_is_focused() {
             .dispatch_keystroke(
                 window_id,
                 &[terminal.id(), input_id, editor_id],
-                &warpui::keymap::Keystroke::parse("ctrl-g").expect("valid keystroke"),
+                &black_ui::keymap::Keystroke::parse("ctrl-g").expect("valid keystroke"),
                 false,
             )
             .expect("dispatch should succeed");
@@ -5251,7 +5251,7 @@ fn ctrl_g_closes_cli_agent_rich_input_from_terminal_context() {
             .dispatch_keystroke(
                 window_id,
                 &[terminal.id()],
-                &warpui::keymap::Keystroke::parse("ctrl-g").expect("valid keystroke"),
+                &black_ui::keymap::Keystroke::parse("ctrl-g").expect("valid keystroke"),
                 false,
             )
             .expect("dispatch should succeed");
@@ -5289,7 +5289,7 @@ fn ctrl_g_toggles_cli_agent_rich_input_from_terminal_context() {
         let (window_id, terminal) =
             open_cli_agent_rich_input_for_agent_with_window_id(&mut app, CLIAgent::OpenCode);
 
-        let keystroke = warpui::keymap::Keystroke::parse("ctrl-g").expect("valid keystroke");
+        let keystroke = black_ui::keymap::Keystroke::parse("ctrl-g").expect("valid keystroke");
 
         // First close: rich input is open → Ctrl-G should close.
         let handled = app

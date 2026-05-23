@@ -7,8 +7,8 @@ use lazy_static::lazy_static;
 pub use new_session_shell::*;
 use serde::{Deserialize, Serialize};
 pub use startup_shell::*;
-use warp_core::settings::macros::define_settings_group;
-use warp_core::settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
+use black_core::settings::macros::define_settings_group;
+use black_core::settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 pub use working_directory_config::*;
 
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;

@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
-use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
+use black_core::features::FeatureFlag;
+use black_core::send_telemetry_from_ctx;
 use warp_multi_agent_api as api;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 use super::history_model::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,

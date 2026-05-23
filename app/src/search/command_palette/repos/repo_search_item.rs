@@ -3,10 +3,10 @@ use std::path::Path;
 use ai::workspace::WorkspaceMetadata;
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{Align, ConstrainedBox, Flex, Highlight, ParentElement, Shrinkable, Text};
-use warpui::fonts::{Properties, Weight};
-use warpui::{AppContext, Element, SingletonEntity};
+use black_core::ui::theme::Fill;
+use black_ui::elements::{Align, ConstrainedBox, Flex, Highlight, ParentElement, Shrinkable, Text};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::{AppContext, Element, SingletonEntity};
 
 use crate::appearance::Appearance;
 use crate::search::action::search_item::styles;

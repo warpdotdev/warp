@@ -5,8 +5,8 @@ use std::{io, process};
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use typed_path::UnixPathBuf;
-use warp_core::channel::{Channel, ChannelState};
-use warp_util::path::{canonicalize_git_bash_path, is_msys2_path, warp_shell_path};
+use black_core::channel::{Channel, ChannelState};
+use black_util::path::{canonicalize_git_bash_path, is_msys2_path, warp_shell_path};
 
 use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::bootstrap::init_shell_script_for_shell;
@@ -29,7 +29,7 @@ pub fn extra_path_entries() -> impl Iterator<Item = PathBuf> {
         if #[cfg(target_os = "macos")] {
             use itertools::Either;
 
-            if let Some(resources_path) = warp_core::paths::bundled_resources_dir() {
+            if let Some(resources_path) = black_core::paths::bundled_resources_dir() {
                 let bin_path = resources_path.join("bin");
                 Either::Left(std::iter::once(bin_path))
             } else {
@@ -528,7 +528,7 @@ impl WslShellStarter {
             .output();
         let home_dir =
             decode_wsl_path_result(command_result).filter(|s| !s.as_bytes().is_empty())?;
-        warp_util::path::convert_wsl_to_windows_host_path(
+        black_util::path::convert_wsl_to_windows_host_path(
             &home_dir.to_typed_path(),
             &self.distribution,
         )
