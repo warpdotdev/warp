@@ -24,9 +24,8 @@ pub const MAX_CUSTOM_WARPING_VERBS: usize = 50;
 /// trailing ellipsis is appended. Longer entries are truncated.
 pub const MAX_WARPING_VERB_CHARS: usize = 40;
 
-/// Trims, sentence-capitalizes, and validates a single verb. Returns `None` if
-/// the trimmed value is empty. Over-long entries are truncated at
-/// [`MAX_WARPING_VERB_CHARS`].
+/// Trims and validates a single verb. Returns `None` if the trimmed value is
+/// empty. Over-long entries are truncated at [`MAX_WARPING_VERB_CHARS`].
 ///
 /// Trailing "." and "…" characters are stripped so that the render-time
 /// formatter can append a single canonical "..." without double-dotting.
@@ -50,9 +49,7 @@ pub fn normalize_warping_verb(verb: &str) -> Option<String> {
         return None;
     }
 
-    let truncated = truncate_warping_verb(&stripped);
-    let capitalized = sentence_capitalize_warping_verb(&truncated);
-    let normalized = truncate_warping_verb(&capitalized);
+    let normalized = truncate_warping_verb(&stripped);
 
     if normalized.is_empty() {
         None
@@ -75,16 +72,6 @@ fn truncate_warping_verb(verb: &str) -> String {
     }
 }
 
-fn sentence_capitalize_warping_verb(verb: &str) -> String {
-    let mut chars = verb.chars();
-    let Some(first) = chars.next() else {
-        return String::new();
-    };
-    let mut capitalized = first.to_uppercase().collect::<String>();
-    capitalized.extend(chars);
-    capitalized
-}
-
 /// Normalizes a list of verbs: trims, drops empties, truncates over-long
 /// entries, and caps the list at [`MAX_CUSTOM_WARPING_VERBS`].
 pub fn normalize_warping_verbs(verbs: Vec<String>) -> Vec<String> {
@@ -102,10 +89,9 @@ fn format_for_display(verb: &str) -> String {
     if trimmed.is_empty() {
         return DEFAULT_WARPING_VERB.to_owned();
     }
-    let capitalized = sentence_capitalize_warping_verb(trimmed);
-    match capitalized.chars().last() {
-        Some('.') | Some('!') | Some('?') | Some('…') => capitalized,
-        _ => format!("{capitalized}..."),
+    match trimmed.chars().last() {
+        Some('.') | Some('!') | Some('?') | Some('…') => trimmed.to_owned(),
+        _ => format!("{trimmed}..."),
     }
 }
 

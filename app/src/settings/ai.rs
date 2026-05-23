@@ -1686,7 +1686,6 @@ define_settings_group!(AISettings, settings: [
         description: "Canonical handler for the Warp agent's spinner verbs / warping verbs / flavor verbs. \
 List of short phrases that replace the default 'Warping...' shimmer while the Warp agent (or an Oz cloud agent) is in the generic in-progress state; tool-specific verbs like 'Grepping...' are unaffected. \
 Keywords: spinner, spinner verbs, warping, warping verbs, flavor verbs, verbs, pack, packs. \
-Custom phrases use sentence capitalization: capitalize only the first word, not every word in a phrase. \
 Built-in preset pack values to write exactly, without trailing ellipses: medieval=[At your service, my liege; At once, my lord; The scribes set to work; Seeking wisdom from the realm; Consulting the ancient tomes; Dispatching riders across the kingdom; Draining the flagons; Interrogating the lesser lords; Raising the drawbridge; Rallying the bannermen]; conspiracy=[Questioning science; Conspiring; Speculating; Melting steel beams; Confirmation biasing; Doing my own research; Looking for alternative facts; Waking up the sheep; Internet deep diving; Gathering evidence; Proceeding with skepticism]; cooking=[Sautéing; Caramelizing; Slicing and dicing; Bruleeing; Flambéing; Immersion blending; Sous viding; Emulsifying; Fermenting; Braising]; warpy=[Warping; Going to infinity; Gaining speed; Morphing; Wormhole-ing; Orbiting; Galaxy braining; Shooting stars; Nebulizing; Constellating]. \
 For ANY natural-language request like 'change my spinner verbs', 'set my warping verbs', or 'use the <pack> pack', ALWAYS replace the entire list in this setting with exactly what the user asked for. \
 If a request like 'update spinner verbs' does not include a custom list or built-in pack name, ask the user which verbs or pack to use instead of searching. \
@@ -2241,8 +2240,8 @@ impl AISettings {
     }
 
     /// Replaces the custom warping verbs list with a normalized version of `verbs`.
-    /// Normalization trims whitespace, sentence-capitalizes entries, drops
-    /// empty entries, truncates over-long entries, and caps the list length. See
+    /// Normalization trims whitespace, drops empty entries, truncates over-long
+    /// entries, and caps the list length. See
     /// [`crate::ai::loading::normalize_warping_verbs`].
     pub fn set_custom_warping_verbs(&mut self, verbs: Vec<String>, ctx: &mut ModelContext<Self>) {
         let normalized = crate::ai::loading::normalize_warping_verbs(verbs);

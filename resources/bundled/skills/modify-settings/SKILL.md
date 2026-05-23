@@ -27,7 +27,6 @@ Rules:
 
 - Use `agents.warp_agent.custom_warping_verbs`.
 - Store raw phrases without trailing ellipses; Warp adds `...` at display time.
-- Use sentence capitalization for custom phrases: capitalize only the first word, not every word in a phrase.
 - Set `custom_warping_verbs = []` to restore the default `Warping...` display.
 - If the user provides a custom list (comma-separated, numbered, or plain), write those phrases verbatim as a TOML string array. Replace the entire list every time — never append.
 - If the user asks for a built-in pack by name, write the exact pack array below. Do NOT modify source code to add a new pack.

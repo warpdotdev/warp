@@ -40,7 +40,6 @@ The generic `Warping...` message is currently fixed. Users who personalize Warp'
     - Drop empty entries.
     - Strip trailing `.` and `…` characters before display formatting.
     - Drop entries that become empty after trimming/stripping, including dots-only entries.
-    - Sentence-capitalize the first character without title-casing the whole phrase.
     - Truncate each phrase to `MAX_WARPING_VERB_CHARS` characters before the render-time ellipsis.
     - Cap the stored/displayed list at `MAX_CUSTOM_WARPING_VERBS` entries.
 12. If normalization produces an empty list, Warp falls back to `Warping...`.

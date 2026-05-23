@@ -4,31 +4,31 @@ use super::*;
 fn normalize_verb_trims_whitespace() {
     assert_eq!(
         normalize_warping_verb("   cooking up a plan   "),
-        Some("Cooking up a plan".to_owned())
+        Some("cooking up a plan".to_owned())
     );
 }
 
 #[test]
-fn normalize_verb_capitalizes_single_word() {
+fn normalize_verb_preserves_single_word_casing() {
     assert_eq!(
         normalize_warping_verb("warping"),
-        Some("Warping".to_owned())
+        Some("warping".to_owned())
     );
 }
 
 #[test]
-fn normalize_verb_capitalizes_only_first_word_in_phrase() {
+fn normalize_verb_preserves_phrase_casing() {
     assert_eq!(
         normalize_warping_verb("going to infinity"),
-        Some("Going to infinity".to_owned())
+        Some("going to infinity".to_owned())
     );
 }
 
 #[test]
-fn normalize_verb_preserves_existing_phrase_casing_after_first_word() {
+fn normalize_verb_preserves_existing_acronym_casing() {
     assert_eq!(
         normalize_warping_verb("checking NASA docs"),
-        Some("Checking NASA docs".to_owned())
+        Some("checking NASA docs".to_owned())
     );
 }
 
@@ -93,20 +93,20 @@ fn normalize_verbs_caps_list_length_and_drops_empties() {
 
 #[test]
 fn format_for_display_appends_ellipsis() {
-    assert_eq!(format_for_display("thinking"), "Thinking...");
-    assert_eq!(format_for_display("cooking"), "Cooking...");
+    assert_eq!(format_for_display("thinking"), "thinking...");
+    assert_eq!(format_for_display("cooking"), "cooking...");
     assert_eq!(
         format_for_display("going to infinity"),
-        "Going to infinity..."
+        "going to infinity..."
     );
 }
 
 #[test]
 fn format_for_display_preserves_existing_punctuation() {
-    assert_eq!(format_for_display("are you sure?"), "Are you sure?");
-    assert_eq!(format_for_display("working hard!"), "Working hard!");
-    assert_eq!(format_for_display("thinking..."), "Thinking...");
-    assert_eq!(format_for_display("thinking…"), "Thinking…");
+    assert_eq!(format_for_display("are you sure?"), "are you sure?");
+    assert_eq!(format_for_display("working hard!"), "working hard!");
+    assert_eq!(format_for_display("thinking..."), "thinking...");
+    assert_eq!(format_for_display("thinking…"), "thinking…");
 }
 
 #[test]
@@ -193,7 +193,7 @@ fn selector_uses_updated_verbs_for_new_session() {
         selector.resolve_from_verbs("stream-1", &changed_verbs),
         first
     );
-    assert!(["C...", "D..."].contains(
+    assert!(["c...", "d..."].contains(
         &selector
             .resolve_from_verbs("stream-2", &changed_verbs)
             .as_str()
@@ -209,7 +209,7 @@ fn selector_normalizes_raw_setting_values_before_display() {
     let raw_display = display.trim_end_matches("...");
 
     assert_eq!(raw_display.chars().count(), MAX_WARPING_VERB_CHARS);
-    assert!(raw_display.starts_with('A'));
+    assert!(raw_display.starts_with('a'));
 }
 
 #[test]

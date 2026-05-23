@@ -27,8 +27,6 @@ Normalization rules are implemented in `app/src/ai/loading/warping_verb.rs`:
 - Strip trailing `.` and `…` characters.
 - Drop entries that are empty after trimming and stripping.
 - Truncate each entry to `MAX_WARPING_VERB_CHARS`.
-- Sentence-capitalize the first character.
-- Truncate again after capitalization to preserve the max length.
 - Keep at most `MAX_CUSTOM_WARPING_VERBS` entries.
 `format_for_display` appends `...` unless the normalized selected phrase already ends with `.`, `!`, `?`, or `…`.
 ## 4. Built-In Packs
@@ -90,7 +88,7 @@ Settings hot reload uses the existing public-settings path. Raw values are norma
 Invalid or unsupported values should follow the repository's existing settings-file error behavior. Valid arrays that normalize to an empty list fall back to `Warping...`.
 ## 9. Tests and Validation
 Unit coverage should include:
-- `normalize_warping_verb` trimming, trailing-dot stripping, dots-only dropping, sentence capitalization, unicode safety, and truncation.
+- `normalize_warping_verb` trimming, trailing-dot stripping, dots-only dropping, casing preservation, unicode safety, and truncation.
 - `normalize_warping_verbs` empty filtering and max-list capping.
 - selector default fallback when the feature is disabled or list is empty.
 - selector per-session stability.

@@ -31,7 +31,6 @@ The setting path is `agents.warp_agent.custom_warping_verbs`.
 - If the user asks to update spinner verbs but does not provide a list or pack name, ask which verbs or pack they want. Do not search.
 - If the user asks to reset or restore the default, set `custom_warping_verbs = []`.
 - Store raw phrases without trailing ellipses; Warp adds `...` at display time.
-- Use sentence capitalization for custom phrases.
 
 ## Built-in pack values
 
