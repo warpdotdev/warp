@@ -1,3 +1,4 @@
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -7,7 +8,8 @@ pub use crate::catalog::{
     StateDataCategory, TargetScope,
 };
 pub use crate::selectors::{
-    PaneSelector, PaneTarget, TabSelector, TabTarget, TargetSelector, WindowSelector, WindowTarget,
+    PaneSelector, PaneTarget, SessionSelector, SessionTarget, TabSelector, TabTarget,
+    TargetSelector, WindowSelector, WindowTarget,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -37,12 +39,145 @@ pub struct Action {
     pub params: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmptyParams {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActionGetParams {
+    pub action: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActionListParams {}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppActiveParams {}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppInspectParams {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActionListResult {
+    pub actions: Vec<ActionMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActionGetResult {
+    pub action: ActionMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActiveTargetChain {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppVersionResult {
+    pub protocol_version: u32,
+    pub channel: String,
+    pub app_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_version: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppInspectResult {
+    pub version: AppVersionResult,
+    pub active: ActiveTargetChain,
+    pub actions: Vec<ActionMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowSummary {
+    pub window_id: String,
+    pub is_active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowListResult {
+    pub windows: Vec<WindowSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TabSummary {
+    pub tab_id: String,
+    pub window_id: String,
+    pub index: u32,
+    pub is_active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TabListResult {
+    pub tabs: Vec<TabSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneSummary {
+    pub pane_id: String,
+    pub tab_id: String,
+    pub index: u32,
+    pub is_active: bool,
+    pub has_terminal_session: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneListResult {
+    pub panes: Vec<PaneSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub session_id: String,
+    pub pane_id: String,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionListResult {
+    pub sessions: Vec<SessionSummary>,
+}
 impl Action {
     pub fn new(kind: ActionKind) -> Self {
         Self {
             kind,
             params: serde_json::Value::Object(Default::default()),
         }
+    }
+
+    pub fn with_params<T: Serialize>(kind: ActionKind, params: T) -> Result<Self, ControlError> {
+        Ok(Self {
+            kind,
+            params: serde_json::to_value(params).map_err(|err| {
+                ControlError::with_details(
+                    ErrorCode::InvalidParams,
+                    format!("failed to serialize {} parameters", kind.as_str()),
+                    err.to_string(),
+                )
+            })?,
+        })
+    }
+
+    pub fn params_as<T: DeserializeOwned>(&self) -> Result<T, ControlError> {
+        serde_json::from_value(self.params.clone()).map_err(|err| {
+            ControlError::with_details(
+                ErrorCode::InvalidParams,
+                format!("failed to decode {} parameters", self.kind.as_str()),
+                err.to_string(),
+            )
+        })
     }
 }
 

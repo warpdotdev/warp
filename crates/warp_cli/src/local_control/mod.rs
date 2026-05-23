@@ -9,7 +9,10 @@ use crate::agent::OutputFormat;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use clap_complete::aot::Shell;
 
-use commands::{run_app_command, run_instance_command, run_tab_command};
+use commands::{
+    run_action_command, run_app_command, run_instance_command, run_pane_command,
+    run_session_command, run_tab_command, run_window_command,
+};
 use completions::generate_completions_to_stdout;
 use output::write_control_error;
 
@@ -67,10 +70,24 @@ pub enum ControlCommand {
     /// Inspect a selected local Warp app.
     #[command(subcommand)]
     App(AppCommand),
+    /// Inspect the local-control action catalog.
+    #[command(subcommand)]
+    Action(ActionCommand),
+
+    /// Inspect local Warp windows.
+    #[command(subcommand)]
+    Window(WindowCommand),
 
     /// Control local Warp tabs.
     #[command(subcommand)]
     Tab(TabCommand),
+    /// Inspect local Warp panes.
+    #[command(subcommand)]
+    Pane(PaneCommand),
+
+    /// Inspect local Warp sessions.
+    #[command(subcommand)]
+    Session(SessionCommand),
 
     /// Generate shell completions for your shell to stdout.
     ///
@@ -108,12 +125,47 @@ pub enum AppCommand {
 
     /// Print protocol and app version metadata for the selected local Warp app.
     Version(TargetArgs),
+
+    /// Print the active window/tab/pane/session chain.
+    Active(TargetArgs),
+
+    /// Print app and protocol metadata.
+    Inspect(TargetArgs),
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum ActionCommand {
+    /// List allowlisted local-control actions.
+    List(TargetArgs),
+
+    /// Inspect one allowlisted local-control action.
+    Get(ActionGetArgs),
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum WindowCommand {
+    /// List windows in the selected local Warp app.
+    List(TargetArgs),
 }
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum TabCommand {
+    /// List tabs in the selected local Warp app.
+    List(TargetArgs),
     /// Create a new terminal tab in the active window.
     Create(TargetArgs),
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum PaneCommand {
+    /// List panes in the selected local Warp app.
+    List(TargetArgs),
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum SessionCommand {
+    /// List sessions in the selected local Warp app.
+    List(TargetArgs),
 }
 
 #[derive(Debug, Clone, Args, Default)]
@@ -125,6 +177,15 @@ pub struct TargetArgs {
     /// Target a specific local Warp process id.
     #[arg(long = "pid", conflicts_with = "instance")]
     pub pid: Option<u32>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ActionGetArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    /// Action name, such as tab.create or window.list.
+    pub action: String,
 }
 
 pub fn run(args: ControlArgs) -> ExitCode {
@@ -148,7 +209,11 @@ fn run_inner(args: ControlArgs) -> Result<(), local_control::protocol::ControlEr
     match args.command {
         ControlCommand::Instance(command) => run_instance_command(command, output_format),
         ControlCommand::App(command) => run_app_command(command, output_format),
+        ControlCommand::Action(command) => run_action_command(command, output_format),
+        ControlCommand::Window(command) => run_window_command(command, output_format),
         ControlCommand::Tab(command) => run_tab_command(command, output_format),
+        ControlCommand::Pane(command) => run_pane_command(command, output_format),
+        ControlCommand::Session(command) => run_session_command(command, output_format),
         ControlCommand::Completions { shell } => generate_completions_to_stdout(shell),
     }
 }

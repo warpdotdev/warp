@@ -18,7 +18,11 @@ pub use discovery::{
     discovery_dir,
 };
 pub use protocol::{
-    Action, ControlError, ControlResponse, ErrorCode, ErrorResponseEnvelope, ExecutionContextProof,
-    PROTOCOL_VERSION, RequestEnvelope, ResponseEnvelope,
+    Action, ActionGetParams, ActionGetResult, ActionListParams, ActionListResult,
+    ActiveTargetChain, AppActiveParams, AppInspectParams, AppInspectResult, AppVersionResult,
+    ControlError, ControlResponse, EmptyParams, ErrorCode, ErrorResponseEnvelope,
+    ExecutionContextProof, PROTOCOL_VERSION, PaneListResult, PaneSummary, RequestEnvelope,
+    ResponseEnvelope, SessionListResult, SessionSummary, TabListResult, TabSummary,
+    WindowListResult, WindowSummary,
 };
-pub use selectors::{PaneSelector, TabSelector, TargetSelector, WindowSelector};
+pub use selectors::{PaneSelector, SessionSelector, TabSelector, TargetSelector, WindowSelector};

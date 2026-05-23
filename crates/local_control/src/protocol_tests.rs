@@ -33,6 +33,7 @@ fn input_run_is_not_in_the_allowlisted_catalog() {
     let action = serde_json::from_value::<ActionKind>(serde_json::json!("input.run"));
     assert!(action.is_err());
 }
+
 #[test]
 fn malformed_action_name_is_not_deserialized() {
     let action = serde_json::from_value::<ActionKind>(serde_json::json!("tab.create.extra"));
@@ -67,11 +68,19 @@ fn tab_create_metadata_is_first_slice_logged_out_safe_mutation() {
 }
 
 #[test]
-fn core_smoke_metadata_has_explicit_read_metadata_category() {
+fn structural_metadata_actions_are_logged_out_safe_read_metadata() {
     for action in [
         ActionKind::InstanceList,
         ActionKind::AppPing,
+        ActionKind::AppInspect,
         ActionKind::AppVersion,
+        ActionKind::AppActive,
+        ActionKind::ActionList,
+        ActionKind::ActionGet,
+        ActionKind::WindowList,
+        ActionKind::TabList,
+        ActionKind::PaneList,
+        ActionKind::SessionList,
     ] {
         let metadata = action.metadata();
         assert_eq!(
@@ -87,9 +96,72 @@ fn core_smoke_metadata_has_explicit_read_metadata_category() {
             metadata.permission_category,
             PermissionCategory::ReadMetadata
         );
+        assert!(!metadata.requires_authenticated_user);
         assert!(!metadata.authenticated_user.required);
-        assert_eq!(metadata.target_scope, TargetScope::Instance);
+        assert_eq!(
+            metadata.allowed_invocation_contexts,
+            vec![
+                InvocationContext::InsideWarp,
+                InvocationContext::OutsideWarp
+            ]
+        );
     }
+}
+
+#[test]
+fn structural_metadata_actions_have_expected_target_scopes() {
+    for action in [
+        ActionKind::InstanceList,
+        ActionKind::AppPing,
+        ActionKind::AppInspect,
+        ActionKind::AppVersion,
+        ActionKind::AppActive,
+    ] {
+        assert_eq!(action.metadata().target_scope, TargetScope::Instance);
+    }
+
+    assert_eq!(
+        ActionKind::ActionList.metadata().target_scope,
+        TargetScope::Action
+    );
+    assert_eq!(
+        ActionKind::ActionGet.metadata().target_scope,
+        TargetScope::Action
+    );
+    assert_eq!(
+        ActionKind::WindowList.metadata().target_scope,
+        TargetScope::Window
+    );
+    assert_eq!(
+        ActionKind::TabList.metadata().target_scope,
+        TargetScope::Tab
+    );
+    assert_eq!(
+        ActionKind::PaneList.metadata().target_scope,
+        TargetScope::Pane
+    );
+    assert_eq!(
+        ActionKind::SessionList.metadata().target_scope,
+        TargetScope::Session
+    );
+}
+
+#[test]
+fn action_with_params_roundtrips_typed_action_get_params() {
+    let action = Action::with_params(
+        ActionKind::ActionGet,
+        ActionGetParams {
+            action: "tab.create".to_owned(),
+        },
+    )
+    .expect("params serialize");
+    assert_eq!(action.kind, ActionKind::ActionGet);
+    assert_eq!(action.params["action"], "tab.create");
+
+    let params = action
+        .params_as::<ActionGetParams>()
+        .expect("params deserialize");
+    assert_eq!(params.action, "tab.create");
 }
 
 #[test]
@@ -124,6 +196,7 @@ fn default_permissions_preserve_security_categories() {
         PermissionCategory::ReadMetadata
     );
 }
+
 #[test]
 fn non_first_slice_actions_are_catalog_stubs() {
     let metadata = ActionKind::WindowCreate.metadata();

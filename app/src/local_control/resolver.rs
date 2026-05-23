@@ -1,4 +1,7 @@
-use ::local_control::protocol::{PaneTarget, TabTarget, TargetSelector, WindowTarget};
+use crate::local_control::handlers::metadata::action_metadata_for_name;
+use ::local_control::protocol::{
+    ActionGetParams, PaneTarget, SessionTarget, TabTarget, TargetSelector, WindowTarget,
+};
 use ::local_control::{ActionKind, ControlError, ErrorCode};
 use warpui::ModelContext;
 
@@ -41,13 +44,43 @@ pub(crate) fn validate_tab_create_target(target: &TargetSelector) -> Result<(), 
             "tab.create does not accept a concrete pane selector",
         ));
     }
+    if matches!(target.session.as_ref(), Some(SessionTarget::Id { .. })) {
+        return Err(ControlError::new(
+            ErrorCode::StaleTarget,
+            "tab.create cannot resolve the requested session id",
+        ));
+    }
+    if !matches!(target.session.as_ref(), None | Some(SessionTarget::Active)) {
+        return Err(ControlError::new(
+            ErrorCode::InvalidSelector,
+            "tab.create does not accept a concrete session selector",
+        ));
+    }
     Ok(())
 }
 
 pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result<(), ControlError> {
-    if action.kind != ActionKind::TabCreate {
-        return Ok(());
+    match action.kind {
+        ActionKind::ActionGet => {
+            let params = action.params_as::<ActionGetParams>()?;
+            action_metadata_for_name(&params.action)?;
+            Ok(())
+        }
+        ActionKind::AppPing
+        | ActionKind::AppInspect
+        | ActionKind::AppVersion
+        | ActionKind::AppActive
+        | ActionKind::ActionList
+        | ActionKind::WindowList
+        | ActionKind::TabList
+        | ActionKind::TabCreate
+        | ActionKind::PaneList
+        | ActionKind::SessionList => validate_empty_action_params(action),
+        _ => Ok(()),
     }
+}
+
+fn validate_empty_action_params(action: &::local_control::Action) -> Result<(), ControlError> {
     if action
         .params
         .as_object()
@@ -57,7 +90,7 @@ pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result
     }
     Err(ControlError::new(
         ErrorCode::InvalidParams,
-        "tab.create does not accept parameters in the first implementation slice",
+        format!("{} does not accept parameters", action.kind.as_str()),
     ))
 }
 
