@@ -1,8 +1,7 @@
-use std::{
-    collections::{HashMap, HashSet},
-    iter,
-};
+use std::collections::{HashMap, HashSet};
+use std::iter;
 
+use asset_cache::AssetCacheExt as _;
 use futures::future::BoxFuture;
 use futures_util::future::join_all;
 use itertools::{Either, Itertools};
@@ -11,26 +10,20 @@ use rand::Rng;
 #[cfg(not(target_arch = "wasm32"))]
 use session_sharing_protocol::common::Viewer;
 use session_sharing_protocol::common::{
-    InputReplicaId, ParticipantInfo, ParticipantList, ParticipantPresenceUpdate, PresenceUpdate,
-    Role, RoleRequestId, Selection,
+    InputReplicaId, ParticipantId, ParticipantInfo, ParticipantList, ParticipantPresenceUpdate,
+    PresenceUpdate, Role, RoleRequestId, Selection,
 };
+use warpui::assets::asset_cache::{AssetCache, AssetState};
+use warpui::image_cache::ImageType;
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
-use asset_cache::AssetCacheExt as _;
-use warpui::{
-    assets::asset_cache::{AssetCache, AssetState},
-    image_cache::ImageType,
-    r#async::SpawnedFutureHandle,
-    AppContext, Entity, ModelContext, SingletonEntity,
-};
-
-use session_sharing_protocol::common::ParticipantId;
-
-use crate::{
-    auth::UserUid,
-    editor::{CursorColors, PeerSelectionData},
-    terminal::model::{block::BlockId, blocks::BlockList, terminal_model::BlockIndex},
-    util::color::coloru_with_opacity,
-};
+use crate::auth::UserUid;
+use crate::editor::{CursorColors, PeerSelectionData};
+use crate::terminal::model::block::BlockId;
+use crate::terminal::model::blocks::BlockList;
+use crate::terminal::model::terminal_model::BlockIndex;
+use crate::util::color::coloru_with_opacity;
 
 /// Selections have 25% opacity.
 pub fn text_selection_color(participant_color: ColorU) -> ColorU {

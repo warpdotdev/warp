@@ -3,25 +3,21 @@
 //! Uses the shared [`ChipConfigurator`] with `LeftRightZones` layout to let users
 //! drag/drop chips between left, right, and unused banks.
 
+use settings::Setting as _;
 use warpui::keymap::FixedBinding;
-
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
+use super::toolbar_item::AgentToolbarItemKind;
 use crate::chip_configurator::{
     render_chip_editor_modal, render_chip_editor_sections, ChipConfigurator,
     ChipConfiguratorAction, ChipConfiguratorLayout, ChipEditorModalConfig, ChipEditorMouseHandles,
     ChipEditorSectionsConfig,
 };
-use crate::report_if_error;
 use crate::terminal::session_settings::{
     AgentToolbarChipSelection, CLIAgentToolbarChipSelection, SessionSettings,
     SessionSettingsChangedEvent, ToolbarChipSelection,
 };
-use crate::Appearance;
-
-use settings::Setting as _;
-
-use super::toolbar_item::AgentToolbarItemKind;
+use crate::{report_if_error, Appearance};
 
 const AGENT_MODAL_TITLE: &str = "Edit agent toolbelt";
 const CLI_MODAL_TITLE: &str = "Edit CLI agent toolbelt";
@@ -94,9 +90,15 @@ fn open_toolbar_items_from_settings<V: View>(
         }
     };
 
-    // Drop saved items that are no longer available (e.g. their feature flag was disabled).
-    // Without this, the editor renders chips like `HandoffToCloud` from a prior `Custom`
-    // selection even when the gating flag is off.
+    // Filter out items that are unavailable due to runtime state (user settings,
+    // workspace config, etc.) on top of the feature-flag checks in all_available().
+    let available: Vec<AgentToolbarItemKind> = available
+        .into_iter()
+        .filter(|item| item.is_available(ctx))
+        .collect();
+
+    // Drop saved items that are no longer available (e.g. their feature flag was disabled
+    // or a setting was turned off).
     let filter_unavailable = |items: Vec<AgentToolbarItemKind>| -> Vec<AgentToolbarItemKind> {
         items
             .into_iter()
@@ -121,6 +123,15 @@ fn open_default_toolbar_items<V: View>(
 ) {
     let appearance = Appearance::as_ref(ctx);
     let (left, right, available) = AgentToolbarItemKind::defaults_for_mode(mode);
+    let filter_runtime = |items: Vec<AgentToolbarItemKind>| -> Vec<AgentToolbarItemKind> {
+        items
+            .into_iter()
+            .filter(|item| item.is_available(ctx))
+            .collect()
+    };
+    let left = filter_runtime(left);
+    let right = filter_runtime(right);
+    let available = filter_runtime(available);
     chip_configurator.open_left_right_zones_with_items(left, right, available, appearance);
 }
 

@@ -17,30 +17,35 @@ pub use persistence::schema;
 #[cfg(feature = "integration_tests")]
 pub mod testing;
 
-use instant::Instant;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use crate::ai::persisted_workspace::EnablementState;
 use ai::project_context::model::ProjectRulePath;
+use ai::workspace::WorkspaceMetadata as CodeWorkspaceMetadata;
 use chrono::{DateTime, Local, Utc};
+use instant::Instant;
 use lsp::supported_servers::LSPServerType;
+#[cfg(any(feature = "local_fs", feature = "integration_tests"))]
+pub use sqlite::database_file_path_for_scope;
+#[cfg(any(feature = "local_fs", feature = "integration_tests"))]
+pub use sqlite::establish_ro_connection;
 use uuid::Uuid;
 use warp_core::command::ExitCode;
 use warp_graphql::scalars::time::ServerTimestamp;
 use warp_multi_agent_api as api;
 use warpui::{AppContext, Entity, SingletonEntity};
 
+use self::model::{AgentConversation, AgentConversationData, Project};
 use crate::ai::blocklist::PersistedAIInput;
 use crate::ai::mcp::TemplatableMCPServerInstallation;
+use crate::ai::persisted_workspace::EnablementState;
 use crate::app_state::AppState;
 use crate::auth::auth_manager::PersistedCurrentUserInformation;
 use crate::cloud_object::model::actions::ObjectAction;
 use crate::cloud_object::model::generic_string_model::CloudStringObject;
-
 use crate::cloud_object::{
     CloudObject, CloudObjectMetadata, ObjectIdType, RevisionAndLastEditor, ServerCreationInfo,
 };
@@ -55,14 +60,6 @@ use crate::terminal::model::session::SessionId;
 use crate::workflows::CloudWorkflow;
 use crate::workspaces::user_profiles::UserProfileWithUID;
 use crate::workspaces::workspace::{Workspace as WorkspaceMetadata, WorkspaceUid};
-use ai::workspace::WorkspaceMetadata as CodeWorkspaceMetadata;
-
-use self::model::{AgentConversation, AgentConversationData, Project};
-
-#[cfg(any(feature = "local_fs", feature = "integration_tests"))]
-pub use sqlite::database_file_path_for_scope;
-#[cfg(any(feature = "local_fs", feature = "integration_tests"))]
-pub use sqlite::establish_ro_connection;
 
 pub enum PersistenceScope {
     App,
@@ -78,7 +75,7 @@ pub enum PersistenceScope {
 pub fn initialize(
     ctx: &mut AppContext,
     scope: PersistenceScope,
-) -> (Option<PersistedData>, Option<WriterHandles>) {
+) -> (Option<Box<PersistedData>>, Option<WriterHandles>) {
     cfg_if::cfg_if! {
         if #[cfg(feature = "local_fs")] {
             sqlite::initialize(ctx, scope)

@@ -1,7 +1,8 @@
 //! Utilities for editing lists.
 
-use enum_iterator::Sequence;
 use std::fmt;
+
+use enum_iterator::Sequence;
 
 #[cfg(test)]
 #[path = "list_tests.rs"]

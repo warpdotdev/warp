@@ -1,18 +1,7 @@
-use crate::{
-    ai::agent::conversation::AIConversationId,
-    terminal::{
-        model::{
-            block::{AgentInteractionMetadata, SerializedAIMetadata, SerializedBlock},
-            bootstrap::BootstrapStage,
-            session::command_executor::testing::TestCommandExecutor,
-            session::{BootstrapSessionType, Session, SessionId, SessionInfo},
-            test_utils::TestBlockBuilder,
-        },
-        shell::ShellType,
-        History,
-    },
-    test_util::{Stub, VirtualFS},
-};
+use std::path::PathBuf;
+use std::pin::pin;
+use std::sync::Arc;
+
 use chrono::Local;
 use futures::future::join_all;
 use futures::Future;
@@ -21,11 +10,18 @@ use itertools::Itertools;
 use warp_core::command::ExitCode;
 use warpui::{App, ModelHandle};
 
-use std::path::PathBuf;
-use std::pin::pin;
-use std::sync::Arc;
-
 use super::{HistoryEntry, HistoryEvent, PersistedCommand, ShellHost};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::terminal::model::block::{
+    AgentInteractionMetadata, SerializedAIMetadata, SerializedBlock,
+};
+use crate::terminal::model::bootstrap::BootstrapStage;
+use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
+use crate::terminal::model::session::{BootstrapSessionType, Session, SessionId, SessionInfo};
+use crate::terminal::model::test_utils::TestBlockBuilder;
+use crate::terminal::shell::ShellType;
+use crate::terminal::History;
+use crate::test_util::{Stub, VirtualFS};
 
 impl History {
     /// Returns a Future that completes when `History` is initialized for all sessions with IDs in

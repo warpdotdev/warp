@@ -1,35 +1,31 @@
 #![allow(deprecated)]
 
-use command::{blocking, r#async::Command};
-use futures::{StreamExt, TryStreamExt as _};
-use futures_lite::future;
-use instant::Instant;
-use std::{
-    env,
-    ffi::{CString, OsString},
-    fs,
-    os::unix::{ffi::OsStrExt as _, fs::MetadataExt, io::AsRawFd as _},
-    path::{Path, PathBuf},
-    str,
-    time::Duration,
-};
-use warp_core::safe_error;
+use std::ffi::{CString, OsString};
+use std::os::unix::ffi::OsStrExt as _;
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::io::AsRawFd as _;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+use std::{env, fs, str};
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use channel_versions::VersionInfo;
-use nix::unistd::{fchown, getgid};
-use nix::{errno::Errno, unistd::getuid};
+use command::blocking;
+use command::r#async::Command;
+use futures::{StreamExt, TryStreamExt as _};
+use futures_lite::future;
+use instant::Instant;
+use nix::errno::Errno;
+use nix::unistd::{fchown, getgid, getuid};
 use warp_core::macos::get_bundle_path;
+use warp_core::safe_error;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
-use crate::{
-    appearance::AppearanceManager,
-    autoupdate::{AutoupdateStage, AutoupdateState},
-    channel::{Channel, ChannelState},
-    safe_info,
-};
-
 use super::{release_assets_directory_url, DownloadReady};
+use crate::appearance::AppearanceManager;
+use crate::autoupdate::{AutoupdateStage, AutoupdateState};
+use crate::channel::{Channel, ChannelState};
+use crate::safe_info;
 
 // Relative path to the directory containing old executables from before an autoupdate.
 //

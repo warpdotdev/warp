@@ -1,52 +1,47 @@
 pub mod active_session;
 pub mod command_executor;
 
-use async_channel::Sender;
-pub use command_executor::*;
-
-use anyhow::Result;
-use futures::future::{BoxFuture, Shared};
-use futures::FutureExt;
-use instant::Instant;
-use once_cell::sync::OnceCell;
-use smol_str::SmolStr;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use typed_path::{TypedPath, TypedPathBuf, WindowsPath};
-use warp_util::path::{
-    convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
-    ShellFamily,
-};
 
+use anyhow::Result;
+use async_channel::Sender;
+#[cfg(feature = "local_tty")]
+use command_executor::remote_server_executor::RemoteServerCommandExecutor;
+pub use command_executor::*;
+use futures::future::{BoxFuture, Shared};
+use futures::FutureExt;
+use instant::Instant;
+use once_cell::sync::OnceCell;
+use parking_lot::{Mutex, RwLock};
+use smol_str::SmolStr;
+use typed_path::{TypedPath, TypedPathBuf, WindowsPath};
 use version_compare::Version;
 use warp_completer::completer::{
     CommandExitStatus, CommandOutput, PathSeparators, TopLevelCommandCaseSensitivity,
 };
-use warpui::{platform::OperatingSystem, Entity, ModelContext, SingletonEntity};
+use warp_util::path::{
+    convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
+    ShellFamily,
+};
+use warpui::platform::OperatingSystem;
+use warpui::{Entity, ModelContext, SingletonEntity};
 
+use super::ansi::{BootstrappedValue, InitShellValue, SSHValue};
+use super::terminal_model::{HistoryEntry, SubshellInitializationInfo};
 #[cfg(feature = "local_tty")]
 use crate::features::FeatureFlag;
 #[cfg(feature = "local_tty")]
 use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use crate::server::telemetry::{BootstrappingInfo, TelemetryEvent};
-use crate::terminal::event::ExecutedExecutorCommandEvent;
-use crate::terminal::ShellHost;
-use crate::terminal::ShellLaunchData;
-#[cfg(feature = "local_tty")]
-use command_executor::remote_server_executor::RemoteServerCommandExecutor;
-use parking_lot::{Mutex, RwLock};
-
+use crate::terminal::event::{ExecutedExecutorCommandEvent, RemoteServerSetupState};
 use crate::terminal::shell::{Shell, ShellType};
 use crate::terminal::warpify::SubshellSource;
-use crate::terminal::History;
-
-use super::ansi::{BootstrappedValue, InitShellValue, SSHValue};
-use super::terminal_model::{HistoryEntry, SubshellInitializationInfo};
-use crate::terminal::event::RemoteServerSetupState;
+use crate::terminal::{History, ShellHost, ShellLaunchData};
 
 #[derive(thiserror::Error, Debug)]
 pub enum ReadHistoryContentsError {
@@ -180,13 +175,15 @@ impl Sessions {
                 | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
                 | RemoteServerManagerEvent::CodebaseIndexStatusesSnapshot { .. }
                 | RemoteServerManagerEvent::CodebaseIndexStatusUpdated { .. }
+                | RemoteServerManagerEvent::CodebaseIndexMutationFailed { .. }
                 | RemoteServerManagerEvent::BinaryCheckComplete { .. }
                 | RemoteServerManagerEvent::BinaryInstallComplete { .. }
                 | RemoteServerManagerEvent::ClientRequestFailed { .. }
                 | RemoteServerManagerEvent::ServerMessageDecodingError { .. }
                 | RemoteServerManagerEvent::DiffStateSnapshotReceived { .. }
                 | RemoteServerManagerEvent::DiffStateMetadataUpdateReceived { .. }
-                | RemoteServerManagerEvent::DiffStateFileDeltaReceived { .. } => {}
+                | RemoteServerManagerEvent::DiffStateFileDeltaReceived { .. }
+                | RemoteServerManagerEvent::GetBranchesResponse { .. } => {}
                 RemoteServerManagerEvent::SessionReconnected {
                     session_id: sid,
                     client,
@@ -584,6 +581,7 @@ pub struct SessionInfo {
     pub keywords: Vec<SmolStr>,
     pub is_legacy_ssh_session: IsLegacySSHSession,
     pub home_dir: Option<String>,
+    pub cdpath: Option<String>,
     pub editor: Option<String>,
     pub session_type: BootstrapSessionType,
     pub host_info: HostInfo,
@@ -648,6 +646,7 @@ impl SessionInfo {
             environment_variable_names: Default::default(),
             path: None,
             home_dir: None,
+            cdpath: None,
             editor: None,
             histfile: None,
             aliases: Default::default(),
@@ -784,6 +783,7 @@ impl SessionInfo {
             builtins: builtins.unwrap_or_default(),
             keywords: keywords.unwrap_or_default(),
             home_dir,
+            cdpath: bootstrapped_value.cdpath,
             editor: bootstrapped_value.editor,
             is_legacy_ssh_session: self.is_legacy_ssh_session,
             subshell_info: self.subshell_info.take(),
@@ -971,6 +971,10 @@ impl Session {
 
     pub fn editor(&self) -> Option<&str> {
         self.info.editor.as_deref()
+    }
+
+    pub fn cdpath(&self) -> Option<&str> {
+        self.info.cdpath.as_deref()
     }
 
     pub fn host_info(&self) -> HostInfo {
@@ -1576,7 +1580,8 @@ pub fn get_local_hostname() -> Result<String> {
 
 #[cfg(test)]
 pub mod testing {
-    use super::{command_executor::testing::TestCommandExecutor, *};
+    use super::command_executor::testing::TestCommandExecutor;
+    use super::*;
 
     /// Builder methods for constructing `SessionInfo` in tests.
     impl SessionInfo {
@@ -1607,6 +1612,7 @@ pub mod testing {
                 keywords: Vec::new(),
                 is_legacy_ssh_session: IsLegacySSHSession::No,
                 home_dir: None,
+                cdpath: None,
                 host_info: Default::default(),
                 tmux_control_mode: false,
                 wsl_name: None,
@@ -1656,6 +1662,11 @@ pub mod testing {
 
         pub fn with_home_dir(mut self, home_dir: String) -> Self {
             self.home_dir = Some(home_dir);
+            self
+        }
+
+        pub fn with_cdpath(mut self, cdpath: String) -> Self {
+            self.cdpath = Some(cdpath);
             self
         }
 

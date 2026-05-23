@@ -8,8 +8,7 @@ use warp_completer::completer::SuggestionTypeName;
 use warp_completer::signatures::CommandRegistry;
 use warp_core::ui::theme::AnsiColorIdentifier;
 use warpui::r#async::SpawnedFutureHandle;
-use warpui::ViewHandle;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warpui::{Entity, ModelContext, SingletonEntity, ViewHandle};
 
 use crate::appearance::Appearance;
 use crate::completer::SessionAgnosticContext;

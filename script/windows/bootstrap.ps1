@@ -1,24 +1,45 @@
 #!/usr/bin/env powershell
 param(
     [switch]$Help,
-    [switch]$InstallCommonSkills
+    [switch]$InstallCommonSkills,
+    [string]$CommonSkillsTarget = $env:WARP_COMMON_SKILLS_INSTALL_TARGET
 )
 
 $ErrorActionPreference = 'Stop'
+$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 
 function Show-Usage {
-    Write-Output 'Usage: .\script\windows\bootstrap.ps1 [-Help] [-InstallCommonSkills]'
+    Write-Output 'Usage: .\script\windows\bootstrap.ps1 [-Help] [-InstallCommonSkills] [-CommonSkillsTarget <project|global>]'
     Write-Output ''
     Write-Output 'Prepare this checkout for Warp development on Windows.'
     Write-Output ''
     Write-Output 'Options:'
     Write-Output '  -Help                 Show this help message.'
     Write-Output '  -InstallCommonSkills  Install or update common agent skills from skills-lock.json.'
+    Write-Output '  -CommonSkillsTarget   Install into project .agents/skills or global ~/.agents/skills.'
     Write-Output ''
     Write-Output 'Environment:'
     Write-Output '  WARP_SKIP_COMMON_SKILLS_INSTALL=1'
     Write-Output '      Skip installing common agent skills.'
+    Write-Output '  WARP_COMMON_SKILLS_INSTALL_TARGET=project|global'
+    Write-Output '      Choose the install target when -CommonSkillsTarget is omitted.'
+    Write-Output '      Target prompting and duplicate checks are delegated to warpdotdev/common-skills/scripts/install_common_skills.'
+    Write-Output '  WARP_COMMON_SKILLS_SCRIPTS_DIR=/path/to/common-skills/scripts'
+    Write-Output '      Override where common-skills management scripts are loaded from.'
+    Write-Output '  WARP_COMMON_SKILLS_REF=<git-ref>'
+    Write-Output '      Override the remote warpdotdev/common-skills ref used when fetching scripts.'
 }
+
+function ConvertTo-CommonSkillsTarget {
+    param([string]$Target)
+
+    switch ($Target.ToLowerInvariant()) {
+        { $_ -eq '' -or $_ -eq 'p' -or $_ -eq 'project' -or $_ -eq '1' } { return 'project' }
+        { $_ -eq 'g' -or $_ -eq 'global' -or $_ -eq '2' } { return 'global' }
+        default { throw "Invalid common skills install target: $Target" }
+    }
+}
+
 
 function Show-BootstrapPreview {
     Write-Output 'Warp bootstrap is starting for Windows.'
@@ -32,8 +53,12 @@ function Show-BootstrapPreview {
         Write-Output '  - Skip common agent skills unless -InstallCommonSkills is provided.'
     } elseif ($env:WARP_SKIP_COMMON_SKILLS_INSTALL -eq '1') {
         Write-Output '  - Skip common agent skills because WARP_SKIP_COMMON_SKILLS_INSTALL=1.'
+    } elseif ($script:ResolvedCommonSkillsTarget -eq 'global') {
+        Write-Output '  - Install or update common agent skills in ~/.agents/skills if needed.'
+    } elseif ($script:ResolvedCommonSkillsTarget -eq 'project') {
+        Write-Output '  - Install or update common agent skills in this checkout''s .agents/skills if needed.'
     } else {
-        Write-Output '  - Install or update common agent skills from skills-lock.json if needed.'
+        Write-Output '  - Prompt for where common agent skills should be installed before installing or updating them.'
     }
 
     Write-Output 'Run .\script\windows\bootstrap.ps1 -Help to see options and environment overrides.'
@@ -43,6 +68,10 @@ function Show-BootstrapPreview {
 if ($Help) {
     Show-Usage
     exit 0
+}
+$script:ResolvedCommonSkillsTarget = ''
+if ($InstallCommonSkills -and $CommonSkillsTarget) {
+    $script:ResolvedCommonSkillsTarget = ConvertTo-CommonSkillsTarget $CommonSkillsTarget
 }
 
 Show-BootstrapPreview
@@ -59,9 +88,35 @@ if (-not $gitBinDir) {
     exit 1
 }
 $env:PATH = "$gitBinDir;$env:PATH"
+function Resolve-CommonSkillsScript {
+    param([string]$ScriptName)
+
+    if ($env:WARP_COMMON_SKILLS_SCRIPTS_DIR) {
+        $scriptPath = Join-Path $env:WARP_COMMON_SKILLS_SCRIPTS_DIR $ScriptName
+        if (Test-Path -PathType Leaf $scriptPath) { return $scriptPath }
+        throw "Could not find $ScriptName in WARP_COMMON_SKILLS_SCRIPTS_DIR=$env:WARP_COMMON_SKILLS_SCRIPTS_DIR."
+    }
+
+    $commonSkillsRef = if ($env:WARP_COMMON_SKILLS_REF) { $env:WARP_COMMON_SKILLS_REF } else { 'main' }
+    $rawBaseUrl = if ($env:WARP_COMMON_SKILLS_RAW_BASE_URL) {
+        $env:WARP_COMMON_SKILLS_RAW_BASE_URL.TrimEnd('/')
+    } else {
+        "https://raw.githubusercontent.com/warpdotdev/common-skills/$commonSkillsRef/scripts"
+    }
+    $rawUrl = "$rawBaseUrl/$ScriptName"
+    $scriptPath = Join-Path $env:TEMP "warp-$ScriptName"
+
+    Invoke-WebRequest -Uri $rawUrl -OutFile $scriptPath
+    return $scriptPath
+}
 
 function Install-CommonSkill {
-    & "$gitBinDir\bash.exe" "$PWD\script\install_common_skills" --if-needed
+    $installScript = Resolve-CommonSkillsScript 'install_common_skills'
+    if ($script:ResolvedCommonSkillsTarget) {
+        & "$gitBinDir\bash.exe" "$installScript" --repo-root "$RepoRoot" "--$script:ResolvedCommonSkillsTarget" --if-needed
+    } else {
+        & "$gitBinDir\bash.exe" "$installScript" --repo-root "$RepoRoot" --if-needed --prompt-for-target
+    }
 }
 
 if (-not (Get-Command -Name cargo -Type Application -ErrorAction SilentlyContinue)) {

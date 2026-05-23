@@ -1,17 +1,16 @@
-use std::{
-    ops::Range,
-    path::{Path, PathBuf},
-};
-
-use super::{hash::MerkleHash, node::NodeId, MerkleTree, NodeHash, NodeLens};
-
-use crate::index::full_source_code_embedding::fragment_metadata::{
-    FragmentLocation, LeafToFragmentMetadata,
-};
+use std::ops::Range;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use string_offset::ByteOffset;
+
+use super::hash::MerkleHash;
+use super::node::NodeId;
+use super::{MerkleTree, NodeHash, NodeLens};
+use crate::index::full_source_code_embedding::fragment_metadata::{
+    FragmentLocation, LeafToFragmentMetadata,
+};
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct SerializedCodebaseIndex {

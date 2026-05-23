@@ -1,7 +1,57 @@
-use chrono::Duration;
+use chrono::{Duration, Utc};
 use virtual_fs::{Stub, VirtualFS};
 
 use super::*;
+fn workspace_metadata(path: impl Into<PathBuf>) -> WorkspaceMetadata {
+    WorkspaceMetadata {
+        path: path.into(),
+        navigated_ts: None,
+        modified_ts: Some(Utc::now()),
+        queried_ts: None,
+    }
+}
+
+#[test]
+#[cfg(feature = "local_fs")]
+fn snapshot_storage_app_default_matches_snapshot_dir() {
+    VirtualFS::test(
+        "snapshot_storage_app_default_matches_snapshot_dir",
+        |_dirs, _sandbox| {
+            let storage = SnapshotStorage::app_default().unwrap();
+            assert_eq!(storage.path(), snapshot_dir().unwrap());
+            assert!(storage.is_app_default());
+        },
+    );
+}
+
+#[test]
+fn split_snapshot_metadata_by_validity_uses_injected_snapshot_dir() {
+    let snapshot_dir = tempfile::tempdir().unwrap();
+    let storage = SnapshotStorage::from_dir(snapshot_dir.path().join("daemon")).unwrap();
+    let repo_path = PathBuf::from("/remote/repo");
+    std::fs::write(storage.snapshot_path(&repo_path), b"snapshot").unwrap();
+
+    let (invalid_metadata, valid_metadata) =
+        split_snapshot_metadata_by_validity(vec![workspace_metadata(&repo_path)], Some(&storage));
+
+    assert!(invalid_metadata.is_empty());
+    assert_eq!(valid_metadata.len(), 1);
+    assert_eq!(valid_metadata[0].path, repo_path);
+}
+
+#[test]
+fn split_snapshot_metadata_by_validity_rejects_missing_injected_snapshot() {
+    let snapshot_dir = tempfile::tempdir().unwrap();
+    let storage = SnapshotStorage::from_dir(snapshot_dir.path().join("daemon")).unwrap();
+    let repo_path = PathBuf::from("/remote/repo");
+
+    let (invalid_metadata, valid_metadata) =
+        split_snapshot_metadata_by_validity(vec![workspace_metadata(&repo_path)], Some(&storage));
+
+    assert_eq!(invalid_metadata.len(), 1);
+    assert_eq!(invalid_metadata[0].path, repo_path);
+    assert!(valid_metadata.is_empty());
+}
 
 #[test]
 fn test_clean_up_snapshot_files() {
@@ -71,12 +121,7 @@ fn test_clean_up_snapshot_files() {
         .unwrap();
 
         // Create test metadata that only includes the valid file
-        let metadata = vec![WorkspaceMetadata {
-            path: test_path,
-            navigated_ts: None,
-            modified_ts: None,
-            queried_ts: None,
-        }];
+        let metadata = vec![workspace_metadata(test_path)];
 
         // Run cleanup
         clean_up_snapshot_files(&snapshot_dir_absolute_path, &metadata);

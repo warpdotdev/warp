@@ -2,8 +2,21 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use session_sharing_protocol::common::SessionId;
+use ui_components::lightbox;
 use warp_util::path::LineAndColumnArg;
+use warpui::accessibility::AccessibilityVerbosity;
+use warpui::geometry::rect::RectF;
+use warpui::geometry::vector::Vector2F;
+use warpui::platform::Cursor;
+use warpui::{EntityId, WeakViewHandle, WindowId};
 
+use super::global_actions::{ForkFromExchange, ForkedConversationDestination};
+use super::tab_settings::{
+    VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity, VerticalTabsPrimaryInfo,
+    VerticalTabsTabItemMode, VerticalTabsViewMode,
+};
+use super::view::{OnboardingTutorial, WorkspaceBanner};
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
@@ -29,21 +42,6 @@ use crate::themes::theme::AnsiColorIdentifier;
 use crate::themes::theme_chooser::ThemeChooserMode;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 use crate::workspace::PaneViewLocator;
-use session_sharing_protocol::common::SessionId;
-
-use ui_components::lightbox;
-use warpui::accessibility::AccessibilityVerbosity;
-use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::Vector2F;
-use warpui::platform::Cursor;
-use warpui::{EntityId, WeakViewHandle, WindowId};
-
-use super::global_actions::{ForkFromExchange, ForkedConversationDestination};
-use super::tab_settings::{
-    VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity, VerticalTabsPrimaryInfo,
-    VerticalTabsTabItemMode, VerticalTabsViewMode,
-};
-use super::view::{OnboardingTutorial, WorkspaceBanner};
 
 /// This enum determines how the search query is initialized when opening command search.
 #[derive(Clone, Default, Debug)]
@@ -93,6 +91,12 @@ impl VerticalTabsPaneContextMenuTarget {
             Self::ClickedPane(locator) | Self::ActivePane(locator) => locator,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoCloudHandoffTrigger {
+    MacOsSleep,
+    Uri,
 }
 
 #[derive(Debug, Clone)]
@@ -164,7 +168,6 @@ pub enum WorkspaceAction {
     ToggleTabConfigsMenu,
     ToggleNewSessionMenu {
         position: Vector2F,
-        is_vertical_tabs: bool,
     },
     SelectNewSessionMenuItem(NewSessionMenuItem),
     AutoupdateFailureLink,
@@ -334,6 +337,9 @@ pub enum WorkspaceAction {
     CopySharedSessionLinkFromTab {
         tab_index: usize,
     },
+    OpenSharedSessionQrCode {
+        session_id: SessionId,
+    },
     AddWindow,
     AddWindowWithShell {
         shell: AvailableShell,
@@ -495,7 +501,24 @@ pub enum WorkspaceAction {
         launch: Option<crate::ai::blocklist::handoff::PendingCloudLaunch>,
         #[cfg(not(all(feature = "local_fs", not(target_family = "wasm"))))]
         launch: Option<()>,
-        explicit_environment_id: Option<crate::server::ids::SyncId>,
+        environment_id: Option<crate::server::ids::SyncId>,
+        entry_point: crate::ai::ambient_agents::telemetry::HandoffEntryPoint,
+    },
+    /// Automatically hand off the active running local agent conversation in the
+    /// given terminal view to Cloud Mode.
+    AutoHandoffActiveAgentToCloud {
+        terminal_view_id: EntityId,
+        conversation_id: AIConversationId,
+        trigger: AutoCloudHandoffTrigger,
+    },
+    /// Show the environment creation modal during `&` handoff compose when no
+    /// environments exist.
+    ShowHandoffEnvironmentCreationModal,
+    ShowCloudModeV2EnvironmentCreationModal,
+    /// Open the workspace modal for creating a new managed auth secret.
+    /// Dispatched by orchestration card pickers' "New API key…" item.
+    OpenCreateAuthSecretModal {
+        harness: warp_cli::agent::Harness,
     },
     /// Summarize the active AI conversation in the focused pane.
     SummarizeAIConversation {
@@ -609,9 +632,8 @@ pub enum WorkspaceAction {
         conversation_id: AIConversationId,
         terminal_view_id: Option<EntityId>,
     },
-    /// Open an ambient agent session by joining its shared session.
-    /// Used when the sandbox is running or when we need to view a live session.
-    OpenAmbientAgentSession {
+    /// Open the canonical ambient agent conversation pane and attach it to a live session.
+    OpenOrAttachAmbientAgentConversation {
         session_id: SessionId,
         task_id: AmbientAgentTaskId,
     },
@@ -894,6 +916,7 @@ impl WorkspaceAction {
             | StopSharingSessionFromTabMenu { .. }
             | StopSharingAllSessionsInTab { .. }
             | CopySharedSessionLinkFromTab { .. }
+            | OpenSharedSessionQrCode { .. }
             | ReopenClosedSession
             | FocusLeftPanel
             | FocusRightPanel
@@ -939,7 +962,7 @@ impl WorkspaceAction {
             | ShowRewindConfirmationDialog { .. }
             | ExecuteRewindAIConversation { .. }
             | ExecuteDeleteConversation { .. }
-            | OpenAmbientAgentSession { .. }
+            | OpenOrAttachAmbientAgentConversation { .. }
             | OpenConversationTranscriptViewer { .. }
             | OpenLightbox { .. }
             | UpdateLightboxImage { .. }
@@ -955,6 +978,10 @@ impl WorkspaceAction {
             | OpenSettingsFile
             | FixSettingsWithOz { .. }
             | OpenLocalToCloudHandoffPane { .. }
+            | AutoHandoffActiveAgentToCloud { .. }
+            | ShowHandoffEnvironmentCreationModal
+            | ShowCloudModeV2EnvironmentCreationModal
+            | OpenCreateAuthSecretModal { .. }
             | OpenNetworkLogPane => false,
             #[cfg(debug_assertions)]
             ShowHoaOnboardingFlow => false,

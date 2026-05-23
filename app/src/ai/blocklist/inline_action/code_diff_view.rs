@@ -1,126 +1,104 @@
-use crate::ai::blocklist::view_util::render_provider_icon_button;
-use crate::ai::skills::{SkillOpenOrigin, SkillTelemetryEvent};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Duration;
+
+use ai::diff_validation::{
+    fuzzy_match_diffs, fuzzy_match_v4a_diffs, parse_line_numbers, DiffDelta, DiffType, ParsedDiff,
+    SearchAndReplace, V4AHunk,
+};
 use anyhow::Result;
 use lazy_static::lazy_static;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_geometry::vector::vec2f;
-use rand::{distributions::Alphanumeric, thread_rng, Rng as _};
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    rc::Rc,
-    sync::Arc,
-    time::Duration,
-};
-use warp_core::{
-    features::FeatureFlag,
-    platform::SessionPlatform,
-    settings::ToggleableSetting,
-    ui::{
-        appearance::Appearance,
-        color::CLAUDE_ORANGE,
-        theme::{
-            color::internal_colors::{fg_overlay_6, neutral_1, neutral_4},
-            Fill,
-        },
-    },
-    HostId,
-};
-use warp_editor::{
-    content::buffer::InitialBufferState, render::element::VerticalExpansionBehavior,
-};
+use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng as _};
+use warp_core::features::FeatureFlag;
+use warp_core::platform::SessionPlatform;
+use warp_core::settings::ToggleableSetting;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::color::CLAUDE_ORANGE;
+use warp_core::ui::theme::color::internal_colors::{fg_overlay_6, neutral_1, neutral_4};
+use warp_core::ui::theme::Fill;
+use warp_core::HostId;
+use warp_editor::content::buffer::InitialBufferState;
+use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_util::file::FileSaveError;
 use warp_util::path::common_path;
 use warp_util::standardized_path::StandardizedPath;
+use warpui::elements::new_scrollable::{ScrollableAppearance, SingleAxisConfig};
+use warpui::elements::{
+    Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox,
+    Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty, EventHandler, Flex,
+    FormattedTextElement, HighlightedHyperlink, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, NewScrollable, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, PositionedElementAnchor, PositionedElementOffsetBounds, Radius,
+    SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable,
+    SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
+};
+use warpui::keymap::{EditableBinding, FixedBinding, Keystroke};
+use warpui::platform::{Cursor, OperatingSystem};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        new_scrollable::{ScrollableAppearance, SingleAxisConfig},
-        Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox,
-        Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty, EventHandler,
-        Flex, FormattedTextElement, HighlightedHyperlink, Hoverable, MainAxisAlignment,
-        MainAxisSize, MouseStateHandle, NewScrollable, OffsetPositioning, ParentAnchor,
-        ParentElement, ParentOffsetBounds, PositionedElementAnchor, PositionedElementOffsetBounds,
-        Radius, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable,
-        SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
-    },
-    keymap::{EditableBinding, FixedBinding, Keystroke},
-    platform::{Cursor, OperatingSystem},
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
     AppContext, Element, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };
 
 use super::malformed_line_heuristics::has_malformed_terminal_correction_signal;
-use crate::view_components::action_button::{ActionButton, NakedTheme};
-use crate::{
-    ai::{
-        agent::{
-            icons::{self, yellow_stop_icon},
-            AIAgentActionId, AIIdentifiers, FileEdit, FileLocations, ServerOutputId,
-        },
-        blocklist::{
-            action_model::{
-                AIActionStatus, BlocklistAIActionEvent, BlocklistAIActionModel,
-                EditAcceptAndContinueClickedEvent, EditAcceptClickedEvent, EditResolvedEvent,
-                EditStats, MalformedFinalLineProxyEvent, RequestFileEditsFormatKind,
-                RequestFileEditsTelemetryEvent,
-            },
-            history_model::BlocklistAIHistoryModel,
-            inline_action::{
-                inline_action_header::INLINE_ACTION_HORIZONTAL_PADDING,
-                inline_action_icons::{cancelled_icon, green_check_icon, icon_size, reverted_icon},
-            },
-            model::{AIBlockModel, AIBlockModelHelper},
-            RequestedEditResolution,
-        },
-        mcp::{mcp_provider_from_file_path, MCPProvider},
-        paths::host_native_absolute_path,
-        predict::prompt_suggestions::ACCEPT_PROMPT_SUGGESTION_KEYBINDING,
-        skills::{
-            icon_override_for_skill_name, render_skill_button, skill_path_from_file_path,
-            SkillManager, SkillReference,
-        },
-    },
-    cmd_or_ctrl_shift,
-    code::{
-        diff_viewer::{DiffViewer, DisplayMode},
-        editor::{
-            add_color, remove_color,
-            view::{CodeEditorEvent, CodeEditorRenderOptions, CodeEditorView},
-        },
-        inline_diff::{InlineDiffView, InlineDiffViewEvent},
-        DiffResult,
-    },
-    code_review::telemetry_event::CodeReviewPaneEntrypoint,
-    menu::{Event as MenuEvent, Menu, MenuItemFields, MenuVariant},
-    pane_group::{
-        focus_state::PaneFocusHandle,
-        pane::{view, PaneId},
-        BackingView, PaneEvent,
-    },
-    send_telemetry_from_ctx,
-    server::telemetry::{AgentModeCodeFileNavigationSource, ToggleCodeSuggestionsSettingSource},
-    settings::AISettings,
-    terminal::{input::SET_INPUT_MODE_AGENT_ACTION_NAME, ShellLaunchData},
-    ui_components::{blended_colors, icons::Icon},
-    util::bindings::keybinding_name_to_keystroke,
-    view_components::{
-        action_button::{ButtonSize, KeystrokeSource},
-        compactible_action_button::{
-            render_compact_and_regular_button_rows, CompactibleActionButton,
-            RenderCompactibleActionButton, MEDIUM_SIZE_SWITCH_THRESHOLD,
-            XLARGE_SIZE_SWITCH_THRESHOLD,
-        },
-        compactible_split_action_button::CompactibleSplitActionButton,
-        DismissibleToast,
-    },
-    workspace::ToastStack,
-    TelemetryEvent,
+use crate::ai::agent::icons::{self, yellow_stop_icon};
+use crate::ai::agent::{AIAgentActionId, AIIdentifiers, FileEdit, FileLocations, ServerOutputId};
+use crate::ai::blocklist::action_model::{
+    AIActionStatus, BlocklistAIActionEvent, BlocklistAIActionModel,
+    EditAcceptAndContinueClickedEvent, EditAcceptClickedEvent, EditResolvedEvent, EditStats,
+    MalformedFinalLineProxyEvent, RequestFileEditsFormatKind, RequestFileEditsTelemetryEvent,
 };
-use ai::diff_validation::{
-    fuzzy_match_diffs, fuzzy_match_v4a_diffs, parse_line_numbers, DiffDelta, DiffType, ParsedDiff,
-    SearchAndReplace, V4AHunk,
+use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
+use crate::ai::blocklist::inline_action::inline_action_header::INLINE_ACTION_HORIZONTAL_PADDING;
+use crate::ai::blocklist::inline_action::inline_action_icons::{
+    cancelled_icon, green_check_icon, icon_size, reverted_icon,
 };
+use crate::ai::blocklist::model::{AIBlockModel, AIBlockModelHelper};
+use crate::ai::blocklist::view_util::render_provider_icon_button;
+use crate::ai::blocklist::RequestedEditResolution;
+use crate::ai::mcp::{mcp_provider_from_file_path, MCPProvider};
+use crate::ai::paths::host_native_absolute_path;
+use crate::ai::predict::prompt_suggestions::ACCEPT_PROMPT_SUGGESTION_KEYBINDING;
+use crate::ai::skills::{
+    icon_override_for_skill_name, render_skill_button, skill_path_from_file_path, SkillManager,
+    SkillOpenOrigin, SkillReference, SkillTelemetryEvent,
+};
+use crate::code::buffer_location::LocalOrRemotePath;
+use crate::code::diff_viewer::{DiffViewer, DisplayMode};
+use crate::code::editor::view::{CodeEditorEvent, CodeEditorRenderOptions, CodeEditorView};
+use crate::code::editor::{add_color, remove_color};
+use crate::code::inline_diff::{InlineDiffView, InlineDiffViewEvent};
+use crate::code::DiffResult;
+use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
+use crate::menu::{Event as MenuEvent, Menu, MenuItemFields, MenuVariant};
+use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::pane::{view, PaneId};
+use crate::pane_group::{BackingView, PaneEvent};
+use crate::server::telemetry::{
+    AgentModeCodeFileNavigationSource, ToggleCodeSuggestionsSettingSource,
+};
+use crate::settings::AISettings;
+use crate::terminal::input::SET_INPUT_MODE_AGENT_ACTION_NAME;
+use crate::terminal::ShellLaunchData;
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
+use crate::util::bindings::keybinding_name_to_keystroke;
+use crate::view_components::action_button::{
+    ActionButton, ButtonSize, KeystrokeSource, NakedTheme,
+};
+use crate::view_components::compactible_action_button::{
+    render_compact_and_regular_button_rows, CompactibleActionButton, RenderCompactibleActionButton,
+    MEDIUM_SIZE_SWITCH_THRESHOLD, XLARGE_SIZE_SWITCH_THRESHOLD,
+};
+use crate::view_components::compactible_split_action_button::CompactibleSplitActionButton;
+use crate::view_components::DismissibleToast;
+use crate::workspace::ToastStack;
+use crate::{cmd_or_ctrl_shift, send_telemetry_from_ctx, TelemetryEvent};
 
 const REQUESTED_EDIT_CANCEL_LABEL: &str = "Cancel";
 const REQUESTED_EDIT_REFINE_LABEL: &str = "Refine";
@@ -1000,15 +978,14 @@ impl CodeDiffView {
                 let file_path = diff.base.file_path.clone();
 
                 // Set up the editor buffer with the pre-loaded content.
-                let path = Path::new(&file_path);
+                let standardized_path = StandardizedPath::try_new(&file_path).ok();
                 editor.update(ctx, |editor_view, ctx| {
-                    editor_view.set_language_with_path(path, ctx);
+                    editor_view.set_language_with_local_path(Path::new(&file_path), ctx);
                     let state = InitialBufferState::plain_text(&diff.base.content);
                     editor_view.reset(state, ctx);
                 });
 
                 // Create the InlineDiffView which applies diffs to the editor buffer.
-                let standardized_path = StandardizedPath::try_new(&file_path).ok();
                 let diff_viewer = ctx.add_typed_action_view(|ctx| {
                     InlineDiffView::new(
                         editor.clone(),
@@ -2608,6 +2585,23 @@ impl CodeDiffView {
             .as_ref(app)
             .file_path()
             .map(|p| p.to_string())
+    }
+
+    /// Returns the primary file location as a `LocalOrRemotePath`,
+    /// using `diff_session_type` to correctly identify remote files.
+    pub fn primary_file_location(&self, app: &AppContext) -> Option<LocalOrRemotePath> {
+        let path_str = self.primary_file_path(app)?;
+        match &self.diff_session_type {
+            DiffSessionType::Local => Some(LocalOrRemotePath::Local(PathBuf::from(path_str))),
+            DiffSessionType::Remote(host_id) => {
+                StandardizedPath::try_new(&path_str).ok().map(|path| {
+                    LocalOrRemotePath::Remote(warp_util::remote_path::RemotePath {
+                        host_id: host_id.clone(),
+                        path,
+                    })
+                })
+            }
+        }
     }
 }
 

@@ -1,16 +1,10 @@
 use std::sync::Arc;
 
-use crate::{
-    context_chips::context_chip::GeneratorContext,
-    terminal::model::{
-        block::BlockMetadata,
-        session::{
-            command_executor::testing::TestCommandExecutor, BootstrapSessionType, Session,
-            SessionInfo,
-        },
-    },
-    terminal::shell::ShellType,
-};
+use crate::context_chips::context_chip::GeneratorContext;
+use crate::terminal::model::block::BlockMetadata;
+use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
+use crate::terminal::model::session::{BootstrapSessionType, Session, SessionInfo};
+use crate::terminal::shell::ShellType;
 
 #[test]
 fn test_working_directory() {

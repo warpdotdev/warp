@@ -1,10 +1,10 @@
-use crate::event::DispatchedEvent;
+use pathfinder_geometry::vector::Vector2F;
 
 use super::{
     AfterLayoutContext, AppContext, Element, EventContext, LayoutContext, PaintContext, Point,
     SizeConstraint,
 };
-use pathfinder_geometry::vector::Vector2F;
+use crate::event::DispatchedEvent;
 
 #[derive(Default)]
 pub struct Empty {

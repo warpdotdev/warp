@@ -1,11 +1,10 @@
 //! Module containing helper code to apply suggested diffs from an LLM
 //! to a set of files on the user's filesystem.
 
-use std::{
-    collections::{hash_map::Entry, HashMap, HashSet},
-    future::Future,
-    sync::Arc,
-};
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::sync::Arc;
 
 use ai::diff_validation::{
     fuzzy_match_diffs, fuzzy_match_v4a_diffs, AIRequestedCodeDiff, DiffDelta, DiffMatchFailures,
@@ -15,20 +14,15 @@ use itertools::Itertools;
 use vec1::Vec1;
 use warpui::r#async::executor::Background;
 
-use crate::{
-    ai::{
-        agent::{AIIdentifiers, FileEdit},
-        blocklist::SessionContext,
-        paths::host_native_absolute_path,
-    },
-    auth::auth_state::AuthState,
-    safe_debug, safe_warn, send_telemetry_on_executor,
-};
-
 use super::telemetry::{
     DiffInvalidFileEvent, DiffMatchFailedEvent, MissingLineNumbersEvent,
     RequestFileEditsTelemetryEvent,
 };
+use crate::ai::agent::{AIIdentifiers, FileEdit};
+use crate::ai::blocklist::SessionContext;
+use crate::ai::paths::host_native_absolute_path;
+use crate::auth::auth_state::AuthState;
+use crate::{safe_debug, safe_warn, send_telemetry_on_executor};
 
 /// Result of reading a file from disk or a remote server.
 ///

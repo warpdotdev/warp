@@ -1,16 +1,14 @@
-use warpui::fonts::FamilyId;
-use warpui::SingletonEntity as _;
-use warpui::{
-    elements::{
-        Border, ConstrainedBox, Container, Fill, Flex, List, ListState, MainAxisSize,
-        ParentElement, Rect, ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth,
-        Stack, Text,
-    },
-    AppContext, Element, Entity, TypedActionView, View, ViewContext,
-};
-
 use std::sync::{Arc, Mutex};
+
 use warpui::color::ColorU;
+use warpui::elements::{
+    Border, ConstrainedBox, Container, Fill, Flex, List, ListState, MainAxisSize, ParentElement,
+    Rect, ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth, Stack, Text,
+};
+use warpui::fonts::FamilyId;
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity as _, TypedActionView, View, ViewContext,
+};
 
 pub struct RootView {
     font_family: FamilyId,

@@ -1,3 +1,5 @@
+use std::fmt;
+
 use super::object::{Container, Space};
 use crate::scalars::Time;
 use crate::schema;
@@ -30,6 +32,16 @@ pub enum OwnerType {
     Team,
     #[cynic(rename = "User")]
     User,
+}
+
+impl fmt::Display for OwnerType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let owner_type = match self {
+            OwnerType::Team => "Team",
+            OwnerType::User => "Personal",
+        };
+        write!(f, "{owner_type}")
+    }
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]

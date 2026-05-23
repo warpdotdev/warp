@@ -1,4 +1,6 @@
-use crate::{error::UserFacingError, request_context::RequestContext, schema};
+use crate::error::UserFacingError;
+use crate::request_context::RequestContext;
+use crate::schema;
 
 /// A GraphQL query to fetch attachments for a specific task.
 ///

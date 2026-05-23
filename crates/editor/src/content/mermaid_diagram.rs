@@ -1,21 +1,17 @@
-use std::{
-    hash::{DefaultHasher, Hash, Hasher},
-    sync::Arc,
-};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::Arc;
 
 use bytes::Bytes;
 use mermaid_to_svg::MermaidTheme;
-use warpui::{
-    AppContext, SingletonEntity,
-    assets::asset_cache::{AssetCache, AssetSource, AssetState, AsyncAssetId, AsyncAssetType},
-    image_cache::ImageType,
-    units::{IntoPixels, Pixels},
+use warpui::assets::asset_cache::{
+    AssetCache, AssetSource, AssetState, AsyncAssetId, AsyncAssetType,
 };
+use warpui::image_cache::ImageType;
+use warpui::units::{IntoPixels, Pixels};
+use warpui::{AppContext, SingletonEntity};
 
-use crate::render::{
-    layout::TextLayout,
-    model::{BlockSpacing, ImageBlockConfig},
-};
+use crate::render::layout::TextLayout;
+use crate::render::model::{BlockSpacing, ImageBlockConfig};
 
 const DEFAULT_MERMAID_HEIGHT_LINE_MULTIPLIER: f32 = 10.0;
 const FAILED_MERMAID_HEIGHT_LINE_MULTIPLIER: f32 = 2.0;

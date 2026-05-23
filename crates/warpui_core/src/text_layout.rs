@@ -1,16 +1,9 @@
-use crate::elements::{Fill, DEFAULT_UI_LINE_HEIGHT_RATIO};
-use crate::fonts::{
-    Cache as FontCache, FamilyId, Properties, RequestedFallbackFontSource, TextLayoutSystem,
-};
-use crate::geometry::rect::RectF;
-use crate::geometry::vector::vec2f;
-use crate::platform::LineStyle;
-use crate::scene::{Border, CornerRadius, Dash};
-use crate::{
-    fonts::{FontId, GlyphId},
-    scene::GlyphFade,
-    Scene,
-};
+use std::borrow::Borrow;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::ops::Range;
+use std::sync::Arc;
+
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
@@ -18,14 +11,18 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 use rangemap::RangeMap;
 use smallvec::SmallVec;
-use std::{
-    borrow::Borrow,
-    collections::HashMap,
-    hash::{Hash, Hasher},
-    ops::Range,
-    sync::Arc,
-};
 use vec1::{vec1, Vec1};
+
+use crate::elements::{Fill, DEFAULT_UI_LINE_HEIGHT_RATIO};
+use crate::fonts::{
+    Cache as FontCache, FamilyId, FontId, GlyphId, Properties, RequestedFallbackFontSource,
+    TextLayoutSystem,
+};
+use crate::geometry::rect::RectF;
+use crate::geometry::vector::vec2f;
+use crate::platform::LineStyle;
+use crate::scene::{Border, CornerRadius, Dash, GlyphFade};
+use crate::Scene;
 
 type StyleRun = (Range<usize>, StyleAndFont);
 

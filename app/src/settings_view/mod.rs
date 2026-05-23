@@ -1,36 +1,13 @@
-use self::telemetry::SettingsTelemetryEvent;
-use crate::pane_group::focus_state::PaneFocusHandle;
-use crate::server::telemetry::MCPServerCollectionPaneEntrypoint;
-use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
-use crate::TelemetryEvent;
-use crate::{
-    ai::execution_profiles::profiles::ClientProfileId,
-    appearance::Appearance,
-    editor::{
-        EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
-        TextColors, TextOptions,
-    },
-    menu::{self, Menu, MenuItem, MenuItemFields},
-    pane_group::{
-        pane::view, BackingView, Direction, PaneConfiguration, PaneEvent, SplitPaneState,
-    },
-    server::server_api::ServerApiProvider,
-    settings::{AISettings, BlockVisibilitySettings, SettingsFileError},
-    settings_view::mcp_servers_page::MCPServersSettingsPageEvent,
-    terminal::{model::blockgrid::BlockGrid, SizeInfo},
-    ui_components::icons,
-    util::bindings::{keybinding_name_to_display_string, BindingGroup, CustomAction},
-    view_components::ToastFlavor,
-    workspace::WorkspaceAction,
-    GlobalResourceHandlesProvider,
-};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::str::FromStr;
+
 use about_page::AboutPageView;
 use ai_page::{AISettingsPageAction, AISettingsPageEvent, AISettingsPageView, AISubpage};
 use appearance_page::{AppearancePageAction, AppearanceSettingsPageView};
-use billing_and_usage_page::{BillingAndUsagePageEvent, BillingAndUsagePageView};
-use billing_and_usage_page_v2::BillingAndUsagePageV2View;
-use code_page::CodeSubpage;
-use code_page::{CodeSettingsPageAction, CodeSettingsPageEvent};
+use billing_and_usage_dispatch::BillingAndUsageDispatchView;
+use billing_and_usage_page::BillingAndUsagePageEvent;
+use code_page::{CodeSettingsPageAction, CodeSettingsPageEvent, CodeSubpage};
 use environments_page::EnvironmentsPageView;
 use features_page::{FeaturesPageView, FeaturesSettingsPageEvent};
 use itertools::Itertools as _;
@@ -47,32 +24,51 @@ use settings_page::{
     HEADER_PADDING,
 };
 use show_blocks_view::{ShowBlocksEvent, ShowBlocksView};
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::str::FromStr;
 use teams_page::{TeamsPageView, TeamsPageViewEvent};
+use warp_core::channel::ChannelState;
+use warp_core::context_flag::ContextFlag;
+use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
-use warp_core::{
-    channel::ChannelState, context_flag::ContextFlag, features::FeatureFlag,
-    settings::ToggleableSetting as _, ui::theme::color::internal_colors,
-};
+use warp_core::settings::ToggleableSetting as _;
+use warp_core::ui::theme::color::internal_colors;
 use warp_editor::editor::NavigationKey;
 use warpify_page::{WarpifyPageAction, WarpifyPageView};
-use warpui::Element;
-use warpui::{
-    elements::{
-        Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle,
-        ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        DispatchEventResult, Empty, EventHandler, Expanded, Fill, Flex, MainAxisSize,
-        OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
-        ScrollbarWidth, Shrinkable, Stack, Text,
-    },
-    fonts::{Properties, Weight},
-    id,
-    keymap::{ContextPredicate, EnabledPredicate, FixedBinding},
-    Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView as _,
-    View, ViewContext, ViewHandle,
+use warpui::elements::{
+    Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty,
+    EventHandler, Expanded, Fill, Flex, MainAxisSize, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, Shrinkable, Stack,
+    Text,
 };
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::{ContextPredicate, EnabledPredicate, FixedBinding};
+use warpui::{
+    id, Action, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView,
+    UpdateView as _, View, ViewContext, ViewHandle,
+};
+
+use self::telemetry::SettingsTelemetryEvent;
+use crate::ai::execution_profiles::profiles::ClientProfileId;
+use crate::appearance::Appearance;
+use crate::editor::{
+    EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
+    TextColors, TextOptions,
+};
+use crate::menu::{self, Menu, MenuItem, MenuItemFields};
+use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::pane::view;
+use crate::pane_group::{BackingView, Direction, PaneConfiguration, PaneEvent, SplitPaneState};
+use crate::server::server_api::ServerApiProvider;
+use crate::server::telemetry::MCPServerCollectionPaneEntrypoint;
+use crate::settings::{AISettings, BlockVisibilitySettings, SettingsFileError};
+use crate::settings_view::mcp_servers_page::{MCPServersSettingsPage, MCPServersSettingsPageEvent};
+use crate::terminal::model::blockgrid::BlockGrid;
+use crate::terminal::SizeInfo;
+use crate::ui_components::icons;
+use crate::util::bindings::{keybinding_name_to_display_string, BindingGroup, CustomAction};
+use crate::view_components::ToastFlavor;
+use crate::workspace::WorkspaceAction;
+use crate::{GlobalResourceHandlesProvider, TelemetryEvent};
 
 mod about_page;
 mod admin_actions;
@@ -80,15 +76,18 @@ mod agent_assisted_environment_modal;
 mod ai_page;
 mod appearance_page;
 mod billing_and_usage;
+mod billing_and_usage_dispatch;
 mod billing_and_usage_page;
 mod billing_and_usage_page_v2;
 mod code_page;
+mod custom_inference_modal;
 mod delete_environment_confirmation_dialog;
 mod directory_color_add_picker;
 pub(crate) mod environments_page;
 mod execution_profile_view;
 mod features;
 mod features_page;
+pub(crate) mod handoff_environment_creation_modal;
 pub mod keybindings;
 mod main_page;
 pub mod mcp_servers;
@@ -100,6 +99,7 @@ mod platform_page;
 mod privacy;
 mod privacy_page;
 mod referrals_page;
+mod remove_custom_endpoint_confirmation_dialog;
 mod settings_file_footer;
 pub(crate) mod settings_page;
 mod show_blocks_view;
@@ -160,6 +160,36 @@ pub(super) fn editor_text_colors(appearance: &Appearance) -> TextColors {
         disabled_color: theme.disabled_ui_text_color(),
         hint_color: theme.disabled_ui_text_color(),
     }
+}
+
+/// Renders a horizontal row of pill-shaped chips for model labels.
+/// Used by custom inference endpoint cards and the remove confirmation dialog.
+pub(super) fn render_model_chips(
+    labels: impl IntoIterator<Item = String>,
+    appearance: &Appearance,
+    text_color: warp_core::ui::theme::Fill,
+) -> Box<dyn Element> {
+    use warpui::ui_components::chip::Chip;
+    use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+
+    let theme = appearance.theme();
+    let chip_border = internal_colors::neutral_4(theme).into();
+    let chip_style = UiComponentStyles {
+        background: None,
+        border_color: Some(chip_border),
+        border_width: Some(1.),
+        border_radius: Some(CornerRadius::with_all(Radius::Pixels(5.))),
+        font_family_id: Some(appearance.ui_font_family()),
+        font_size: Some(appearance.ui_font_size()),
+        font_color: Some(text_color.into_solid()),
+        ..Default::default()
+    };
+
+    let mut chips = Flex::row().with_spacing(8.);
+    for label in labels {
+        chips.add_child(Chip::new(label, chip_style).build().finish());
+    }
+    chips.finish()
 }
 
 #[derive(PartialEq, Eq)]
@@ -226,8 +256,9 @@ pub enum SettingsSection {
     OzCloudAPIKeys,
 }
 
-use crate::util::bindings::custom_tag_to_keystroke;
 use std::fmt::{self, Display};
+
+use crate::util::bindings::custom_tag_to_keystroke;
 
 impl Display for SettingsSection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -974,7 +1005,6 @@ macro_rules! update_page {
             SettingsPageViewHandle::About(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Code(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::BillingAndUsage(handle) => $ctx.update_view(handle, $update),
-            SettingsPageViewHandle::BillingAndUsageV2(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::MCPServers(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::WarpDrive(handle) => $ctx.update_view(handle, $update),
         }
@@ -1070,20 +1100,12 @@ impl SettingsView {
             me.handle_environments_page_event(event, ctx);
         });
 
-        let billing_and_usage_page: SettingsPage =
-            if FeatureFlag::BillingAndUsagePageV2.is_enabled() {
-                let handle = ctx.add_view(BillingAndUsagePageV2View::new);
-                ctx.subscribe_to_view(&handle, |me, _, event, ctx| {
-                    me.handle_billing_and_usage_page_event(event, ctx);
-                });
-                SettingsPage::new(handle)
-            } else {
-                let handle = ctx.add_typed_action_view(BillingAndUsagePageView::new);
-                ctx.subscribe_to_view(&handle, |me, _, event, ctx| {
-                    me.handle_billing_and_usage_page_event(event, ctx);
-                });
-                SettingsPage::new(handle)
-            };
+        // Billing & Usage page (internally, this routes to the v1 or v2 version. Depending on FFs and current plan).
+        let billing_and_usage_handle = ctx.add_view(BillingAndUsageDispatchView::new);
+        ctx.subscribe_to_view(&billing_and_usage_handle, |me, _, event, ctx| {
+            me.handle_billing_and_usage_page_event(event, ctx);
+        });
+        let billing_and_usage_page = SettingsPage::new(billing_and_usage_handle);
 
         // Keybindings page
         let keybindings_handle = ctx.add_typed_action_view(KeybindingsView::new);
@@ -1807,6 +1829,10 @@ impl SettingsView {
             AISettingsPageEvent::SignupAnonymousUser => {
                 ctx.emit(SettingsViewEvent::SignupAnonymousUser)
             }
+            AISettingsPageEvent::ShowModal | AISettingsPageEvent::HideModal => {
+                // Modal rendering is handled in get_modal_content_for_page
+                ctx.notify();
+            }
         }
     }
 
@@ -1968,7 +1994,6 @@ impl SettingsView {
             SettingsPageViewHandle::Features(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Appearance(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::BillingAndUsage(v) => v.as_ref(app).should_render(app),
-            SettingsPageViewHandle::BillingAndUsageV2(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::About(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::OzCloudAPIKeys(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Privacy(v) => v.as_ref(app).should_render(app),
@@ -2187,7 +2212,7 @@ impl SettingsView {
     ) -> Option<Box<dyn Element>> {
         match page_handle {
             SettingsPageViewHandle::BillingAndUsage(view) => {
-                view.read(app, |view, _| view.get_modal_content())
+                view.read(app, |view, _| view.get_modal_content(app))
             }
             SettingsPageViewHandle::Privacy(view) => {
                 view.read(app, |view, _| view.get_modal_content())
@@ -2196,6 +2221,9 @@ impl SettingsView {
                 view.read(app, |view, _| view.get_modal_content())
             }
             SettingsPageViewHandle::MCPServers(view) => {
+                view.read(app, |view, _| view.get_modal_content(app))
+            }
+            SettingsPageViewHandle::AI(view) => {
                 view.read(app, |view, _| view.get_modal_content(app))
             }
             _ => None,

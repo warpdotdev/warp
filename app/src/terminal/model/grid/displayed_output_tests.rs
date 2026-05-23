@@ -1,6 +1,7 @@
-use super::*;
 use bimap::BiMap;
 use itertools::Itertools;
+
+use super::*;
 
 /// Converts a vector of ranges into DisplayedRows objects with source FilterMatch.
 fn make_displayed_rows_from_ranges(ranges: Vec<RangeInclusive<usize>>) -> Vec<DisplayedRows> {

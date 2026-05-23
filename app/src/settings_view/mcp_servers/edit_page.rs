@@ -1,67 +1,59 @@
+use std::collections::HashMap;
+use std::path::Path;
+#[cfg(feature = "local_fs")]
+use std::sync::Arc;
+
 #[cfg(feature = "local_fs")]
 #[cfg(not(target_family = "wasm"))]
 use diesel::SqliteConnection;
 #[cfg(feature = "local_fs")]
 use parking_lot::Mutex;
 use pathfinder_geometry::vector::vec2f;
-#[cfg(feature = "local_fs")]
-use std::sync::Arc;
-use std::{collections::HashMap, path::Path};
 use uuid::Uuid;
-use warp_core::{
-    send_telemetry_from_ctx,
-    ui::{appearance::Appearance, theme::color::internal_colors},
+use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::color::internal_colors;
+use warp_editor::content::buffer::InitialBufferState;
+use warp_editor::render::element::VerticalExpansionBehavior;
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, Container, CornerRadius, CrossAxisAlignment, Flex,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack, Text,
 };
-use warp_editor::{
-    content::buffer::InitialBufferState, render::element::VerticalExpansionBehavior,
-};
+use warpui::platform::Cursor;
+use warpui::ui_components::components::UiComponent;
 use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, Container, CornerRadius, CrossAxisAlignment, Flex,
-        MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
-        ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack, Text,
-    },
-    platform::Cursor,
-    ui_components::components::UiComponent,
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::{
-    ai::{
-        blocklist::secret_redaction::find_secrets_in_text,
-        mcp::{
-            parsing::{prettify_json, resolve_json, ParsedTemplatableMCPServerResult},
-            templatable::CloudTemplatableMCPServer,
-            MCPServer, TemplatableMCPServer, TemplatableMCPServerInstallation,
-            TemplatableMCPServerManager, TransportType,
-        },
-    },
-    banner::{Banner, BannerTextContent},
-    cloud_object::{CloudObject, Space},
-    code::editor::view::{CodeEditorRenderOptions, CodeEditorView},
-    persistence::ModelEvent,
-    server::{
-        cloud_objects::update_manager::InitiatedBy,
-        telemetry::{MCPTemplateCreationSource, TelemetryEvent},
-    },
-    settings_view::mcp_servers::{
-        destructive_mcp_confirmation_dialog::{
-            DestructiveMCPConfirmationDialog, DestructiveMCPConfirmationDialogEvent,
-            DestructiveMCPConfirmationDialogVariant,
-        },
-        style, ServerCardItemId,
-    },
-    ui_components::{buttons::icon_button, icons::Icon},
-    view_components::{
-        action_button::{ActionButton, DangerNakedTheme, DangerSecondaryTheme, PrimaryTheme},
-        DismissibleToast,
-    },
-    workspace::ToastStack,
-    GlobalResourceHandlesProvider,
+use crate::ai::blocklist::secret_redaction::find_secrets_in_text;
+use crate::ai::mcp::parsing::{prettify_json, resolve_json, ParsedTemplatableMCPServerResult};
+use crate::ai::mcp::templatable::CloudTemplatableMCPServer;
+use crate::ai::mcp::{
+    MCPServer, TemplatableMCPServer, TemplatableMCPServerInstallation, TemplatableMCPServerManager,
+    TransportType,
 };
-
+use crate::banner::{Banner, BannerTextContent};
+use crate::cloud_object::{CloudObject, Space};
+use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView};
+use crate::persistence::ModelEvent;
 #[cfg(feature = "local_fs")]
 use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
+use crate::server::cloud_objects::update_manager::InitiatedBy;
+use crate::server::telemetry::{MCPTemplateCreationSource, TelemetryEvent};
+use crate::settings_view::mcp_servers::destructive_mcp_confirmation_dialog::{
+    DestructiveMCPConfirmationDialog, DestructiveMCPConfirmationDialogEvent,
+    DestructiveMCPConfirmationDialogVariant,
+};
+use crate::settings_view::mcp_servers::{style, ServerCardItemId};
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{
+    ActionButton, DangerNakedTheme, DangerSecondaryTheme, PrimaryTheme,
+};
+use crate::view_components::DismissibleToast;
+use crate::workspace::ToastStack;
+use crate::GlobalResourceHandlesProvider;
 
 const DEFAULT_JSON_TEXT: &str = r#"{
     "": {
@@ -178,7 +170,7 @@ impl MCPServersEditPageView {
                     true,
                 ),
             );
-            editor.set_language_with_path(Path::new("mcp.json"), ctx);
+            editor.set_language_with_local_path(Path::new("/mcp.json"), ctx);
             editor
         });
 

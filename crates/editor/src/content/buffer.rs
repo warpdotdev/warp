@@ -1,4 +1,10 @@
 use core::fmt;
+use std::iter::{self, FusedIterator, once};
+use std::mem;
+use std::ops::Range;
+use std::sync::Arc;
+
+use enum_iterator::all;
 use itertools::{Either, Itertools};
 use line_ending::LineEnding;
 use markdown_parser::{
@@ -8,56 +14,47 @@ use markdown_parser::{
 };
 use num_traits::SaturatingSub;
 use pathfinder_color::ColorU;
-use rand::{Rng, distributions::Alphanumeric};
+use rand::Rng;
+use rand::distributions::Alphanumeric;
 use serde_yaml::Mapping;
-use std::{
-    iter::{self, FusedIterator, once},
-    mem,
-    ops::Range,
-    sync::Arc,
-};
-use vec1::{Vec1, vec1};
-use warp_util::content_version::ContentVersion;
-
-use super::{
-    anchor::{Anchor, AnchorSide, Anchors},
-    cursor::BufferCursor,
-    edit::EditDelta,
-    markdown::{BufferMarkdownParser, BufferToFormattedText, ExportedBufferBlocks, MarkdownStyle},
-    selection::{Selection, TextStyleBias},
-    text::{
-        BlockCount, BlockLineBreakBehavior, BlockType, BufferBlockItem, BufferBlockStyle,
-        BufferSummary, BufferText, BufferTextStyle, Bytes, CodeBlockType, IndentBehavior,
-        LineCount, LinkCount, LinkMarker, MarkerDir, StyleSummary, SyntaxColorId, TextStyles,
-        TextStylesWithMetadata, TextSummary, inline_to_text,
-    },
-    undo::{NonAtomicType, UndoActionType, UndoArg, UndoStack},
-    validation::validate_content,
-};
-use warp_core::{platform::SessionPlatform, safe_error};
-
-use crate::{
-    content::{
-        anchor::AnchorUpdate,
-        core::{CoreEditorAction, CoreEditorActionType, RangeAnchors},
-        cursor::BufferSumTree,
-        edit::PreciseDelta,
-        selection_model::{BufferSelectionModel, SelectionSnapshot},
-        text::{ColorMarker, IndentUnit},
-        undo::{ReversibleEditorActions, ReversibleSelectionState},
-        version::BufferVersion,
-    },
-    multiline::{self, AnyMultilineString, LF, MultilineString},
-    render::model::{EmbeddedItem, RenderedSelection, RenderedSelectionBias, RenderedSelectionSet},
-};
-use enum_iterator::all;
 use string_offset::{ByteOffset, CharOffset};
 use sum_tree::{SeekBias, SumTree};
-use warpui::{AppContext, Entity, ModelContext};
-use warpui::{EntityId, ModelHandle, elements::ListIndentLevel};
-use warpui::{
-    fonts::Weight,
-    text::{TextBuffer, char_slice, point::Point},
+use vec1::{Vec1, vec1};
+use warp_core::platform::SessionPlatform;
+use warp_core::safe_error;
+use warp_util::content_version::ContentVersion;
+use warpui::elements::ListIndentLevel;
+use warpui::fonts::Weight;
+use warpui::text::point::Point;
+use warpui::text::{TextBuffer, char_slice};
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
+
+use super::anchor::{Anchor, AnchorSide, Anchors};
+use super::cursor::BufferCursor;
+use super::edit::EditDelta;
+use super::markdown::{
+    BufferMarkdownParser, BufferToFormattedText, ExportedBufferBlocks, MarkdownStyle,
+};
+use super::selection::{Selection, TextStyleBias};
+use super::text::{
+    BlockCount, BlockLineBreakBehavior, BlockType, BufferBlockItem, BufferBlockStyle,
+    BufferSummary, BufferText, BufferTextStyle, Bytes, CodeBlockType, IndentBehavior, LineCount,
+    LinkCount, LinkMarker, MarkerDir, StyleSummary, SyntaxColorId, TextStyles,
+    TextStylesWithMetadata, TextSummary, inline_to_text,
+};
+use super::undo::{NonAtomicType, UndoActionType, UndoArg, UndoStack};
+use super::validation::validate_content;
+use crate::content::anchor::AnchorUpdate;
+use crate::content::core::{CoreEditorAction, CoreEditorActionType, RangeAnchors};
+use crate::content::cursor::BufferSumTree;
+use crate::content::edit::PreciseDelta;
+use crate::content::selection_model::{BufferSelectionModel, SelectionSnapshot};
+use crate::content::text::{ColorMarker, IndentUnit};
+use crate::content::undo::{ReversibleEditorActions, ReversibleSelectionState};
+use crate::content::version::BufferVersion;
+use crate::multiline::{self, AnyMultilineString, LF, MultilineString};
+use crate::render::model::{
+    EmbeddedItem, RenderedSelection, RenderedSelectionBias, RenderedSelectionSet,
 };
 
 /// Format of the passed in text.
@@ -4493,6 +4490,9 @@ impl Buffer {
         ctx: &mut ModelContext<Self>,
     ) {
         if edits.is_empty() {
+            // TODO: This is temporary. We will add support to properly maintain the undo stack after incremental updates.
+            self.reset_undo_stack();
+            self.set_version(new_version);
             return;
         }
 

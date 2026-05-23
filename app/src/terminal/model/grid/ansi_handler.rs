@@ -16,6 +16,7 @@ use base64::Engine as _;
 use bounded_vec_deque::BoundedVecDeque;
 use pathfinder_geometry::vector::Vector2F;
 use rand::Rng;
+use tab_stops::TabStops;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
@@ -24,6 +25,7 @@ use warp_terminal::model::grid::cell;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::image_cache::{resize_dimensions, FitType};
 
+use super::{AbsolutePoint, FullGridClearBehavior, GridHandler, PerformResetGridChecks, TermMode};
 use crate::server::telemetry::ImageProtocol;
 use crate::terminal::event::Event;
 use crate::terminal::event_listener::ChannelEventListener;
@@ -43,10 +45,6 @@ use crate::terminal::model::kitty::{
 use crate::terminal::model::selection::ScrollDelta;
 use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::{ClipboardType, SizeInfo};
-
-use super::{AbsolutePoint, FullGridClearBehavior, GridHandler, PerformResetGridChecks, TermMode};
-
-use tab_stops::TabStops;
 
 const MAX_IMAGE_CELL_HEIGHT: u32 = 255;
 

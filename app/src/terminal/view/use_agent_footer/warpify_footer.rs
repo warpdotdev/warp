@@ -1,22 +1,19 @@
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
+use warpui::elements::{
+    ChildView, Container, CrossAxisAlignment, Expanded, Flex, MainAxisSize, ParentElement,
+};
 use warpui::prelude::Empty;
-use warpui::{
-    elements::{
-        ChildView, Container, CrossAxisAlignment, Expanded, Flex, MainAxisSize, ParentElement,
-    },
-    AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle,
-};
-
-use crate::{
-    terminal::view::{TerminalModel, PADDING_LEFT},
-    ui_components::icons::Icon,
-    view_components::action_button::{ActionButton, ButtonSize, KeystrokeSource, TooltipAlignment},
-};
+use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
 use super::{AgentFooterButtonTheme, USE_AGENT_KEYSTROKE};
 use crate::terminal::view::block_banner::WarpificationMode;
+use crate::terminal::view::{TerminalModel, PADDING_LEFT};
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{
+    ActionButton, ButtonSize, KeystrokeSource, TooltipAlignment,
+};
 
 /// Footer view rendered for detected subshell/SSH commands, offering both
 /// "Warpify" and "Use agent" buttons in a horizontal row.

@@ -1,9 +1,7 @@
-use repo_metadata::{
-    entry::{DirectoryEntry, Entry, FileMetadata},
-    file_tree_store::FileTreeState,
-    repositories::DetectedRepositories,
-    DirectoryWatcher, RepoMetadataModel,
-};
+use repo_metadata::entry::{DirectoryEntry, Entry, FileMetadata};
+use repo_metadata::file_tree_store::FileTreeState;
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::{DirectoryWatcher, RepoMetadataModel};
 use virtual_fs::{Stub, VirtualFS};
 use warpui::App;
 

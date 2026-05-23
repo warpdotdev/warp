@@ -5,7 +5,6 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::Path;
 
 use ai::skills::SkillProvider;
 use enum_iterator::Sequence;
@@ -14,8 +13,10 @@ use pathfinder_color::ColorU;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use warp_cli::agent::Harness;
-use warp_editor::content::{buffer::Buffer, markdown::MarkdownStyle};
-
+use warp_completer::parsers::simple::top_level_command;
+use warp_editor::content::buffer::Buffer;
+use warp_editor::content::markdown::MarkdownStyle;
+use warp_util::path::EscapeChar;
 use warpui::{AppContext, SingletonEntity};
 
 use crate::ai::agent::{AgentReviewCommentBatch, DiffSetHunk};
@@ -25,8 +26,6 @@ use crate::code_review::comments::AttachedReviewCommentTarget;
 use crate::server::telemetry::CLIAgentType;
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use warp_completer::parsers::simple::top_level_command;
-use warp_util::path::EscapeChar;
 
 /// UID for the Uber team.
 /// See https://warp.metabaseapp.com/dashboard/1454?team_id=46347
@@ -424,7 +423,7 @@ pub fn build_review_prompt(review: &AgentReviewCommentBatch) -> String {
                 line,
                 ..
             } => {
-                let path = absolute_file_path.display();
+                let path = absolute_file_path.display_path();
                 match line {
                     EditorLineLocation::Current { line_number, .. } => {
                         let n = line_number.as_usize() + 1;
@@ -444,10 +443,9 @@ pub fn build_review_prompt(review: &AgentReviewCommentBatch) -> String {
                 }
             }
             AttachedReviewCommentTarget::File { absolute_file_path } => {
-                let path = absolute_file_path.display();
-                let abs_str = absolute_file_path.to_string_lossy();
+                let path = absolute_file_path.display_path();
                 let is_deleted = review.diff_set.iter().any(|(file_key, hunks)| {
-                    abs_str.ends_with(file_key.as_str())
+                    path.ends_with(file_key.as_str())
                         && !hunks.is_empty()
                         && hunks
                             .iter()
@@ -456,7 +454,7 @@ pub fn build_review_prompt(review: &AgentReviewCommentBatch) -> String {
                 if is_deleted {
                     format!("{path} (deleted file — see `git diff`)")
                 } else {
-                    format!("{path}")
+                    path
                 }
             }
             AttachedReviewCommentTarget::General => "General".to_string(),
@@ -492,15 +490,14 @@ fn export_review_comment_for_cli_prompt(comment: &str) -> String {
 /// `<path> L<start>-L<end>` where `start` and `end` are 1-indexed and both
 /// ends are **inclusive**.
 pub fn build_diff_hunk_prompt(
-    file_path: &Path,
+    file_path: &str,
     start_line: usize,
     end_line: usize,
     lines_added: u32,
     lines_removed: u32,
 ) -> String {
-    let path = file_path.display();
     format!(
-        "{path} L{start_line}-L{end_line} (+{lines_added} -{lines_removed}) \
+        "{file_path} L{start_line}-L{end_line} (+{lines_added} -{lines_removed}) \
          -- run `git diff` to see the full context."
     )
 }

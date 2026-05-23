@@ -1,17 +1,19 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use warp_editor::model::CoreEditorModel;
 use warp_editor::render::model::{
     BlockItem, HitTestOptions, LineCount, Location, RenderLineLocation,
 };
-use warpui::{units::Pixels, AppContext, ViewContext};
+use warpui::units::Pixels;
+use warpui::{AppContext, ViewContext};
 
 use super::{CodeReviewView, CodeReviewViewState, FILE_HEADER_HEIGHT};
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::line::EditorLineLocation;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodeReviewVisibleAnchorForTest {
-    pub file_path: PathBuf,
+    pub file_path: String,
     pub line_number: usize,
     pub line_text: String,
 }
@@ -69,7 +71,7 @@ impl CodeReviewView {
 
     pub fn scroll_to_line_for_test(
         &mut self,
-        path: &Path,
+        path: &str,
         line_number: usize,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
@@ -130,7 +132,7 @@ impl CodeReviewView {
 
     /// Scrolls the code review to the header region of the given file.
     /// The header region is the area above the editor content (< FILE_HEADER_HEIGHT).
-    pub fn scroll_to_header_for_test(&mut self, path: &Path, ctx: &mut ViewContext<Self>) -> bool {
+    pub fn scroll_to_header_for_test(&mut self, path: &str, ctx: &mut ViewContext<Self>) -> bool {
         let CodeReviewViewState::Loaded(state) = self.state() else {
             return false;
         };
@@ -166,7 +168,7 @@ impl CodeReviewView {
     }
 
     /// Scrolls the code review past the end of editor content into the footer region.
-    pub fn scroll_to_footer_for_test(&mut self, path: &Path, ctx: &mut ViewContext<Self>) -> bool {
+    pub fn scroll_to_footer_for_test(&mut self, path: &str, ctx: &mut ViewContext<Self>) -> bool {
         let CodeReviewViewState::Loaded(state) = self.state() else {
             return false;
         };
@@ -217,7 +219,7 @@ impl CodeReviewView {
     /// Scans forward from the y-offset of `near_line` to find the first TemporaryBlock.
     pub fn scroll_to_deleted_range_for_test(
         &mut self,
-        path: &Path,
+        path: &str,
         near_line: usize,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
@@ -355,11 +357,14 @@ impl CodeReviewView {
 
     pub fn line_text_for_test(
         &self,
-        path: &Path,
+        path: &str,
         line_number: usize,
         ctx: &AppContext,
     ) -> Option<String> {
-        let editor = if let Some(editor) = self.editor_for_path(path, ctx) {
+        // Test helper: probe by both the raw path (wrapped as a local
+        // `LocalOrRemotePath`) and by the repo-joined absolute path.
+        let local_path = LocalOrRemotePath::Local(PathBuf::from(path));
+        let editor = if let Some(editor) = self.editor_for_path(&local_path, ctx) {
             editor
         } else {
             let absolute_path = self.repo_path()?.join(path);

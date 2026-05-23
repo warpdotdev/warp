@@ -1,53 +1,55 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
-use std::{collections::HashSet, sync::mpsc::SyncSender};
 
+use ai::index::full_source_code_embedding::manager::{
+    CodebaseIndexManager, CodebaseIndexManagerEvent,
+};
+use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
+use ai::workspace::{WorkspaceMetadata, WorkspaceMetadataEvent};
+use anyhow::Context;
+use chrono::Utc;
+use itertools::Itertools;
+use lsp::supported_servers::LSPServerType;
 use lsp::LanguageId;
+#[cfg(feature = "local_fs")]
+use lsp::LspEvent;
 #[cfg(feature = "local_fs")]
 use lsp::{LspManagerModel, LspServerConfig};
 #[cfg(feature = "local_fs")]
 use repo_metadata::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
 use serde::{Deserialize, Serialize};
-
-use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
-use crate::ai::AIRequestUsageModel;
-use crate::persistence::ModelEvent;
-use crate::report_if_error;
-use crate::send_telemetry_from_ctx;
-use crate::settings::CodeSettings;
-use crate::terminal::TerminalView;
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
-use crate::TelemetryEvent;
-use ai::{
-    index::full_source_code_embedding::manager::{CodebaseIndexManager, CodebaseIndexManagerEvent},
-    workspace::{WorkspaceMetadata, WorkspaceMetadataEvent},
-};
-use anyhow::Context;
-use chrono::Utc;
-use itertools::Itertools;
-use lsp::supported_servers::LSPServerType;
+#[cfg(feature = "local_fs")]
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+#[cfg(feature = "local_fs")]
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 #[cfg(feature = "local_fs")]
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+#[cfg(feature = "local_fs")]
+use crate::ai::codebase_auto_indexing::{
+    auto_index_candidate_roots, should_auto_index_codebase, CodebaseAutoIndexingSurface,
+};
+use crate::ai::AIRequestUsageModel;
 #[cfg(feature = "local_fs")]
 use crate::code::language_server_shutdown_manager::LanguageServerShutdownManager;
 #[cfg(feature = "local_fs")]
 use crate::code::lsp_telemetry::LspTelemetryEvent;
+use crate::persistence::ModelEvent;
 #[cfg(feature = "local_fs")]
 use crate::server::server_api::ServerApiProvider;
+use crate::settings::CodeSettings;
 #[cfg(feature = "local_fs")]
 use crate::terminal::local_shell::LocalShellState;
+use crate::terminal::TerminalView;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::{report_if_error, send_telemetry_from_ctx, TelemetryEvent};
 #[cfg(feature = "local_fs")]
 use crate::{view_components::DismissibleToast, workspace::ToastStack};
-#[cfg(feature = "local_fs")]
-use lsp::LspEvent;
-#[cfg(feature = "local_fs")]
-use warp_core::channel::ChannelState;
-
-use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
 
 /// Represents whether an LSP server is enabled or disabled for a workspace.
 ///
@@ -240,7 +242,7 @@ impl PersistedWorkspace {
                     CodebaseIndexManagerEvent::IndexMetadataUpdated { root_path, event } => {
                         me.handle_index_metadata_event(root_path, *event);
                     }
-                    CodebaseIndexManagerEvent::NewIndexCreated => {
+                    CodebaseIndexManagerEvent::NewIndexCreated { .. } => {
                         send_active_indexed_repos_changed_telemetry(ctx);
                     }
                     CodebaseIndexManagerEvent::RemoveExpiredIndexMetadata { expired_metadata } => {
@@ -651,14 +653,14 @@ impl PersistedWorkspace {
         );
 
         #[cfg(feature = "local_fs")]
-        for dir in all_working_directories(ctx) {
-            // Auto-index working directory ONLY if the user has "Read files" set to "Always allow" OR this directory is in the allowlist.
-            let auto_indexing_enabled = *CodeSettings::as_ref(ctx).auto_indexing_enabled;
-
-            if auto_indexing_enabled {
-                if let Some(root) = DetectedRepositories::as_ref(ctx).get_root_for_path(&dir) {
-                    manager.index_directory(root, ctx);
-                }
+        if should_auto_index_codebase(CodebaseAutoIndexingSurface::Local, ctx) {
+            let roots = all_working_directories(ctx).into_iter().filter_map(|dir| {
+                DetectedRepositories::as_ref(ctx)
+                    .get_root_for_path(&LocalOrRemotePath::Local(dir))
+                    .and_then(|root| root.to_local_path().map(Path::to_path_buf))
+            });
+            for root in auto_index_candidate_roots(roots, |_| true) {
+                manager.index_directory(root, ctx);
             }
         }
     }
@@ -811,13 +813,21 @@ impl PersistedWorkspace {
             for terminal_view in terminal_views.into_iter().flatten() {
                 let terminal_view_ref = terminal_view.as_ref(ctx);
                 if terminal_view_ref.view_id() == terminal_view_id {
-                    if let Some(pwd) = terminal_view_ref.pwd() {
-                        let directory_path = Path::new(&pwd);
+                    if terminal_view_ref.active_session_is_local(ctx) != Some(true) {
+                        log::info!(
+                            "Skipping local codebase incremental sync for non-local agent conversation"
+                        );
+                        return;
+                    }
+
+                    let pwd = terminal_view_ref.pwd();
+                    if let Some(pwd) = pwd {
+                        let directory_path = PathBuf::from(pwd);
 
                         // Trigger an incremental sync through the CodebaseIndexManager
                         CodebaseIndexManager::handle(ctx).update(ctx, |codebase_manager, ctx| {
                             if let Err(e) = codebase_manager
-                                .trigger_incremental_sync_for_path(directory_path, ctx)
+                                .trigger_incremental_sync_for_path(&directory_path, ctx)
                             {
                                 log::warn!("Failed to trigger incremental sync {e}");
                             }

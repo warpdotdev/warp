@@ -7,9 +7,8 @@ use prost::Message as _;
 use tokenizers::Tokenizer;
 use warp_completer::ParsedTokensSnapshot;
 
-use super::ClassificationResult;
-
-use super::Model;
+use super::{ClassificationResult, Model};
+use crate::InputClassifierDecisionSource;
 
 pub struct InferenceRunner {
     model: ModelProto,
@@ -96,6 +95,7 @@ impl super::InferenceRunner for InferenceRunner {
         Ok(ClassificationResult {
             p_ai: probabilities[0],
             p_shell: probabilities[1],
+            source: InputClassifierDecisionSource::InputClassifier,
         })
     }
 }

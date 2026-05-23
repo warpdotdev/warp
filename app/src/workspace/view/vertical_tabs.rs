@@ -1,62 +1,15 @@
 pub mod telemetry;
 
-use crate::ai::agent::conversation::{ConversationStatus, StatusColorStyle};
-use crate::ai::agent_management::AgentNotificationsModel;
-use crate::ai::conversation_status_ui::render_status_element;
-use crate::code::editor::{add_color, remove_color};
-use crate::code::icon_from_file_path;
-use crate::safe_triangle::SafeTriangle;
-use crate::send_telemetry_from_app_ctx;
-use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
-use crate::terminal::view::TerminalViewState;
-use crate::terminal::CLIAgent;
-use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
-use crate::ui_components::icon_with_status::{render_icon_with_status, IconWithStatusVariant};
-use crate::workspace::view::vertical_tabs::telemetry::{
-    VerticalTabsChipEntrypoint, VerticalTabsTelemetryEvent,
-};
-use crate::FeatureFlag;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::appearance::Appearance;
-use crate::context_chips::display_chip::GitLineChanges;
-use crate::context_chips::github_pr_display_text_from_url;
-use crate::drive::{cloud_object_styling::warp_drive_icon_color, DriveObjectType};
-use crate::editor::EditorView;
-use crate::pane_group::pane::IPaneType;
-use crate::pane_group::TerminalPane;
-use crate::pane_group::{
-    CodePane, NotebookPane, PaneGroup, PaneId, TabBarHoverIndex, WorkflowPane,
-};
-use crate::tab::{tab_position_id, SelectedTabColor, TabData};
-use crate::terminal::session_settings::SessionSettings;
-use crate::terminal::TerminalView;
-use crate::themes::theme::Fill as ThemeFill;
-use crate::ui_components::buttons::combo_inner_button;
-use crate::ui_components::icons::Icon as UiIcon;
-use crate::util::bindings::keybinding_name_to_display_string;
-use crate::util::color::Opacity;
-use crate::workspace::action::WorkspaceAction;
-use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
-use crate::workspace::hoa_onboarding::HoaOnboardingStep;
-use crate::workspace::tab_settings::{
-    TabSettings, VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity,
-    VerticalTabsPrimaryInfo, VerticalTabsTabItemMode, VerticalTabsViewMode,
-};
-use crate::workspace::{
-    PaneViewLocator, TabBarLocation, TabContextMenuAnchor, VerticalTabsPaneContextMenuTarget,
-    VerticalTabsPaneDropTargetData, Workspace,
-};
-use languages::language_by_filename;
-
+use languages::language_by_local_filename;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use settings::Setting as _;
-use std::path::{Path, PathBuf};
 use warp_core::context_flag::ContextFlag;
 use warp_core::telemetry::TelemetryEvent as _;
 use warp_core::ui::color::blend::Blend;
@@ -64,13 +17,12 @@ use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill as WarpThemeFill, WarpTheme};
 use warp_core::ui::Icon as WarpIcon;
-use warpui::elements::DispatchEventResult;
 use warpui::elements::{
     resizable_state_handle, Border, ChildAnchor, Clipped, ClippedScrollStateHandle,
-    ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DragAxis,
-    DragBarSide, Draggable, DropShadow, DropTarget, Element, Empty, EventHandler, Expanded,
-    Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
+    ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    DispatchEventResult, DragAxis, DragBarSide, Draggable, DropShadow, DropTarget, Element, Empty,
+    EventHandler, Expanded, Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
     PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Resizable,
     ResizableStateHandle, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth,
     Shrinkable, Stack, Text,
@@ -82,6 +34,54 @@ use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::ui_components::text_input::TextInput;
 use warpui::{AppContext, EntityId, SingletonEntity, ViewHandle, WindowId};
+
+use crate::ai::agent::conversation::{ConversationStatus, StatusColorStyle};
+use crate::ai::agent_management::AgentNotificationsModel;
+use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::conversation_status_ui::render_status_element;
+use crate::appearance::Appearance;
+use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::cloud_object::CloudObjectLookup as _;
+use crate::code::editor::{add_color, remove_color};
+use crate::code::icon_from_file_path;
+use crate::context_chips::display_chip::GitLineChanges;
+use crate::context_chips::github_pr_display_text_from_url;
+use crate::drive::cloud_object_styling::warp_drive_icon_color;
+use crate::drive::DriveObjectType;
+use crate::editor::EditorView;
+use crate::pane_group::pane::IPaneType;
+use crate::pane_group::{
+    CodePane, NotebookPane, PaneGroup, PaneId, TabBarHoverIndex, TerminalPane, WorkflowPane,
+};
+use crate::safe_triangle::SafeTriangle;
+use crate::tab::{tab_position_id, SelectedTabColor, TabData};
+use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::session_settings::SessionSettings;
+use crate::terminal::view::TerminalViewState;
+use crate::terminal::{CLIAgent, TerminalView};
+use crate::themes::theme::Fill as ThemeFill;
+use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
+use crate::ui_components::buttons::combo_inner_button;
+use crate::ui_components::icon_with_status::{render_icon_with_status, IconWithStatusVariant};
+use crate::ui_components::icons::Icon as UiIcon;
+use crate::util::bindings::keybinding_name_to_display_string;
+use crate::util::color::Opacity;
+use crate::workspace::action::WorkspaceAction;
+use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
+use crate::workspace::hoa_onboarding::HoaOnboardingStep;
+use crate::workspace::tab_settings::{
+    TabSettings, VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity,
+    VerticalTabsPrimaryInfo, VerticalTabsTabItemMode, VerticalTabsViewMode,
+};
+use crate::workspace::view::vertical_tabs::telemetry::{
+    VerticalTabsChipEntrypoint, VerticalTabsTelemetryEvent,
+};
+use crate::workspace::{
+    PaneViewLocator, TabBarLocation, TabContextMenuAnchor, VerticalTabsPaneContextMenuTarget,
+    VerticalTabsPaneDropTargetData, Workspace,
+};
+use crate::{send_telemetry_from_app_ctx, FeatureFlag};
 
 const PANEL_WIDTH: f32 = 248.;
 const MIN_PANEL_WIDTH: f32 = 200.;
@@ -1432,10 +1432,7 @@ fn render_new_tab_button(
         )
         .build()
         .on_click(|ctx, _, position| {
-            ctx.dispatch_typed_action(WorkspaceAction::ToggleNewSessionMenu {
-                position,
-                is_vertical_tabs: true,
-            });
+            ctx.dispatch_typed_action(WorkspaceAction::ToggleNewSessionMenu { position });
         })
         .finish();
 
@@ -2735,7 +2732,7 @@ fn build_vertical_tabs_summary_data(
                 let terminal_view = terminal_pane.terminal_view(app);
                 let terminal_view = terminal_view.as_ref(app);
                 let title_text = terminal_view.terminal_title_from_shell();
-                let working_directory = terminal_view.display_working_directory(app);
+                let working_directory = resolved_terminal_working_directory(terminal_view, app);
                 let working_directory_text = working_directory
                     .clone()
                     .filter(|wd| !wd.trim().is_empty())
@@ -2770,7 +2767,9 @@ fn build_vertical_tabs_summary_data(
                 }
 
                 if let (Some(repo_path), Some(branch_name)) = (
-                    terminal_view.current_repo_path().cloned(),
+                    terminal_view
+                        .current_local_repo_path()
+                        .map(Path::to_path_buf),
                     terminal_view
                         .current_git_branch(app)
                         .and_then(|branch| normalize_summary_text(&branch)),
@@ -2993,9 +2992,7 @@ fn terminal_pane_search_text_fragments(
     let terminal_view = terminal_pane.terminal_view(app);
     let terminal_view = terminal_view.as_ref(app);
     let title_text = terminal_view.terminal_title_from_shell();
-    let working_directory = terminal_view
-        .display_working_directory(app)
-        .filter(|wd| !wd.trim().is_empty())
+    let working_directory = resolved_terminal_working_directory(terminal_view, app)
         .unwrap_or_else(|| title_text.clone());
     let agent_text = terminal_agent_text(terminal_view, app);
     let (conversation_display_title, cli_agent_title) =
@@ -3259,6 +3256,47 @@ impl PaneGroup {
     }
 }
 
+/// Returns the best available working-directory string for a terminal pane,
+/// incorporating cloud environment name and setup status for ambient agent sessions.
+fn resolved_terminal_working_directory(
+    terminal_view: &TerminalView,
+    app: &AppContext,
+) -> Option<String> {
+    let working_directory = terminal_view
+        .display_working_directory(app)
+        .filter(|wd| !wd.trim().is_empty());
+    cloud_agent_working_directory_and_env(terminal_view, working_directory.as_deref(), app)
+        .or(working_directory)
+}
+
+/// For cloud agent panes, builds a composite string from the environment name,
+/// setup status, and/or working directory. Returns `None` for non-cloud sessions.
+fn cloud_agent_working_directory_and_env(
+    terminal_view: &TerminalView,
+    working_directory: Option<&str>,
+    app: &AppContext,
+) -> Option<String> {
+    if !terminal_view.is_ambient_agent_session(app) {
+        return None;
+    }
+    let model_ref = terminal_view.ambient_agent_view_model()?.as_ref(app);
+
+    let env_name = model_ref
+        .selected_environment_id()
+        .and_then(|id| CloudAmbientAgentEnvironment::get_by_id(id, app))
+        .map(|env| env.model().string_model.display_name());
+
+    let setup_status: Option<&str> = model_ref.agent_progress().map(|p| p.setup_status_text());
+
+    match (env_name, setup_status, working_directory) {
+        (Some(env), Some(status), _) => Some(format!("{env} · {status}")),
+        (Some(env), None, Some(wd)) => Some(format!("{env} · {wd}")),
+        (Some(env), None, None) => Some(env),
+        (None, Some(status), _) => Some(status.to_string()),
+        (None, None, _) => None,
+    }
+}
+
 fn render_terminal_row_content(
     props: &PaneProps<'_>,
     terminal_view: &TerminalView,
@@ -3271,9 +3309,7 @@ fn render_terminal_row_content(
     let primary_info = *TabSettings::as_ref(app).vertical_tabs_primary_info.value();
 
     let title_text = terminal_view.terminal_title_from_shell();
-    let working_directory = terminal_view
-        .display_working_directory(app)
-        .filter(|wd| !wd.trim().is_empty())
+    let working_directory = resolved_terminal_working_directory(terminal_view, app)
         .unwrap_or_else(|| title_text.clone());
 
     let git_branch = terminal_view.current_git_branch(app);
@@ -4072,9 +4108,7 @@ fn render_terminal_primary_line_for_view(
     app: &AppContext,
 ) -> Box<dyn Element> {
     let title_text = terminal_view.terminal_title_from_shell();
-    let working_directory = terminal_view
-        .display_working_directory(app)
-        .filter(|wd| !wd.trim().is_empty())
+    let working_directory = resolved_terminal_working_directory(terminal_view, app)
         .unwrap_or_else(|| title_text.clone());
     let agent_text = terminal_agent_text(terminal_view, app);
     let (conversation_display_title, cli_agent_title) =
@@ -5597,7 +5631,7 @@ fn render_terminal_detail_section(
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text_colors = detail_sidecar_text_colors(theme);
-    let working_directory = terminal_view.display_working_directory(app);
+    let working_directory = resolved_terminal_working_directory(terminal_view, app);
     let git_branch = terminal_view.current_git_branch(app);
     let cli_agent_session = CLIAgentSessionsModel::as_ref(app).session(terminal_view.id());
     let agent_text = terminal_agent_text(terminal_view, app);
@@ -5808,7 +5842,8 @@ fn render_warp_drive_object_detail_section(
 }
 
 fn code_detail_kind_label(file_name: &str) -> Option<String> {
-    language_by_filename(Path::new(file_name)).map(|language| language.display_name().to_string())
+    language_by_local_filename(Path::new(file_name))
+        .map(|language| language.display_name().to_string())
 }
 
 fn typed_pane_warp_drive_object_type(typed: &TypedPane<'_>) -> Option<DriveObjectType> {
@@ -6061,9 +6096,7 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
             let terminal_view = terminal_pane.terminal_view(app).as_ref(app);
             let terminal_title = terminal_view.terminal_title_from_shell();
             let git_branch = terminal_view.current_git_branch(app);
-            let working_directory = terminal_view
-                .display_working_directory(app)
-                .filter(|wd| !wd.trim().is_empty());
+            let working_directory = resolved_terminal_working_directory(terminal_view, app);
             let working_directory_text = working_directory
                 .clone()
                 .unwrap_or_else(|| terminal_title.clone());

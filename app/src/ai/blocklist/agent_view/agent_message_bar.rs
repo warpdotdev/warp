@@ -18,19 +18,20 @@ use crate::ai::agent::{
 use crate::ai::blocklist::agent_view::shortcuts::AgentShortcutViewModel;
 use crate::ai::blocklist::agent_view::zero_state_block::render_ambient_credits_banner;
 use crate::ai::blocklist::agent_view::{
-    agent_view_bg_fill, AgentViewController, AgentViewControllerEvent,
+    agent_view_bg_fill, is_in_cloud_context, AgentViewController, AgentViewControllerEvent,
 };
 use crate::ai::blocklist::{
     ai_brand_color, BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIHistoryEvent,
     BlocklistAIInputEvent, BlocklistAIInputModel,
 };
 use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentModelEvent};
-use crate::ai::mcp::{
-    templatable_manager::{FigmaMcpStatus, TemplatableMCPServerManagerEvent},
-    TemplatableMCPServerManager,
+use crate::ai::mcp::templatable_manager::{FigmaMcpStatus, TemplatableMCPServerManagerEvent};
+use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::ai::request_usage_model::{
+    AIRequestUsageModel, AIRequestUsageModelEvent, AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD,
 };
-use crate::ai::request_usage_model::{AIRequestUsageModel, AIRequestUsageModelEvent};
 use crate::search::slash_command_menu::static_commands::commands;
+use crate::settings::AISettings;
 use crate::terminal::input::buffer_model::{InputBufferModel, InputBufferUpdateEvent};
 use crate::terminal::input::message_bar::attached_context::{
     AttachedBlocksMessageProducer, AttachedContextArgs, AttachedTextSelectionMessageProducer,
@@ -66,6 +67,7 @@ pub struct AgentMessageBarMouseStates {
     pub toggle_plan: MouseStateHandle,
     pub toggle_conversation_menu: MouseStateHandle,
     pub toggle_code_review: MouseStateHandle,
+    pub handoff_to_cloud: MouseStateHandle,
     pub clear_attached_context: MouseStateHandle,
     /// Mouse state handle for the "Get Figma MCP" contextual button.
     pub figma_install_button: MouseStateHandle,
@@ -349,7 +351,6 @@ impl View for AgentMessageBar {
         };
 
         // Show credits banner when user has ambient credits remaining.
-        use crate::ai::request_usage_model::AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD;
         let right_element = if cfg!(target_family = "wasm") {
             None
         } else if let Some(credits) =
@@ -575,10 +576,39 @@ impl MessageProvider<AgentMessageArgs<'_>> for ZeroStateMessageProducer {
             .with_is_disabled(!is_buffer_empty),
         );
 
-        let is_cloud_agent = matches!(
-            agent_view_controller.agent_view_state(),
-            AgentViewState::Active { origin, .. } if origin.is_cloud_agent()
-        );
+        let is_cloud_agent =
+            is_in_cloud_context(agent_view_controller.agent_view_state(), terminal_model);
+        let ai_settings = AISettings::as_ref(app);
+
+        // Handoff to cloud only available for local agents.
+        if !is_cloud_agent
+            && ai_settings
+                .is_ampersand_handoff_enabled_for_conversation(Some(active_conversation), app)
+        {
+            items.push(
+                MessageItem::clickable(
+                    vec![
+                        MessageItem::Keystroke {
+                            keystroke: Keystroke {
+                                key: "&".to_owned(),
+                                ..Default::default()
+                            },
+                            color: color_override_for_shortcuts_and_commands,
+                            background_color: bg_color_override_for_shortcuts_and_commands,
+                        },
+                        MessageItem::Text {
+                            content: "send task to the cloud".into(),
+                            color: color_override_for_shortcuts_and_commands,
+                        },
+                    ],
+                    |ctx| {
+                        ctx.dispatch_typed_action(InputAction::ActivateCloudHandoff);
+                    },
+                    mouse_states.handoff_to_cloud.clone(),
+                )
+                .with_is_disabled(!is_buffer_empty),
+            );
+        }
 
         let plan_count = AIDocumentModel::as_ref(app)
             .get_all_documents_for_conversation(active_conversation.id())
@@ -606,7 +636,11 @@ impl MessageProvider<AgentMessageArgs<'_>> for ZeroStateMessageProducer {
 
         // Code review only works locally.
         #[cfg(not(target_family = "wasm"))]
-        if !is_cloud_agent && *TabSettings::as_ref(app).show_code_review_button {
+        if !is_cloud_agent
+            && !ai_settings
+                .is_cloud_handoff_enabled_for_conversation(Some(active_conversation), app)
+            && *TabSettings::as_ref(app).show_code_review_button
+        {
             let code_review_keystroke = if OperatingSystem::get().is_mac() {
                 Keystroke::parse("cmd-shift-+").expect("keystroke should parse")
             } else {
@@ -721,7 +755,7 @@ fn should_fork_from_last_known_good_state(
     };
 
     match error {
-        RenderableAIError::QuotaLimit
+        RenderableAIError::QuotaLimit { .. }
         | RenderableAIError::ServerOverloaded
         | RenderableAIError::ContextWindowExceeded(_)
         | RenderableAIError::InvalidApiKey { .. }
@@ -823,8 +857,8 @@ impl MessageProvider<AgentMessageArgs<'_>> for AutodetectedBashModeMessageProduc
             input_buffer_model,
             input_model,
             appearance,
-            slash_command_model,
             app,
+            slash_command_model,
             ..
         } = args;
         if input_model.is_ai_input_enabled()
@@ -914,42 +948,25 @@ struct ExitBashModeMessageProducer;
 impl MessageProvider<AgentMessageArgs<'_>> for ExitBashModeMessageProducer {
     fn produce_message(&self, args: AgentMessageArgs<'_>) -> Option<Message> {
         let AgentMessageArgs {
-            input_buffer_model,
             input_model,
             appearance,
+            app,
             ..
         } = args;
         if input_model.is_ai_input_enabled() || !input_model.is_input_type_locked() {
             return None;
         }
+        let set_input_mode_agent_keystroke =
+            keybinding_name_to_keystroke(SET_INPUT_MODE_AGENT_ACTION_NAME, app)?;
 
-        let (text_color, keystroke_color_override, keystroke_bg_color_override) =
-            if input_buffer_model.current_value().is_empty() {
-                (appearance.theme().ansi_fg_blue(), None, None)
-            } else {
-                (
-                    Fill::from(appearance.theme().ansi_fg_blue())
-                        .with_opacity(60)
-                        .into_solid(),
-                    Some(
-                        appearance
-                            .theme()
-                            .sub_text_color(appearance.theme().background())
-                            .into_solid(),
-                    ),
-                    Some(blended_colors::neutral_1(appearance.theme())),
-                )
-            };
+        let text_color = appearance.theme().ansi_fg_blue();
 
         Some(
             Message::new(vec![
                 MessageItem::Keystroke {
-                    keystroke: Keystroke {
-                        key: "backspace".to_owned(),
-                        ..Default::default()
-                    },
-                    color: keystroke_color_override,
-                    background_color: keystroke_bg_color_override,
+                    keystroke: set_input_mode_agent_keystroke,
+                    color: None,
+                    background_color: None,
                 },
                 MessageItem::text("to exit shell mode"),
             ])

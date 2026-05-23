@@ -1,13 +1,12 @@
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
-use crate::{
-    config::LanguageId, model::LanguageServerId, supported_servers::LSPServerType, LspEvent,
-    LspServerConfig, LspServerModel,
-};
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+
+use crate::config::LanguageId;
+use crate::model::LanguageServerId;
+use crate::supported_servers::LSPServerType;
+use crate::{LspEvent, LspServerConfig, LspServerModel};
 
 #[derive(Debug)]
 pub enum LspManagerModelEvent {

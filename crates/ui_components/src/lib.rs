@@ -6,7 +6,6 @@ pub mod switch;
 pub mod tooltip;
 
 pub use keyboard_shortcut::KeyboardShortcut;
-
 use warp_core::ui::appearance::Appearance;
 use warpui::Element;
 

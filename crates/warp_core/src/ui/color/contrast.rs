@@ -1,6 +1,7 @@
 use warpui::color::ColorU;
 
-use super::{blend::Blend, coloru_with_opacity, Rgb};
+use super::blend::Blend;
+use super::{coloru_with_opacity, Rgb};
 
 /// Offset to the relative luminance when computing the contrast ratio per the formula defined in
 /// the [W3C Spec](https://www.w3.org/TR/WCAG20-TECHS/G17.html). This offset is included to

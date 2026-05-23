@@ -1,3 +1,11 @@
+use std::collections::{HashMap, HashSet};
+
+use uuid::Uuid;
+use warp_core::features::FeatureFlag;
+use warp_core::send_telemetry_from_ctx;
+use warp_multi_agent_api as api;
+use warpui::{Entity, ModelContext, SingletonEntity};
+
 use super::history_model::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
 };
@@ -6,18 +14,12 @@ use super::telemetry::{
     TeamAgentCommunicationFailureReason, TeamAgentCommunicationKind,
     TeamAgentCommunicationTransport, TeamAgentOrchestrationVersion,
 };
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    conversation::{AIConversationId, ConversationStatus},
-    task::TaskId,
     AIAgentExchangeId, AIAgentInput, AIAgentOutputMessageType, LifecycleEventType,
     ReceivedMessageInput,
 };
-use std::collections::{HashMap, HashSet};
-use uuid::Uuid;
-use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
-use warp_multi_agent_api as api;
-use warpui::{Entity, ModelContext, SingletonEntity};
 
 const MAX_RETRY_ATTEMPTS: i32 = 3;
 const MAX_PENDING_LIFECYCLE_EVENTS_PER_TARGET: usize = 200;
@@ -101,6 +103,8 @@ pub enum OrchestrationEventServiceEvent {
 
 /// Synchronous state manager for orchestration event queuing, delivery
 /// tracking, lifecycle dispatch, and readiness detection.
+// TODO(QUALITY-733): Remove the legacy v1 orchestration event-service paths once v2 delivery no
+// longer reuses this service for local queueing and controller injection.
 pub struct OrchestrationEventService {
     pending_events: HashMap<AIConversationId, Vec<PendingEvent>>,
     awaiting_server_echo_events: HashMap<AIConversationId, Vec<PendingEvent>>,
@@ -489,6 +493,8 @@ impl OrchestrationEventService {
         source_conversation_id: AIConversationId,
         ctx: &ModelContext<Self>,
     ) {
+        // TODO(QUALITY-733): Remove restored v1 lifecycle subscriptions once legacy
+        // orchestration lifecycle dispatch is deleted.
         if FeatureFlag::OrchestrationV2.is_enabled() {
             return;
         }
@@ -555,6 +561,8 @@ impl OrchestrationEventService {
         if FeatureFlag::OrchestrationV2.is_enabled() {
             return;
         }
+        // TODO(QUALITY-733): Remove legacy v1 lifecycle dispatch once all child-agent lifecycle
+        // events are delivered through the v2 event log.
 
         #[allow(deprecated)]
         match (previous_status.as_ref(), &current_status) {

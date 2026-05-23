@@ -13,46 +13,41 @@ mod ansi_c_decoder;
 mod dcs_hooks;
 mod handler;
 
+use std::collections::HashMap;
+use std::fmt::Write;
+use std::str::FromStr as _;
+use std::time::Duration;
+use std::{io, str};
+
 use ansi_c_decoder::*;
+use byte_unit::{Byte, Unit as ByteUnit};
 pub use dcs_hooks::*;
 pub use handler::*;
+use hex;
 use instant::Instant;
 use itertools::Itertools;
+use lazy_static::lazy_static;
+use log::debug;
+use vte::{Params, Parser as VteParser, Perform as VtePerform};
 pub use warp_terminal::model::ansi::control_sequence_parameters::*;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use warpui::color::ColorU;
 
+use super::kitty::parse_kitty_chunk;
+use super::terminal_model::TmuxInstallationState;
 use crate::features::FeatureFlag;
 use crate::terminal::model::completions::{
     ShellCompletion, ShellCompletionUpdate, ShellData as CompletionsShellData,
 };
 use crate::terminal::model::escape_sequences::C0;
 use crate::terminal::model::index::VisibleRow;
-
 use crate::terminal::model::iterm_image::parse_iterm_image_metadata;
-
-use crate::terminal::model::tmux::{
-    commands::{parse_command, TmuxCommandResponse},
-    format_input,
-    parser::{TmuxControlModeHandler, TmuxControlModeParser, TmuxMessage},
+use crate::terminal::model::tmux::commands::{parse_command, TmuxCommandResponse};
+use crate::terminal::model::tmux::parser::{
+    TmuxControlModeHandler, TmuxControlModeParser, TmuxMessage,
 };
-
-use crate::terminal::model::tmux::ControlModeEvent;
+use crate::terminal::model::tmux::{format_input, ControlModeEvent};
 use crate::{safe_debug, safe_error};
-use byte_unit::{Byte, Unit as ByteUnit};
-use hex;
-use lazy_static::lazy_static;
-use log::debug;
-use std::collections::HashMap;
-use std::fmt::Write;
-
-use std::str::FromStr as _;
-use std::time::Duration;
-use std::{io, str};
-use vte::{Params, Parser as VteParser, Perform as VtePerform};
-use warpui::color::ColorU;
-
-use super::kitty::parse_kitty_chunk;
-use super::terminal_model::TmuxInstallationState;
 
 /// Marks an OSC as one that is sent by Warp logic registered in the shell.
 ///
@@ -155,6 +150,60 @@ fn parse_legacy_color(color: &[u8]) -> Option<ColorU> {
         color_from_slice(&color[item_len * 2..])?,
         0xff,
     ))
+}
+
+/// Parse the payload of an OSC 7 sequence (`file://<host>/<percent-encoded-path>`).
+///
+/// Returns the decoded absolute path only when the host portion explicitly
+/// matches the local machine's hostname. Empty and `localhost` hosts are
+/// rejected because OSC 7 is terminal-controlled — a remote shell streamed
+/// through a legacy SSH session can emit either form, and we cannot
+/// distinguish that from a real local shell. Shells that want OSC 7 honored
+/// must include the hostname (the de-facto convention; see wezterm/iTerm2).
+fn parse_osc_7_cwd(payload: &[u8]) -> Option<String> {
+    let raw = str::from_utf8(payload).ok()?;
+    let after_scheme = raw.strip_prefix("file://")?;
+    let path_start = after_scheme.find('/')?;
+    let host = &after_scheme[..path_start];
+    let encoded_path = &after_scheme[path_start..];
+
+    if !osc_7_host_is_local(host) {
+        debug!("Ignoring OSC 7 from non-local host {host:?}");
+        return None;
+    }
+
+    percent_decode_utf8(encoded_path)
+}
+
+fn osc_7_host_is_local(host: &str) -> bool {
+    if host.is_empty() || host.eq_ignore_ascii_case("localhost") {
+        return false;
+    }
+    crate::terminal::model::session::get_local_hostname()
+        .map(|local| local.eq_ignore_ascii_case(host))
+        .unwrap_or(false)
+}
+
+/// Percent-decode an ASCII URI path segment into a UTF-8 String. Returns `None`
+/// if the input contains a malformed `%xx` escape (including `%` not followed
+/// by two hex digits, e.g. truncated at the end of the string) or the decoded
+/// bytes are not UTF-8.
+fn percent_decode_utf8(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hi = (*bytes.get(i + 1)? as char).to_digit(16)?;
+            let lo = (*bytes.get(i + 2)? as char).to_digit(16)?;
+            decoded.push(((hi << 4) | lo) as u8);
+            i += 3;
+        } else {
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
 }
 
 fn parse_number(input: &[u8]) -> Option<u8> {
@@ -850,6 +899,27 @@ where
                         .to_owned();
                     self.handler.set_title(Some(title));
                     return;
+                }
+                unhandled(params);
+            }
+
+            // OSC 7: Current working directory.
+            // Format: OSC 7 ; file://<host>/<percent-encoded-path> ST
+            // Lets external tools (worktree managers, project launchers, etc.)
+            // notify the terminal of CWD changes outside the shell prompt
+            // cycle, so the tab CWD/git-branch display can update mid-command.
+            // Reference: https://wezterm.org/shell-integration.html#osc-7-escape-sequence-to-set-the-working-directory
+            b"7" => {
+                if params.len() >= 2 {
+                    // OSC parameters are split on `;`, but URI paths can
+                    // contain unescaped semicolons. Rejoin params[1..] before
+                    // decoding so we don't silently truncate the payload
+                    // (matching the OSC 2 title handler above).
+                    let payload: Vec<u8> = params[1..].join(&b';');
+                    if let Some(path) = parse_osc_7_cwd(&payload) {
+                        self.handler.set_current_working_directory(path);
+                        return;
+                    }
                 }
                 unhandled(params);
             }

@@ -1,8 +1,6 @@
-use markdown_parser::CodeBlockText;
-use warpui::fonts::Weight;
-
-use markdown_parser::FormattedTable;
+use markdown_parser::{CodeBlockText, FormattedTable};
 use warp_core::features::FeatureFlag;
+use warpui::fonts::Weight;
 
 use super::{
     BufferBlockItem, BufferTextStyle, CodeBlockType, MarkdownStyle, TextStyles,

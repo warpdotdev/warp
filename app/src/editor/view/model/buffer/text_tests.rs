@@ -1,6 +1,7 @@
-use super::*;
 use std::collections::HashSet;
 use std::iter::FromIterator;
+
+use super::*;
 
 #[test]
 fn test_basic() {

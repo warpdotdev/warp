@@ -1,5 +1,7 @@
 //! Conversion between remote codebase indexing domain types and proto-generated types.
 
+use serde::Serialize;
+
 use crate::proto;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -10,9 +12,11 @@ pub struct RemoteCodebaseIndexStatus {
     pub progress_completed: Option<u64>,
     pub progress_total: Option<u64>,
     pub failure_message: Option<String>,
+    pub root_hash: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RemoteCodebaseIndexState {
     NotEnabled,
     Unavailable,
@@ -35,6 +39,7 @@ impl From<&RemoteCodebaseIndexStatus> for proto::CodebaseIndexStatus {
             progress_completed: status.progress_completed,
             progress_total: status.progress_total,
             failure_message: status.failure_message.clone(),
+            root_hash: status.root_hash.clone(),
         }
     }
 }
@@ -75,6 +80,7 @@ pub fn proto_to_codebase_index_status(
         progress_completed: status.progress_completed,
         progress_total: status.progress_total,
         failure_message: status.failure_message.clone(),
+        root_hash: status.root_hash.clone(),
     })
 }
 
@@ -119,6 +125,7 @@ mod tests {
             progress_completed: None,
             progress_total: None,
             failure_message: None,
+            root_hash: None,
         }
     }
 
@@ -139,6 +146,18 @@ mod tests {
             let proto = proto::CodebaseIndexStatus::from(&status);
             assert_eq!(proto_to_codebase_index_status(&proto), Some(status));
         }
+    }
+
+    #[test]
+    fn ready_status_round_trips_retrieval_metadata() {
+        let status = RemoteCodebaseIndexStatus {
+            root_hash: Some("root-hash".to_string()),
+            ..status(RemoteCodebaseIndexState::Ready)
+        };
+
+        let proto = proto::CodebaseIndexStatus::from(&status);
+        assert_eq!(proto.root_hash.as_deref(), Some("root-hash"));
+        assert_eq!(proto_to_codebase_index_status(&proto), Some(status));
     }
 
     #[test]
@@ -176,6 +195,7 @@ mod tests {
             progress_completed: None,
             progress_total: None,
             failure_message: None,
+            root_hash: None,
         };
 
         assert_eq!(proto_to_codebase_index_status(&status), None);

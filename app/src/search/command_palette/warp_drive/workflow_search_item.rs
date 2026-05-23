@@ -1,3 +1,8 @@
+use ordered_float::OrderedFloat;
+use warpui::elements::{Clipped, Container, Flex, Highlight, ParentElement, Shrinkable, Text};
+use warpui::fonts::{Properties, Weight};
+use warpui::{AppContext, Element, SingletonEntity};
+
 use crate::appearance::Appearance;
 use crate::cloud_object::CloudObject;
 use crate::drive::cloud_object_styling::warp_drive_icon_color;
@@ -10,10 +15,6 @@ use crate::search::result_renderer::ItemHighlightState;
 use crate::search::workflows::fuzzy_match::FuzzyMatchWorkflowResult;
 use crate::ui_components::icons::Icon;
 use crate::workflows::CloudWorkflow;
-use ordered_float::OrderedFloat;
-use warpui::elements::{Clipped, Container, Flex, Highlight, ParentElement, Shrinkable, Text};
-use warpui::fonts::{Properties, Weight};
-use warpui::{AppContext, Element, SingletonEntity};
 
 /// Search item result for a cloud workflow.
 #[derive(Debug)]

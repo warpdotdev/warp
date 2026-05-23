@@ -1,25 +1,12 @@
-use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::SizeInfo;
-
-use crate::terminal::model::ansi::{
-    self, Attr, CharsetIndex, ClearMode, CursorShape, CursorStyle, LineClearMode, Mode,
-    PrecmdValue, PreexecValue, StandardCharset, TabulationClearMode,
-};
-use crate::terminal::model::grid::grid_handler::{GridHandler, PerformResetGridChecks, RegexIter};
-use crate::terminal::model::index::{Point, VisibleRow};
-use crate::terminal::model::iterm_image::ITermImage;
-
-use crate::terminal::model::grid::Dimensions;
-use crate::terminal::model::GridStorage;
-
-use crate::terminal::model::secrets::ObfuscateSecrets;
-use instant::Instant;
-use pathfinder_color::ColorU;
 use std::collections::HashMap;
 use std::io;
 use std::num::NonZeroUsize;
 use std::ops::{Range, RangeInclusive};
 use std::sync::{Arc, OnceLock};
+
+use instant::Instant;
+use pathfinder_color::ColorU;
+use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 
 use super::find::RegexDFAs;
 use super::grid::RespectDisplayedOutput;
@@ -27,7 +14,18 @@ use super::image_map::StoredImageMetadata;
 use super::kitty::{KittyAction, KittyResponse};
 use super::secrets::RespectObfuscatedSecrets;
 use super::selection::ScrollDelta;
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::ansi::{
+    self, Attr, CharsetIndex, ClearMode, CursorShape, CursorStyle, LineClearMode, Mode,
+    PrecmdValue, PreexecValue, StandardCharset, TabulationClearMode,
+};
+use crate::terminal::model::grid::grid_handler::{GridHandler, PerformResetGridChecks, RegexIter};
+use crate::terminal::model::grid::Dimensions;
+use crate::terminal::model::index::{Point, VisibleRow};
+use crate::terminal::model::iterm_image::ITermImage;
+use crate::terminal::model::secrets::ObfuscateSecrets;
+use crate::terminal::model::GridStorage;
+use crate::terminal::SizeInfo;
 
 #[derive(Clone)]
 pub struct BlockGrid {

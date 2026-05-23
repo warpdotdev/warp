@@ -1,12 +1,10 @@
 use async_channel::Sender;
 
-use crate::terminal::{
-    model::{
-        session::command_executor::{InBandCommand, InBandCommandCancelledEvent},
-        tmux::commands::TmuxCommand,
-    },
-    shell::ShellType,
+use crate::terminal::model::session::command_executor::{
+    InBandCommand, InBandCommandCancelledEvent,
 };
+use crate::terminal::model::tmux::commands::TmuxCommand;
+use crate::terminal::shell::ShellType;
 
 /// Set of events sent by command executors.
 pub enum ExecutorCommandEvent {

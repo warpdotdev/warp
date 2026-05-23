@@ -1,7 +1,9 @@
-use super::{BucketRange, Experiment, Layer};
-use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::str::FromStr;
+
+use lazy_static::lazy_static;
+
+use super::{BucketRange, Experiment, Layer};
 
 lazy_static! {
     pub static ref LOGIN_LAYER: Layer = Layer {

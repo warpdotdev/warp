@@ -1,20 +1,26 @@
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use rmcp::model::{ErrorCode, ErrorData, Resource, ServerCapabilities, Tool};
+
     use crate::ai::mcp::templatable_manager::utils::{
         query_resources_for, query_tools_for, should_query_resources, should_query_tools,
     };
-    use rmcp::model::{ErrorCode, ErrorData, Resource, ServerCapabilities, Tool};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
 
     /// Build a `ServerCapabilities` with selected capability flags toggled on.
     /// Each `Some(default)` mirrors how rmcp deserializes a capability the
     /// server advertised with no inner flags set.
     fn caps(tools: bool, resources: bool) -> ServerCapabilities {
-        ServerCapabilities {
-            tools: tools.then(Default::default),
-            resources: resources.then(Default::default),
-            ..Default::default()
+        match (tools, resources) {
+            (true, true) => ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
+            (true, false) => ServerCapabilities::builder().enable_tools().build(),
+            (false, true) => ServerCapabilities::builder().enable_resources().build(),
+            (false, false) => ServerCapabilities::builder().build(),
         }
     }
 

@@ -17,15 +17,6 @@ pub mod user_uid;
 #[cfg(target_family = "wasm")]
 pub mod web_handoff;
 
-use crate::ai::agent_conversations_model::AgentConversationsModel;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::ai_assistant::requests::REQUEST_LIMIT_INFO_CACHE_KEY;
-use crate::code::editor_management::{CodeEditorStatus, CodeEditorSummary};
-use crate::env_vars::manager::EnvVarCollectionManager;
-use crate::notebooks::manager::NotebookManager;
-use crate::terminal::general_settings::GeneralSettings;
-use crate::workflows::manager::WorkflowManager;
 use ::settings::{Setting, SettingsManager, ToggleableSetting};
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 pub use auth_manager::AuthManager;
@@ -33,13 +24,19 @@ pub use auth_state::AuthStateProvider;
 use itertools::Itertools;
 pub use login_failure_notification::LoginFailureReason;
 pub use user_uid::UserUid;
-use warpui::modals::{AlertDialogWithCallbacks, ModalButton};
-
 use warp_core::user_preferences::GetUserPreferences as _;
+use warpui::modals::{AlertDialogWithCallbacks, ModalButton};
 use warpui::{AppContext, SingletonEntity};
 
+use crate::ai::agent_conversations_model::AgentConversationsModel;
+use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai_assistant::requests::REQUEST_LIMIT_INFO_CACHE_KEY;
 use crate::cloud_object::model::persistence::CloudModel;
-use crate::focus_running_window_and_show_native_modal;
+use crate::code::editor_management::{CodeEditorStatus, CodeEditorSummary};
+use crate::env_vars::manager::EnvVarCollectionManager;
+use crate::notebooks::manager::NotebookManager;
 use crate::palette::PaletteMode;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::sync_queue::SyncQueue;
@@ -49,11 +46,15 @@ use crate::settings::{
     CloudPreferencesSettings, PrivacySettings, CRASH_REPORTING_ENABLED_DEFAULTS_KEY,
     TELEMETRY_ENABLED_DEFAULTS_KEY,
 };
+use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::shared_session::manager::Manager as SharedSessionManager;
+use crate::workflows::manager::WorkflowManager;
 use crate::workspace::{Workspace, WorkspaceAction};
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::{persistence, GlobalResourceHandlesProvider};
-use crate::{report_if_error, send_telemetry_sync_from_app_ctx};
+use crate::{
+    focus_running_window_and_show_native_modal, persistence, report_if_error,
+    send_telemetry_sync_from_app_ctx, GlobalResourceHandlesProvider,
+};
 
 /// Prefix for API keys used in authentication
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
@@ -231,6 +232,9 @@ pub fn log_out(app: &mut AppContext) {
     });
     BlocklistAIHistoryModel::handle(app).update(app, |history_model, _| {
         history_model.reset();
+    });
+    OrchestrationPillBarModel::handle(app).update(app, |pill_bar_model, _| {
+        pill_bar_model.reset();
     });
     AgentConversationsModel::handle(app).update(app, |agent_conversations_model, _| {
         agent_conversations_model.reset();

@@ -1,16 +1,13 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_broadcast::InactiveReceiver;
-use warpui::{r#async::SpawnedFutureHandle, Entity, ModelContext, SingletonEntity, WindowId};
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::{Entity, ModelContext, SingletonEntity, WindowId};
 
-use crate::{
-    settings::{DebugSettings, DebugSettingsChangedEvent},
-    view_components::{DismissibleToast, ToastLink},
-    workspace::{ToastStack, WorkspaceAction},
-};
+use crate::settings::{DebugSettings, DebugSettingsChangedEvent};
+use crate::view_components::{DismissibleToast, ToastLink};
+use crate::workspace::{ToastStack, WorkspaceAction};
 
 /// Subdirectory under the application state directory for PTY recordings.
 #[cfg(feature = "local_fs")]

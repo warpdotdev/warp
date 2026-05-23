@@ -1,6 +1,7 @@
-use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
 use std::path::PathBuf;
 use std::time::Duration;
+
+use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};

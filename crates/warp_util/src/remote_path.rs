@@ -20,3 +20,12 @@ impl RemotePath {
         Self { host_id, path }
     }
 }
+
+/// The result of a `navigate_to_directory` request to the remote server.
+#[derive(Clone, Debug)]
+pub struct RemoteNavigationResult {
+    /// The canonicalized remote path returned by the server.
+    pub remote_path: RemotePath,
+    /// Whether the server detected a git repository at this path.
+    pub is_git: bool,
+}

@@ -8,37 +8,50 @@ pub fn initialize_settings_for_tests(app: &mut App) {
 }
 
 #[cfg(test)]
+pub fn initialize_history_persistence_for_tests(app: &mut App) {
+    use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
+
+    initialize_settings_for_tests(app);
+
+    let global_resource_handles = GlobalResourceHandles::mock(app);
+    app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+}
+
+#[cfg(test)]
 pub fn initialize_settings_for_tests_with_mode(
     app: &mut App,
     mode: warp_core::execution_mode::ExecutionMode,
     is_sandboxed: bool,
 ) {
-    use crate::{
-        ai::cloud_agent_settings::CloudAgentSettings,
-        drive::settings::WarpDriveSettings,
-        search::command_search::settings::CommandSearchSettings,
-        settings::{
-            app_icon::AppIconSettings, init_and_register_user_preferences,
-            manager::SettingsManager, AISettings, AccessibilitySettings, AliasExpansionSettings,
-            AppEditorSettings, BlockVisibilitySettings, ChangelogSettings,
-            CloudPreferencesSettings, CodeSettings, DebugSettings, EmacsBindingsSettings,
-            FontSettings, GPUSettings, InputModeSettings, InputSettings, NativePreferenceSettings,
-            PaneSettings, SameLinePromptBlockSettings, ScrollSettings, SelectionSettings,
-            SshSettings, ThemeSettings, VimBannerSettings,
-        },
-        terminal::{
-            general_settings::GeneralSettings, keys_settings::KeysSettings,
-            ligature_settings::LigatureSettings, safe_mode_settings::SafeModeSettings,
-            session_settings::SessionSettings, settings::TerminalSettings,
-            shared_session::settings::SharedSessionSettings, warpify::settings::WarpifySettings,
-            BlockListSettings,
-        },
-        undo_close::UndoCloseSettings,
-        user_config::WarpConfig,
-        window_settings::WindowSettings,
-        workspace::tab_settings::TabSettings,
+    use warp_core::execution_mode::AppExecutionMode;
+    use warp_core::semantic_selection::SemanticSelection;
+
+    use crate::ai::cloud_agent_settings::CloudAgentSettings;
+    use crate::drive::settings::WarpDriveSettings;
+    use crate::search::command_search::settings::CommandSearchSettings;
+    use crate::settings::app_icon::AppIconSettings;
+    use crate::settings::manager::SettingsManager;
+    use crate::settings::{
+        init_and_register_user_preferences, AISettings, AccessibilitySettings,
+        AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings, ChangelogSettings,
+        CloudPreferencesSettings, CodeSettings, DebugSettings, EmacsBindingsSettings, FontSettings,
+        GPUSettings, InputModeSettings, InputSettings, NativePreferenceSettings, PaneSettings,
+        SameLinePromptBlockSettings, ScrollSettings, SelectionSettings, SshSettings, ThemeSettings,
+        VimBannerSettings,
     };
-    use warp_core::{execution_mode::AppExecutionMode, semantic_selection::SemanticSelection};
+    use crate::terminal::general_settings::GeneralSettings;
+    use crate::terminal::keys_settings::KeysSettings;
+    use crate::terminal::ligature_settings::LigatureSettings;
+    use crate::terminal::safe_mode_settings::SafeModeSettings;
+    use crate::terminal::session_settings::SessionSettings;
+    use crate::terminal::settings::TerminalSettings;
+    use crate::terminal::shared_session::settings::SharedSessionSettings;
+    use crate::terminal::warpify::settings::WarpifySettings;
+    use crate::terminal::BlockListSettings;
+    use crate::undo_close::UndoCloseSettings;
+    use crate::user_config::WarpConfig;
+    use crate::window_settings::WindowSettings;
+    use crate::workspace::tab_settings::TabSettings;
     app.add_singleton_model(|ctx| AppExecutionMode::new(mode, is_sandboxed, ctx));
 
     app.update(init_and_register_user_preferences);

@@ -1,6 +1,7 @@
+use string_offset::CharOffset;
+
 use super::{OffsetMap, SelectableTextRun};
 use crate::render::model::FrameOffset;
-use string_offset::CharOffset;
 
 #[test]
 fn test_offset_map_basic() {
@@ -76,24 +77,20 @@ fn test_offset_map_placeholders() {
 fn test_end_to_end() {
     // Group imports here so they don't cause "unused import" warnings on other targets.
 
-    use warpui::{
-        App, color::ColorU, elements::Fill, fonts::Cache as FontCache, text_layout::LayoutCache,
-    };
+    use warpui::App;
+    use warpui::color::ColorU;
+    use warpui::elements::Fill;
+    use warpui::fonts::Cache as FontCache;
+    use warpui::text_layout::LayoutCache;
 
-    use crate::{
-        content::{
-            buffer::{Buffer, BufferEditAction, EditOrigin},
-            selection_model::BufferSelectionModel,
-            text::IndentBehavior,
-        },
-        render::{
-            layout::TextLayout,
-            model::{
-                BlockItem, BrokenLinkStyle, CheckBoxStyle, HorizontalRuleStyle, InlineCodeStyle,
-                PARAGRAPH_MIN_HEIGHT, ParagraphStyles, RenderLayoutOptions, RichTextStyles,
-                TableStyle, test_utils::TEST_BASELINE_OFFSET,
-            },
-        },
+    use crate::content::buffer::{Buffer, BufferEditAction, EditOrigin};
+    use crate::content::selection_model::BufferSelectionModel;
+    use crate::content::text::IndentBehavior;
+    use crate::render::layout::TextLayout;
+    use crate::render::model::test_utils::TEST_BASELINE_OFFSET;
+    use crate::render::model::{
+        BlockItem, BrokenLinkStyle, CheckBoxStyle, HorizontalRuleStyle, InlineCodeStyle,
+        PARAGRAPH_MIN_HEIGHT, ParagraphStyles, RenderLayoutOptions, RichTextStyles, TableStyle,
     };
 
     App::test((), |mut app| async move {

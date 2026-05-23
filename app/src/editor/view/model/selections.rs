@@ -1,4 +1,6 @@
-use std::{cmp::Ordering, mem, ops::Range};
+use std::cmp::Ordering;
+use std::mem;
+use std::ops::Range;
 
 use pathfinder_geometry::vector::Vector2F;
 use serde::{Deserialize, Serialize};
@@ -7,18 +9,12 @@ use vec1::Vec1;
 use warpui::text::point::Point;
 use warpui::AppContext;
 
-use super::{
-    buffer::{Anchor, Buffer, LamportValue, ToBufferOffset, ToCharOffset, ToPoint},
-    display_map::{DisplayMap, ToDisplayPoint},
-    DisplayPoint, ReplicaId,
-};
-use crate::{
-    editor::{
-        soft_wrap::{ClampDirection, DisplayPointAndClampDirection},
-        CursorColors, RangeExt,
-    },
-    ui_components::avatar::Avatar,
-};
+use super::buffer::{Anchor, Buffer, LamportValue, ToBufferOffset, ToCharOffset, ToPoint};
+use super::display_map::{DisplayMap, ToDisplayPoint};
+use super::{DisplayPoint, ReplicaId};
+use crate::editor::soft_wrap::{ClampDirection, DisplayPointAndClampDirection};
+use crate::editor::{CursorColors, RangeExt};
+use crate::ui_components::avatar::Avatar;
 
 /// This type encapsulates enough information about a selection to be able to
 /// draw it. Compared to the `Selection` type, the points are converted based on
