@@ -68,7 +68,7 @@ fn test_cache_dir_path() {
     // ChannelState, by default, is configured for Channel::Oss.
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
-            assert_eq!(cache_dir(), home_dir.join("Library/Application Support/io.blackdagger.Black-Oss"));
+            assert_eq!(cache_dir(), home_dir.join("Library/Application Support/io.blackdagger.Black"));
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             assert_eq!(cache_dir(), home_dir.join(".cache/black-oss"));
         } else if #[cfg(windows)] {
@@ -85,7 +85,7 @@ fn test_state_dir_path() {
     cfg_if::cfg_if! {
         // ChannelState, by default, is configured for Channel::Oss.
         if #[cfg(target_os = "macos")] {
-            assert_eq!(state_dir(), home_dir.join("Library/Application Support/io.blackdagger.Black-Oss"));
+            assert_eq!(state_dir(), home_dir.join("Library/Application Support/io.blackdagger.Black"));
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             assert_eq!(state_dir(), home_dir.join(".local/state/black-oss"));
         } else if #[cfg(windows)] {
