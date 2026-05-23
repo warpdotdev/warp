@@ -55,10 +55,23 @@ Create a small shared protocol crate or equivalent shared module used by both th
   - `TabSelector`
   - `PaneSelector`
   - `SessionSelector`
+  - `BlockSelector`
+  - `FileSelector`
+  - `DriveObjectSelector`
 - Opaque protocol-facing ID newtypes for instance/window/tab/pane/session identifiers.
 - Allowlisted `ControlAction` variants and typed parameter payloads.
 - Success/error envelopes with stable machine-readable error codes.
 The protocol should treat target IDs as opaque. The app may encode existing runtime identifiers internally, but the public wire contract should not require callers to understand `EntityId`, `PaneId`, or other implementation types.
+Recommended selector variants:
+- `InstanceSelector`: `Active`, `Id(InstanceId)`, `Pid(u32)`.
+- `WindowSelector`: `Active`, `Id(WindowId)`, `Index(u32)`, `Title(String)`.
+- `TabSelector`: `Active`, `Id(TabId)`, `Index(u32)`, `Title(String)`.
+- `PaneSelector`: `Active`, `Id(PaneId)`, `Index(u32)`.
+- `SessionSelector`: `Active`, `Id(SessionId)`, `Index(u32)`.
+- `BlockSelector`: `Id(BlockId)`.
+- `FileSelector`: `Path { path, line, column }`.
+- `DriveObjectSelector`: `Id(DriveObjectId)` or `Lookup { object_type, name_or_path }`.
+Index selectors are resolved only within their parent selector context, so tab index resolution requires a resolved window and pane/session index resolution requires a resolved tab or pane. Title and name/path lookup selectors are ergonomic helpers for interactive use and must fail on ambiguity rather than choosing the first match.
 Recommended top-level request shape for `tab.create`:
 ```json
 {
@@ -85,7 +98,7 @@ Recommended response shape:
   "result": {}
 }
 ```
-Error payloads should include stable codes defined in `SECURITY.md`, including `local_control_disabled`, `unauthorized_local_client`, `insufficient_permissions`, `authenticated_user_required`, `authenticated_user_unavailable`, `execution_context_not_allowed`, `ambiguous_instance`, `stale_target`, `invalid_selector`, `unsupported_action`, `not_allowlisted`, `invalid_params`, `target_state_conflict`, `missing_target`, and `no_instance`.
+Error payloads should include stable codes defined in `SECURITY.md`, including `local_control_disabled`, `unauthorized_local_client`, `insufficient_permissions`, `authenticated_user_required`, `authenticated_user_unavailable`, `execution_context_not_allowed`, `ambiguous_instance`, `ambiguous_target`, `stale_target`, `invalid_selector`, `unsupported_action`, `not_allowlisted`, `invalid_params`, `target_state_conflict`, `missing_target`, and `no_instance`.
 ### 2. Per-process discovery instead of fixed-port-only routing
 Keep the existing fixed-port HTTP behavior intact for installation detection/profiling compatibility. Add a separate local-control listener that follows the same native Axum/Tokio pattern but supports multiple local Warp app processes.
 Recommended design:
@@ -192,16 +205,27 @@ Recommended resolution order:
 3. Resolve tab within the window.
 4. Resolve pane within the tab/pane-group context.
 5. Resolve session only for session-scoped commands.
+6. Resolve block/file/Drive selectors only for commands whose action metadata declares that target family.
 Selector behavior:
 - `active` resolves from current app focus/selection state.
 - Explicit opaque IDs must resolve exactly or return `stale_target`.
-- Index selectors are allowed only for user-visible indexed concepts such as tabs and should resolve to a concrete opaque ID before execution.
+- Index selectors are allowed only for user-visible indexed concepts and should resolve to a concrete opaque ID before execution.
+- Title, name, and path selectors are convenience selectors. They must be exact by default, document any future fuzzy behavior explicitly, and return `ambiguous_target` when more than one target matches.
 - A session-scoped request against a non-terminal pane returns `target_state_conflict`.
 Target resolution must happen after protected enablement, authentication, and safety-grant checks. This prevents denied requests from learning more target state than necessary and keeps enforcement centralized.
 Implementation references:
 - Window-level active selection already exists inside the app through `WindowManager`.
 - Pane scoping can build on the conceptual model of `PaneViewLocator` in `app/src/workspace/util.rs (12-18)`.
 - Existing URI intent routing in `app/src/uri/mod.rs (895-1093)` shows how to locate workspaces/windows and avoid silently acting in the wrong place.
+#### CLI selector grammar
+`crates/warp_cli/src/local_control.rs` should expose a shared selector argument group that is flattened into every command that accepts app targets. The parser must support:
+- Instance selectors: `--instance <instance_id>` and `--pid <pid>`, with clap conflicts.
+- Window selectors: `--window <active|id:<id>|index:<n>|title:<title>>`, `--window-id <id>`, `--window-index <n>`, and `--window-title <title>`, with one form allowed.
+- Tab selectors: `--tab <active|id:<id>|index:<n>|title:<title>>`, `--tab-id <id>`, `--tab-index <n>`, and `--tab-title <title>`, with one form allowed.
+- Pane selectors: `--pane <active|id:<id>|index:<n>>`, `--pane-id <id>`, and `--pane-index <n>`, with one form allowed.
+- Session selectors: `--session <active|id:<id>|index:<n>>`, `--session-id <id>`, and `--session-index <n>`, with one form allowed.
+- Block/file/Drive selectors only on commands that need them: `--block-id <id>`, path arguments or `--path <path>` plus `--line`/`--column`, and Drive object ID arguments or `--drive-id <id>`.
+The CLI converts these flags into the protocol `TargetSelector` before sending the request. It must not rely on positional entity IDs for commands like `window close 1`; target entities are selected through the shared selector flags so command arguments remain reserved for action parameters.
 ### 6. Allowlisted handler families
 Use one handler module per action family. The protocol layer owns parsing/validation; handler modules own target resolution and delegation to existing app logic.
 Recommended modules/families:
@@ -396,6 +420,8 @@ Map tests directly to `PRODUCT.md` behavior.
 - Behavior 7-13:
   - Selector-resolution unit tests for active, explicit ID, index, stale target, ambiguous target, and non-terminal session target.
   - Tests that no lower-level selector silently retargets after an explicit stale selector fails.
+  - CLI selector parsing tests for every generic and explicit alias form: `--window`, `--window-id`, `--window-index`, `--window-title`, `--tab`, `--tab-id`, `--tab-index`, `--tab-title`, `--pane`, `--pane-id`, `--pane-index`, `--session`, `--session-id`, and `--session-index`.
+  - CLI conflict tests proving only one selector form per entity family is accepted and that positional target IDs are rejected where the command expects selector flags.
 - Behavior 15-28:
   - Parser/serde tests for every first-slice `ControlAction` variant.
   - Router tests proving unknown/unallowlisted actions are rejected.

@@ -53,7 +53,14 @@ Non-goals:
    - Active tab in the selected window.
    - Active pane in the selected tab.
    - Active session in the selected pane.
-10. Every selector family supports explicit opaque IDs returned by introspection. Tabs may also support index selectors where index-based workflows are already user-visible, but IDs remain the preferred automation surface.
+10. Every selector family supports explicit opaque IDs returned by introspection. Selector families may also support scoped indices, titles/names, or paths where those concepts are already user-visible, but IDs remain the preferred automation surface.
+   - Window selectors support `active`, opaque window IDs, window indices from `window list`, and exact window titles for interactive use.
+   - Tab selectors support `active`, opaque tab IDs, tab indices scoped to the resolved window, and exact tab titles for interactive use.
+   - Pane selectors support `active`, opaque pane IDs, and pane indices scoped to the resolved tab or pane group.
+   - Session selectors support `active`, opaque session IDs, and session indices scoped to the resolved pane when sessions are user-visible as an ordered list.
+   - Block selectors use opaque block IDs from block/session introspection.
+   - File selectors use paths, plus optional line/column coordinates where the command supports opening or reading a location.
+   - Warp Drive selectors use opaque object IDs, with optional type-scoped exact name/path lookups for interactive use.
 11. “Active session” means the currently selected terminal session for the resolved pane/window context. If the selected target does not contain a terminal session, session-scoped actions fail rather than silently redirecting elsewhere.
 12. When a command omits lower-level selectors, it resolves them from the chosen higher-level context using active defaults. Example: a pane split command with only `--instance` uses that instance’s active window, active tab, and active pane.
 13. When an explicitly supplied target disappears between discovery and execution, the request fails with a stale-target error. The CLI must not silently choose a different tab, pane, or session.
@@ -136,8 +143,13 @@ Non-goals:
    - `warpctrl instance list`
    - `warpctrl app active`
    - `warpctrl tab create`
+   - `warpctrl tab rename --window-id <window_id> --tab-id <tab_id> "Build logs"`
+   - `warpctrl tab rename --window active --tab-index 0 "Build logs"`
+   - `warpctrl window close --window-title "Scratch"`
    - `warpctrl pane split --direction right`
    - `warpctrl pane split --instance <id> --window active --pane active --direction right`
+   - `warpctrl input replace --session-id <session_id> "cargo check"`
+   - `warpctrl block output --pane-id <pane_id> --block-id <block_id> --plain`
    - `warpctrl theme set "Warp Dark"`
    - `warpctrl setting set appearance.themes.system_theme true`
    - `warpctrl input insert "cargo check" --replace`
@@ -177,15 +189,22 @@ The product surface must distinguish what kind of state a command touches. This 
 - **Underlying data mutations** can change user data or cause external side effects: executing terminal commands, writing/creating/deleting files, running workflows that execute commands, CRUD operations on Warp Drive objects, mutating AI conversation history, and any action that can modify data outside transient app UI state.
 A command that touches multiple categories must require the strongest applicable permission. For example, `file open` is an app-state mutation, while `file write` is an underlying data mutation; `input insert` is an app-state mutation, while `input run` is an underlying data mutation because it executes a command in the target session.
 ### Targeting flags
-All commands that address a running app target accept the same selector flags where meaningful:
+All commands that address a running app target accept the same selector flags where meaningful. Generic `--window`, `--tab`, `--pane`, and `--session` flags accept the selector grammar below; explicit typed aliases are provided so scripts can avoid string parsing ambiguity:
 - `--instance <instance_id>` selects a running Warp process from `warpctrl instance list`.
 - `--pid <pid>` is a convenience instance selector and conflicts with `--instance`.
-- `--window <active|id|index|title>` selects a window inside the instance.
-- `--tab <active|id|index|title>` selects a tab inside the window.
-- `--pane <active|id|index>` selects a pane inside the tab or pane-group context.
-- `--session <active|id>` selects a terminal or agent session inside the pane when the command is session-scoped.
+- `--window <active|id:<id>|index:<n>|title:<title>>` selects a window inside the instance.
+- `--window-id <id>`, `--window-index <n>`, and `--window-title <title>` are exact aliases for the corresponding `--window ...` forms.
+- `--tab <active|id:<id>|index:<n>|title:<title>>` selects a tab inside the resolved window.
+- `--tab-id <id>`, `--tab-index <n>`, and `--tab-title <title>` are exact aliases for the corresponding `--tab ...` forms.
+- `--pane <active|id:<id>|index:<n>>` selects a pane inside the resolved tab or pane-group context.
+- `--pane-id <id>` and `--pane-index <n>` are exact aliases for the corresponding `--pane ...` forms.
+- `--session <active|id:<id>|index:<n>>` selects a terminal or agent session inside the resolved pane when the command is session-scoped.
+- `--session-id <id>` and `--session-index <n>` are exact aliases for the corresponding `--session ...` forms.
+- `--block-id <id>` selects a terminal block for block-scoped read commands.
+- File commands use path arguments or `--path <path>` where the path is the selected file entity; `--line <n>` and `--column <n>` refine the location when supported.
+- Drive commands use object ID arguments or `--drive-id <id>` where the ID is the selected Warp Drive entity; name/path lookup must be type-scoped when supported.
 - `--output-format <pretty|json|ndjson|text>` controls output shape and remains globally available.
-Omitted lower-level selectors use active defaults only when that active target is unambiguous. Explicit IDs must resolve exactly or fail with `stale_target`.
+Within a selector family, specifying more than one form is invalid. For example, `--tab-id` conflicts with `--tab-index`, `--tab-title`, and `--tab`. Omitted lower-level selectors use active defaults only when that active target is unambiguous. Explicit IDs must resolve exactly or fail with `stale_target`; index/title/name/path selectors that match zero targets fail with `missing_target`, and selectors that match multiple targets fail with `ambiguous_target`.
 ### Read-only command set
 The read-only branch `zach/warp-cli-readonly` should implement the following commands before mutating catalog expansion begins. Read-only does not mean one permission: metadata reads and underlying data reads are separate grant categories.
 Metadata and capability reads:
