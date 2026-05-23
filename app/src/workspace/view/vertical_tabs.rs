@@ -329,6 +329,7 @@ fn render_pane_row_element(
         rename_editor: _,
         is_pane_being_renamed,
         pane_rename_editor: _,
+        tab_number: _,
     } = props;
     let is_selected = is_active_tab && is_focused;
     let mut row = Hoverable::new(mouse_state, move |state| {
@@ -691,6 +692,11 @@ struct PaneProps<'a> {
     rename_editor: Option<ViewHandle<EditorView>>,
     is_pane_being_renamed: bool,
     pane_rename_editor: Option<ViewHandle<EditorView>>,
+    /// When `Some(n)`, this row represents tab `n` (1-based) and a tab-number
+    /// label is drawn before its icon. Controlled by the
+    /// `appearance.tabs.show_tab_numbers` setting; set only on each tab's
+    /// representative row so the Cmd+1..9 shortcuts are discoverable.
+    tab_number: Option<usize>,
 }
 
 struct PaneRowState {
@@ -1794,6 +1800,7 @@ fn render_tab_group_internal(
     let pane_group_id = tab.pane_group.id();
     let visible_pane_ids = pane_group.visible_pane_ids();
     let resolved_mode = resolve_vertical_tabs_mode(app);
+    let show_tab_number = *TabSettings::as_ref(app).show_tab_numbers.value();
     let display_granularity = match resolved_mode {
         VerticalTabsResolvedMode::Panes => VerticalTabsDisplayGranularity::Panes,
         VerticalTabsResolvedMode::FocusedSession | VerticalTabsResolvedMode::Summary => {
@@ -1897,7 +1904,7 @@ fn render_tab_group_internal(
                     .entry(*pane_id)
                     .or_default()
                     .clone();
-                let Some(pane_props) = PaneProps::new(
+                let Some(mut pane_props) = PaneProps::new(
                     pane_group,
                     *pane_id,
                     pane_group_id,
@@ -1922,6 +1929,7 @@ fn render_tab_group_internal(
                 ) else {
                     return Empty::new().finish();
                 };
+                pane_props.tab_number = show_tab_number.then_some(tab_index + 1);
                 rows.add_child(render_summary_tab_item(
                     pane_props,
                     summary
@@ -1932,7 +1940,7 @@ fn render_tab_group_internal(
                 ));
                 return rows.finish();
             }
-            for (pane_id, row_mouse_state) in &row_mouse_states {
+            for (row_idx, (pane_id, row_mouse_state)) in row_mouse_states.iter().enumerate() {
                 let pane_color = per_pane_colors
                     .as_ref()
                     .and_then(|map| map.get(pane_id).copied())
@@ -1950,7 +1958,7 @@ fn render_tab_group_internal(
                 let is_pane_being_renamed = workspace
                     .current_workspace_state
                     .is_pane_being_renamed(locator);
-                let Some(pane_props) = PaneProps::new(
+                let Some(mut pane_props) = PaneProps::new(
                     pane_group,
                     *pane_id,
                     pane_group_id,
@@ -1975,6 +1983,8 @@ fn render_tab_group_internal(
                 ) else {
                     continue;
                 };
+                // Label only the tab's first row so each tab shows a single number.
+                pane_props.tab_number = (show_tab_number && row_idx == 0).then_some(tab_index + 1);
                 let view_mode = *TabSettings::as_ref(app).vertical_tabs_view_mode.value();
                 let row = match view_mode {
                     VerticalTabsViewMode::Compact => render_compact_pane_row(pane_props, app),
@@ -2537,10 +2547,14 @@ fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
         content_col.finish()
     };
 
-    let content = Flex::row()
+    let mut content = Flex::row()
         .with_main_axis_size(MainAxisSize::Max)
         .with_cross_axis_alignment(icon_alignment)
-        .with_spacing(ICON_WITH_STATUS_GAP)
+        .with_spacing(ICON_WITH_STATUS_GAP);
+    if let Some(number) = props.tab_number {
+        content.add_child(render_tab_number_label(number, appearance));
+    }
+    let content = content
         .with_child(icon)
         .with_child(Shrinkable::new(1., text_content).finish())
         .finish();
@@ -2895,6 +2909,7 @@ impl<'a> PaneProps<'a> {
             rename_editor,
             is_pane_being_renamed,
             pane_rename_editor,
+            tab_number: None,
         })
     }
 
@@ -3515,6 +3530,16 @@ fn render_text_line(
         .finish()
 }
 
+/// Renders the 1-based tab-number label shown before a vertical tab's icon when
+/// `appearance.tabs.show_tab_numbers` is enabled. The surrounding row applies
+/// `ICON_WITH_STATUS_GAP` spacing, so no extra margin is needed here.
+fn render_tab_number_label(number: usize, appearance: &Appearance) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    Text::new_inline(format!("{number}"), appearance.ui_font_family(), 12.)
+        .with_color(theme.sub_text_color(theme.background()).into())
+        .finish()
+}
+
 fn render_inline_tab_rename_editor(
     rename_editor: &ViewHandle<EditorView>,
     appearance: &Appearance,
@@ -3762,10 +3787,14 @@ fn render_summary_tab_item(
         );
     }
 
-    let content = Flex::row()
+    let mut content = Flex::row()
         .with_main_axis_size(MainAxisSize::Max)
         .with_cross_axis_alignment(CrossAxisAlignment::Start)
-        .with_spacing(ICON_WITH_STATUS_GAP)
+        .with_spacing(ICON_WITH_STATUS_GAP);
+    if let Some(number) = props.tab_number {
+        content.add_child(render_tab_number_label(number, appearance));
+    }
+    let content = content
         .with_child(icon)
         .with_child(Shrinkable::new(1., text_col.finish()).finish())
         .finish();
@@ -6253,10 +6282,14 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
         text_col.add_child(subtitle);
     }
 
-    let content = Flex::row()
+    let mut content = Flex::row()
         .with_main_axis_size(MainAxisSize::Max)
         .with_cross_axis_alignment(icon_alignment)
-        .with_spacing(ICON_WITH_STATUS_GAP)
+        .with_spacing(ICON_WITH_STATUS_GAP);
+    if let Some(number) = props.tab_number {
+        content.add_child(render_tab_number_label(number, appearance));
+    }
+    let content = content
         .with_child(icon)
         .with_child(Shrinkable::new(1., text_col.finish()).finish())
         .finish();
