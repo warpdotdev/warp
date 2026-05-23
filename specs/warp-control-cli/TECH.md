@@ -304,6 +304,7 @@ The intended stack is:
 2. `zach/warp-cli` — first implementation branch. This stays as the core scaffolding slice: protocol crate, discovery/auth scaffolding, Scripting settings surface, local-control server/bridge, standalone `warpctrl` binary, packaging hooks, and only the single `warpctrl tab create` mutation needed to prove the end-to-end path.
 3. `zach/warp-cli-readonly` — create this branch directly from `zach/warp-cli`. It implements the read-only command set from `PRODUCT.md` without adding additional mutations beyond the existing `tab create` proof command.
 4. `zach/warp-cli-read-write` — create this branch directly from `zach/warp-cli-readonly`. It implements the mutating command set from `PRODUCT.md` after the read-only branch has established selectors, metadata result shapes, and inspection APIs.
+Spec changes are an important part of the stacking strategy. All spec changes must originate on `zach/warp-cli-specs`, which is the authoritative source for `specs/warp-control-cli/PRODUCT.md`, `TECH.md`, `SECURITY.md`, and supporting docs. After a spec change lands there, propagate it upward through every stacked branch with raw git so the spec files stay synchronized across `zach/warp-cli`, `zach/warp-cli-readonly`, and `zach/warp-cli-read-write`. Do not make independent spec edits directly on the implementation branches except as part of resolving a propagation conflict in a way that preserves the authoritative specs-branch content.
 Recommended raw-git setup:
 ```bash
 git fetch origin
