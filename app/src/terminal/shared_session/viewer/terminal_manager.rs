@@ -1748,13 +1748,18 @@ impl crate::terminal::TerminalManager for TerminalManager {
     }
 
     fn on_view_detached(&self, detach_type: DetachType, app: &mut AppContext) {
-        // Keep the network + shared-session state alive for non-permanent detaches:
-        // - `HiddenForClose`: the pane may be restored from the undo-close stack. If the tab is
-        //   never restored, we'll be invoked again with `Closed` from the grace-period expiry
-        //   and tear down then.
+        // Keep the network + shared-session state — and the orchestration
+        // viewer model (OVM) — alive for non-permanent detaches:
+        // - `HiddenForClose`: the pane may be restored from the undo-close stack within the
+        //   grace window (~60s default). We deliberately leave the OVM (and its ancestor
+        //   streamer registration) in place so undo-close-tab restores the pill bar
+        //   seamlessly. If the tab is never restored, we'll be invoked again with `Closed`
+        //   from the grace-period expiry and tear down then.
         // - `Moved`: the same `TerminalManager` is reused in the target pane group (the
         //   `Box<dyn AnyPaneContent>` is transferred via `remove_pane_for_move` and then
-        //   immediately re-attached), so tearing down the network would break the live session.
+        //   immediately re-attached), so tearing down the network or OVM would break the
+        //   live session.
+        // Only `Closed` tears down the OVM here.
         if !matches!(detach_type, DetachType::Closed) {
             return;
         }
@@ -1764,6 +1769,15 @@ impl crate::terminal::TerminalManager for TerminalManager {
             model.unregister_agent_view_controller(terminal_view_id, ctx);
             model.unregister_ambient_session(terminal_view_id, ctx);
         });
+
+        // Tear down the orchestration viewer model so its streamer
+        // registration is released and the ancestor SSE can close. The
+        // network-event paths (SessionEnded / ViewerRemoved /
+        // FailedToReconnect) also call this, but pane-close doesn't flow
+        // through them — without this, the SSE leaks until the app exits.
+        // `stop_orchestration_polling` is idempotent, so a later
+        // network-event-driven call is a no-op.
+        Self::stop_orchestration_polling(&self.orchestration_viewer_model, app);
 
         if let NetworkState::Active(ref network) = self.network_state {
             network.update(app, |network, _| {
@@ -1785,3 +1799,7 @@ impl crate::terminal::TerminalManager for TerminalManager {
         self
     }
 }
+
+#[cfg(test)]
+#[path = "terminal_manager_tests.rs"]
+mod tests;
