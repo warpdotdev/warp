@@ -242,6 +242,21 @@ Recommended modules/families:
 - Panels/surfaces:
   - settings/page/search, palettes, left/right panels, Drive, resource center, code review, vertical tabs, AI assistant.
 Do not use a generic “dispatch action by string” endpoint. Every handler should be reachable only through an explicit `ControlAction` variant.
+#### WarpCtrlBehavior review gate
+The public `ControlAction` catalog remains the source of truth for the wire protocol, CLI parser, permission metadata, generated documentation, and app bridge handlers. Internal app actions such as `WorkspaceAction`, `TerminalAction`, `PaneGroupAction`, settings actions, and future user-visible action enums must not become the public protocol directly because they can contain transient view locators, indices, debug-only variants, implementation-specific payloads, and unstable internal semantics.
+To prevent drift between user-visible Warp behavior and the `warpctrl` catalog, every user-visible app action enum should implement a `WarpCtrlBehavior` review mapping. The mapping is a code-level forcing function, not an automatic exposure mechanism. It answers whether each internal app action is:
+- `Exposed` through a specific public `ControlAction` kind.
+- `CoveredBy` an existing public `ControlAction` kind because several internal actions map to one stable CLI behavior.
+- `Excluded` with an explicit reason such as debug-only, unsafe/privileged, internal implementation detail, not user-visible, no deterministic targeting model, no stable public semantics, or prohibited in the initial public version.
+- `Deferred` with an explicit reason and tracking issue when the action might belong in `warpctrl` later but needs additional product, security, selector, or protocol design.
+`WarpCtrlBehavior` implementations must use exhaustive matches without wildcard arms. Adding a new variant to a reviewed action enum should fail compilation until the developer or agent deliberately classifies its relationship to `warpctrl`. This mirrors the existing exhaustive-action-review style used by app-state saving decisions and makes “should this exist in Warp Control?” part of the ordinary code path for adding new user-visible actions.
+Recommended shape:
+- Define a shared `WarpCtrlBehavior` trait in the local-control integration layer or another app-visible module that does not force the core `warpui::Action` blanket implementation to change.
+- Define review enums such as `WarpCtrlActionReview`, `WarpCtrlExclusionReason`, and `WarpCtrlDeferredReason`.
+- Implement `WarpCtrlBehavior` for the major user-visible action enums, starting with `WorkspaceAction` and `TerminalAction`.
+- Keep the mapping one-way from internal behavior to public catalog metadata. `WarpCtrlBehavior::Exposed(ControlActionKind::TabCreate)` means the action is represented by the public `tab.create` command; it does not mean raw `WorkspaceAction::AddTerminalTab` is serializable or dispatchable over the protocol.
+- Add tests that collect reviewed action kinds and verify every `ControlActionKind` has protocol metadata, permission metadata, CLI parser coverage, generated-doc coverage, and an app-side handler before it can be advertised as supported.
+The `warpui::Action` trait should not be extended for this purpose because it currently has a blanket implementation for any `Any + Debug + Send + Sync` type. The enforcement point is the concrete user-visible action enums and binding/action registration surfaces, where exhaustive review can be required without weakening the allowlisted protocol boundary.
 ### 7. First slice: prove discovery and `tab.create`
 The first `warpctrl` implementation slice should land the minimum cross-cutting architecture plus a single representative tab mutation:
 - Shared protocol types and error envelopes.
@@ -267,6 +282,7 @@ The PR should also introduce the shell-facing CLI command grammar that the remai
 ### 8. Follow-up slices: fill out the remaining protocol in parallel
 After the first slice validates discovery, auth, selector resolution, CLI syntax, and server-to-app execution, follow-up slices can add the remaining allowlisted catalog in parallelized action-family groups. The baseline code should make new action additions mostly additive:
 - Extend `ControlAction`.
+- Update the relevant `WarpCtrlBehavior` mappings for the internal app actions that implement, overlap with, exclude, or defer the behavior.
 - Add typed params/results.
 - Add a handler.
 - Add validation/tests.
@@ -437,7 +453,7 @@ Map tests directly to `PRODUCT.md` behavior.
   - Startup-path tests or focused checks confirming `warpctrl` dispatches commands without entering GUI-app launch code.
   - Shell completions/help output checks once final command naming is selected.
 ### Computer-use CLI verification
-Before any stacked PR is considered ready for review, run an end-to-end computer-use verification pass against a Claude-built validation artifact from that branch. The validation artifact is a Warp app build and standalone `warpctrl` binary built by the validation agent from the exact commit under review, with `warp_control_cli` compiled in and `FeatureFlag::WarpControlCli` enabled at runtime.
+Before any stacked PR is considered ready for review, run an end-to-end computer-use verification pass against a cloud built validation artifact from that branch. The validation artifact is a Warp app build and standalone `warpctrl` binary built by the validation agent from the exact commit under review, with `warp_control_cli` compiled in and `FeatureFlag::WarpControlCli` enabled at runtime.
 The verifier must launch the built Warp app, enable the Scripting settings needed for the command category under test, and capture screenshots or screen recordings that prove the user-visible result of each basic command family. Screenshots should be saved as durable artifacts and named by branch, invocation context, command family, and command name.
 The verifier must exercise both invocation contexts:
 - **Inside Warp terminal:** run `warpctrl` from a terminal session inside the feature-flag-enabled Warp app. This path must prove the app-issued Warp-terminal execution-context proof is accepted and that inside-Warp settings gate the command categories.
@@ -496,7 +512,7 @@ flowchart LR
 - Implementation drift from `SECURITY.md`:
   - Mitigation: treat `SECURITY.md` as normative for security behavior; update this technical plan before implementation when there is disagreement, and include tests for the security architecture in the first slice.
 - Action catalog drift from real UI behavior:
-  - Mitigation: each control action reuses or factors existing UI action paths rather than duplicating behavior.
+  - Mitigation: each control action reuses or factors existing UI action paths rather than duplicating behavior, and user-visible app action enums implement exhaustive `WarpCtrlBehavior` mappings so new internal actions cannot be added without an explicit expose/cover/exclude/defer decision.
 - Leaking internal unstable identifiers:
   - Mitigation: public protocol exposes opaque IDs and selectors; internal runtime IDs stay implementation details.
 - Over-broad settings mutation:
