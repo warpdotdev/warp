@@ -20,9 +20,10 @@ pub use discovery::{
 pub use protocol::{
     Action, ActionGetParams, ActionGetResult, ActionListParams, ActionListResult,
     ActiveTargetChain, AppActiveParams, AppInspectParams, AppInspectResult, AppVersionResult,
-    ControlError, ControlResponse, EmptyParams, ErrorCode, ErrorResponseEnvelope,
-    ExecutionContextProof, PROTOCOL_VERSION, PaneListResult, PaneSummary, RequestEnvelope,
-    ResponseEnvelope, SessionListResult, SessionSummary, TabListResult, TabSummary,
-    WindowListResult, WindowSummary,
+    BlockGetParams, BlockGetResult, BlockListParams, BlockListResult, BlockSummary, ControlError,
+    ControlResponse, EmptyParams, ErrorCode, ErrorResponseEnvelope, ExecutionContextProof,
+    HistoryEntrySummary, HistoryListParams, HistoryListResult, InputGetParams, InputStateResult,
+    PROTOCOL_VERSION, PaneListResult, PaneSummary, RequestEnvelope, ResponseEnvelope,
+    SessionListResult, SessionSummary, TabListResult, TabSummary, WindowListResult, WindowSummary,
 };
 pub use selectors::{PaneSelector, SessionSelector, TabSelector, TargetSelector, WindowSelector};

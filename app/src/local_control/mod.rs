@@ -25,7 +25,9 @@ use warp_core::channel::ChannelState;
 use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
 
 pub use bridge::LocalControlBridge;
-use permissions::{ensure_action_allowed, ensure_feature_enabled};
+use permissions::{
+    authenticated_user_subject_for_action, ensure_action_allowed, ensure_feature_enabled,
+};
 
 #[derive(Clone)]
 struct ControlServerState {
@@ -245,16 +247,19 @@ async fn handle_credential_request(
         )
             .into_response();
     }
-    let settings_check = state
+    let authorization_check = state
         .bridge_spawner
         .spawn({
             let action = request.action;
             let invocation_context = request.invocation_context;
-            move |_, ctx| ensure_action_allowed(invocation_context, action, ctx)
+            move |_, ctx| {
+                ensure_action_allowed(invocation_context, action, ctx)?;
+                authenticated_user_subject_for_action(action, ctx)
+            }
         })
         .await;
-    match settings_check {
-        Ok(Ok(())) => {}
+    let authenticated_subject = match authorization_check {
+        Ok(Ok(subject)) => subject,
         Ok(Err(error)) => {
             return (
                 StatusCode::FORBIDDEN,
@@ -272,14 +277,15 @@ async fn handle_credential_request(
             )
                 .into_response();
         }
-    }
+    };
     let auth_token = AuthToken::generate();
-    let grant = CredentialGrant::new(
+    let mut grant = CredentialGrant::new(
         state.instance_id.clone(),
         request.action,
         request.invocation_context,
         Duration::minutes(5),
     );
+    grant.authenticated_user.subject = authenticated_subject;
     let mut credentials = match state.credentials.lock() {
         Ok(credentials) => credentials,
         Err(_) => {

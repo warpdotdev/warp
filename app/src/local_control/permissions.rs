@@ -1,7 +1,9 @@
+use crate::auth::AuthStateProvider;
 use crate::features::FeatureFlag;
 use crate::settings::{
     LocalControlInvocationContext, LocalControlPermissionCategory, LocalControlSettings,
 };
+use ::local_control::auth::CredentialGrant;
 use ::local_control::{ActionKind, ControlError, ErrorCode, InvocationContext, PermissionCategory};
 use warpui::{ModelContext, SingletonEntity};
 
@@ -98,6 +100,54 @@ pub(crate) fn ensure_settings_allow_action(
             format!(
                 "{} requires a local-control permission that is disabled",
                 action.as_str()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn authenticated_user_subject_for_action(
+    action: ActionKind,
+    ctx: &mut ModelContext<LocalControlBridge>,
+) -> Result<Option<String>, ControlError> {
+    if !action.metadata().requires_authenticated_user {
+        return Ok(None);
+    }
+    AuthStateProvider::as_ref(ctx)
+        .get()
+        .user_id()
+        .map(|uid| Some(uid.as_string()))
+        .ok_or_else(|| {
+            ControlError::new(
+                ErrorCode::AuthenticatedUserUnavailable,
+                format!("{} requires a logged-in Warp user", action.as_str()),
+            )
+        })
+}
+
+pub(super) fn ensure_authenticated_user_matches(
+    grant: &CredentialGrant,
+    ctx: &mut ModelContext<LocalControlBridge>,
+) -> Result<(), ControlError> {
+    if !grant.authenticated_user.required {
+        return Ok(());
+    }
+    let subject = AuthStateProvider::as_ref(ctx)
+        .get()
+        .user_id()
+        .map(|uid| uid.as_string())
+        .ok_or_else(|| {
+            ControlError::new(
+                ErrorCode::AuthenticatedUserUnavailable,
+                format!("{} requires a logged-in Warp user", grant.action.as_str()),
+            )
+        })?;
+    if grant.authenticated_user.subject.as_deref() != Some(subject.as_str()) {
+        return Err(ControlError::new(
+            ErrorCode::AuthenticatedUserMismatch,
+            format!(
+                "{} credential is bound to a different Warp user",
+                grant.action.as_str()
             ),
         ));
     }

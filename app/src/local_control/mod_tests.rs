@@ -192,6 +192,10 @@ fn capabilities_advertises_core_and_metadata_slice_actions() {
             ActionKind::TabCreate,
             ActionKind::PaneList,
             ActionKind::SessionList,
+            ActionKind::BlockList,
+            ActionKind::BlockGet,
+            ActionKind::InputGet,
+            ActionKind::HistoryList,
         ]
     );
 }
@@ -436,6 +440,46 @@ fn metadata_actions_require_metadata_permission_not_app_state_mutation_permissio
 }
 
 #[test]
+fn data_actions_require_underlying_data_permission_not_metadata_permission() {
+    let underlying_data_without_metadata =
+        settings_with_values(true, true, false, false, true, true);
+    let metadata_without_underlying_data = LocalControlSettings {
+        allow_inside_warp_underlying_data_reads: AllowInsideWarpUnderlyingDataReads::new(Some(
+            false,
+        )),
+        allow_outside_warp_underlying_data_reads: AllowOutsideWarpUnderlyingDataReads::new(Some(
+            false,
+        )),
+        ..settings_with_values(true, true, true, true, true, true)
+    };
+
+    for action in [
+        ActionKind::BlockList,
+        ActionKind::BlockGet,
+        ActionKind::InputGet,
+        ActionKind::HistoryList,
+    ] {
+        assert_eq!(
+            action.metadata().permission_category,
+            PermissionCategory::ReadUnderlyingData
+        );
+        ensure_settings_allow_action(
+            &underlying_data_without_metadata,
+            InvocationContext::InsideWarp,
+            action,
+        )
+        .expect("underlying data read permission allows data action");
+        let err = ensure_settings_allow_action(
+            &metadata_without_underlying_data,
+            InvocationContext::InsideWarp,
+            action,
+        )
+        .expect_err("data action is denied without underlying data read permission");
+        assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+    }
+}
+
+#[test]
 fn action_get_rejects_unallowlisted_action_names() {
     let err = validate_action_params(&Action {
         kind: ActionKind::ActionGet,
@@ -481,4 +525,39 @@ fn app_target_metadata_reads_reject_malformed_params() {
         })
         .expect("empty app target metadata read params are accepted");
     }
+}
+
+#[test]
+fn data_reads_reject_malformed_params() {
+    validate_action_params(&Action {
+        kind: ActionKind::InputGet,
+        params: serde_json::json!({}),
+    })
+    .expect("input.get accepts empty params");
+
+    let err = validate_action_params(&Action {
+        kind: ActionKind::InputGet,
+        params: serde_json::json!({ "unexpected": true }),
+    })
+    .expect_err("input.get params must be empty");
+    assert_eq!(err.code, ErrorCode::InvalidParams);
+
+    validate_action_params(&Action {
+        kind: ActionKind::BlockList,
+        params: serde_json::json!({ "limit": 10 }),
+    })
+    .expect("block.list accepts limit");
+
+    validate_action_params(&Action {
+        kind: ActionKind::HistoryList,
+        params: serde_json::json!({ "limit": 20 }),
+    })
+    .expect("history.list accepts limit");
+
+    let err = validate_action_params(&Action {
+        kind: ActionKind::BlockGet,
+        params: serde_json::json!({ "block_id": "" }),
+    })
+    .expect_err("block.get requires a block id");
+    assert_eq!(err.code, ErrorCode::InvalidParams);
 }

@@ -1,6 +1,7 @@
 use crate::local_control::handlers::metadata::action_metadata_for_name;
 use ::local_control::protocol::{
-    ActionGetParams, PaneTarget, SessionTarget, TabTarget, TargetSelector, WindowTarget,
+    ActionGetParams, BlockGetParams, BlockListParams, HistoryListParams, PaneTarget, SessionTarget,
+    TabTarget, TargetSelector, WindowTarget,
 };
 use ::local_control::{ActionKind, ControlError, ErrorCode};
 use warpui::ModelContext;
@@ -75,7 +76,19 @@ pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result
         | ActionKind::TabList
         | ActionKind::TabCreate
         | ActionKind::PaneList
-        | ActionKind::SessionList => validate_empty_action_params(action),
+        | ActionKind::SessionList
+        | ActionKind::InputGet => validate_empty_action_params(action),
+        ActionKind::BlockList => action.params_as::<BlockListParams>().map(|_| ()),
+        ActionKind::BlockGet => action.params_as::<BlockGetParams>().and_then(|params| {
+            if params.block_id.is_empty() {
+                return Err(ControlError::new(
+                    ErrorCode::InvalidParams,
+                    "block.get requires a non-empty block id",
+                ));
+            }
+            Ok(())
+        }),
+        ActionKind::HistoryList => action.params_as::<HistoryListParams>().map(|_| ()),
         _ => Ok(()),
     }
 }
@@ -103,10 +116,17 @@ pub(super) fn target_window_id(
 pub(crate) fn require_active_window_id(
     active_window: Option<warpui::WindowId>,
 ) -> Result<warpui::WindowId, ControlError> {
+    require_active_window_id_for_action(active_window, ActionKind::TabCreate)
+}
+
+pub(crate) fn require_active_window_id_for_action(
+    active_window: Option<warpui::WindowId>,
+    action: ActionKind,
+) -> Result<warpui::WindowId, ControlError> {
     active_window.ok_or_else(|| {
         ControlError::new(
             ErrorCode::MissingTarget,
-            "tab.create requires an active Warp window",
+            format!("{} requires an active Warp window", action.as_str()),
         )
     })
 }

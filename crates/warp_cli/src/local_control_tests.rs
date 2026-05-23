@@ -105,6 +105,34 @@ fn parses_structural_metadata_list_commands() {
 }
 
 #[test]
+fn parses_underlying_data_read_commands() {
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "block", "list", "--limit", "10"])
+            .expect("block list parses")
+            .command,
+        ControlCommand::Block(BlockCommand::List(_))
+    ));
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "block", "get", "block_123"])
+            .expect("block get parses")
+            .command,
+        ControlCommand::Block(BlockCommand::Get(_))
+    ));
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "input", "get"])
+            .expect("input get parses")
+            .command,
+        ControlCommand::Input(InputCommand::Get(_))
+    ));
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "history", "list", "--limit", "20"])
+            .expect("history list parses")
+            .command,
+        ControlCommand::History(HistoryCommand::List(_))
+    ));
+}
+
+#[test]
 fn parses_completion_generation_command() {
     let args = ControlArgs::try_parse_from(["warpctrl", "completions", "bash"])
         .expect("completions parses");
@@ -119,9 +147,6 @@ fn parses_completion_generation_command() {
 #[test]
 fn rejects_non_metadata_and_future_catalog_commands_not_in_this_shard() {
     assert!(ControlArgs::try_parse_from(["warpctrl", "setting", "list"]).is_err());
-    assert!(ControlArgs::try_parse_from(["warpctrl", "input", "get"]).is_err());
-    assert!(ControlArgs::try_parse_from(["warpctrl", "history", "list"]).is_err());
-    assert!(ControlArgs::try_parse_from(["warpctrl", "block", "list"]).is_err());
     assert!(ControlArgs::try_parse_from(["warpctrl", "drive", "list"]).is_err());
 }
 
@@ -136,6 +161,9 @@ fn generated_bash_completions_include_metadata_commands() {
     assert!(completions.contains("tab"));
     assert!(completions.contains("pane"));
     assert!(completions.contains("session"));
+    assert!(completions.contains("block"));
+    assert!(completions.contains("input"));
+    assert!(completions.contains("history"));
     assert!(completions.contains("completions"));
 }
 

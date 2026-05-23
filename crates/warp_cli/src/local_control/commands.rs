@@ -10,8 +10,8 @@ use crate::agent::OutputFormat;
 use crate::local_control::output::{write_json, write_json_line};
 use crate::local_control::selectors::instance_selector;
 use crate::local_control::{
-    ActionCommand, AppCommand, InstanceCommand, PaneCommand, SessionCommand, TabCommand,
-    TargetArgs, WindowCommand,
+    ActionCommand, AppCommand, BlockCommand, HistoryCommand, InputCommand, InstanceCommand,
+    PaneCommand, SessionCommand, TabCommand, TargetArgs, WindowCommand,
 };
 
 #[derive(Serialize)]
@@ -169,6 +169,56 @@ pub(super) fn run_session_command(
         SessionCommand::List(args) => {
             run_action_with_params(args, ActionKind::SessionList, EmptyParams {}, output_format)
         }
+    }
+}
+
+pub(super) fn run_block_command(
+    command: BlockCommand,
+    output_format: OutputFormat,
+) -> Result<(), ControlError> {
+    match command {
+        BlockCommand::List(args) => run_action_with_params(
+            args.target,
+            ActionKind::BlockList,
+            local_control::BlockListParams { limit: args.limit },
+            output_format,
+        ),
+        BlockCommand::Get(args) => run_action_with_params(
+            args.target,
+            ActionKind::BlockGet,
+            local_control::BlockGetParams {
+                block_id: args.block_id,
+            },
+            output_format,
+        ),
+    }
+}
+
+pub(super) fn run_input_command(
+    command: InputCommand,
+    output_format: OutputFormat,
+) -> Result<(), ControlError> {
+    match command {
+        InputCommand::Get(args) => run_action_with_params(
+            args,
+            ActionKind::InputGet,
+            local_control::InputGetParams::default(),
+            output_format,
+        ),
+    }
+}
+
+pub(super) fn run_history_command(
+    command: HistoryCommand,
+    output_format: OutputFormat,
+) -> Result<(), ControlError> {
+    match command {
+        HistoryCommand::List(args) => run_action_with_params(
+            args.target,
+            ActionKind::HistoryList,
+            local_control::HistoryListParams { limit: args.limit },
+            output_format,
+        ),
     }
 }
 

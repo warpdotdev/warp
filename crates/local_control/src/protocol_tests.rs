@@ -147,6 +147,60 @@ fn structural_metadata_actions_have_expected_target_scopes() {
 }
 
 #[test]
+fn underlying_data_actions_require_underlying_data_permission_and_authenticated_user() {
+    for action in [
+        ActionKind::BlockList,
+        ActionKind::BlockGet,
+        ActionKind::InputGet,
+        ActionKind::HistoryList,
+    ] {
+        let metadata = action.metadata();
+        assert_eq!(
+            metadata.implementation_status,
+            ActionImplementationStatus::Implemented
+        );
+        assert_eq!(metadata.risk_tier, RiskTier::ReadOnlyTerminalData);
+        assert_eq!(
+            metadata.state_data_category,
+            StateDataCategory::UnderlyingDataRead
+        );
+        assert_eq!(
+            metadata.permission_category,
+            PermissionCategory::ReadUnderlyingData
+        );
+        assert!(metadata.requires_authenticated_user);
+        assert!(metadata.authenticated_user.required);
+        assert_eq!(
+            metadata.allowed_invocation_contexts,
+            vec![
+                InvocationContext::InsideWarp,
+                InvocationContext::OutsideWarp
+            ]
+        );
+    }
+}
+
+#[test]
+fn underlying_data_actions_have_expected_target_scopes() {
+    assert_eq!(
+        ActionKind::BlockList.metadata().target_scope,
+        TargetScope::Block
+    );
+    assert_eq!(
+        ActionKind::BlockGet.metadata().target_scope,
+        TargetScope::Block
+    );
+    assert_eq!(
+        ActionKind::InputGet.metadata().target_scope,
+        TargetScope::Session
+    );
+    assert_eq!(
+        ActionKind::HistoryList.metadata().target_scope,
+        TargetScope::History
+    );
+}
+
+#[test]
 fn action_with_params_roundtrips_typed_action_get_params() {
     let action = Action::with_params(
         ActionKind::ActionGet,
@@ -194,6 +248,10 @@ fn default_permissions_preserve_security_categories() {
     assert_eq!(
         ActionKind::TabList.metadata().permission_category,
         PermissionCategory::ReadMetadata
+    );
+    assert_eq!(
+        ActionKind::BlockList.metadata().permission_category,
+        PermissionCategory::ReadUnderlyingData
     );
 }
 
