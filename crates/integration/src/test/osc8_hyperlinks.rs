@@ -38,10 +38,13 @@ use crate::Builder;
 const HTTPS_URL: &str = "https://example.com/osc8-test";
 const VISIBLE_TEXT: &str = "Click me";
 /// Position id stamped by `grid_renderer::cache_osc8_hyperlink_position`
-/// for the *first* OSC 8 hyperlink interned in a fresh grid. The registry
-/// hands out monotonically increasing ids starting at 1, and bootstrap
-/// output does not contain OSC 8 sequences, so id 1 is reliably ours.
-const HYPERLINK_1_POSITION: &str = "terminal_view:first_cell_in_osc8_hyperlink_1";
+/// for the *first* OSC 8 hyperlink in the printf block's output grid. The
+/// key is scoped per (block_index, grid kind) so ids from different grids
+/// in the same frame don't collide. These tests run one `printf` after a
+/// clean bootstrap; the printf lands in block 0 (matches the `block_index:0`
+/// convention used by other integration tests), and its output grid's
+/// registry hands out id 1 to the first OSC 8 hyperlink it sees.
+const HYPERLINK_1_POSITION: &str = "terminal_view:first_cell_in_osc8_hyperlink:block_0_output:1";
 
 /// Build a `printf` command that emits an OSC 8 hyperlink wrapping
 /// `visible` and pointing at `uri`. Single-quoted so the shell does not

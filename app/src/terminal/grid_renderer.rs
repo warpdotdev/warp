@@ -309,6 +309,12 @@ pub fn render_grid<'a>(
     image_metadata: &HashMap<u32, StoredImageMetadata>,
     bg_color_sampler: Option<&mut ColorSampler>,
     hide_cursor_cell: bool,
+    // Scope passed through to the OSC 8 first-cell position cache to
+    // disambiguate ids across grids rendered in the same frame. Use a
+    // stable string like `"alt_screen"` or `"block_<n>_output"`. Pass
+    // `""` to skip caching (e.g. for grids that never need to be the
+    // click target of an integration test).
+    osc8_cache_scope: &str,
     ctx: &mut PaintContext,
     app: &AppContext,
 ) {
@@ -346,6 +352,7 @@ pub fn render_grid<'a>(
                 image_metadata,
                 bg_color_sampler,
                 hide_cursor_cell,
+                osc8_cache_scope,
                 ctx,
                 app,
             );
@@ -378,6 +385,7 @@ pub fn render_grid<'a>(
                 image_metadata,
                 bg_color_sampler,
                 hide_cursor_cell,
+                osc8_cache_scope,
                 ctx,
                 app,
             );
@@ -412,6 +420,7 @@ pub fn render_grid<'a>(
                 image_metadata,
                 bg_color_sampler,
                 hide_cursor_cell,
+                osc8_cache_scope,
                 ctx,
                 app,
             );
@@ -445,6 +454,7 @@ pub fn render_grid<'a>(
                 image_metadata,
                 bg_color_sampler,
                 hide_cursor_cell,
+                osc8_cache_scope,
                 ctx,
                 app,
             );
@@ -482,6 +492,7 @@ fn render_grid_without_ligatures<'a>(
     image_metadata: &HashMap<u32, StoredImageMetadata>,
     mut bg_color_sampler: Option<&mut ColorSampler>,
     hide_cursor_cell: bool,
+    osc8_cache_scope: &str,
     ctx: &mut PaintContext,
     app: &AppContext,
 ) {
@@ -804,6 +815,7 @@ fn render_grid_without_ligatures<'a>(
             cache_osc8_hyperlink_position(
                 cell.hyperlink_id(),
                 &mut seen_hyperlink_ids,
+                osc8_cache_scope,
                 grid_origin + cell_size * vec2f(col as f32, offset_row as f32),
                 cell_size,
                 ctx,
@@ -997,6 +1009,7 @@ fn render_grid_with_ligatures<'a>(
     image_metadata: &HashMap<u32, StoredImageMetadata>,
     mut bg_color_sampler: Option<&mut ColorSampler>,
     hide_cursor_cell: bool,
+    osc8_cache_scope: &str,
     ctx: &mut PaintContext,
     app: &AppContext,
 ) {
@@ -1387,6 +1400,7 @@ fn render_grid_with_ligatures<'a>(
             cache_osc8_hyperlink_position(
                 cell.hyperlink_id(),
                 &mut seen_hyperlink_ids,
+                osc8_cache_scope,
                 grid_origin + glyph_offset,
                 cell_size,
                 ctx,
@@ -2030,23 +2044,35 @@ fn handle_secret_redaction<'a>(
 }
 
 /// Cache the position of the first visible cell of each OSC 8 hyperlink
-/// span under a stable id (`terminal_view:first_cell_in_osc8_hyperlink_<n>`).
-/// Integration tests use the cached position to dispatch synthetic clicks
-/// at the cell. No-op when the cell has no hyperlink id, or when this
-/// hyperlink has already been cached this render.
+/// span under a stable id
+/// (`terminal_view:first_cell_in_osc8_hyperlink:<scope>:<n>`). The scope
+/// disambiguates ids across grids — `HyperlinkId`s are only unique within
+/// a single `HyperlinkRegistry`, so two grids rendered in the same frame
+/// could both assign id `1` to their first hyperlink and collide on the
+/// position cache without the scope. Integration tests use the cached
+/// position to dispatch synthetic clicks at the cell. No-op when the cell
+/// has no hyperlink id, when this hyperlink has already been cached this
+/// render, or when `scope` is empty.
 fn cache_osc8_hyperlink_position(
     hyperlink_id: Option<HyperlinkId>,
     seen: &mut HashSet<HyperlinkId>,
+    scope: &str,
     cell_origin: Vector2F,
     cell_size: Vector2F,
     ctx: &mut PaintContext,
 ) {
+    if scope.is_empty() {
+        return;
+    }
     let Some(id) = hyperlink_id else { return };
     if !seen.insert(id) {
         return;
     }
     ctx.position_cache.cache_position_indefinitely(
-        format!("terminal_view:first_cell_in_osc8_hyperlink_{}", id.get()),
+        format!(
+            "terminal_view:first_cell_in_osc8_hyperlink:{scope}:{}",
+            id.get()
+        ),
         RectF::new(cell_origin, cell_size),
     );
 }
