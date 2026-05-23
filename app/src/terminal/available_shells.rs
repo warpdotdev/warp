@@ -9,6 +9,8 @@ use std::sync::Arc;
 #[cfg(feature = "local_tty")]
 use settings::Setting as _;
 #[cfg(feature = "local_tty")]
+use warp_util::path::ShellFamily;
+#[cfg(feature = "local_tty")]
 use warpui::{AppContext, ModelContext};
 use warpui::{Entity, SingletonEntity};
 
@@ -437,6 +439,15 @@ impl AvailableShells {
     pub fn get_from_shell_launch_data(&self, _config: &ShellLaunchData) -> Option<AvailableShell> {
         None
     }
+
+    /// Without a local TTY there is no user-configurable shell preference to
+    /// honor, so we fall back to the operating system's default family.
+    pub fn user_preferred_shell_family(
+        &self,
+        _ctx: &warpui::AppContext,
+    ) -> warp_util::path::ShellFamily {
+        warpui::platform::OperatingSystem::get().default_shell_family()
+    }
 }
 
 #[cfg(feature = "local_tty")]
@@ -594,6 +605,16 @@ impl AvailableShells {
                 .cloned()
                 .unwrap_or_default(),
         }
+    }
+
+    /// The [`ShellFamily`] that newly-opened panes with `shell: None` will
+    /// actually run under — i.e. the family corresponding to the user's
+    /// preferred shell setting, not the OS's hard-coded default. Use this
+    /// whenever you need to render a shell command that will execute in such
+    /// a pane (e.g. shell-escaping a path that gets baked into a `TabConfig`
+    /// command).
+    pub fn user_preferred_shell_family(&self, ctx: &AppContext) -> ShellFamily {
+        self.get_user_preferred_shell_setting(ctx).shell_family()
     }
 
     /// Sets the user-preferred shell for new sessions. Saves the value back to user settings.
