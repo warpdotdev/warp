@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 #[cfg(feature = "local_fs")]
 use anyhow::Result;
+use warp_util::path::ShellFamily;
 
 use super::tab_config::{
     build_shell_safe_worktree_path, TabConfig, TabConfigPaneNode, TabConfigPaneType,
@@ -99,12 +100,22 @@ fn config_name(directory: &Path, enable_worktree: bool) -> String {
 /// This is a pure function — it produces the canonical `TabConfig`
 /// that can be either rendered directly (via `render_tab_config`) or
 /// serialized to disk (via `write_tab_config`).
+///
+/// The returned `TabConfig` leaves `pane.shell` as `None`, which means the
+/// pane runtime resolves the shell via the user's preferred shell setting
+/// (see [`AvailableShells::user_preferred_shell_family`][user_pref]).
+/// `shell_family` MUST match that same family so the shell-escaping of the
+/// embedded worktree path lines up with the shell that actually executes
+/// the command. Use the helper above at the call site; never pass
+/// `OperatingSystem::default_shell_family()` here — see #11144.
+///
+/// [user_pref]: crate::terminal::available_shells::AvailableShells::user_preferred_shell_family
 pub fn build_tab_config(
     session_type: &SessionType,
     directory: &Path,
     enable_worktree: bool,
     autogenerate_worktree_branch_name: bool,
-    shell_family: warp_util::path::ShellFamily,
+    shell_family: ShellFamily,
 ) -> TabConfig {
     let mut commands: Vec<String> = Vec::new();
     let mut params = HashMap::new();
