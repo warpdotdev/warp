@@ -2848,6 +2848,7 @@ impl SettingsWidget for CustomAppIconWidget {
             &view.app_icon_dropdown,
         );
 
+        #[cfg(target_os = "macos")]
         let show_dock_icon_toggle = render_body_item::<AppearancePageAction>(
             "Show Warp in Dock".into(),
             None,
@@ -2906,10 +2907,10 @@ impl SettingsWidget for CustomAppIconWidget {
             }
         }
 
-        Flex::column()
-            .with_child(dropdown)
-            .with_child(show_dock_icon_toggle)
-            .finish()
+        let column = Flex::column().with_child(dropdown);
+        #[cfg(target_os = "macos")]
+        let column = column.with_child(show_dock_icon_toggle);
+        column.finish()
     }
 }
 
