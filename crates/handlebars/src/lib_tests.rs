@@ -18,7 +18,7 @@ fn renders_simple_substitution() {
     assert_eq!(args, vec!["name".to_string()]);
 
     let out = render_template(&template, &context);
-    assert_eq!(out, "Hello, Warp!");
+    assert_eq!(out, "Hello, Black!");
 }
 
 #[test]
@@ -33,7 +33,7 @@ fn leaves_unknown_placeholder_unchanged() {
     );
 
     let out = render_template(&template, &context);
-    assert_eq!(out, "Hello, Warp and {{unknown}}!");
+    assert_eq!(out, "Hello, Black and {{unknown}}!");
 }
 
 #[test]
@@ -75,7 +75,7 @@ fn preserves_escaped_triple_braces() {
 
     let out = render_template(template, &context);
     // Triple braces should not be substituted by our parser; double braces should.
-    assert_eq!(out, "{{{name}}} Warp");
+    assert_eq!(out, "{{{name}}} Black");
 }
 
 #[test]
