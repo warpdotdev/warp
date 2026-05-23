@@ -875,6 +875,9 @@ impl ansi::Handler for GridHandler {
                 // grid has been cleared.
                 self.clear_secrets();
                 self.clear_displayed_rows_and_filter_matches();
+                // Same reason as in `reset_state`: don't carry an unclosed
+                // OSC 8 link past a full grid clear.
+                self.active_hyperlink_id = None;
 
                 // The row with the cursor still exists, though, so mark it as
                 // dirty and re-compute state accordingly.
@@ -905,6 +908,11 @@ impl ansi::Handler for GridHandler {
         self.flat_storage.clear();
 
         self.clear_secrets();
+
+        // Drop any unclosed OSC 8 hyperlink so a hostile sender can't leave a
+        // link open, force a terminal reset, and have subsequent unrelated
+        // output inherit the stale URI.
+        self.active_hyperlink_id = None;
 
         self.ansi_handler_state.active_charset = Default::default();
         self.ansi_handler_state.cursor_style = CursorStyle::default();
