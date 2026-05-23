@@ -471,7 +471,10 @@ NSUInteger activeScreenId() {
 
 - (BOOL)setDockIconVisible:(BOOL)visible {
     if (visible) {
-        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+        if (![NSApp setActivationPolicy:NSApplicationActivationPolicyRegular]) {
+            NSLog(@"Warp: failed to restore Regular activation policy; keeping status item as fallback");
+            return NO;
+        }
         if (statusItem) {
             [[NSStatusBar systemStatusBar] removeStatusItem:statusItem];
             [statusItem release];
