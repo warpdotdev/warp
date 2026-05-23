@@ -18,9 +18,9 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GithubRepo {
-    /// Repository owner (e.g. "warpdotdev")
+    /// Repository owner (e.g. "blackdagger")
     pub owner: String,
-    /// Repository name (e.g. "warp-internal")
+    /// Repository name (e.g. "black-internal")
     pub repo: String,
 }
 

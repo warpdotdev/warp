@@ -21,7 +21,7 @@ use crate::ai::cloud_environments::AwsProviderConfig;
 /// set this to the current maximum task duration.
 const IDENTITY_TOKEN_DURATION: Duration = Duration::from_hours(3);
 
-/// AWS STS audience for Warp Oz OIDC federation.
+/// AWS STS audience for Black Oz OIDC federation.
 const AWS_AUDIENCE: &str = "sts.amazonaws.com";
 
 /// Provides AWS Web Identity credentials for the agent session.

@@ -254,13 +254,13 @@ pub enum WorkspaceAction {
         tab_position: RectF,
     },
     DropTab,
-    /// Toggles the left panel. In Code Mode V1 this toggles Warp Drive.
+    /// Toggles the left panel. In Code Mode V1 this toggles Black Drive.
     /// In Code Mode V2 this toggles the left panel which contains both the project explorer and
-    /// Warp Drive. This happens as explicit action from the user.
+    /// Black Drive. This happens as explicit action from the user.
     ToggleLeftPanel,
-    /// Toggles directly to the Warp Drive tab of the left panel in Code Mode V2
+    /// Toggles directly to the Black Drive tab of the left panel in Code Mode V2
     ToggleWarpDrive,
-    /// Unconditionally opens Warp Drive. This is used in the case of user lifecycle
+    /// Unconditionally opens Black Drive. This is used in the case of user lifecycle
     /// events like new user onboarding or when the user joins a team.
     OpenWarpDrive,
     /// Toggles the right panel. This happens as an explicit action from the user.
@@ -323,7 +323,7 @@ pub enum WorkspaceAction {
     SignupAnonymousUser,
     SignInAnonymousWebUser,
     OpenLink(String),
-    /// On WASM, opens a given URL in the desktop Warp app (if installed) or redirects to download page.
+    /// On WASM, opens a given URL in the desktop Black app (if installed) or redirects to download page.
     #[cfg(target_family = "wasm")]
     OpenLinkOnDesktop(url::Url),
     ReopenClosedSession,
@@ -366,7 +366,7 @@ pub enum WorkspaceAction {
     },
     TerminateApp,
     CloseWindow,
-    /// Help the user call the Warp executable with the [`crate::args::DEBUG_DUMP_FLAG`].
+    /// Help the user call the Black executable with the [`crate::args::DEBUG_DUMP_FLAG`].
     DumpDebugInfo,
     /// Log review comment send eligibility for panes in the active tab.
     LogReviewCommentSendStatusForActiveTab,
@@ -530,10 +530,10 @@ pub enum WorkspaceAction {
     QueuePromptForConversation {
         prompt: String,
     },
-    /// Install the Warp CLI command to /usr/local/bin
+    /// Install the Black CLI command to /usr/local/bin
     #[cfg(target_os = "macos")]
     InstallCLI,
-    /// Uninstall the Warp CLI command from /usr/local/bin
+    /// Uninstall the Black CLI command from /usr/local/bin
     #[cfg(target_os = "macos")]
     UninstallCLI,
     UndoRevertInCodeReviewPane {

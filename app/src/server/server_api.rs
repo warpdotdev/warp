@@ -65,7 +65,7 @@ pub const FETCH_CHANNEL_VERSIONS_TIMEOUT: std::time::Duration = Duration::from_s
 
 const EXPERIMENT_ID_HEADER: &str = "X-Warp-Experiment-Id";
 
-/// We use a special error code header `X-Warp-Error-Code` to allow the server to send
+/// We use a special error code header `X-Black-Error-Code` to allow the server to send
 /// more specific error code information, so that the client can discern between different
 /// errors with the same error code.
 /// See errors/http_error_codes.go on the server for possible values.
@@ -161,7 +161,7 @@ pub enum AIApiError {
         user_display_message: Option<String>,
     },
 
-    #[error("Warp is currently overloaded. Please try again later.")]
+    #[error("Black is currently overloaded. Please try again later.")]
     ServerOverloaded,
 
     #[error("Internal error occurred at transport layer.")]
@@ -218,7 +218,7 @@ impl AIApiError {
         headers: &::http::HeaderMap,
         body: Option<String>,
     ) -> Self {
-        // For HTTP 429 errors, check the X-Warp-Error-Code header to distinguish
+        // For HTTP 429 errors, check the X-Black-Error-Code header to distinguish
         // between out-of-credits and server-overload.
         if err.status() == Some(http::StatusCode::TOO_MANY_REQUESTS) {
             return Self::error_for_429(headers, body);
@@ -256,7 +256,7 @@ impl AIApiError {
         AIApiError::Transport(err)
     }
 
-    /// Returns the appropriate error for a 429 response by checking the X-Warp-Error-Code header.
+    /// Returns the appropriate error for a 429 response by checking the X-Black-Error-Code header.
     fn error_for_429(headers: &::http::HeaderMap, body: Option<String>) -> Self {
         if headers
             .get(WARP_ERROR_CODE_HEADER)
@@ -349,7 +349,7 @@ pub enum TranscribeError {
     #[error("Request failed due to lack of Voice quota.")]
     QuotaLimit,
 
-    #[error("Warp is currently overloaded. Please try again later.")]
+    #[error("Black is currently overloaded. Please try again later.")]
     ServerOverloaded,
 
     #[error("Internal error occurred at transport layer.")]
@@ -1444,7 +1444,7 @@ impl ServerApi {
         }
     }
 
-    /// Fetches updated Warp Channel Versions from Warp Server. If it is the first such request of
+    /// Fetches updated Black Channel Versions from Black Server. If it is the first such request of
     /// the current calendar day, first attempts to call the '/client_version/daily'. If that call
     /// fails or if it not the first request of the calendar day, returns the result of a call to
     /// `/client_version'. The caller can specify whether or not changelog information should be
@@ -1620,7 +1620,7 @@ impl ServerApiProvider {
     }
 
     /// Returns the shared HTTP client. This client is wired into network logging
-    /// and includes standard Warp request headers.
+    /// and includes standard Black request headers.
     pub fn get_http_client(&self) -> Arc<http_client::Client> {
         self.server_api.client.clone()
     }

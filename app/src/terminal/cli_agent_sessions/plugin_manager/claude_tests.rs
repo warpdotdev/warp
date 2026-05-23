@@ -10,7 +10,7 @@ fn installed_when_plugin_present() {
 
     let json = serde_json::json!({
         "plugins": {
-            "warp@claude-code-warp": [{"version": "1.0.0"}]
+            "black@claude-code-black": [{"version": "1.0.0"}]
         }
     });
     fs::write(
@@ -50,7 +50,7 @@ fn not_installed_when_plugin_array_empty() {
 
     let json = serde_json::json!({
         "plugins": {
-            "warp@claude-code-warp": []
+            "black@claude-code-black": []
         }
     });
     fs::write(
@@ -105,7 +105,7 @@ fn is_installed_via_trait_with_claude_home_env() {
 
     let json = serde_json::json!({
         "plugins": {
-            "warp@claude-code-warp": [{"version": "1.0.0"}]
+            "black@claude-code-black": [{"version": "1.0.0"}]
         }
     });
     fs::write(
@@ -141,7 +141,7 @@ fn installed_version_returns_version_when_present() {
 
     let json = serde_json::json!({
         "plugins": {
-            "warp@claude-code-warp": [{"version": "1.5.0"}]
+            "black@claude-code-black": [{"version": "1.5.0"}]
         }
     });
     fs::write(
@@ -161,7 +161,7 @@ fn installed_version_returns_none_when_no_version_field() {
 
     let json = serde_json::json!({
         "plugins": {
-            "warp@claude-code-warp": [{"scope": "user"}]
+            "black@claude-code-black": [{"scope": "user"}]
         }
     });
     fs::write(

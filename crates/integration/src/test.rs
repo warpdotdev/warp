@@ -2433,7 +2433,7 @@ precmd_functions+=(_p9k_precmd)
         )
         .with_step(wait_until_bootstrapped_single_pane_for_tab(1))
         .with_step(check_banner_open(1, true))
-        // If the user then switches back to the Warp prompt, we should close the banner.
+        // If the user then switches back to the Black prompt, we should close the banner.
         .with_step(
             new_step_with_default_assertions("Disable honor_ps1").with_action(|app, _, _| {
                 SessionSettings::handle(app).update(app, |session_settings, ctx| {
@@ -3333,7 +3333,7 @@ pub fn test_custom_ps1_expansion_bash() -> Builder {
         )
 }
 
-/// Default auto title. We test that Warp's auto title is used and verify that
+/// Default auto title. We test that Black's auto title is used and verify that
 /// DISABLE_AUTO_TITLE is set correctly.
 pub fn test_auto_title() -> Builder {
     new_builder()
@@ -3355,7 +3355,7 @@ pub fn test_auto_title() -> Builder {
         ))
 }
 
-/// Validate that disabling Warp's auto title feature will not mess with oh-my-zsh settings.
+/// Validate that disabling Black's auto title feature will not mess with oh-my-zsh settings.
 pub fn test_warp_auto_title_disabled() -> Builder {
     new_builder()
         .set_should_run_test(|| {
@@ -3384,7 +3384,7 @@ BLACK_DISABLE_AUTO_TITLE="true"
             );
         })
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        // If Warp title is disabled, we don't set the DISABLE_AUTO_TITLE env variable
+        // If Black title is disabled, we don't set the DISABLE_AUTO_TITLE env variable
         .with_step(execute_command_for_single_terminal_in_tab(
             0,
             "echo $DISABLE_AUTO_TITLE".to_string(),
@@ -3396,7 +3396,7 @@ BLACK_DISABLE_AUTO_TITLE="true"
         ))
 }
 
-/// Checks that the tab title set by the user takes precedence over the Warp's default title and
+/// Checks that the tab title set by the user takes precedence over the Black's default title and
 /// doesn't require any additional setting from the user's POV. This is bash-specific test.
 pub fn test_warp_honors_user_title_bash() -> Builder {
     new_builder()
@@ -3428,7 +3428,7 @@ PROMPT_COMMAND='echo -en "\033]0;TEST_TAB_TITLE\a"'
         ))
 }
 
-/// Checks that the tab title set by the user takes precedence over the Warp's default title and
+/// Checks that the tab title set by the user takes precedence over the Black's default title and
 /// doesn't require any additional setting from the user's POV. This is zsh-specific test.
 pub fn test_warp_honors_user_title_zsh() -> Builder {
     new_builder()
@@ -3462,7 +3462,7 @@ precmd_functions+=(set_title)
 /// Checks that an OSC 7 escape sequence (`\e]7;file://host/path\a`) emitted by
 /// the running command updates the block's current working directory mid-command
 /// without waiting for the next prompt. This lets external tools that change
-/// directory (for example `wt switch` from worktrunk) keep Warp's per-block CWD
+/// directory (for example `wt switch` from worktrunk) keep Black's per-block CWD
 /// in sync with the shell. See issue #9125.
 pub fn test_osc7_updates_current_working_directory() -> Builder {
     new_builder()
@@ -4031,7 +4031,7 @@ pub fn test_ctrl_r_multi_cursor() -> Builder {
 }
 
 /// This test ensures that the HISTCONTROL env var is not clobbered by our bootstrap process for bash.
-/// See https://linear.app/warpdotdev/issue/WAR-2592 for more details
+/// See https://linear.app/blackdagger/issue/WAR-2592 for more details
 pub fn test_histcontrol_env_var() -> Builder {
     let histcontrol_val = "ignorespace";
     new_builder()
@@ -5718,7 +5718,7 @@ pub fn test_custom_open_completions_menu_binding() -> Builder {
 }
 
 /// This is a regression test for:
-/// https://linear.app/warpdotdev/issue/WAR-6095/panic-internal-error-entered-unreachable-code-handled-at-model-layer
+/// https://linear.app/blackdagger/issue/WAR-6095/panic-internal-error-entered-unreachable-code-handled-at-model-layer
 pub fn test_color_overrides_in_prompt_dont_crash() -> Builder {
     new_builder()
         .set_should_run_test(|| {

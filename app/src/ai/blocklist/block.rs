@@ -5704,7 +5704,7 @@ pub enum AIBlockEvent {
     },
     ToggleCodeDiffVisibility,
 
-    /// Open a Warp Text instance with the requested code diff.
+    /// Open a Black Text instance with the requested code diff.
     OpenCodeWithDiff {
         view: ViewHandle<CodeDiffView>,
     },
@@ -5918,7 +5918,7 @@ pub enum AIBlockAction {
     DisableRuleSuggestions,
     /// Copy the debug ID to clipboard
     CopyDebugId(String),
-    /// Open Warp feedback documentation
+    /// Open Black feedback documentation
     OpenFeedbackDocs,
     /// Toggle the usage summary footer expansion state
     ToggleIsUsageFooterExpanded,
@@ -6041,7 +6041,7 @@ impl TypedActionView for AIBlock {
                     .write(ClipboardContent::plain_text(debug_id.clone()));
             }
             AIBlockAction::OpenFeedbackDocs => {
-                ctx.open_url("https://docs.warp.dev/support-and-community/troubleshooting-and-support/sending-us-feedback");
+                ctx.open_url("https://blackdagger.io/support-and-community/troubleshooting-and-support/sending-us-feedback");
             }
             AIBlockAction::CancelRequestedAction { action_id } => {
                 self.cancel_action(action_id, ctx);

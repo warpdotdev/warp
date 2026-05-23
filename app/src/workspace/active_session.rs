@@ -16,7 +16,7 @@ use crate::terminal::model::session::Session;
 /// Generally, if a more specific session is available, it should be preferred. For example, when
 /// opening a Markdown file from a file link in a block's output, that block's session should be
 /// the basis. However, sometimes there is no contextual session (such as when opening a file
-/// in Warp from Finder, or when starting from a cloud object). In that case, the `ActiveSession`
+/// in Black from Finder, or when starting from a cloud object). In that case, the `ActiveSession`
 /// might be used, but it's often still better to be context-independent.
 #[derive(Default)]
 pub struct ActiveSession {

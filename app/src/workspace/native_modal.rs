@@ -25,7 +25,7 @@ pub(super) fn init(app: &mut AppContext) {
     ]);
 }
 
-/// Used to show a Warp-native modal dialog above a [`super::Workspace`]. The first button is [`ButtonVariant::Accent`].
+/// Used to show a Black-native modal dialog above a [`super::Workspace`]. The first button is [`ButtonVariant::Accent`].
 pub struct NativeModal {
     alert_dialog: Option<AlertDialogWithCallbacks<AppModalCallback>>,
     dont_show_again: bool,

@@ -1191,7 +1191,7 @@ fn test_object_editor_timeout() {
                 .expect("notebook should exist");
 
             // Set the editor to be somebody else.
-            notebook.metadata.current_editor_uid = Some("ian@warp.dev".to_string());
+            notebook.metadata.current_editor_uid = Some("ian.io".to_string());
         });
 
         let current_editor = CloudViewModel::handle(&app).read(&app, |view_model, ctx| {
@@ -1275,7 +1275,7 @@ fn assert_sorting_timestamp(id: ServerId, expected_ts: impl Into<ServerTimestamp
 }
 
 /// Test that, if an object is updated, we recalculate its ancestors' sorting timestamps too. This
-/// way, the folders containing the updated object move to the top of the Warp Drive index if it's
+/// way, the folders containing the updated object move to the top of the Black Drive index if it's
 /// sorted by last updated.
 #[test]
 fn test_update_folder_timestamp_from_child_update() {

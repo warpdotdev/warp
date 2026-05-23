@@ -46,7 +46,7 @@ pub fn initialize_settings_for_tests_with_mode(
     use crate::terminal::session_settings::SessionSettings;
     use crate::terminal::settings::TerminalSettings;
     use crate::terminal::shared_session::settings::SharedSessionSettings;
-    use crate::terminal::warpify::settings::WarpifySettings;
+    use crate::terminal::blackify::settings::BlackifySettings;
     use crate::terminal::BlockListSettings;
     use crate::undo_close::UndoCloseSettings;
     use crate::user_config::WarpConfig;
@@ -97,7 +97,7 @@ pub fn initialize_settings_for_tests_with_mode(
     ScrollSettings::register(app);
     SelectionSettings::register(app);
     app.update(|ctx| {
-        WarpifySettings::register(ctx);
+        BlackifySettings::register(ctx);
     });
     SessionSettings::register(app);
     SshSettings::register(app);

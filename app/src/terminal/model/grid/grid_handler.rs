@@ -307,8 +307,8 @@ impl AbsoluteRectangle {
 }
 
 /// Whether or not this Grid should keep track of a "Reset Grid" OSC. On Windows, ConPTY has an internal
-/// grid that needs to be kept in sync with Warp's grids. We do this via clearing the ConPTY
-/// grid before Warp starts populating a new grid.
+/// grid that needs to be kept in sync with Black's grids. We do this via clearing the ConPTY
+/// grid before Black starts populating a new grid.
 ///
 /// See here for more: https://docs.google.com/document/d/11fU_vVW8CH72W92QUnFJ1Kl31fGWNGbjkQQCK3TUaYk/edit?usp=sharing
 #[derive(Default, Clone, Copy)]

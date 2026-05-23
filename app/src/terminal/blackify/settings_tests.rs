@@ -1,5 +1,5 @@
 #[cfg(windows)]
-use super::WarpifySettings;
+use super::BlackifySettings;
 
 #[cfg(windows)]
 #[test]
@@ -19,7 +19,7 @@ fn test_wsl_subshell_detection_success() {
     .iter()
     .for_each(|cmd| {
         assert!(
-            WarpifySettings::is_built_in_subshell_match(cmd),
+            BlackifySettings::is_built_in_subshell_match(cmd),
             "{} failed to match",
             *cmd
         )
@@ -50,7 +50,7 @@ fn test_wsl_subshell_detection_fail() {
     .iter()
     .for_each(|cmd| {
         assert!(
-            !WarpifySettings::is_built_in_subshell_match(cmd),
+            !BlackifySettings::is_built_in_subshell_match(cmd),
             "{} accidentally matched",
             *cmd
         )

@@ -248,7 +248,7 @@ impl ConversationDetailsData {
 
     /// Build details data from an in-memory `AIConversation`. Used both by the WASM
     /// transcript/shared-session details panel and by the native pane-level details panel
-    /// when the active conversation is a local (non-cloud) Warp Agent run.
+    /// when the active conversation is a local (non-cloud) Black Agent run.
     pub fn from_conversation(conversation: &AIConversation, app: &AppContext) -> Self {
         let mut directory = None;
         let mut conversation_id = None;
@@ -729,7 +729,7 @@ impl ConversationDetailsPanel {
                     return None;
                 }
                 // Hide for non-Oz harnesses (e.g. Claude, Gemini): they can't be
-                // forked into a local Warp conversation.
+                // forked into a local Black conversation.
                 if matches!(self.data.harness, Some(h) if h != Harness::Oz) {
                     return None;
                 }

@@ -48,7 +48,7 @@ pub(super) fn maybe_register_app_as_login_item(ctx: &mut AppContext) {
                     match register(&value_name, &exe) {
                         Ok(()) => true,
                         Err(err) => {
-                            log::warn!("Failed to register Warp as a login item: {err}");
+                            log::warn!("Failed to register Black as a login item: {err}");
                             false
                         }
                     }
@@ -58,7 +58,7 @@ pub(super) fn maybe_register_app_as_login_item(ctx: &mut AppContext) {
                         Err(err) => {
                             // Don't flip app_added_as_login_item on failure — let a
                             // later retoggle try again.
-                            log::warn!("Failed to unregister Warp as a login item: {err}");
+                            log::warn!("Failed to unregister Black as a login item: {err}");
                         }
                     }
                     false
@@ -82,7 +82,7 @@ fn current_exe_path() -> Option<PathBuf> {
 /// Returns the per-channel registry value name used under the `Run` subkey.
 ///
 /// Using the channel's application name keeps Dogfood / Preview / Stable installs
-/// isolated (`Warp`, `WarpPreview`, `WarpDev`, etc.) so installing multiple
+/// isolated (`Black`, `BlackPreview`, `WarpDev`, etc.) so installing multiple
 /// channels doesn't cause one to overwrite another's startup entry.
 fn login_item_value_name() -> String {
     ChannelState::app_id().application_name().to_owned()
@@ -91,7 +91,7 @@ fn login_item_value_name() -> String {
 /// Writes the startup registry value pointing at `exe` under `value_name`.
 ///
 /// The path is wrapped in quotes so paths containing spaces (e.g.
-/// `C:\Program Files\Warp\warp.exe`) are parsed as a single executable path.
+/// `C:\Program Files\Black\warp.exe`) are parsed as a single executable path.
 fn register(value_name: &str, exe: &Path) -> std::io::Result<()> {
     register_in(HKEY_CURRENT_USER, RUN_SUBKEY, value_name, exe)
 }
@@ -153,7 +153,7 @@ mod tests {
                     .as_nanos(),
                 name,
             );
-            let path = format!(r"Software\Warp\LoginItemTests\{suffix}");
+            let path = format!(r"Software\Black\LoginItemTests\{suffix}");
             RegKey::predef(HKEY_CURRENT_USER)
                 .create_subkey(&path)
                 .expect("create scratch subkey");
@@ -177,11 +177,11 @@ mod tests {
     #[test]
     fn register_writes_quoted_path() {
         let scratch = ScratchSubkey::new("register_writes_quoted_path");
-        let exe = PathBuf::from(r"C:\Program Files\Warp\warp.exe");
-        register_in(HKEY_CURRENT_USER, &scratch.path, "Warp", &exe).unwrap();
+        let exe = PathBuf::from(r"C:\Program Files\Black\black.exe");
+        register_in(HKEY_CURRENT_USER, &scratch.path, "Black", &exe).unwrap();
         assert_eq!(
-            scratch.read("Warp").as_deref(),
-            Some(r#""C:\Program Files\Warp\warp.exe""#)
+            scratch.read("Black").as_deref(),
+            Some(r#""C:\Program Files\Black\black.exe""#)
         );
     }
 
@@ -191,20 +191,20 @@ mod tests {
         register_in(
             HKEY_CURRENT_USER,
             &scratch.path,
-            "Warp",
-            &PathBuf::from(r"C:\old\warp.exe"),
+            "Black",
+            &PathBuf::from(r"C:\old\black.exe"),
         )
         .unwrap();
         register_in(
             HKEY_CURRENT_USER,
             &scratch.path,
-            "Warp",
-            &PathBuf::from(r"C:\new\warp.exe"),
+            "Black",
+            &PathBuf::from(r"C:\new\black.exe"),
         )
         .unwrap();
         assert_eq!(
-            scratch.read("Warp").as_deref(),
-            Some(r#""C:\new\warp.exe""#)
+            scratch.read("Black").as_deref(),
+            Some(r#""C:\new\black.exe""#)
         );
     }
 
@@ -212,18 +212,18 @@ mod tests {
     fn unregister_is_idempotent() {
         let scratch = ScratchSubkey::new("unregister_is_idempotent");
         // Never registered: unregister should be Ok.
-        unregister_in(HKEY_CURRENT_USER, &scratch.path, "Warp").unwrap();
+        unregister_in(HKEY_CURRENT_USER, &scratch.path, "Black").unwrap();
         // Register, then unregister twice.
         register_in(
             HKEY_CURRENT_USER,
             &scratch.path,
-            "Warp",
-            &PathBuf::from(r"C:\warp.exe"),
+            "Black",
+            &PathBuf::from(r"C:\black.exe"),
         )
         .unwrap();
-        unregister_in(HKEY_CURRENT_USER, &scratch.path, "Warp").unwrap();
-        unregister_in(HKEY_CURRENT_USER, &scratch.path, "Warp").unwrap();
-        assert!(scratch.read("Warp").is_none());
+        unregister_in(HKEY_CURRENT_USER, &scratch.path, "Black").unwrap();
+        unregister_in(HKEY_CURRENT_USER, &scratch.path, "Black").unwrap();
+        assert!(scratch.read("Black").is_none());
     }
 
     #[test]
@@ -232,24 +232,24 @@ mod tests {
         register_in(
             HKEY_CURRENT_USER,
             &scratch.path,
-            "Warp",
-            &PathBuf::from(r"C:\warp.exe"),
+            "Black",
+            &PathBuf::from(r"C:\black.exe"),
         )
         .unwrap();
         register_in(
             HKEY_CURRENT_USER,
             &scratch.path,
-            "WarpPreview",
-            &PathBuf::from(r"C:\warp-preview.exe"),
+            "BlackPreview",
+            &PathBuf::from(r"C:\black-preview.exe"),
         )
         .unwrap();
 
-        unregister_in(HKEY_CURRENT_USER, &scratch.path, "Warp").unwrap();
+        unregister_in(HKEY_CURRENT_USER, &scratch.path, "Black").unwrap();
 
-        assert!(scratch.read("Warp").is_none());
+        assert!(scratch.read("Black").is_none());
         assert_eq!(
-            scratch.read("WarpPreview").as_deref(),
-            Some(r#""C:\warp-preview.exe""#)
+            scratch.read("BlackPreview").as_deref(),
+            Some(r#""C:\black-preview.exe""#)
         );
     }
 
@@ -257,8 +257,8 @@ mod tests {
     fn unregister_missing_subkey_is_ok() {
         unregister_in(
             HKEY_CURRENT_USER,
-            r"Software\Warp\LoginItemTests\does-not-exist",
-            "Warp",
+            r"Software\Black\LoginItemTests\does-not-exist",
+            "Black",
         )
         .unwrap();
     }

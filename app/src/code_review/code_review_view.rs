@@ -7463,7 +7463,7 @@ impl BackingView for CodeReviewView {
                     target_os = "windows"
                 )
             )) {
-                // Find the workspace to show the Warp-native modal
+                // Find the workspace to show the Black-native modal
                 if let Some(workspace) = ctx
                     .views_of_type::<Workspace>(ctx.window_id())
                     .and_then(|workspaces| workspaces.first().cloned())

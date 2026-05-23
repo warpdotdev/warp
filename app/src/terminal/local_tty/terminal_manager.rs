@@ -95,7 +95,7 @@ use crate::terminal::shared_session::{
 };
 use crate::terminal::shell::ShellName;
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event as TerminalViewEvent};
-use crate::terminal::warpify::settings::WarpifySettings;
+use crate::terminal::blackify::settings::BlackifySettings;
 use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
 use crate::terminal::writeable_pty::terminal_manager_util::{
     init_pty_controller_model, init_remote_server_controller, wire_up_pty_controller_with_view,
@@ -1025,7 +1025,7 @@ impl TerminalManager {
         });
     }
 
-    /// Sends bindkey to notify shell process to switch to Warp prompt logic for prompt
+    /// Sends bindkey to notify shell process to switch to Black prompt logic for prompt
     /// with the combined prompt/command grid (we unset the PS1, but save the value for potential
     /// future restoration).
     pub fn send_switch_to_warp_prompt_bindkey(&self, app_ctx: &mut AppContext) {
@@ -1084,10 +1084,10 @@ impl TerminalManager {
 
         // The TMUX SSH wrapper supercedes the original ControlMaster wrapper.
         let enable_ssh_wrapper = if FeatureFlag::SSHTmuxWrapper.is_enabled() {
-            *WarpifySettings::as_ref(ctx)
+            *BlackifySettings::as_ref(ctx)
                 .enable_ssh_warpification
                 .value()
-                && !*WarpifySettings::as_ref(ctx).use_ssh_tmux_wrapper.value()
+                && !*BlackifySettings::as_ref(ctx).use_ssh_tmux_wrapper.value()
         } else {
             *SshSettings::as_ref(ctx).enable_legacy_ssh_wrapper.value()
         };

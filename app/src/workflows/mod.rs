@@ -60,7 +60,7 @@ pub enum WorkflowSource {
         location: NotebookLocation,
     },
 
-    /// A hardcoded workflow type that allows Warp to surface features as Workflows (e.g.
+    /// A hardcoded workflow type that allows Black to surface features as Workflows (e.g.
     /// a command to see our network log)
     App,
 }
@@ -156,7 +156,7 @@ pub enum WorkflowType {
     Local(Workflow),
     /// Saved workflows from personal or team collections, saved using cloud-sync.
     Cloud(Box<CloudWorkflow>),
-    /// Ephemeral/transient workflows created from Warp AI output
+    /// Ephemeral/transient workflows created from Black AI output
     AIGenerated {
         workflow: Workflow,
         origin: AIWorkflowOrigin,

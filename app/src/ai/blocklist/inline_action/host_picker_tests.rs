@@ -65,15 +65,15 @@ fn build_menu_items_dedups_recent_when_it_matches_default_or_warp() {
     assert_eq!(item_label(&items[1]), ORCHESTRATION_WARP_WORKER_HOST);
     assert_eq!(item_label(&items[2]), "Custom host\u{2026}");
 
-    // Recent == "warp" is also skipped (warp is already a row).
-    let items = build_menu_items(Some("my-corp"), Some("warp"), &[]);
-    assert_eq!(items.len(), 3, "warp recent should not double-add");
+    // Recent == "black" is also skipped (black is already a row).
+    let items = build_menu_items(Some("my-corp"), Some("black"), &[]);
+    assert_eq!(items.len(), 3, "black recent should not double-add");
 }
 #[test]
 fn build_menu_items_adds_connected_hosts_before_recent_and_dedups_known_hosts() {
     let connected_hosts = vec![
         "alpha".to_string(),
-        "warp".to_string(),
+        "black".to_string(),
         "my-corp".to_string(),
         "alpha".to_string(),
         "beta".to_string(),

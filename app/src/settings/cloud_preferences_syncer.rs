@@ -99,7 +99,7 @@ pub fn initialize_cloud_preferences_syncer(
     CloudPreferencesSyncer::new(force_local_wins_on_startup, toml_file_path, ctx)
 }
 
-/// Handles syncing CloudPreferences (the Warp Drive objects) and local Settings models that
+/// Handles syncing CloudPreferences (the Black Drive objects) and local Settings models that
 /// have been created using the define_settings_group macro.
 pub struct CloudPreferencesSyncer {
     // A channel used for debouncing local settings updates so that we don't spam the

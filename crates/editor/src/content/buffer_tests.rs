@@ -3166,7 +3166,7 @@ fn test_inline_markdown_roundtrips() {
 #[test]
 fn test_export_markdown_blocks() {
     let markdown =
-        "A `styled`\n***range** of text* and\n```warp-runnable-command\ncode\nblock\n```\n";
+        "A `styled`\n***range** of text* and\n```black-runnable-command\ncode\nblock\n```\n";
     let formatted = parse_markdown(markdown).unwrap();
     assert_eq!(
         Buffer::export_to_markdown(formatted, None, MarkdownStyle::Internal),
@@ -3405,7 +3405,7 @@ fn test_markdown_escapes() {
             // // Punctuation in code blocks should not be escaped.
             assert_eq!(
                 buffer.markdown(),
-                "This is \\*not\\* markdown\n```warp-runnable-command\nThis is $code*!*\n```\n"
+                "This is \\*not\\* markdown\n```black-runnable-command\nThis is $code*!*\n```\n"
             );
         });
 
@@ -3430,7 +3430,7 @@ fn test_markdown_escapes() {
 fn test_import_markdown() {
     App::test((), |mut app| async move {
         let markdown_string =
-            "test\n```warp-runnable-command\nparagragh\n```\nSome text\nSome ***bold and italic***";
+            "test\n```black-runnable-command\nparagragh\n```\nSome text\nSome ***bold and italic***";
         let (buffer, _selection) = Buffer::mock_from_markdown(
             markdown_string,
             None,
@@ -3473,7 +3473,7 @@ fn test_import_markdown() {
             assert_eq!(buffer.markdown(), markdown_string);
         });
 
-        let markdown_string = "aaa\n```warp-runnable-command\nafb\n```\n*b**b***\n```warp-runnable-command\nb\nlll\n```\n";
+        let markdown_string = "aaa\n```black-runnable-command\nafb\n```\n*b**b***\n```black-runnable-command\nb\nlll\n```\n";
         let (buffer, _selection) = Buffer::mock_from_markdown(
             markdown_string,
             None,
@@ -3488,7 +3488,7 @@ fn test_import_markdown() {
             assert_eq!(buffer.markdown(), markdown_string);
         });
 
-        let markdown_string = "```warp-runnable-command\ntest\nblock\n```\n";
+        let markdown_string = "```black-runnable-command\ntest\nblock\n```\n";
         let (buffer, _selection) = Buffer::mock_from_markdown(
             markdown_string,
             None,
@@ -3617,7 +3617,7 @@ sh code
 ```rust
 rust code
 ```
-```warp-runnable-command
+```black-runnable-command
 warp code
 ```"#,
             None,
@@ -3643,10 +3643,10 @@ fn test_import_markdown_embedded() {
             r#"```
 default code
 ```
-```warp-embedded-object
+```black-embedded-object
 id: workflow-123
 ```
-```warp-embedded-object
+```black-embedded-object
 id: workflow-123
 type: workflow
 author: kevin
@@ -4643,7 +4643,7 @@ fn test_enter_at_start_of_empty_text() {
 
 #[test]
 fn test_enter_after_empty_block() {
-    // This is a regression test for the issue described in https://github.com/warpdotdev/warp-internal/pull/6953#discussion_r1319189935.
+    // This is a regression test for the issue described in https://github.com/blackdagger/black-internal/pull/6953#discussion_r1319189935.
     App::test((), |mut app| async move {
         let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
         let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
@@ -5260,21 +5260,21 @@ fn test_read_html() {
             assert_eq!(
                 buffer.selected_text_as_html(selection.clone(), ctx),
                 Some(
-                    "<pre><code class=\"language-warp-runnable-command\">Blo</code></pre>".to_string()
+                    "<pre><code class=\"language-black-runnable-command\">Blo</code></pre>".to_string()
                 )
             );
 
             buffer.set_selection(CharOffset::from(4)..CharOffset::from(11), selection.clone(), ctx);
             assert_eq!(
                 buffer.selected_text_as_html(selection.clone(), ctx),
-                Some("<p><strong>ore</strong></p><pre><code class=\"language-warp-runnable-command\">Blo</code></pre>".to_string())
+                Some("<p><strong>ore</strong></p><pre><code class=\"language-black-runnable-command\">Blo</code></pre>".to_string())
             );
 
             buffer.set_selection(CharOffset::from(11)..CharOffset::from(16), selection.clone(), ctx);
             assert_eq!(
                 buffer.selected_text_as_html(selection.clone(), ctx),
                 Some(
-                    "<pre><code class=\"language-warp-runnable-command\">ck</code></pre><p>Af</p>"
+                    "<pre><code class=\"language-black-runnable-command\">ck</code></pre><p>Af</p>"
                         .to_string()
                 )
             );
@@ -5298,7 +5298,7 @@ fn test_read_html() {
             assert_eq!(
                 buffer.selected_text_as_html(selection.clone(), ctx),
                 Some(
-                    "<pre><code class=\"language-warp-runnable-command\">ck</code></pre><h1>After</h1>"
+                    "<pre><code class=\"language-black-runnable-command\">ck</code></pre><h1>After</h1>"
                         .to_string()
                 )
             );
@@ -12864,7 +12864,7 @@ fn test_multiselect_copy_blocks() {
                 buffer.selected_text_as_plain_text(selection.clone(), ctx).as_str(),
                 "Hey\nYo\next\nThis"
             );
-            assert_eq!(buffer.selected_text_as_html(selection.clone(), ctx), Some("<ul><li>Hey</li><li>Yo</li></ul><p>ext</p><pre><code class=\"language-warp-runnable-command\">This</code></pre>".to_string()));
+            assert_eq!(buffer.selected_text_as_html(selection.clone(), ctx), Some("<ul><li>Hey</li><li>Yo</li></ul><p>ext</p><pre><code class=\"language-black-runnable-command\">This</code></pre>".to_string()));
         })
     });
 }

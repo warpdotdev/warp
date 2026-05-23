@@ -10,8 +10,8 @@ use black_ui::async_assert;
 use super::new_builder;
 use crate::Builder;
 
-/// Checks if the Ask Warp AI keybinding works correctly when a block is selected.
-/// This is a regression test: https://linear.app/warpdotdev/issue/WAR-6758/warp-ai-ask-from-block-keybinding-doesnt-work-as-expected.
+/// Checks if the Ask Black AI keybinding works correctly when a block is selected.
+/// This is a regression test: https://linear.app/blackdagger/issue/WAR-6758/warp-ai-ask-from-block-keybinding-doesnt-work-as-expected.
 pub fn test_ask_warp_ai_keybinding_for_selected_block() -> Builder {
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
@@ -32,10 +32,10 @@ pub fn test_ask_warp_ai_keybinding_for_selected_block() -> Builder {
         .with_step(
             new_step_with_default_assertions("select block")
                 .with_keystrokes(&["ctrl-shift-space"])
-                .add_named_assertion("ask warp ai from selected block", |app, window_id| {
+                .add_named_assertion("ask black ai from selected block", |app, window_id| {
                     let ai_assistant_panel = ai_assistant_panel_view(app, window_id);
                     ai_assistant_panel.read(app, |view, ctx| {
-                        let expected_code_block = "```warp\nfoo\n```";
+                        let expected_code_block = "```black\nfoo\n```";
                         let editor_content = view.editor().as_ref(ctx).buffer_text(ctx);
                         async_assert!(editor_content.contains(expected_code_block))
                     })

@@ -4,7 +4,7 @@ use js_sys::ReferenceError;
 use serde::Serialize;
 use wasm_bindgen::JsCast;
 
-/// Events emitted from Warp on Web to the host JavaScript app.
+/// Events emitted from Black on Web to the host JavaScript app.
 ///
 /// These must stay in sync with the [`WarpEvent` TypeScript type](https://github.com/warpdotdev/warp-server/blob/develop/client/src/warp-client/index.ts).
 #[derive(Debug, Clone, Serialize)]
@@ -36,7 +36,7 @@ mod ffi {
         ///   rustwasm/wasm-bindgen#3659), but may be in the future. We could also provide a
         ///   WASM-specific entrypoint (instead of `main`) that takes context before starting the
         ///   app.
-        #[wasm_bindgen(js_name = "warpEmitEvent", catch)]
+        #[wasm_bindgen(js_name = "blackEmitEvent", catch)]
         pub fn emit_event(event: JsValue) -> Result<(), JsValue>;
     }
 }

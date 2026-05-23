@@ -31,7 +31,7 @@ pub enum SkillTelemetryEvent {
         name: Option<String>,
         /// Specifies the scope of the skill (home or project)
         scope: Option<SkillScope>,
-        /// Specifies the provider of the skill (Warp, Claude, Codex, etc.)
+        /// Specifies the provider of the skill (Black, Claude, Codex, etc.)
         provider: Option<SkillProvider>,
         /// Whether the ReadSkill lookup failed (reference could not be resolved)
         error: bool,

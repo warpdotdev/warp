@@ -1,4 +1,4 @@
-//! Node.js and npm runtime management for Warp.
+//! Node.js and npm runtime management for Black.
 //!
 //! This module provides functionality to install and manage Node.js/npm,
 //! supporting multiple platforms (macOS, Linux, Windows) and architectures
@@ -453,7 +453,7 @@ pub async fn detect_system_node(path_env_var: impl AsRef<OsStr>) -> Result<()> {
     // (set via `.env("PATH", ...)`) is used for executable search.
     // `CreateProcessW` uses the parent process's PATH, not the child's
     // `lpEnvironment` PATH, so running `node` directly would find node.exe
-    // via Warp's inherited env rather than the captured interactive PATH.
+    // via Black's inherited env rather than the captured interactive PATH.
     #[cfg(windows)]
     let output = Command::new("cmd.exe")
         .args(["/c", "node", "--version"])

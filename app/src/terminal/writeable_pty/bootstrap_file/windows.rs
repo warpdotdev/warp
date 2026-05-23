@@ -107,7 +107,7 @@ impl Drop for TempBootstrapFile {
 /// Returns the path to the permanent bootstrap file in bytes, if it exists.
 ///
 /// Currently we only create a permanent bootstrap file for PowerShell, located
-/// alongside the Warp executable.
+/// alongside the Black executable.
 pub fn path_to_permanent_bootstrap_file(shell_type: ShellType) -> Option<Vec<u8>> {
     if shell_type != ShellType::PowerShell {
         return None;

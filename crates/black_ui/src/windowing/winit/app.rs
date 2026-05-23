@@ -42,7 +42,7 @@ pub enum CustomEvent {
     ///
     /// We use this to trigger [`platform::AppCallbacks::on_active_window_changed`] instead of
     /// winit's [`winit::event::WindowEvent::Focused`]. This is because winit's `Focused` event
-    /// actually fires twice when focus is transferred between 2 of Warp's own windows. But, we
+    /// actually fires twice when focus is transferred between 2 of Black's own windows. But, we
     /// only want to fire `on_active_window_changed` once for that focus change. So, we coalesce
     /// multiple `Focused` events into a single `ActiveWindowChanged` event on the next tick of the
     /// [`winit::event_loop::EventLoop`].

@@ -20,7 +20,7 @@ use crate::server::server_api::ServerApiProvider;
 use crate::settings::PrivacySettings;
 use crate::terminal::model::session::{IsLegacySSHSession, SessionInfo};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
-use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
+use crate::terminal::blackify::settings::{SshExtensionInstallMode, BlackifySettings};
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 /// Per-SSH-init state machine. Encoding the state as an enum makes invalid
@@ -290,7 +290,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
                 });
             }
             Ok(false) => {
-                let install_mode = *WarpifySettings::as_ref(ctx)
+                let install_mode = *BlackifySettings::as_ref(ctx)
                     .ssh_extension_install_mode
                     .value();
                 match install_mode {

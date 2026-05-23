@@ -69,7 +69,7 @@ const MERKLE_TREE_BUILD_TIME: &str = "merkle_tree_build_time";
 const SYNC_TIME: &str = "sync_time";
 
 const SUPPORTED_IGNORES: [&str; 4] = [
-    ".warpindexingignore",
+    ".blackindexingignore",
     ".cursorignore",
     ".cursorindexingignore",
     ".codeiumignore",

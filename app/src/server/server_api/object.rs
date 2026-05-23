@@ -237,7 +237,7 @@ pub trait ObjectClient: 'static + Send + Sync {
     async fn give_up_notebook_edit_access(&self, notebook_id: NotebookId)
         -> Result<ServerMetadata>;
 
-    /// Gets updates for all Warp Drive actions.
+    /// Gets updates for all Black Drive actions.
     async fn get_warp_drive_updates(
         &self,
         message_sender: Sender<ObjectUpdateMessage>,

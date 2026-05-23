@@ -11,7 +11,7 @@ use crate::terminal::model_events::AnsiHandlerEvent;
 /// The duration after a precmd/end prompt hook (depending on the shell type) to wait before
 /// assuming the shell's line editor is active again. If we receive a preexec hook in that time,
 /// we assume there are multiple queued typeahead commands and wait to request input.
-/// This prevents Warp sending an escape sequence to an arbitrary running program.
+/// This prevents Black sending an escape sequence to an arbitrary running program.
 ///
 /// To avoid flickering, this must be less than `BACKGROUND_OUTPUT_RENDER_DELAY_MS`,
 /// which is the delay before a background block is rendered.

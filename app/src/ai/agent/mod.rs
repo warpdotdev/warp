@@ -82,7 +82,7 @@ impl ServerOutputId {
 pub enum CancellationReason {
     /// The user explicitly cancelled without providing a follow-up.
     ManuallyCancelled,
-    /// Warp automatically cancelled the local run so it could continue in Cloud Mode.
+    /// Black automatically cancelled the local run so it could continue in Cloud Mode.
     AutomaticCloudHandoff,
 
     /// The user submitted a follow-up query during streaming which implicitly cancelled the current one.
@@ -693,7 +693,7 @@ impl Display for RenderableAIError {
                 }
             }
             Self::ServerOverloaded => {
-                write!(f, "Warp is currently overloaded. Please try again later.")
+                write!(f, "Black is currently overloaded. Please try again later.")
             }
             Self::InternalWarpError => write!(f, "Internal Warp error."),
             Self::ContextWindowExceeded(message) => {

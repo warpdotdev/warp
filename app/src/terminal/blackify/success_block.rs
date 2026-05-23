@@ -13,7 +13,7 @@ use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
 use black_ui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use super::render::{HORIZONTAL_TEXT_MARGIN, SSH_DOCS_URL, SUBSHELL_DOCS_URL};
-use super::settings::WarpifySettings;
+use super::settings::BlackifySettings;
 use super::{render, subshell_bootstrap_success_block_bytes, WarpificationSource};
 use crate::ai::agent::ProgrammingLanguage;
 use crate::ai::blocklist::code_block::{render_runnable_code_snippet, CodeSnippetButtonHandles};
@@ -27,20 +27,20 @@ use crate::workspace::WorkspaceAction;
 const VERTICAL_TEXT_MARGIN: f32 = 16.;
 
 #[derive(Debug, Clone)]
-pub enum WarpifySuccessBlockEvent {
-    OpenWarpifySettings,
+pub enum BlackifySuccessBlockEvent {
+    OpenBlackifySettings,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub enum WarpifySuccessBlockAction {
-    ClearAutoWarpifySnippet,
-    OpenWarpifySettings,
+pub enum BlackifySuccessBlockAction {
+    ClearAutoBlackifySnippet,
+    OpenBlackifySettings,
     OpenUrl(String),
 }
 
-struct AutoWarpifySnippet {
+struct AutoBlackifySnippet {
     /// On subshell initialization, this will contain the output grid to display,
-    /// containing info like how to auto-warpify the subshell.
+    /// containing info like how to auto-blackify the subshell.
     output_grid: Cow<'static, str>,
     /// The output grid needs to be selectable to allow users to copy the command to their clipboard.
     selection_handle: SelectionHandle,
@@ -52,14 +52,14 @@ struct AutoWarpifySnippet {
     can_write_to_rc: bool,
 }
 
-pub struct WarpifySuccessBlock {
+pub struct BlackifySuccessBlock {
     source: WarpificationSource,
     spawning_command: String,
     learn_more_link_mouse_states: MouseStateHandle,
-    auto_warpify_snippet: Option<AutoWarpifySnippet>,
+    auto_blackify_snippet: Option<AutoBlackifySnippet>,
 }
 
-impl WarpifySuccessBlock {
+impl BlackifySuccessBlock {
     #[allow(clippy::new_without_default)]
     pub fn new(
         source: WarpificationSource,
@@ -69,7 +69,7 @@ impl WarpifySuccessBlock {
         disable_tmux: bool,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&WarpifySettings::handle(ctx), move |_, _, _, ctx| {
+        ctx.subscribe_to_model(&BlackifySettings::handle(ctx), move |_, _, _, ctx| {
             ctx.notify();
         });
 
@@ -77,17 +77,17 @@ impl WarpifySuccessBlock {
         // getting the OS to write to the correct RC file.
         let remote_os = TargetOS::Linux;
 
-        let is_auto_warpify_configured = subshell_info
+        let is_auto_blackify_configured = subshell_info
             .as_ref()
             .map(|info| info.was_triggered_by_rc_file_snippet)
             .unwrap_or_default();
 
-        let auto_warpify_snippet = if is_auto_warpify_configured {
+        let auto_blackify_snippet = if is_auto_blackify_configured {
             None
         } else {
             subshell_info.and_then(|subshell_info| {
-                // If warpification wasn't triggered automatically, show a snippet about
-                // how to automatically warpify.
+                // If blackification wasn't triggered automatically, show a snippet about
+                // how to automatically blackify.
                 (!subshell_info.was_triggered_by_rc_file_snippet).then(|| {
                     let (command, is_executable) = subshell_bootstrap_success_block_bytes(
                         &subshell_info,
@@ -110,10 +110,10 @@ impl WarpifySuccessBlock {
                 })
             })
         };
-        let auto_warpify_snippet = auto_warpify_snippet.map(|(output_grid, can_write_to_rc)| {
-            AutoWarpifySnippet {
+        let auto_blackify_snippet = auto_blackify_snippet.map(|(output_grid, can_write_to_rc)| {
+            AutoBlackifySnippet {
                 description: (if !output_grid.is_empty() {
-                    "Run the following to automatically Warpify in the future:"
+                    "Run the following to automatically Blackify in the future:"
                 } else {
                     "In remote subshells, Warp runs commands in the background to power completions, syntax highlighting, and other features."
                 }).into(),
@@ -130,12 +130,12 @@ impl WarpifySuccessBlock {
             source,
             learn_more_link_mouse_states: Default::default(),
             spawning_command,
-            auto_warpify_snippet,
+            auto_blackify_snippet,
         }
     }
 
     pub fn selected_text(&self) -> Option<String> {
-        self.auto_warpify_snippet
+        self.auto_blackify_snippet
             .as_ref()
             .and_then(|snippet| snippet.selected_text.read().clone())
     }
@@ -195,7 +195,7 @@ impl WarpifySuccessBlock {
                 None,
                 Some(Box::new({
                     move |ctx| {
-                        ctx.dispatch_typed_action(WarpifySuccessBlockAction::OpenUrl(
+                        ctx.dispatch_typed_action(BlackifySuccessBlockAction::OpenUrl(
                             url.to_owned(),
                         ));
                     }
@@ -214,11 +214,11 @@ impl WarpifySuccessBlock {
 
     /// Fired when a block ends and we are not in a Warpified session.
     pub fn on_warpified_session_complete(&mut self, ctx: &mut ViewContext<Self>) {
-        self.clear_auto_warpify_snippet(ctx);
+        self.clear_auto_blackify_snippet(ctx);
     }
 
-    pub fn clear_auto_warpify_snippet(&mut self, ctx: &mut ViewContext<Self>) {
-        self.auto_warpify_snippet = None;
+    pub fn clear_auto_blackify_snippet(&mut self, ctx: &mut ViewContext<Self>) {
+        self.auto_blackify_snippet = None;
         ctx.notify();
     }
 
@@ -229,16 +229,16 @@ impl WarpifySuccessBlock {
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
         let theme = appearance.theme();
-        let auto_warpify_snippet = self.auto_warpify_snippet.as_ref()?;
+        let auto_blackify_snippet = self.auto_blackify_snippet.as_ref()?;
 
-        if auto_warpify_snippet.output_grid.is_empty() {
+        if auto_blackify_snippet.output_grid.is_empty() {
             return None;
         }
 
-        let shell_language = ProgrammingLanguage::Shell(auto_warpify_snippet.shell_type);
+        let shell_language = ProgrammingLanguage::Shell(auto_blackify_snippet.shell_type);
         let runnable_command = render_runnable_code_snippet(
-            &auto_warpify_snippet.output_grid,
-            if auto_warpify_snippet.can_write_to_rc {
+            &auto_blackify_snippet.output_grid,
+            if auto_blackify_snippet.can_write_to_rc {
                 Some(&shell_language)
             } else {
                 None
@@ -249,7 +249,7 @@ impl WarpifySuccessBlock {
                         code_snippet.to_string(),
                     ));
 
-                    ctx.dispatch_typed_action(WarpifySuccessBlockAction::ClearAutoWarpifySnippet);
+                    ctx.dispatch_typed_action(BlackifySuccessBlockAction::ClearAutoBlackifySnippet);
                 }
             })),
             Some(Box::new({
@@ -257,19 +257,19 @@ impl WarpifySuccessBlock {
                     ctx.dispatch_typed_action(WorkspaceAction::CopyTextToClipboard(code_snippet));
                 }
             })),
-            Some(auto_warpify_snippet.code_snippet_handles.clone()),
+            Some(auto_blackify_snippet.code_snippet_handles.clone()),
             app,
         );
 
         let semantic_selection = SemanticSelection::as_ref(app);
-        let selected_text = auto_warpify_snippet.selected_text.clone();
+        let selected_text = auto_blackify_snippet.selected_text.clone();
 
-        // TODO(Simon): Implement full selection and copying functionality for the WarpifySuccessBlock.
+        // TODO(Simon): Implement full selection and copying functionality for the BlackifySuccessBlock.
         // Look to the `EnvVarCollectionBlock` for the existing implementation paradigm. We don't
         // yet have a robust way of ensuring that every aspect of text selection is implemented
         // properly, so be extra careful not to miss any details!
         let output_grid = SelectableArea::new(
-            auto_warpify_snippet.selection_handle.clone(),
+            auto_blackify_snippet.selection_handle.clone(),
             move |selection_args, _, _| {
                 *selected_text.write() = selection_args.selection;
             },
@@ -283,7 +283,7 @@ impl WarpifySuccessBlock {
             .with_child(
                 Container::new(
                     Text::new(
-                        auto_warpify_snippet.description.clone(),
+                        auto_blackify_snippet.description.clone(),
                         appearance.monospace_font_family(),
                         appearance.monospace_font_size(),
                     )
@@ -305,15 +305,15 @@ impl WarpifySuccessBlock {
     }
 }
 
-impl Entity for WarpifySuccessBlock {
-    type Event = WarpifySuccessBlockEvent;
+impl Entity for BlackifySuccessBlock {
+    type Event = BlackifySuccessBlockEvent;
 }
 
-pub const WARPIFY_SUCCESS_BLOCK_VISIBLE_KEY: &str = "WarpifySuccessBlockVisible";
+pub const WARPIFY_SUCCESS_BLOCK_VISIBLE_KEY: &str = "BlackifySuccessBlockVisible";
 
-impl View for WarpifySuccessBlock {
+impl View for BlackifySuccessBlock {
     fn ui_name() -> &'static str {
-        "WarpifySuccessBlock"
+        "BlackifySuccessBlock"
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
@@ -338,19 +338,19 @@ impl View for WarpifySuccessBlock {
     }
 }
 
-impl TypedActionView for WarpifySuccessBlock {
-    type Action = WarpifySuccessBlockAction;
+impl TypedActionView for BlackifySuccessBlock {
+    type Action = BlackifySuccessBlockAction;
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
-            WarpifySuccessBlockAction::OpenWarpifySettings => {
-                ctx.emit(WarpifySuccessBlockEvent::OpenWarpifySettings);
+            BlackifySuccessBlockAction::OpenBlackifySettings => {
+                ctx.emit(BlackifySuccessBlockEvent::OpenBlackifySettings);
             }
-            WarpifySuccessBlockAction::OpenUrl(url) => {
+            BlackifySuccessBlockAction::OpenUrl(url) => {
                 ctx.open_url(url);
             }
-            WarpifySuccessBlockAction::ClearAutoWarpifySnippet => {
-                self.clear_auto_warpify_snippet(ctx);
+            BlackifySuccessBlockAction::ClearAutoBlackifySnippet => {
+                self.clear_auto_blackify_snippet(ctx);
             }
         }
     }

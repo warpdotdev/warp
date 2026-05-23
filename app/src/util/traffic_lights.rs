@@ -1,7 +1,7 @@
 //! This module is meant to be a single source of truth for information about the windows' "traffic
 //! light" buttons, the minimize, maximize, and close buttons in the corner of the window, so named
 //! b/c of their resemblance to traffic lights on MacOS. How (whether or not) these are rendered
-//! depends on the platform. The Warp app must use this information to avoid rendering UI elements
+//! depends on the platform. The Black app must use this information to avoid rendering UI elements
 //! underneath them.
 
 #[cfg(windows)]
@@ -123,7 +123,7 @@ impl TrafficLightMouseStates {
     }
 }
 
-/// Data the Warp app needs to avoid rendering anything below the traffic lights.
+/// Data the Black app needs to avoid rendering anything below the traffic lights.
 #[derive(Clone, Debug)]
 pub struct TrafficLightData {
     width: f32,

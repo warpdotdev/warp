@@ -9,7 +9,7 @@ pub struct SkillDescriptor {
     pub description: String,
     /// The scope of the skill (home directory vs project directory).
     pub scope: SkillScope,
-    /// The provider/origin of the skill (Claude, Codex, or Warp).
+    /// The provider/origin of the skill (Claude, Codex, or Black).
     /// None if the skill path didn't match a known provider directory.
     pub provider: SkillProvider,
     /// Override icon for this skill. When set, rendering code should use this

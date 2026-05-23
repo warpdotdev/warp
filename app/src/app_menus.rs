@@ -46,18 +46,18 @@ const DISABLE_SHELL_DEBUG_MODE_MENU_ITEM_NAME: &str =
 const ENABLE_IN_BAND_GENERATORS_MENU_ITEM_NAME: &str = "Enable In-band Generators for New Sessions";
 const DISABLE_IN_BAND_GENERATORS_MENU_ITEM_NAME: &str =
     "Disable in-band generators for new sessions";
-const ENABLE_PTY_RECORDING: &str = "Enable PTY Recording Mode (warp.pty.recording)";
-const DISABLE_PTY_RECORDING: &str = "Disable PTY Recording Mode (warp.pty.recording)";
+const ENABLE_PTY_RECORDING: &str = "Enable PTY Recording Mode (black.pty.recording)";
+const DISABLE_PTY_RECORDING: &str = "Disable PTY Recording Mode (black.pty.recording)";
 const SHOW_BOOTSTRAP_BLOCK_MENU_ITEM_NAME: &str = "Show Initialization Block";
 const HIDE_BOOTSTRAP_BLOCK_MENU_ITEM_NAME: &str = "Hide Initialization Block";
 const SHOW_IN_BAND_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "Show In-band Command Blocks";
 const HIDE_IN_BAND_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "Hide In-band Command Blocks";
-const SHOW_SSH_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "Show Warpified SSH Blocks";
-const HIDE_SSH_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "Hide Warpified SSH Blocks";
+const SHOW_SSH_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "Show Blackified SSH Blocks";
+const HIDE_SSH_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "Hide Blackified SSH Blocks";
 const EXPORT_DEFAULT_SETTINGS_CSV_MENU_ITEM_NAME: &str =
     "Export Default Settings as CSV to home dir";
 
-const SETTINGS_CSV_FILE_NAME: &str = "warp_default_settings.csv";
+const SETTINGS_CSV_FILE_NAME: &str = "black_default_settings.csv";
 const MAX_RECENT_REPOS_IN_MENU: usize = 10;
 
 /// Creates the root app menu bar
@@ -209,7 +209,7 @@ fn make_new_app_menu(ctx: &AppContext) -> Menu {
     menu_items.push(MenuItem::Standard(StandardAction::ShowAllApps));
     menu_items.push(MenuItem::Separator);
     menu_items.push(MenuItem::Custom(CustomMenuItem::new(
-        "Set Warp as Default Terminal",
+        "Set Black as Default Terminal",
         move |ctx| {
             DefaultTerminal::handle(ctx).update(ctx, |default_terminal, ctx| {
                 default_terminal.make_warp_default(ctx)
@@ -244,7 +244,7 @@ fn make_new_app_menu(ctx: &AppContext) -> Menu {
         None,
     )));
     menu_items.push(MenuItem::Standard(StandardAction::Quit));
-    Menu::new("Warp", menu_items)
+    Menu::new("Black", menu_items)
 }
 
 fn make_new_file_menu(ctx: &AppContext) -> Menu {
@@ -300,7 +300,7 @@ fn make_new_edit_menu(ctx: &AppContext) -> Menu {
     ];
     let group_5 = vec![
         MenuItem::Custom(CustomMenuItem::new(
-            "Use Warp's Prompt",
+            "Use Black's Prompt",
             move |ctx| ctx.dispatch_global_action("app:toggle_user_ps1", &()),
             move |_props, ctx| MenuItemPropertyChanges {
                 checked: Some(
@@ -925,9 +925,9 @@ fn make_new_help_menu() -> Menu {
         "Help",
         vec![
             feedback_menu_item(),
-            link_menu_item("Warp Documentation...", links::USER_DOCS_URL.into()),
+            link_menu_item("Black Documentation...", links::USER_DOCS_URL.into()),
             link_menu_item("GitHub Issues...", links::GITHUB_ISSUES_URL.into()),
-            link_menu_item("Warp Slack Community...", links::SLACK_URL.into()),
+            link_menu_item("Black Community...", links::SLACK_URL.into()),
         ],
     )
 }

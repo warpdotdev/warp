@@ -118,7 +118,7 @@ fn maybe_warn_team_api_key(ctx: &AppContext) {
     );
 }
 
-/// Run a Warp CLI command.
+/// Run a Black CLI command.
 pub fn run(
     ctx: &mut AppContext,
     command: CliCommand,
@@ -628,7 +628,7 @@ impl AgentDriverRunner {
             )
             .await?;
 
-        // Wait for Warp Drive to sync before building the task config, since
+        // Wait for Black Drive to sync before building the task config, since
         // prompt resolution (SavedPrompt -> workflow lookup) and environment
         // resolution (CloudAmbientAgentEnvironment lookup) depend on it.
         setup_events
@@ -1486,7 +1486,7 @@ fn launch_command(
         return dispatch_command(ctx, command, global_options);
     }
 
-    let cli_name = black_cli::binary_name().unwrap_or_else(|| "warp".to_string());
+    let cli_name = black_cli::binary_name().unwrap_or_else(|| "black".to_string());
 
     let auth_state = AuthStateProvider::handle(ctx).as_ref(ctx).get();
     if !auth_state.is_logged_in() {
@@ -1535,7 +1535,7 @@ fn launch_command(
     Ok(())
 }
 
-/// Check if we're running within Warp (for example, if this is an invocation of the Warp CLI
+/// Check if we're running within Black (for example, if this is an invocation of the Black CLI
 /// within a Warp terminal session).
 pub fn is_running_in_warp() -> bool {
     std::env::var("TERM_PROGRAM")

@@ -42,7 +42,7 @@ use crate::workspace::ToastStack;
 /// See `specs/GH686/product.md`.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum InstallOrigin {
-    /// Triggered by a user gesture inside Warp (gallery card click,
+    /// Triggered by a user gesture inside Black (gallery card click,
     /// reinstall button, programmatic in-app flows, etc.).
     InApp,
     /// Triggered by a `warp://settings/mcp?autoinstall=...` deeplink; must be

@@ -11,7 +11,7 @@ use black_ui::{AppContext, Element};
 
 use super::{render_block_banner, BLOCK_BANNER_DESCRIPTION_MAX_HEIGHT};
 use crate::appearance::Appearance;
-use crate::terminal::ssh::warpify::warpify_description;
+use crate::terminal::ssh::blackify::blackify_description;
 use crate::terminal::view::{RememberForWarpification, TerminalAction};
 use crate::themes::theme::Fill;
 use crate::ui_components::blended_colors;
@@ -55,26 +55,26 @@ impl WarpificationMode {
     }
 }
 
-pub struct WarpifyBannerState {
+pub struct BlackifyBannerState {
     pub mode: WarpificationMode,
     pub height: f32,
     pub accept_button_mouse_state: MouseStateHandle,
     pub dont_ask_button_mouse_state: MouseStateHandle,
     pub dismiss_button_mouse_state: MouseStateHandle,
 
-    /// This keybinding gets rendered in the Warpification banner, but we can't look it up
+    /// This keybinding gets rendered in the Blackification banner, but we can't look it up
     /// during render as a &mut AppContext is not available then. This needs to get
     /// looked up during action handling and cached here.
-    pub initialize_warpify_keybinding: Option<Keystroke>,
+    pub initialize_blackify_keybinding: Option<Keystroke>,
     pub hover_state: MouseStateHandle,
 }
 
-impl WarpifyBannerState {
-    pub fn new(mode: WarpificationMode, initialize_warpify_keybinding: Option<Keystroke>) -> Self {
+impl BlackifyBannerState {
+    pub fn new(mode: WarpificationMode, initialize_blackify_keybinding: Option<Keystroke>) -> Self {
         Self {
             mode,
             height: 0.0,
-            initialize_warpify_keybinding,
+            initialize_blackify_keybinding,
             accept_button_mouse_state: Default::default(),
             dont_ask_button_mouse_state: Default::default(),
             dismiss_button_mouse_state: Default::default(),
@@ -88,14 +88,14 @@ impl WarpifyBannerState {
 
     pub fn title(&self) -> &str {
         match &self.mode {
-            WarpificationMode::Ssh { .. } => "Warpify SSH session",
-            WarpificationMode::Subshell { .. } => "Warpify subshell",
+            WarpificationMode::Ssh { .. } => "Blackify SSH session",
+            WarpificationMode::Subshell { .. } => "Blackify subshell",
         }
     }
 
     pub fn action(&self) -> TerminalAction {
         match &self.mode {
-            WarpificationMode::Ssh { .. } => TerminalAction::WarpifySSHSession,
+            WarpificationMode::Ssh { .. } => TerminalAction::BlackifySSHSession,
             WarpificationMode::Subshell { .. } => TerminalAction::TriggerSubshellBootstrap,
         }
     }
@@ -132,13 +132,13 @@ impl WarpifyBannerState {
 /// command. It asks if they want to bootstrap a subshell and, if so, whether we should ask again
 /// next time they run the same command.
 pub fn render_warpification_banner(
-    state: &WarpifyBannerState,
+    state: &BlackifyBannerState,
     appearance: &Appearance,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let yes_button = render_yes_button(
         state,
-        &state.initialize_warpify_keybinding,
+        &state.initialize_blackify_keybinding,
         &state.accept_button_mouse_state,
         appearance,
     );
@@ -154,7 +154,7 @@ pub fn render_warpification_banner(
             .with_text_label("Do not show again".to_owned())
             .build()
             .on_click(move |ctx, _, _| {
-                ctx.dispatch_typed_action(TerminalAction::DismissWarpifyBanner(
+                ctx.dispatch_typed_action(TerminalAction::DismissBlackifyBanner(
                     remember.to_owned(),
                 ));
             })
@@ -172,7 +172,7 @@ pub fn render_warpification_banner(
         )
         .build()
         .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(TerminalAction::DismissWarpifyBanner(
+            ctx.dispatch_typed_action(TerminalAction::DismissBlackifyBanner(
                 do_not_remember.to_owned(),
             ));
         })
@@ -197,7 +197,7 @@ pub fn render_warpification_banner(
                 hyperlink_index, ..
             } = &state.mode
             {
-                let description = Container::new(warpify_description(app, hyperlink_index))
+                let description = Container::new(blackify_description(app, hyperlink_index))
                     .with_uniform_margin(STANDARD_PADDING)
                     .with_margin_top(4.)
                     .finish();
@@ -218,7 +218,7 @@ pub fn render_warpification_banner(
 }
 
 fn render_yes_button(
-    state: &WarpifyBannerState,
+    state: &BlackifyBannerState,
     initialize_warpification_keybinding: &Option<Keystroke>,
     mouse_state: &MouseStateHandle,
     appearance: &Appearance,

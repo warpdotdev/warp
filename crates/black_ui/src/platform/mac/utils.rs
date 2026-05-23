@@ -41,7 +41,7 @@ extern "C" {
 pub fn unicode_char_to_key(char: u16) -> Option<&'static str> {
     // Control character naming needs to be in sync with the corresponding
     // objective-c definition in `keycode.m`. See:
-    // https://github.com/warpdotdev/warp-internal/blob/master/ui/src/platform/mac/objc/keycode.m#L17
+    // https://github.com/blackdagger/black-internal/blob/master/ui/src/platform/mac/objc/keycode.m#L17
     match char {
         ARROW_UP_KEY => Some("up"),
         ARROW_DOWN_KEY => Some("down"),

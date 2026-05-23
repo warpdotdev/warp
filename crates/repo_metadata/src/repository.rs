@@ -55,7 +55,7 @@ pub struct StartWatching {
     pub registration_future: BoxFuture<'static, Result<(), RepoMetadataError>>,
 }
 
-/// Model for tracking a code repository that Warp is aware of.
+/// Model for tracking a code repository that Black is aware of.
 pub struct Repository {
     /// The root directory of the repository.
     root_dir: StandardizedPath,

@@ -211,14 +211,14 @@ pub fn init(app: &mut AppContext) {
                 )
                 .with_context_predicate(id!("Workspace")),
                 EditableBinding::new(
-                    "workspace:open_openwarp_launch_modal",
-                    "[Debug] Open OpenWarp Launch Modal",
+                    "workspace:open_openblack_launch_modal",
+                    "[Debug] Open OpenBlack Launch Modal",
                     WorkspaceAction::OpenOpenWarpLaunchModal,
                 )
                 .with_context_predicate(id!("Workspace")),
                 EditableBinding::new(
-                    "workspace:reset_openwarp_launch_modal_state",
-                    "[Debug] Reset OpenWarp Launch Modal State",
+                    "workspace:reset_openblack_launch_modal_state",
+                    "[Debug] Reset OpenBlack Launch Modal State",
                     WorkspaceAction::ResetOpenWarpLaunchModalState,
                 )
                 .with_context_predicate(id!("Workspace")),
@@ -235,14 +235,14 @@ pub fn init(app: &mut AppContext) {
                 )
                 .with_context_predicate(id!("Workspace")),
                 EditableBinding::new(
-                    "workspace:install_opencode_warp_plugin",
-                    "[Debug] Install OpenCode Warp plugin",
+                    "workspace:install_opencode_black_plugin",
+                    "[Debug] Install OpenCode Black plugin",
                     WorkspaceAction::InstallOpenCodeWarpPlugin,
                 )
                 .with_context_predicate(id!("Workspace")),
                 EditableBinding::new(
-                    "workspace:use_local_opencode_warp_plugin",
-                    "[Debug] Use local OpenCode Warp plugin (testing only)",
+                    "workspace:use_local_opencode_black_plugin",
+                    "[Debug] Use local OpenCode Black plugin (testing only)",
                     WorkspaceAction::UseLocalOpenCodeWarpPlugin,
                 )
                 .with_context_predicate(id!("Workspace")),
@@ -618,7 +618,7 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(
             id!("Workspace")
                 & id!(flags::ENABLE_WARP_DRIVE)
-                & id!("WarpDrive_BelongsToTeam")
+                & id!("BlackDrive_BelongsToTeam")
                 & id!("IsOnline"),
         )
         .with_group(bindings::BindingGroup::Notebooks.as_str()),
@@ -642,7 +642,7 @@ pub fn init(app: &mut AppContext) {
             id!("Workspace")
                 & id!(flags::ENABLE_WARP_DRIVE)
                 & id!("IsOnline")
-                & id!("WarpDrive_BelongsToTeam"),
+                & id!("BlackDrive_BelongsToTeam"),
         )
         .with_group(bindings::BindingGroup::Workflow.as_str()),
         EditableBinding::new(
@@ -664,7 +664,7 @@ pub fn init(app: &mut AppContext) {
             id!("Workspace")
                 & id!(flags::ENABLE_WARP_DRIVE)
                 & id!("IsOnline")
-                & id!("WarpDrive_BelongsToTeam"),
+                & id!("BlackDrive_BelongsToTeam"),
         )
         .with_group(bindings::BindingGroup::Folders.as_str()),
         EditableBinding::new(
@@ -797,7 +797,7 @@ pub fn init(app: &mut AppContext) {
         EditableBinding::new(
             TOGGLE_WARP_DRIVE_BINDING_NAME,
             BindingDescription::new("Toggle Warp Drive")
-                .with_custom_description(bindings::MAC_MENUS_CONTEXT, "Warp Drive"),
+                .with_custom_description(bindings::MAC_MENUS_CONTEXT, "Black Drive"),
             WorkspaceAction::ToggleWarpDrive,
         )
         .with_context_predicate(id!("Workspace") & id!(flags::ENABLE_WARP_DRIVE)),
@@ -1094,8 +1094,8 @@ pub fn init(app: &mut AppContext) {
 
     if cfg!(not(target_family = "wasm")) {
         app.register_editable_bindings([EditableBinding::new(
-            "workspace:export_all_warp_drive_objects",
-            "Export all Warp Drive objects",
+            "workspace:export_all_black_drive_objects",
+            "Export all Black Drive objects",
             WorkspaceAction::ExportAllWarpDriveObjects,
         )
         .with_group(bindings::BindingGroup::Settings.as_str())
@@ -1175,7 +1175,7 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("Workspace") & id!(flags::IS_ANY_AI_ENABLED))
         .with_group(bindings::BindingGroup::WarpAi.as_str())
         // We use the same custom action as AM so that we don't have
-        // two mac menu items for AM vs Warp AI since they are mutually exclusive.
+        // two mac menu items for AM vs Black AI since they are mutually exclusive.
         .with_custom_action(CustomAction::NewAgentModePane),
     ]);
 
@@ -1193,7 +1193,7 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(
             id!("Workspace")
                 & id!(flags::ENABLE_WARP_DRIVE)
-                & id!("WarpDrive_BelongsToTeam")
+                & id!("BlackDrive_BelongsToTeam")
                 & id!("IsOnline"),
         )
         .with_group(bindings::BindingGroup::EnvVarCollection.as_str()),
@@ -1231,7 +1231,7 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(
             id!("Workspace")
                 & id!(flags::ENABLE_WARP_DRIVE)
-                & id!("WarpDrive_BelongsToTeam")
+                & id!("BlackDrive_BelongsToTeam")
                 & id!("IsOnline")
                 & id!(flags::IS_ANY_AI_ENABLED),
         ),
@@ -1267,7 +1267,7 @@ pub fn init(app: &mut AppContext) {
             WorkspaceAction::ImportToTeamDrive,
         )
         .with_context_predicate(
-            id!("Workspace") & id!(flags::ENABLE_WARP_DRIVE) & id!("WarpDrive_BelongsToTeam"),
+            id!("Workspace") & id!(flags::ENABLE_WARP_DRIVE) & id!("BlackDrive_BelongsToTeam"),
         ),
     ]);
 
@@ -1439,10 +1439,10 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_context_predicate(id!("Workspace")),
         EditableBinding::new(
-            "workspace:show_settings_warpify_page",
-            BindingDescription::new("Open Settings: Warpify")
-                .with_custom_description(bindings::MAC_MENUS_CONTEXT, "Configure Warpify..."),
-            WorkspaceAction::ShowSettingsPage(SettingsSection::Warpify),
+            "workspace:show_settings_blackify_page",
+            BindingDescription::new("Open Settings: Blackify")
+                .with_custom_description(bindings::MAC_MENUS_CONTEXT, "Configure Blackify..."),
+            WorkspaceAction::ShowSettingsPage(SettingsSection::Blackify),
         )
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_context_predicate(id!("Workspace")),

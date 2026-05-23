@@ -61,7 +61,7 @@ pub fn should_render_ps1_prompt(terminal_model: &TerminalModel, app: &AppContext
     let session_settings = SessionSettings::as_ref(app);
 
     // In the context of session sharing, these values may differ from the local settings i.e.
-    // if the sharer is using PS1 and the viewer is not (using Warp prompt in non-SLP mode).
+    // if the sharer is using PS1 and the viewer is not (using Black prompt in non-SLP mode).
     // In this case, we still want to render the prompt on the same line (PS1 should ALWAYS be
     // rendered on the same line).
     // Note that the product behavior for session sharing is normally to respect the local settings
@@ -80,7 +80,7 @@ pub fn should_render_prompt_on_same_line(
 ) -> bool {
     // We render the prompt on the same line, in the input editor, if:
     // 1. The user is using a custom prompt (PS1)
-    // 2. The user has the same line prompt setting enabled for their Warp prompt.
+    // 2. The user has the same line prompt setting enabled for their Black prompt.
 
     // If universal developer input is enabled, ignore PS1 rendering logic
     if is_universal_developer_input {

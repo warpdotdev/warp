@@ -55,13 +55,13 @@ struct AIDocumentSaveRequest {
     document_id: AIDocumentId,
 }
 
-/// The status of saving an AI Document to Warp Drive
+/// The status of saving an AI Document to Black Drive
 pub enum AIDocumentSaveStatus {
-    /// Not being synced with Warp Drive at all
+    /// Not being synced with Black Drive at all
     NotSaved,
-    /// Is being saved to Warp Drive, but has not finished yet
+    /// Is being saved to Black Drive, but has not finished yet
     Saving,
-    /// Has been saved to Warp Drive
+    /// Has been saved to Black Drive
     Saved,
 }
 
@@ -89,7 +89,7 @@ impl AIDocumentUserEditStatus {
 
 const PLAN_FOLDER_NAME: &str = "Plans";
 
-/// Represents a document queued for creation in Warp Drive.
+/// Represents a document queued for creation in Black Drive.
 #[derive(Debug, Clone)]
 struct PendingDocument {
     id: AIDocumentId,
@@ -109,7 +109,7 @@ pub struct AIDocumentEarlierVersion {
 #[derive(Debug, Clone)]
 pub struct AIDocument {
     /// ID to sync with a cloud model with the server.
-    /// Set when a document is saved to Warp Drive.
+    /// Set when a document is saved to Black Drive.
     pub sync_id: Option<SyncId>,
     pub title: String,
     pub version: AIDocumentVersion,
@@ -251,7 +251,7 @@ impl AIDocumentModel {
         let content = document.editor.as_ref(ctx).markdown(ctx);
 
         let Some(owner) = Self::get_plan_owner(ctx) else {
-            log::warn!("Failed to get owner while saving AI Document to Warp Drive. Skipping");
+            log::warn!("Failed to get owner while saving AI Document to Black Drive. Skipping");
             return false;
         };
 
@@ -306,7 +306,7 @@ impl AIDocumentModel {
         // If we're waiting on a Plans folder to complete creation, ensure the Plans folder exists
         // (creating it if needed) and if it has a ServerId, process the pending document queue.
         //
-        // NOTE: this handler runs for *all* Warp Drive object creations, so we must only create the
+        // NOTE: this handler runs for *all* Black Drive object creations, so we must only create the
         // Plans folder when we actually have a plan notebook waiting to be created.
         if !self.pending_document_queue.is_empty() {
             if let Some(owner) = Self::get_plan_owner(ctx) {
@@ -382,7 +382,7 @@ impl AIDocumentModel {
         id
     }
 
-    /// Create a document from an existing Warp Drive notebook.
+    /// Create a document from an existing Black Drive notebook.
     pub fn create_document_from_notebook(
         &mut self,
         ai_document_id: AIDocumentId,
@@ -913,7 +913,7 @@ impl AIDocumentModel {
             ctx,
         );
 
-        // Update the sync status of a document by checking if it exists in Warp Drive.
+        // Update the sync status of a document by checking if it exists in Black Drive.
         let Some(doc) = self.documents.get(&id) else {
             return;
         };

@@ -1,7 +1,7 @@
 //! Representation of Warp user credentials.
 //!
 //! The primary representation is [`Credentials`], which is the source of truth for how a user is
-//! authenticated to Warp.
+//! authenticated to Black.
 //!
 //! Credentials can be split into two halves:
 //! * [`LoginToken`], which is a long-lived token that we use to fetch user information.
@@ -12,7 +12,7 @@ use black_graphql::object_permissions::OwnerType;
 
 use super::user::FirebaseAuthTokens;
 
-/// Represents the different ways a user can authenticate with Warp.
+/// Represents the different ways a user can authenticate with Black.
 #[derive(Clone, Debug)]
 pub enum Credentials {
     /// Firebase authentication with ID token and refresh token.

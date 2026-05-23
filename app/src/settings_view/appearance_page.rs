@@ -240,7 +240,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         context.to_owned(),
     )]);
 
-    // Add command palette entry for toggling between Warp and Classic input modes
+    // Add command palette entry for toggling between Black and Classic input modes
     app.register_fixed_bindings(vec![FixedBinding::empty(
         "Toggle Input Mode (Warp/Classic)".to_string(),
         builder(SettingsAction::AppearancePageToggle(
@@ -503,7 +503,7 @@ pub struct AppearanceSettingsPageView {
     header_toolbar_inline_editor: ViewHandle<HeaderToolbarInlineEditor>,
 
     /// The context chip renderers based on the most recently
-    /// selected Warp prompt configuration.
+    /// selected Black prompt configuration.
     context_chips: Vec<ContextChipRenderer>,
 
     /// The information we need to render the PS1 as a grid when we're
@@ -1529,7 +1529,7 @@ impl AppearanceSettingsPageView {
             AppIcon::Original => "Original",
             AppIcon::Starburst => "Starburst",
             AppIcon::Sticker => "Sticker",
-            AppIcon::WarpOne => "Warp 1",
+            AppIcon::WarpOne => "Black 1",
         }
     }
 
@@ -2591,7 +2591,7 @@ impl SettingsWidget for CreateCustomThemeWidget {
                 .ui_builder()
                 .link(
                     "Create your own custom theme".to_string(),
-                    Some("https://docs.warp.dev/terminal/appearance/custom-themes".to_string()),
+                    Some("https://blackdagger.io/terminal/appearance/custom-themes".to_string()),
                     None,
                     self.mouse_state.clone(),
                 )
@@ -3149,7 +3149,7 @@ impl SettingsWidget for WindowBlurWidget {
         let label_info = AdditionalInfo {
             mouse_state: self.info_button.clone(),
             on_click_action: Some(AppearancePageAction::OpenUrl(
-                "https://docs.warp.dev/terminal/appearance/size-opacity-blurring".into(),
+                "https://blackdagger.io/terminal/appearance/size-opacity-blurring".into(),
             )),
             secondary_text: None,
             tooltip_override_text: None,
@@ -3333,7 +3333,7 @@ impl SettingsWidget for InputTypeWidget {
             .radio_buttons(
                 self.radio_buttons_states.clone(),
                 vec![
-                    RadioButtonItem::text("Warp"),
+                    RadioButtonItem::text("Black"),
                     RadioButtonItem::text("Shell (PS1)"),
                 ],
                 view.input_type_radio_state.clone(),
@@ -5010,7 +5010,7 @@ impl SettingsWidget for AltScreenPaddingWidget {
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_mouse_state.clone(),
                 on_click_action: Some(AppearancePageAction::OpenUrl(
-                    "https://docs.warp.dev/terminal/more-features/full-screen-apps#padding".into(),
+                    "https://blackdagger.io/terminal/more-features/full-screen-apps#padding".into(),
                 )),
                 secondary_text: None,
                 tooltip_override_text: None,

@@ -164,7 +164,7 @@ pub struct RequestFailedEvent {
 /// This type does **not** own the child subprocess whose stdio backs it.
 /// For transports that spawn a subprocess (e.g. SSH), the caller is
 /// responsible for holding the `Child` for the lifetime of the session
-/// so that `kill_on_drop` fires when teardown occurs. In Warp this is
+/// so that `kill_on_drop` fires when teardown occurs. In Black this is
 /// the `RemoteServerManager`, which stores the child in
 /// `RemoteSessionState` alongside the `Arc<RemoteServerClient>`. That
 /// way the child's lifetime is gated by the manager's session map
@@ -203,7 +203,7 @@ impl RemoteServerClient {
     /// The caller retains ownership of the `Child` itself. Typically the
     /// caller spawns the `Command` with `kill_on_drop(true)` and stashes
     /// the returned `Child` somewhere whose lifetime matches the
-    /// session's (in Warp, on the `RemoteServerManager`'s
+    /// session's (in Black, on the `RemoteServerManager`'s
     /// `RemoteSessionState`). Dropping the `Child` there triggers
     /// SIGKILL on the subprocess, regardless of how many
     /// `Arc<RemoteServerClient>` clones are still alive.

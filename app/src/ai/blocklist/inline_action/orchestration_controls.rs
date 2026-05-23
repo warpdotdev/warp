@@ -438,7 +438,7 @@ pub fn new_standard_picker_dropdown<A: OrchestrationControlAction, V: View>(
     })
 }
 
-/// Returns Warp base-model choices for orchestration.
+/// Returns Black base-model choices for orchestration.
 fn get_base_model_choices<'a>(
     llm_prefs: &'a LLMPreferences,
     app: &'a AppContext,
@@ -450,7 +450,7 @@ fn get_base_model_choices<'a>(
 }
 /// Populates the model picker based on the active harness.
 ///
-/// - **Oz / empty**: shows the Warp LLM catalog (existing behavior).
+/// - **Oz / empty**: shows the Black LLM catalog (existing behavior).
 /// - **Local Codex**: shows only a "Default model" entry (no model delivery
 ///   possible for local Codex children).
 /// - **Other non-Oz harnesses**: shows "Default model" at the top, followed
@@ -469,7 +469,7 @@ pub fn populate_model_picker_for_harness<A: OrchestrationControlAction, V: View>
         let harness = Harness::parse_orchestration_harness(&harness_type);
         match harness {
             Some(Harness::Oz) | None => {
-                // Oz / unset: Warp LLM catalog. Custom models excluded for
+                // Oz / unset: Black LLM catalog. Custom models excluded for
                 // cloud runs (not supported by remote workers).
                 // Order: auto models first, then custom models, then other models.
                 let llm_prefs = LLMPreferences::as_ref(ctx_dropdown);
@@ -590,7 +590,7 @@ pub fn is_model_in_filtered_choices<V: View>(
 
 /// Returns the default model_id for the given harness.
 ///
-/// For Oz this is the first Warp LLM; for non-Oz harnesses it is an empty
+/// For Oz this is the first Black LLM; for non-Oz harnesses it is an empty
 /// string (the "Default model" entry).
 pub fn first_filtered_model_id<V: View>(
     harness_type: &str,

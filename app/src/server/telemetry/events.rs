@@ -193,7 +193,7 @@ impl From<Space> for TelemetrySpace {
     }
 }
 
-/// Common metadata to include in all Warp Drive telemetry events that act on a specific object.
+/// Common metadata to include in all Black Drive telemetry events that act on a specific object.
 /// Events that only apply to a single object type may use specific metadata like [`WorkflowTelemetryMetadata`],
 /// [`NotebookTelemetryMetadata`], or [`EnvVarTelemetryMetadata`] instead.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -365,7 +365,7 @@ impl From<rmcp::RmcpError> for MCPServerTelemetryError {
 pub struct OpenedSharingDialogEvent {
     pub source: SharingDialogSource,
 
-    /// Metadata for the object being shared, if it's a Warp Drive object.
+    /// Metadata for the object being shared, if it's a Black Drive object.
     #[serde(flatten)]
     pub object_metadata: Option<CloudObjectTelemetryMetadata>,
 
@@ -373,18 +373,18 @@ pub struct OpenedSharingDialogEvent {
     pub session_id: Option<SharedSessionId>,
 }
 
-/// How the user opened the Warp Drive sharing dialog.
+/// How the user opened the Black Drive sharing dialog.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum SharingDialogSource {
     /// The sharing button in the pane header.
     PaneHeader,
     /// The per-pane command palette entry (includes keybindings).
     CommandPalette,
-    /// The Warp Drive index context menu.
+    /// The Black Drive index context menu.
     DriveIndex,
     /// The sharing dialog was auto-opened from shared session creation.
     StartedSessionShare,
-    /// The user intented into Warp with an email address to invite.
+    /// The user intented into Black with an email address to invite.
     InviteeRequest,
     /// The user jumped from an inherited ACL to its definition on a parent object.
     InheritedPermission,
@@ -499,7 +499,7 @@ pub enum PluginChipTelemetryKind {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NotificationAgentVariant {
-    /// Warp's built-in agent (Oz).
+    /// Black's built-in agent (Oz).
     Oz,
     /// A CLI agent (e.g., Claude Code, Gemini CLI, etc.).
     CLIAgent(CLIAgentType),
@@ -704,7 +704,7 @@ pub enum KnowledgePaneEntrypoint {
     #[serde(rename = "settings")]
     Settings,
 
-    #[serde(rename = "warp_drive")]
+    #[serde(rename = "black_drive")]
     WarpDrive,
 
     #[serde(rename = "ai_blocklist")]
@@ -723,7 +723,7 @@ pub enum MCPServerCollectionPaneEntrypoint {
     #[serde(rename = "settings")]
     Settings,
 
-    #[serde(rename = "warp_drive")]
+    #[serde(rename = "black_drive")]
     WarpDrive,
 
     #[serde(rename = "slash_command")]
@@ -1361,7 +1361,7 @@ pub enum TelemetryEvent {
     DatabaseReadError(String),
     DatabaseWriteError(String),
     AppStartup(AppStartupInfo),
-    /// The native app was opened while logged out. Since Warp requires login,
+    /// The native app was opened while logged out. Since Black requires login,
     /// this usually means a new user.
     LoggedOutStartup,
     /// The download source, if it can be determined. Will only be sent when
@@ -1607,11 +1607,11 @@ pub enum TelemetryEvent {
     InitialWorkingDirectoryConfigurationChanged {
         advanced_mode_enabled: bool,
     },
-    /// Opened legacy Warp AI.
+    /// Opened legacy Black AI.
     OpenedWarpAI {
         source: OpenedWarpAISource,
     },
-    /// Issued legacy Warp AI request.
+    /// Issued legacy Black AI request.
     WarpAIRequestIssued {
         result: WarpAIRequestResult,
     },
@@ -1633,7 +1633,7 @@ pub enum TelemetryEvent {
     InputPaste,
     InputCommandSearch,
     InputAICommandSearch,
-    InputAskWarpAI,
+    InputAskBlackAI,
     SaveAsWorkflowModal {
         source: SaveAsWorkflowModalSource,
     },
@@ -1694,19 +1694,19 @@ pub enum TelemetryEvent {
     },
     /// An ssh interactive session was detected.
     SshInteractiveSessionDetected(SshInteractiveSessionDetected),
-    SshTmuxWarpifyBannerDisplayed,
-    /// A SSH Warpify Block was accepted
-    SshTmuxWarpifyBlockAccepted,
-    /// A SSH Warpify Block was dismissed
-    SshTmuxWarpifyBlockDismissed,
-    WarpifyFooterShown {
+    SshTmuxBlackifyBannerDisplayed,
+    /// A SSH Blackify Block was accepted
+    SshTmuxBlackifyBlockAccepted,
+    /// A SSH Blackify Block was dismissed
+    SshTmuxBlackifyBlockDismissed,
+    BlackifyFooterShown {
         is_ssh: bool,
     },
     AgentToolbarDismissed,
-    WarpifyFooterAcceptedWarpify {
+    BlackifyFooterAcceptedBlackify {
         is_ssh: bool,
     },
-    /// How long until the warpify process succeeded
+    /// How long until the blackify process succeeded
     SshTmuxWarpificationSuccess {
         tmux_installation: Option<TmuxInstallationState>,
         duration_ms: u64,
@@ -1743,7 +1743,7 @@ pub enum TelemetryEvent {
         source: WarpDriveSource,
         is_code_mode_v2: bool,
     },
-    // Toggled the legacy Warp AI side panel.
+    // Toggled the legacy Black AI side panel.
     ToggleWarpAI {
         opened: bool,
     },
@@ -1825,7 +1825,7 @@ pub enum TelemetryEvent {
         team_uid: ServerId,
     },
     CopyObjectToClipboard(TelemetryCloudObjectType),
-    OpenAndWarpifyDockerSubshell {
+    OpenAndBlackifyDockerSubshell {
         /// Some variant if we support this shell type, and None otherwise.
         shell_type: Option<ShellType>,
     },
@@ -1992,7 +1992,7 @@ pub enum TelemetryEvent {
     /// language auto-detection false-positive.
     AgentModePotentialAutoDetectionFalsePositive(AgentModeAutoDetectionFalsePositivePayload),
 
-    /// This is a telemetry event used to help track performance of Agent Predict in Warp,
+    /// This is a telemetry event used to help track performance of Agent Predict in Black,
     /// by keeping track of the context given and the predictions generated.
     AgentModePrediction {
         was_suggestion_accepted: bool,
@@ -2643,7 +2643,7 @@ pub enum TelemetryEvent {
     AgentManagementViewOpenedSession,
     /// Emitted when the user copies a session link from the Agent Management View.
     AgentManagementViewCopiedSessionLink,
-    /// Detected that Warp is running in an isolated sandbox.
+    /// Detected that Black is running in an isolated sandbox.
     DetectedIsolationPlatform {
         platform: black_isolation_platform::IsolationPlatformType,
     },
@@ -3312,9 +3312,9 @@ impl TelemetryEvent {
             TelemetryEvent::CodePanelsFileOpened { entrypoint, target } => {
                 let (target, layout, editor) = match target {
                     FileTarget::MarkdownViewer(layout) => {
-                        ("warp_markdown_viewer", Some(*layout), None)
+                        ("black_markdown_viewer", Some(*layout), None)
                     }
-                    FileTarget::CodeEditor(layout) => ("warp_code_editor", Some(*layout), None),
+                    FileTarget::CodeEditor(layout) => ("black_code_editor", Some(*layout), None),
                     FileTarget::EnvEditor => ("env_editor", None, None),
                     FileTarget::SystemDefault => ("system_default", None, None),
                     FileTarget::SystemGeneric => ("system_generic", None, None),
@@ -3364,8 +3364,8 @@ impl TelemetryEvent {
                 Some(json!({ "remember": remember }))
             }
             TelemetryEvent::AgentToolbarDismissed => None,
-            TelemetryEvent::WarpifyFooterShown { is_ssh }
-            | TelemetryEvent::WarpifyFooterAcceptedWarpify { is_ssh } => {
+            TelemetryEvent::BlackifyFooterShown { is_ssh }
+            | TelemetryEvent::BlackifyFooterAcceptedBlackify { is_ssh } => {
                 Some(json!({ "is_ssh": is_ssh }))
             }
             TelemetryEvent::ToggleSameLinePrompt { enabled } => Some(json!({ "enabled": enabled })),
@@ -3438,7 +3438,7 @@ impl TelemetryEvent {
             TelemetryEvent::CopyObjectToClipboard(object_type) => {
                 Some(json!({ "object_type": object_type }))
             }
-            TelemetryEvent::OpenAndWarpifyDockerSubshell { shell_type } => {
+            TelemetryEvent::OpenAndBlackifyDockerSubshell { shell_type } => {
                 Some(json!({ "shell_type": shell_type }))
             }
             TelemetryEvent::ToggleBlockFilterQuery { enabled, source } => {
@@ -4152,11 +4152,11 @@ impl TelemetryEvent {
             | TelemetryEvent::InputPaste
             | TelemetryEvent::InputCommandSearch
             | TelemetryEvent::InputAICommandSearch
-            | TelemetryEvent::InputAskWarpAI
+            | TelemetryEvent::InputAskBlackAI
             | TelemetryEvent::SetNewWindowsAtCustomSize
             | TelemetryEvent::DisableInputSync
             | TelemetryEvent::ShowSubshellBanner
-            | TelemetryEvent::SshTmuxWarpifyBannerDisplayed
+            | TelemetryEvent::SshTmuxBlackifyBannerDisplayed
             | TelemetryEvent::AddDenylistedSubshellCommand
             | TelemetryEvent::RemoveDenylistedSubshellCommand
             | TelemetryEvent::AddAddedSubshellCommand
@@ -4164,8 +4164,8 @@ impl TelemetryEvent {
             | TelemetryEvent::ReceivedSubshellRcFileDcs
             | TelemetryEvent::AddDenylistedSshTmuxWrapperHost
             | TelemetryEvent::RemoveDenylistedSshTmuxWrapperHost
-            | TelemetryEvent::SshTmuxWarpifyBlockAccepted
-            | TelemetryEvent::SshTmuxWarpifyBlockDismissed
+            | TelemetryEvent::SshTmuxBlackifyBlockAccepted
+            | TelemetryEvent::SshTmuxBlackifyBlockDismissed
             | TelemetryEvent::SshInstallTmuxBlockDisplayed
             | TelemetryEvent::SshInstallTmuxBlockAccepted
             | TelemetryEvent::SshInstallTmuxBlockDismissed
@@ -4944,7 +4944,7 @@ impl TelemetryEvent {
             | TelemetryEvent::InputPaste
             | TelemetryEvent::InputCommandSearch
             | TelemetryEvent::InputAICommandSearch
-            | TelemetryEvent::InputAskWarpAI
+            | TelemetryEvent::InputAskBlackAI
             | TelemetryEvent::SaveAsWorkflowModal { .. }
             | TelemetryEvent::ExperimentTriggered { .. }
             | TelemetryEvent::ToggleSyncAllPanesInAllTabs { .. }
@@ -4967,12 +4967,12 @@ impl TelemetryEvent {
             | TelemetryEvent::RemoveDenylistedSshTmuxWrapperHost
             | TelemetryEvent::ToggleSshTmuxWrapper { .. }
             | TelemetryEvent::SshInteractiveSessionDetected(_)
-            | TelemetryEvent::SshTmuxWarpifyBannerDisplayed
-            | TelemetryEvent::SshTmuxWarpifyBlockAccepted
-            | TelemetryEvent::SshTmuxWarpifyBlockDismissed
-            | TelemetryEvent::WarpifyFooterShown { .. }
+            | TelemetryEvent::SshTmuxBlackifyBannerDisplayed
+            | TelemetryEvent::SshTmuxBlackifyBlockAccepted
+            | TelemetryEvent::SshTmuxBlackifyBlockDismissed
+            | TelemetryEvent::BlackifyFooterShown { .. }
             | TelemetryEvent::AgentToolbarDismissed
-            | TelemetryEvent::WarpifyFooterAcceptedWarpify { .. }
+            | TelemetryEvent::BlackifyFooterAcceptedBlackify { .. }
             | TelemetryEvent::SshTmuxWarpificationSuccess { .. }
             | TelemetryEvent::SshTmuxWarpificationErrorBlock { .. }
             | TelemetryEvent::SshInstallTmuxBlockDisplayed
@@ -5021,7 +5021,7 @@ impl TelemetryEvent {
             | TelemetryEvent::LogOut
             | TelemetryEvent::InviteTeammates { .. }
             | TelemetryEvent::CopyObjectToClipboard(_)
-            | TelemetryEvent::OpenAndWarpifyDockerSubshell { .. }
+            | TelemetryEvent::OpenAndBlackifyDockerSubshell { .. }
             | TelemetryEvent::UpdateBlockFilterQuery
             | TelemetryEvent::UpdateBlockFilterQueryContextLines { .. }
             | TelemetryEvent::ToggleBlockFilterQuery { .. }
@@ -5502,7 +5502,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::InputPaste => EnablementState::Always,
             Self::InputCommandSearch => EnablementState::Always,
             Self::InputAICommandSearch => EnablementState::Always,
-            Self::InputAskWarpAI => EnablementState::Always,
+            Self::InputAskBlackAI => EnablementState::Always,
             Self::SaveAsWorkflowModal => EnablementState::Always,
             Self::ExperimentTriggered => EnablementState::Always,
             Self::ToggleSyncAllPanesInAllTabs => EnablementState::Always,
@@ -5514,7 +5514,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ToggleTabIndicators => EnablementState::Always,
             Self::TogglePreserveActiveTabColor => EnablementState::Always,
             Self::ShowSubshellBanner => EnablementState::Always,
-            Self::SshTmuxWarpifyBannerDisplayed => EnablementState::Always,
+            Self::SshTmuxBlackifyBannerDisplayed => EnablementState::Always,
             Self::DeclineSubshellBootstrap => EnablementState::Always,
             Self::TriggerSubshellBootstrap => EnablementState::Always,
             Self::AddDenylistedSubshellCommand => EnablementState::Always,
@@ -5526,11 +5526,11 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AddDenylistedSshTmuxWrapperHost => EnablementState::Always,
             Self::RemoveDenylistedSshTmuxWrapperHost => EnablementState::Always,
             Self::SshInteractiveSessionDetected => EnablementState::Always,
-            Self::SshTmuxWarpifyBlockAccepted => EnablementState::Always,
-            Self::SshTmuxWarpifyBlockDismissed => EnablementState::Always,
-            Self::WarpifyFooterShown
+            Self::SshTmuxBlackifyBlockAccepted => EnablementState::Always,
+            Self::SshTmuxBlackifyBlockDismissed => EnablementState::Always,
+            Self::BlackifyFooterShown
             | Self::AgentToolbarDismissed
-            | Self::WarpifyFooterAcceptedWarpify => EnablementState::Always,
+            | Self::BlackifyFooterAcceptedBlackify => EnablementState::Always,
             Self::SshTmuxWarpificationSuccess => EnablementState::Always,
             Self::SshTmuxWarpificationErrorBlock => EnablementState::Always,
             Self::SshInstallTmuxBlockDisplayed => EnablementState::Always,
@@ -5566,7 +5566,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::SettingsImportInitiated => EnablementState::Always,
             Self::InviteTeammates => EnablementState::Always,
             Self::CopyObjectToClipboard => EnablementState::Always,
-            Self::OpenAndWarpifyDockerSubshell => EnablementState::Always,
+            Self::OpenAndBlackifyDockerSubshell => EnablementState::Always,
             Self::UpdateBlockFilterQuery => EnablementState::Always,
             Self::UpdateBlockFilterQueryContextLines => EnablementState::Always,
             Self::ToggleBlockFilterQuery => EnablementState::Always,
@@ -5998,10 +5998,10 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::InputModeChanged => "Input Mode Changed",
             Self::OpenedWarpAI => "Opened Warp AI",
-            Self::WarpAIRequestIssued => "Warp AI Request Issued",
-            Self::WarpAIAction => "Warp AI Action",
+            Self::WarpAIRequestIssued => "Black AI Request Issued",
+            Self::WarpAIAction => "Black AI Action",
             Self::UsedWarpAIPreparedPrompt => "Used Warp AI Prepared Prompt",
-            Self::WarpAICharacterLimitExceeded => "Warp AI Character Limit Exceeded",
+            Self::WarpAICharacterLimitExceeded => "Black AI Character Limit Exceeded",
             Self::OpenInputContextMenu => "OpenInputBoxContextMenu",
             Self::InputCutSelectedText => "InputBoxCutSelectedText",
             Self::InputCopySelectedText => "InputBoxCutSelectedText",
@@ -6009,7 +6009,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::InputPaste => "InputBoxPaste",
             Self::InputCommandSearch => "InputBoxCommandSearch",
             Self::InputAICommandSearch => "InputBoxAICommandSearch",
-            Self::InputAskWarpAI => "InputBoxAskWarpAI",
+            Self::InputAskBlackAI => "InputBoxAskBlackAI",
             Self::SaveAsWorkflowModal => "Opened Save As Workflow Modal",
             Self::ExperimentTriggered => "experiments.client.enroll_client",
             Self::ToggleSyncAllPanesInAllTabs => "Toggle Sync Inputs Across All Panes in All Tabs",
@@ -6019,7 +6019,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ToggleTabIndicators => "Toggle Tab Indicators",
             Self::TogglePreserveActiveTabColor => "Toggle Preserve Active Tab Color",
             Self::ShowSubshellBanner => "Show Subshell Banner",
-            Self::SshTmuxWarpifyBannerDisplayed => "Show Warpify SSH Banner",
+            Self::SshTmuxBlackifyBannerDisplayed => "Show Blackify SSH Banner",
             Self::DeclineSubshellBootstrap => "Decline Subshell Bootstrap",
             Self::TriggerSubshellBootstrap => "Trigger Subshell Bootstrap",
             Self::AddDenylistedSubshellCommand => "Add Denylisted Subshell Command",
@@ -6036,11 +6036,11 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AddDenylistedSshTmuxWrapperHost => "Add Denylisted SSH Tmux Wrapper Host",
             Self::RemoveDenylistedSshTmuxWrapperHost => "Remove Denylisted SSH Tmux Wrapper Host",
             Self::SshInteractiveSessionDetected => "SSH Interactive Session Detected",
-            Self::SshTmuxWarpifyBlockAccepted => "SSH Tmux Warpify Block Accepted",
-            Self::SshTmuxWarpifyBlockDismissed => "SSH Tmux Warpify Block Dismissed",
-            Self::WarpifyFooterShown => "Warpify Footer Shown",
+            Self::SshTmuxBlackifyBlockAccepted => "SSH Tmux Blackify Block Accepted",
+            Self::SshTmuxBlackifyBlockDismissed => "SSH Tmux Blackify Block Dismissed",
+            Self::BlackifyFooterShown => "Blackify Footer Shown",
             Self::AgentToolbarDismissed => "Agent Toolbar Dismissed",
-            Self::WarpifyFooterAcceptedWarpify => "Warpify Footer Accepted Warpify",
+            Self::BlackifyFooterAcceptedBlackify => "Blackify Footer Accepted Blackify",
             Self::SshTmuxWarpificationSuccess => "SSH Tmux Warpification Succeeded",
             Self::SshTmuxWarpificationErrorBlock => "SSH Tmux Warpification Error Block",
             Self::SshInstallTmuxBlockDisplayed => "SSH Install Tmux Block Displayed",
@@ -6051,7 +6051,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::EnableAliasExpansionFromBanner => "Enable Alias Expansion From Banner",
             Self::InitiateReauth => "Initiate Reauth",
             Self::NeedsReauth => "Needs Reauth",
-            Self::WarpDriveOpened => "Warp Drive Opened",
+            Self::WarpDriveOpened => "Black Drive Opened",
             Self::ToggleWarpAI => "Toggle Warp AI",
             Self::ToggleSecretRedaction => "Toggle Secret Redaction",
             Self::CustomSecretRegexAdded => "Custom Secret Regex Added",
@@ -6077,13 +6077,13 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::JumpToSharedSessionParticipant { .. } => "Jumped to Shared Session Participant",
             Self::CopiedSharedSessionLink { .. } => "Copied Shared Session Link",
             Self::WebSessionOpenedOnDesktop { .. } => "Web session opened on desktop",
-            Self::WebCloudObjectOpenedOnDesktop { .. } => "Warp Drive object opened on desktop",
-            Self::DriveSharingOnboardingBlockShown => "Warp Drive Sharing onboarding block shown",
+            Self::WebCloudObjectOpenedOnDesktop { .. } => "Black Drive object opened on desktop",
+            Self::DriveSharingOnboardingBlockShown => "Black Drive Sharing onboarding block shown",
             Self::UnsupportedShell => "Unsupported Shell",
             Self::SettingsImportInitiated => "Settings Import Initiated",
             Self::InviteTeammates => "Invited Teammates",
             Self::CopyObjectToClipboard => "Copy Object To Clipboard",
-            Self::OpenAndWarpifyDockerSubshell => "OpenAndWarpifyDockerSubshell",
+            Self::OpenAndBlackifyDockerSubshell => "OpenAndBlackifyDockerSubshell",
             Self::UpdateBlockFilterQuery => "Update Block Filter Query",
             Self::ToggleBlockFilterQuery => "Toggle Block Filter Query",
             Self::ToggleBlockFilterCaseSensitivity => "Toggle Block Filter Case Sensitivity",
@@ -6395,7 +6395,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "Anonymous user attempted to create a cloud object past their personal object limit"
             }
             Self::BackgroundBlockStarted => {
-                "Warp created a background-output Block (whenever a processes has been backgrounded and yields some output)"
+                "Black created a background-output Block (whenever a processes has been backgrounded and yields some output)"
             }
             Self::BaselineCommandLatency => "Command execution time",
             Self::SessionCreation => "Created a tab",
@@ -6682,7 +6682,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::InputAICommandSearch => {
                 "Opened AI Command Search via the Input Editor's context menu (right clicking the buffer)"
             }
-            Self::InputAskWarpAI => "Clicked \"Ask Warp AI\" from the Input Editor's context menu",
+            Self::InputAskBlackAI => "Clicked \"Ask Warp AI\" from the Input Editor's context menu",
             Self::SaveAsWorkflowModal => {
                 "Opened the modal to create a new workflow using a Block's context--command, etc."
             }
@@ -6713,28 +6713,28 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "Enabled or disabled preserving the active tab color"
             }
             Self::ShowSubshellBanner => {
-                "Displayed the banner asking whether Warp should Warpify the current session via Warp's subshell wrapper"
+                "Displayed the banner asking whether Warp should Blackify the current session via Warp's subshell wrapper"
             }
-            Self::SshTmuxWarpifyBannerDisplayed => {
-                "Displayed the banner asking whether Warp should Warpify the current SSH session via Warp's SSH Wrapper"
+            Self::SshTmuxBlackifyBannerDisplayed => {
+                "Displayed the banner asking whether Warp should Blackify the current SSH session via Warp's SSH Wrapper"
             }
             Self::DeclineSubshellBootstrap => {
-                "Developer declined the Warp banner to Warpify the current session"
+                "Developer declined the Warp banner to Blackify the current session"
             }
             Self::TriggerSubshellBootstrap => {
-                "Attempted to Warpify the current session via Warp's subshell wrapper"
+                "Attempted to Blackify the current session via Warp's subshell wrapper"
             }
             Self::AddDenylistedSubshellCommand => {
                 "Explicitly prevent a command from being Warpified via Warp's subshell wrapper"
             }
             Self::RemoveDenylistedSubshellCommand => {
-                "Removed a command from the list of commands to IGNORE when trying to Warpify via Warp's subshell wrapper"
+                "Removed a command from the list of commands to IGNORE when trying to Blackify via Warp's subshell wrapper"
             }
             Self::AddAddedSubshellCommand => {
                 "Added a command to be automatically Warpified via Warp's subshell wrapper"
             }
             Self::RemoveAddedSubshellCommand => {
-                "Removed a command from the list of commands to automatically Warpify via Warp's subshell wrapper"
+                "Removed a command from the list of commands to automatically Blackify via Warp's subshell wrapper"
             }
             Self::ReceivedSubshellRcFileDcs => "Spawned a subshell to be automatically Warpified",
             Self::ToggleSshTmuxWrapper => {
@@ -6755,13 +6755,13 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::AgentModeRatedResponse => "User rated an Agent Mode response",
             Self::SshInteractiveSessionDetected => "An interactive SSH session was detected",
-            Self::SshTmuxWarpifyBlockAccepted => "User accepted an ssh tmux warpify block",
-            Self::SshTmuxWarpifyBlockDismissed => "User dismissed an ssh tmux warpify block",
-            Self::WarpifyFooterShown => {
-                "Displayed the warpify footer for a detected subshell or SSH session"
+            Self::SshTmuxBlackifyBlockAccepted => "User accepted an ssh tmux blackify block",
+            Self::SshTmuxBlackifyBlockDismissed => "User dismissed an ssh tmux blackify block",
+            Self::BlackifyFooterShown => {
+                "Displayed the blackify footer for a detected subshell or SSH session"
             }
             Self::AgentToolbarDismissed => "User dismissed the use-agent toolbar",
-            Self::WarpifyFooterAcceptedWarpify => "User clicked Warpify in the warpify footer",
+            Self::BlackifyFooterAcceptedBlackify => "User clicked Blackify in the blackify footer",
             Self::SshTmuxWarpificationSuccess => "Ssh tmux warpification succeeded",
             Self::SshTmuxWarpificationErrorBlock => "Ssh tmux warpification errored out",
             Self::SshInstallTmuxBlockDisplayed => "Displayed an ssh install tmux block",
@@ -6836,7 +6836,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "Shared session viewed on the web was opened on the desktop"
             }
             Self::WebCloudObjectOpenedOnDesktop => {
-                "Warp Drive object on the web was opened on the desktop"
+                "Black Drive object on the web was opened on the desktop"
             }
             Self::DriveSharingOnboardingBlockShown => {
                 "Showed onboarding block for Warp Drive sharing"
@@ -6846,8 +6846,8 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::SettingsImportInitiated => "Started the import settings flow for new users",
             Self::InviteTeammates => "Sent emails to invite teammates to join Warp Drive team",
             Self::CopyObjectToClipboard => "Copied an object to the user's keyboard",
-            Self::OpenAndWarpifyDockerSubshell => {
-                "Warpifying a docker subshell from using the docker extension"
+            Self::OpenAndBlackifyDockerSubshell => {
+                "Blackifying a docker subshell from using the docker extension"
             }
             Self::UpdateBlockFilterQuery => "When a new filter is applied to a block",
             Self::UpdateBlockFilterQueryContextLines => {

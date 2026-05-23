@@ -984,7 +984,7 @@ impl TeamsPageView {
                 self.show_error("Failed to toggle team discoverability", Some(err), ctx);
             }
             UserWorkspacesEvent::JoinTeamWithTeamDiscoverySuccess => {
-                // Force refresh of Warp Drive objects after joining a team
+                // Force refresh of Black Drive objects after joining a team
                 UpdateManager::handle(ctx).update(ctx, move |update_manager, ctx| {
                     update_manager.refresh_updated_objects(ctx);
                 });

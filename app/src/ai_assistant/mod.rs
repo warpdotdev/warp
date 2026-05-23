@@ -1,4 +1,4 @@
-//! AI Assistant has since been renamed to "Warp AI" in the product.
+//! AI Assistant has since been renamed to "Black AI" in the product.
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -32,7 +32,7 @@ mod test_util;
 /// This is also roughly the limit at which the editor starts degrading.
 pub const PROMPT_CHARACTER_LIMIT: usize = 1000;
 
-pub const AI_ASSISTANT_FEATURE_NAME: &str = "Warp AI";
+pub const AI_ASSISTANT_FEATURE_NAME: &str = "Black AI";
 pub const ASK_AI_ASSISTANT_TEXT: &str = "Ask Warp AI";
 
 pub const AI_ASSISTANT_SVG_PATH: &str = "bundled/svg/ai-assistant.svg";

@@ -160,10 +160,10 @@ pub fn test_open_in_warp_banner() -> Builder {
             .add_assertion(assert_open_in_warp_banner_open(0, 0)),
         )
         .with_step(
-            new_step_with_default_assertions("Click Open in Warp banner")
+            new_step_with_default_assertions("Click Open in Black banner")
                 .with_click_on_saved_position_fn(|app, window_id| {
                     let view = terminal_view(app, window_id, 0, 0);
-                    format!("open_in_warp_banner_button_{}", view.id())
+                    format!("open_in_black_banner_button_{}", view.id())
                 }),
         )
         .with_step(

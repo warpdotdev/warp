@@ -3948,7 +3948,7 @@ fn test_bash_vim_banner_already_shown() {
                 .set_value(BannerState::Dismissed, ctx);
         });
 
-        // Ensure Warp's vim keybindings are off.
+        // Ensure Black's vim keybindings are off.
         AppEditorSettings::handle(&app).update(&mut app, |editor_settings, ctx| {
             let _ = editor_settings.vim_mode.set_value(false, ctx);
         });
@@ -4005,7 +4005,7 @@ fn test_bash_vim_banner_on() {
                 .set_value(BannerState::NotDismissed, ctx);
         });
 
-        // Ensure Warp's vim keybindings are off.
+        // Ensure Black's vim keybindings are off.
         AppEditorSettings::handle(&app).update(&mut app, |editor_settings, ctx| {
             let _ = editor_settings.vim_mode.set_value(false, ctx);
         });
@@ -4061,7 +4061,7 @@ fn test_bash_vim_banner_off() {
                 .set_value(BannerState::NotDismissed, ctx);
         });
 
-        // Ensure Warp's vim keybindings are on.
+        // Ensure Black's vim keybindings are on.
         AppEditorSettings::handle(&app).update(&mut app, |editor_settings, ctx| {
             let _ = editor_settings.vim_mode.set_value(true, ctx);
         });
@@ -4118,7 +4118,7 @@ fn test_zsh_vim_banner_on() {
                 .set_value(BannerState::NotDismissed, ctx);
         });
 
-        // Ensure Warp's vim keybindings are off.
+        // Ensure Black's vim keybindings are off.
         AppEditorSettings::handle(&app).update(&mut app, |editor_settings, ctx| {
             let _ = editor_settings.vim_mode.set_value(false, ctx);
         });
@@ -4174,7 +4174,7 @@ fn test_zsh_vim_banner_off() {
                 .set_value(BannerState::NotDismissed, ctx);
         });
 
-        // Ensure Warp's vim keybindings are on.
+        // Ensure Black's vim keybindings are on.
         AppEditorSettings::handle(&app).update(&mut app, |editor_settings, ctx| {
             let _ = editor_settings.vim_mode.set_value(true, ctx);
         });
@@ -4224,7 +4224,7 @@ fn test_fish_vim_banner_on() {
             view.set_focus_handle(focus_handle, ctx);
         });
 
-        // Ensure Warp's vim keybindings are off.
+        // Ensure Black's vim keybindings are off.
         AppEditorSettings::handle(&app).update(&mut app, |editor_settings, ctx| {
             let _ = editor_settings.vim_mode.set_value(false, ctx);
         });
@@ -4273,7 +4273,7 @@ fn test_fish_vim_banner_off() {
             view.set_focus_handle(focus_handle, ctx);
         });
 
-        // Ensure Warp's vim keybindings are on.
+        // Ensure Black's vim keybindings are on.
         AppEditorSettings::handle(&app).update(&mut app, |editor_settings, ctx| {
             let _ = editor_settings.vim_mode.set_value(true, ctx);
         });
@@ -5455,7 +5455,7 @@ fn drag_drop_image_in_cli_agent_long_running_command_pastes_via_clipboard() {
         // file. Bytes don't have to be a valid PNG.
         let mut image_path = std::env::temp_dir();
         image_path.push(format!(
-            "warp-test-cli-agent-drop-{}.png",
+            "black-test-cli-agent-drop-{}.png",
             std::process::id()
         ));
         std::fs::write(&image_path, b"fake-png-bytes").expect("write tmp image");

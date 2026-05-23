@@ -1,6 +1,6 @@
 //! Skill provider definitions and utilities.
 //!
-//! This module defines the supported skill providers (i.e. Agents, Claude, Codex, Warp) and their
+//! This module defines the supported skill providers (i.e. Agents, Claude, Codex, Black) and their
 //! associated skills directory paths. It provides utilities for looking up providers
 //! from paths and vice versa.
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ use black_core::ui::color::CLAUDE_ORANGE;
 use black_core::ui::icons::Icon;
 use black_core::ui::theme::Fill;
 
-/// Represents a skill provider/origin (Agents, Claude, Codex, or Warp).
+/// Represents a skill provider/origin (Agents, Claude, Codex, or Black).
 #[derive(
     Debug,
     Clone,
@@ -61,7 +61,7 @@ pub enum SkillScope {
     Home,
     /// Skills from a project directory (e.g., `./repo/.agents/skills`).
     Project,
-    /// Bundled skills distributed with Warp.
+    /// Bundled skills distributed with Black.
     Bundled,
 }
 
@@ -109,7 +109,7 @@ pub static SKILL_PROVIDER_DEFINITIONS: LazyLock<Vec<SkillProviderDefinition>> =
             },
             SkillProviderDefinition {
                 provider: SkillProvider::Warp,
-                skills_path: PathBuf::from(".warp").join("skills"),
+                skills_path: PathBuf::from(".black").join("skills"),
             },
             SkillProviderDefinition {
                 provider: SkillProvider::Claude,

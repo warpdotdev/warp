@@ -3,8 +3,8 @@
 //! disabilities to use certain software. In our case: we focus on blind users and their day-to-day
 //! life with screen readers.
 //!
-//! ## How does a11y work in Warp?
-//! Because Warp uses its own rust UI framework (black_ui), we don’t benefit from the built-in
+//! ## How does a11y work in Black?
+//! Because Black uses its own rust UI framework (black_ui), we don’t benefit from the built-in
 //! VoiceOver integration and objc NSAccessibility APIs. This is both good and bad for our app and
 //! the UI framework.
 //!
@@ -64,7 +64,7 @@ pub struct AccessibilityContent {
     /// (currently unused) The rectangle that describes where the given element is on the screen.
     /// System’s APIs then draw a frame around that element, making it super clear what object
     /// the description is referring to.
-    /// Frame support is a work-in-progress in Warp and right now this field is omitted and not set.
+    /// Frame support is a work-in-progress in Black and right now this field is omitted and not set.
     pub frame: Option<RectF>,
     /// The role a given element has. Note that we use our own, WarpUI-defined roles (vs those that
     /// come from the NSAccessibility framework). The role describes the action/element/event role (

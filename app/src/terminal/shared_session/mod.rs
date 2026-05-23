@@ -327,7 +327,7 @@ pub enum SharedSessionActionSource {
 }
 
 /// Returns the native intent URL to join a shared session.
-/// This should be used when opening the session from within Warp.
+/// This should be used when opening the session from within Black.
 pub fn join_native_intent(session_id: &SessionId) -> String {
     format!(
         "{}://shared_session/{}",

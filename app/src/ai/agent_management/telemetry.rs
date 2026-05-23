@@ -116,7 +116,7 @@ pub enum AgentManagementTelemetryEvent {
     /// User invoked the /continue-locally slash command
     #[cfg(not(target_family = "wasm"))]
     SlashCommandContinueLocally,
-    /// User clicked "Open in Warp" in the tombstone (wasm)
+    /// User clicked "Open in Black" in the tombstone (wasm)
     #[cfg(target_family = "wasm")]
     TombstoneOpenInWarp,
     /// User cancelled a cloud run

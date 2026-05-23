@@ -3047,7 +3047,7 @@ impl BillingAndUsagePageView {
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| current_user_email.clone());
 
-        // TODO: move sorting once per initial load or sort option change https://github.com/warpdotdev/warp-internal/pull/18288/files#r2392139761
+        // TODO: move sorting once per initial load or sort option change https://github.com/blackdagger/black-internal/pull/18288/files#r2392139761
         sort_user_items_in_place(
             &mut user_information,
             &current_user_display_name,

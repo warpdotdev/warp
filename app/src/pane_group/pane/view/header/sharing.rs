@@ -1,4 +1,4 @@
-//! Support for pane contents that are shareable, like sessions and Warp Drive objects.
+//! Support for pane contents that are shareable, like sessions and Black Drive objects.
 //!
 //! This is tightly coupled to the pane header so that different overlays (context menus, the
 //! sharing dialog, and so on) are correctly displayed.

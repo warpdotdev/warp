@@ -183,8 +183,8 @@ impl TerminationType {
                 format!("{pty_spawn_error:#}").into()
             }
             TerminationType::Premature { shell_detail, .. } => format!(
-                "Something went wrong while starting {shell_detail} and Warpifying it, causing the \
-                process to terminate. Warpify script output is displayed here, which may point at \
+                "Something went wrong while starting {shell_detail} and Blackifying it, causing the \
+                process to terminate. Blackify script output is displayed here, which may point at \
                 a cause."
             )
             .into(),
@@ -226,7 +226,7 @@ impl TerminationType {
                         .build()
                         .on_click(|ctx, _, _| {
                             ctx.dispatch_typed_action(Action::OpenUrl(
-                                "https://docs.warp.dev/support-and-community/troubleshooting-and-support/known-issues#debugging".to_string(),
+                                "https://blackdagger.io/support-and-community/troubleshooting-and-support/known-issues#debugging".to_string(),
                             ));
                         })
                         .finish(),
@@ -264,7 +264,7 @@ impl TerminationType {
                         .build()
                         .on_click(|ctx, _, _| {
                             ctx.dispatch_typed_action(Action::OpenUrl(
-                                "https://docs.warp.dev/support-and-community/troubleshooting-and-support/known-issues#debugging".to_string(),
+                                "https://blackdagger.io/support-and-community/troubleshooting-and-support/known-issues#debugging".to_string(),
                             ));
                         })
                         .finish(),

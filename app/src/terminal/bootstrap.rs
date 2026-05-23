@@ -8,7 +8,7 @@ use black_ui::{AppContext, AssetProvider, SingletonEntity};
 #[cfg(feature = "local_fs")]
 use super::{
     model::session::{BootstrapSessionType, SessionInfo},
-    warpify::settings::{PIPENV_SUBSHELL_COMMAND_REGEX, POETRY_SUBSHELL_COMMAND_REGEX},
+    blackify::settings::{PIPENV_SUBSHELL_COMMAND_REGEX, POETRY_SUBSHELL_COMMAND_REGEX},
 };
 use crate::env_vars::EnvVar;
 use crate::terminal::session_settings::SessionSettings;
@@ -37,7 +37,7 @@ pub fn is_container_subshell(session_info: &SessionInfo) -> bool {
     })
 }
 
-/// Returns `true` if Warp should use an RC-file based bootstrap (e.g. dump the bootstrap script to
+/// Returns `true` if Black should use an RC-file based bootstrap (e.g. dump the bootstrap script to
 /// a temp file and `source` it) for a newly spawned session with the given `shell_type`, and
 /// associated `session_type` and `subshell_initialization_info`.
 ///

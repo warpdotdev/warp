@@ -92,7 +92,7 @@ impl fmt::Display for CustomHeaderParsingError {
                 write!(f, "Custom header had {param_name} field missing")
             }
             Self::MissingHeaderIdentifier => {
-                write!(f, "Image did not contain the 'warp-img:' prefix.")
+                write!(f, "Image did not contain the 'black-img:' prefix.")
             }
         }
     }
@@ -116,7 +116,7 @@ pub struct CustomImageHeader {
 impl CustomImageHeader {
     pub fn create_header(&self) -> String {
         format!(
-            "warp-img:{}:{}:{}:",
+            "black-img:{}:{}:{}:",
             self.image_format.create_tag(),
             self.width,
             self.height
@@ -157,7 +157,7 @@ impl CustomImageHeader {
     }
 
     fn try_from_bytes(data: &[u8]) -> Result<(CustomImageHeader, &[u8]), CustomHeaderParsingError> {
-        if !data.starts_with(b"warp-img:") {
+        if !data.starts_with(b"black-img:") {
             return Err(CustomHeaderParsingError::MissingHeaderIdentifier);
         }
 
@@ -283,7 +283,7 @@ impl Asset for ImageType {
             return Ok(ImageType::Svg { svg });
         }
 
-        if data.starts_with(b"warp-img:") {
+        if data.starts_with(b"black-img:") {
             let (custom_warp_header, data) = match CustomImageHeader::try_from_bytes(data) {
                 Ok((custom_warp_header, data)) => (custom_warp_header, data),
                 Err(err) => return Err(anyhow!(err.to_string())),
@@ -311,7 +311,7 @@ impl Asset for ImageType {
                 }
             }) else {
                 return Err(anyhow!(
-                    "Could not convert custom warp image into approprate dynamic image."
+                    "Could not convert custom black image into appropriate dynamic image."
                 ));
             };
             return Ok(ImageType::StaticBitmap {

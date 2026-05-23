@@ -23,7 +23,7 @@ use black::integration_testing::terminal::{
     wait_until_bootstrapped_single_pane_for_tab,
 };
 use black::terminal::shell::ShellType;
-use black::terminal::warpify::settings::{SshExtensionInstallMode, SshExtensionInstallModeSetting};
+use black::terminal::blackify::settings::{SshExtensionInstallMode, SshExtensionInstallModeSetting};
 use black_ui::integration::TestStep;
 
 use super::{new_builder, Builder};

@@ -132,7 +132,7 @@ pub enum Subject {
     AnyoneWithLink(LinkSharingSubjectType),
 }
 
-/// A kind of user. In all cases, there is an underlying Warp account, but it's represented
+/// A kind of user. In all cases, there is an underlying Black account, but it's represented
 /// differently in certain cases.
 #[derive(Debug, Clone)]
 pub enum UserKind {

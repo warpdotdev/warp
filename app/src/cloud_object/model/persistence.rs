@@ -1095,7 +1095,7 @@ impl CloudModel {
             .count()
     }
 
-    /// Number of cloud objects that have errored in some way and are visible in the Warp Drive index
+    /// Number of cloud objects that have errored in some way and are visible in the Black Drive index
     pub fn num_visible_errored_objects(&self) -> usize {
         self.objects_by_id
             .values()

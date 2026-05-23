@@ -159,7 +159,7 @@ impl CreateApiKeyModal {
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("Warp API Key", ctx);
+            editor.set_placeholder_text("Black API Key", ctx);
             editor
         });
 
@@ -324,7 +324,7 @@ impl CreateApiKeyModal {
         let name = self.name_editor.as_ref(ctx).buffer_text(ctx);
 
         let final_name = if name.trim().is_empty() {
-            "Warp API Key".to_string()
+            "Black API Key".to_string()
         } else {
             name.trim().to_string()
         };

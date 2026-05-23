@@ -34,13 +34,13 @@ fn test_split_path() {
         SplitPath {
             directory_absolute_path: path.clone(),
             directory_relative_path_name: "~/".to_owned(),
-            file_name: "Warp.app".to_owned()
+            file_name: "Black.app".to_owned()
         }
     );
 
     let split_path = SplitPath::new(
         path.to_path(),
-        "Warp.app/Contents",
+        "Black.app/Contents",
         Some("/Users/warpuser"),
         &['/'],
     );
@@ -48,14 +48,14 @@ fn test_split_path() {
         split_path,
         SplitPath {
             directory_absolute_path: TypedPathBuf::from("/Users/warpuser/Warp.app/"),
-            directory_relative_path_name: "Warp.app/".to_owned(),
+            directory_relative_path_name: "Black.app/".to_owned(),
             file_name: "Contents".to_owned()
         }
     );
 
     let split_path = SplitPath::new(
         path.to_path(),
-        "Warp.app/macOS/bin/warp.o",
+        "Black.app/macOS/bin/warp.o",
         Some("/Users/warpuser"),
         &['/'],
     );
@@ -63,8 +63,8 @@ fn test_split_path() {
         split_path,
         SplitPath {
             directory_absolute_path: TypedPathBuf::from("/Users/warpuser/Warp.app/macOS/bin/"),
-            directory_relative_path_name: "Warp.app/macOS/bin/".to_owned(),
-            file_name: "warp.o".to_owned()
+            directory_relative_path_name: "Black.app/macOS/bin/".to_owned(),
+            file_name: "black.o".to_owned()
         }
     );
 }

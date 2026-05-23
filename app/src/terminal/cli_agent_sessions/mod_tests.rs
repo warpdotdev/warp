@@ -9,7 +9,7 @@ use crate::terminal::CLIAgent;
 #[test]
 fn parse_stop_notification() {
     let body = r#"{"v":1,"agent":"claude","event":"stop","session_id":"abc","cwd":"/tmp/proj","project":"proj","query":"write a haiku","response":"Memory is safe","transcript_path":"/tmp/t.jsonl"}"#;
-    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+    let notif = parse_event(Some("black://cli-agent"), body).unwrap();
 
     assert_eq!(notif.v, 1);
     assert_eq!(notif.agent, CLIAgent::Claude);
@@ -68,7 +68,7 @@ fn cli_agent_session_context_title_helpers_ignore_empty_text() {
 #[test]
 fn parse_permission_request_notification() {
     let body = r#"{"v":1,"agent":"claude","event":"permission_request","session_id":"abc","cwd":"/tmp/proj","project":"proj","summary":"Wants to run Bash: rm -rf /tmp","tool_name":"Bash","tool_input":{"command":"rm -rf /tmp"}}"#;
-    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+    let notif = parse_event(Some("black://cli-agent"), body).unwrap();
 
     assert_eq!(notif.event, CLIAgentEventType::PermissionRequest);
     assert_eq!(
@@ -85,7 +85,7 @@ fn parse_permission_request_notification() {
 #[test]
 fn parse_permission_request_with_file_path() {
     let body = r#"{"v":1,"agent":"claude","event":"permission_request","session_id":"abc","cwd":"/tmp","project":"tmp","tool_name":"Write","tool_input":{"file_path":"/tmp/test.py","content":"print('hi')"}}"#;
-    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+    let notif = parse_event(Some("black://cli-agent"), body).unwrap();
 
     assert_eq!(
         notif.payload.tool_input_preview.as_deref(),
@@ -96,7 +96,7 @@ fn parse_permission_request_with_file_path() {
 #[test]
 fn parse_idle_prompt_notification() {
     let body = r#"{"v":1,"agent":"claude","event":"idle_prompt","session_id":"abc","cwd":"/tmp","project":"tmp","summary":"Claude is waiting for your input"}"#;
-    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+    let notif = parse_event(Some("black://cli-agent"), body).unwrap();
 
     assert_eq!(notif.event, CLIAgentEventType::IdlePrompt);
     assert_eq!(
@@ -108,7 +108,7 @@ fn parse_idle_prompt_notification() {
 #[test]
 fn parse_session_start_notification() {
     let body = r#"{"v":1,"agent":"claude","event":"session_start","session_id":"abc","cwd":"/tmp","project":"tmp","plugin_version":"1.1.0"}"#;
-    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+    let notif = parse_event(Some("black://cli-agent"), body).unwrap();
 
     assert_eq!(notif.event, CLIAgentEventType::SessionStart);
     assert_eq!(notif.payload.plugin_version.as_deref(), Some("1.1.0"));
@@ -128,13 +128,13 @@ fn returns_none_for_missing_title() {
 
 #[test]
 fn returns_none_for_invalid_json() {
-    assert!(parse_event(Some("warp://cli-agent"), "not json").is_none());
+    assert!(parse_event(Some("black://cli-agent"), "not json").is_none());
 }
 
 #[test]
 fn handles_unknown_event_type() {
     let body = r#"{"v":1,"agent":"claude","event":"some_future_event"}"#;
-    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+    let notif = parse_event(Some("black://cli-agent"), body).unwrap();
     assert_eq!(
         notif.event,
         CLIAgentEventType::Unknown("some_future_event".to_string())
@@ -144,7 +144,7 @@ fn handles_unknown_event_type() {
 #[test]
 fn handles_missing_optional_fields() {
     let body = r#"{"event":"stop"}"#;
-    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+    let notif = parse_event(Some("black://cli-agent"), body).unwrap();
 
     assert_eq!(notif.v, 1);
     assert_eq!(notif.agent, CLIAgent::Unknown);
@@ -158,7 +158,7 @@ fn handles_missing_optional_fields() {
 #[test]
 fn handles_special_characters_in_values() {
     let body = r#"{"v":1,"agent":"claude","event":"stop","query":"what does \"hello\" mean?","response":"It means greeting. Use: printf(\"hello\")"}"#;
-    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+    let notif = parse_event(Some("black://cli-agent"), body).unwrap();
 
     assert_eq!(
         notif.payload.query.as_deref(),
@@ -173,13 +173,13 @@ fn handles_special_characters_in_values() {
 #[test]
 fn rejects_unsupported_schema_version() {
     let body = r#"{"v":2,"agent":"claude","event":"stop"}"#;
-    assert!(parse_event(Some("warp://cli-agent"), body).is_none());
+    assert!(parse_event(Some("black://cli-agent"), body).is_none());
 }
 
 #[test]
 fn defaults_to_v1_when_version_missing() {
     let body = r#"{"agent":"claude","event":"stop","query":"hi"}"#;
-    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+    let notif = parse_event(Some("black://cli-agent"), body).unwrap();
     assert_eq!(notif.v, 1);
     assert_eq!(notif.payload.query.as_deref(), Some("hi"));
 }
@@ -187,7 +187,7 @@ fn defaults_to_v1_when_version_missing() {
 #[test]
 fn explicit_v1_parses_correctly() {
     let body = r#"{"v":1,"agent":"claude","event":"stop","query":"test"}"#;
-    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+    let notif = parse_event(Some("black://cli-agent"), body).unwrap();
     assert_eq!(notif.v, 1);
     assert_eq!(notif.payload.query.as_deref(), Some("test"));
 }
@@ -195,7 +195,7 @@ fn explicit_v1_parses_correctly() {
 #[test]
 fn parse_prompt_submit_notification() {
     let body = r#"{"v":1,"agent":"claude","event":"prompt_submit","session_id":"abc","cwd":"/tmp/proj","project":"proj","query":"fix the bug"}"#;
-    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+    let notif = parse_event(Some("black://cli-agent"), body).unwrap();
 
     assert_eq!(notif.event, CLIAgentEventType::PromptSubmit);
     assert_eq!(notif.payload.query.as_deref(), Some("fix the bug"));
@@ -204,7 +204,7 @@ fn parse_prompt_submit_notification() {
 #[test]
 fn parse_tool_complete_notification() {
     let body = r#"{"v":1,"agent":"claude","event":"tool_complete","session_id":"abc","cwd":"/tmp/proj","project":"proj","tool_name":"Bash"}"#;
-    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+    let notif = parse_event(Some("black://cli-agent"), body).unwrap();
 
     assert_eq!(notif.event, CLIAgentEventType::ToolComplete);
     assert_eq!(notif.payload.tool_name.as_deref(), Some("Bash"));
@@ -214,7 +214,7 @@ fn parse_tool_complete_notification() {
 fn parse_auggie_stop_notification() {
     // Mirrors what the community auggie-warp plugin emits on the Stop hook.
     let body = r#"{"v":1,"agent":"auggie","event":"stop","session_id":"abc","cwd":"/tmp/proj","project":"proj","query":"write a haiku","response":"Memory is safe"}"#;
-    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+    let notif = parse_event(Some("black://cli-agent"), body).unwrap();
 
     assert_eq!(notif.agent, CLIAgent::Auggie);
     assert_eq!(notif.event, CLIAgentEventType::Stop);
@@ -228,7 +228,7 @@ fn parse_pi_stop_notification() {
     // matches the Auggie shape and uses `"agent":"pi"`, which `resolve_agent`
     // already maps to `CLIAgent::Pi` via `command_prefix()`.
     let body = r#"{"v":1,"agent":"pi","event":"stop","session_id":"abc","cwd":"/tmp/proj","project":"proj","query":"write a haiku","response":"Memory is safe"}"#;
-    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+    let notif = parse_event(Some("black://cli-agent"), body).unwrap();
 
     assert_eq!(notif.agent, CLIAgent::Pi);
     assert_eq!(notif.event, CLIAgentEventType::Stop);

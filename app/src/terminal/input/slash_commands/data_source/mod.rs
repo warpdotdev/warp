@@ -410,7 +410,7 @@ impl SlashCommandDataSource {
 
     /// Returns true when the active conversation is associated with a cloud Oz
     /// `AmbientAgentTask`. Used to gate `/continue-locally` to runs that can
-    /// actually be forked into a local Warp conversation.
+    /// actually be forked into a local Black conversation.
     ///
     /// Permissive when the harness is not yet known: we consider an absent task or
     /// missing `agent_config_snapshot.harness` to be Oz, matching the existing

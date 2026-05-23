@@ -1,4 +1,4 @@
-//! This module defines a set of macros used to reference assets in Warp.
+//! This module defines a set of macros used to reference assets in Black.
 //!
 //! The three types of assets are:
 //! - Bundled: These are always included in the app bundle. These files are located in `app/assets/bundled`.

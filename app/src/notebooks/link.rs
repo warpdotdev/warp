@@ -36,7 +36,7 @@ pub enum LinkTarget {
         /// The base session when the link was resolved. It's stored here in case it changes
         /// between resolving and opening the link.
         session: Arc<Session>,
-        /// Whether or not this file is a Markdown file viewable in Warp.
+        /// Whether or not this file is a Markdown file viewable in Black.
         is_markdown: bool,
     },
     LocalDirectory {
@@ -311,7 +311,7 @@ impl NotebookLinks {
                 is_markdown: true,
                 ..
             } => {
-                // The default action for Markdown file links is to open them in Warp. As a
+                // The default action for Markdown file links is to open them in Black. As a
                 // secondary action, open them in an external app.
                 open_file(path.clone(), *line_and_column, ctx)
             }
@@ -428,7 +428,7 @@ pub enum LinkEvent {
     /// resolution has changed.
     RefreshLinks,
     #[cfg(feature = "local_fs")]
-    /// Emitted when a file should be opened in Warp (code editor or markdown viewer).
+    /// Emitted when a file should be opened in Black (code editor or markdown viewer).
     OpenFileWithTarget {
         path: PathBuf,
         target: FileTarget,

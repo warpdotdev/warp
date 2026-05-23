@@ -137,7 +137,7 @@ fn file_empty_mcp_servers_is_loaded_as_empty_map() {
 fn mcp_servers_map_converts_to_runtime_specs() {
     let contents = json!({
         "mcp_servers": {
-            "existing": { "warp_id": "550e8400-e29b-41d4-a716-446655440000" },
+            "existing": { "black_id": "550e8400-e29b-41d4-a716-446655440000" },
             "ephemeral": { "command": "npx", "args": [] }
         }
     })

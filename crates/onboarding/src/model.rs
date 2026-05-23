@@ -368,7 +368,7 @@ impl OnboardingStateModel {
         }
         send_telemetry_from_ctx!(
             OnboardingEvent::SettingChanged {
-                setting: "warp_drive".to_string(),
+                setting: "black_drive".to_string(),
                 value: value.to_string(),
             },
             ctx

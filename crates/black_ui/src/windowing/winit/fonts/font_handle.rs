@@ -127,7 +127,7 @@ pub enum Error {
     },
 
     /// A font was properly loaded, but did not have a codepoint
-    /// for the letter m, indicating it would not work within Warp.
+    /// for the letter m, indicating it would not work within Black.
     #[error("Font {path} does not have a valid codepoint for the letter m")]
     Validate { path: PathBuf },
 }

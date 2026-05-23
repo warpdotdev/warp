@@ -44,7 +44,7 @@ impl OpenInWarpBannerState {
     }
 }
 
-/// Given an openable file, format a file-specific title for the Open in Warp banner.
+/// Given an openable file, format a file-specific title for the Open in Black banner.
 fn file_title_text(openable_path: &OpenablePath) -> String {
     match openable_path.file_type {
         OpenableFileType::Markdown => {
@@ -93,7 +93,7 @@ pub fn render_open_in_warp_banner(
             weight: Some(Weight::Bold),
             ..Default::default()
         },
-        position_id: Some(format!("open_in_warp_banner_button_{view_id}")),
+        position_id: Some(format!("open_in_black_banner_button_{view_id}")),
         variant: InlineBannerTextButtonVariant::Primary,
     };
 

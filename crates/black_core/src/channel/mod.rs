@@ -18,7 +18,7 @@ pub enum Channel {
     /// The internal-only HEAD build.
     Local,
 
-    /// The open-source build of Warp.
+    /// The open-source build of Black.
     Oss,
 
     /// The integration test build.

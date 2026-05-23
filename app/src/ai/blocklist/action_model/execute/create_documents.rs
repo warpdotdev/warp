@@ -112,7 +112,7 @@ impl CreateDocumentsExecutor {
                 // Add plan artifact to the conversation.
                 let artifact = Artifact::Plan {
                     document_uid: id.to_string(),
-                    notebook_uid: None, // Will be updated when synced to Warp Drive
+                    notebook_uid: None, // Will be updated when synced to Black Drive
                     title: Some(document.title.clone()),
                 };
                 let terminal_view_id = self.terminal_view_id;

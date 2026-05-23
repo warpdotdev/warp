@@ -2525,7 +2525,7 @@ fn test_terminal_pane_headers() {
 
 /// Tests that focusing two different panes in quick succession does not cause
 /// an infinite loop of focus changes, as outlined in this PR's description:
-/// https://github.com/warpdotdev/warp-internal/pull/8990
+/// https://github.com/blackdagger/black-internal/pull/8990
 #[cfg_attr(windows, ignore = "TODO(CORE-3626)")]
 #[test]
 fn test_pane_focus_does_not_have_an_infinite_event_loop() {

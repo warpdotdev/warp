@@ -31,9 +31,9 @@ use crate::view_components::action_button::{ActionButton, SecondaryTheme};
 use crate::workflows::workflow::{Argument, ArgumentType, Workflow};
 use crate::workflows::WorkflowType;
 
-const DOCS_URL: &str = "https://docs.warp.dev/agent-platform/cloud-agents/overview";
+const DOCS_URL: &str = "https://blackdagger.io/agent-platform/cloud-agents/overview";
 const ENV_DOCS_URL: &str =
-    "https://docs.warp.dev/reference/cli/integration-setup#creating-an-environment";
+    "https://blackdagger.io/reference/cli/integration-setup#creating-an-environment";
 const OZ_URL: &str = "https://oz.warp.dev";
 
 const CONTENT_MAX_WIDTH: f32 = 720.;

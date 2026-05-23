@@ -53,7 +53,7 @@ pub type PersistedCredentialsMap = HashMap<Uuid, PersistedCredentials>;
 pub type FileBasedPersistedCredentialsMap = HashMap<u64, PersistedCredentials>;
 
 /// A credential store that wraps [`InMemoryCredentialStore`] and persists token
-/// updates to Warp's secure storage via a channel.
+/// updates to Black's secure storage via a channel.
 ///
 /// When rmcp auto-refreshes an expired access token at runtime, the rotated
 /// tokens are only saved to the in-memory store by default. This wrapper
@@ -129,7 +129,7 @@ impl CredentialStore for PersistingCredentialStore {
 }
 
 /// Installs a [`PersistingCredentialStore`] on the given auth manager so that
-/// runtime token auto-refreshes are written back to Warp's secure storage.
+/// runtime token auto-refreshes are written back to Black's secure storage.
 ///
 /// A background tokio task is spawned to receive credential updates and persist
 /// them via the [`ModelSpawner`]. The task terminates when the auth manager (and
@@ -309,7 +309,7 @@ pub async fn make_authenticated_client(
         // Try dynamic client registration.
         let mut oauth_state = OAuthState::Unauthorized(auth_manager);
         oauth_state
-            .start_authorization(&[], &redirect_uri, Some("Warp"))
+            .start_authorization(&[], &redirect_uri, Some("Black"))
             .await?;
         oauth_state
     };

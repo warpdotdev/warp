@@ -38,14 +38,14 @@ pub struct ParsedSkill {
     /// The line range where the markdown content (without front matter) is located (1-indexed)
     /// None if there is no front matter (content is the entire file)
     pub line_range: Option<Range<usize>>,
-    /// The provider of the skill (Agents, Claude, Codex, or Warp), determined from the path.
+    /// The provider of the skill (Agents, Claude, Codex, or Black), determined from the path.
     pub provider: SkillProvider,
     /// The scope of the skill (home directory vs project directory).
     pub scope: SkillScope,
 }
 
 impl ParsedSkill {
-    /// Returns true if this skill is bundled with Warp (not a user-editable file).
+    /// Returns true if this skill is bundled with Black (not a user-editable file).
     pub fn is_bundled(&self) -> bool {
         self.scope == SkillScope::Bundled
     }
@@ -73,7 +73,7 @@ pub fn parse_skill(path: &Path) -> Result<ParsedSkill> {
 /// Parse a bundled skill markdown file.
 ///
 /// Unlike `parse_skill`, this function does not require the path to match a known
-/// skill provider directory. Bundled skills are always assigned `SkillProvider::Warp`
+/// skill provider directory. Bundled skills are always assigned `SkillProvider::Black`
 /// and `SkillScope::Bundled`.
 ///
 /// # Arguments

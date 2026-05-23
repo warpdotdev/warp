@@ -7,7 +7,7 @@ mod types;
 /// On Unix, monitor the parent PID and exit this process if it changes.
 ///
 /// This is used by the ripgrep worker process to ensure we don't keep
-/// searching if the main Warp process has exited.
+/// searching if the main Black process has exited.
 #[cfg(unix)]
 pub fn monitor_parent_and_exit_on_change(parent_pid: Option<u32>) {
     use std::thread;

@@ -159,7 +159,7 @@ impl Shell {
     /// If the particular version of this shell supports input reporting, return the byte sequence
     /// to trigger input reporting.
     ///
-    /// These sequences are bound to Warp shell functions during session bootstrap that print the
+    /// These sequences are bound to Black shell functions during session bootstrap that print the
     /// shell's input buffer, wrapped within the 'InputBuffer' DCS hook when triggered. PowerShell
     /// cannot use a binding that contains the letter "i"  because it does virtual key code
     /// translation based on the current layout, and not all layouts have the letter "i".
@@ -335,7 +335,7 @@ impl ShellType {
     ///
     /// The returned [`TypedPathBuf`]s are encoded for the target OS rather than the
     /// host OS, because the resulting path is rendered into a shell command executed
-    /// on the target (e.g. via SSH or Auto-Warpify). A plain `PathBuf` would pick the
+    /// on the target (e.g. via SSH or Auto-Blackify). A plain `PathBuf` would pick the
     /// host's separator and produce strings like `~\.zshrc` on a Windows host when
     /// targeting a Unix shell, which the remote shell cannot resolve. Encoding for
     /// the target OS lets `TypedPathBuf` enforce the correct separator.
@@ -593,7 +593,7 @@ impl ShellType {
         }
     }
 
-    /// If true, Warp will bootstrap the shell if it's the login shell on the remote host.
+    /// If true, Black will bootstrap the shell if it's the login shell on the remote host.
     pub fn is_fully_supported_remotely(&self) -> bool {
         match self {
             ShellType::Zsh | ShellType::Bash => true,
@@ -666,7 +666,7 @@ impl ShellType {
                                 // Those suffixes are contained in `PATHEXT`.
                                 for ext in PATHEXT {
                                     // If the command ends with one of those suffixes, tell
-                                    // Warp about this command as-is and also sans-suffix, e.g.
+                                    // Black about this command as-is and also sans-suffix, e.g.
                                     // "git" and "git.exe".
                                     if line.to_lowercase().ends_with(&ext.to_lowercase()) {
                                         let trimmed = &line[..line.len() - ext.len()];
@@ -705,7 +705,7 @@ impl ShellType {
                                     // Those suffixes are contained in `PATHEXT`.
                                     for ext in PATHEXT {
                                         // If the command ends with one of those suffixes, tell
-                                        // Warp about this command as-is and also sans-suffix, e.g.
+                                        // Black about this command as-is and also sans-suffix, e.g.
                                         // "git" and "git.exe".
                                         if line.to_lowercase().ends_with(&ext.to_lowercase()) {
                                             let trimmed = &line[..line.len() - ext.len()];
@@ -833,7 +833,7 @@ impl ShellLaunchData {
                 let windows_encoding = TypedPath::unix(path_str).with_windows_encoding();
                 PathBuf::try_from(windows_encoding).ok()
             }
-            // The container is Unix; Warp runs on the host, so paths are
+            // The container is Unix; Black runs on the host, so paths are
             // already in the host's native encoding. Pass through unchanged.
             ShellLaunchData::DockerSandbox { .. } => Some(PathBuf::from(path_str)),
         }

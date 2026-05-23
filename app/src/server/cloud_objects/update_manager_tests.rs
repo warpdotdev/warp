@@ -7156,7 +7156,7 @@ fn test_permissions_update_grants_access() {
         let guest_user_id = UserUid::new("abc123");
         let other_guests = vec![UserProfileWithUID {
             firebase_uid: guest_user_id,
-            display_name: Some("Warp User".to_string()),
+            display_name: Some("Black User".to_string()),
             email: "user@warp.dev".to_string(),
             photo_url: String::new(),
         }];

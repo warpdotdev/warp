@@ -14,7 +14,7 @@ pub struct AliasedCommand {
     pub alias_value: String,
 }
 
-/// Returns whether the alias can be expanded by Warp given its value.
+/// Returns whether the alias can be expanded by Black given its value.
 ///
 /// We don't expand on any alias that starts with itself, as it leads to
 /// cases where the alias is expanded twice: once as the user types in the

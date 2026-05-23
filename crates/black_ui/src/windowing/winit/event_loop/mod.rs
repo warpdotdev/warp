@@ -1273,7 +1273,7 @@ impl EventLoop {
                 }
 
                 // If the event is a modifier key, just by itself, we handle it specially, issuing
-                // the appropriate Warp-side event (ModifierKeyChanged).
+                // the appropriate Black-side event (ModifierKeyChanged).
                 if let (None, keyboard::PhysicalKey::Code(keycode)) =
                     (&event.text, &event.physical_key)
                 {

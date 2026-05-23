@@ -111,7 +111,7 @@ fn github_auth_url_for_initial_run_includes_focus_cloud_mode_next() {
                 .map(|(_, value)| value.into_owned());
             assert_eq!(
                 next,
-                Some("warpdev://action/focus_cloud_mode?source=cloud_setup".to_string())
+                Some("blackdev://action/focus_cloud_mode?source=cloud_setup".to_string())
             );
         });
     });

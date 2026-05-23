@@ -150,7 +150,7 @@ impl ExternalEditorView {
 
         let mut items = vec![default_app];
 
-        items.push(DropdownItem::new("Warp", make_action(EditorChoice::Warp)));
+        items.push(DropdownItem::new("Black", make_action(EditorChoice::Warp)));
         if FeatureFlag::AllowOpeningFileLinksUsingEditorEnv.is_enabled() {
             items.push(DropdownItem::new(
                 "$EDITOR",
@@ -172,7 +172,7 @@ impl ExternalEditorView {
             EditorChoice::ExternalEditor(editor) => {
                 dropdown.set_selected_by_name(format!("{editor}"), ctx)
             }
-            EditorChoice::Warp => dropdown.set_selected_by_name("Warp", ctx),
+            EditorChoice::Warp => dropdown.set_selected_by_name("Black", ctx),
             EditorChoice::EnvEditor => dropdown.set_selected_by_name("$EDITOR", ctx),
             EditorChoice::SystemDefault => dropdown.set_selected_by_name(default_option_text, ctx),
         };
@@ -358,7 +358,7 @@ impl View for ExternalEditorView {
             Some(AdditionalInfo {
                 mouse_state: self.markdown_viewer_mouse_state.clone(),
                 on_click_action: Some(ExternalEditorAction::OpenUrl(
-                    "https://docs.warp.dev/terminal/more-features/markdown-viewer".to_string(),
+                    "https://blackdagger.io/terminal/more-features/markdown-viewer".to_string(),
                 )),
                 secondary_text: None,
                 tooltip_override_text: None,

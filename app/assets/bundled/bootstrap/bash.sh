@@ -1,5 +1,5 @@
  # We need to prepend a space to all the top-level commands here to prevent
- # Warp bootstrap script contents from showing up in the history.
+ # Black bootstrap script contents from showing up in the history.
 
  # Keep track of whether bash-preexec was included in /etc/bash.bashrc.
  if [[ $bash_preexec_imported == "defined" || $__bp_imported == "defined" ]]; then
@@ -55,7 +55,7 @@
      #  using: the "DEBUG" trap, and the "PROMPT_COMMAND" variable. If you override
      #  either of these after bash-preexec has been installed it will most likely break.
     
- #### In Warp's inclusion of bash-preexec, we don't include these two guards
+ #### In Black's inclusion of bash-preexec, we don't include these two guards
  #### at the beginning of the script. Instead, we use bash_preexec_imported and __bp_imported to
  #### determine whether we want to execute bash-preexec or not.
      # Make sure this is bash that's running and return otherwise.
@@ -67,7 +67,7 @@
      #if [[ -n "${bash_preexec_imported:-}" ]]; then
      #    return 0
      #fi
- #### End of difference 1/4 between Warp and bash-preexec's original source.
+ #### End of difference 1/4 between Black and bash-preexec's original source.
      bash_preexec_imported="defined"
 
      # WARNING: This variable is no longer used and should not be relied upon.
@@ -245,7 +245,7 @@
              return
          fi
 
- #### For Warp, the clause below prevents the typeahead readline binding from triggering
+ #### For Black, the clause below prevents the typeahead readline binding from triggering
  #### preexec, which would otherwise break the typeahead/background process implementation.
          if [[ -n "${READLINE_LINE+x}" ]]; then
              # We're in the middle of a readline binding to a shell command. Since
@@ -253,7 +253,7 @@
              # command running.
              return
          fi
- #### End of difference 2/4 between Warp and bash-preexec's original source.
+ #### End of difference 2/4 between Black and bash-preexec's original source.
 
          if [[ -z "${__bp_preexec_interactive_mode:-}" ]]; then
              # We're doing something related to displaying the prompt.  Let the
@@ -340,7 +340,7 @@
  # Note: this method diverges from the bash_preexec script in that
  # we don't call __bp_adjust_histcontrol because of
  # https://linear.app/warpdotdev/issue/WAR-2592.
- # End of difference 3/4 between Warp and bash-preexec's original source.
+ # End of difference 3/4 between Black and bash-preexec's original source.
 
          # Issue #25. Setting debug trap for subshells causes sessions to exit for
          # backgrounded subshell commands (e.g. (pwd)& ). Believe this is a bug in Bash.
@@ -403,13 +403,13 @@
          # shellcheck disable=SC2179 # PROMPT_COMMAND is not an array in bash <= 5.0
          PROMPT_COMMAND+=${__bp_install_string}
      }
- ### In Warp, we run this last install step in the install_bashpreexec
+ ### In Black, we run this last install step in the install_bashpreexec
  ### function so this is commented out here.
      ## Run our install so long as we're not delaying it.
      #if [[ -z "${__bp_delay_install:-}" ]]; then
      #    __bp_install_after_session_init
      #fi;
- ### End of difference 4/4 between Warp and bash-preexec's original source.
+ ### End of difference 4/4 between Black and bash-preexec's original source.
  }
 
  function install_bashpreexec() {

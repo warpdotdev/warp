@@ -24,7 +24,7 @@ mod ffi {
 
     #[wasm_bindgen]
     extern "C" {
-        #[wasm_bindgen(js_name = "warpUserHandoff", catch)]
+        #[wasm_bindgen(js_name = "blackUserHandoff", catch)]
         pub fn user_handoff() -> Result<Option<String>, JsValue>;
     }
 }

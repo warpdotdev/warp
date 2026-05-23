@@ -43,12 +43,12 @@ impl LocalWorkflows {
         }
     }
 
-    /// Returns an iterator over hardcoded "application" workflows included in the Warp binary.
+    /// Returns an iterator over hardcoded "application" workflows included in the Black binary.
     pub fn app_workflows(&self) -> impl Iterator<Item = &Workflow> {
         self.app_workflows.iter()
     }
 
-    /// Returns an iterator over the static set of workflows for 3rd party tools loaded from Warp's
+    /// Returns an iterator over the static set of workflows for 3rd party tools loaded from Black's
     /// workflows GitHub repo.
     pub fn global_workflows(
         &self,
@@ -216,14 +216,14 @@ pub fn prompt_chip_logging_workflow(shell_family: ShellFamily) -> Option<Workflo
     Some(Workflow::Command {
         name: "Tail prompt chip log".into(),
         command: tail_command_for_shell(shell_family, &log_file_path),
-        tags: vec!["warp".into(), "debug".into()],
+        tags: vec!["black".into(), "debug".into()],
         description: Some(
             "Shows the diagnostic log of shell commands run by prompt context chips (dogfood only)"
                 .into(),
         ),
         arguments: vec![],
         source_url: None,
-        author: Some("Warp".into()),
+        author: Some("Black".into()),
         author_url: None,
         shells: vec![],
         environment_variables: None,

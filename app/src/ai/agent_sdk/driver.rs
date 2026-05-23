@@ -112,17 +112,17 @@ const SETUP_FAILED_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 /// If no follow-up status arrives within this window, the driver terminates with the
 /// original error so the CLI does not hang indefinitely.
 const AUTO_RESUME_TIMEOUT: Duration = Duration::from_secs(120);
-/// Signals to Claude child-harness hooks that Warp already owns the background
+/// Signals to Claude child-harness hooks that Black already owns the background
 /// message-listener lifecycle, so the plugin should reuse the shared state
 /// files instead of spawning and cleaning up its own listener.
 ///
 /// When this variable is absent, the Claude plugin falls back to its legacy
-/// self-managed listener path so older Warp builds and standalone plugin
+/// self-managed listener path so older Black builds and standalone plugin
 /// invocations keep working.
 pub(crate) const OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV: &str =
     "OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY";
 /// Optional root directory for the per-session Claude message-listener state
-/// that Warp and the Claude hook scripts share.
+/// that Black and the Claude hook scripts share.
 pub(crate) const OZ_MESSAGE_LISTENER_STATE_ROOT_ENV: &str = "OZ_MESSAGE_LISTENER_STATE_ROOT";
 // Keep exporting the legacy `OZ_PARENT_*` names to child hooks until the
 // external Claude plugin has fully migrated to the canonical
@@ -404,7 +404,7 @@ pub enum AgentDriverError {
         #[source]
         error: terminal::ShareSessionError,
     },
-    #[error("Error syncing Warp Drive")]
+    #[error("Error syncing Black Drive")]
     WarpDriveSyncFailed,
     #[error("Requested environment not found: {0}")]
     EnvironmentNotFound(String),
@@ -2054,7 +2054,7 @@ impl AgentDriver {
     }
 
     /// Sets up the third-party harness by subscribing to CLI session events and
-    /// installing the Warp plugin and platform plugin, if applicable.
+    /// installing the Black plugin and platform plugin, if applicable.
     ///
     /// Returns a oneshot receiver that fires when the harness should exit
     /// (either immediately on completion or after the idle-on-complete timeout).
@@ -2684,7 +2684,7 @@ impl AgentDriver {
             }
         });
 
-        // Subscribe to document model events to emit artifact_created when plans sync to Warp Drive.
+        // Subscribe to document model events to emit artifact_created when plans sync to Black Drive.
         ctx.subscribe_to_model(&AIDocumentModel::handle(ctx), move |me, event, ctx| {
             let AIDocumentModelEvent::DocumentSaveStatusUpdated(document_id) = event else {
                 return;
@@ -2921,7 +2921,7 @@ impl AgentDriver {
         match event {
             TerminalDriverEvent::SlowBootstrap => {
                 eprintln!(
-                    "Warning: Terminal session is slow to bootstrap. See https://docs.warp.dev/support-and-community/troubleshooting-and-support/known-issues#shells to troubleshoot."
+                    "Warning: Terminal session is slow to bootstrap. See https://blackdagger.io/support-and-community/troubleshooting-and-support/known-issues#shells to troubleshoot."
                 );
             }
             TerminalDriverEvent::EstablishedSharedSession {

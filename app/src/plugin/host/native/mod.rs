@@ -110,7 +110,7 @@ fn plugin_paths() -> Vec<PathBuf> {
         .collect()
 }
 
-/// Returns `true` if the directory at the given path is directory containing JS source for a Warp plugin.
+/// Returns `true` if the directory at the given path is directory containing JS source for a Black plugin.
 fn is_plugin_dir(path: &Path) -> bool {
     if !path.is_dir() {
         return false;

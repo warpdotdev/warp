@@ -24,7 +24,7 @@ use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{HtmlInputElement, InputEvent, KeyboardEvent};
 
 /// The ID used for the hidden input element in the DOM.
-const HIDDEN_INPUT_ID: &str = "warp-soft-keyboard-input";
+const HIDDEN_INPUT_ID: &str = "black-soft-keyboard-input";
 
 /// The sentinel character used to ensure backspace events are always emitted.
 /// A single space ensures the keyboard always sees "deletable" content.

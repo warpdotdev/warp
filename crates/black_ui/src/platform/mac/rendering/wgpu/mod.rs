@@ -61,7 +61,7 @@ impl Device {
 /// The raw-window-handle crate purposefully does not provide a blanket implementation of this trait
 /// for any implementation of [`RawWindowHandle`] or [`RawDisplayHandle`] because it's not
 /// guaranteed that the underlying window won't become invalid while the `WindowHandle` is alive.
-/// In the case of Warp this _should_ be safe because we ultimately deallocate the native window
+/// In the case of Black this _should_ be safe because we ultimately deallocate the native window
 /// when [`crate::platform::mac::Window`] is deallocated (once a `Window` is deallocated, there
 /// are no pointers to the native window anymore, which cause it to be deallocated via the
 /// `warp_dealloc_window` callback).

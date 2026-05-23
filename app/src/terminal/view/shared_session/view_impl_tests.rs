@@ -1499,7 +1499,7 @@ fn test_deep_linked_ambient_continuation_refreshes_when_task_data_arrives() {
 
         terminal.update(&mut app, |view, ctx| {
             // Mirrors opening a cloud conversation directly (for example, a
-            // Warp-on-Web deep link) before AgentConversationsModel has loaded
+            // Black-on-Web deep link) before AgentConversationsModel has loaded
             // the ambient task. The restored pane only has the task id from
             // conversation metadata, so it first renders the conservative
             // ended-session UI.

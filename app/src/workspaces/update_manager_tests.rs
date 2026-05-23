@@ -121,7 +121,7 @@ fn test_leaving_team_removes_objects() {
             &mut app,
         );
 
-        // Add the initial Warp Drive objects.
+        // Add the initial Black Drive objects.
         CloudModel::handle(&app).update(&mut app, |cloud_model, _| {
             cloud_model.add_object(
                 SyncId::ServerId(team_workflow_id.into()),

@@ -293,7 +293,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 
     if !FeatureFlag::SSHTmuxWrapper.is_enabled() {
         toggle_binding_pairs.push(ToggleSettingActionPair::new(
-            "Warp SSH wrapper",
+            "Black SSH wrapper",
             builder(SettingsAction::FeaturesPageToggle(
                 #[allow(deprecated)]
                 FeaturesPageAction::ToggleSshWrapper,
@@ -658,7 +658,7 @@ lazy_static! {
 const NOTIFICATION_CHECKBOX_MARGIN_RIGHT: f32 = 5.;
 const NOTIFICATION_EDITOR_MARGIN: f32 = 5.;
 
-const NOTIFICATIONS_DOCS_URL: &str = "https://docs.warp.dev/terminal/more-features/notifications";
+const NOTIFICATIONS_DOCS_URL: &str = "https://blackdagger.io/terminal/more-features/notifications";
 
 /// WARNING: this constant was computed manually by determining the pixel width
 /// of the quake mode dropdowns based on the number of expanded items in the flex row.
@@ -1936,7 +1936,7 @@ impl FeaturesPageView {
 
         ctx.subscribe_to_model(&SelectionSettings::handle(ctx), |_, _, _, ctx| ctx.notify());
 
-        // TODO(CORE-3029): Remove when we launch the new SSH Warpification.
+        // TODO(CORE-3029): Remove when we launch the new SSH Blackification.
         ctx.subscribe_to_model(&SshSettings::handle(ctx), |_, _, _, ctx| ctx.notify());
         ctx.subscribe_to_model(&AltScreenReporting::handle(ctx), |_, _, _, ctx| {
             ctx.notify()
@@ -4260,7 +4260,7 @@ impl SettingsWidget for SessionRestorationWidget {
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
                 on_click_action: Some(FeaturesPageAction::OpenUrl(
-                    "https://docs.warp.dev/terminal/sessions/session-restoration".into(),
+                    "https://blackdagger.io/terminal/sessions/session-restoration".into(),
                 )),
                 secondary_text: None,
                 tooltip_override_text: None,
@@ -4292,7 +4292,7 @@ impl SettingsWidget for SessionRestorationWidget {
             let link = ui_builder
                 .link(
                     "See docs.".to_owned(),
-                    Some("https://docs.warp.dev/terminal/sessions/session-restoration".to_owned()),
+                    Some("https://blackdagger.io/terminal/sessions/session-restoration".to_owned()),
                     None,
                     self.docs_link.clone(),
                 )
@@ -4345,7 +4345,7 @@ impl SettingsWidget for SnackbarHeaderWidget {
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
                 on_click_action: Some(FeaturesPageAction::OpenUrl(
-                    "https://docs.warp.dev/terminal/blocks/sticky-command-header".into(),
+                    "https://blackdagger.io/terminal/blocks/sticky-command-header".into(),
                 )),
                 secondary_text: None,
                 tooltip_override_text: None,
@@ -4776,7 +4776,7 @@ impl SettingsWidget for DefaultTerminalWidget {
     type View = FeaturesPageView;
 
     fn search_terms(&self) -> &str {
-        "warp default terminal application"
+        "black default terminal application"
     }
 
     fn render(
@@ -4789,7 +4789,7 @@ impl SettingsWidget for DefaultTerminalWidget {
         let default_terminal = DefaultTerminal::as_ref(app);
         if default_terminal.is_warp_default() {
             ui_builder
-                .wrappable_text("Warp is the default terminal", true)
+                .wrappable_text("Black is the default terminal", true)
                 .with_style(UiComponentStyles {
                     font_color: Some(appearance.theme().disabled_ui_text_color().into()),
                     margin: Some(Coords::default().bottom(16.)),
@@ -4893,11 +4893,11 @@ impl SettingsWidget for SSHWrapperWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Warp SSH Wrapper".into(),
+            "Black SSH Wrapper".into(),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
                 on_click_action: Some(FeaturesPageAction::OpenUrl(
-                    "https://docs.warp.dev/terminal/warpify/ssh-legacy#implementation".into(),
+                    "https://blackdagger.io/terminal/blackify/ssh-legacy#implementation".into(),
                 )),
                 secondary_text: if view.ssh_wrapper_toggled {
                     Some("This change will take effect in new sessions".to_string())
@@ -5370,7 +5370,7 @@ impl SettingsWidget for GlobalHotkeyWidget {
                             .link(
                                 "See docs.".to_owned(),
                                 Some(
-                                    "https://docs.warp.dev/terminal/windows/global-hotkey"
+                                    "https://blackdagger.io/terminal/windows/global-hotkey"
                                         .to_owned(),
                                 ),
                                 None,
@@ -6439,7 +6439,7 @@ impl SettingsWidget for MouseReportingWidget {
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
                 on_click_action: Some(FeaturesPageAction::OpenUrl(
-                    "https://docs.warp.dev/terminal/more-features/full-screen-apps#mouse-and-scroll-reporting"
+                    "https://blackdagger.io/terminal/more-features/full-screen-apps#mouse-and-scroll-reporting"
                         .into(),
                 )),
                 secondary_text: None,
@@ -6704,7 +6704,7 @@ impl SettingsWidget for SmartSelectWidget {
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
                 on_click_action: Some(FeaturesPageAction::OpenUrl(
-                    "https://docs.warp.dev/terminal/more-features/text-selection".into(),
+                    "https://blackdagger.io/terminal/more-features/text-selection".into(),
                 )),
                 secondary_text: None,
                 tooltip_override_text: None,
@@ -6955,7 +6955,7 @@ impl SettingsWidget for WorkflowsInCommandSearch {
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
                 on_click_action: Some(FeaturesPageAction::OpenUrl(
-                    "https://docs.warp.dev/terminal/entry/yaml-workflows".into(),
+                    "https://blackdagger.io/terminal/entry/yaml-workflows".into(),
                 )),
                 secondary_text: None,
                 tooltip_override_text: None,

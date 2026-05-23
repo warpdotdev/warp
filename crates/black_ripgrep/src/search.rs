@@ -36,7 +36,7 @@ pub struct Match {
 /// Entry point for the ripgrep subprocess.
 ///
 /// Runs a ripgrep search in-process and writes JSON results to stdout.
-/// The main Warp process spawns this via the `ripgrep-search` CLI
+/// The main Black process spawns this via the `ripgrep-search` CLI
 /// subcommand and reads the JSON output.
 pub fn run_search_subprocess(
     patterns: &[String],

@@ -703,8 +703,8 @@ fn test_smart_selection_in_single_block() {
 
             let block_index = insert_block(
                 &mut block_list,
-                "echo https://warp.dev/about hello/world.js\n",
-                "https://warp.dev/about hello/world.js\n",
+                "echo https://blackdagger.io/about hello/world.js\n",
+                "https://blackdagger.io/about hello/world.js\n",
             );
             let block = block_list
                 .block_at(block_index)
@@ -728,7 +728,7 @@ fn test_smart_selection_in_single_block() {
 
             assert_eq!(
                 block_list.selection_to_string(&semantic_selection, false, ctx),
-                Some("https://warp.dev/about".to_string())
+                Some("https://blackdagger.io/about".to_string())
             );
             block_list.clear_selection();
 
@@ -746,7 +746,7 @@ fn test_smart_selection_in_single_block() {
 
             assert_eq!(
                 block_list.selection_to_string(&semantic_selection, false, ctx),
-                Some("https://warp.dev/about".to_string())
+                Some("https://blackdagger.io/about".to_string())
             );
             block_list.clear_selection();
 
@@ -764,7 +764,7 @@ fn test_smart_selection_in_single_block() {
 
             assert_eq!(
                 block_list.selection_to_string(&semantic_selection, false, ctx),
-                Some("https://warp.dev/about hello".to_string())
+                Some("https://blackdagger.io/about hello".to_string())
             );
             block_list.clear_selection();
 
@@ -798,8 +798,8 @@ fn test_smart_selection_in_multiple_blocks() {
 
             let first_block_index = insert_block(
                 &mut block_list,
-                "echo https://warp.dev/about hello/world.js\n",
-                "https://warp.dev/about hello/world.js\n",
+                "echo https://blackdagger.io/about hello/world.js\n",
+                "https://blackdagger.io/about hello/world.js\n",
             );
             let second_block_index =
                 insert_block(&mut block_list, "echo 192.168.0.1\n", "192.168.0.1\n");
@@ -835,7 +835,7 @@ fn test_smart_selection_in_multiple_blocks() {
 
             assert_eq!(
                 block_list.selection_to_string(&semantic_selection, false, ctx),
-                Some("https://warp.dev/about hello/world.js\nhttps".to_string())
+                Some("https://blackdagger.io/about hello/world.js\nhttps".to_string())
             );
             block_list.clear_selection();
 
@@ -855,7 +855,7 @@ fn test_smart_selection_in_multiple_blocks() {
             assert_eq!(
         block_list.selection_to_string(&semantic_selection, false, ctx),
         Some(
-            "hello/world.js\nhttps://warp.dev/about hello/world.js\necho 192.168.0.1\n192.168"
+            "hello/world.js\nhttps://blackdagger.io/about hello/world.js\necho 192.168.0.1\n192.168"
                 .to_string()
         )
     );
@@ -928,11 +928,11 @@ fn test_smart_selection_override() {
 
             let block_index = insert_block(
                 &mut block_list,
-                "echo https://warp.dev/about hello/world",
-                "https://warp.dev/about hello/world",
+                "echo https://blackdagger.io/about hello/world",
+                "https://blackdagger.io/about hello/world",
             );
 
-            // the override wraps "https://warp.dev/about hello/world"
+            // the override wraps "https://blackdagger.io/about hello/world"
             block_list.set_smart_select_override(WithinBlock::new(
                 Point::new(0, 5)..=Point::new(5, 3),
                 block_index,
@@ -952,7 +952,7 @@ fn test_smart_selection_override() {
 
             assert_eq!(
                 block_list.selection_to_string(&semantic_selection, false, ctx),
-                Some("https://warp.dev/about hello/world".to_string())
+                Some("https://blackdagger.io/about hello/world".to_string())
             );
         })
     })

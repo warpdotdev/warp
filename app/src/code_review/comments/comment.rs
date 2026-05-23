@@ -11,7 +11,7 @@ use crate::code::editor::EditorReviewComment;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum CommentOrigin {
-    /// Comments originally created in the Warp UI.
+    /// Comments originally created in the Black UI.
     #[default]
     Native,
     /// Comments imported from a GitHub pull request.

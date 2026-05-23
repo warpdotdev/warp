@@ -300,7 +300,7 @@ fn codebases_for_agent_context_includes_searchable_remote_paths() {
                 path: "/workspaces/stale".to_string(),
             },
             RemoteCodebaseContextEntry {
-                name: "warp".to_string(),
+                name: "black".to_string(),
                 path: "/workspaces/warp".to_string(),
             },
         ]

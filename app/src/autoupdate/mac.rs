@@ -134,7 +134,7 @@ pub(super) fn relaunch() -> Result<()> {
     let bundle_path = PathBuf::from(get_bundle_path()?);
     // Set the -n option to open a new instance of the app even if one is
     // running so we still launch the new version even if the user was running
-    // multiple instances of Warp.
+    // multiple instances of Black.
     let mut launch_command = OsString::from("/usr/bin/open -n ");
     launch_command.push(bundle_path.as_os_str());
     // Pass a flag to the app to let it know it was restarted as part of the
@@ -147,11 +147,11 @@ pub(super) fn relaunch() -> Result<()> {
         launch_command.push(format!(" --env BLACK_CHANNEL_VERSIONS_PATH={path}"));
     }
 
-    // We need to make sure that the current Warp process is no longer running
+    // We need to make sure that the current Black process is no longer running
     // before we spawn the new one, otherwise we can end up showing multiple
     // icons in the macOS dock.  To do this, we use an intermediary /bin/sh
     // process that watches for this process to terminate, and then spawns a
-    // new Warp process.
+    // new Black process.
     //
     // Wait until the current process is no longer running, checking every
     // 200ms.  Once the current process has terminated, launch the new one.
@@ -243,7 +243,7 @@ pub async fn cleanup_all_except(preserve_update_id: Option<&str>) {
     }
 }
 
-/// Determines if the user needs authorization in order to update Warp.
+/// Determines if the user needs authorization in order to update Black.
 async fn needs_authorization(bundle_path: &Path) -> Result<bool> {
     // For the bundle path itself, check permissions without creating a test file so as to not
     // interfere with code signing.
@@ -268,8 +268,8 @@ async fn needs_authorization(bundle_path: &Path) -> Result<bool> {
 }
 
 /// Determines if a directory is writable as part of an update. This means:
-/// * Warp can create files in the directory
-/// * Warp can modify the permissions of created files
+/// * Black can create files in the directory
+/// * Black can modify the permissions of created files
 async fn is_directory_writable(directory: &Path) -> Result<bool> {
     // Just because we have writability access does not mean we can set the correct owner/group.
     // Test if we can set the owner/group on a temporarily created file. If we can, then we can
@@ -304,7 +304,7 @@ async fn is_directory_writable(directory: &Path) -> Result<bool> {
 }
 
 /// Verifies that the staged bundle path has a valid macOS code signature, and that its
-/// team identifier matches Warp's team identifier.
+/// team identifier matches Black's team identifier.
 async fn verify_code_signature(component: &str, path: &Path) -> Result<()> {
     // Verify the signature of the staged update bundle with team identifier
     let codesign_verify_output = Command::new("/usr/bin/codesign")
@@ -404,7 +404,7 @@ async fn apply_update(channel: Channel, version_info: &VersionInfo, update_id: &
         .await
         .is_ok()
     {
-        // If we performed this process already but didn't relaunch Warp, the old executable will
+        // If we performed this process already but didn't relaunch Black, the old executable will
         // still be located in the user application data directory.  In that case, leave it there.
         log::info!("Already autoupdated without relaunching; ignoring executable from old bundle");
     } else {
@@ -678,8 +678,8 @@ async fn mount_dmg(dmg_dir: &Path, update_id: &str) -> Result<PathBuf> {
     hdiutil_cmd.args(["attach", "-mountpoint"]);
     hdiutil_cmd.arg(&volume);
     // Explanation of flags:
-    // -nobrowse: Do not show the Warp DMG in Finder or similar apps.
-    // -noautoopen: Do not open the Warp DMG in Finder.
+    // -nobrowse: Do not show the Black DMG in Finder or similar apps.
+    // -noautoopen: Do not open the Black DMG in Finder.
     // -readonly: For safety, we mount read-only since there's no need to modify the new app version.
     // -autofsck: Ensure that the DMG contents are verified. This is on by default for quarantined images, but macOS
     //    doesn't necessarily recognize our download as such.
@@ -728,12 +728,12 @@ fn dmg_name(channel: Channel) -> String {
 
 fn app_name_prefix(channel: Channel) -> &'static str {
     match channel {
-        Channel::Stable => "Warp",
+        Channel::Stable => "Black",
         Channel::Preview => "WarpPreview",
-        Channel::Local => "warp",
+        Channel::Local => "black",
         Channel::Integration => "integration",
         Channel::Dev => "WarpDev",
-        Channel::Oss => "warp-oss",
+        Channel::Oss => "black-oss",
     }
 }
 
@@ -741,10 +741,10 @@ fn executable_name(channel: Channel) -> &'static str {
     match channel {
         Channel::Stable => "stable",
         Channel::Preview => "preview",
-        Channel::Local => "warp",
+        Channel::Local => "black",
         Channel::Integration => "integration",
         Channel::Dev => "dev",
-        Channel::Oss => "warp-oss",
+        Channel::Oss => "black-oss",
     }
 }
 

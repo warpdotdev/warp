@@ -1,4 +1,4 @@
-//! Voltron (https://en.wikipedia.org/wiki/Voltron) in Warp is a code name for the UI element used
+//! Voltron (https://en.wikipedia.org/wiki/Voltron) in Black is a code name for the UI element used
 //! for workflows, ai commands and history search. As @charlespierce pointed out: it's 3 mini lions
 //! (features) coming together to form one super bot (this view). Hence the name. Don't ask me, I
 //! haven't watched it.

@@ -13,7 +13,7 @@ use black_ui::fonts::{FamilyId, Properties, Weight};
 use black_ui::ui_components::components::{UiComponent as _, UiComponentStyles};
 use black_ui::{AppContext, Element, EventContext, PaintContext, SingletonEntity as _};
 
-use super::settings::WarpifySettings;
+use super::settings::BlackifySettings;
 use super::SubshellSource;
 use crate::ai::blocklist::inline_action::inline_action_icons;
 use crate::ui_components::blended_colors;
@@ -31,8 +31,8 @@ const WARP_DRIVE_ENV_VAR_COLLECTION_ICON_COLOR: u32 = 0xC464FFFF;
 const ICON_MARGIN: f32 = 4.;
 const TERMINAL_ICON: &str = "bundled/svg/terminal.svg";
 pub const HORIZONTAL_TEXT_MARGIN: f32 = 20.;
-pub const SSH_DOCS_URL: &str = "https://docs.warp.dev/terminal/warpify/ssh";
-pub const SUBSHELL_DOCS_URL: &str = "https://docs.warp.dev/terminal/warpify/subshells";
+pub const SSH_DOCS_URL: &str = "https://blackdagger.io/terminal/blackify/ssh";
+pub const SUBSHELL_DOCS_URL: &str = "https://blackdagger.io/terminal/blackify/subshells";
 
 /// Errored blocks have a red stripe, and subshells have a gray one.
 pub const LEFT_STRIPE_WIDTH: f32 = 5.;
@@ -92,7 +92,7 @@ fn green_check_icon(appearance: &Appearance, size: f32) -> Box<dyn Element> {
         .finish()
 }
 
-/// UI helper to render the ssh command that caused the warpification prompt.
+/// UI helper to render the ssh command that caused the blackification prompt.
 pub fn build_command_row(
     command: String,
     theme: &WarpTheme,
@@ -160,32 +160,32 @@ pub fn description_row(text: &str, theme: &WarpTheme, appearance: &Appearance) -
     .finish()
 }
 
-/// Renders a "Never Warpify this host" link or nothing.
-pub fn render_never_warpify_ssh_link(
+/// Renders a "Never Blackify this host" link or nothing.
+pub fn render_never_blackify_ssh_link(
     ssh_host: &Option<String>,
     app: &AppContext,
     appearance: &Appearance,
     mouse_state_handle: MouseStateHandle,
-    on_never_warpify: fn(&mut EventContext<'_>, ssh_host: String),
+    on_never_blackify: fn(&mut EventContext<'_>, ssh_host: String),
 ) -> Option<Box<dyn Element>> {
     let Some(ssh_host) = ssh_host else {
         return None;
     };
 
-    let settings = WarpifySettings::handle(app);
+    let settings = BlackifySettings::handle(app);
     if settings.as_ref(app).is_ssh_host_denylisted(ssh_host) {
-        // Should only happen if user manually attempts to Warpify a denylisted host.
+        // Should only happen if user manually attempts to Blackify a denylisted host.
         return None;
     }
 
     let link = appearance
         .ui_builder()
         .link(
-            "Never Warpify this host".into(),
+            "Never Blackify this host".into(),
             None,
             Some(Box::new({
                 let ssh_host = ssh_host.clone();
-                move |ctx| on_never_warpify(ctx, ssh_host.to_owned())
+                move |ctx| on_never_blackify(ctx, ssh_host.to_owned())
             })),
             mouse_state_handle,
         )

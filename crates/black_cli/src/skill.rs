@@ -21,21 +21,21 @@ use std::str::FromStr;
 /// Simple skill names (searched with directory precedence):
 /// ```ignore
 /// code-review                              // searches .agents/skills/, .warp/skills/, .claude/skills/, .codex/skills/
-/// warp-internal:code-review                // searches in "warp-internal" repo
-/// warpdotdev/warp-internal:code-review     // searches in specific org/repo
+/// warp-internal:code-review                // searches in "black-internal" repo
+/// blackdagger/black-internal:code-review     // searches in specific org/repo
 /// ```
 ///
 /// Full paths (resolved directly, no precedence):
 /// ```ignore
 /// .agents/skills/my-skill/SKILL.md                              // directly resolves this path
-/// warp-server:.claude/skills/deploy/SKILL.md                    // exact path in "warp-server" repo
-/// warpdotdev/warp-internal:.claude/skills/code-review/SKILL.md  // exact path in org/repo
+/// warp-server:.claude/skills/deploy/SKILL.md                    // exact path in "black-server" repo
+/// blackdagger/black-internal:.claude/skills/code-review/SKILL.md  // exact path in org/repo
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillSpec {
-    /// Optional GitHub organization (e.g., "warpdotdev" in "warpdotdev/warp-internal:code-review")
+    /// Optional GitHub organization (e.g., "blackdagger" in "blackdagger/black-internal:code-review")
     pub org: Option<String>,
-    /// Optional repository name (e.g., "warp-internal")
+    /// Optional repository name (e.g., "black-internal")
     pub repo: Option<String>,
     /// The skill identifier - either a simple name or a full path to SKILL.md.
     ///

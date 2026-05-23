@@ -14,7 +14,7 @@ use tracing::Span;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-/// A small webserver to serve the Warp wasm bundle and assets for local development.
+/// A small webserver to serve the Black wasm bundle and assets for local development.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {

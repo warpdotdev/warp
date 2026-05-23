@@ -32,7 +32,7 @@ pub struct GridRenderParams {
     pub cell_size: Vector2F,
     pub use_ligature_rendering: bool,
     /// When true, suppresses cursor rendering for CLI agents when rich input is open. For agents that draw their own cursor (SHOW_CURSOR off),
-    /// the cursor cell is skipped. For agents that let Warp draw the cursor
+    /// the cursor cell is skipped. For agents that let Black draw the cursor
     /// (SHOW_CURSOR on), the `draw_cursor` call and cursor contrast colouring
     /// are suppressed instead.
     pub hide_cursor_cell: bool,

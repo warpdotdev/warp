@@ -193,7 +193,7 @@ fn new_command_executor_for_local_tty_session(
 
     if FeatureFlag::SSHTmuxWrapper.is_enabled()
         && session_info.tmux_control_mode
-        // We don't allow nested tmux warpification, so if our parent session is already warified using
+        // We don't allow nested tmux blackification, so if our parent session is already warified using
         // tmux then we shouldn't.
         && !parent_session_info.is_some_and(|s| s.tmux_control_mode)
     {
@@ -331,7 +331,7 @@ fn new_command_executor_for_local_tty_session(
                 // This code path exists as a fail-safe for disabling in-band
                 // generators if some unforeseen severe issue surfaces during or
                 // shortly after subshells launch. The setting that triggers this
-                // codepath is only accessible via a user defaults command that a Warp
+                // codepath is only accessible via a user defaults command that a Black
                 // engineer would have given to the user via some first-hand
                 // correspondence (e.g. GitHub issues).
                 log::info!("creating a no-op executor!");

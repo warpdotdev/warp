@@ -1565,7 +1565,7 @@ impl WorkflowView {
     }
 
     /// Save the workflow and associated state. This makes a best-effort attempt to not
-    /// unnecessarily modify the backing Warp Drive object.
+    /// unnecessarily modify the backing Black Drive object.
     fn save(&mut self, ctx: &mut ViewContext<Self>) {
         if FeatureFlag::WorkflowAliases.is_enabled() && self.are_aliases_dirty(ctx) {
             self.save_aliases(ctx);

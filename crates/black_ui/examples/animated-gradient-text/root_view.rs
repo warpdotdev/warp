@@ -34,7 +34,7 @@ impl RootView {
         let end = ColorU::new(255, 255, 255, 255);
 
         Self {
-            text: "Warp shimmer: 👩‍💻with ligatures — fi fl 🇺🇸".to_string(),
+            text: "Black shimmer: 👩‍💻with ligatures — fi fl 🇺🇸".to_string(),
             font_family,
             font_size: 28.0,
             start,

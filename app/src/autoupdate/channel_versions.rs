@@ -48,8 +48,8 @@ pub async fn fetch_channel_versions(
     }
 }
 
-// Synchronously fetches updated Warp [`ChannelVersions`] from GCP JSON storage. This will soon
-// be deprecated in favor of retrieving updated channel versions from the Warp Server.
+// Synchronously fetches updated Black [`ChannelVersions`] from GCP JSON storage. This will soon
+// be deprecated in favor of retrieving updated channel versions from the Black Server.
 // Note, in order to run against a test file you can use the "channel_versions_test.json" file
 // and update the file using gsutil cp channel_versions_test.json gs://warp-releases/channel_versions_test.json
 async fn fetch_channel_versions_from_json_storage(

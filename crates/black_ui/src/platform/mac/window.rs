@@ -1351,14 +1351,14 @@ extern "C-unwind" fn warp_update_layer(this: &Object) {
         let device = window
             .device
             .as_ref()
-            .expect("warp_update_layer should not be called for a window that has no real display");
+            .expect("black_update_layer should not be called for a window that has no real display");
         // SAFETY: warp_update_layer is only invoked by the event loop,
         // which should never attempt to draw a window while it is already
         // being drawn.
         let mut renderer_manager = window
             .renderer_manager
             .as_ref()
-            .expect("warp_update_layer should never be called twice in parallel")
+            .expect("black_update_layer should never be called twice in parallel")
             .borrow_mut();
         let renderer = renderer_manager.renderer_for_device(device, window.physical_size());
 

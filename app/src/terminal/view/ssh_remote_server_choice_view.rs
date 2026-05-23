@@ -1,14 +1,14 @@
 //! Inline block view that asks the user whether they want to install
-//! Warp's SSH extension on the remote host the shell just connected to,
+//! Black's SSH extension on the remote host the shell just connected to,
 //! or continue without installing (falling back to the existing
-//! ControlMaster warpification path).
+//! ControlMaster blackification path).
 //!
 //! Designed from frame 6050:2448 of the Figma file
 //! [Remote session initialization](https://www.figma.com/design/r0BO9cTZCK6pDE6qerg2K0/Remote-session-initialization).
 //!
 //! The view owns:
 //! - a child [`KeyboardNavigableButtons`] handle for the two selectable
-//!   cards ("Install Warp's SSH extension" / "Continue without installing"),
+//!   cards ("Install Black's SSH extension" / "Continue without installing"),
 //! - the [`SessionId`] this prompt is scoped to (used for event forwarding),
 //! - the current "Don't ask me this again" checked state (purely local to
 //!   this prompt instance; persisted to `ssh_extension_install_mode` only
@@ -37,7 +37,7 @@ use crate::ai::blocklist::inline_action::inline_action_header::{
 };
 use crate::server::telemetry::TelemetryEvent;
 use crate::terminal::model::session::SessionId;
-use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
+use crate::terminal::blackify::settings::{SshExtensionInstallMode, BlackifySettings};
 use crate::ui_components::blended_colors;
 use crate::{send_telemetry_from_ctx, Appearance};
 
@@ -48,14 +48,14 @@ pub enum SshRemoteServerChoiceViewAction {
     Install,
     Skip,
     ToggleDoNotAskAgain,
-    OpenWarpifySettings,
+    OpenBlackifySettings,
 }
 
 #[derive(Clone, Debug)]
 pub enum SshRemoteServerChoiceViewEvent {
     Install,
     Skip,
-    OpenWarpifySettings,
+    OpenBlackifySettings,
 }
 
 /// Choice block prompting the user to install the remote-server binary on the remote host or skip.
@@ -171,14 +171,14 @@ impl SshRemoteServerChoiceView {
             .with_child(Container::new(checkbox_label).with_margin_left(4.).finish())
             .finish();
 
-        // Right: "Manage Warpify settings" link.
+        // Right: "Manage Blackify settings" link.
         let manage_settings_link = appearance
             .ui_builder()
             .link(
-                "Manage Warpify settings".into(),
+                "Manage Blackify settings".into(),
                 None,
                 Some(Box::new(|ctx| {
-                    ctx.dispatch_typed_action(SshRemoteServerChoiceViewAction::OpenWarpifySettings);
+                    ctx.dispatch_typed_action(SshRemoteServerChoiceViewAction::OpenBlackifySettings);
                 })),
                 self.manage_settings_mouse_state.clone(),
             )
@@ -264,7 +264,7 @@ impl TypedActionView for SshRemoteServerChoiceView {
             SshRemoteServerChoiceViewAction::Install => {
                 if self.do_not_ask_again {
                     let mode = SshExtensionInstallMode::AlwaysInstall;
-                    WarpifySettings::handle(ctx).update(ctx, |settings, ctx| {
+                    BlackifySettings::handle(ctx).update(ctx, |settings, ctx| {
                         if let Err(e) = settings.ssh_extension_install_mode.set_value(mode, ctx) {
                             log::error!("Failed to persist ssh_extension_install_mode: {e}");
                         }
@@ -281,7 +281,7 @@ impl TypedActionView for SshRemoteServerChoiceView {
             SshRemoteServerChoiceViewAction::Skip => {
                 if self.do_not_ask_again {
                     let mode = SshExtensionInstallMode::NeverInstall;
-                    WarpifySettings::handle(ctx).update(ctx, |settings, ctx| {
+                    BlackifySettings::handle(ctx).update(ctx, |settings, ctx| {
                         if let Err(e) = settings.ssh_extension_install_mode.set_value(mode, ctx) {
                             log::error!("Failed to persist ssh_extension_install_mode: {e}");
                         }
@@ -305,8 +305,8 @@ impl TypedActionView for SshRemoteServerChoiceView {
                 );
                 ctx.notify();
             }
-            SshRemoteServerChoiceViewAction::OpenWarpifySettings => {
-                ctx.emit(SshRemoteServerChoiceViewEvent::OpenWarpifySettings);
+            SshRemoteServerChoiceViewAction::OpenBlackifySettings => {
+                ctx.emit(SshRemoteServerChoiceViewEvent::OpenBlackifySettings);
             }
         }
     }

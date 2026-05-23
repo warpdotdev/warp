@@ -539,7 +539,7 @@ impl BuildPlanMigrationModal {
             if is_business {
                 "The new Business plan is a primarily usage-based plan, starting at:"
             } else {
-                "Warp Build is a primarily usage-based plan, starting at:"
+                "Black Build is a primarily usage-based plan, starting at:"
             }
             .to_string(),
             font_family,
@@ -632,7 +632,7 @@ impl BuildPlanMigrationModal {
 
         let learn_more_fragments = vec![
             FormattedTextFragment::plain_text("Learn more on our "),
-            FormattedTextFragment::hyperlink("pricing page", "https://www.warp.dev/pricing"),
+            FormattedTextFragment::hyperlink("pricing page", "https://blackdagger.io/pricing"),
             FormattedTextFragment::plain_text("."),
         ];
         let learn_more = Container::new(
@@ -647,7 +647,7 @@ impl BuildPlanMigrationModal {
             .with_hyperlink_font_color(appearance.theme().accent().into_solid())
             .register_default_click_handlers(|_url, ctx, _| {
                 ctx.dispatch_typed_action(BuildPlanMigrationModalViewAction::OpenUrl(
-                    "https://www.warp.dev/pricing",
+                    "https://blackdagger.io/pricing",
                 ));
             })
             .finish(),

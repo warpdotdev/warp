@@ -1347,7 +1347,7 @@ impl AIConversation {
         });
     }
 
-    /// Updates the notebook_uid for a plan artifact when it's synced to Warp Drive.
+    /// Updates the notebook_uid for a plan artifact when it's synced to Black Drive.
     pub fn update_plan_notebook_uid(
         &mut self,
         document_uid: AIDocumentId,
@@ -3891,7 +3891,7 @@ pub enum AIAgentSerializedBlockFormat {
 /// Describes the format capabilities of a conversation.
 #[derive(Debug, Clone)]
 pub struct AIAgentConversationFormat {
-    /// Whether there is a Warp MAA task list available for this conversation.
+    /// Whether there is a Black MAA task list available for this conversation.
     pub has_task_list: bool,
     /// The format of the TUI serialized block, if available.
     pub block_snapshot: Option<AIAgentSerializedBlockFormat>,

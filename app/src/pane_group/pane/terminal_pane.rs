@@ -2106,7 +2106,7 @@ fn launch_remote_child(
     // Map the run-wide auth secret name into the harness-specific
     // config variant. For unsupported harnesses (Oz, OpenCode, Gemini,
     // Unknown), the secret is silently ignored — those harnesses either
-    // use Warp's built-in auth (Oz) or don't currently support managed
+    // use Black's built-in auth (Oz) or don't currently support managed
     // secrets via this flow.
     let harness_auth_secrets = auth_secret_name
         .as_ref()

@@ -1,7 +1,7 @@
 //! This module contains the code path for the [`black_cli::Command::DumpDebugInfo`] subcommand.
 //!
 //! This is intended to never be used by a vast majority of users. This is only intended for users
-//! who are unable to run Warp and want to provide us, the dev team, with useful debugging
+//! who are unable to run Black and want to provide us, the dev team, with useful debugging
 //! information.
 #[cfg(not(windows))]
 use command::blocking::Command;
@@ -9,7 +9,7 @@ use black_core::channel::ChannelState;
 use black_ui::windowing;
 
 pub(crate) fn run() -> anyhow::Result<()> {
-    println!("Warp version: {:?}", ChannelState::app_version());
+    println!("Black version: {:?}", ChannelState::app_version());
 
     #[cfg(not(windows))]
     {

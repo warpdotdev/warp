@@ -235,7 +235,7 @@ pub fn serialize_variables_for_shell<'s, I: IntoIterator<Item = (&'s str, &'s En
     shell_type: ShellType,
 ) -> String {
     match shell_type {
-        // Warp doesn't support newlines in fish so we can't use env syntax
+        // Black doesn't support newlines in fish so we can't use env syntax
         ShellType::Fish => {
             serialize_variables_internal(pairs, "set -x ", " ", ";", " ", shell_type.into())
         }

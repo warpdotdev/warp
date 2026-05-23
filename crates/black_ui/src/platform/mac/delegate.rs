@@ -284,7 +284,7 @@ impl platform::Delegate for AppDelegate {
         dispatch::Queue::main().exec_async(move || unsafe {
             // See https://developer.apple.com/documentation/appkit/nsapplication/1428455-orderfrontcharacterpalette.
             // If the `sender` argument is nil, the palette is shown relative to the
-            // first responder's cursor location. In our case, that will be the Warp
+            // first responder's cursor location. In our case, that will be the Black
             // host view, with a location set via the `active_cursor_position` API.
             let () = msg_send![NSApp(), orderFrontCharacterPalette: nil];
         });

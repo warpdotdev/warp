@@ -315,7 +315,7 @@ impl CustomizeUISlide {
             });
 
             chips.push(ChipSpec {
-                label: "Warp Drive",
+                label: "Black Drive",
                 is_enabled: ui.show_warp_drive,
                 mouse_state: self.chip_warp_drive_mouse.clone(),
                 on_click: Box::new(|ctx, _, _| {
@@ -469,8 +469,8 @@ impl CustomizeUISlide {
         "async/png/onboarding/agent_intention/customize_fileexplorer_horizontal.png",
         "async/png/onboarding/agent_intention/customize_filesearch_vertical.png",
         "async/png/onboarding/agent_intention/customize_filesearch_horizontal.png",
-        "async/png/onboarding/agent_intention/customize_warpdrive_vertical.png",
-        "async/png/onboarding/agent_intention/customize_warpdrive_horizontal.png",
+        "async/png/onboarding/agent_intention/customize_blackdrive_vertical.png",
+        "async/png/onboarding/agent_intention/customize_blackdrive_horizontal.png",
         "async/png/onboarding/agent_intention/customize_codereview_enabled_vertical.png",
         "async/png/onboarding/agent_intention/customize_codereview_enabled_horizontal.png",
         "async/png/onboarding/agent_intention/customize_codereview_disabled_vertical.png",
@@ -482,8 +482,8 @@ impl CustomizeUISlide {
         "async/png/onboarding/terminal_intention/terminal_customize_fileexplorer_horizontal.png",
         "async/png/onboarding/terminal_intention/terminal_customize_filesearch_vertical.png",
         "async/png/onboarding/terminal_intention/terminal_customize_filesearch_horizontal.png",
-        "async/png/onboarding/terminal_intention/terminal_customize_warpdrive_vertical.png",
-        "async/png/onboarding/terminal_intention/terminal_customize_warpdrive_horizontal.png",
+        "async/png/onboarding/terminal_intention/terminal_customize_blackdrive_vertical.png",
+        "async/png/onboarding/terminal_intention/terminal_customize_blackdrive_horizontal.png",
         "async/png/onboarding/terminal_intention/terminal_codereview_enabled.png",
         "async/png/onboarding/terminal_intention/terminal_codereview_disabled.png",
     ];
@@ -554,8 +554,8 @@ impl CustomizeUISlide {
                             (ToolsPanelSubSetting::ProjectExplorer, false) => "async/png/onboarding/agent_intention/customize_fileexplorer_horizontal.png",
                             (ToolsPanelSubSetting::GlobalSearch, true) => "async/png/onboarding/agent_intention/customize_filesearch_vertical.png",
                             (ToolsPanelSubSetting::GlobalSearch, false) => "async/png/onboarding/agent_intention/customize_filesearch_horizontal.png",
-                            (ToolsPanelSubSetting::WarpDrive, true) => "async/png/onboarding/agent_intention/customize_warpdrive_vertical.png",
-                            (ToolsPanelSubSetting::WarpDrive, false) => "async/png/onboarding/agent_intention/customize_warpdrive_horizontal.png",
+                            (ToolsPanelSubSetting::WarpDrive, true) => "async/png/onboarding/agent_intention/customize_blackdrive_vertical.png",
+                            (ToolsPanelSubSetting::WarpDrive, false) => "async/png/onboarding/agent_intention/customize_blackdrive_horizontal.png",
                         }
                     } else {
                         // Terminal: no conversation chip; ConversationHistory falls through to file explorer.
@@ -564,8 +564,8 @@ impl CustomizeUISlide {
                             (ToolsPanelSubSetting::ConversationHistory | ToolsPanelSubSetting::ProjectExplorer, false) => "async/png/onboarding/terminal_intention/terminal_customize_fileexplorer_horizontal.png",
                             (ToolsPanelSubSetting::GlobalSearch, true) => "async/png/onboarding/terminal_intention/terminal_customize_filesearch_vertical.png",
                             (ToolsPanelSubSetting::GlobalSearch, false) => "async/png/onboarding/terminal_intention/terminal_customize_filesearch_horizontal.png",
-                            (ToolsPanelSubSetting::WarpDrive, true) => "async/png/onboarding/terminal_intention/terminal_customize_warpdrive_vertical.png",
-                            (ToolsPanelSubSetting::WarpDrive, false) => "async/png/onboarding/terminal_intention/terminal_customize_warpdrive_horizontal.png",
+                            (ToolsPanelSubSetting::WarpDrive, true) => "async/png/onboarding/terminal_intention/terminal_customize_blackdrive_vertical.png",
+                            (ToolsPanelSubSetting::WarpDrive, false) => "async/png/onboarding/terminal_intention/terminal_customize_blackdrive_horizontal.png",
                         }
                     }
                 }

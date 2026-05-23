@@ -38,7 +38,7 @@ pub fn test_video_recording() -> Builder {
                     let artifacts_root = std::env::var(ARTIFACTS_DIR_ENV_VAR)
                         .map(std::path::PathBuf::from)
                         .unwrap_or_else(|_| {
-                            std::env::temp_dir().join("warp_integration_test_artifacts")
+                            std::env::temp_dir().join("black_integration_test_artifacts")
                         });
                     let test_dir = artifacts_root.join("test_video_recording");
 

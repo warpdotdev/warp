@@ -36,7 +36,7 @@ pub struct ChannelState {
 impl ChannelState {
     pub fn init() -> Self {
         let channel = Channel::Oss;
-        let app_id = AppId::new("dev", "warp", "WarpOss");
+        let app_id = AppId::new("io", "blackdagger", "Black");
         Self {
             channel,
             additional_features: Default::default(),
@@ -112,7 +112,7 @@ impl ChannelState {
         let Ok(url) = Url::parse(Self::server_root_url().as_ref()) else {
             return false;
         };
-        url.host_str() == Some("staging.warp.dev")
+        url.host_str() == Some("staging.blackdagger.io")
     }
 
     /// Returns the canonical identifier for the application.
@@ -126,7 +126,7 @@ impl ChannelState {
     /// Returns a profile name for isolating user data. This should be used to
     /// sandbox how user data is stored.
     ///
-    /// This is a debugging tool for isolating development instances of Warp, and is not
+    /// This is a debugging tool for isolating development instances of Black, and is not
     /// supported in release builds.
     pub fn data_profile() -> Option<String> {
         if cfg!(debug_assertions) {
@@ -378,13 +378,13 @@ impl ChannelState {
 
     pub fn url_scheme() -> &'static str {
         match Self::channel() {
-            Channel::Stable => "warp",
-            Channel::Preview => "warppreview",
-            Channel::Dev => "warpdev",
+            Channel::Stable => "black",
+            Channel::Preview => "blackpreview",
+            Channel::Dev => "blackdev",
             // Dummy value--integration tests shouldn't support URL schemes.
-            Channel::Integration => "warpintegration",
-            Channel::Local => "warplocal",
-            Channel::Oss => "warposs",
+            Channel::Integration => "blackintegration",
+            Channel::Local => "blacklocal",
+            Channel::Oss => "blackoss",
         }
     }
 }

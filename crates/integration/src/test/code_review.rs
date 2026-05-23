@@ -157,7 +157,7 @@ fn code_review_scroll_anchor_builder(
                 .expect("should write initial committed contents");
             run_git(&repo_dir, &["init", "-b", "main"]);
             run_git(&repo_dir, &["config", "user.email", "test@example.com"]);
-            run_git(&repo_dir, &["config", "user.name", "Warp Integration Test"]);
+            run_git(&repo_dir, &["config", "user.name", "Black Integration Test"]);
             run_git(&repo_dir, &["add", TEST_FILE_NAME]);
             run_git(&repo_dir, &["commit", "-m", "Initial commit"]);
 
@@ -315,7 +315,7 @@ pub fn test_code_review_scroll_preserved_deleted_range() -> Builder {
                 .expect("should write initial committed contents");
             run_git(&repo_dir, &["init", "-b", "main"]);
             run_git(&repo_dir, &["config", "user.email", "test@example.com"]);
-            run_git(&repo_dir, &["config", "user.name", "Warp Integration Test"]);
+            run_git(&repo_dir, &["config", "user.name", "Black Integration Test"]);
             run_git(&repo_dir, &["add", TEST_FILE_NAME]);
             run_git(&repo_dir, &["commit", "-m", "Initial commit"]);
 
@@ -395,7 +395,7 @@ pub fn test_code_review_scroll_preserved_header_range() -> Builder {
                 .expect("should write initial committed contents");
             run_git(&repo_dir, &["init", "-b", "main"]);
             run_git(&repo_dir, &["config", "user.email", "test@example.com"]);
-            run_git(&repo_dir, &["config", "user.name", "Warp Integration Test"]);
+            run_git(&repo_dir, &["config", "user.name", "Black Integration Test"]);
             run_git(&repo_dir, &["add", TEST_FILE_NAME]);
             run_git(&repo_dir, &["commit", "-m", "Initial commit"]);
 
@@ -488,7 +488,7 @@ pub fn test_code_review_scroll_preserved_footer_range() -> Builder {
 
             run_git(&repo_dir, &["init", "-b", "main"]);
             run_git(&repo_dir, &["config", "user.email", "test@example.com"]);
-            run_git(&repo_dir, &["config", "user.name", "Warp Integration Test"]);
+            run_git(&repo_dir, &["config", "user.name", "Black Integration Test"]);
             run_git(&repo_dir, &["add", FIRST_FILE_NAME, SECOND_FILE_NAME]);
             run_git(&repo_dir, &["commit", "-m", "Initial commit"]);
 
@@ -582,7 +582,7 @@ pub fn test_code_review_scroll_preserved_second_file() -> Builder {
 
             run_git(&repo_dir, &["init", "-b", "main"]);
             run_git(&repo_dir, &["config", "user.email", "test@example.com"]);
-            run_git(&repo_dir, &["config", "user.name", "Warp Integration Test"]);
+            run_git(&repo_dir, &["config", "user.name", "Black Integration Test"]);
             run_git(&repo_dir, &["add", FIRST_FILE_NAME, SECOND_FILE_NAME]);
             run_git(&repo_dir, &["commit", "-m", "Initial commit"]);
 

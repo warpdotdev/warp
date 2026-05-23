@@ -449,22 +449,22 @@ fn test_build_bundled_skill_context() {
     // At least 5 entries: server_url, cli_binary_name, url_scheme, settings_file_path, keybindings_file_path.
     // settings_schema_path is only present when bundled_resources_dir() returns Some.
     assert!(context.len() >= 5);
-    assert!(context.contains_key("warp_server_url"));
-    assert!(context.contains_key("warp_cli_binary_name"));
-    assert!(context.contains_key("warp_url_scheme"));
+    assert!(context.contains_key("black_server_url"));
+    assert!(context.contains_key("black_cli_binary_name"));
+    assert!(context.contains_key("black_url_scheme"));
     assert!(context.contains_key("settings_file_path"));
     assert!(context.contains_key("keybindings_file_path"));
 
     assert_eq!(
-        context.get("warp_server_url").unwrap(),
+        context.get("black_server_url").unwrap(),
         &ChannelState::server_root_url().to_string()
     );
     assert_eq!(
-        context.get("warp_cli_binary_name").unwrap(),
+        context.get("black_cli_binary_name").unwrap(),
         ChannelState::channel().cli_command_name()
     );
     assert_eq!(
-        context.get("warp_url_scheme").unwrap(),
+        context.get("black_url_scheme").unwrap(),
         ChannelState::url_scheme()
     );
     assert_eq!(

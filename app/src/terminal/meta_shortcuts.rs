@@ -1,6 +1,6 @@
 use black_ui::keymap::Keystroke;
 
-/// Whether this keystroke should dispatch an action in Warp despite the
+/// Whether this keystroke should dispatch an action in Black despite the
 /// [`black_ui::event::Event::KeyDown::is_composing`] being true.
 ///
 /// Generally, we ignore all `KeyDown` events if the `is_composing` field is true. However it's

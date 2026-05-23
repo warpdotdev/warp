@@ -12,7 +12,7 @@ fn create_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
 #[test]
 fn renders_simple_substitution() {
     let template = "Hello, {{name}}!".to_string();
-    let context = create_map(&[("name", "Warp")]);
+    let context = create_map(&[("name", "Black")]);
 
     let args = get_arguments(&template);
     assert_eq!(args, vec!["name".to_string()]);
@@ -24,7 +24,7 @@ fn renders_simple_substitution() {
 #[test]
 fn leaves_unknown_placeholder_unchanged() {
     let template = "Hello, {{name}} and {{unknown}}!".to_string();
-    let context = create_map(&[("name", "Warp")]);
+    let context = create_map(&[("name", "Black")]);
 
     let args = get_arguments(&template);
     assert_eq!(
@@ -67,7 +67,7 @@ fn unicode_in_names_and_text() {
 #[test]
 fn preserves_escaped_triple_braces() {
     let template = "{{{name}}} {{name}}";
-    let context = create_map(&[("name", "Warp")]);
+    let context = create_map(&[("name", "Black")]);
 
     let args = get_arguments(template);
     // Only the double-braced arg should be returned

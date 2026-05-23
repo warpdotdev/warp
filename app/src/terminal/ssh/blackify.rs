@@ -12,24 +12,24 @@ use black_ui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, Vi
 use crate::ai::blocklist::inline_action::requested_action::RenderableAction;
 use crate::appearance::Appearance;
 use crate::terminal::shell::ShellType;
-use crate::terminal::warpify;
-use crate::terminal::warpify::render::SSH_DOCS_URL;
+use crate::terminal::blackify;
+use crate::terminal::blackify::render::SSH_DOCS_URL;
 use crate::ui_components::icons::Icon as UiIcon;
 
 #[derive(Debug, Clone)]
-pub enum SshWarpifyBlockEvent {
-    WarpifySession,
+pub enum SshBlackifyBlockEvent {
+    BlackifySession,
     Cancel,
     Interrupt,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub enum SshWarpifyBlockAction {
+pub enum SshBlackifyBlockAction {
     Interrupt,
     Focus,
 }
 
-pub struct SshWarpifyBlock {
+pub struct SshBlackifyBlock {
     block_mouse_state: MouseStateHandle,
     ssh_command: String,
 }
@@ -39,12 +39,12 @@ pub fn init(app: &mut AppContext) {
 
     app.register_fixed_bindings([FixedBinding::new(
         "ctrl-c",
-        SshWarpifyBlockAction::Interrupt,
-        id!(SshWarpifyBlock::ui_name()),
+        SshBlackifyBlockAction::Interrupt,
+        id!(SshBlackifyBlock::ui_name()),
     )]);
 }
 
-impl SshWarpifyBlock {
+impl SshBlackifyBlock {
     #[allow(clippy::new_without_default)]
     pub fn new(ssh_command: String) -> Self {
         Self {
@@ -59,18 +59,18 @@ impl SshWarpifyBlock {
     }
 }
 
-impl Entity for SshWarpifyBlock {
-    type Event = SshWarpifyBlockEvent;
+impl Entity for SshBlackifyBlock {
+    type Event = SshBlackifyBlockEvent;
 }
 
-impl SshWarpifyBlock {
+impl SshBlackifyBlock {
     fn render_title_ui(&self, theme: &WarpTheme, appearance: &Appearance) -> Box<dyn Element> {
         let icon = Icon::new(UiIcon::Warp.into(), theme.active_ui_detail());
-        warpify::render::header_row("Warpifying SSH Session...", icon, theme, appearance)
+        blackify::render::header_row("Blackifying SSH Session...", icon, theme, appearance)
     }
 }
 
-pub fn warpify_description(
+pub fn blackify_description(
     app: &AppContext,
     hyperlink_index: &HighlightedHyperlink,
 ) -> Box<dyn Element> {
@@ -83,7 +83,7 @@ pub fn warpify_description(
         ),
         FormattedTextFragment::hyperlink("Learn more", SSH_DOCS_URL),
     ])]);
-    warpify::render::build_description_row(description, theme, appearance, hyperlink_index.clone())
+    blackify::render::build_description_row(description, theme, appearance, hyperlink_index.clone())
         .with_hyperlink_font_color(appearance.theme().accent().into_solid())
         .register_default_click_handlers(|url, _, ctx| {
             ctx.open_url(&url.url);
@@ -91,9 +91,9 @@ pub fn warpify_description(
         .finish()
 }
 
-impl View for SshWarpifyBlock {
+impl View for SshBlackifyBlock {
     fn ui_name() -> &'static str {
-        "SshWarpifyBlock"
+        "SshBlackifyBlock"
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
@@ -123,39 +123,39 @@ impl View for SshWarpifyBlock {
                 .finish()
         })
         .on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(SshWarpifyBlockAction::Focus);
+            ctx.dispatch_typed_action(SshBlackifyBlockAction::Focus);
         })
         .finish()
     }
 }
 
-impl TypedActionView for SshWarpifyBlock {
-    type Action = SshWarpifyBlockAction;
+impl TypedActionView for SshBlackifyBlock {
+    type Action = SshBlackifyBlockAction;
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
-            SshWarpifyBlockAction::Interrupt => {
-                ctx.emit(SshWarpifyBlockEvent::Interrupt);
+            SshBlackifyBlockAction::Interrupt => {
+                ctx.emit(SshBlackifyBlockEvent::Interrupt);
             }
-            SshWarpifyBlockAction::Focus => {
+            SshBlackifyBlockAction::Focus => {
                 self.focus(ctx);
             }
         }
     }
 }
 
-/// Convert the begin_warpify_ssh_session script into a string.
-pub fn begin_warpify_ssh_session_command(app: &AppContext) -> String {
+/// Convert the begin_blackify_ssh_session script into a string.
+pub fn begin_blackify_ssh_session_command(app: &AppContext) -> String {
     let asset = bundled_asset!("bootstrap/unknown_init_subshell.sh");
 
     match AssetCache::as_ref(app).load_asset::<String>(asset) {
         AssetState::Loaded { data } => data.to_string().replace("HOOK_NAME", "InitSsh"),
-        _ => panic!("ssh begin warpify script should be available as a string"),
+        _ => panic!("ssh begin blackify script should be available as a string"),
     }
 }
 
-/// Convert the warpify_ssh_session script into a string.
-pub fn warpify_ssh_session_command(
+/// Convert the blackify_ssh_session script into a string.
+pub fn blackify_ssh_session_command(
     uname: &str,
     shell_type: ShellType,
     app: &AppContext,
@@ -163,14 +163,14 @@ pub fn warpify_ssh_session_command(
     let asset = match (uname, shell_type) {
         // Mac scripts must be less than 1020 characters due to macOS 15+ pty issue
         ("Darwin", ShellType::Zsh | ShellType::Bash) => {
-            bundled_asset!("ssh/bash_zsh/warpify_ssh_session_mac.sh")
+            bundled_asset!("ssh/bash_zsh/blackify_ssh_session_mac.sh")
         }
         // Mac scripts must be less than 1020 characters due to macOS 15+ pty issue
-        ("Darwin", ShellType::Fish) => bundled_asset!("ssh/fish/warpify_ssh_session_mac.sh"),
+        ("Darwin", ShellType::Fish) => bundled_asset!("ssh/fish/blackify_ssh_session_mac.sh"),
         (_, ShellType::Zsh | ShellType::Bash) => {
-            bundled_asset!("ssh/bash_zsh/warpify_ssh_session.sh")
+            bundled_asset!("ssh/bash_zsh/blackify_ssh_session.sh")
         }
-        (_, ShellType::Fish) => bundled_asset!("ssh/fish/warpify_ssh_session.sh"),
+        (_, ShellType::Fish) => bundled_asset!("ssh/fish/blackify_ssh_session.sh"),
         // PowerShell is not supported yet.
         (_, ShellType::PowerShell) => return None,
     };
@@ -178,9 +178,9 @@ pub fn warpify_ssh_session_command(
     // Todo(Jack): look into avoiding an allocation here.
     match AssetCache::as_ref(app).load_asset::<String>(asset) {
         AssetState::Loaded { data } => Some(data.to_string()),
-        _ => panic!("ssh warpify script should be available as a string"),
+        _ => panic!("ssh blackify script should be available as a string"),
     }
 }
 #[cfg(test)]
-#[path = "warpify_tests.rs"]
+#[path = "blackify_tests.rs"]
 mod tests;

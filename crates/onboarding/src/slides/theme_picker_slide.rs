@@ -53,7 +53,7 @@ pub enum ThemePickerSlideAction {
     PrivacySettingsClicked,
 }
 
-const TOS_URL: &str = "https://www.warp.dev/terms-of-service";
+const TOS_URL: &str = "https://blackdagger.io/terms-of-service";
 
 #[derive(Debug, Clone)]
 struct ThemeOption {
@@ -172,7 +172,7 @@ impl ThemePickerSlide {
         // Add the Privacy Settings / Terms of Service disclaimer block below the
         // theme options when the user has selected the terminal intention and
         // won't hit the login slide afterwards. The terminal-intent flow skips
-        // the login slide (which surfaces the same links) unless Warp Drive is
+        // the login slide (which surfaces the same links) unless Black Drive is
         // enabled — in that case the login slide will still run after the theme
         // step and show the disclaimer, so duplicating it here is unnecessary.
         let state = self.onboarding_state.as_ref(app);

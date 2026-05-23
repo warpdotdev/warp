@@ -29,10 +29,10 @@ use crate::util::openable_file_type::{is_file_openable_in_warp, OpenableFileType
 mod tests;
 
 const LEARN_MORE_MARKDOWN_URL: &str =
-    "https://docs.warp.dev/terminal/more-features/markdown-viewer";
-const LEARN_MORE_CODE_URL: &str = "https://docs.warp.dev/code/overview#built-in-code-editor";
+    "https://blackdagger.io/terminal/more-features/markdown-viewer";
+const LEARN_MORE_CODE_URL: &str = "https://blackdagger.io/code/overview#built-in-code-editor";
 
-/// A path to a file that can be opened in Warp, along with its type.
+/// A path to a file that can be opened in Black, along with its type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenablePath {
     pub path: PathBuf,
@@ -86,7 +86,7 @@ impl TerminalView {
         }
     }
 
-    /// Whether or not the "Open in Warp" banner is open.
+    /// Whether or not the "Open in Black" banner is open.
     #[cfg(feature = "integration_tests")]
     pub fn is_open_in_warp_banner_open(&self) -> bool {
         self.inline_banners_state.open_in_warp_banner.is_some()
@@ -253,7 +253,7 @@ lazy_static! {
         HashSet::from(["bat", "cat", "glow", "less", "open"]);
 }
 
-/// Examines `command` for a file openable in Warp, returning the resolved path and type if found.
+/// Examines `command` for a file openable in Black, returning the resolved path and type if found.
 async fn check_openable_in_warp(
     command: String,
     working_directory: Option<String>,
@@ -308,7 +308,7 @@ async fn check_openable_in_warp(
                 );
 
                 if async_fs::metadata(&resolved).await.is_ok() {
-                    // We've found a file that exists and can be opened in Warp.
+                    // We've found a file that exists and can be opened in Black.
                     return Some(OpenablePath {
                         path: resolved,
                         file_type,

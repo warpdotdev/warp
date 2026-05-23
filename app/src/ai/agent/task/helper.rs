@@ -208,7 +208,7 @@ impl SubagentExt for api::message::tool_call::Subagent {
             Some(Metadata::ComputerUse(_)) => "computer_use",
             Some(Metadata::Summarization(_)) => "summarization",
             Some(Metadata::ConversationSearch(_)) => "conversation_search",
-            Some(Metadata::WarpDocumentationSearch(_)) => "warp_documentation_search",
+            Some(Metadata::WarpDocumentationSearch(_)) => "black_documentation_search",
             None => "unknown",
         }
     }

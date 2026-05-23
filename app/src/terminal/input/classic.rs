@@ -23,7 +23,7 @@ use crate::terminal::input::common::{
 use crate::terminal::input::{get_input_box_top_border_width, InputDropTargetData};
 use crate::terminal::settings::{SpacingMode, TerminalSettings};
 use crate::terminal::view::TerminalAction;
-use crate::terminal::warpify::render::{render_subshell_flag, render_subshell_flag_pole};
+use crate::terminal::blackify::render::{render_subshell_flag, render_subshell_flag_pole};
 
 impl Input {
     /// Renders the classic input. This is used when the user has 'Honor PS1' enabled in settings,

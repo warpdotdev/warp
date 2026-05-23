@@ -1426,7 +1426,7 @@ fn render_hover_card(
     // harness (always when known). Hidden entirely when no chip applies.
     let mut chips: Vec<Box<dyn Element>> = Vec::new();
 
-    // Harness chip: defaults to Warp Agent (Oz) when server metadata
+    // Harness chip: defaults to Black Agent (Oz) when server metadata
     // hasn't loaded yet so the chip slot stays useful for in-progress
     // local conversations. The brand color matches `harness_display`
     // (e.g. orange for Claude Code, blue for Gemini CLI).

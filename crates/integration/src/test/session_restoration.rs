@@ -417,8 +417,8 @@ pub fn test_restore_snapshot_with_test_json_object() -> Builder {
 
 /// Tests restoring a snapshot that has multiple objects with the same shareable_object_id
 /// in the metadata table.  This test verifies a regression introduced in
-/// https://github.com/warpdotdev/warp-internal/pull/7406 and fixed in
-/// https://github.com/warpdotdev/warp-internal/pull/7480
+/// https://github.com/blackdagger/black-internal/pull/7406 and fixed in
+/// https://github.com/blackdagger/black-internal/pull/7480
 ///
 /// The two objects have server ids Workflow-ftv7on4HwTeixO2xF5hmKf and Notebook-Flbu686H9XDCHZlYRriVpB
 /// and shareable_object_id 2.

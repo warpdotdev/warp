@@ -25,7 +25,7 @@ impl AdminActions {
 
     /// Open the contact sales page
     pub fn contact_sales(ctx: &mut AppContext) {
-        ctx.open_url("https://warp.dev/contact-sales");
+        ctx.open_url("https://blackdagger.io/contact-sales");
     }
 }
 

@@ -1,4 +1,4 @@
-//! Context chips built into Warp
+//! Context chips built into Black
 
 use chrono::Local;
 use black_util::path::user_friendly_path;

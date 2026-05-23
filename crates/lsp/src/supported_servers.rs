@@ -32,7 +32,7 @@ pub struct CustomBinaryConfig {
     pub prepend_args: Vec<String>,
 }
 
-/// Represents the different types of LSP servers supported by Warp.
+/// Represents the different types of LSP servers supported by Black.
 ///
 /// This is also used in underlying sqlite type persistence. We should be careful
 /// not to rename an existing variant, as it will break persistence.

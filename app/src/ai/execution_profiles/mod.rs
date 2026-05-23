@@ -298,7 +298,7 @@ pub struct AIExecutionProfile {
 
     pub context_window_limit: Option<u32>,
 
-    /// Whether plans created by the agent should be automatically synced to Warp Drive
+    /// Whether plans created by the agent should be automatically synced to Black Drive
     pub autosync_plans_to_warp_drive: bool,
 
     /// Whether the agent may use web search when helpful for completing tasks

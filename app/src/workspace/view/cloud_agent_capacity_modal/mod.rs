@@ -32,7 +32,7 @@ const MODAL_HEIGHT: f32 = 532.;
 const COMPACT_MODAL_HEIGHT: f32 = 360.;
 const HEADER_HEIGHT: f32 = 92.;
 const BUTTON_DIAMETER: f32 = 20.;
-const BILLING_AND_USAGE_URL: &str = "warp://settings/billing_and_usage";
+const BILLING_AND_USAGE_URL: &str = "black://settings/billing_and_usage";
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub enum CloudAgentCapacityModalVariant {

@@ -121,7 +121,7 @@ mod appimage {
             .as_file_mut()
             .set_permissions(appimage_path.metadata()?.permissions())?;
 
-        // Move new AppImage over the one that launched the current Warp instance.
+        // Move new AppImage over the one that launched the current Black instance.
         let new_appimage_path = new_appimage.into_temp_path();
         let mv_status = command::r#async::Command::new("mv")
             .arg(new_appimage_path.as_os_str())
@@ -152,7 +152,7 @@ mod appimage {
             command.env("BLACK_CHANNEL_VERSIONS_PATH", path);
         }
 
-        log::info!("Relaunching warp for update...");
+        log::info!("Relaunching black for update...");
         command.spawn()?;
         Ok(())
     }
@@ -229,7 +229,7 @@ mod package_manager {
                     FormattedTextFragment::plain_text(
                         "\nThe ",
                     ),
-                    FormattedTextFragment::inline_code("warp_handle_dist_upgrade"),
+                    FormattedTextFragment::inline_code("black_handle_dist_upgrade"),
                     FormattedTextFragment::plain_text(
                         " function ensures the Warp package repository is enabled, as we've detected you recently upgraded your distribution.",
                     ),
@@ -300,20 +300,20 @@ mod package_manager {
             command.env("BLACK_CHANNEL_VERSIONS_PATH", path);
         }
 
-        log::info!("Relaunching warp for update...");
+        log::info!("Relaunching black for update...");
         command.spawn()?;
         Ok(())
     }
 }
 
-/// Returns which method should be used to update Warp.
+/// Returns which method should be used to update Black.
 #[derive(Debug)]
 pub(crate) enum UpdateMethod {
-    /// We don't know how to update Warp.
+    /// We don't know how to update Black.
     Unknown,
-    /// Warp is running as an AppImage and should be updated in-place.
+    /// Black is running as an AppImage and should be updated in-place.
     AppImage(PathBuf),
-    /// Warp can be updated using the given package manager.
+    /// Black can be updated using the given package manager.
     PackageManager(PackageManager),
 }
 
@@ -358,9 +358,9 @@ impl PackageManager {
             } => {
                 let dist_upgrade_fn = match shell_type {
                     ShellType::Zsh | ShellType::Bash | ShellType::Fish => {
-                        "warp_handle_dist_upgrade"
+                        "black_handle_dist_upgrade"
                     }
-                    ShellType::PowerShell => "Warp-Handle-DistUpgrade",
+                    ShellType::PowerShell => "Black-Handle-DistUpgrade",
                 };
                 // If running with apt, attempt to handle a distribution update that may rename the
                 // warp source file to `{repo_name}.distUpgrade`.
@@ -392,7 +392,7 @@ impl PackageManager {
                     let cache_dir_str = cache_dir.display();
                     // Back up the existing pacman.conf file just in case
                     // anything goes wrong, then add the repository config.
-                    format!("mkdir -p {cache_dir_str}{and}\\\ncp /etc/pacman.conf {cache_dir_str}{and}\\\nsudo sh -c \"echo '\n[{repo_name}]\nServer = https://releases.warp.dev/linux/pacman/\\$repo/\\$arch' >> /etc/pacman.conf\"{and}\\\n")
+                    format!("mkdir -p {cache_dir_str}{and}\\\ncp /etc/pacman.conf {cache_dir_str}{and}\\\nsudo sh -c \"echo '\n[{repo_name}]\nServer = https://releases.blackdagger.io/linux/pacman/\\$repo/\\$arch' >> /etc/pacman.conf\"{and}\\\n")
                 } else {
                     String::new()
                 };
@@ -400,7 +400,7 @@ impl PackageManager {
                     // Retrieve our key from keys.openpgp.org and locally sign
                     // it before retrieving the package repository and
                     // installing the updated package.
-                    format!("sudo pacman-key -r \"linux-maintainers@warp.dev\" --keyserver hkp://keys.openpgp.org:80{and}\\\nsudo pacman-key --lsign-key \"linux-maintainers@warp.dev\"{and}\\\n")
+                    format!("sudo pacman-key -r \"linux-maintainers@blackdagger.io\" --keyserver hkp://keys.openpgp.org:80{and}\\\nsudo pacman-key --lsign-key \"linux-maintainers@blackdagger.io\"{and}\\\n")
                 } else {
                     String::new()
                 };
@@ -409,8 +409,8 @@ impl PackageManager {
         };
 
         let finish_update_fn = match shell_type {
-            ShellType::Zsh | ShellType::Bash | ShellType::Fish => "warp_finish_update",
-            ShellType::PowerShell => "Warp-Finish-Update",
+            ShellType::Zsh | ShellType::Bash | ShellType::Fish => "black_finish_update",
+            ShellType::PowerShell => "Black-Finish-Update",
         };
         format!("{base_command}{and}{finish_update_fn} {update_id}")
     }
@@ -466,7 +466,7 @@ impl PackageManager {
         match output {
             Ok(output) => {
                 if !output.status.success() {
-                    bail!("Failed to determine which package manager was used to install warp");
+                    bail!("Failed to determine which package manager was used to install black");
                 }
                 let Ok(stdout) = std::str::from_utf8(&output.stdout) else {
                     bail!("Could not parse package manager detection script output as UTF-8");
@@ -543,7 +543,7 @@ impl std::fmt::Display for PackageManager {
 /// `foo.list.distUpgrade`. It then creates a new version of `foo.list` (or `foo.sources` if
 /// updating to Ubuntu 24+) with the repo disabled.
 ///
-/// However, Ubuntu incorrectly thinks the Warp source file is invalid (due to the addition of the
+/// However, Ubuntu incorrectly thinks the Black source file is invalid (due to the addition of the
 /// `signed-by` key) so it only leaves the `*.distUpgrade` source file. We use the existence of this
 /// file to determine whether we need to run the special `warp_handle_dist_upgrade` function to copy
 /// `warpdotdev.list.distUpgrade` back to `warpdotdev.list` to re-enable the repository.
@@ -604,7 +604,7 @@ fn is_pacman_signing_key_installed() -> bool {
             "/etc/pacman.d/gnupg",
             "--list-keys",
             "--with-colons",
-            "linux-maintainers@warp.dev",
+            "linux-maintainers@blackdagger.io",
         ])
         .output()
     {
@@ -665,21 +665,21 @@ fn is_pacman_signing_key_installed() -> bool {
 
 fn package_name(channel: Channel) -> &'static str {
     match channel {
-        Channel::Stable => "warp-terminal",
-        Channel::Preview => "warp-terminal-preview",
-        Channel::Dev => "warp-terminal-dev",
-        Channel::Integration => "warp-terminal-integration",
-        Channel::Local => "warp-terminal-local",
-        Channel::Oss => "warp-oss",
+        Channel::Stable => "black-terminal",
+        Channel::Preview => "black-terminal-preview",
+        Channel::Dev => "black-terminal-dev",
+        Channel::Integration => "black-terminal-integration",
+        Channel::Local => "black-terminal-local",
+        Channel::Oss => "black-oss",
     }
 }
 
 fn repo_name(channel: Channel) -> String {
     let package_name = package_name(channel);
     let channel_suffix = package_name
-        .strip_prefix("warp-terminal")
+        .strip_prefix("black-terminal")
         .unwrap_or_default();
-    format!("warpdotdev{channel_suffix}")
+    format!("blackdagger{channel_suffix}")
 }
 
 #[cfg(test)]

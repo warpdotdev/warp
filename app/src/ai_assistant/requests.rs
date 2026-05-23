@@ -23,7 +23,7 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 /// Not wiring through Settings for now since this data is only needed by the panel view.
 pub const REQUEST_LIMIT_INFO_CACHE_KEY: &str = "AIAssistantRequestLimitInfo";
 
-/// Tracks the current request status for making Warp AI requests against server.
+/// Tracks the current request status for making Black AI requests against server.
 pub enum RequestStatus {
     /// There isn't a request in flight right now.
     NotInFlight,
@@ -165,7 +165,7 @@ impl Requests {
         }
     }
 
-    /// Starts a Warp AI request against the server with the given request prompt.
+    /// Starts a Black AI request against the server with the given request prompt.
     pub fn issue_request(&mut self, request: String, ctx: &mut ModelContext<Self>) {
         let server_api = self.server_api.clone();
         let raw_request = request.trim();

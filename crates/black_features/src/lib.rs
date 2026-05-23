@@ -25,7 +25,7 @@ pub enum FeatureFlag {
     /// Enables cloud object related features for an explicit allowlist of team testers.
     CloudObjects,
 
-    /// If `true`, fetch updated Warp channel versions from the Warp server endpoint instead of
+    /// If `true`, fetch updated Black channel versions from the Warp server endpoint instead of
     /// from GCP directly.
     FetchChannelVersionsFromWarpServer,
 
@@ -79,10 +79,10 @@ pub enum FeatureFlag {
     /// discrete GPU.
     IntegratedGPU,
 
-    /// Warp Agent Mode.
+    /// Black Agent Mode.
     AgentMode,
 
-    /// Whether the user is part of the Warp Alpha Program (AI Trusted Testers).
+    /// Whether the user is part of the Black Alpha Program (AI Trusted Testers).
     /// This is enabled automatically for local and dev builds.
     /// Collect conversation and input autodetection data for agent mode.
     /// Also collects block data for Next Command, if enabled.
@@ -101,7 +101,7 @@ pub enum FeatureFlag {
     /// Feature flag for cursor reflow fix (fixes part of the Alacritty resizing logic).
     ResizeFix,
 
-    /// Enable multiselect in Notebooks and Warp Text.
+    /// Enable multiselect in Notebooks and Black Text.
     RichTextMultiselect,
 
     /// If enabled, the default input mode is set to waterfall for new users.
@@ -122,10 +122,10 @@ pub enum FeatureFlag {
     /// Enable dynamic enum parameter types for workflow arguments
     DynamicWorkflowEnums,
 
-    /// Enables next action prediction within Warp, powered by AI.
+    /// Enables next action prediction within Black, powered by AI.
     AgentPredict,
 
-    /// Enables receiving shared Warp Drive objects.
+    /// Enables receiving shared Black Drive objects.
     SharedWithMe,
 
     /// Enables workflows for use with Agent Mode.
@@ -157,7 +157,7 @@ pub enum FeatureFlag {
     /// tab.
     FullScreenZenMode,
 
-    /// Playground for reducing Warp UI clutter.
+    /// Playground for reducing Black UI clutter.
     MinimalistUI,
 
     /// Enables support for using native shell completions to supplement our
@@ -167,7 +167,7 @@ pub enum FeatureFlag {
     /// Adds avatar to the tab bar.
     AvatarInTabBar,
 
-    /// Adds aliases for executing Warp Drive workflows.
+    /// Adds aliases for executing Black Drive workflows.
     WorkflowAliases,
 
     SshDragAndDrop,
@@ -213,7 +213,7 @@ pub enum FeatureFlag {
     /// Enables Kitty image rendering
     KittyImages,
 
-    /// Enables support for Warp Packs.
+    /// Enables support for Black Packs.
     WarpPacks,
 
     /// Enables the revised AI analytics policy banner.
@@ -331,7 +331,7 @@ pub enum FeatureFlag {
     /// Enables code symbols in AI context menu
     AIContextMenuCode,
 
-    /// Enables Warp Drive objects (like workflows) as context in AI context menu
+    /// Enables Black Drive objects (like workflows) as context in AI context menu
     DriveObjectsAsContext,
 
     /// Expands code diff edits to replace the current pane instead of opening in a new tab.
@@ -471,7 +471,7 @@ pub enum FeatureFlag {
     /// Enables cloud environments management via CLI.
     CloudEnvironments,
 
-    /// Enables the /create-environment slash command for setting up Warp Environments
+    /// Enables the /create-environment slash command for setting up Black Environments
     CreateEnvironmentSlashCommand,
 
     /// Enables the local docker sandbox entrypoints in the client.
@@ -563,7 +563,7 @@ pub enum FeatureFlag {
     /// Enables host selection in cloud mode.
     CloudModeHostSelector,
 
-    /// Enables Warp Managed Secrets functionality.
+    /// Enables Black Managed Secrets functionality.
     WarpManagedSecrets,
 
     /// Enables support for AM file diffs backed by the V4A patch format.
@@ -631,7 +631,7 @@ pub enum FeatureFlag {
     /// Enables conversation artifacts.
     ConversationArtifacts,
 
-    /// Enables auto-syncing ambient plans to Warp Drive.
+    /// Enables auto-syncing ambient plans to Black Drive.
     SyncAmbientPlans,
 
     /// Enables platform skills support (--skill flag) for agent runs.
@@ -657,7 +657,7 @@ pub enum FeatureFlag {
     /// Enables the Oz launch modal for introducing cloud agent features.
     OzLaunchModal,
 
-    /// Enables the OpenWarp launch modal announcing Warp going open-source.
+    /// Enables the OpenWarp launch modal announcing Black going open-source.
     /// When enabled, the HOA onboarding flow is suppressed.
     OpenWarpLaunchModal,
 
@@ -681,7 +681,7 @@ pub enum FeatureFlag {
     ConversationsAsContext,
 
     /// Enables the rich input editor for CLI agents (e.g., Claude Code).
-    /// Ctrl-G intercepts the keystroke and opens Warp's input editor instead of $EDITOR.
+    /// Ctrl-G intercepts the keystroke and opens Black's input editor instead of $EDITOR.
     CLIAgentRichInput,
 
     /// Enables incremental (diff-based) buffer updates for auto-reload instead of full replace.
@@ -748,7 +748,7 @@ pub enum FeatureFlag {
     /// adopt the configured color when their working directory matches.
     DirectoryTabColors,
 
-    /// Enables the new settings to control visibility of Warp Drive, Code Review Panel,
+    /// Enables the new settings to control visibility of Black Drive, Code Review Panel,
     /// and Project Explorer & Global Search features.
     OpenWarpNewSettingsModes,
 
@@ -760,7 +760,7 @@ pub enum FeatureFlag {
     HoaCodeReview,
 
     /// Enables the `--harness` flag for `oz agent run`, allowing external agent
-    /// CLIs (e.g. `claude`) to execute prompts instead of Warp's agent harness.
+    /// CLIs (e.g. `claude`) to execute prompts instead of Black's agent harness.
     AgentHarness,
 
     /// Enables workspace- and block-snapshot handoff between cloud agent runs
@@ -776,15 +776,15 @@ pub enum FeatureFlag {
     /// Enables the upgraded CLI agent session tracking and notifications infrastructure.
     HOANotifications,
 
-    /// Enables the install/update chip for the OpenCode Warp plugin.
+    /// Enables the install/update chip for the OpenCode Black plugin.
     /// Requires HOANotifications to also be enabled.
     OpenCodeNotifications,
 
-    /// Enables the install/update chip for the Codex Warp notification plugin.
+    /// Enables the install/update chip for the Codex Black notification plugin.
     /// Requires HOANotifications to also be enabled.
     CodexNotifications,
 
-    /// Enables the install/update chip for the Gemini CLI Warp extension.
+    /// Enables the install/update chip for the Gemini CLI Black extension.
     /// Requires HOANotifications to also be enabled.
     GeminiNotifications,
 
@@ -810,8 +810,8 @@ pub enum FeatureFlag {
     /// Enables Custom Inference endpoints for enterprise users.
     CustomInferenceEndpointsEnterprise,
 
-    /// Replaces the in-block warpification banner with a warpify footer.
-    WarpifyFooter,
+    /// Replaces the in-block blackification banner with a blackify footer.
+    BlackifyFooter,
 
     /// Enables conversation retrieval via the CLI (oz run conversation get, oz run get --conversation).
     ConversationApi,
@@ -942,7 +942,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::RemoteCodebaseIndexing,
 ];
 
-/// Features enabled for feature preview build users (e.g.: Friends of Warp).
+/// Features enabled for feature preview build users (e.g.: Friends of Black).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
 pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::BlocklistMarkdownTableRendering,

@@ -206,7 +206,7 @@ enum NotebookSyncError {
     FeatureNotAvailable,
 }
 
-/// A view that allows viewing/execution and editing of a Warp notebook.
+/// A view that allows viewing/execution and editing of a Black notebook.
 /// We don't currently persist any data.
 pub struct NotebookView {
     /// This is a stateful component that shows information about the notebook like its location

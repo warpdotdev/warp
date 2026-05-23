@@ -187,7 +187,7 @@ impl FileUpload {
         }
     }
 
-    /// Creates an sftp command that copies a given local file into the PWD of the warpified ssh session, if any.
+    /// Creates an sftp command that copies a given local file into the PWD of the blackified ssh session, if any.
     fn transfer_file_sftp_command(&self, file_upload: &FileUploadInfo) -> String {
         // "sftp "
         let mut command = String::from("sftp ");

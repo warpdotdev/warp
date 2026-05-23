@@ -22,20 +22,20 @@ use directories::BaseDirs;
 use crate::channel::{Channel, ChannelState};
 use crate::AppId;
 
-/// The name of the directory in which to put non-global Warp-specific files.
+/// The name of the directory in which to put non-global Black-specific files.
 ///
 /// This should be used, for example, as the base directory under which
-/// repository workflows would be stored (in "./.warp/workflows").
+/// repository workflows would be stored (in "./.black/workflows").
 pub const WARP_CONFIG_DIR: &str = ".black";
 
-/// The name of the folder that stores Warp execution logs and network logs.
+/// The name of the folder that stores Black execution logs and network logs.
 /// This is currently only used on Windows to maintain backwards compatibility.
 pub const WARP_LOGS_DIR: &str = "logs";
 
 fn base_warp_config_dir_name() -> String {
     match ChannelState::channel() {
         // Preview shares the same directory as Stable for backward
-        // compatibility — existing users already have config in `.warp`.
+        // compatibility — existing users already have config in `.black`.
         Channel::Stable | Channel::Preview => WARP_CONFIG_DIR.to_owned(),
         Channel::Oss => format!("{WARP_CONFIG_DIR}-oss"),
         Channel::Dev => format!("{WARP_CONFIG_DIR}-dev"),
@@ -45,7 +45,7 @@ fn base_warp_config_dir_name() -> String {
 }
 /// Returns the home-relative Warp config directory name for the current channel and data profile.
 ///
-/// This preserves the historical `.warp*` directory shape while still isolating dev, local,
+/// This preserves the historical `.black*` directory shape while still isolating dev, local,
 /// integration, oss, and optional development profiles.
 pub fn warp_home_config_dir_name() -> String {
     let base_dir_name = base_warp_config_dir_name();
@@ -60,7 +60,7 @@ pub fn warp_home_config_dir_name() -> String {
 /// Returns the home-relative Warp config directory for the current channel and data profile.
 ///
 /// Unlike [`data_dir`] and [`config_local_dir`] on non-macOS platforms, this intentionally keeps
-/// Warp-authored, user-facing config under a `.warp*` directory in the home directory instead of
+/// Black-authored, user-facing config under a `.black*` directory in the home directory instead of
 /// using the platform XDG/AppData project directories.
 pub fn warp_home_config_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|home_dir| home_dir.join(warp_home_config_dir_name()))
@@ -76,8 +76,8 @@ pub fn warp_home_mcp_config_file_path() -> Option<PathBuf> {
 
 /// Returns the macOS config directory name for the current channel.
 ///
-/// Stable uses `.warp`, while other channels include a channel suffix
-/// (e.g., `.warp-dev`, `.warp-local`).
+/// Stable uses `.black`, while other channels include a channel suffix
+/// (e.g., `.black-dev`, `.black-local`).
 ///
 /// These suffixes are persisted on disk as directory names and must not be
 /// changed once established, or existing user data will be orphaned.
@@ -138,7 +138,7 @@ pub fn base_config_dir() -> PathBuf {
 ///
 /// This is the appropriate home for files like our sqlite database, which
 /// contains durable but non-critical and non-portable data like what windows
-/// the user had open and cached state of known Warp Drive objects.
+/// the user had open and cached state of known Black Drive objects.
 pub fn state_dir() -> PathBuf {
     let Some(project_dirs) = project_dirs() else {
         return PathBuf::new();
@@ -164,7 +164,7 @@ pub fn secure_state_dir() -> Option<PathBuf> {
 
     #[cfg(target_os = "macos")]
     if let Some(app_group_root) = app_group_container_path() {
-        // The macOS project_path is the bundle ID (i.e. `dev.warp.Warp-Stable`).
+        // The macOS project_path is the bundle ID (i.e. `io.blackdagger.Black`).
         let project_dirs = project_dirs()?;
         return Some(
             app_group_root
@@ -240,9 +240,9 @@ fn project_dirs_for_app_id(
             // directories like "warp-terminal" and "warp-terminal-dev", to
             // match our Linux package name.
             let base_app_name = match app_id.application_name() {
-                "Warp" => "Warp-Terminal".to_owned(),
-                "WarpOss" => "Warp-Oss".to_owned(),
-                other if other.starts_with("Warp") => other.replace("Warp", "Warp-Terminal-"),
+                "Black" => "Black-Terminal".to_owned(),
+                "WarpOss" => "Black-Oss".to_owned(),
+                other if other.starts_with("Black") => other.replace("Black", "Black-Terminal-"),
                 _ => app_id.application_name().to_owned(),
             };
         } else {
@@ -273,7 +273,7 @@ pub fn app_group_container_path() -> Option<PathBuf> {
 
         let fm = NSFileManager::defaultManager();
         // Keep in sync with Entitlements.plist
-        let group_id = format!("{}.dev.warp", crate::macos::APPLE_TEAM_ID);
+        let group_id = format!("{}.io.blackdagger", crate::macos::APPLE_TEAM_ID);
         let group_id = NSString::from_str(&group_id);
         // containerURLForSecurityApplicationGroupIdentifier always returns a value on macOS (unlike iOS).
         // We have to double-check that the path points to a directory we can actually use. In addition to
@@ -293,13 +293,13 @@ pub fn app_group_container_path() -> Option<PathBuf> {
     LazyLock::force(&CONTAINER_PATH).clone()
 }
 
-/// Returns the path to resources included in the Warp distribution.
+/// Returns the path to resources included in the Black distribution.
 ///
 /// Unlike [`black_ui::AssetProvider`] assets, which are generally embedded in the binary, these are
-/// stored on the filesystem alongside the rest of Warp.
+/// stored on the filesystem alongside the rest of Black.
 ///
 /// ## macOS
-/// The resources directory is `$APP_DIR/Contents/Resources` (e.g. `/Applications/Warp.app/Contents/Resources`).
+/// The resources directory is `$APP_DIR/Contents/Resources` (e.g. `/Applications/Black.app/Contents/Resources`).
 ///
 /// ## Linux
 /// The resources directory is `$INSTALL_DIR/resources`, where `$INSTALL_DIR` depends on the
@@ -307,7 +307,7 @@ pub fn app_group_container_path() -> Option<PathBuf> {
 ///
 /// ## Windows
 /// The resources directory is `$INSTALL_DIR/resources`, where `$INSTALL_DIR` is the directory
-/// containing the Warp executable (e.g. `C:\Program Files\WarpDev\resources`).
+/// containing the Black executable (e.g. `C:\Program Files\WarpDev\resources`).
 pub fn bundled_resources_dir() -> Option<PathBuf> {
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {

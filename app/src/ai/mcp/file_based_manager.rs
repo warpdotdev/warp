@@ -244,7 +244,7 @@ impl FileBasedMCPManager {
     /// config location.
     ///
     /// "Global" means the installation was detected outside of a user repository:
-    /// - For `MCPProvider::Warp`: the logical root for `~/.warp*/.mcp.json`.
+    /// - For `MCPProvider::Black`: the logical root for `~/.warp*/.mcp.json`.
     /// - For any other provider: the user's home directory (e.g. `~/.claude.json`).
     ///
     /// Project-scoped installations (those detected inside a repo) are not considered
@@ -317,8 +317,8 @@ impl FileBasedMCPManager {
         let mcp_enabled = AISettings::as_ref(ctx).is_file_based_mcp_enabled(ctx);
 
         // Partition servers into three buckets based on scope:
-        // - Global Warp: always auto-spawn.
-        // - Global non-Warp: auto-spawn iff the toggle is on.
+        // - Global Black: always auto-spawn.
+        // - Global non-Black: auto-spawn iff the toggle is on.
         // - Project-scoped (any provider): never auto-spawn; require explicit opt-in
         //   via the "Detected from {provider}" section of the MCP settings.
         let mut to_spawn = Vec::new();
@@ -484,7 +484,7 @@ impl FileBasedMCPManager {
     /// when its config does not specify `working_directory`.
     ///
     /// The spawn root is the directory the config was discovered in, with one
-    /// exception: global Warp installs are discovered in `~/.warp*/`, which
+    /// exception: global Black installs are discovered in `~/.warp*/`, which
     /// isn't a useful cwd for spawned processes, so they are remapped to the
     /// home directory instead.
     /// - Project-scoped installations: the repo root.
@@ -504,9 +504,9 @@ impl FileBasedMCPManager {
             .sorted()
             .next()?;
 
-        // Global Warp installs live under `~/.warp*/`, which is internal Warp
+        // Global Black installs live under `~/.warp*/`, which is internal Black
         // state rather than a meaningful working directory. Map them to the
-        // home dir so all global installs (Warp and third-party) share a
+        // home dir so all global installs (Black and third-party) share a
         // consistent cwd.
         if self.is_global_warp_server(hash) {
             return dirs::home_dir().or(Some(discovery_root));
@@ -522,9 +522,9 @@ struct AutoStartDecision {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FileBasedMCPServerType {
-    /// A file-based MCP server detected from Warp's global managed config.
+    /// A file-based MCP server detected from Black's global managed config.
     GlobalWarp,
-    /// A file-based MCP server detected from a non-Warp provider's global user config.
+    /// A file-based MCP server detected from a non-Black provider's global user config.
     GlobalThirdParty,
     /// A file-based MCP server detected from a project/repository-scoped config.
     ProjectScoped,

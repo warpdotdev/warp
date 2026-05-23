@@ -24,7 +24,7 @@ use crate::server::server_api::ai::{AIClient, GitCredential};
 pub(crate) const GIT_CREDENTIALS_REFRESH_INTERVAL: Duration = Duration::from_secs(50 * 60);
 
 const DEFAULT_GIT_NAME: &str = "Oz";
-const DEFAULT_GIT_EMAIL: &str = "oz-agent@warp.dev";
+const DEFAULT_GIT_EMAIL: &str = "oz-agent@blackdagger.io";
 const GH_HOSTS_FILENAME: &str = "hosts.yml";
 
 fn home_dir() -> Result<PathBuf> {

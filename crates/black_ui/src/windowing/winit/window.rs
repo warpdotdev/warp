@@ -70,7 +70,7 @@ pub(crate) struct WindowManager {
     windows: HashMap<WindowId, Rc<Window>>,
     event_loop_proxy: EventLoopProxy<CustomEvent>,
     window_ordering: Mutex<WindowOrderingState>,
-    /// We assume this won't change throughout the life of the Warp process.
+    /// We assume this won't change throughout the life of the Black process.
     os_window_manager_name: OnceCell<Option<String>>,
     /// This is a client for talking to the Xorg server directly instead of through winit.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -144,7 +144,7 @@ impl WindowManager {
     /// same thing as a physical monitor, but a grouping of monitors into a single coordinate
     /// space. All our app's windows must be on the same screen, and hence will have the same scale
     /// factor. For more in-depth explanation:
-    /// https://github.com/warpdotdev/warp-internal/pull/8431#discussion_r1460629912
+    /// https://github.com/blackdagger/black-internal/pull/8431#discussion_r1460629912
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn get_x11_backing_scale_factor(&self) -> f32 {
         use crate::platform::WindowContext;
@@ -652,7 +652,7 @@ fn window_level_for_style(style: WindowStyle) -> WindowLevel {
 }
 
 /// If the selected adapter has a known rendering offset bug, enable native window decorations
-/// to work around it. See: https://github.com/warpdotdev/Warp/issues/6120
+/// to work around it. See: https://github.com/blackdagger/black/issues/6120
 fn enable_decorations_if_needed(window: &winit::window::Window, adapter_info: &AdapterInfo) {
     if adapter_has_rendering_offset_bug(adapter_info) {
         log::warn!(
@@ -1313,7 +1313,7 @@ fn create_window(
     #[cfg(windows)]
     {
         // WARNING: Do not use [`WindowAttributes::with_no_redirection_bitmap`] as that caused:
-        // https://github.com/warpdotdev/Warp/issues/8935
+        // https://github.com/blackdagger/black/issues/8935
 
         use winit::platform::windows::{IconExtWindows, WindowAttributesExtWindows};
 

@@ -41,7 +41,7 @@ pub fn is_file_content_binary(path: impl AsRef<Path>) -> bool {
     is_buffer_binary(&buffer[..n])
 }
 
-/// Checks if a file is a binary file that should not be opened in Warp.
+/// Checks if a file is a binary file that should not be opened in Black.
 /// Note that we only check the file extension, not the file content.
 /// Returns true for common binary file extensions like images, videos, executables, etc.
 pub fn is_binary_file(path: impl AsRef<Path>) -> bool {

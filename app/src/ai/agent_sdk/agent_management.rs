@@ -450,7 +450,7 @@ fn print_single_agent(agent: &AgentResponse, output_format: OutputFormat) -> any
 }
 
 fn print_skills_hint() {
-    let binary_name = black_cli::binary_name().unwrap_or_else(|| "warp".to_string());
+    let binary_name = black_cli::binary_name().unwrap_or_else(|| "black".to_string());
     println!("\n\nLooking for your agent skills? Use `{binary_name} agent skills` instead.");
 }
 

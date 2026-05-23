@@ -13,15 +13,15 @@ use super::{
 use crate::terminal::model::session::LocalCommandExecutor;
 use crate::terminal::shell::ShellType;
 
-const PLUGIN_KEY: &str = "warp@claude-code-warp";
-const MARKETPLACE_REPO: &str = "warpdotdev/claude-code-warp";
-const MARKETPLACE_NAME: &str = "claude-code-warp";
+const PLUGIN_KEY: &str = "black@claude-code-black";
+const MARKETPLACE_REPO: &str = "blackdagger/claude-code-black";
+const MARKETPLACE_NAME: &str = "claude-code-black";
 
-const PLATFORM_PLUGIN_KEY: &str = "oz-harness-support@claude-code-warp";
+const PLATFORM_PLUGIN_KEY: &str = "oz-harness-support@claude-code-black";
 // Note: we will eventually publish this to the same marketplace repo, but are using the internal one as we build out multi-harness.
-const PLATFORM_MARKETPLACE_REPO: &str = "warpdotdev/claude-code-warp-internal";
+const PLATFORM_MARKETPLACE_REPO: &str = "blackdagger/claude-code-black-internal";
 
-// Keep in sync with the plugin version in warpdotdev/claude-code-warp.
+// Keep in sync with the plugin version in blackdagger/claude-code-black.
 // (See the Versioning section of that repo's README.)
 const MINIMUM_PLUGIN_VERSION: &str = "2.1.0";
 
@@ -120,11 +120,11 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
     }
 
     fn install_success_message(&self) -> &'static str {
-        "Warp plugin installed. Please run /reload-plugins to activate."
+        "Black plugin installed. Please run /reload-plugins to activate."
     }
 
     fn update_success_message(&self) -> &'static str {
-        "Warp plugin updated. Please run /reload-plugins to activate."
+        "Black plugin updated. Please run /reload-plugins to activate."
     }
 
     fn install_instructions(&self) -> &'static PluginInstructions {
@@ -166,13 +166,13 @@ static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| {
         steps: &[
             PluginInstructionStep {
                 description: "Add the Warp plugin marketplace repository",
-                command: "claude plugin marketplace add warpdotdev/claude-code-warp",
+                command: "claude plugin marketplace add blackdagger/claude-code-black",
                 executable: true,
                 link: None,
             },
             PluginInstructionStep {
                 description: "Install the Warp plugin",
-                command: "claude plugin install warp@claude-code-warp",
+                command: "claude plugin install black@claude-code-black",
                 executable: true,
                 link: None,
             },
@@ -191,19 +191,19 @@ static UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| Plug
     steps: &[
         PluginInstructionStep {
             description: "Remove the existing marketplace (if present)",
-            command: "claude plugin marketplace remove claude-code-warp",
+            command: "claude plugin marketplace remove claude-code-black",
             executable: true,
             link: None,
         },
         PluginInstructionStep {
             description: "Re-add the marketplace",
-            command: "claude plugin marketplace add warpdotdev/claude-code-warp",
+            command: "claude plugin marketplace add blackdagger/claude-code-black",
             executable: true,
             link: None,
         },
         PluginInstructionStep {
             description: "Install the latest plugin version",
-            command: "claude plugin install warp@claude-code-warp",
+            command: "claude plugin install black@claude-code-black",
             executable: true,
             link: None,
         },
@@ -227,7 +227,7 @@ fn check_installed(claude_dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Reads the installed version string for the Warp plugin, if present.
+/// Reads the installed version string for the Black plugin, if present.
 fn installed_version(claude_dir: &Path) -> Option<String> {
     let plugins_path = claude_dir.join("plugins").join("installed_plugins.json");
     let contents = fs::read_to_string(plugins_path).ok()?;

@@ -179,11 +179,11 @@ fn no_proxy_suffix_with_dot() {
     let _lock = ENV_LOCK.lock();
     clear_proxy_env();
     env::set_var("HTTPS_PROXY", "http://proxy:3128");
-    env::set_var("NO_PROXY", ".warp.dev");
+    env::set_var("NO_PROXY", ".blackdagger.io");
 
-    assert!(resolved_proxy_tls("sessions.app.warp.dev").is_none());
+    assert!(resolved_proxy_tls("sessions.app.blackdagger.io").is_none());
 
-    assert!(resolved_proxy_tls("warp.dev").is_some()); // Exact "warp.dev" != ".warp.dev"
+    assert!(resolved_proxy_tls("blackdagger.io").is_some()); // Exact "blackdagger.io" != ".blackdagger.io"
     assert!(resolved_proxy_tls("other.com").is_some());
     clear_proxy_env();
 }
@@ -193,13 +193,13 @@ fn no_proxy_suffix_without_dot() {
     let _lock = ENV_LOCK.lock();
     clear_proxy_env();
     env::set_var("HTTPS_PROXY", "http://proxy:3128");
-    env::set_var("NO_PROXY", "warp.dev");
+    env::set_var("NO_PROXY", "blackdagger.io");
 
-    // "sessions.app.warp.dev" ends with ".warp.dev" → matches
-    assert!(resolved_proxy_tls("sessions.app.warp.dev").is_none());
+    // "sessions.app.blackdagger.io" ends with "blackdagger.io" → matches
+    assert!(resolved_proxy_tls("sessions.app.blackdagger.io").is_none());
     // Exact match too
-    assert!(resolved_proxy_tls("warp.dev").is_none());
-    assert!(resolved_proxy_tls("notwarp.dev").is_some());
+    assert!(resolved_proxy_tls("blackdagger.io").is_none());
+    assert!(resolved_proxy_tls("notblack.io").is_some());
     clear_proxy_env();
 }
 

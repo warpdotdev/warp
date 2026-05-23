@@ -172,8 +172,8 @@ pub trait CloudObject: Debug {
         true
     }
 
-    /// Creates a new Warp Drive item for this object.  Returns None if this
-    /// object is not rendered in Warp Drive.
+    /// Creates a new Black Drive item for this object.  Returns None if this
+    /// object is not rendered in Black Drive.
     fn to_warp_drive_item(&self, appearance: &Appearance) -> Option<Box<dyn WarpDriveItem>>;
 
     /// Returns the web link of this object. Will return none if we do not support web links
@@ -460,7 +460,7 @@ pub trait CloudModelType: Debug + Clone + Send + Sync {
     }
 
     /// Creates a new warp drive item for this model type. Returns None
-    /// if this object does not render in Warp Drive.
+    /// if this object does not render in Black Drive.
     fn to_warp_drive_item(
         &self,
         id: SyncId,
@@ -468,10 +468,10 @@ pub trait CloudModelType: Debug + Clone + Send + Sync {
         object: &Self::CloudObjectType,
     ) -> Option<Box<dyn WarpDriveItem>>;
 
-    /// Returns the display name for this model (e.g. to show in the Warp Drive index)
+    /// Returns the display name for this model (e.g. to show in the Black Drive index)
     fn display_name(&self) -> String;
 
-    /// Sets the display name to show in the Warp Drive Index.  Setting the name
+    /// Sets the display name to show in the Black Drive Index.  Setting the name
     /// is not currently supported by all object types, hence the default empty
     /// implementation.
     fn set_display_name(&mut self, _name: &str) {}
@@ -837,8 +837,8 @@ impl ServerObjectModel for CloudWorkflowModel {
     }
 }
 /// Extracts the server id and object type from a (caller validated) Drive link.
-/// Intended use is deriving metadata from links such that Warp objects
-/// can be opened natively in Warp with no web interaction.
+/// Intended use is deriving metadata from links such that Black objects
+/// can be opened natively in Black with no web interaction.
 pub fn extract_server_id_and_object_type_from_warp_drive_link(
     url: &Url,
 ) -> Option<OpenWarpDriveObjectArgs> {
@@ -850,7 +850,7 @@ pub fn extract_server_id_and_object_type_from_warp_drive_link(
 
     let object_type = url.path_segments().and_then(|mut segments| segments.nth(1));
 
-    // Parse the object portion of the path segment (warp.dev/drive/{object})
+    // Parse the object portion of the path segment (blackdagger.io/drive/{object})
     // into an object type
     let object_type = match object_type {
         Some("notebook") => ObjectType::Notebook,

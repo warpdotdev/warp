@@ -2443,7 +2443,7 @@ impl BlockList {
                 let next_block = self.block_at(next_block_index)?;
                 let next_command_is_empty = next_block.is_command_empty();
                 // NOTE: there is a semantic difference here of seeking down to the next "prompt" (in the PS1 case)
-                // vs the next "command" (in the Warp prompt case), when using the combined grid, rather than
+                // vs the next "command" (in the Black prompt case), when using the combined grid, rather than
                 // directly going to the next "command" in both cases.
                 let grid_type = GridType::PromptAndCommand;
 
@@ -3579,10 +3579,10 @@ impl ansi::Handler for BlockList {
             }
             ClearMode::All => {
                 // TODO(alokedesai): Investigate how we can call `clear_visible_screen` here to have
-                // Warp's custom logic for "clear". It's not immediately straightforward because a
+                // Black's custom logic for "clear". It's not immediately straightforward because a
                 // a running program that writes output, clears the visible screen, and then writes
                 // more output should all be encapsulated within a single block, which wouldn't be
-                // quite right with Warp's custom clear screen logic.
+                // quite right with Black's custom clear screen logic.
             }
             _ => {}
         }

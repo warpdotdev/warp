@@ -349,10 +349,10 @@ fn test_word_and_line_boundary_movement_with_block_item() {
             buffer.update(ctx, |buffer, ctx| {
                 *buffer = Buffer::from_markdown(
                     r#"text
-```warp-embedded-object
+```black-embedded-object
 id: workflow-123
 ```
-```warp-embedded-object
+```black-embedded-object
 id: workflow-123
 type: workflow
 author: kevin

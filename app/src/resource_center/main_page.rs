@@ -133,7 +133,7 @@ impl ResourceCenterMainView {
                             }
                             None => !is_tips_completed && !is_onboarded,
                         },
-                        // Expand Maximize Warp section once user has completed welcome tips,
+                        // Expand Maximize Black section once user has completed welcome tips,
                         // and keep open after users have completed/skipped all tips
                         FeatureSection::MaximizeWarp => match ChannelState::app_version() {
                             Some(version) => {

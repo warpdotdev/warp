@@ -396,7 +396,7 @@ impl RunAgentsCardView {
             _ => {}
         });
 
-        // Repopulate the model picker when available Warp LLMs change.
+        // Repopulate the model picker when available Black LLMs change.
         // Only relevant for Oz harness — non-Oz harnesses get their
         // model catalog from HarnessAvailabilityModel, not LLMPreferences.
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |me, _, event, ctx| {

@@ -350,7 +350,7 @@ fn daemon_codebase_index_snapshot_storage(launch_mode: &LaunchMode) -> Option<Sn
     }
 }
 
-/// Launch mode for how to start up Warp.
+/// Launch mode for how to start up Black.
 #[allow(clippy::large_enum_variant)]
 pub enum LaunchMode {
     /// Run the regular GUI application.
@@ -361,7 +361,7 @@ pub enum LaunchMode {
         api_key: Option<String>,
     },
 
-    /// Run the Warp command-line SDK.
+    /// Run the Black command-line SDK.
     CommandLine {
         command: black_cli::CliCommand,
         global_options: GlobalOptions,
@@ -455,7 +455,7 @@ impl LaunchMode {
         }
     }
 
-    /// Returns `true` if Warp should run headlessly, without a visible UI.
+    /// Returns `true` if Black should run headlessly, without a visible UI.
     fn is_headless(&self) -> bool {
         match self {
             LaunchMode::CommandLine { command, .. } => match command {
@@ -847,15 +847,15 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             launch_mode.args().as_ref(),
         ) {
             // If we were able to contact an existing application instance, quit -
-            // we only want to run a single instance of Warp at a time.
+            // we only want to run a single instance of Black at a time.
             Ok(_) => std::process::exit(0),
-            // If Warp isn't already running, we're good to go.
+            // If Black isn't already running, we're good to go.
             Err(app_services::linux::StartupArgsForwardingError::NoExistingInstance) => {}
             // If we just finished an auto-update, we should continue running.
             Err(app_services::linux::StartupArgsForwardingError::IgnoredAfterAutoUpdate) => {}
             // If we were unable to perform the forwarding for an unknown reason,
             // it's better to run a second instance than potentially end up in a
-            // state where Warp refuses to run even a first instance.
+            // state where Black refuses to run even a first instance.
             Err(err) => {
                 let err = anyhow::Error::from(err).context("Failed to forward startup args");
                 log::error!("{err:#}");
@@ -870,15 +870,15 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             launch_mode.args().as_ref(),
         ) {
             // If we were able to contact an existing application instance, quit -
-            // we only want to run a single instance of Warp at a time.
+            // we only want to run a single instance of Black at a time.
             Ok(_) => std::process::exit(0),
-            // If Warp isn't already running, we're good to go.
+            // If Black isn't already running, we're good to go.
             Err(app_services::windows::StartupArgsForwardingError::NoExistingInstance) => {}
             // If we just finished an auto-update, we should continue running.
             Err(app_services::windows::StartupArgsForwardingError::IgnoredAfterAutoUpdate) => {}
             // If we were unable to perform the forwarding for an unknown reason,
             // it's better to run a second instance than potentially end up in a
-            // state where Warp refuses to run even a first instance.
+            // state where Black refuses to run even a first instance.
             Err(err) => {
                 let err = anyhow::Error::from(err).context("Failed to forward startup args");
                 log::error!("{err:#}");
@@ -887,7 +887,7 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         }
     }
 
-    // Sets up a Job Object that we associate with the Warp process to handle
+    // Sets up a Job Object that we associate with the Black process to handle
     // shared fate with its child processes. This should be called before we
     // start spawning any child processes.
     #[cfg(windows)]
@@ -1388,7 +1388,7 @@ pub(crate) fn initialize_app(
     remote_server::wire_auth_token_rotation(ctx);
 
     log::info!(
-        "Starting warp with channel state {} and version {:?}",
+        "Starting black with channel state {} and version {:?}",
         ChannelState::debug_str(),
         ChannelState::app_version()
     );
@@ -1400,7 +1400,7 @@ pub(crate) fn initialize_app(
         apply_scroll_multiplier(event, ctx);
     });
 
-    // Rewrite recognized Warp web URLs (sessions, Drive, settings, home) into local
+    // Rewrite recognized Black web URLs (sessions, Drive, settings, home) into local
     // intent URLs when possible so they open directly in the desktop app.
     ctx.set_before_open_url(|url_str, _ctx| {
         if let Ok(url) = Url::parse(url_str) {
@@ -1595,7 +1595,7 @@ pub(crate) fn initialize_app(
     settings_view::update_environment_form::init(ctx);
     env_vars::env_var_collection_block::init(ctx);
     terminal::ssh::install_tmux::init(ctx);
-    terminal::ssh::warpify::init(ctx);
+    terminal::ssh::blackify::init(ctx);
     terminal::ssh::error::init(ctx);
     context_chips::display_menu::init(ctx);
     context_chips::node_version_popup::init(ctx);
@@ -2091,7 +2091,7 @@ pub(crate) fn app_callbacks(is_integration_test: bool) -> black_ui::platform::Ap
             });
 
             // We want to tear down the terminal server before relaunching for
-            // autoupdate, to ensure we're not running any extra Warp processes
+            // autoupdate, to ensure we're not running any extra Black processes
             // when we bring up the new process.  Additionally, this must occur
             // after terminating the persistence writer, so we don't keep track
             // of the fact that the shell sessions terminated.

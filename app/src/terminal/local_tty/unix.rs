@@ -307,7 +307,7 @@ fn build_host_shell_command(
     builder.env("BLACK_IS_LOCAL_SHELL_SESSION", "1");
 
     // Only advertise the protocol version when the HOA notifications feature is enabled.
-    // Without it, Warp can't render structured CLI agent notifications,
+    // Without it, Black can't render structured CLI agent notifications,
     // so the plugin should fall back to legacy notifications.
     if FeatureFlag::HOANotifications.is_enabled() {
         builder.env(
@@ -468,7 +468,7 @@ fn spawn_command_in_pty(
             if is_isolated {
                 // If running in a sandbox on Linux, adjust the OOM score
                 // to make the child process more likely to be killed than the parent process
-                // in case of OOM. If the Warp process is killed while hosting an ambient
+                // in case of OOM. If the Black process is killed while hosting an ambient
                 // agent, its shared session will abruptly end with no user-visible error.
                 // Instead, we want to kill whatever process the agent spawned that's using
                 // lots of memory. This gives the agent a chance to gracefully fail.
@@ -834,7 +834,7 @@ fn build_docker_sandbox_command(
 ///
 /// TODO(advait): Wire up cleanup on pane close. Today, closing a Docker
 /// sandbox pane leaves behind (1) the per-sandbox host init + workspace dirs
-/// under the Warp cache dir, and (2) the stopped `warp-sandbox-<id>`
+/// under the Black cache dir, and (2) the stopped `warp-sandbox-<id>`
 /// container. Both are per-sandbox so they don't clobber each other, but
 /// they accumulate over repeated sessions. The right hook is likely on the
 /// PTY/pane lifecycle (alongside `Pty::kill`) and should:
@@ -845,7 +845,7 @@ fn build_docker_sandbox_command(
 fn prepare_docker_sandbox(starter: &DockerSandboxShellStarter) -> Result<()> {
     // Build each per-sandbox subdirectory with mode 0700 so other local users
     // cannot traverse into them, which (combined with the parent living under
-    // the per-user Warp cache dir rather than `/tmp`) prevents the init
+    // the per-user Black cache dir rather than `/tmp`) prevents the init
     // script from being read or symlink-attacked by anyone other than the
     // Warp user. The file itself is left at the default mode so the
     // container's shell (which may run as a different uid than the host

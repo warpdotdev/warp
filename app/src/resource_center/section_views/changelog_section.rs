@@ -367,7 +367,7 @@ impl SectionView for ChangelogSectionView {
                 .ui_builder()
                 .link(
                     "Read all changelogs".into(),
-                    Some("https://docs.warp.dev/changelog".into()),
+                    Some("https://blackdagger.io/changelog".into()),
                     None,
                     self.changelog_button_mouse_states
                         .view_changelogs_mouse_state

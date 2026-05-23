@@ -38,12 +38,12 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 pub const MIN_SIDEBAR_WIDTH: f32 = 250.;
 pub const MAX_SIDEBAR_WIDTH_RATIO: f32 = 0.75;
 
-pub const WARP_DRIVE_POSITION_ID: &str = "warp_drive";
+pub const WARP_DRIVE_POSITION_ID: &str = "black_drive";
 
-/// The sidebar that houses Warp Drive.
+/// The sidebar that houses Black Drive.
 /// `DrivePanel` is different from `DriveIndex` in that it is responsible for
-/// how Warp Drive interacts with the workspace and the rest of the app, whereas
-/// `DriveIndex` is the main warp drive view and responsible for the internals of Warp Drive.
+/// how Black Drive interacts with the workspace and the rest of the app, whereas
+/// `DriveIndex` is the main warp drive view and responsible for the internals of Black Drive.
 pub struct DrivePanel {
     index_view: ViewHandle<DriveIndex>,
     mouse_state_handles: MouseStateHandles,
@@ -603,14 +603,14 @@ impl DrivePanel {
         })
     }
 
-    /// This functions scrolls the relevant Warp Drive item into view.
+    /// This functions scrolls the relevant Black Drive item into view.
     pub fn scroll_item_into_view(&mut self, item_id: WarpDriveItemId, ctx: &mut ViewContext<Self>) {
         self.index_view.update(ctx, |index, ctx| {
             index.scroll_item_into_view(item_id, ctx);
         })
     }
 
-    /// This functions sets the index of a focused Warp Drive item.
+    /// This functions sets the index of a focused Black Drive item.
     pub fn set_focused_index(&mut self, focused_index: Option<usize>, ctx: &mut ViewContext<Self>) {
         self.index_view.update(ctx, |index, ctx| {
             index.set_focused_index(focused_index, true, ctx);

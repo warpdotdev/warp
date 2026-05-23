@@ -13,10 +13,10 @@ use super::{
 use crate::terminal::model::session::LocalCommandExecutor;
 use crate::terminal::shell::ShellType;
 
-const EXTENSION_REPO: &str = "https://github.com/warpdotdev/gemini-cli-warp";
-const EXTENSION_NAME: &str = "gemini-warp";
+const EXTENSION_REPO: &str = "https://github.com/blackdagger/gemini-cli-black";
+const EXTENSION_NAME: &str = "gemini-black";
 
-// Keep in sync with the plugin version in warpdotdev/gemini-warp.
+// Keep in sync with the plugin version in blackdagger/gemini-black.
 const MINIMUM_PLUGIN_VERSION: &str = "1.0.0";
 
 pub(super) struct GeminiPluginManager {
@@ -106,11 +106,11 @@ impl CliAgentPluginManager for GeminiPluginManager {
     }
 
     fn install_success_message(&self) -> &'static str {
-        "Warp plugin installed. Please restart Gemini CLI to activate."
+        "Black plugin installed. Please restart Gemini CLI to activate."
     }
 
     fn update_success_message(&self) -> &'static str {
-        "Warp plugin updated. Please restart Gemini CLI to activate."
+        "Black plugin updated. Please restart Gemini CLI to activate."
     }
 
     fn install_instructions(&self) -> &'static PluginInstructions {
@@ -123,12 +123,12 @@ impl CliAgentPluginManager for GeminiPluginManager {
 }
 
 static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
-    title: "Install Warp Plugin for Gemini CLI",
+    title: "Install Black Plugin for Gemini CLI",
     subtitle: "Run the following command, then restart Gemini CLI.",
     steps: &[PluginInstructionStep {
-        description: "Install the Warp extension",
+        description: "Install the Black extension",
         command:
-            "gemini extensions install https://github.com/warpdotdev/gemini-cli-warp --consent",
+            "gemini extensions install https://github.com/blackdagger/gemini-cli-black --consent",
         executable: true,
         link: None,
     }],
@@ -136,11 +136,11 @@ static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| Plu
 });
 
 static UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
-    title: "Update Warp Plugin for Gemini CLI",
+    title: "Update Black Plugin for Gemini CLI",
     subtitle: "Run the following command, then restart Gemini CLI.",
     steps: &[PluginInstructionStep {
-        description: "Update the Warp extension",
-        command: "gemini extensions update gemini-warp",
+        description: "Update the Black extension",
+        command: "gemini extensions update gemini-black",
         executable: true,
         link: None,
     }],
@@ -157,7 +157,7 @@ fn check_installed(extensions_dir: &Path) -> bool {
     serde_json::from_str::<Value>(&contents).is_ok()
 }
 
-/// Reads the installed version string for the Warp extension, if present.
+/// Reads the installed version string for the Black extension, if present.
 fn installed_version(extensions_dir: &Path) -> Option<String> {
     let manifest_path = extensions_dir
         .join(EXTENSION_NAME)

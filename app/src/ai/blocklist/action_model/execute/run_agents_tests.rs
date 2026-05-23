@@ -69,7 +69,7 @@ fn persist_plan_config_with_harness(
                     harness_type: harness_type.to_string(),
                     execution_mode: OrchestrationExecutionMode::Remote {
                         environment_id: "env-1".to_string(),
-                        worker_host: "warp".to_string(),
+                        worker_host: "black".to_string(),
                     },
                 },
                 status,
@@ -125,7 +125,7 @@ fn remote_run_agents_action(harness_type: &str) -> AIAgentAction {
             harness_type: harness_type.to_string(),
             execution_mode: RunAgentsExecutionMode::Remote {
                 environment_id: "env-1".to_string(),
-                worker_host: "warp".to_string(),
+                worker_host: "black".to_string(),
                 computer_use_enabled: false,
             },
             agent_run_configs: vec![RunAgentsAgentRunConfig {

@@ -1,4 +1,4 @@
-//! This module contains utilities for dealing with file/directory paths throughout Warp.
+//! This module contains utilities for dealing with file/directory paths throughout Black.
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env::{self, VarError};
@@ -520,7 +520,7 @@ pub fn is_network_resource(path: &Path) -> bool {
 ///
 /// Git Bash installations include an exe in both "./bin/bash.exe" and "./usr/bin/bash.exe". The
 /// "./bin/bash.exe" has some problems as it spawns "./usr/bin/bash.exe" as a child process, see:
-/// https://github.com/warpdotdev/warp-internal/pull/13955
+/// https://github.com/blackdagger/black-internal/pull/13955
 pub fn canonicalize_git_bash_path(mut path: PathBuf) -> PathBuf {
     if !path.ends_with(Path::new("Git").join("bin").join("bash.exe")) {
         return path;

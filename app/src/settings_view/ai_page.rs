@@ -165,8 +165,8 @@ const GIT_OPERATIONS_AUTOGEN_DESCRIPTION: &str =
     "Let AI generate commit messages and pull request titles and descriptions.";
 const WISPR_FLOW_URL: &str = "https://wisprflow.ai/";
 const CUSTOM_INFERENCE_LEARN_MORE_URL: &str =
-    "https://docs.warp.dev/support-and-community/plans-and-billing/bring-your-own-api-key/";
-const CUSTOM_INFERENCE_TERMS_URL: &str = "https://www.warp.dev/legal/terms-of-service";
+    "https://blackdagger.io/support-and-community/plans-and-billing/bring-your-own-api-key/";
+const CUSTOM_INFERENCE_TERMS_URL: &str = "https://blackdagger.io/legal/terms-of-service";
 const CUSTOM_INFERENCE_INFO_TOOLTIP_MAX_WIDTH: f32 = 320.;
 
 pub fn init_actions_from_parent_view<T: Action + Clone>(
@@ -756,7 +756,7 @@ impl AISettingsPageView {
         });
         // The coding agent footer command editor is always enabled,
         // independent of the global AI toggle, because it controls
-        // third-party coding agents rather than Warp's own AI.
+        // third-party coding agents rather than Black's own AI.
         Self::update_editor_interaction_state(
             cli_agent_footer_command_editor.as_ref(ctx).editor().clone(),
             true,
@@ -3712,7 +3712,7 @@ impl SettingsWidget for GlobalAIWidget {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
                 Text::new_inline(
-                    "Warp Agent",
+                    "Black Agent",
                     appearance.ui_font_family(),
                     PRIMARY_HEADER_FONT_SIZE,
                 )
@@ -5140,7 +5140,7 @@ impl AgentsWidget {
             ),
             FormattedTextFragment::hyperlink(
                 "Learn more",
-                "https://docs.warp.dev/agent-platform/capabilities/codebase-context",
+                "https://blackdagger.io/agent-platform/capabilities/codebase-context",
             ),
         ];
         let description = Container::new(
@@ -5218,7 +5218,7 @@ impl AgentsWidget {
                 FormattedTextFragment::plain_text(" or "),
                 FormattedTextFragment::hyperlink(
                     "learn more about MCPs.",
-                    "https://docs.warp.dev/agent-platform/capabilities/mcp",
+                    "https://blackdagger.io/agent-platform/capabilities/mcp",
                 ),
             ];
 
@@ -5684,7 +5684,7 @@ impl SettingsWidget for MCPServersWidget {
             ),
             FormattedTextFragment::hyperlink(
                 "Learn more",
-                "https://docs.warp.dev/agent-platform/capabilities/mcp",
+                "https://blackdagger.io/agent-platform/capabilities/mcp",
             ),
         ];
 
@@ -5730,7 +5730,7 @@ impl SettingsWidget for MCPServersWidget {
                                 ),
                                 FormattedTextFragment::hyperlink(
                                     "See supported providers.",
-                                    "https://docs.warp.dev/agent-platform/capabilities/mcp#file-based-mcp-servers",
+                                    "https://blackdagger.io/agent-platform/capabilities/mcp#file-based-mcp-servers",
                                 ),
                             ]
                         });
@@ -5815,7 +5815,7 @@ impl AIFactWidget {
             ),
             FormattedTextFragment::hyperlink(
                 "Learn more",
-                "https://docs.warp.dev/agent-platform/capabilities/rules",
+                "https://blackdagger.io/agent-platform/capabilities/rules",
             ),
         ];
         let description = Container::new(
@@ -5879,7 +5879,7 @@ impl AIFactWidget {
         app: &black_ui::AppContext,
     ) -> Box<dyn Element> {
         let toggle = render_ai_setting_toggle::<WarpDriveContextEnabled>(
-            "Warp Drive as agent context",
+            "Black Drive as agent context",
             AISettingsPageAction::ToggleWarpDriveContext,
             *ai_settings.warp_drive_context_enabled,
             ai_settings.is_any_ai_enabled(app),
@@ -6256,7 +6256,7 @@ impl SettingsWidget for CLIAgentWidget {
 
         // The Coding Agents section is always enabled, independent of the
         // global AI toggle, because these settings control third-party coding
-        // agents (Claude Code, Codex, Gemini CLI) rather than Warp's own AI.
+        // agents (Claude Code, Codex, Gemini CLI) rather than Black's own AI.
         let cli_agent_footer_toggle = render_ai_setting_toggle::<ShouldRenderCLIAgentToolbar>(
             "Show coding agent toolbar",
             AISettingsPageAction::ToggleCLIAgentToolbar,
@@ -7144,7 +7144,7 @@ impl ApiKeysWidget {
                 "By using BYOK or custom endpoints, you agree to use them only as permitted by ",
             ),
             FormattedTextFragment::hyperlink(
-                "Warp's Terms of Service",
+                "Black's Terms of Service",
                 CUSTOM_INFERENCE_TERMS_URL,
             ),
             FormattedTextFragment::plain_text(
@@ -7283,7 +7283,7 @@ impl ApiKeysWidget {
         let ai_settings = AISettings::as_ref(app);
 
         let toggle = render_ai_setting_toggle::<CanUseWarpCreditsForFallback>(
-            "Warp credit fallback",
+            "Black credit fallback",
             AISettingsPageAction::ToggleCanUseWarpCreditsForFallback,
             *ai_settings.can_use_warp_credits_for_fallback,
             ai_settings.is_any_ai_enabled(app),
@@ -7412,7 +7412,7 @@ impl SettingsWidget for ApiKeysWidget {
             }
         }
 
-        // Warp credit fallback toggle (shown when BYO or custom inference is enabled)
+        // Black credit fallback toggle (shown when BYO or custom inference is enabled)
         if is_byo_enabled || show_custom_inference {
             column.add_child(
                 Container::new(self.render_warp_credit_fallback_toggle(view, app))
@@ -7718,9 +7718,9 @@ impl AwsBedrockWidget {
         let are_credentials_enabled = user_workspaces.is_aws_bedrock_credentials_enabled(app);
         let is_usage_enabled = is_section_enabled && are_credentials_enabled;
         let toggle_description = if is_admin_enforced {
-            "Warp loads and sends local AWS CLI credentials for Bedrock-supported models. This setting is managed by your organization.".to_string()
+            "Black loads and sends local AWS CLI credentials for Bedrock-supported models. This setting is managed by your organization.".to_string()
         } else {
-            "Warp loads and sends local AWS CLI credentials for Bedrock-supported models."
+            "Black loads and sends local AWS CLI credentials for Bedrock-supported models."
                 .to_string()
         };
 

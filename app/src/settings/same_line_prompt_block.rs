@@ -28,7 +28,7 @@ pub enum SLPBlockState {
 }
 
 // This isn't a user-visible setting, but rather a record of a
-// Warp action that should be persisted the same way we would a setting.
+// Black action that should be persisted the same way we would a setting.
 //
 // When a user has been shown the same line prompt onboarding block,
 // we want to remember that they have already been shown it.

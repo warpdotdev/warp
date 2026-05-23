@@ -195,7 +195,7 @@ impl View for SpendingLimitModal {
         let theme = appearance.theme();
 
         let description_text = Text::new(
-            "Warp will prevent use of premium models when this dollar limit is reached. Resets on a monthly basis.",
+            "Black will prevent use of premium models when this dollar limit is reached. Resets on a monthly basis.",
             appearance.ui_font_family(),
             14.,
         )

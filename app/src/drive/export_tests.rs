@@ -406,7 +406,7 @@ fn test_safe_filename() {
             "allowed $special %characters",
             "allowed $special %characters",
         ),
-        ("warp:drive", "warp_drive"),
+        ("black:drive", "black_drive"),
         ("a/b/c/d:e", "a_b_c_d_e"),
         ("the\0sneaky\0null", "the_sneaky_null"),
         ("ascii\x03control\x1bchars", "ascii_control_chars"),

@@ -19,7 +19,7 @@ use black_ui::{Action, AppContext, Element, SingletonEntity as _};
 use crate::settings::PrivacySettings;
 use crate::themes::theme::ThemeKind;
 
-const PRIVACY_URL: &str = "https://warp.dev/privacy";
+const PRIVACY_URL: &str = "https://blackdagger.io/privacy";
 
 pub const AUTH_MODAL_GAP: f32 = 16.;
 const MODAL_CORNER_RADIUS: Radius = Radius::Pixels(8.);

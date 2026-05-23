@@ -48,7 +48,7 @@ impl CommandRegistry {
         registry
     }
 
-    /// Register signatures for Warp CLI commands.
+    /// Register signatures for Black CLI commands.
     ///
     /// Ideally this would be done outside of the `black_completer` crate, but it's not currently
     /// possible to configure the shared [`Self::global_instance`].

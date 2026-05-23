@@ -21,7 +21,7 @@ pub fn init(_config: LogConfig) -> Result<()> {
     let _ = js_sys::eval("Error.stackTraceLimit = 100");
 
     // Configure log entries to be written to the JS console.
-    init_logger(Config::new(log::Level::Info).module_prefix("warp"));
+    init_logger(Config::new(log::Level::Info).module_prefix("black"));
 
     Ok(())
 }

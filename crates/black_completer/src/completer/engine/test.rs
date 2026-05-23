@@ -103,10 +103,10 @@ fn completes_command_names() {
 #[test]
 fn completes_unregistered_command_names() {
     assert_eq!(
-        location("warp", CommandRegistry::empty(), 4),
+        location("black", CommandRegistry::empty(), 4),
         vec![LocationType::Command {
             is_recognized: false,
-            parsed_token: ParsedToken::new("warp")
+            parsed_token: ParsedToken::new("black")
         }]
     );
 

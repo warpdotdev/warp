@@ -230,7 +230,7 @@ impl AIAssistantPanelView {
         {
             Some(handle) => handle,
             None => {
-                log::error!("Couldn't retrieve warp ai resizable state handle.");
+                log::error!("Couldn't retrieve black ai resizable state handle.");
                 resizable_state_handle(DEFAULT_WARP_AI_WIDTH)
             }
         };
@@ -285,7 +285,7 @@ impl AIAssistantPanelView {
     fn format_as_code_block(&self, content: &str) -> String {
         // Intentionally choose a language that won't be interpreted as a shell language
         // i.e. (*sh)
-        format!("```warp\n{}\n```", content.trim())
+        format!("```black\n{}\n```", content.trim())
     }
 
     // TODO: reconsider if we should be doing all the formatting in here as opposed
@@ -661,7 +661,7 @@ impl AIAssistantPanelView {
         for part in transcript {
             result.push_str(&format!("Prompt: {}\n\n", part.raw_user_prompt().trim()));
             result.push_str(&format!(
-                "Warp AI: {}\n\n",
+                "Black AI: {}\n\n",
                 part.raw_assistant_answer().trim()
             ));
         }

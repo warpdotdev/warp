@@ -79,7 +79,7 @@ pub mod ssh;
 pub mod terminal_manager;
 mod terminal_size_element;
 pub mod view;
-pub mod warpify;
+pub mod blackify;
 mod waterfall_gap_element;
 mod writeable_pty;
 #[cfg(windows)]
@@ -365,7 +365,7 @@ impl SizeInfo {
     }
 
     /// Create SizeInfo for a [`TerminalModel`] instance that doesn't have font metrics,
-    /// which comes from either a headless Warp instance or tests.
+    /// which comes from either a headless Black instance or tests.
     pub fn new_without_font_metrics(rows: usize, cols: usize) -> Self {
         let width = cols as f32;
         let height = rows as f32;

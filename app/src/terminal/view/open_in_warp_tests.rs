@@ -40,7 +40,7 @@ fn test_any_text_file_type_supported() {
         TopLevelCommandCaseSensitivity::CaseInsensitive,
         EscapeChar::Backslash,
     ));
-    // .svg is a non-markdown file, and we allow opening it in the Warp Editor (as a "code" file).
+    // .svg is a non-markdown file, and we allow opening it in the Black Editor (as a "code" file).
     assert_eq!(
         result,
         Some(OpenablePath {

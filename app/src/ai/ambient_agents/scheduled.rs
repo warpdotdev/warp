@@ -150,7 +150,7 @@ pub struct UpdateScheduleParams {
     pub skill_spec: Option<Option<String>>,
     /// The new worker host for the scheduled agent.
     /// If not provided, the worker host will not be updated.
-    /// Setting to "warp" or empty string reverts to Warp-hosted.
+    /// Setting to "warp" or empty string reverts to Black-hosted.
     pub worker_host: Option<String>,
 }
 

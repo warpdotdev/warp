@@ -15,7 +15,7 @@ use crate::terminal::view::telemetry::SharingDialogSource;
 use crate::ui_components::icons::Icon;
 use crate::workspace::WorkspaceAction;
 
-/// A rich onboarding block that prompts the user to share a newly-created personal Warp Drive
+/// A rich onboarding block that prompts the user to share a newly-created personal Black Drive
 /// object.
 pub struct OnboardingDriveSharingBlock {
     object_id: CloudObjectTypeAndId,

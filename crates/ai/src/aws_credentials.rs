@@ -79,7 +79,7 @@ impl AwsCredentialsState {
             ),
             Self::Disabled => (
                 "AWS Bedrock Disabled".to_string(),
-                "Warp will not load your AWS CLI credentials until AWS Bedrock is enabled by you or your workspace admin"
+                "Black will not load your AWS CLI credentials until AWS Bedrock is enabled by you or your workspace admin"
                     .to_string(),
                 Icon::Key,
             ),

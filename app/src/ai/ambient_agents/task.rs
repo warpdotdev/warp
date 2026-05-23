@@ -43,7 +43,7 @@ pub struct AgentConfigSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile_id: Option<String>,
     /// Self-hosted worker ID that should execute this task.
-    /// If None or Some("warp"), the task will be dispatched to Warp-hosted (Namespace) workers.
+    /// If None or Some("black"), the task will be dispatched to Black-hosted (Namespace) workers.
     /// Otherwise, the task will only be assigned to a connected self-hosted worker with matching ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_host: Option<String>,
@@ -57,7 +57,7 @@ pub struct AgentConfigSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub computer_use_enabled: Option<bool>,
     /// Execution harness for the agent run.
-    /// If None, we use Warp's default ("oz").
+    /// If None, we use Black's default ("oz").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<HarnessConfig>,
     /// Authentication secrets for third-party harnesses.
@@ -219,7 +219,7 @@ impl AgentSource {
             AgentSource::Slack => "Slack",
             AgentSource::Cli => "CLI",
             AgentSource::ScheduledAgent => "Scheduled",
-            AgentSource::Interactive | AgentSource::CloudMode => "Warp App",
+            AgentSource::Interactive | AgentSource::CloudMode => "Black App",
             AgentSource::WebApp => "Oz Web",
             AgentSource::GitHubAction => "GitHub Action",
         }

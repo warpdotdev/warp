@@ -181,7 +181,7 @@ fn test_deserialize_image() {
         AssetSource::LocalFile {
             path: home_dir()
                 .unwrap()
-                .join("warp.jpg")
+                .join("black.jpg")
                 .to_str()
                 .unwrap_or_default()
                 .to_owned()
@@ -213,7 +213,7 @@ fn test_deserialize_image() {
         image.source,
         AssetSource::LocalFile {
             path: themes_dir()
-                .join("warp.jpg")
+                .join("black.jpg")
                 .to_str()
                 .unwrap_or_default()
                 .to_owned()

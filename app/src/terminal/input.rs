@@ -137,7 +137,7 @@ use super::view::inline_banner::{
 use super::view::{
     ExecuteCommandEvent, SyncInputType, TerminalAction, PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT,
 };
-use super::warpify::SubshellSource;
+use super::blackify::SubshellSource;
 use super::{prompt, History, HistoryEntry, SizeInfo, TerminalModel, UpArrowHistoryConfig};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentContext, AIAgentExchangeId, CancellationReason, EntrypointType};
@@ -400,26 +400,26 @@ const AGENT_MODE_AI_DISABLED_AUTODETECTION_DISABLED_HINT_TEXT: &str = "Run comma
 
 // Rotating hint text options for new Agent Mode conversations
 const AGENT_MODE_HINT_OPTIONS: &[&str] = &[
-    "Warp anything e.g. Deploy my React app to Vercel and set up environment variables",
-    "Warp anything e.g. Help me debug why my Python tests are failing in CI",
-    "Warp anything e.g. Set up a new microservice with Docker and create the deployment pipeline",
-    "Warp anything e.g. Find and fix the memory leak in my Node.js application",
-    "Warp anything e.g. Create a backup script for my PostgreSQL database and schedule it",
-    "Warp anything e.g. Help me migrate my data from MySQL to PostgreSQL",
-    "Warp anything e.g. Set up monitoring and alerts for my AWS infrastructure",
-    "Warp anything e.g. Build a REST API for my mobile app using FastAPI",
-    "Warp anything e.g. Help me optimize my SQL queries that are running slowly",
-    "Warp anything e.g. Create a GitHub Actions workflow to automatically deploy on merge",
-    "Warp anything e.g. Set up Redis caching for my web application",
-    "Warp anything e.g. Help me troubleshoot why my Kubernetes pods keep crashing",
-    "Warp anything e.g. Build a data pipeline to process CSV files and load them into BigQuery",
-    "Warp anything e.g. Set up SSL certificates and configure HTTPS for my domain",
-    "Warp anything e.g. Help me refactor this legacy code to use modern design patterns",
-    "Warp anything e.g. Create unit tests for my authentication service",
-    "Warp anything e.g. Set up log aggregation with ELK stack for my distributed system",
-    "Warp anything e.g. Help me implement OAuth2 authentication in my Express.js app",
-    "Warp anything e.g. Optimize my Docker images to reduce build times and size",
-    "Warp anything e.g. Set up A/B testing infrastructure for my web application",
+    "Black anything e.g. Deploy my React app to Vercel and set up environment variables",
+    "Black anything e.g. Help me debug why my Python tests are failing in CI",
+    "Black anything e.g. Set up a new microservice with Docker and create the deployment pipeline",
+    "Black anything e.g. Find and fix the memory leak in my Node.js application",
+    "Black anything e.g. Create a backup script for my PostgreSQL database and schedule it",
+    "Black anything e.g. Help me migrate my data from MySQL to PostgreSQL",
+    "Black anything e.g. Set up monitoring and alerts for my AWS infrastructure",
+    "Black anything e.g. Build a REST API for my mobile app using FastAPI",
+    "Black anything e.g. Help me optimize my SQL queries that are running slowly",
+    "Black anything e.g. Create a GitHub Actions workflow to automatically deploy on merge",
+    "Black anything e.g. Set up Redis caching for my web application",
+    "Black anything e.g. Help me troubleshoot why my Kubernetes pods keep crashing",
+    "Black anything e.g. Build a data pipeline to process CSV files and load them into BigQuery",
+    "Black anything e.g. Set up SSL certificates and configure HTTPS for my domain",
+    "Black anything e.g. Help me refactor this legacy code to use modern design patterns",
+    "Black anything e.g. Create unit tests for my authentication service",
+    "Black anything e.g. Set up log aggregation with ELK stack for my distributed system",
+    "Black anything e.g. Help me implement OAuth2 authentication in my Express.js app",
+    "Black anything e.g. Optimize my Docker images to reduce build times and size",
+    "Black anything e.g. Set up A/B testing infrastructure for my web application",
 ];
 
 fn get_agent_mode_new_conversation_hint_text() -> &'static str {
@@ -849,7 +849,7 @@ struct ViewerCommandExecutionRequest {
 /// Where a command execution request originates from.
 #[derive(Clone)]
 pub enum CommandExecutionSource {
-    /// A non-shared command execution request from Warp AI++.
+    /// A non-shared command execution request from Black AI++.
     /// Shared commands use the SharedSession variant instead.
     AI {
         /// Metadata associated with the execution.
@@ -5846,7 +5846,7 @@ impl Input {
             }
             (InputType::AI, _) => {
                 // Follow the `agent_indicator` pattern (see `app/src/tab.rs`):
-                //  * `None` (no conversation, empty, passive, or untitled) => new conversation => "Warp anything"
+                //  * `None` (no conversation, empty, passive, or untitled) => new conversation => "Black anything"
                 //  * `InProgress`                                           => agent running    => "Steer"
                 //  * Any other status                                       => finished         => "Ask a follow up"
                 match self
@@ -6236,7 +6236,7 @@ impl Input {
         });
     }
 
-    /// Predicts the next action using an AI model and past context on blocks within Warp.
+    /// Predicts the next action using an AI model and past context on blocks within Black.
     /// Populates the autosuggestion with the predicted action, if any. Otherwise, falls back to
     /// existing autosuggestion logic.
     #[cfg_attr(target_family = "wasm", allow(unused_variables))]
@@ -7475,7 +7475,7 @@ impl Input {
             .string_model;
 
         if shell_type == ShellType::Fish {
-            // Warp currently doesn't support newlines in Fish, just prepend the vars
+            // Black currently doesn't support newlines in Fish, just prepend the vars
             let mut command = env_vars.export_variables_for_shell(ShellType::Fish);
             command.push(' ');
             Some(command)
@@ -11353,7 +11353,7 @@ impl Input {
 
         // CLI agent rich input in shell mode (! prefix) should allow completions
         // even though the active block is a long-running command.
-        // However, completions are disabled on warpified remote hosts because
+        // However, completions are disabled on blackified remote hosts because
         // in-band generators don't work in this context (with CLI agent).
         let is_cli_agent_shell_mode = self.is_locked_in_shell_mode(ctx)
             && CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id)

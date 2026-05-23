@@ -763,7 +763,7 @@ impl CategoriesView {
                 .link(
                     "creating your own workflow".into(),
                     Some(
-                        "https://docs.warp.dev/knowledge-and-collaboration/warp-drive/workflows"
+                        "https://blackdagger.io/knowledge-and-collaboration/warp-drive/workflows"
                             .into(),
                     ),
                     None,

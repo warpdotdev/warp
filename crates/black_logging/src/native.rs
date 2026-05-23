@@ -105,10 +105,10 @@ pub fn on_crash_recovery_process_killed() {
 }
 
 /// Handles the crash recovery process "recovering" from a parent crash by:
-/// 1) Renaming the log file from the main process (which just panicked) to `warp.log.old.temp`.
-/// 2) Moving the crash recovery process log (which is located at `warp.log.recovery`) to the usual
-///    path warp logs are located (log_directory/warp.log).
-///    The temp log file (`warp.log.old.temp`) will ultimately be rotated to `warp.log.old.0` the next
+/// 1) Renaming the log file from the main process (which just panicked) to `black.log.old.temp`.
+/// 2) Moving the crash recovery process log (which is located at `black.log.recovery`) to the usual
+///    path black logs are located (log_directory/black.log).
+///    The temp log file (`black.log.old.temp`) will ultimately be rotated to `black.log.old.0` the next
 ///    time [`rotate_log_files`] is called (which will get called when the event loop starts and we
 ///    have access to the `AppContext`)
 pub fn on_parent_process_crash() {
@@ -261,7 +261,7 @@ fn current_and_rotated_log_paths() -> Result<Vec<PathBuf>> {
 
     if files.is_empty() {
         return Err(anyhow::anyhow!(
-            "No warp logs were found for {}",
+            "No black logs were found for {}",
             ChannelState::logfile_name()
         ));
     }
@@ -335,7 +335,7 @@ fn sentry_log_filter(md: &log::Metadata) -> sentry_log::LogFilter {
 
         // Filter out logs from the crash-reporting implementation, in case it logs
         // anything in the process of forwarding logs to Sentry.
-        t if t.starts_with("warp::crash_reporting::") => sentry_log::LogFilter::Ignore,
+        t if t.starts_with("black::crash_reporting::") => sentry_log::LogFilter::Ignore,
 
         _ => sentry_log::default_filter(md),
     }

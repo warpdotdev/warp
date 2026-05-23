@@ -4,16 +4,16 @@ use super::*;
 0 1 2 3
 w a r p
 -------
-0     4  << the span for the string "warp" is (0, 4)
+0     4  << the span for the string "black" is (0, 4)
 
 Spanned {
-    item: String::new("warp"),  << warp string
+    item: String::new("black"),  << black string
     span: Span::new(0, 4)       << span
 }
 
-or >> String::new("warp").spanned(Span::new(0, 4))        */
-fn warp() -> Spanned<String> {
-    String::from("warp").spanned(Span::new(0, 4))
+or >> String::new("black").spanned(Span::new(0, 4))        */
+fn black_word() -> Spanned<String> {
+    String::from("black").spanned(Span::new(0, 4))
 }
 
 fn empty() -> Spanned<String> {
@@ -22,6 +22,6 @@ fn empty() -> Spanned<String> {
 
 #[test]
 fn knows_distances() {
-    assert!(warp().span.distance() == 4);
+    assert!(black_word().span.distance() == 4);
     assert!(empty().span.distance() == 0);
 }

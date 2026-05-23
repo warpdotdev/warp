@@ -1,4 +1,4 @@
-//! Generates a JSON Schema file describing Warp's user-facing settings.
+//! Generates a JSON Schema file describing Black's user-facing settings.
 //!
 //! Usage:
 //! ```
@@ -229,7 +229,7 @@ fn main() {
     );
     root.insert(
         "title".to_string(),
-        Value::String("Warp Settings".to_string()),
+        Value::String("Black Settings".to_string()),
     );
     root.insert(
         "description".to_string(),

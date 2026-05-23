@@ -1,6 +1,6 @@
 //! This module contains rendering functions for various requested inline actions that have not yet
 //! been transformed into a [`View`] component. This currently encompasses UI for file retrieval,
-//! environmental variable collection, and SSH Warpification, to name a few.
+//! environmental variable collection, and SSH Blackification, to name a few.
 //!
 //! There's quite a bit of duplication between function-based inline actions and view-based inline
 //! actions. Moreover, the header rendering functions here don't make use of the HeaderConfig.

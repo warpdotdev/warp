@@ -1,10 +1,10 @@
 //! One-time migration that gives the Preview channel its own config
-//! directory (`~/.warp-preview`) on macOS.
+//! directory (`~/.black`) on macOS.
 //!
-//! Historically, Stable and Preview shared `~/.warp` on macOS. To give
+//! Historically, Stable and Preview shared `~/.black` on macOS. To give
 //! Preview its own directory without breaking existing users, this migration
-//! symlinks each top-level entry from `~/.warp` into `~/.warp-preview` on
-//! first launch, so existing configuration (keybindings, themes, workflows,
+//! symlinks each top-level entry from `~/.black` into the Preview config dir
+//! on first launch, so existing configuration (keybindings, themes, workflows,
 //! etc.) remains available to Preview.
 //!
 //! See `specs/QUALITY-408/` for full context.
@@ -19,15 +19,15 @@ use black_core::paths::{data_dir, WARP_CONFIG_DIR};
 /// Preview so each channel has independent settings.
 const MIGRATION_EXCLUDED_FILES: &[&str] = &["settings.toml"];
 
-/// Migrates Preview's config directory from the shared `.warp` location to
-/// `.warp-preview` by creating symlinks from each top-level entry in `.warp`
+/// Migrates Preview's config directory from the shared `.black` location to
+/// its own directory by creating symlinks from each top-level entry in `.black`
 /// into the new directory.
 ///
 /// This runs once — on the first launch after the Preview channel is given
 /// its own config directory. It is a no-op if:
 /// - The channel is not Preview.
-/// - `~/.warp-preview` already exists.
-/// - `~/.warp` does not exist.
+/// - The Preview config directory already exists.
+/// - `~/.black` does not exist.
 pub(crate) fn migrate_preview_config_dir_if_needed() {
     if ChannelState::channel() != Channel::Preview {
         return;
@@ -39,7 +39,7 @@ pub(crate) fn migrate_preview_config_dir_if_needed() {
 
     let old_dir = home.join(WARP_CONFIG_DIR);
     // `data_dir()` is already channel-aware; for Preview it resolves to
-    // `~/.warp-preview`.
+    // the Preview config directory.
     let new_dir = data_dir();
 
     migrate_config_dir_via_symlinks(&old_dir, &new_dir);
@@ -56,7 +56,7 @@ pub(crate) fn migrate_config_dir_via_symlinks(old_dir: &Path, new_dir: &Path) {
 
     // The existence of new_dir is the migration marker — no separate marker
     // file is needed. Once this directory exists (whether created by the
-    // migration itself or by ensure_warp_watch_roots_exist on a subsequent
+    // migration itself or by ensure_black_watch_roots_exist on a subsequent
     // launch), this function is a no-op.
     if new_dir.exists() || !old_dir.exists() {
         return;

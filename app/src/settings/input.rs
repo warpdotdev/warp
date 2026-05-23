@@ -160,7 +160,7 @@ define_settings_group!(InputSettings,
             supported_platforms: SupportedPlatforms::ALL,
             sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
             private: false,
-            toml_path: "agents.warp_agent.input.show_agent_tips",
+            toml_path: "agents.black_agent.input.show_agent_tips",
             description: "Whether agent tips are displayed in the input.",
         },
         // Whether to show the terminal input message bar (contextual hints at the bottom of terminal input).

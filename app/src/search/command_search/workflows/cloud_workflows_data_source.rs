@@ -29,7 +29,7 @@ pub(crate) struct CloudWorkflowsSnapshot {
     filter_to_command_workflows: bool,
 }
 
-/// Creates an async data source for cloud workflows (i.e. those that exist in Warp Drive).
+/// Creates an async data source for cloud workflows (i.e. those that exist in Black Drive).
 pub fn cloud_workflows_data_source(
 ) -> AsyncSnapshotDataSource<CloudWorkflowsSnapshot, CommandSearchItemAction> {
     AsyncSnapshotDataSource::new(

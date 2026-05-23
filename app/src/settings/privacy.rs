@@ -748,7 +748,7 @@ impl PrivacySettings {
                 Some(is_cloud_conversation_storage_enabled),
             ) => {
                 log::info!(
-                    "Warp Drive privacy preferences are set, using those for telemetry={is_telemetry_enabled}, \
+                    "Black Drive privacy preferences are set, using those for telemetry={is_telemetry_enabled}, \
                     crash_reporting={is_crash_reporting_enabled}, cloud_conversation_storage={is_cloud_conversation_storage_enabled}"
                 );
                 self.set_is_telemetry_enabled(is_telemetry_enabled, ctx);
@@ -760,7 +760,7 @@ impl PrivacySettings {
             }
             _ => {
                 log::info!(
-                    "Warp Drive privacy preferences are not set, syncing local PrivacySettings values to \
+                    "Black Drive privacy preferences are not set, syncing local PrivacySettings values to \
                     WarpDrivePrivacySettings and cloud. telemetry={}, crash_reporting={}, \
                     cloud_conversation_storage={}",
                     self.is_telemetry_enabled,

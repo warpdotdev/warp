@@ -701,7 +701,7 @@ impl<'a> WarpDriveRow<'a> {
     }
 }
 
-/// Generate a callback for calculating the Drag bounds within Warp Drive
+/// Generate a callback for calculating the Drag bounds within Black Drive
 fn drag_bounds_callback() -> impl Fn(&PositionCache, Vector2F) -> Option<RectF> {
     move |position_cache, window: Vector2F| {
         let drive_index = position_cache.get_position(WARP_DRIVE_POSITION_ID)?;

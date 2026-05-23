@@ -42,44 +42,44 @@ fn test_mac_warpification_script_size() {
 
         app.read(|ctx| {
             assert_script_is_short_enough_mac(
-                &begin_warpify_ssh_session_command(ctx),
+                &begin_blackify_ssh_session_command(ctx),
                 "unknown_init_subshell.sh",
                 false,
             );
 
             assert_script_is_short_enough_mac(
                 &get_script(
-                    bundled_asset!("ssh/bash_zsh/install_tmux_and_warpify_brew.sh"),
+                    bundled_asset!("ssh/bash_zsh/install_tmux_and_blackify_brew.sh"),
                     ctx,
                 ),
-                "install_tmux_and_warpify_brew.sh",
+                "install_tmux_and_blackify_brew.sh",
                 false,
             );
             assert_script_is_short_enough_mac(
                 &get_script(
-                    bundled_asset!("ssh/fish/install_tmux_and_warpify_brew.sh"),
+                    bundled_asset!("ssh/fish/install_tmux_and_blackify_brew.sh"),
                     ctx,
                 ),
-                "fish/install_tmux_and_warpify_brew.sh",
+                "fish/install_tmux_and_blackify_brew.sh",
                 false,
             );
 
             assert_script_is_short_enough_mac(
-                &warpify_ssh_session_command("Darwin", ShellType::Zsh, ctx)
+                &blackify_ssh_session_command("Darwin", ShellType::Zsh, ctx)
                     .expect("Should get Darwin zsh script"),
-                "zsh warpify",
+                "zsh blackify",
                 true,
             );
             assert_script_is_short_enough_mac(
-                &warpify_ssh_session_command("Darwin", ShellType::Bash, ctx)
+                &blackify_ssh_session_command("Darwin", ShellType::Bash, ctx)
                     .expect("Should get Darwin bash script"),
-                "bash warpify",
+                "bash blackify",
                 true,
             );
             assert_script_is_short_enough_mac(
-                &warpify_ssh_session_command("Darwin", ShellType::Fish, ctx)
+                &blackify_ssh_session_command("Darwin", ShellType::Fish, ctx)
                     .expect("Should get Darwin fish script"),
-                "fish warpify",
+                "fish blackify",
                 true,
             )
         });

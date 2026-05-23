@@ -113,12 +113,12 @@ fn format_mcp_server_display(name: &str, config: &Value) -> String {
     }
 
     if let Some(warp_id) = obj
-        .get("warp_id")
+        .get("black_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        return format!("{name}: warp_id={warp_id}");
+        return format!("{name}: black_id={warp_id}");
     }
 
     name.to_string()

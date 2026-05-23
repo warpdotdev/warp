@@ -453,7 +453,7 @@ impl AgentNotificationsModel {
 
 #[derive(Clone, Debug)]
 pub enum AgentManagementEvent {
-    /// A Warp-native conversation needs attention and is not visible in the current window/tab.
+    /// A Black-native conversation needs attention and is not visible in the current window/tab.
     ConversationNeedsAttention {
         window_id: WindowId,
         tab_index: usize,

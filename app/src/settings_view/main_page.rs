@@ -686,7 +686,7 @@ impl SettingsWidget for SettingsSyncWidget {
         let label_info = AdditionalInfo {
             mouse_state: self.tooltip_state.clone(),
             on_click_action: Some(MainPageAction::OpenUrl(
-                "https://docs.warp.dev/terminal/more-features/settings-sync".into(),
+                "https://blackdagger.io/terminal/more-features/settings-sync".into(),
             )),
             secondary_text: None,
             tooltip_override_text: None,

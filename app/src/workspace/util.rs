@@ -285,7 +285,7 @@ pub enum TerminalSessionFallbackBehavior {
 /// Given a [`WindowId`], see if its [`Workspace`] contains an active [`TerminalView`] and return
 /// that.
 ///
-/// Note that "active" is not the same as "focused" in Warp's pane management.
+/// Note that "active" is not the same as "focused" in Black's pane management.
 pub fn active_terminal_in_window<T, F>(
     window_id: WindowId,
     ctx: &mut AppContext,

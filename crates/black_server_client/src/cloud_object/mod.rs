@@ -569,7 +569,7 @@ pub struct CloudObjectMetadata {
     pub trashed_ts: Option<ServerTimestamp>,
     pub folder_id: Option<SyncId>,
     /// Welcome objects are created on the server when a user first receives
-    /// access to Warp Drive as part of onboarding.
+    /// access to Black Drive as part of onboarding.
     pub is_welcome_object: bool,
     pub last_editor_uid: Option<String>,
     pub creator_uid: Option<String>,

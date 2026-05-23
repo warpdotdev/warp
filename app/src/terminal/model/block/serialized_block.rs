@@ -191,7 +191,7 @@ pub struct SerializedBlock {
 
     pub shell_host: Option<ShellHost>,
 
-    /// JSON-serialized representation of the Warp prompt snapshot (Context Chips). Note that this
+    /// JSON-serialized representation of the Black prompt snapshot (Context Chips). Note that this
     /// is different from PS1 and RPROMPT1
     pub prompt_snapshot: Option<String>,
 

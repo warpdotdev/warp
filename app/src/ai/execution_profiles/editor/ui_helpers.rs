@@ -895,7 +895,7 @@ pub fn render_plan_auto_sync_toggle(
     .finish();
 
     let desc_elem = Text::new(
-        "The plans this agent creates will be automatically added and synced to Warp Drive."
+        "The plans this agent creates will be automatically added and synced to Black Drive."
             .to_string(),
         appearance.ui_font_family(),
         11.,

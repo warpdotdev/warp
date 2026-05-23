@@ -23,7 +23,7 @@ use crate::ui_components::icons::Icon;
 use crate::workspaces::user_profiles::UserProfiles;
 
 /// Component to show details about a notebook:
-/// * Interactive breadcrumbs for its location within Warp Drive
+/// * Interactive breadcrumbs for its location within Black Drive
 /// * The current editor of the notebook
 /// * Grab-the-baton UI controls
 pub struct DetailsBar {

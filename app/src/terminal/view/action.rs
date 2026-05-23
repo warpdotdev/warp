@@ -283,14 +283,14 @@ pub enum TerminalAction {
     },
     /// Starts a subshell in the active session.
     TriggerSubshellBootstrap,
-    /// If the user says "no" to Warpification, possibly requesting not to be asked again
-    DismissWarpifyBanner(RememberForWarpification),
+    /// If the user says "no" to Blackification, possibly requesting not to be asked again
+    DismissBlackifyBanner(RememberForWarpification),
     /// Triggers the banner asking to turn the running block into a subshell. The String is the
     /// command that the user entered.
     ShowSubshellBanner(String),
-    /// Triggers the banner asking to Warpify the active ssh session. The String is the
+    /// Triggers the banner asking to Blackify the active ssh session. The String is the
     /// command that the user entered.
-    ShowWarpifySshBanner(String, Option<String>),
+    ShowBlackifySshBanner(String, Option<String>),
     InsertMostRecentCommandCorrection,
     AliasExpansionBanner(AliasExpansionBannerAction),
     OpenInWarpBanner(OpenInWarpBannerAction),
@@ -321,8 +321,8 @@ pub enum TerminalAction {
     /// it if possible.
     SelectAIAttachedBlock(BlockIndex),
     DragAndDropFiles(Vec<String>),
-    /// Triggers an ssh session to warpify, even if there is no Warpify Block.
-    WarpifySSHSession,
+    /// Triggers an ssh session to blackify, even if there is no Blackify Block.
+    BlackifySSHSession,
     NotifySshErrorBlock(SshErrorBlockAction),
     /// Sets the input mode to Agent Mode
     SetInputModeAgent,
@@ -348,7 +348,7 @@ pub enum TerminalAction {
     GenerateCodebaseIndex,
     /// This is for debugging, dev only for now
     LoadAgentModeConversation,
-    ShowWarpifySettings,
+    ShowBlackifySettings,
     /// Removes a pending attachment (image or file) by index in the unified list.
     DeleteAttachment {
         index: usize,
@@ -394,9 +394,9 @@ pub enum TerminalAction {
     DismissCodeToolbeltTooltip,
     /// Start a Language Server for the current working directory (if supported)
     StartLspServer,
-    /// Start the guided Warp Environment setup flow (inserts the inline setup block).
+    /// Start the guided Black Environment setup flow (inserts the inline setup block).
     SetupCloudEnvironment(Vec<String>),
-    /// Start the guided Warp Environment setup flow immediately (no inline setup block).
+    /// Start the guided Black Environment setup flow immediately (no inline setup block).
     SetupCloudEnvironmentAndStart(Vec<String>),
     /// Show the environment setup mode selector to choose between remote GitHub or local agent flow.
     TriggerEnvironmentSetupSelection(Vec<String>),
@@ -612,9 +612,9 @@ impl fmt::Debug for TerminalAction {
             OpenBlockListContextMenu => f.write_str("OpenBlockListContextMenu"),
             AskAIAssistant { block_index } => write!(f, "AskAIAssistant({block_index:?})"),
             TriggerSubshellBootstrap => f.write_str("TriggerSubshellBootstrap"),
-            DismissWarpifyBanner(remember) => write!(f, "DismissWarpifyBanner({remember:?})"),
+            DismissBlackifyBanner(remember) => write!(f, "DismissBlackifyBanner({remember:?})"),
             ShowSubshellBanner(_) => f.write_str("ShowSubshellBanner"),
-            ShowWarpifySshBanner(_, _) => f.write_str("ShowWarpifySshBanner"),
+            ShowBlackifySshBanner(_, _) => f.write_str("ShowBlackifySshBanner"),
             InsertMostRecentCommandCorrection => f.write_str("InsertMostRecentCommandCorrection"),
             AliasExpansionBanner(action) => write!(f, "AliasExpansionBanner({action:?}"),
             OpenInWarpBanner(action) => write!(f, "OpenInWarpBanner({action:?})"),
@@ -652,7 +652,7 @@ impl fmt::Debug for TerminalAction {
             ExecuteRewindFromInlineMenu { .. } => write!(f, "ExecuteRewindFromInlineMenu"),
             SelectAIAttachedBlock(_) => write!(f, "SelectAIAttachedBlock"),
             DragAndDropFiles(_) => write!(f, "DragAndDropFiles"),
-            WarpifySSHSession => write!(f, "WarpifySSHSession"),
+            BlackifySSHSession => write!(f, "BlackifySSHSession"),
             NotifySshErrorBlock(action) => write!(f, "NotifySshErrorBlock({action:?})"),
             SetInputModeAgent => write!(f, "SetInputModeAgent"),
             SetInputModeTerminal => write!(f, "SetInputModeTerminal"),
@@ -676,7 +676,7 @@ impl fmt::Debug for TerminalAction {
             ShowInitializationBlock => write!(f, "ShowInitializationBlock"),
             GenerateCodebaseIndex => write!(f, "GenerateIndexForRepo"),
             LoadAgentModeConversation => write!(f, "LoadAgentModeConversation"),
-            ShowWarpifySettings => write!(f, "ShowWarpifySettings"),
+            ShowBlackifySettings => write!(f, "ShowBlackifySettings"),
             DeleteAttachment { index } => write!(f, "DeleteAttachment({index:?})"),
             OpenAttachmentLightbox { index } => {
                 write!(f, "OpenAttachmentLightbox({index:?})")

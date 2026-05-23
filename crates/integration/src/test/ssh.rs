@@ -190,7 +190,7 @@ macro_rules! generate_can_bootstrap_tmux_ssh_test_for_shell {
         /// Ensure we can successfully ssh into a $shell remote shell and bootstrap it
         /// successfully.
         pub fn $fn_name() -> Builder {
-            fn warpify(builder: Builder) -> Builder {
+            fn blackify(builder: Builder) -> Builder {
                 builder
                     .with_step(enter_ssh_command($shell))
                     .with_step(wait_for_password_prompt(0 /*tab_idx*/, $shell))
@@ -227,14 +227,14 @@ macro_rules! generate_can_bootstrap_tmux_ssh_test_for_shell {
                 .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
                 .with_step(setup_gcloud_sdk());
             // Install Tmux
-            let builder = warpify(builder).with_step(
+            let builder = blackify(builder).with_step(
                 accept_tmux_install().set_post_step_pause(std::time::Duration::from_secs(3)),
             );
             // Quit SSH Session once we validate warpificaiton works with Tmux Install
             let builder = assert_warpification(builder).with_step(run_exit_command());
 
-            // Validate we can Warpify when Tmux is already installed
-            assert_warpification(warpify(builder))
+            // Validate we can Blackify when Tmux is already installed
+            assert_warpification(blackify(builder))
         }
     };
 }

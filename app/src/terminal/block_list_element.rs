@@ -58,7 +58,7 @@ use super::view::{
     BlocklistAIRenderContext, InlineBannerId, RichContentMetadata, SeparatorId,
     SharedSessionBanners, TerminalEditor, TerminalViewRenderContext, BLOCK_BANNER_HEIGHT,
 };
-use super::warpify::render::{draw_flag_pole, render_subshell_flag};
+use super::blackify::render::{draw_flag_pole, render_subshell_flag};
 use super::{heights_approx_eq, TerminalModel, HEIGHT_FUDGE_FACTOR_LINES};
 use crate::ai::blocklist::agent_view::{agent_view_bg_fill, AgentViewState};
 use crate::ai::blocklist::{ai_brand_color, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT};
@@ -86,7 +86,7 @@ use crate::terminal::model::selection::{SelectAction, SelectionPoint};
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::view::TerminalAction;
-use crate::terminal::warpify::SubshellSource;
+use crate::terminal::blackify::SubshellSource;
 use crate::terminal::{grid_renderer, SizeInfo};
 use crate::themes::theme::{Fill, WarpTheme};
 use crate::ui_components::{self, icons as UIIcon};
@@ -711,7 +711,7 @@ pub struct BlockListElement {
     use_ligature_rendering: bool,
 
     /// When true, suppresses cursor rendering for CLI agents when rich input is open. For agents that draw their own cursor (SHOW_CURSOR off),
-    /// the cursor cell is skipped. For agents that let Warp draw the cursor
+    /// the cursor cell is skipped. For agents that let Black draw the cursor
     /// (SHOW_CURSOR on), the `draw_cursor` call and cursor contrast colouring
     /// are suppressed instead.
     hide_cursor_cell: bool,
@@ -2546,7 +2546,7 @@ impl BlockListElement {
                 }
             }
 
-            // If Warp prompt (non-PS1) is being used, the command is drawn below the prompt,
+            // If Black prompt (non-PS1) is being used, the command is drawn below the prompt,
             // hence we account for the prompt's vertical offset.
             let prompt_vertical_offset_px = if !block.honor_ps1() {
                 cell_size_height
@@ -2704,9 +2704,9 @@ impl BlockListElement {
             if block.is_active_and_long_running()
             // Check if the "hide cursor" escape sequence is present.
             && block.is_mode_set(TermMode::SHOW_CURSOR)
-            // Don't draw the Warp cursor when rich input is hiding
+            // Don't draw the Black cursor when rich input is hiding
             // the CLI agent's cursor cell — agents like OpenCode and Codex
-            // rely on Warp's cursor, so we suppress it here too.
+            // rely on Black's cursor, so we suppress it here too.
             && !block_grid_params.grid_render_params.hide_cursor_cell
             {
                 block.output_grid().draw_cursor(

@@ -6,7 +6,7 @@ use anyhow::Result;
 use black_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpServerConfig};
 use black_core::AppId;
 
-// Simple wrapper around black::run() for Warp OSS builds.
+// Simple wrapper around black::run() for Black OSS builds.
 fn main() -> Result<()> {
     let mut state = ChannelState::new(
         Channel::Oss,

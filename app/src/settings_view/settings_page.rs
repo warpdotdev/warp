@@ -41,7 +41,7 @@ use super::referrals_page::ReferralsPageView;
 use super::show_blocks_view::ShowBlocksView;
 use super::teams_page::TeamsPageView;
 use super::warp_drive_page::WarpDriveSettingsPageView;
-use super::warpify_page::WarpifyPageView;
+use super::blackify_page::BlackifyPageView;
 use super::SettingsSection;
 use crate::appearance::Appearance;
 use crate::settings::CloudPreferencesSettings;
@@ -109,7 +109,7 @@ pub enum SettingsPageViewHandle {
     Teams(ViewHandle<TeamsPageView>),
     OzCloudAPIKeys(ViewHandle<super::platform_page::PlatformPageView>),
     Privacy(ViewHandle<PrivacyPageView>),
-    Warpify(ViewHandle<WarpifyPageView>),
+    Blackify(ViewHandle<BlackifyPageView>),
     Referrals(ViewHandle<ReferralsPageView>),
     AI(ViewHandle<AISettingsPageView>),
     CloudEnvironments(ViewHandle<EnvironmentsPageView>),
@@ -132,7 +132,7 @@ impl SettingsPageViewHandle {
             Teams(view_handle) => ChildView::new(view_handle).finish(),
             OzCloudAPIKeys(view_handle) => ChildView::new(view_handle).finish(),
             Privacy(view_handle) => ChildView::new(view_handle).finish(),
-            Warpify(view_handle) => ChildView::new(view_handle).finish(),
+            Blackify(view_handle) => ChildView::new(view_handle).finish(),
             Referrals(view_handle) => ChildView::new(view_handle).finish(),
             AI(view_handle) => ChildView::new(view_handle).finish(),
             CloudEnvironments(view_handle) => ChildView::new(view_handle).finish(),

@@ -305,7 +305,7 @@ impl EmbeddedItem for EmbeddedWorkflow {
 
         // If the workflow is no longer accessible or is trashed, set the content to
         // an empty string. But we should still keep the HTML element formatting and
-        // attributes so we could re-parse the ID and metadata when pasted into Warp.
+        // attributes so we could re-parse the ID and metadata when pasted into Black.
         let workflow_content = workflow
             .and_then(|workflow| {
                 if !workflow.is_trashed(cloud_model) {

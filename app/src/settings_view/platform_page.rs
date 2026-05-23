@@ -41,7 +41,7 @@ use crate::util::time_format::format_approx_duration_from_now_utc;
 
 const MODAL_WIDTH: f32 = 460.;
 const MODAL_HEIGHT: f32 = 320.;
-const API_KEY_DOCS_URL: &str = "https://docs.warp.dev/reference/cli/api-keys";
+const API_KEY_DOCS_URL: &str = "https://blackdagger.io/reference/cli/api-keys";
 const API_KEY_NAME_COLUMN_DEFAULT_WIDTH: f32 = 220.;
 const API_KEY_NAME_COLUMN_MIN_WIDTH: f32 = 120.;
 const API_KEY_KEY_COLUMN_WIDTH: f32 = 120.;

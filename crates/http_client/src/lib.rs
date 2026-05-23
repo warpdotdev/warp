@@ -21,23 +21,23 @@ use black_core::operating_system_info::OperatingSystemInfo;
 use black_core::{execution_mode, report_error};
 
 pub mod headers {
-    /// Custom Warp header indicating the version of the Warp app.
+    /// Custom Black header indicating the version of the Black app.
     pub const CLIENT_RELEASE_VERSION_HEADER_KEY: &str = "X-Warp-Client-Version";
 
-    /// Custom Warp header indicating the OS category the request was sent from.
+    /// Custom Black header indicating the OS category the request was sent from.
     pub(crate) const WARP_OS_CATEGORY: &str = "X-Warp-OS-Category";
-    /// Custom Warp header indicating the OS name the request was sent from. On Linux this is the
+    /// Custom Black header indicating the OS name the request was sent from. On Linux this is the
     /// name of the distribution. On all other platforms it should be equivalent to
     /// `WARP_OS_CATEGORY`.
     pub(crate) const WARP_OS_NAME: &str = "X-Warp-OS-Name";
-    /// Custom Warp header indicating the version of the operating system. On Linux this is the
+    /// Custom Black header indicating the version of the operating system. On Linux this is the
     /// version of the distribution, not the Linux kernel version.
     pub(crate) const WARP_OS_VERSION: &str = "X-Warp-OS-Version";
 
-    /// Custom Warp header indicating the linux kernel version. This is only sent from Linux.
+    /// Custom Black header indicating the linux kernel version. This is only sent from Linux.
     pub(crate) const WARP_OS_LINUX_KERNEL_VERSION: &str = "X-Warp-OS-Linux-Kernel-Version";
 
-    /// Custom Warp header indicating the client role. We don't use the User-Agent header
+    /// Custom Black header indicating the client role. We don't use the User-Agent header
     /// because it can't be set from WASM.
     pub(crate) const WARP_CLIENT_ID: &str = "X-Warp-Client-ID";
 }
@@ -574,7 +574,7 @@ impl<'a> RequestBuilder<'a> {
 }
 
 /// An error returned from `Response::error_for_status` that includes response metadata.
-/// This allows callers to inspect headers (like X-Warp-Error-Code) and the response body when
+/// This allows callers to inspect headers (like X-Black-Error-Code) and the response body when
 /// handling errors.
 #[derive(Debug)]
 pub struct ResponseError {

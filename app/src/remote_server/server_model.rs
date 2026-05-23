@@ -198,7 +198,7 @@ pub struct ServerModel {
     /// Per-connection outbound channels, keyed by `ConnectionId`.
     ///
     /// The daemon can serve multiple proxy connections simultaneously — one
-    /// per SSH session / Warp tab connecting to this host.  Each entry maps
+    /// per SSH session / Black tab connecting to this host.  Each entry maps
     /// a connection's `Uuid` to the channel the connection task drains to
     /// write `ServerMessage`s back to its proxy.
     connection_senders: HashMap<ConnectionId, async_channel::Sender<ServerMessage>>,

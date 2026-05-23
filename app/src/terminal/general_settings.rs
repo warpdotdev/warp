@@ -50,7 +50,7 @@ define_settings_group!(GeneralSettings, settings: [
     // If it has, we don't try to add it again unless the user explicitly
     // retoggles the setting. This is to allow a user to remove the login item
     // directly from their OS's startup UI and not have it re-added when they
-    // next start Warp.
+    // next start Black.
     app_added_as_login_item: AppAddedAsLoginItem {
         type: bool,
         default: false,

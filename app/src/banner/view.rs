@@ -32,7 +32,7 @@ pub enum DismissalType {
     Temporary,
 
     /// The banner should not be shown again to the user, whether in a new or existing session.
-    /// Dismissal state should also persist across app sessions (e.g. when Warp is restarted).
+    /// Dismissal state should also persist across app sessions (e.g. when Black is restarted).
     Permanent,
 }
 

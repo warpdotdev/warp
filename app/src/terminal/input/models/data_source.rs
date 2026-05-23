@@ -43,7 +43,7 @@ use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
-const AUTO_BEDROCK_TOOLTIP: &str = "Warp uses Bedrock when the model Auto selects supports it; otherwise it may use Warp-hosted inference.";
+const AUTO_BEDROCK_TOOLTIP: &str = "Black uses Bedrock when the model Auto selects supports it; otherwise it may use Warp-hosted inference.";
 
 #[derive(Clone, Debug)]
 pub struct AcceptModel {
@@ -671,7 +671,7 @@ impl SearchItem for ModelSearchItem {
 }
 
 /// Returns true when a promo discount chip should be shown for a model.
-/// Discounts only apply when the user is billing through Warp credits,
+/// Discounts only apply when the user is billing through Black credits,
 /// so we suppress the chip when the user is routing through their own API key.
 fn should_show_discount_chip(discount_percentage: Option<f32>, is_using_byok: bool) -> bool {
     discount_percentage.is_some_and(|p| p > 0.) && !is_using_byok

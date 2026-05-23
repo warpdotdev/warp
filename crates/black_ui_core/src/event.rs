@@ -153,12 +153,12 @@ pub enum Event {
         position: Vector2F,
         cmd: bool,
         shift: bool,
-        /// Whether this mouse event was initiated by the user or by Warp synthetically.
+        /// Whether this mouse event was initiated by the user or by Black synthetically.
         /// We create such synthetic mouse events for certain behaviors behaviors within
-        /// Warp, such as triggering the correct tab to be "hovered" when the user closes
+        /// Black, such as triggering the correct tab to be "hovered" when the user closes
         /// a tab to the left. In this case, there's no user-initiated mouse event, however,
         /// we create a synthetic mouse event so that we carry over the "hovered" state from
-        /// the old tab (closed) to the new tab (shifted). Certain elements within Warp,
+        /// the old tab (closed) to the new tab (shifted). Certain elements within Black,
         /// such as the alt-screen, may not want such synthetic mouse events since it can
         /// interfere with actions such as mouse dragging.
         is_synthetic: bool,
@@ -191,7 +191,7 @@ pub enum Event {
     TypedCharacters {
         chars: String,
     },
-    /// Gets fired when user drags a file or folder into Warp. Note that there could exist
+    /// Gets fired when user drags a file or folder into Black. Note that there could exist
     /// multiple file paths in one event as user could drag and drop multiple targets.
     DragAndDropFiles {
         paths: Vec<String>,

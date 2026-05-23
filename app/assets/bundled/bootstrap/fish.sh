@@ -11,7 +11,7 @@ begin
 set -l saved_fish_private_mode $fish_private_mode
 set -g fish_private_mode 1
 
-# Disable fish autosuggestions - because input goes through Warp's editor instead,
+# Disable fish autosuggestions - because input goes through Black's editor instead,
 # they are never actionable, and the extra output can cause problems.
 set -g fish_autosuggestion_enabled 0
 
@@ -21,7 +21,7 @@ set -g DCS_START \u1b\u50\u24
 
 # Appended to $DCS_START to signal that the following message is JSON-encoded.
 # The Rust app also receives non-JSON-encoded DCS's sent from
-# _warp_run_generator_command_internal, which instead end in 'e' (0x65).
+# _black_run_generator_command_internal, which instead end in 'e' (0x65).
 set -g DCS_JSON_MARKER 'd'
 
 set -g DCS_END \x1b\x5c
@@ -78,11 +78,11 @@ set -g _warp_generator_pids ''
 # the job is completed.
 #
 # Usage:
-#   _warp_run_generator_command_internal <command_id> '<command>'
+#   _black_run_generator_command_internal <command_id> '<command>'
 #
 # The first argument is the command's ID, which is included in the DCS string sent
 # to the rust app. The second argument is the command string itself.
-function  _warp_run_generator_command_internal
+function  _black_run_generator_command_internal
     set -l command_id $argv[1]
     set -l command (string join -- ' ' (string escape $argv[2]))
     # Fish cannot run shell functions in the background, so in order to run
@@ -148,12 +148,12 @@ end
 # not substituted until the command string is actually evaluated.
 #
 # Usage:
-#   warp_run_generator_command <command_id> '<command> <arg1> ... <argn>'
-function warp_run_generator_command
+#   black_run_generator_command <command_id> '<command> <arg1> ... <argn>'
+function black_run_generator_command
     # Setting this environment variable allows warp_precmd to detect if a generator
     # command or a user command has just completed.
     set -g _BLACK_GENERATOR_COMMAND 1
-    _warp_run_generator_command_internal $argv
+    _black_run_generator_command_internal $argv
 end
 
 # Run before a command is executed.
@@ -163,7 +163,7 @@ function warp_preexec --on-event fish_preexec
     warp_maybe_send_reset_grid_osc
 
     # If this preexec is called for user command, kill ongoing generator command jobs.
-    if test (! string match -q "warp_run_generator_command*" $argv[1])
+    if test (! string match -q "black_run_generator_command*" $argv[1])
         for pid in $_warp_generator_pids
             # Suppress stderr output; kill writes to stderr if any of the given
             # PIDS are not running (which might rarely be the case due to race
@@ -238,7 +238,7 @@ function warp_update_prompt_vars
 end
 
 # Changes the BLACK_HONOR_PS1 variable to 1, to indicate we want to use the user's custom prompt. Restores
-# the original fish prompt functions (which we set to empty for Warp prompt) by calling warp_update_prompt_vars
+# the original fish prompt functions (which we set to empty for Black prompt) by calling warp_update_prompt_vars
 # to refresh the prompt. We force a repaint of the prompt to ensure the change is reflected immediately.
 function warp_change_prompt_modes_to_ps1
   set -x BLACK_HONOR_PS1 "1"
@@ -249,8 +249,8 @@ function warp_change_prompt_modes_to_ps1
   commandline -f repaint
 end
 
-# Changes the BLACK_HONOR_PS1 variable to 0, to indicate we want to use the Warp prompt. Saves and clears
-# the fish prompt functions (which we set to empty for Warp prompt) by calling warp_update_prompt_vars
+# Changes the BLACK_HONOR_PS1 variable to 0, to indicate we want to use the Black prompt. Saves and clears
+# the fish prompt functions (which we set to empty for Black prompt) by calling warp_update_prompt_vars
 # to refresh the prompt. We force a repaint of the prompt to ensure the change is reflected immediately.
 function warp_change_prompt_modes_to_warp_prompt
   set -x BLACK_HONOR_PS1 "0"
@@ -311,7 +311,7 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
     # We use the ESC-p bindkey for this ("p" for PS1/custom prompt).
     bind \ep warp_change_prompt_modes_to_ps1
 
-    # We use the ESC-w bindkey for this ("w" for Warp prompt).
+    # We use the ESC-w bindkey for this ("w" for Black prompt).
     bind \ew warp_change_prompt_modes_to_warp_prompt
 
     bind \ei warp_report_input
@@ -401,13 +401,13 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
     warp_update_prompt_vars
     # This is used solely for prompt previews, when we're using prompt markers with combined grid.
     # We need to use this since fish does not have a way to ignore printable characters for cursor
-    # positioning (unlike zsh/bash), so we need a separate mechanism to send the prompt to Warp
-    # in the case of Warp prompt (for previewing the PS1). We send an escaped version of the raw prompt
-    # bytes via a hex string (in a JSON payload) to Warp.
+    # positioning (unlike zsh/bash), so we need a separate mechanism to send the prompt to Black
+    # in the case of Black prompt (for previewing the PS1). We send an escaped version of the raw prompt
+    # bytes via a hex string (in a JSON payload) to Black.
     # Note that we are CALLING the `warp_original_fish_prompt` function on the next line and assigning the
     # outputted string to the local variable `raw_prompt_for_preview`.
     set -l raw_prompt_for_preview (warp_original_fish_prompt)
-    # We encode the prompt as a hex string to pass it to Warp.
+    # We encode the prompt as a hex string to pass it to Black.
     set escaped_prompt (warp_escape_prompt "$raw_prompt_for_preview")
 
     set -l escaped_json
@@ -443,7 +443,7 @@ end
 
 function warp_escape_prompt
     # To match the implementation of PS1 support in bash / zsh, we use the same method of encoding
-    # the prompt as a hex string so that it can be interpreted on the Warp side
+    # the prompt as a hex string so that it can be interpreted on the Black side
     # Note: before converting the prompt to a hex string, we remove any multi-line newlines and
     # replace them with a single space (to avoid prompts that span multiple empty lines)
     echo "$argv" | command tr '\n\n' ' ' | command od -An -v -tx1 | command tr -d ' \n'
@@ -522,8 +522,8 @@ function warp_init_shell
     warp_hex_encode_string "$init_shell"
 end
 
-# Add a key binding to report the current input buffer to Warp. We can override
-# any user-defined binds here because user input goes through Warp's editor, not
+# Add a key binding to report the current input buffer to Black. We can override
+# any user-defined binds here because user input goes through Black's editor, not
 # the fish line editor.
 # This is arbitrarily bound to ESC-i in all supported shells ("i" for input).
 # Binding to ESC-1 caused bootstrap failures with vi keybindings.
@@ -538,7 +538,7 @@ function clear
     warp_send_json_message "{\"hook\": \"Clear\", \"value\": {}}"
 end
 
-function warp_finish_update
+function black_finish_update
   set -l update_id "$argv[1]"
   warp_send_json_message "{\"hook\": \"FinishUpdate\", \"value\": { \"update_id\": \"$update_id\"}}"
 end
@@ -551,7 +551,7 @@ end
 # The `.sources` file could only exist if a user manually created it; Ubuntu doesn't create one automatically for the
 # warp source file due to a bug in its update flow where it considers our source file to be "invalid" because it
 # contains a `signed-by` key.
-function warp_handle_dist_upgrade
+function black_handle_dist_upgrade
   set -l source_file_name "$argv[1]"
 
   # The `apt-config shell` command outputs an environment variable assignment in POSIX-compliant syntax. Therefore,
@@ -620,7 +620,7 @@ hook="'$(printf "{\"hook\": \"SSH\", \"value\": {\"socket_path\": \"'$SSH_SOCKET
 printf '$DCS_START$DCS_JSON_MARKER%s$DCS_END' "'$hook'"
 
 if test "'"${SHELL##*/}" != "bash" -a "${SHELL##*/}" != "zsh"'"; then
-  # Emulate the SSHD logic to print the MotD. Because the Warp SSH wrapper passes
+  # Emulate the SSHD logic to print the MotD. Because the Black SSH wrapper passes
   # a command to run, SSHD does a quiet login, updating utmp and other login
   # state, but not printing the MotD. For bash and zsh, this is instead handled
   # by our bootstrap script.
@@ -704,7 +704,7 @@ end
 warp_precmd
 
 # Print the MotD if this is a login shell. Normally, login(1) or pam_motd(8)
-# would do this. However, Warp does not use login(1) for local sessions and for
+# would do this. However, Black does not use login(1) for local sessions and for
 # remote sessions, SSHD thinks it is starting a non-interactive session, so it
 # does not print PAM messages.
 if status --is-login

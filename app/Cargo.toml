@@ -1,5 +1,5 @@
 [package]
-authors = ["Warp Team <dev@warp.dev>"]
+authors = ["Black Team <dev@blackdagger.io>"]
 default-run = "black"
 description = "The cloud-backed terminal for individuals and teams"
 edition = "2021"
@@ -483,7 +483,7 @@ default = [
     "rect_selection",
     "reload_stale_conversation_files",
     "loginless_conversion",
-    "warp_packs",
+    "black_packs",
     "ai_rules",
     "suggested_rules",
     "default_waterfall_mode",
@@ -617,7 +617,7 @@ default = [
     "revert_to_checkpoints",
     "rewind_slash_command",
     "hoa_code_review",
-    "warpify_footer",
+    "blackify_footer",
     "agent_toolbar_editor",
     "configurable_toolbar",
     "transfer_control_tool",
@@ -831,7 +831,7 @@ drive_objects_as_context = []
 iterm_images = []
 validate_autosuggestions = []
 autoupdate_ui_revamp = []
-warp_packs = []
+black_packs = []
 suggested_rules = []
 command_correction_key = []
 full_source_code_embedding = []
@@ -958,7 +958,7 @@ custom_inference_endpoints = []
 solo_user_byok = []
 billing_and_usage_page_v2 = []
 configurable_toolbar = []
-warpify_footer = []
+blackify_footer = []
 hoa_onboarding_flow = []
 git_operations_in_code_review = []
 hoa_remote_control = []

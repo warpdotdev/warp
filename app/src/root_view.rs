@@ -105,7 +105,7 @@ use crate::{
     GlobalResourceHandles, GlobalResourceHandlesProvider, UpdateQuakeModeEventArg,
 };
 
-const WINDOW_TITLE: &str = "Warp";
+const WINDOW_TITLE: &str = "Black";
 
 lazy_static! {
     static ref FALLBACK_WINDOW_SIZE: Vector2F = vec2f(800.0, 600.0);
@@ -700,7 +700,7 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
                         AddWindowOptions {
                             window_style: WindowStyle::Pin,
                             window_bounds: WindowBounds::ExactPosition(frame_args.window_bounds),
-                            title: Some("Warp".to_owned()),
+                            title: Some("Black".to_owned()),
                             fullscreen_state: window.fullscreen_state,
                             background_blur_radius_pixels,
                             background_blur_texture,
@@ -743,7 +743,7 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
                         ctx.add_window(
                             AddWindowOptions {
                                 window_bounds: WindowBounds::new(window.bounds),
-                                title: Some("Warp".to_owned()),
+                                title: Some("Black".to_owned()),
                                 fullscreen_state: window.fullscreen_state,
                                 background_blur_radius_pixels,
                                 background_blur_texture,
@@ -795,7 +795,7 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
                 ctx.add_window(
                     AddWindowOptions {
                         window_bounds: WindowBounds::new(window.bounds),
-                        title: Some("Warp".to_owned()),
+                        title: Some("Black".to_owned()),
                         fullscreen_state: window.fullscreen_state,
                         background_blur_radius_pixels,
                         background_blur_texture,
@@ -1167,7 +1167,7 @@ fn default_window_options(window_settings: &WindowSettings, ctx: &AppContext) ->
     AddWindowOptions {
         window_style,
         window_bounds: next_bounds,
-        title: Some("Warp".to_owned()),
+        title: Some("Black".to_owned()),
         background_blur_radius_pixels: Some(*window_settings.background_blur_radius),
         background_blur_texture: *window_settings.background_blur_texture,
         on_gpu_driver_selected: on_gpu_driver_selected_callback(),
@@ -1352,7 +1352,7 @@ fn toggle_quake_mode_window(global_resource_handles: &GlobalResourceHandles, ctx
                 AddWindowOptions {
                     window_style: WindowStyle::Pin,
                     window_bounds: WindowBounds::ExactPosition(config.window_bounds),
-                    title: Some("Warp".to_owned()),
+                    title: Some("Black".to_owned()),
                     background_blur_radius_pixels: Some(*window_settings.background_blur_radius),
                     background_blur_texture: *window_settings.background_blur_texture,
                     // Ignore the quake window for positioning the next window
@@ -1424,11 +1424,11 @@ fn toggle_quake_mode_window(global_resource_handles: &GlobalResourceHandles, ctx
     };
 }
 
-/// This action will show or hide all of Warp's windows except the quake window
+/// This action will show or hide all of Black's windows except the quake window
 ///
-/// - If Warp is active and has any windows, hide those windows.
-/// - If Warp is hidden, show all windows.
-/// - If Warp is active but has 0 normal windows, create a new window with a new session.
+/// - If Black is active and has any windows, hide those windows.
+/// - If Black is hidden, show all windows.
+/// - If Black is active but has 0 normal windows, create a new window with a new session.
 fn show_or_hide_non_quake_mode_windows(_: &(), ctx: &mut AppContext) {
     let quake_window_id = get_quake_mode_state(ctx).map(|state| state.window_id);
     let non_quake_mode_window_ids = ctx
@@ -2168,7 +2168,7 @@ impl RootView {
 
                 let is_logged_in = AuthStateProvider::as_ref(ctx).get().is_logged_in();
                 // If the user isn't logged in, only require login if the applied
-                // settings need an account (AI or Warp Drive enabled).
+                // settings need an account (AI or Black Drive enabled).
                 let ai_enabled = selected_settings.is_ai_enabled();
                 let warp_drive_enabled = selected_settings.is_warp_drive_enabled();
                 // With old onboarding, we ask user to log in before onboarding, so don't do it after onboarding completes.
@@ -2617,7 +2617,7 @@ impl RootView {
             ctx.windows().show_window_and_focus_app(window_id);
             ctx.notify();
         } else {
-            log::warn!("Auth not complete before trying to open warp drive object");
+            log::warn!("Auth not complete before trying to open black drive object");
         }
         true
     }
@@ -2763,7 +2763,7 @@ impl RootView {
     }
 
     /// Insert a command that should create a subshell. If we support bootstrapping AKA
-    /// "warpifying" its [`ShellType`], set a flag to automatically bootstrap it when the command's
+    /// "blackifying" its [`ShellType`], set a flag to automatically bootstrap it when the command's
     /// block receives the [`AfterBlockStarted`] event.
     pub fn insert_subshell_command_and_bootstrap_if_supported(
         &mut self,
@@ -2789,7 +2789,7 @@ impl RootView {
     /// Shows the user the settings view of their newly joined team
     /// within the app.
     pub fn handle_team_intent_link_action(&mut self, _: &(), ctx: &mut ViewContext<Self>) -> bool {
-        // Force-open warp drive.
+        // Force-open black drive.
         let window_id = ctx.window_id();
         if let AuthOnboardingState::Terminal(handle) = &self.auth_onboarding_state {
             ctx.dispatch_typed_action_for_view(
@@ -2799,7 +2799,7 @@ impl RootView {
             );
             ctx.windows().show_window_and_focus_app(window_id);
         } else {
-            log::error!("Auth not complete before trying to open warp drive");
+            log::error!("Auth not complete before trying to open black drive");
         }
 
         // Use the team tester model to notify relevant subscribers to refresh their data.
@@ -2956,7 +2956,7 @@ impl RootView {
                 } else if let AuthOnboardingState::NeedsSsoLink { .. } = &self.auth_onboarding_state
                 {
                     // We should be able to access their SSO state; if not, default to true,
-                    // since we should err on the side of them _not_ being able to use Warp.
+                    // since we should err on the side of them _not_ being able to use Black.
                     if auth_state.needs_sso_link() == Some(false) {
                         self.auth_onboarding_state.complete_sso_link(ctx);
                     }
@@ -2994,7 +2994,7 @@ impl RootView {
                             self.web_handoff(ctx);
                         } else {
                             // On native, force sign them out, as they should not be able to continue
-                            // to use Warp. Instead, they can sign in or up with a valid account.
+                            // to use Black. Instead, they can sign in or up with a valid account.
                             crate::auth::log_out(ctx);
                         }
                     }

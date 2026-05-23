@@ -44,7 +44,7 @@ static SOLE_INSTANCE_MUTEX: LazyLock<Mutex<Result<Option<MutexHandle>, Error>>> 
     LazyLock::new(|| Mutex::new(try_create_mutex()));
 
 pub(super) fn uri_named_pipe_name() -> String {
-    format!("Warp{:?}_URI_CHANNEL", ChannelState::channel())
+    format!("Black{:?}_URI_CHANNEL", ChannelState::channel())
 }
 
 fn try_create_mutex() -> Result<Option<MutexHandle>, Error> {
@@ -54,7 +54,7 @@ fn try_create_mutex() -> Result<Option<MutexHandle>, Error> {
     //   session namespace"
     //
     // NOTE: This lock name must stay in sync with `AppMutexName` in
-    // `script/windows/windows-installer.iss`, which the installer uses to detect whether Warp is
+    // `script/windows/windows-installer.iss`, which the installer uses to detect whether Black is
     // running.
     let name = format!("Local\\Warp{:?}_SingleInstance", ChannelState::channel())
         .encode_utf16()
@@ -81,7 +81,7 @@ fn try_create_mutex() -> Result<Option<MutexHandle>, Error> {
         })
 }
 
-/// A singleton model that is responsible for ensuring there is only one instance of Warp running.
+/// A singleton model that is responsible for ensuring there is only one instance of Black running.
 /// Uses a Windows named mutex (via `CreateMutexW`) which is a kernel object automatically cleaned
 /// up by the OS when all handles are closed, including on crash.
 pub(super) struct SingleInstanceManager {
@@ -89,7 +89,7 @@ pub(super) struct SingleInstanceManager {
 }
 
 impl SingleInstanceManager {
-    /// Attempts to upgrade the current Warp instance to the "main" instance (i.e. the one that
+    /// Attempts to upgrade the current Black instance to the "main" instance (i.e. the one that
     /// holds the named mutex). This function enforces that a URI server is created iff the mutex
     /// is held.
     pub(super) fn new(ctx: &mut ModelContext<Self>) -> Self {
@@ -129,7 +129,7 @@ impl SingleInstanceManager {
         }
     }
 
-    /// Returns whether or not this process should be treated as the main instance of Warp.
+    /// Returns whether or not this process should be treated as the main instance of Black.
     ///
     /// NOTE: If an unexpected error occurs, we return `true` since it's better to open a second
     /// instance than to fail to create a first instance.

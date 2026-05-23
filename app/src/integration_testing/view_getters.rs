@@ -3,7 +3,7 @@
 //! We should migrate to these view getters because to make it easier to work
 //! with tabs and panes. The old view getters use `tab_idx` without considering
 //! how many panes are in each tab.
-//! See https://github.com/warpdotdev/warp-internal/pull/4785#issue-1634862270
+//! See https://github.com/blackdagger/black-internal/pull/4785#issue-1634862270
 
 use black_ui::integration::AssertionCallback;
 use black_ui::{async_assert, App, Entity, View, ViewHandle, WindowId};

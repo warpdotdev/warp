@@ -122,7 +122,7 @@ pub struct FetchUserResult {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait AuthClient: 'static + Send + Sync {
-    /// Creates an anonymous user, who is allowed to use Warp but may lack the ability
+    /// Creates an anonymous user, who is allowed to use Black but may lack the ability
     /// to interact with particular features.
     async fn create_anonymous_user(
         &self,

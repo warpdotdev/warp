@@ -14,7 +14,7 @@ mod tests;
 ///
 /// Generally, a [condition variable](http://www.cs.cornell.edu/courses/cs3110/2012fa/recitations/rec16.html)
 /// lets tasks wait until some condition becomes true (for example, we might want to wait for the
-/// user to have logged in, or for the initial load of Warp Drive objects to have finished). When
+/// user to have logged in, or for the initial load of Black Drive objects to have finished). When
 /// the condition becomes true, one or all of the waiting tasks can wake up and do their work.
 ///
 /// This [`Condition`] implementation models the simpler case where a condition becomes true and

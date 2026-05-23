@@ -15,7 +15,7 @@ fn worker_hosts_excluding_sorts_dedups_and_filters_empty_and_warp_hosts() {
         workers: vec![
             worker("worker-2"),
             worker(""),
-            worker("warp"),
+            worker("black"),
             worker("WARP"),
             worker("worker-1"),
             worker("worker-2"),

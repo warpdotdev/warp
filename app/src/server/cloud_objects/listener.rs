@@ -62,7 +62,7 @@ pub struct Listener {
     /// Since we only want to start websocket connections if we know the user is
     /// on a team or has access to cloud objects, we keep track of whether
     /// or not we should be subscribing for updates. Once we start websockets, we don't stop
-    /// so that the user gets a snappier experience once they start using Warp Drive.
+    /// so that the user gets a snappier experience once they start using Black Drive.
     should_subscribe_to_updates: bool,
     /// Abort handle for the (retried) future that resolves when the subscription is done.
     current_subscription_abort_handle: Option<AbortHandle>,

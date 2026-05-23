@@ -332,7 +332,7 @@ impl<'a> From<&'a BufferBlockStyle> for BlockType {
 /// Wrapper around the shared [`Workflow`] type with additional context for workflows contained
 /// within a notebook.
 ///
-/// This may be a command block that's part of the notebook text, or an embedded Warp Drive workflow.
+/// This may be a command block that's part of the notebook text, or an embedded Black Drive workflow.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NotebookWorkflow {
     /// Definition of the workflow itself.

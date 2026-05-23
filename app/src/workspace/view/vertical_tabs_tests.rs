@@ -762,7 +762,7 @@ fn terminal_search_fragments_include_rendered_terminal_badges() {
         Some("main".to_string()),
         terminal_kind_badge_label(false, Some(CLIAgent::Claude)),
         Some(terminal_pull_request_badge_label(
-            "https://github.com/warpdotdev/warp-internal/pull/12345",
+            "https://github.com/blackdagger/black-internal/pull/12345",
         )),
         Some(GitLineChanges {
             files_changed: 1,

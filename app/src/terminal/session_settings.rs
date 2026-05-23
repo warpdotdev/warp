@@ -58,7 +58,7 @@ pub enum NotificationsMode {
  * Added [serde(default)] to ensure that new notification settings are backwards compatible with old clients.
  * Otherwise, clients will fail to deserialize existing settings after updating.
  *
- * @see https://github.com/warpdotdev/warp-internal/pull/14596/files#diff-90221c7ecae01c6faf8f170158dea3e49d34d40225a306da42ccc76489d1f84cR43-R44
+ * @see https://github.com/blackdagger/black-internal/pull/14596/files#diff-90221c7ecae01c6faf8f170158dea3e49d34d40225a306da42ccc76489d1f84cR43-R44
  *
  * Alternative considered: Using Option<bool> fields would have required more
  * complex defaulting logic to set the default value to true.

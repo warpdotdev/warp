@@ -318,133 +318,133 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
 
     fn description(&self) -> &'static str {
         match self {
-            CliTelemetryEventDiscriminants::AgentRun => "Ran an agent from the Warp CLI",
+            CliTelemetryEventDiscriminants::AgentRun => "Ran an agent from the Black CLI",
             CliTelemetryEventDiscriminants::AgentRunAmbient => {
-                "Ran an ambient agent from the Warp CLI"
+                "Ran an ambient agent from the Black CLI"
             }
             CliTelemetryEventDiscriminants::AgentProfileList => {
-                "Listed agent profiles from the Warp CLI"
+                "Listed agent profiles from the Black CLI"
             }
-            CliTelemetryEventDiscriminants::AgentList => "Listed agents from the Warp CLI",
-            CliTelemetryEventDiscriminants::AgentGet => "Got agent details from the Warp CLI",
-            CliTelemetryEventDiscriminants::AgentCreate => "Created an agent from the Warp CLI",
-            CliTelemetryEventDiscriminants::AgentUpdate => "Updated an agent from the Warp CLI",
-            CliTelemetryEventDiscriminants::AgentDelete => "Deleted an agent from the Warp CLI",
-            CliTelemetryEventDiscriminants::AgentSkills => "Listed agent skills from the Warp CLI",
+            CliTelemetryEventDiscriminants::AgentList => "Listed agents from the Black CLI",
+            CliTelemetryEventDiscriminants::AgentGet => "Got agent details from the Black CLI",
+            CliTelemetryEventDiscriminants::AgentCreate => "Created an agent from the Black CLI",
+            CliTelemetryEventDiscriminants::AgentUpdate => "Updated an agent from the Black CLI",
+            CliTelemetryEventDiscriminants::AgentDelete => "Deleted an agent from the Black CLI",
+            CliTelemetryEventDiscriminants::AgentSkills => "Listed agent skills from the Black CLI",
             CliTelemetryEventDiscriminants::EnvironmentList => {
-                "Listed cloud environments from the Warp CLI"
+                "Listed cloud environments from the Black CLI"
             }
             CliTelemetryEventDiscriminants::EnvironmentCreate => {
-                "Created a cloud environment from the Warp CLI"
+                "Created a cloud environment from the Black CLI"
             }
             CliTelemetryEventDiscriminants::EnvironmentDelete => {
-                "Deleted a cloud environment from the Warp CLI"
+                "Deleted a cloud environment from the Black CLI"
             }
             CliTelemetryEventDiscriminants::EnvironmentUpdate => {
-                "Updated a cloud environment from the Warp CLI"
+                "Updated a cloud environment from the Black CLI"
             }
             CliTelemetryEventDiscriminants::EnvironmentGet => {
-                "Got cloud environment details from the Warp CLI"
+                "Got cloud environment details from the Black CLI"
             }
             CliTelemetryEventDiscriminants::EnvironmentImageList => {
-                "Listed available base images from the Warp CLI"
+                "Listed available base images from the Black CLI"
             }
-            CliTelemetryEventDiscriminants::MCPList => "Listed MCP servers from the Warp CLI",
-            CliTelemetryEventDiscriminants::ModelList => "Listed models from the Warp CLI",
-            CliTelemetryEventDiscriminants::TaskList => "Listed tasks from the Warp CLI",
-            CliTelemetryEventDiscriminants::TaskGet => "Got status of task from the Warp CLI",
+            CliTelemetryEventDiscriminants::MCPList => "Listed MCP servers from the Black CLI",
+            CliTelemetryEventDiscriminants::ModelList => "Listed models from the Black CLI",
+            CliTelemetryEventDiscriminants::TaskList => "Listed tasks from the Black CLI",
+            CliTelemetryEventDiscriminants::TaskGet => "Got status of task from the Black CLI",
             CliTelemetryEventDiscriminants::ConversationGet => {
-                "Got conversation by ID from the Warp CLI"
+                "Got conversation by ID from the Black CLI"
             }
             CliTelemetryEventDiscriminants::RunConversationGet => {
-                "Got run conversation from the Warp CLI"
+                "Got run conversation from the Black CLI"
             }
             CliTelemetryEventDiscriminants::RunMessageWatch => {
-                "Watched run messages from the Warp CLI"
+                "Watched run messages from the Black CLI"
             }
             CliTelemetryEventDiscriminants::RunMessageSend => {
-                "Sent a run message from the Warp CLI"
+                "Sent a run message from the Black CLI"
             }
             CliTelemetryEventDiscriminants::RunMessageList => {
-                "Listed run messages from the Warp CLI"
+                "Listed run messages from the Black CLI"
             }
             CliTelemetryEventDiscriminants::RunMessageRead => {
-                "Read a run message from the Warp CLI"
+                "Read a run message from the Black CLI"
             }
             CliTelemetryEventDiscriminants::RunMessageMarkDelivered => {
-                "Marked a run message as delivered from the Warp CLI"
+                "Marked a run message as delivered from the Black CLI"
             }
-            CliTelemetryEventDiscriminants::Login => "Logged in via the Warp CLI",
-            CliTelemetryEventDiscriminants::Logout => "Logged out via the Warp CLI",
-            CliTelemetryEventDiscriminants::Whoami => "Printed current user info from the Warp CLI",
-            CliTelemetryEventDiscriminants::ProviderSetup => "Set up a provider via the Warp CLI",
-            CliTelemetryEventDiscriminants::ProviderList => "Listed providers from the Warp CLI",
+            CliTelemetryEventDiscriminants::Login => "Logged in via the Black CLI",
+            CliTelemetryEventDiscriminants::Logout => "Logged out via the Black CLI",
+            CliTelemetryEventDiscriminants::Whoami => "Printed current user info from the Black CLI",
+            CliTelemetryEventDiscriminants::ProviderSetup => "Set up a provider via the Black CLI",
+            CliTelemetryEventDiscriminants::ProviderList => "Listed providers from the Black CLI",
             CliTelemetryEventDiscriminants::IntegrationCreate => {
-                "Created an integration from the Warp CLI"
+                "Created an integration from the Black CLI"
             }
             CliTelemetryEventDiscriminants::IntegrationUpdate => {
-                "Updated an integration from the Warp CLI"
+                "Updated an integration from the Black CLI"
             }
             CliTelemetryEventDiscriminants::IntegrationList => {
-                "Listed integrations from the Warp CLI"
+                "Listed integrations from the Black CLI"
             }
             CliTelemetryEventDiscriminants::ArtifactUpload => {
-                "Uploaded an artifact from the Warp CLI"
+                "Uploaded an artifact from the Black CLI"
             }
             CliTelemetryEventDiscriminants::ArtifactGet => {
-                "Got artifact metadata from the Warp CLI"
+                "Got artifact metadata from the Black CLI"
             }
             CliTelemetryEventDiscriminants::ArtifactDownload => {
-                "Downloaded an artifact from the Warp CLI"
+                "Downloaded an artifact from the Black CLI"
             }
-            CliTelemetryEventDiscriminants::ApiKeyList => "Listed API keys from the Warp CLI",
-            CliTelemetryEventDiscriminants::ApiKeyCreate => "Created an API key from the Warp CLI",
-            CliTelemetryEventDiscriminants::ApiKeyExpire => "Expired an API key from the Warp CLI",
+            CliTelemetryEventDiscriminants::ApiKeyList => "Listed API keys from the Black CLI",
+            CliTelemetryEventDiscriminants::ApiKeyCreate => "Created an API key from the Black CLI",
+            CliTelemetryEventDiscriminants::ApiKeyExpire => "Expired an API key from the Black CLI",
             CliTelemetryEventDiscriminants::ScheduleCreate => {
-                "Created a scheduled agent from the Warp CLI"
+                "Created a scheduled agent from the Black CLI"
             }
             CliTelemetryEventDiscriminants::ScheduleList => {
-                "Listed scheduled agents from the Warp CLI"
+                "Listed scheduled agents from the Black CLI"
             }
             CliTelemetryEventDiscriminants::ScheduleGet => {
-                "Got scheduled agent configuration from the Warp CLI"
+                "Got scheduled agent configuration from the Black CLI"
             }
             CliTelemetryEventDiscriminants::SchedulePause => {
-                "Paused a scheduled agent from the Warp CLI"
+                "Paused a scheduled agent from the Black CLI"
             }
             CliTelemetryEventDiscriminants::ScheduleUnpause => {
-                "Unpaused a scheduled agent from the Warp CLI"
+                "Unpaused a scheduled agent from the Black CLI"
             }
             CliTelemetryEventDiscriminants::ScheduleUpdate => {
-                "Updated a scheduled agent from the Warp CLI"
+                "Updated a scheduled agent from the Black CLI"
             }
             CliTelemetryEventDiscriminants::ScheduleDelete => {
-                "Deleted a scheduled agent from the Warp CLI"
+                "Deleted a scheduled agent from the Black CLI"
             }
-            CliTelemetryEventDiscriminants::SecretCreate => "Created a secret from the Warp CLI",
-            CliTelemetryEventDiscriminants::SecretDelete => "Deleted a secret from the Warp CLI",
-            CliTelemetryEventDiscriminants::SecretUpdate => "Updated a secret from the Warp CLI",
-            CliTelemetryEventDiscriminants::SecretList => "Listed secrets from the Warp CLI",
+            CliTelemetryEventDiscriminants::SecretCreate => "Created a secret from the Black CLI",
+            CliTelemetryEventDiscriminants::SecretDelete => "Deleted a secret from the Black CLI",
+            CliTelemetryEventDiscriminants::SecretUpdate => "Updated a secret from the Black CLI",
+            CliTelemetryEventDiscriminants::SecretList => "Listed secrets from the Black CLI",
             CliTelemetryEventDiscriminants::FederateIssueToken => {
-                "Issued a federated identity token from the Warp CLI"
+                "Issued a federated identity token from the Black CLI"
             }
             CliTelemetryEventDiscriminants::FederateIssueGcpToken => {
-                "Issued a GCP federated identity token from the Warp CLI"
+                "Issued a GCP federated identity token from the Black CLI"
             }
             CliTelemetryEventDiscriminants::HarnessSupportPing => {
-                "Pinged harness-support from the Warp CLI"
+                "Pinged harness-support from the Black CLI"
             }
             CliTelemetryEventDiscriminants::HarnessSupportReportArtifact => {
-                "Reported an artifact via harness-support from the Warp CLI"
+                "Reported an artifact via harness-support from the Black CLI"
             }
             CliTelemetryEventDiscriminants::HarnessSupportNotifyUser => {
-                "Sent a user notification via harness-support from the Warp CLI"
+                "Sent a user notification via harness-support from the Black CLI"
             }
             CliTelemetryEventDiscriminants::HarnessSupportFinishTask => {
-                "Reported task completion via harness-support from the Warp CLI"
+                "Reported task completion via harness-support from the Black CLI"
             }
             CliTelemetryEventDiscriminants::HarnessSupportReportShutdown => {
-                "Reported agent shutdown via harness-support from the Warp CLI"
+                "Reported agent shutdown via harness-support from the Black CLI"
             }
         }
     }

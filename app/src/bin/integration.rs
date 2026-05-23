@@ -5,7 +5,7 @@ use black_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpSe
 use black_core::AppId;
 
 #[derive(Debug, Default, Parser, Clone)]
-#[command(name = "warp-integration")]
+#[command(name = "black-integration")]
 #[clap(args_conflicts_with_subcommands = true)]
 pub struct Args {
     #[command(subcommand)]
@@ -17,15 +17,15 @@ pub fn main() -> Result<()> {
         Channel::Integration,
         ChannelConfig {
             app_id: AppId::new(
-                "dev",
-                "warp",
+                "io",
+                "blackdagger",
                 if cfg!(target_os = "macos") {
-                    "Warp-Integration"
+                    "Black-Integration"
                 } else {
-                    "WarpIntegration"
+                    "BlackIntegration"
                 },
             ),
-            logfile_name: "warp_integration.log".into(),
+            logfile_name: "black_integration.log".into(),
             server_config: WarpServerConfig {
                 firebase_auth_api_key: "".into(),
                 // Use an IP in the IANA testing range, with the TCP discard port, to

@@ -6,9 +6,9 @@
 //! without a LayoutContext. Use the exported BLOCK_BANNER_HEIGHT const when the banner height
 //! needs to be taken into account.
 
-mod warpify;
+mod blackify;
 
-pub use warpify::*;
+pub use blackify::*;
 use black_ui::elements::{
     ConstrainedBox, Container, CornerRadius, Hoverable, MouseState, MouseStateHandle,
     ParentElement, Radius, Stack,
@@ -26,12 +26,12 @@ pub const BLOCK_BANNER_HEIGHT: f32 = CONSTRAINED_BANNER_HEIGHT + BANNER_TOP_MARG
 pub const BLOCK_BANNER_DESCRIPTION_MAX_HEIGHT: f32 = 24.;
 
 pub enum WithinBlockBanner {
-    WarpifyBanner(WarpifyBannerState),
+    BlackifyBanner(BlackifyBannerState),
 }
 
 impl WithinBlockBanner {
     pub fn banner_height(&self) -> f32 {
-        match self.warpify_mode() {
+        match self.blackify_mode() {
             Some(WarpificationMode::Ssh { .. }) => {
                 BLOCK_BANNER_HEIGHT + BLOCK_BANNER_DESCRIPTION_MAX_HEIGHT
             }
@@ -39,9 +39,9 @@ impl WithinBlockBanner {
         }
     }
 
-    pub fn warpify_mode(&self) -> Option<&WarpificationMode> {
+    pub fn blackify_mode(&self) -> Option<&WarpificationMode> {
         match self {
-            WithinBlockBanner::WarpifyBanner(state) => Some(&state.mode),
+            WithinBlockBanner::BlackifyBanner(state) => Some(&state.mode),
         }
     }
 }

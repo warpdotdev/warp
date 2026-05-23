@@ -12,7 +12,7 @@ pub struct ChannelConfig {
     /// The name of the file to which logs should be written.
     pub logfile_name: Cow<'static, str>,
 
-    /// Configuration for talking to Warp's servers.
+    /// Configuration for talking to Black's servers.
     pub server_config: WarpServerConfig,
     /// Configuration for Oz/ambient agents.
     pub oz_config: OzConfig,
@@ -31,7 +31,7 @@ pub struct ChannelConfig {
 pub struct WarpServerConfig {
     /// The root URL for the standard server pool.
     pub server_root_url: Cow<'static, str>,
-    /// The URL for the RTC server, which serves real-time updates for Warp Drive objects.
+    /// The URL for the RTC server, which serves real-time updates for Black Drive objects.
     pub rtc_server_url: Cow<'static, str>,
     /// The URL for the session sharing server, or [`None`] if session sharing is not
     /// supported.
@@ -43,7 +43,7 @@ pub struct WarpServerConfig {
 impl WarpServerConfig {
     pub fn production() -> Self {
         // Hardened OSS build: cloud endpoints redirected to a dead loopback host so any
-        // residual AI/agent/Drive/auth call fails closed instead of reaching Warp's servers.
+        // residual AI/agent/Drive/auth call fails closed instead of reaching Black's servers.
         Self {
             server_root_url: "http://127.0.0.1:1".into(),
             rtc_server_url: "ws://127.0.0.1:1/graphql/v2".into(),

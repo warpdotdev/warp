@@ -97,7 +97,7 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::WorkspaceUid;
 use crate::{report_if_error, send_telemetry_from_ctx, ObjectActions};
 
-const WARP_DRIVE_TITLE: &str = "Warp Drive";
+const WARP_DRIVE_TITLE: &str = "Black Drive";
 
 // Team zero state consts
 const HINT_HORIZONTAL_PADDING: f32 = 18.;
@@ -173,7 +173,7 @@ const OFFLINE_BANNER_TEXT: &str = "You are offline. Some files will be read only
 
 pub const DRIVE_INDEX_VIEW_POSITION_ID: &str = "drive_index_view_id";
 
-// Sets the speed of the autoscroll that occurs when you drag an item near the Warp Drive border.
+// Sets the speed of the autoscroll that occurs when you drag an item near the Black Drive border.
 pub const AUTOSCROLL_SPEED_MULTIPLIER: f32 = 10.;
 // Sets the distance from a border at which scroll events start to occur.
 pub const AUTOSCROLL_DETECTION_DISTANCE: f32 = 30.0;
@@ -195,7 +195,7 @@ const PAYMENT_ISSUE_BANNER_LINE_2_ADMIN: &str =
     "Please update your payment information to restore access.";
 
 const PAYMENT_ISSUE_BANNER_LINE_2_ADMIN_ENTERPRISE: &str =
-    "Please contact support@warp.dev to restore access.";
+    "Please contact support@blackdagger.io to restore access.";
 
 const PAYMENT_ISSUE_BANNER_LINE_2_NONADMIN: &str = "Please contact a team admin to restore access.";
 
@@ -341,10 +341,10 @@ pub enum DriveIndexAction {
     CloseTrashIndex,
     FocusPreviousItem,
     FocusNextItem,
-    /// Hitting one of the l/r arrow keys on a Warp Drive item.
+    /// Hitting one of the l/r arrow keys on a Black Drive item.
     LeftArrowKey,
     RightArrowKey,
-    /// Hitting enter key on a Warp Drive item.
+    /// Hitting enter key on a Black Drive item.
     EnterKey,
     /// Hitting escape key from trash index returns to main drive index.
     EscapeKey,
@@ -498,10 +498,10 @@ struct SpaceMenuState {
     offset: Vector2F,
 }
 
-/// The main view for the Warp Drive sidebar.
+/// The main view for the Black Drive sidebar.
 /// `DriveIndex` is different from `DrivePanel` in that it is responsible for
-/// all the logic within Warp Drive, whereas `DrivePanel` is responsible for
-/// how Warp Drive interacts with the workspace and the rest of the app.
+/// all the logic within Black Drive, whereas `DrivePanel` is responsible for
+/// how Black Drive interacts with the workspace and the rest of the app.
 #[derive(Clone)]
 pub struct DriveIndex {
     window_id: WindowId,
@@ -510,7 +510,7 @@ pub struct DriveIndex {
     menu: ViewHandle<Menu<DriveIndexAction>>,
 
     sharing_dialog: ViewHandle<SharingDialog>,
-    /// Variant of the index, determines whether base Warp Drive or trash is viewed.
+    /// Variant of the index, determines whether base Black Drive or trash is viewed.
     index_variant: DriveIndexVariant,
     /// If None, the context menu is closed. Otherwise, this contains the ID of the object it's open on.
     menu_object_id_if_open: Option<WarpDriveItemId>,
@@ -538,7 +538,7 @@ pub struct DriveIndex {
     /// A hashmap of location (space/folder) to a list of hashed IDs of objects inside
     /// the space/folder, used for rendering our objects
     sorted_orders_by_location: HashMap<CloudObjectLocation, Vec<ObjectUid>>,
-    /// A sorted list of all the items (spaces + objects) in Warp Drive
+    /// A sorted list of all the items (spaces + objects) in Black Drive
     /// Unlike sorted_orders_by_location, this is not used for rendering
     /// This is used for object focusing and WD keyboard navigation
     ordered_items: Vec<WarpDriveItemId>,
@@ -548,7 +548,7 @@ pub struct DriveIndex {
     /// from links before everything has been set up.
     has_initialized_sections: Condition,
 
-    /// The number of objects in Warp Drive that have errored.
+    /// The number of objects in Black Drive that have errored.
     /// This value is cached so that we can determine whether to render the "retry all"
     /// objects button in the case of syncing failures.
     num_errored_objects: usize,
@@ -940,7 +940,7 @@ impl DriveIndex {
 
         let sorting_choice = *WarpDriveSettings::as_ref(ctx).sorting_choice.value();
 
-        // Hide Warp Drive loading icon once initial load is complete
+        // Hide Black Drive loading icon once initial load is complete
         let initial_load_complete = UpdateManager::as_ref(ctx).initial_load_complete();
         ctx.spawn(initial_load_complete, |me, _, ctx| {
             me.show_warp_drive_loading_icon = false;
@@ -1875,7 +1875,7 @@ impl DriveIndex {
                     .finish(),
             )
             .finish(),
-            "WarpDrive_TrashButton",
+            "BlackDrive_TrashButton",
         )
         .finish()
     }
@@ -3204,7 +3204,7 @@ impl DriveIndex {
             if let DriveIndexSection::Space(space) = *section {
                 self.set_focused_item(WarpDriveItemId::Space(space), true, ctx);
             }
-            // Need to re-render focused index in Warp Drive after a space has been toggled
+            // Need to re-render focused index in Black Drive after a space has been toggled
             if let Some(focused_index) = self.focused_index {
                 self.update_focused_params(focused_index, CloudModel::as_ref(ctx));
             }
@@ -3950,7 +3950,7 @@ impl DriveIndex {
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_child(
-                Text::new_inline("Warp Drive".to_string(), appearance.ui_font_family(), 14.)
+                Text::new_inline("Black Drive".to_string(), appearance.ui_font_family(), 14.)
                     .with_color(theme.main_text_color(background_color).into())
                     .with_style(Properties {
                         weight: black_ui::fonts::Weight::Bold,
@@ -4764,7 +4764,7 @@ impl DriveIndex {
         menu_items
     }
 
-    /// Builder for a menu item to open a Warp Drive object in a pane. The icon and label depend
+    /// Builder for a menu item to open a Black Drive object in a pane. The icon and label depend
     /// on whether the object is editable or not.
     ///
     /// If `prefer_open` is `true`, the item defaults to view/open mode rather than edit mode.

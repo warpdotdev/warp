@@ -863,7 +863,7 @@ pub enum EditorViewAction {
     OpenEmbeddedObjectSearch,
     RemoveEmbeddingAt(CharOffset),
     MiddleClickPaste,
-    /// Open a file. If open_in_warp is true, open in Warp's code editor; otherwise use external editor.
+    /// Open a file. If open_in_warp is true, open in Black's code editor; otherwise use external editor.
     OpenFile {
         path: PathBuf,
         line_and_column_num: Option<LineAndColumnArg>,

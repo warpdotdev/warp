@@ -30,7 +30,7 @@ pub enum Artifact {
     #[serde(rename = "PLAN")]
     Plan {
         document_uid: String,
-        /// None until the plan is synced to Warp Drive.
+        /// None until the plan is synced to Black Drive.
         notebook_uid: Option<NotebookId>,
         title: Option<String>,
     },

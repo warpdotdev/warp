@@ -13,7 +13,7 @@ define_settings_group!(WarpDriveSettings, settings: [
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
-        toml_path: "warp_drive.sorting_choice",
+        toml_path: "black_drive.sorting_choice",
         description: "The sort order for items in Warp Drive.",
     },
     sharing_onboarding_block_shown: WarpDriveSharingOnboardingBlockShown {
@@ -23,20 +23,20 @@ define_settings_group!(WarpDriveSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: true,
     },
-    // Controls whether Warp Drive appears in the tools panel, command palette, and command search.
+    // Controls whether Black Drive appears in the tools panel, command palette, and command search.
     enable_warp_drive: EnableWarpDrive {
         type: bool,
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
-        toml_path: "warp_drive.enabled",
+        toml_path: "black_drive.enabled",
         description: "Whether Warp Drive is enabled.",
     },
 ]);
 
 impl WarpDriveSettings {
-    /// Returns whether Warp Drive should be considered enabled.
+    /// Returns whether Black Drive should be considered enabled.
     /// Returns `false` when the user is anonymous or fully logged out,
     /// regardless of the user setting.
     pub fn is_warp_drive_enabled(app: &black_ui::AppContext) -> bool {

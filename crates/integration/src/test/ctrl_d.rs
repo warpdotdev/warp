@@ -51,7 +51,7 @@ pub fn test_ctrl_d_handled_by_read_during_bootstrapping() -> Builder {
     new_builder()
         .set_should_run_test(|| {
             let (starter, _) = current_shell_starter_and_version();
-            // We need to fix https://github.com/warpdotdev/Warp/issues/1869 before
+            // We need to fix https://github.com/blackdagger/black/issues/1869 before
             // this test works on fish.
             !matches!(starter.shell_type(), ShellType::Fish)
         })

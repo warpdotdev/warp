@@ -317,7 +317,7 @@ pub fn test_command_search_loads_history_from_nondefault_histfile_path() -> Buil
 /// histfile commands, effectively "enriching" them with metadata.
 ///
 /// Basically, if a user manually deletes a command from their shell histfile, it should not show
-/// up in Warp -- so we effectively do a "left join" on commands from the histfile with commands
+/// up in Black -- so we effectively do a "left join" on commands from the histfile with commands
 /// loaded from sqlite.
 pub fn test_histfile_left_joined_with_persisted_history() -> Builder {
     new_builder()

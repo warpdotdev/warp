@@ -2,7 +2,7 @@
 //! Repository metadata model singleton.
 //!
 //! This module provides a singleton model that manages repository metadata across
-//! all repositories tracked by Warp.
+//! all repositories tracked by Black.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

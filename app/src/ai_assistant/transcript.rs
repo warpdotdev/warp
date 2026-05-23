@@ -57,7 +57,7 @@ const WHAT_TO_DO_NEXT_PROMPT: &str = "What should I do next?";
 const IN_FLIGHT_REQUEST_TEXT: &str = "Generating answer...";
 const ACCURACY_NOTICE_TEXT: &str = "AI responses can be inaccurate.";
 const MISSING_CONTEXT_NOTICE_TEXT: &str =
-    "Warp AI might forget earlier answers as conversations get long.";
+    "Black AI might forget earlier answers as conversations get long.";
 
 lazy_static::lazy_static! {
     static ref SCROLL_BUFFER_OFFSET_PX: Pixels = (10.).into_pixels();

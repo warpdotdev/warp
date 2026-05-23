@@ -2079,13 +2079,13 @@ fn test_harness_filter_matches_only_selected_harness() {
             assert_eq!(
                 oz_items.len(),
                 2,
-                "expected 2 Warp Agent matches, got {oz_items:?}"
+                "expected 2 Black Agent matches, got {oz_items:?}"
             );
             assert!(oz_items.contains(&format!("task:{}", task_oz_default.task_id)));
             assert!(oz_items.contains(&format!("conversation:{conv_id}")));
             assert!(
                 !oz_items.contains(&format!("task:{}", task_no_snapshot.task_id)),
-                "stub task with no snapshot should not match the Warp Agent filter"
+                "stub task with no snapshot should not match the Black Agent filter"
             );
         });
     });

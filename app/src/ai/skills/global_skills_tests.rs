@@ -19,7 +19,7 @@ fn resolve_skill_repos_returns_empty_for_empty_input() {
 fn resolve_skill_repos_skips_parse_failures() {
     let (specs, repos) = resolve_skill_repos(&[
         String::new(),
-        "warpdotdev/warp-internal:read-google-doc".to_string(),
+        "blackdagger/black-internal:read-google-doc".to_string(),
     ]);
 
     assert_eq!(specs.len(), 1);
@@ -27,8 +27,8 @@ fn resolve_skill_repos_skips_parse_failures() {
     assert_eq!(
         repos,
         vec![GithubRepo::new(
-            "warpdotdev".to_string(),
-            "warp-internal".to_string(),
+            "blackdagger".to_string(),
+            "black-internal".to_string(),
         )]
     );
 }
@@ -38,7 +38,7 @@ fn resolve_skill_repos_skips_unqualified_and_repo_only_specs() {
     let (_specs, repos) = resolve_skill_repos(&[
         "bare-name".to_string(),
         ".agents/skills/read-google-doc/SKILL.md".to_string(),
-        "warp-internal:read-google-doc".to_string(),
+        "black-internal:read-google-doc".to_string(),
     ]);
 
     assert_eq!(repos, Vec::<GithubRepo>::new());
@@ -47,15 +47,15 @@ fn resolve_skill_repos_skips_unqualified_and_repo_only_specs() {
 #[test]
 fn resolve_skill_repos_collects_org_qualified_repos() {
     let (_specs, repos) = resolve_skill_repos(&[
-        "warpdotdev/warp-internal:read-google-doc".to_string(),
-        "warpdotdev/warp-server:deploy".to_string(),
+        "blackdagger/black-internal:read-google-doc".to_string(),
+        "blackdagger/black-server:deploy".to_string(),
     ]);
 
     assert_eq!(
         repos,
         vec![
-            GithubRepo::new("warpdotdev".to_string(), "warp-internal".to_string()),
-            GithubRepo::new("warpdotdev".to_string(), "warp-server".to_string()),
+            GithubRepo::new("blackdagger".to_string(), "black-internal".to_string()),
+            GithubRepo::new("blackdagger".to_string(), "black-server".to_string()),
         ]
     );
 }
@@ -69,7 +69,7 @@ fn filter_skills_by_spec_only_loads_requested_simple_names() {
         parsed_skill(requested_skill_path.clone(), "read-google-doc"),
         parsed_skill(other_skill_path, "deploy"),
     ];
-    let specs = global_specs(&["warpdotdev/warp-internal:read-google-doc".to_string()]);
+    let specs = global_specs(&["blackdagger/black-internal:read-google-doc".to_string()]);
 
     let filtered = filter_skills_by_spec(repo_path, skills, &specs);
 
@@ -85,7 +85,7 @@ fn filter_skills_by_spec_matches_simple_names_by_parsed_skill_name() {
         parsed_skill(requested_skill_path.clone(), "read-google-doc"),
         parsed_skill(directory_name_match_path, "unrelated-skill"),
     ];
-    let specs = global_specs(&["warpdotdev/warp-internal:read-google-doc".to_string()]);
+    let specs = global_specs(&["blackdagger/black-internal:read-google-doc".to_string()]);
 
     let filtered = filter_skills_by_spec(repo_path, skills, &specs);
 
@@ -101,7 +101,7 @@ fn filter_skills_by_spec_uses_provider_precedence_for_simple_names() {
         parsed_skill(claude_skill_path, "deploy"),
         parsed_skill(agents_skill_path.clone(), "deploy"),
     ];
-    let specs = global_specs(&["warpdotdev/warp-internal:deploy".to_string()]);
+    let specs = global_specs(&["blackdagger/black-internal:deploy".to_string()]);
 
     let filtered = filter_skills_by_spec(repo_path, skills, &specs);
 
@@ -122,7 +122,7 @@ fn filter_skills_by_spec_matches_full_path_specs() {
         parsed_skill(requested_skill_path.clone(), "deploy-from-full-path"),
     ];
     let specs = global_specs(&[format!(
-        "warpdotdev/warp-internal:{}",
+        "blackdagger/black-internal:{}",
         requested_relative_path.display()
     )]);
 

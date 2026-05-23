@@ -202,7 +202,7 @@ fn test_from_task_resolves_harness() {
             let data = ConversationDetailsData::from_task(&base_task, None, None, ctx);
             assert_eq!(data.harness, None);
 
-            // Snapshot without an explicit harness → default to Warp Agent.
+            // Snapshot without an explicit harness → default to Black Agent.
             let mut task = base_task.clone();
             task.agent_config_snapshot = Some(AgentConfigSnapshot::default());
             let data = ConversationDetailsData::from_task(&task, None, None, ctx);
@@ -254,7 +254,7 @@ fn test_from_task_populates_executor() {
 fn test_from_conversation_populates_local_conversation_fields() {
     // Locks in that `ConversationDetailsData::from_conversation` works on native
     // and surfaces the conversation-derived fields the conversation details panel
-    // renders for local Warp Agent runs (APP-3595).
+    // renders for local Black Agent runs (APP-3595).
     App::test((), |mut app| async move {
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 

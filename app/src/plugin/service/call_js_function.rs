@@ -1,4 +1,4 @@
-//! IPC service for calling JS functions registered by Warp plugins.
+//! IPC service for calling JS functions registered by Black plugins.
 //!
 //! This service is hosted by the plugin host process and used by the main app process to call
 //! plugin functions defined in JS.

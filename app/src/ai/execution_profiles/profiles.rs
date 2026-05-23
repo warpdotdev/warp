@@ -58,7 +58,7 @@ impl AIExecutionProfileInfo {
         &self.id
     }
 
-    /// The Warp Drive sync ID of this profile, if it has been synced.
+    /// The Black Drive sync ID of this profile, if it has been synced.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn sync_id(&self) -> Option<SyncId> {
         self.sync_id

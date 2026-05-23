@@ -1,4 +1,4 @@
-//! Repository metadata utilities for Warp.
+//! Repository metadata utilities for Black.
 //!
 //! This crate provides utilities for managing repository metadata, including file trees,
 //! gitignore processing, and filesystem watching capabilities.s

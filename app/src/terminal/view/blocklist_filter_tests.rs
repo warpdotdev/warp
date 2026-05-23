@@ -42,7 +42,7 @@ fn test_should_show_task_in_blocklist_hides_warp_docs_subagent_task() {
     let subtask = conversation
         .all_tasks()
         .find(|task| task.is_warp_documentation_search_subagent())
-        .expect("warp docs subagent task should exist");
+        .expect("black docs subagent task should exist");
 
     assert!(!should_show_task_in_blocklist(subtask));
 }

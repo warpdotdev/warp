@@ -353,7 +353,7 @@ impl AuthState {
             .map(|user| user.metadata.email.clone())
     }
 
-    /// Returns whether the user considered onboarded to Warp.
+    /// Returns whether the user considered onboarded to Black.
     pub fn is_onboarded(&self) -> Option<bool> {
         self.user.read().as_ref().map(|user| user.is_onboarded)
     }
@@ -382,7 +382,7 @@ impl AuthState {
     }
 
     /// Returns whether or not the user is a "web client anonymous user", aka their account
-    /// originated from viewing Warp on web.
+    /// originated from viewing Black on web.
     pub fn is_user_web_anonymous_user(&self) -> Option<bool> {
         self.user.read().as_ref().map(|user| {
             user.anonymous_user_type() == Some(AnonymousUserType::WebClientAnonymousUser)
@@ -404,7 +404,7 @@ impl AuthState {
         })
     }
 
-    /// Returns whether or not the anonymous user is past any of their Warp Drive object limits.
+    /// Returns whether or not the anonymous user is past any of their Black Drive object limits.
     pub fn is_anonymous_user_past_object_limit(
         &self,
         object_type: ObjectType,

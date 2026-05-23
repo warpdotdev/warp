@@ -13,7 +13,7 @@ use black::integration_testing::terminal::wait_until_bootstrapped_single_pane_fo
 use black::integration_testing::view_getters::single_input_view_for_tab;
 use black::root_view::SubshellCommandArg;
 use black::terminal::shell::ShellType;
-use black::terminal::warpify::settings::AddedSubshellCommands;
+use black::terminal::blackify::settings::AddedSubshellCommands;
 use black_ui::integration::{AssertionOutcome, TestStep};
 use black_ui::windowing::state::ApplicationStage;
 use black_ui::windowing::WindowManager;
@@ -83,7 +83,7 @@ generate_can_bootstrap_remote_subshell_for_shell!(test_can_bootstrap_remote_bash
 // generate_can_bootstrap_remote_subshell_for_shell!(test_can_bootstrap_remote_fish_subshell, "fish");
 
 // Test the flow of creating a new window and running a command that should create a subshell and
-//  automaticall bootstrapping AKA "warpifying" that subshell.
+//  automaticall bootstrapping AKA "blackifying" that subshell.
 pub fn test_can_auto_bootstrap() -> Builder {
     const SUBSHELL_COMMAND: &str = "zsh";
 

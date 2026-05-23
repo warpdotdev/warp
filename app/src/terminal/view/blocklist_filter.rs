@@ -7,7 +7,7 @@ use crate::ai::agent::AIAgentExchange;
 /// Returns whether a task's exchanges should be shown in the blocklist.
 pub(super) fn should_show_task_in_blocklist(task: &Task) -> bool {
     // All tasks are visible in the blocklist aside from CLI (long-running command),
-    // Warp documentation search, and conversation search subtasks.
+    // Black documentation search, and conversation search subtasks.
     !task.is_cli_subagent()
         && !task.is_warp_documentation_search_subagent()
         && !task.is_conversation_search_subagent()

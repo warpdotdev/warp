@@ -20,7 +20,7 @@ pub const SCREENSHOT_PATH_KEY: &str = "pending_screenshot_path";
 pub const VIDEO_ENABLED_ENV_VAR: &str = "BLACK_INTEGRATION_TEST_VIDEO";
 
 /// Environment variable that sets the output directory for video recordings
-/// and screenshots. Defaults to `$TMPDIR/warp_integration_video_captures` when
+/// and screenshots. Defaults to `$TMPDIR/black_integration_video_captures` when
 /// unset.
 pub const VIDEO_DIR_ENV_VAR: &str = "BLACK_INTEGRATION_TEST_VIDEO_DIR";
 
@@ -374,7 +374,7 @@ pub fn save_captured_frame_as_png(frame: &CapturedFrame, path: &Path) -> anyhow:
 pub fn output_dir() -> PathBuf {
     let dir = std::env::var(VIDEO_DIR_ENV_VAR)
         .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::temp_dir().join("warp_integration_video_captures"));
+        .unwrap_or_else(|_| std::env::temp_dir().join("black_integration_video_captures"));
     std::fs::create_dir_all(&dir).ok();
     dir
 }

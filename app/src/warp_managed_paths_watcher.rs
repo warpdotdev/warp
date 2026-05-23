@@ -14,7 +14,7 @@ use black_ui::{Entity, ModelContext, SingletonEntity};
 #[cfg(not(target_family = "wasm"))]
 use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
 
-/// Duration between filesystem watch events for the Warp managed paths watcher, in milliseconds.
+/// Duration between filesystem watch events for the Black managed paths watcher, in milliseconds.
 #[cfg(not(target_family = "wasm"))]
 const WARP_MANAGED_PATHS_WATCHER_DEBOUNCE_MILLI_SECS: u64 = 500;
 
@@ -256,7 +256,7 @@ impl WarpManagedPathsWatcher {
                 data_dir.clone(),
                 WatchFilter::with_filter(filter.clone(), filter),
                 RecursiveMode::Recursive,
-                "Warp data directory",
+                "Black data directory",
             );
             if should_register_config_local_dir {
                 Self::register_path(
@@ -265,7 +265,7 @@ impl WarpManagedPathsWatcher {
                     config_local_dir.clone(),
                     WatchFilter::accept_all(),
                     RecursiveMode::Recursive,
-                    "Warp config directory",
+                    "Black config directory",
                 );
             }
             if let Some(warp_home_skills_dir) = warp_home_skills_dir() {
@@ -280,7 +280,7 @@ impl WarpManagedPathsWatcher {
                         warp_home_skills_dir,
                         WatchFilter::accept_all(),
                         RecursiveMode::Recursive,
-                        "Warp home skills directory",
+                        "Black home skills directory",
                     );
                 }
             }
@@ -301,7 +301,7 @@ impl WarpManagedPathsWatcher {
                         warp_home_config_dir,
                         WatchFilter::with_filter(Arc::new(|_: &Path| true), emit),
                         RecursiveMode::NonRecursive,
-                        "Warp home MCP config directory",
+                        "Black home MCP config directory",
                     );
                 }
             }

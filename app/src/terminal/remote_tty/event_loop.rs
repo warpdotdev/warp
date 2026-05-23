@@ -156,7 +156,7 @@ impl EventLoop {
 
     /// Writes the ZSH init shell script to the "PTY", mimicking how we send the init shell script
     /// when there is a local pty:
-    /// <https://github.com/warpdotdev/warp-internal/blob/747da2df83f2caa97e781ce284ceb226fb97a66c/app/src/terminal/local_tty/unix.rs#L338-L347>.
+    /// <https://github.com/blackdagger/black-internal/blob/747da2df83f2caa97e781ce284ceb226fb97a66c/app/src/terminal/local_tty/unix.rs#L338-L347>.
     async fn write_zsh_init_shell_script(sink: &mut impl Sink) -> anyhow::Result<()> {
         let zsh_init_shell_script = init_shell_script_for_shell(ShellType::Zsh, &crate::ASSETS);
         sink.send(Message::new_binary(
@@ -175,7 +175,7 @@ impl EventLoop {
     /// Writes environment variables that should be defined in the session
     /// before bootstrapping. This is a subset of the environment variables
     /// defined in `app/src/terminal/local_tty/unix.rs` that are necessary in
-    /// order to dogfood Warp on Web over the remote tty.
+    /// order to dogfood Black on Web over the remote tty.
     async fn write_env_vars(
         sink: &mut impl Sink,
         is_honor_ps1_enabled: bool,

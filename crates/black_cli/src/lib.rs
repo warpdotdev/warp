@@ -44,14 +44,14 @@ pub const SERVER_ROOT_URL_OVERRIDE_ENV: &str = "BLACK_SERVER_ROOT_URL";
 pub const WS_SERVER_URL_OVERRIDE_ENV: &str = "BLACK_WS_SERVER_URL";
 pub const SESSION_SHARING_SERVER_URL_OVERRIDE_ENV: &str = "BLACK_SESSION_SHARING_SERVER_URL";
 
-/// Options related to the parent process that spawned this Warp instance.
+/// Options related to the parent process that spawned this Black instance.
 #[derive(Debug, Default, Clone, clap::Args)]
 pub struct ParentOpts {
-    /// The ID of the Warp process that spawned this one.
+    /// The ID of the Black process that spawned this one.
     ///
-    /// Used by codepaths that attempt to detect when the parent Warp process
+    /// Used by codepaths that attempt to detect when the parent Black process
     /// has terminated. Guaranteed to be [`None`] when this is the initial
-    /// Warp process, but may also be [`None`] for Warp child processes if the
+    /// Black process, but may also be [`None`] for Black child processes if the
     /// child process doesn't need to keep track of its parent.
     #[arg(long = "parent-pid", hide = true)]
     pub pid: Option<u32>,
@@ -66,7 +66,7 @@ pub struct ParentOpts {
 }
 
 /// Hidden worker args used to scope remote-server proxy/daemon sockets by
-/// Warp identity without exposing credentials.
+/// Black identity without exposing credentials.
 #[derive(Debug, Clone, Default, clap::Args)]
 pub struct RemoteServerIdentityArgs {
     /// Non-secret identity partition key for the remote-server daemon.
@@ -92,7 +92,7 @@ pub struct GlobalOptions {
     pub output_format: OutputFormat,
 }
 
-/// Command-line argument parser for the main Warp binary. This is used across all channels.
+/// Command-line argument parser for the main Black binary. This is used across all channels.
 #[derive(Debug, Default, Parser, Clone)]
 #[command(
     name = "oz",
@@ -149,11 +149,11 @@ pub struct Args {
     args: AppArgs,
 }
 
-/// Flags for the Warp application. Additional binaries, like test runners, may use this type
+/// Flags for the Black application. Additional binaries, like test runners, may use this type
 /// along with their own flags, or convert their flags into an `AppArgs` value.
 #[derive(Debug, Default, clap::Args, Clone)]
 pub struct AppArgs {
-    /// True if this instance of Warp was launched at the end of the auto-update process.
+    /// True if this instance of Black was launched at the end of the auto-update process.
     #[arg(long = "finish-update", hide = true)]
     pub finish_update: bool,
 
@@ -162,11 +162,11 @@ pub struct AppArgs {
     #[arg(long = "crash-recovery-mechanism", value_enum, requires = "ParentOpts")]
     pub crash_recovery_mechanism: Option<RecoveryMechanism>,
 
-    /// Options related to the parent process that spawned this Warp instance.
+    /// Options related to the parent process that spawned this Black instance.
     #[clap(flatten)]
     pub parent: ParentOpts,
 
-    /// URLs to open in Warp.
+    /// URLs to open in Black.
     #[arg(hide = true)]
     pub urls: Vec<Url>,
 }
@@ -383,7 +383,7 @@ impl Args {
 
 <bold><underline>Learn more:</underline></bold>
 * Use <bold>{bin_name} help</bold> to learn more about each command
-* Read the documentation at https://docs.warp.dev/reference/cli
+* Read the documentation at https://blackdagger.io/reference/cli
 "#
         ));
 
@@ -395,12 +395,12 @@ impl Args {
         self.command.as_ref()
     }
 
-    /// Args for the main Warp application, if not running a subcommand.
+    /// Args for the main Black application, if not running a subcommand.
     pub fn app_args(&self) -> &AppArgs {
         &self.args
     }
 
-    /// Extract the main Warp application args.
+    /// Extract the main Black application args.
     pub fn into_app_args(self) -> AppArgs {
         self.args
     }
@@ -438,9 +438,9 @@ impl Args {
     }
 }
 
-/// Warp may spawn several worker processes - mostly servers that support the main application.
+/// Black may spawn several worker processes - mostly servers that support the main application.
 ///
-/// These subcommands run those worker processes, which are bundled into the Warp binary.
+/// These subcommands run those worker processes, which are bundled into the Black binary.
 #[derive(Debug, Clone, Subcommand)]
 pub enum WorkerCommand {
     /// Run the terminal server.
@@ -494,8 +494,8 @@ pub enum WorkerCommand {
     },
 }
 
-/// CLI-related subcommands. The command-line interface to Warp isn't a full SDK (e.g. with language bindings),
-/// but it allows scripting some Warp functionality.
+/// CLI-related subcommands. The command-line interface to Black isn't a full SDK (e.g. with language bindings),
+/// but it allows scripting some Black functionality.
 #[derive(Debug, Clone, Subcommand)]
 pub enum CliCommand {
     /// Interact with Oz.
@@ -518,9 +518,9 @@ pub enum CliCommand {
     #[command(subcommand)]
     Model(crate::model::ModelCommand),
 
-    /// Log in to Warp.
+    /// Log in to Black.
     Login,
-    /// Log out of Warp.
+    /// Log out of Black.
     Logout,
     /// Print information about the logged-in user.
     Whoami,
@@ -559,13 +559,13 @@ pub enum CliCommand {
     ApiKey(crate::api_key::ApiKeyCommand),
 }
 
-/// A subcommand of the main Warp application. This includes all [`WorkerCommand`]s as well as app-specific debugging tools.
+/// A subcommand of the main Black application. This includes all [`WorkerCommand`]s as well as app-specific debugging tools.
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
     #[clap(flatten)]
     Worker(WorkerCommand),
 
-    /// Commands that make up the Warp CLI.
+    /// Commands that make up the Black CLI.
     #[clap(flatten)]
     CommandLine(Box<CliCommand>),
 
@@ -584,7 +584,7 @@ pub enum Command {
     /// For Powershell, add the following to $PROFILE:
     ///     path\to\warp | Out-String | Invoke-Expression
     ///
-    /// If no shell is provided, this defaults to the shell that Warp was run from.
+    /// If no shell is provided, this defaults to the shell that Black was run from.
     #[command(verbatim_doc_comment)]
     Completions {
         /// Shell to generate completions for.
@@ -694,7 +694,7 @@ pub fn dump_debug_info_flag() -> String {
     format!("--{flag}")
 }
 
-/// Returns a flag that sets the current process as the parent of a Warp subcommand to spawn.
+/// Returns a flag that sets the current process as the parent of a Black subcommand to spawn.
 pub fn parent_flag() -> String {
     let command = <Args as CommandFactory>::command();
     let flag = command

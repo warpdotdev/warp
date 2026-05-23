@@ -63,19 +63,19 @@ pub fn sections(ctx: &mut ViewContext<ResourceCenterMainView>) -> Vec<Section> {
             ContentItem {
                 title: "Use your custom prompt",
                 description: "Set up Warp to honor your PS1 setting",
-                url: "https://docs.warp.dev/terminal/appearance/prompt",
+                url: "https://blackdagger.io/terminal/appearance/prompt",
                 button_label: "View documentation",
             },
             ContentItem {
                 title: "Integrate Warp with your IDE",
                 description: "Configure Warp to launch from your most used development tools",
-                url: "https://docs.warp.dev/terminal/integrations-and-plugins",
+                url: "https://blackdagger.io/terminal/integrations-and-plugins",
                 button_label: "View documentation",
             },
             ContentItem {
                 title: "How Warp uses Warp",
                 description: "Learn how Warp's engineering team uses their favorite features",
-                url: "https://www.warp.dev/blog/how-warp-uses-warp",
+                url: "https://blackdagger.io/blog/how-warp-uses-warp",
                 button_label: "Read article",
             },
         ],

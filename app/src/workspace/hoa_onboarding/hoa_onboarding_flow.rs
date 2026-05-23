@@ -469,7 +469,7 @@ impl HoaOnboardingFlow {
             styles: FormattedTextStyles {
                 underline: true,
                 hyperlink: Some(Hyperlink::Url(
-                    "https://docs.warp.dev/agent-platform/warp-agents/agent-notifications".into(),
+                    "https://blackdagger.io/agent-platform/warp-agents/agent-notifications".into(),
                 )),
                 ..Default::default()
             },
@@ -477,7 +477,7 @@ impl HoaOnboardingFlow {
 
         let formatted = FormattedText::new([FormattedTextLine::Line(vec![
             FormattedTextFragment::plain_text(
-                "Warp pipes through notifications from any CLI coding agent into a unified notification center that works across all coding agents and harnesses. ",
+                "Black pipes through notifications from any CLI coding agent into a unified notification center that works across all coding agents and harnesses. ",
             ),
             learn_more_fragment,
         ])]);

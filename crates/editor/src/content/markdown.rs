@@ -34,7 +34,7 @@ use crate::content::version::BufferVersion;
 /// A Markdown format to serialize a [`Buffer`] into.
 #[derive(Clone, Copy)]
 pub enum MarkdownStyle<'a> {
-    /// The internal Markdown format used in Warp Drive. References are normalized, so the Markdown
+    /// The internal Markdown format used in Black Drive. References are normalized, so the Markdown
     /// only refers to other objects by their IDs, with no other data.
     Internal,
     /// A Markdown format suitable for external use. If an [`AppContext`] is set, it may be used to

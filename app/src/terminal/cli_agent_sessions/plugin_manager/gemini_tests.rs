@@ -35,13 +35,13 @@ fn update_instructions_has_steps() {
 #[test]
 fn installed_when_extension_present() {
     let dir = tempfile::tempdir().unwrap();
-    let ext_dir = dir.path().join("gemini-warp");
+    let ext_dir = dir.path().join("gemini-black");
     fs::create_dir_all(&ext_dir).unwrap();
 
     let json = serde_json::json!({
-        "name": "warp",
+        "name": "black",
         "version": "1.0.0",
-        "description": "Warp terminal integration for Gemini CLI"
+        "description": "Black terminal integration for Gemini CLI"
     });
     fs::write(
         ext_dir.join("gemini-extension.json"),
@@ -61,7 +61,7 @@ fn not_installed_when_extension_missing() {
 #[test]
 fn not_installed_when_json_invalid() {
     let dir = tempfile::tempdir().unwrap();
-    let ext_dir = dir.path().join("gemini-warp");
+    let ext_dir = dir.path().join("gemini-black");
     fs::create_dir_all(&ext_dir).unwrap();
     fs::write(ext_dir.join("gemini-extension.json"), "not json").unwrap();
 
@@ -71,11 +71,11 @@ fn not_installed_when_json_invalid() {
 #[test]
 fn installed_version_returns_version_when_present() {
     let dir = tempfile::tempdir().unwrap();
-    let ext_dir = dir.path().join("gemini-warp");
+    let ext_dir = dir.path().join("gemini-black");
     fs::create_dir_all(&ext_dir).unwrap();
 
     let json = serde_json::json!({
-        "name": "warp",
+        "name": "black",
         "version": "1.5.0"
     });
     fs::write(
@@ -90,11 +90,11 @@ fn installed_version_returns_version_when_present() {
 #[test]
 fn installed_version_returns_none_when_no_version_field() {
     let dir = tempfile::tempdir().unwrap();
-    let ext_dir = dir.path().join("gemini-warp");
+    let ext_dir = dir.path().join("gemini-black");
     fs::create_dir_all(&ext_dir).unwrap();
 
     let json = serde_json::json!({
-        "name": "warp"
+        "name": "black"
     });
     fs::write(
         ext_dir.join("gemini-extension.json"),
@@ -114,11 +114,11 @@ fn installed_version_returns_none_when_file_missing() {
 #[test]
 fn needs_update_logic_true_when_version_outdated() {
     let dir = tempfile::tempdir().unwrap();
-    let ext_dir = dir.path().join("gemini-warp");
+    let ext_dir = dir.path().join("gemini-black");
     fs::create_dir_all(&ext_dir).unwrap();
 
     let json = serde_json::json!({
-        "name": "warp",
+        "name": "black",
         "version": "0.9.0"
     });
     fs::write(
@@ -137,11 +137,11 @@ fn needs_update_logic_true_when_version_outdated() {
 #[test]
 fn needs_update_logic_false_when_version_current() {
     let dir = tempfile::tempdir().unwrap();
-    let ext_dir = dir.path().join("gemini-warp");
+    let ext_dir = dir.path().join("gemini-black");
     fs::create_dir_all(&ext_dir).unwrap();
 
     let json = serde_json::json!({
-        "name": "warp",
+        "name": "black",
         "version": "1.0.0"
     });
     fs::write(

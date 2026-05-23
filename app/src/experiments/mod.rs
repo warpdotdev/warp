@@ -1,4 +1,4 @@
-//! A framework for running A/B tests within Warp.
+//! A framework for running A/B tests within Black.
 //!
 //! Before starting, please read the usage guide on Notion. The guide explains
 //! some important constraints that are required for proper use of the framework
@@ -339,7 +339,7 @@ pub trait Experiment<T: Experiment<T>>: FromStr {
 
             #[cfg(feature = "crash_reporting")]
             {
-                let tag_name = format!("warp.experiments.{}", Self::name());
+                let tag_name = format!("black.experiments.{}", Self::name());
                 crate::crash_reporting::set_tag(&tag_name, group.variant());
             }
         }

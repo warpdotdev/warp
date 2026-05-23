@@ -1879,11 +1879,11 @@ fn test_interleaving_command_and_embedding() {
 
         let model_handle = model_from_markdown(
             r#"Text
-```warp-embedded-object
+```black-embedded-object
 id: Workflow-test_uid00000000000123
 ```
 More text
-```warp-embedded-object
+```black-embedded-object
 id: Workflow-test_uid00000000000245
 ```
 ```Python
@@ -2603,7 +2603,7 @@ fn test_cut_code_block() {
             assert_eq!(clipboard.plain_text, "command");
             assert_eq!(
                 clipboard.html.unwrap(),
-                r#"<pre><code class="language-warp-runnable-command">command</code></pre>"#
+                r#"<pre><code class="language-black-runnable-command">command</code></pre>"#
             );
         })
     });

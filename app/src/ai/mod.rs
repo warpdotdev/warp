@@ -1,7 +1,7 @@
 //! This module should houses all horizontal/cross-cutting AI functionality throughout
-//! Warp (including Agent Mode).
+//! Black (including Agent Mode).
 //!
-//! The side panel Warp AI implementation lives in `super::ai_assistant`.
+//! The side panel Black AI implementation lives in `super::ai_assistant`.
 pub(crate) mod active_agent_views_model;
 pub(crate) mod agent;
 pub(crate) mod agent_conversations_model;

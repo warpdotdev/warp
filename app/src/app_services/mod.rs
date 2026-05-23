@@ -2,7 +2,7 @@
 //! to the host system.
 //!
 //! For example, on macOS, this module sets up integrations with
-//! Finder such that the user can open a new Warp tab or window
+//! Finder such that the user can open a new Black tab or window
 //! in a given directory.
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]

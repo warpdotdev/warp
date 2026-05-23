@@ -1,6 +1,6 @@
 use crate::crash_reporting::VirtualEnvironment;
 
-/// Returns what virtualized environment Warp is running in, if any.
+/// Returns what virtualized environment Black is running in, if any.
 pub fn get_virtualized_environment() -> Option<VirtualEnvironment> {
     if let Ok(output) = command::blocking::Command::new("systemd-detect-virt").output() {
         if !output.status.success() {

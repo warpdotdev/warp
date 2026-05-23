@@ -39,7 +39,7 @@ pub struct ManagedSecret {
     pub created_at: Time,
     pub updated_at: Time,
     // In our GraphQL schema, `Space` is essentially the output type equivalent of an `Owner`.
-    // Most Warp Drive code converts `Space` to `Owner`, but we don't have that conversion layer
+    // Most Black Drive code converts `Space` to `Owner`, but we don't have that conversion layer
     // for secrets.
     pub owner: Space,
     #[cynic(rename = "type")]

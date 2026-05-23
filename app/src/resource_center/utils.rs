@@ -1,5 +1,5 @@
 // Hard coded constants to divide keybindings into their respective categories/sections.
-// This should always align with documentation: https://docs.warp.dev/getting-started/keyboard-shortcuts
+// This should always align with documentation: https://blackdagger.io/getting-started/keyboard-shortcuts
 
 use black_ui::keymap::Keystroke;
 
@@ -107,9 +107,9 @@ pub const TERMINAL_KEYBINDINGS: &[&str] = &[
 
 pub const FUNDAMENTALS_KEYBINDINGS: &[&str] = &[
     "workspace:new_window",
-    "workspace:hide_warp",
+    "workspace:hide_black",
     "workspace:hide_others",
-    "workspace:quit_warp",
+    "workspace:quit_black",
     "workspace:minimize",
 ];
 
@@ -123,8 +123,8 @@ pub fn get_additional_keybindings() -> Vec<CommandBinding> {
             Some(Keystroke::parse("cmd-n").expect("Valid keystroke")),
         ),
         CommandBinding::new(
-            "workspace:hide_warp".into(),
-            "Hide Warp".into(),
+            "workspace:hide_black".into(),
+            "Hide Black".into(),
             Some(Keystroke::parse("cmd-h").expect("Valid keystroke")),
         ),
         CommandBinding::new(
@@ -133,8 +133,8 @@ pub fn get_additional_keybindings() -> Vec<CommandBinding> {
             Some(Keystroke::parse("alt-cmd-h").expect("Valid keystroke")),
         ),
         CommandBinding::new(
-            "workspace:quit_warp".into(),
-            "Quit Warp".into(),
+            "workspace:quit_black".into(),
+            "Quit Black".into(),
             Some(Keystroke::parse("cmd-q").expect("Valid keystroke")),
         ),
         CommandBinding::new(

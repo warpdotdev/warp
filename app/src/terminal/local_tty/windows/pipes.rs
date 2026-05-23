@@ -71,7 +71,7 @@ pub enum CreatePipeError {
 pub struct DuplexPipe {
     /// The client-side (e.g.: OpenConsole) end of the pipe.
     pub client: HANDLE,
-    /// The server-side (e.g.: Warp) end of the pipe.
+    /// The server-side (e.g.: Black) end of the pipe.
     pub server: HANDLE,
 }
 

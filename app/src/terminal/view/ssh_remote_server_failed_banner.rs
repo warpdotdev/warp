@@ -1,5 +1,5 @@
 //! Banner shown when the remote-server binary check, installation, or connection fails on the remote host.
-//! We fall back to the existing Warpification behavior and display this banner so the user knows why advanced features are unavailable.
+//! We fall back to the existing Blackification behavior and display this banner so the user knows why advanced features are unavailable.
 
 use remote_server::transport::UserFacingError;
 use black_core::ui::theme::color::internal_colors;

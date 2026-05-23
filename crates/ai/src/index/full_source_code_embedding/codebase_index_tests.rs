@@ -110,7 +110,7 @@ fn synced_index_with_queued_file_changes_reports_pending_status() {
             App::test((), |mut app| async move {
                 app.add_singleton_model(DirectoryWatcher::new);
 
-                let repo_name = "warp-virtual";
+                let repo_name = "black-virtual";
                 sandbox.mkdir(repo_name);
                 sandbox.with_files(vec![Stub::FileWithContent(
                     format!("{repo_name}/existing_file").as_str(),
@@ -150,7 +150,7 @@ fn synced_index_without_pending_file_changes_stays_ready_after_flush() {
             App::test((), |mut app| async move {
                 app.add_singleton_model(DirectoryWatcher::new);
 
-                let repo_name = "warp-virtual";
+                let repo_name = "black-virtual";
                 sandbox.mkdir(repo_name);
                 sandbox.with_files(vec![Stub::FileWithContent(
                     format!("{repo_name}/existing_file").as_str(),
@@ -685,7 +685,7 @@ fn test_nonsequential_fragments_sorting() {
 #[test]
 fn test_diff_merkle_node_no_diffs() {
     VirtualFS::test("test_diff_merkle_node_no_diffs", |dirs, mut sandbox| {
-        let repo_name = "warp-virtual";
+        let repo_name = "black-virtual";
         let repo_path = dirs.tests().join(repo_name);
 
         // Initialize repo:
@@ -728,7 +728,7 @@ fn test_diff_merkle_node_no_diffs() {
 #[test]
 fn test_diff_merkle_node_new_file() {
     VirtualFS::test("test_diff_merkle_node_new_file", |dirs, mut sandbox| {
-        let repo_name = "warp-virtual";
+        let repo_name = "black-virtual";
 
         // Initialize repo:
         // warp-virtual/
@@ -786,7 +786,7 @@ fn test_diff_merkle_node_new_empty_subdirectory() {
     VirtualFS::test(
         "test_diff_merkle_node_new_empty_subdirectory",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize repo:
             // warp-virtual/
@@ -840,7 +840,7 @@ fn test_diff_merkle_node_new_subdirectory_with_file() {
     VirtualFS::test(
         "test_diff_merkle_node_new_subdirectory_with_file",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize repo:
             // warp-virtual/
@@ -902,7 +902,7 @@ fn test_diff_merkle_node_new_subdirectory_with_file() {
 #[test]
 fn test_diff_merkle_node_deleted_file() {
     VirtualFS::test("test_diff_merkle_node_deleted_file", |dirs, mut sandbox| {
-        let repo_name = "warp-virtual";
+        let repo_name = "black-virtual";
 
         // Initialize repo:
         // warp-virtual/
@@ -957,7 +957,7 @@ fn test_diff_merkle_node_deleted_empty_subdirectory() {
     VirtualFS::test(
         "test_diff_merkle_node_deleted_empty_subdirectory",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize repo with two files:
             // warp-virtual/
@@ -1009,7 +1009,7 @@ fn test_diff_merkle_node_deleted_subdirectory_with_file() {
     VirtualFS::test(
         "test_diff_merkle_node_deleted_subdirectory_with_file",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize repo with two files:
             // warp-virtual/
@@ -1069,7 +1069,7 @@ fn test_diff_merkle_node_deleted_subdirectory_with_file() {
 #[test]
 fn test_diff_merkle_node_moved_file() {
     VirtualFS::test("test_diff_merkle_node_moved_file", |dirs, mut sandbox| {
-        let repo_name = "warp-virtual";
+        let repo_name = "black-virtual";
 
         // Initialize repo with two files:
         // warp-virtual/
@@ -1127,7 +1127,7 @@ fn test_diff_merkle_node_moved_subdirectory_with_file() {
     VirtualFS::test(
         "test_diff_merkle_node_moved_subdirectory_with_file",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize repo:
             // warp-virtual/
@@ -1198,7 +1198,7 @@ fn test_diff_merkle_node_file_changed_to_empty_subdirectory() {
     VirtualFS::test(
         "test_diff_merkle_node_file_changed_to_empty_subdirectory",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize repo:
             // warp-virtual/
@@ -1262,7 +1262,7 @@ fn test_diff_merkle_node_file_changed_to_non_empty_subdirectory() {
     VirtualFS::test(
         "test_diff_merkle_node_file_changed_to_non_empty_subdirectory",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize repo:
             // warp-virtual/
@@ -1333,7 +1333,7 @@ fn test_diff_merkle_node_subdirectory_changed_to_file() {
     VirtualFS::test(
         "test_diff_merkle_node_subdirectory_changed_to_file",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize repo:
             // warp-virtual/
@@ -1400,7 +1400,7 @@ fn test_diff_merkle_node_file_content_changed() {
     VirtualFS::test(
         "test_diff_merkle_node_file_content_changed",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize repo:
             // warp-virtual/
@@ -1470,7 +1470,7 @@ fn test_diff_merkle_node_file_content_changed_but_file_size_unchanged() {
     VirtualFS::test(
         "test_diff_merkle_node_file_content_changed_but_file_size_unchanged",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize repo:
             // warp-virtual/
@@ -1541,7 +1541,7 @@ fn test_diff_merkle_node_multiple_files_changed() {
     VirtualFS::test(
         "test_diff_merkle_node_multiple_files_changed",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize repo:
             // warp-virtual/
@@ -1625,7 +1625,7 @@ fn test_diff_merkle_node_gitignore_file_changed() {
     VirtualFS::test(
         "test_diff_merkle_node_gitignore_file_changed",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize repo:
             // warp-virtual/
@@ -1738,7 +1738,7 @@ fn test_diff_merkle_node_file_node_with_no_children() {
     VirtualFS::test(
         "test_diff_merkle_node_file_node_with_no_children",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize repo:
             // warp-virtual/
@@ -1828,7 +1828,7 @@ fn test_diff_merkle_node_file_node_with_fragment_children_with_children() {
     VirtualFS::test(
         "test_diff_merkle_node_file_node_with_fragment_children_with_children",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize repo:
             // warp-virtual/
@@ -1952,7 +1952,7 @@ fn test_diff_merkle_node_max_depth_exceeded() {
     VirtualFS::test(
         "test_diff_merkle_node_max_depth_exceeded",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize a simple repo:
             // warp-virtual/
@@ -2004,7 +2004,7 @@ fn test_diff_merkle_node_max_depth_boundary() {
     VirtualFS::test(
         "test_diff_merkle_node_max_depth_boundary",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize a simple repo:
             // warp-virtual/
@@ -2052,7 +2052,7 @@ fn test_diff_merkle_node_file_limit_exceeded() {
     VirtualFS::test(
         "test_diff_merkle_node_file_limit_exceeded",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize repo with multiple files:
             // warp-virtual/
@@ -2105,7 +2105,7 @@ fn test_diff_merkle_node_file_limit_boundary() {
     VirtualFS::test(
         "test_diff_merkle_node_file_limit_boundary",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize repo with one file
             sandbox.mkdir(repo_name);
@@ -2165,7 +2165,7 @@ fn test_add_merkle_node_max_depth_exceeded() {
     VirtualFS::test(
         "test_add_merkle_node_max_depth_exceeded",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize a simple repo with a single file
             // warp-virtual/
@@ -2252,7 +2252,7 @@ fn test_add_merkle_node_file_limit_exceeded() {
     VirtualFS::test(
         "test_add_merkle_node_file_limit_exceeded",
         |dirs, mut sandbox| {
-            let repo_name = "warp-virtual";
+            let repo_name = "black-virtual";
 
             // Initialize a repo with multiple files:
             // warp-virtual/

@@ -466,7 +466,7 @@ impl<'a> QuitWarningDialog<'a> {
             not(target_family = "wasm"),
             any(target_os = "linux", target_os = "freebsd", windows)
         )) {
-            // Find a window to show the Warp-native modal in. If there is no active window, use
+            // Find a window to show the Black-native modal in. If there is no active window, use
             // one of the windows with a running process.
             let window_id_to_focus = ctx
                 .windows()
