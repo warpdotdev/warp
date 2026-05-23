@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use anyhow::Context as _;
 use command::blocking::Command;
@@ -190,7 +190,7 @@ pub fn run_server(socket_path: &Path) -> anyhow::Result<()> {
                     });
                 }
                 Ok(MinidumpCommand::AddBreadcrumb { breadcrumb }) => {
-                    sentry::add_breadcrumb(breadcrumb);
+                    sentry::add_breadcrumb(breadcrumb.into());
                 }
                 Ok(MinidumpCommand::SetCrashDetails { details }) => {
                     *self.pending_crash_details.lock() = Some(details);
@@ -338,7 +338,9 @@ impl MinidumpGuard {
     fn add_breadcrumb(&self, breadcrumb: Breadcrumb) {
         let _ = send_command(
             self.client.as_ref(),
-            MinidumpCommand::AddBreadcrumb { breadcrumb },
+            MinidumpCommand::AddBreadcrumb {
+                breadcrumb: breadcrumb.into(),
+            },
         );
     }
 
@@ -419,8 +421,115 @@ enum MinidumpCommand {
     Shutdown,
     SetTags { tags: HashMap<String, String> },
     SetUser { user_id: String },
-    AddBreadcrumb { breadcrumb: Breadcrumb },
+    AddBreadcrumb { breadcrumb: MinidumpBreadcrumb },
     SetCrashDetails { details: String },
+}
+
+/// `sentry::Breadcrumb` contains arbitrary JSON data, which does not round-trip through bincode.
+/// Keep the minidump IPC payload to the fields the native reporters also forward.
+#[derive(Debug, Serialize, Deserialize)]
+struct MinidumpBreadcrumb {
+    ty: String,
+    category: Option<String>,
+    level: MinidumpBreadcrumbLevel,
+    message: Option<String>,
+}
+
+impl From<Breadcrumb> for MinidumpBreadcrumb {
+    fn from(breadcrumb: Breadcrumb) -> Self {
+        Self {
+            ty: breadcrumb.ty,
+            category: breadcrumb.category,
+            level: breadcrumb.level.into(),
+            message: breadcrumb.message,
+        }
+    }
+}
+
+impl From<MinidumpBreadcrumb> for Breadcrumb {
+    fn from(breadcrumb: MinidumpBreadcrumb) -> Self {
+        Self {
+            timestamp: SystemTime::now(),
+            ty: breadcrumb.ty,
+            category: breadcrumb.category,
+            level: breadcrumb.level.into(),
+            message: breadcrumb.message,
+            data: Default::default(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+enum MinidumpBreadcrumbLevel {
+    Debug,
+    Info,
+    Warning,
+    Error,
+    Fatal,
+}
+
+impl From<Level> for MinidumpBreadcrumbLevel {
+    fn from(level: Level) -> Self {
+        match level {
+            Level::Debug => Self::Debug,
+            Level::Info => Self::Info,
+            Level::Warning => Self::Warning,
+            Level::Error => Self::Error,
+            Level::Fatal => Self::Fatal,
+        }
+    }
+}
+
+impl From<MinidumpBreadcrumbLevel> for Level {
+    fn from(level: MinidumpBreadcrumbLevel) -> Self {
+        match level {
+            MinidumpBreadcrumbLevel::Debug => Self::Debug,
+            MinidumpBreadcrumbLevel::Info => Self::Info,
+            MinidumpBreadcrumbLevel::Warning => Self::Warning,
+            MinidumpBreadcrumbLevel::Error => Self::Error,
+            MinidumpBreadcrumbLevel::Fatal => Self::Fatal,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn minidump_breadcrumb_command_round_trips_through_bincode() {
+        let mut breadcrumb = Breadcrumb {
+            timestamp: SystemTime::now(),
+            ty: "default".to_string(),
+            category: Some("test".to_string()),
+            level: Level::Warning,
+            message: Some("breadcrumb message".to_string()),
+            data: Default::default(),
+        };
+        breadcrumb.data.insert(
+            "nested".to_string(),
+            serde_json::json!({ "value": true, "count": 1 }),
+        );
+
+        let command = MinidumpCommand::AddBreadcrumb {
+            breadcrumb: breadcrumb.into(),
+        };
+        let serialized =
+            bincode::serialize(&command).expect("breadcrumb command should serialize");
+        let deserialized: MinidumpCommand = bincode::deserialize(&serialized)
+            .expect("breadcrumb command should deserialize");
+
+        let MinidumpCommand::AddBreadcrumb { breadcrumb } = deserialized else {
+            panic!("expected AddBreadcrumb command");
+        };
+        let breadcrumb: Breadcrumb = breadcrumb.into();
+
+        assert_eq!(breadcrumb.ty, "default");
+        assert_eq!(breadcrumb.category.as_deref(), Some("test"));
+        assert_eq!(breadcrumb.level, Level::Warning);
+        assert_eq!(breadcrumb.message.as_deref(), Some("breadcrumb message"));
+        assert!(breadcrumb.data.is_empty());
+    }
 }
 
 /// Format details from a [`CrashContext`] into a Sentry error message. This information should
