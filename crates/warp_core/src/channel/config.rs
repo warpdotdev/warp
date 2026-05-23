@@ -42,10 +42,12 @@ pub struct WarpServerConfig {
 
 impl WarpServerConfig {
     pub fn production() -> Self {
+        // Hardened OSS build: cloud endpoints redirected to a dead loopback host so any
+        // residual AI/agent/Drive/auth call fails closed instead of reaching Warp's servers.
         Self {
-            server_root_url: "https://app.warp.dev".into(),
-            rtc_server_url: "wss://rtc.app.warp.dev/graphql/v2".into(),
-            session_sharing_server_url: Some("wss://sessions.app.warp.dev".into()),
+            server_root_url: "http://127.0.0.1:1".into(),
+            rtc_server_url: "ws://127.0.0.1:1/graphql/v2".into(),
+            session_sharing_server_url: Some("ws://127.0.0.1:1".into()),
             firebase_auth_api_key: "AIzaSyBdy3O3S9hrdayLJxJ7mriBR4qgUaUygAs".into(),
         }
     }
@@ -64,8 +66,9 @@ pub struct OzConfig {
 
 impl OzConfig {
     pub fn production() -> Self {
+        // Hardened OSS build: Oz/ambient-agent cloud endpoint redirected to a dead loopback host.
         Self {
-            oz_root_url: "https://oz.warp.dev".into(),
+            oz_root_url: "http://127.0.0.1:1".into(),
             workload_audience_url: None,
         }
     }
