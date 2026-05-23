@@ -47,7 +47,7 @@ Agents handling natural-language "spinner verbs", "warping verbs", or "flavor ve
 When rendering the latest exchange:
 1. `resolve_fallback_warping_message` is evaluated first.
 2. If fallback-model text exists, that exact model-specific text becomes `default_warping_text`, and the fallback explanation is rendered as secondary content.
-3. Otherwise, `warping_verb_session_key_for_exchange` chooses a stable session key from the active response stream or exchange.
+3. Otherwise, `warping_verb_session_key_for_exchange` chooses a stable session key for the current LLM response from the active response stream or exchange.
 4. `WarpingVerbSelector::resolve` returns one selected custom phrase for that session, or `DEFAULT_WARPING_VERB` if the feature is disabled or the normalized list is empty.
 5. The resolved string is passed to `render_warping_indicator` as `WarpingProps::default_warping_text`.
 `render_warping_indicator` keeps all specific states above the generic fallback, including summarization, document generation/update, passive code diff, file edit request, ask-user-question preparation, web search, review-comment fetching, interrupt adjustment, codebase search, grep, MCP call/resource read, file glob, writing to long-running commands, command execution, command waiting, and waiting-for-user-input states.
@@ -57,7 +57,7 @@ Only the final generic fallback branch uses `props.default_warping_text`.
 - `session_key`
 - raw selected phrase
 - formatted display phrase
-If the same session key renders again, it returns the cached display phrase. When the session key changes, it picks from the normalized list. With more than one candidate, it filters out the previously selected raw phrase when possible to avoid an immediate repeat.
+A warping session is one LLM response or active response stream, not a terminal session or full conversation. If the same session key renders again, it returns the cached display phrase. When the session key changes, it picks from the normalized list. With more than one candidate, it filters out the previously selected raw phrase when possible to avoid an immediate repeat. A single conversation can include multiple warping sessions and may show different spinner verbs across separate responses.
 The selector clears its cache and returns `DEFAULT_WARPING_VERB` when `FeatureFlag::CustomWarpingVerbs` is disabled or the normalized list is empty.
 ## 7. Settings UI
 `AISettingsPageView` tracks `spinner_verb_mode` with:
@@ -91,7 +91,7 @@ Unit coverage should include:
 - `normalize_warping_verb` trimming, trailing-dot stripping, dots-only dropping, casing preservation, unicode safety, and truncation.
 - `normalize_warping_verbs` empty filtering and max-list capping.
 - selector default fallback when the feature is disabled or list is empty.
-- selector per-session stability.
+- selector per-response stability.
 - selector no-immediate-repeat behavior when alternatives exist.
 - selector renderer-boundary normalization for raw settings/synced values.
 - pack identifiers, display names, and pack contents.
