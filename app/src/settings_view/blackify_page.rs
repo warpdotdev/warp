@@ -526,7 +526,7 @@ impl TitleWidget {
     fn render_top_of_page(&self, appearance: &Appearance, _app: &AppContext) -> Box<dyn Element> {
         let blackify_description = vec![
             FormattedTextFragment::plain_text(
-                "Configure whether Warp attempts to “Blackify” (add support for blocks, \
+                "Configure whether Black attempts to “Blackify” (add support for blocks, \
                     input modes, etc) certain shells. ",
             ),
             FormattedTextFragment::hyperlink(

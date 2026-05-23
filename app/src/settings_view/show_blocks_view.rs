@@ -37,7 +37,7 @@ const SCROLLBAR_WIDTH: ScrollbarWidth = ScrollbarWidth::Auto;
 
 const UNSHARE_BLOCK_CONFIRMATION_DIALOG_TEXT: &str =
     "Are you sure you want to unshare this block?\n\
-\nIt will no longer be accessible by link and will be permanently deleted from Warp servers.";
+\nIt will no longer be accessible by link and will be permanently deleted from Black servers.";
 
 #[derive(Clone, Debug)]
 struct UserOwnedBlock {

@@ -1746,7 +1746,7 @@ impl SettingsWidget for CloudConversationStorageWidget {
                         if is_checked {
                             "Agent conversations can be shared with others and are retained \
                             when you log in on different devices. This data is only stored \
-                            for product functionality, and Warp will not use it for analytics."
+                            for product functionality, and Black will not use it for analytics."
                         } else {
                             "Agent conversations are only stored locally on your machine, are \
                             lost upon logout, and cannot be shared. Note: conversation data \
