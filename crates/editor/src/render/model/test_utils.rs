@@ -313,9 +313,10 @@ pub fn init_logging() {
     // If multiple tests run in the same process, we should still only set up logging once.
     static INIT: Once = Once::new();
     INIT.call_once(|| {
-        env_logger::builder()
+        // try_init avoids a panic when another test module already initialized env_logger.
+        let _ = env_logger::builder()
             .parse_filters("black_editor=trace")
             .is_test(true)
-            .init();
+            .try_init();
     });
 }
