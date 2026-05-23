@@ -708,6 +708,72 @@ fn test_find_url_line_breaks() {
     );
 }
 
+// Tests for hard-wrap URL continuation (issue #11609).
+//
+// kiro-cli and other TUI programs emit \r\n (hard wraps), which creates rows
+// without the WRAPLINE flag.  When a URL fills the terminal width and spills
+// onto the next row, url_at_point should return the full cross-row URL.
+
+#[test]
+fn test_url_extends_across_hard_wrap_boundary() {
+    // "https://example.com/" is exactly 20 chars and fills the grid width.
+    // The \r\n between the rows means row 0 is hard-wrapped (no WRAPLINE flag).
+    // Hovering anywhere on the row-0 fragment should yield the full URL.
+    let blockgrid = mock_blockgrid("https://example.com/\r\npath");
+    let full_url = Link {
+        range: Point { row: 0, col: 0 }..=Point { row: 1, col: 3 },
+        is_empty: false,
+    };
+    assert_eq!(
+        blockgrid.grid_handler.url_at_point(Point { row: 0, col: 0 }),
+        Some(full_url.clone())
+    );
+    assert_eq!(
+        blockgrid.grid_handler.url_at_point(Point { row: 0, col: 10 }),
+        Some(full_url.clone())
+    );
+    assert_eq!(
+        blockgrid.grid_handler.url_at_point(Point { row: 0, col: 18 }),
+        Some(full_url)
+    );
+    // Hovering on the continuation row still returns None (backward scan cannot
+    // cross a hard-wrap boundary; only forward extension is implemented).
+    assert_eq!(
+        blockgrid.grid_handler.url_at_point(Point { row: 1, col: 0 }),
+        None
+    );
+}
+
+#[test]
+fn test_url_hard_wrap_no_extend_for_uppercase_continuation() {
+    // When the following row starts with an uppercase letter the continuation
+    // looks like a new sentence and must NOT be joined with the URL.
+    let blockgrid = mock_blockgrid("https://example.com/\r\nFor more info");
+    let row0_only = Link {
+        range: Point { row: 0, col: 0 }..=Point { row: 0, col: 19 },
+        is_empty: false,
+    };
+    assert_eq!(
+        blockgrid.grid_handler.url_at_point(Point { row: 0, col: 0 }),
+        Some(row0_only)
+    );
+}
+
+#[test]
+fn test_url_hard_wrap_no_extend_for_space_continuation() {
+    // When the following row starts with whitespace (e.g. an indented block)
+    // the URL must NOT be extended.
+    let blockgrid = mock_blockgrid("https://example.com/\r\n  more text");
+    let row0_only = Link {
+        range: Point { row: 0, col: 0 }..=Point { row: 0, col: 19 },
+        is_empty: false,
+    };
+    assert_eq!(
+        blockgrid.grid_handler.url_at_point(Point { row: 0, col: 0 }),
+        Some(row0_only)
+    );
+}
+
 #[test]
 fn test_find_url_wide_characters() {
     let blockgrid = mock_blockgrid("https://google.com/啊啊啊啊");

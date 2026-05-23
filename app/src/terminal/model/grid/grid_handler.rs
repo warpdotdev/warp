@@ -791,6 +791,58 @@ impl GridHandler {
             total_characters_scanned += 1;
         }
 
+        // Try to extend the URL across a hard-wrap row boundary.
+        //
+        // Some programs (e.g. kiro-cli) emit explicit \r\n, creating rows whose
+        // WRAPLINE flag is absent (hard wraps). The grapheme cursor only follows soft
+        // wraps, so it stops at hard-wrap boundaries and truncates URLs that overflow
+        // the terminal width.
+        //
+        // When the detected URL ends near the right edge of a hard-wrapped row, scan
+        // the leading token of the following row. If it looks like a URL fragment
+        // (no separators, does not start with an uppercase letter) extend the range
+        // to include it.
+        //
+        // See: https://github.com/warpdotdev/warp/issues/11609
+        if !url.is_empty {
+            let url_end = *url.range.end();
+            let last_col = self.columns().saturating_sub(1);
+            // Require the URL to be within a few columns of the right edge to avoid
+            // false positives when a short URL ends in the middle of a wide terminal.
+            let near_right_edge = url_end.col + 4 >= last_col;
+            let row_hard_wrapped = !self.row_wraps(url_end.row);
+            let next_row_exists = self.row(url_end.row + 1).is_some();
+            if near_right_edge && row_hard_wrapped && next_row_exists {
+                let next_row_start = Point {
+                    row: url_end.row + 1,
+                    col: 0,
+                };
+                let mut continuation_cursor =
+                    self.grapheme_cursor_from(next_row_start, grapheme_cursor::Wrap::None);
+                let mut is_first_char = true;
+                while let Some(item) = continuation_cursor.current_item() {
+                    // Stay on the continuation row only.
+                    if item.point().row != url_end.row + 1 {
+                        break;
+                    }
+                    let cell = item.cell();
+                    // Stop at any URL separator or whitespace.
+                    if is_at_boundary(cell) || cell.c.is_whitespace() {
+                        break;
+                    }
+                    // Reject continuations starting with an uppercase letter; these
+                    // almost certainly begin a new sentence rather than a URL fragment.
+                    // Example: "https://example.com\nFor more info" must not join.
+                    if is_first_char && cell.c.is_uppercase() {
+                        break;
+                    }
+                    is_first_char = false;
+                    url.extend_link(item.point());
+                    continuation_cursor.move_forward();
+                }
+            }
+        }
+
         if url.is_empty || !url.range.contains(&original_point) {
             None
         } else {

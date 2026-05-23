@@ -1830,8 +1830,12 @@ impl TerminalModel {
         respect_obfuscated_secrets: RespectObfuscatedSecrets,
     ) -> String {
         let text = self.string_at_range(item, respect_obfuscated_secrets);
-        text.trim_matches(['\u{200B}', ' ', '\n', '\r', '\t'])
-            .to_owned()
+        // Trim leading/trailing whitespace and zero-width spaces.
+        // Also remove embedded \r/\n characters, which appear when the URL range
+        // spans a hard-wrapped row boundary (see issue #11609). RFC 3986 URLs
+        // cannot contain raw newlines, so this stripping is always safe.
+        let trimmed = text.trim_matches(['\u{200B}', ' ', '\n', '\r', '\t']);
+        trimmed.replace(['\n', '\r'], "")
     }
 
     /// Return all possible file paths containing the grid point ordered from longest to shortest.
