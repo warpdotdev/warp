@@ -20207,11 +20207,20 @@ impl TerminalView {
                         block.output_to_string(),
                     ),
                     BlockEntity::FilteredOutput => block.output_to_string(),
-                    BlockEntity::CommandAndOutputAsMarkdown => format!(
-                        "```\n{}\n```\n\n{}",
-                        block.command_to_string().trim_end(),
-                        block.output_to_markdown_string(),
-                    ),
+                    BlockEntity::CommandAndOutputAsMarkdown => {
+                        let command = block.command_to_string();
+                        let command = command.trim_end();
+                        // Pick a fence at least 3 backticks long, and always
+                        // longer than the longest backtick run in the command
+                        // so untrusted/user-controlled content can't escape
+                        // the code block in the rendered markdown.
+                        let fence_len = longest_backtick_run(command).saturating_add(1).max(3);
+                        let fence = "`".repeat(fence_len);
+                        format!(
+                            "{fence}\n{command}\n{fence}\n\n{}",
+                            block.output_to_markdown_string(),
+                        )
+                    }
                 };
 
                 if !block_str.trim().is_empty() {
@@ -27353,6 +27362,23 @@ fn command_first_word_and_suffix(command: &str) -> Option<(&str, &str)> {
     let word_start = command.find(first_word)?;
     let rest = &command[word_start + first_word.len()..];
     Some((first_word, rest))
+}
+
+/// Returns the length of the longest contiguous run of backticks in `s`.
+fn longest_backtick_run(s: &str) -> usize {
+    let mut max = 0;
+    let mut cur = 0;
+    for b in s.bytes() {
+        if b == b'`' {
+            cur += 1;
+            if cur > max {
+                max = cur;
+            }
+        } else {
+            cur = 0;
+        }
+    }
+    max
 }
 
 /// Conditionally wrap a terminal element (altscreen / blocklist element) in a scrollable element.

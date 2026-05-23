@@ -58,6 +58,12 @@ pub struct HyperlinkRegistry {
     /// Forward array: id → hyperlink. The id's `NonZeroU32` value is
     /// `index_in_by_id + 1`.
     by_id: Vec<Hyperlink>,
+    /// Whether we've already logged a warning that the distinct-entries cap
+    /// was hit. Untrusted terminal output can emit unlimited unique URIs, so
+    /// we warn at most once per registry to avoid log spam. Not serialized:
+    /// on restore the new process gets a fresh warning budget.
+    #[serde(skip)]
+    cap_warning_logged: bool,
 }
 
 impl HyperlinkRegistry {
@@ -83,9 +89,12 @@ impl HyperlinkRegistry {
         }
 
         if self.by_id.len() >= MAX_DISTINCT_ENTRIES {
-            log::warn!(
-                "HyperlinkRegistry: distinct-entries cap of {MAX_DISTINCT_ENTRIES} reached; dropping new entry"
-            );
+            if !self.cap_warning_logged {
+                log::warn!(
+                    "HyperlinkRegistry: distinct-entries cap of {MAX_DISTINCT_ENTRIES} reached; dropping new entries (logged once per registry)"
+                );
+                self.cap_warning_logged = true;
+            }
             return None;
         }
 
