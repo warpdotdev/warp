@@ -714,6 +714,14 @@ impl TryFrom<&[u8]> for PromptKind {
 /// large heap allocation.
 pub const MAX_URI_BYTES: usize = 4096;
 
+/// Maximum byte length of the OSC 8 `id` param value. The id is attacker-
+/// controlled terminal data and ends up in the `Hyperlink` registry key, so
+/// it has to be bounded for the same reason `MAX_URI_BYTES` is: otherwise a
+/// process can emit `MAX_DISTINCT_ENTRIES` links with small URIs but very
+/// large unique ids and blow past the documented per-grid memory ceiling.
+/// Oversized ids are dropped (the URI is still kept and remains clickable).
+pub const MAX_ID_BYTES: usize = 256;
+
 /// A hyperlink declared via the OSC 8 escape sequence.
 ///
 /// Format: `OSC 8 ; params ; URI ST`, where `params` is a colon-separated
@@ -806,6 +814,13 @@ impl Hyperlink {
                 let key = &pair[..eq_idx];
                 let value = &pair[eq_idx + 1..];
                 if key == b"id" {
+                    // Bound the id length before allocating: it's untrusted
+                    // terminal data and the `Hyperlink` it ends up in is used
+                    // as the registry key. Oversized ids are dropped (the URI
+                    // remains usable as a hyperlink without an id).
+                    if value.len() > MAX_ID_BYTES {
+                        continue;
+                    }
                     let value =
                         str::from_utf8(value).map_err(|_| HyperlinkParseError::InvalidUtf8)?;
                     id = Some(value.to_owned());
@@ -922,6 +937,18 @@ mod hyperlink_parse_tests {
             }
             other => panic!("expected UriTooLong, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn over_length_id_is_dropped_uri_kept() {
+        // An attacker-controlled `id` larger than the cap should be dropped
+        // before allocation, leaving the link with no id but a valid URI.
+        let big_id = format!("id={}", "x".repeat(MAX_ID_BYTES + 1));
+        let parsed =
+            Hyperlink::parse_osc_params(&[big_id.as_bytes(), b"https://example.com"]).unwrap();
+        let link = parsed.unwrap();
+        assert_eq!(link.id, None);
+        assert_eq!(link.uri, "https://example.com");
     }
 
     #[test]
