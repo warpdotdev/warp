@@ -1,3 +1,4 @@
+use crate::terminal::model::block::BlockMetadata;
 use ::local_control::auth::CredentialGrant;
 use ::local_control::protocol::ActionKind;
 use ::local_control::protocol::{
@@ -8,12 +9,13 @@ use ::local_control::protocol::{
     DriveRunParams, DriveTarget, DriveUpdateParams, FileDeleteParams, FileMutationResult,
     FileOpenParams, FileSelector, FileTarget, FileWriteParams, HorizontalDirection,
     InputClearParams, InputInsertParams, InputMode, InputModeSetParams, InputReplaceParams,
-    InputRunParams, PaneCloseParams, PaneDirection, PaneFocusParams, PaneMaximizeParams,
-    PaneNavigateParams, PaneResizeParams, PaneSelector, PaneSplitParams, PaneTarget,
-    SessionSelector, SessionTarget, SettingSetParams, SettingToggleParams, SizeAdjustment,
-    TabActivateParams, TabActivationTarget, TabCloseParams, TabCloseScope, TabMoveParams,
-    TabMutationResult, TabRenameParams, TabSelector, TabTarget, TargetSelector, ThemeSetParams,
-    WindowCloseParams, WindowCreateParams, WindowFocusParams, WindowSelector, WindowTarget,
+    InputRunParams, InputStateResult, PaneCloseParams, PaneDirection, PaneFocusParams,
+    PaneMaximizeParams, PaneNavigateParams, PaneResizeParams, PaneSelector, PaneSplitParams,
+    PaneTarget, SessionSelector, SessionTarget, SettingSetParams, SettingToggleParams,
+    SizeAdjustment, TabActivateParams, TabActivationTarget, TabCloseParams, TabCloseScope,
+    TabMoveParams, TabMutationResult, TabRenameParams, TabSelector, TabTarget, TargetSelector,
+    ThemeSetParams, WindowCloseParams, WindowCreateParams, WindowFocusParams, WindowSelector,
+    WindowTarget,
 };
 use ::local_control::{
     ErrorCode, InstanceId, InvocationContext, PermissionCategory, RequestEnvelope,
@@ -26,6 +28,7 @@ use std::path::Path;
 use warp_core::features::FeatureFlag;
 use warp_core::session_id::SessionId;
 use warpui::platform::WindowStyle;
+use warpui::windowing::{state::ApplicationStage, WindowManager};
 use warpui::{App, SingletonEntity, TypedActionView};
 
 use super::allow_input_run_policy_for_test;
@@ -38,12 +41,13 @@ use super::{
     require_active_window_id_for_action, resolve_file_mutation_path,
     select_window_for_app_state_target, setting_get_result, setting_list_result,
     setting_set_result, setting_toggle_result, theme_list_result, theme_set_result,
-    validate_action_params, validate_app_focus_target, validate_block_get_target,
-    validate_block_list_target, validate_drive_target, validate_file_mutation_target,
-    validate_instance_metadata_read_target, validate_tab_create_target, validate_tab_rename_target,
-    validate_terminal_read_target, validate_window_create_target, workspace_action_for_surface,
-    LocalControlBridge,
+    validate_action_params, validate_active_terminal_target, validate_app_focus_target,
+    validate_block_get_target, validate_block_list_target, validate_drive_target,
+    validate_file_mutation_target, validate_instance_metadata_read_target,
+    validate_tab_create_target, validate_tab_rename_target, validate_terminal_read_target,
+    validate_window_create_target, workspace_action_for_surface, LocalControlBridge,
 };
+use crate::ai::blocklist::{InputConfig, InputType};
 use crate::ai::facts::manager::AIFactManager;
 use crate::ai::mcp::{FileBasedMCPManager, FileMCPWatcher};
 use crate::appearance::AppearanceManager;
@@ -81,7 +85,7 @@ use crate::terminal::available_shells;
 use crate::terminal::model::TerminalModel;
 use crate::terminal::shared_session::manager::Manager as SharedSessionManager;
 use crate::test_util::settings::initialize_settings_for_tests;
-use crate::test_util::terminal::initialize_app_for_terminal_view;
+use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::workflows::{workflow::Workflow, CloudWorkflow, CloudWorkflowModel};
 use crate::workspace::{
     bonus_grant_notification_model::BonusGrantNotificationModel,
@@ -267,6 +271,9 @@ fn owned_app_state_actions() -> [ActionKind; 9] {
         ActionKind::PaneResize,
     ]
 }
+fn request_with_params<T: serde::Serialize>(action: ActionKind, params: T) -> RequestEnvelope {
+    RequestEnvelope::new(Action::with_params(action, params).expect("params serialize"))
+}
 
 fn initialize_drive_app(app: &mut App, logged_in: bool) {
     initialize_settings_for_tests(app);
@@ -427,6 +434,12 @@ fn response_drive_mutation(response: ::local_control::ResponseEnvelope) -> Drive
         panic!("expected ok response");
     };
     serde_json::from_value(data).expect("drive mutation result decodes")
+}
+fn response_ok_data(response: ::local_control::ResponseEnvelope) -> serde_json::Value {
+    match response.response {
+        ControlResponse::Ok { data } => data,
+        ControlResponse::Error { error } => panic!("expected ok response, got {error}"),
+    }
 }
 
 fn with_local_control_bridge(
@@ -916,10 +929,16 @@ fn capabilities_advertises_implemented_actions() {
             ActionKind::PaneClose,
             ActionKind::PaneMaximize,
             ActionKind::PaneResize,
+            ActionKind::PaneSessionPrevious,
+            ActionKind::PaneSessionNext,
             ActionKind::SessionList,
             ActionKind::BlockList,
             ActionKind::BlockGet,
             ActionKind::InputGet,
+            ActionKind::InputInsert,
+            ActionKind::InputReplace,
+            ActionKind::InputClear,
+            ActionKind::InputModeSet,
             ActionKind::InputRun,
             ActionKind::HistoryList,
             ActionKind::ThemeList,
@@ -1141,6 +1160,124 @@ fn terminal_reads_reject_unsupported_selector_forms() {
         },
     )
     .expect_err("file target is rejected");
+    assert_eq!(err.code, ErrorCode::InvalidSelector);
+}
+
+#[test]
+fn input_mutation_targets_accept_default_and_active_targets() {
+    for action in [
+        ActionKind::InputInsert,
+        ActionKind::InputReplace,
+        ActionKind::InputClear,
+        ActionKind::InputModeSet,
+    ] {
+        validate_terminal_read_target(action, &TargetSelector::default())
+            .expect("default target is accepted");
+
+        validate_terminal_read_target(
+            action,
+            &TargetSelector {
+                window: Some(WindowTarget::Active),
+                tab: Some(TabTarget::Active),
+                pane: Some(PaneTarget::Active),
+                session: Some(SessionTarget::Active),
+                ..TargetSelector::default()
+            },
+        )
+        .expect("active target is accepted");
+    }
+}
+
+#[test]
+fn session_cycle_targets_accept_default_and_active_targets() {
+    for action in [ActionKind::PaneSessionPrevious, ActionKind::PaneSessionNext] {
+        validate_active_terminal_target(&TargetSelector::default(), action)
+            .expect("default target is accepted");
+
+        validate_active_terminal_target(
+            &TargetSelector {
+                window: Some(WindowTarget::Active),
+                tab: Some(TabTarget::Active),
+                pane: Some(PaneTarget::Active),
+                ..TargetSelector::default()
+            },
+            action,
+        )
+        .expect("active target is accepted");
+    }
+}
+
+#[test]
+fn input_mutation_targets_reject_stale_and_unsupported_targets() {
+    let err = validate_terminal_read_target(
+        ActionKind::InputInsert,
+        &TargetSelector {
+            window: Some(WindowTarget::Id {
+                id: WindowSelector("window".to_owned()),
+            }),
+            ..TargetSelector::default()
+        },
+    )
+    .expect_err("concrete window target is rejected");
+    assert_eq!(err.code, ErrorCode::StaleTarget);
+
+    let err = validate_terminal_read_target(
+        ActionKind::InputReplace,
+        &TargetSelector {
+            session: Some(SessionTarget::Id {
+                id: SessionSelector("session".to_owned()),
+            }),
+            ..TargetSelector::default()
+        },
+    )
+    .expect_err("concrete session target is rejected");
+    assert_eq!(err.code, ErrorCode::StaleTarget);
+
+    let err = validate_terminal_read_target(
+        ActionKind::InputModeSet,
+        &TargetSelector {
+            block: Some(BlockTarget::Active),
+            ..TargetSelector::default()
+        },
+    )
+    .expect_err("block target is rejected");
+    assert_eq!(err.code, ErrorCode::InvalidSelector);
+}
+
+#[test]
+fn session_cycle_targets_reject_stale_and_unsupported_targets() {
+    let err = validate_active_terminal_target(
+        &TargetSelector {
+            pane: Some(PaneTarget::Id {
+                id: PaneSelector("pane".to_owned()),
+            }),
+            ..TargetSelector::default()
+        },
+        ActionKind::PaneSessionNext,
+    )
+    .expect_err("concrete pane target is rejected");
+    assert_eq!(err.code, ErrorCode::StaleTarget);
+
+    let err = validate_active_terminal_target(
+        &TargetSelector {
+            file: Some(FileTarget::Path {
+                path: "notes.txt".to_owned(),
+            }),
+            ..TargetSelector::default()
+        },
+        ActionKind::PaneSessionPrevious,
+    )
+    .expect_err("file target is rejected");
+    assert_eq!(err.code, ErrorCode::InvalidSelector);
+
+    let err = validate_active_terminal_target(
+        &TargetSelector {
+            session: Some(SessionTarget::Active),
+            ..TargetSelector::default()
+        },
+        ActionKind::PaneSessionNext,
+    )
+    .expect_err("session target is rejected");
     assert_eq!(err.code, ErrorCode::InvalidSelector);
 }
 
@@ -1889,9 +2026,31 @@ fn mutating_permissions_keep_app_metadata_and_underlying_data_separate() {
         PermissionCategory::MutateMetadataConfiguration
     );
     assert_eq!(
+        ActionKind::PaneSessionPrevious
+            .metadata()
+            .permission_category,
+        PermissionCategory::MutateAppState
+    );
+    assert_eq!(
+        ActionKind::PaneSessionNext.metadata().permission_category,
+        PermissionCategory::MutateAppState
+    );
+    assert_eq!(
         ActionKind::SettingSet.metadata().permission_category,
         PermissionCategory::MutateMetadataConfiguration
     );
+    for action in [
+        ActionKind::InputInsert,
+        ActionKind::InputReplace,
+        ActionKind::InputClear,
+        ActionKind::InputModeSet,
+        ActionKind::InputRun,
+    ] {
+        assert_eq!(
+            action.metadata().permission_category,
+            PermissionCategory::MutateUnderlyingData
+        );
+    }
     assert_eq!(
         ActionKind::InputRun.metadata().permission_category,
         PermissionCategory::MutateUnderlyingData
@@ -1946,6 +2105,199 @@ fn mutating_permissions_keep_app_metadata_and_underlying_data_separate() {
         .verify_for_action(ActionKind::TabRename)
         .expect_err("app-state mutation category does not satisfy metadata mutation");
     assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+
+    let mut grant = CredentialGrant::new(
+        InstanceId("instance".to_owned()),
+        ActionKind::InputInsert,
+        InvocationContext::InsideWarp,
+        Duration::minutes(5),
+    );
+    grant.permission_category = PermissionCategory::MutateAppState;
+    grant.authenticated_user.subject = Some("user".to_owned());
+
+    let err = grant
+        .verify_for_action(ActionKind::InputInsert)
+        .expect_err("app-state mutation category does not satisfy input mutation");
+    assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+}
+
+#[test]
+fn input_mutations_require_underlying_data_mutation_permission() {
+    let settings = settings_with_values(true, true, true, true, true, false);
+
+    for action in [
+        ActionKind::InputInsert,
+        ActionKind::InputReplace,
+        ActionKind::InputClear,
+        ActionKind::InputModeSet,
+    ] {
+        let err = ensure_settings_allow_action(&settings, InvocationContext::OutsideWarp, action)
+            .expect_err("underlying-data mutation permission is disabled");
+        assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+
+        let mut grant = CredentialGrant::new(
+            InstanceId("instance".to_owned()),
+            action,
+            InvocationContext::InsideWarp,
+            Duration::minutes(5),
+        );
+        grant.permission_category = PermissionCategory::MutateAppState;
+        grant.authenticated_user.subject = Some("user".to_owned());
+        let err = grant
+            .verify_for_action(action)
+            .expect_err("app-state permission does not satisfy input mutation");
+        assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+    }
+}
+
+#[test]
+fn session_cycle_actions_require_app_state_mutation_permission() {
+    let settings = settings_with_values(true, true, true, true, false, true);
+
+    for action in [ActionKind::PaneSessionPrevious, ActionKind::PaneSessionNext] {
+        let err = ensure_settings_allow_action(&settings, InvocationContext::InsideWarp, action)
+            .expect_err("app-state mutation permission is disabled");
+        assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+
+        let mut grant = CredentialGrant::new(
+            InstanceId("instance".to_owned()),
+            action,
+            InvocationContext::InsideWarp,
+            Duration::minutes(5),
+        );
+        grant.permission_category = PermissionCategory::MutateUnderlyingData;
+        grant.authenticated_user.subject = Some("user".to_owned());
+        let err = grant
+            .verify_for_action(action)
+            .expect_err("underlying-data mutation permission does not satisfy session cycling");
+        assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+    }
+}
+
+#[test]
+fn input_mutation_handlers_change_buffer_and_mode_without_executing() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(LocalControlBridge::new);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let session_id = SessionId::from(123);
+
+        terminal.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.model.lock();
+                model
+                    .block_list_mut()
+                    .active_block_for_test()
+                    .set_session_id(session_id);
+            }
+            let window_id = ctx.window_id();
+            WindowManager::handle(ctx).update(ctx, |state, ctx| {
+                state.overwrite_for_test(ApplicationStage::Active, Some(window_id));
+                ctx.notify();
+            });
+            ctx.windows().show_window_and_focus_app(window_id);
+            view.set_active_block_metadata_for_test(
+                BlockMetadata::new(Some(session_id), None),
+                ctx,
+            );
+        });
+
+        let initial_block_count = terminal.read(&app, |view, _| {
+            let model = view.model.lock();
+            model.block_list().blocks().len()
+        });
+
+        LocalControlBridge::handle(&app).update(&mut app, |bridge, ctx| {
+            let insert_response = bridge.handle_request(
+                request_with_params(
+                    ActionKind::InputInsert,
+                    InputInsertParams {
+                        text: "cargo".to_owned(),
+                        replace: false,
+                    },
+                ),
+                authenticated_grant(ActionKind::InputInsert, ctx),
+                ctx,
+            );
+            let inserted: InputStateResult =
+                serde_json::from_value(response_ok_data(insert_response))
+                    .expect("input.insert result decodes");
+            assert_eq!(inserted.session_id, session_id.as_u64().to_string());
+            assert_eq!(inserted.text, "cargo");
+
+            let append_response = bridge.handle_request(
+                request_with_params(
+                    ActionKind::InputInsert,
+                    InputInsertParams {
+                        text: " check".to_owned(),
+                        replace: false,
+                    },
+                ),
+                authenticated_grant(ActionKind::InputInsert, ctx),
+                ctx,
+            );
+            let appended: InputStateResult =
+                serde_json::from_value(response_ok_data(append_response))
+                    .expect("input.insert append result decodes");
+            assert_eq!(appended.text, "cargo check");
+
+            let replace_response = bridge.handle_request(
+                request_with_params(
+                    ActionKind::InputReplace,
+                    InputReplaceParams {
+                        text: "cargo test".to_owned(),
+                    },
+                ),
+                authenticated_grant(ActionKind::InputReplace, ctx),
+                ctx,
+            );
+            let replaced: InputStateResult =
+                serde_json::from_value(response_ok_data(replace_response))
+                    .expect("input.replace result decodes");
+            assert_eq!(replaced.text, "cargo test");
+
+            let mode_response = bridge.handle_request(
+                request_with_params(
+                    ActionKind::InputModeSet,
+                    InputModeSetParams {
+                        mode: InputMode::Agent,
+                    },
+                ),
+                authenticated_grant(ActionKind::InputModeSet, ctx),
+                ctx,
+            );
+            let mode_result: InputStateResult =
+                serde_json::from_value(response_ok_data(mode_response))
+                    .expect("input.mode.set result decodes");
+            assert_eq!(mode_result.text, "cargo test");
+
+            let clear_response = bridge.handle_request(
+                request_with_params(ActionKind::InputClear, InputClearParams::default()),
+                authenticated_grant(ActionKind::InputClear, ctx),
+                ctx,
+            );
+            let cleared: InputStateResult =
+                serde_json::from_value(response_ok_data(clear_response))
+                    .expect("input.clear result decodes");
+            assert_eq!(cleared.text, "");
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                view.input_config(ctx),
+                InputConfig {
+                    input_type: InputType::AI,
+                    is_locked: true,
+                }
+            );
+            let model = view.model.lock();
+            assert_eq!(model.block_list().blocks().len(), initial_block_count);
+            assert_eq!(model.block_list().active_block().command_to_string(), "");
+        });
+    })
 }
 
 #[test]

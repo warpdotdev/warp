@@ -13,6 +13,7 @@ use crate::projects::ProjectManagementModel;
 use crate::root_view;
 use crate::server::ids::{ClientId, SyncId};
 use crate::server::telemetry::PaletteSource;
+use crate::terminal::input::Input;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::model::TerminalModel;
 use std::collections::{BTreeMap, HashMap};
@@ -46,7 +47,7 @@ use ::local_control::protocol::{
     DriveObjectType as ControlDriveObjectType, DriveRunParams, DriveTarget, DriveUpdateParams,
     FileDeleteParams, FileListResult, FileMutationResult, FileOpenParams, FileSummary, FileTarget,
     FileWriteParams, HistoryEntrySummary, HistoryListParams, HistoryListResult,
-    HorizontalDirection, InputClearParams, InputInsertParams, InputModeSetParams,
+    HorizontalDirection, InputClearParams, InputInsertParams, InputMode, InputModeSetParams,
     InputReplaceParams, InputRunParams, InputStateResult, PaneCloseParams, PaneDirection,
     PaneFocusParams, PaneMaximizeParams, PaneMutationResult, PaneNavigateParams, PaneResizeParams,
     PaneSplitParams, PaneTarget, ProjectActiveResult, ProjectListResult, ProjectSummary,
@@ -964,6 +965,94 @@ impl LocalControlBridge {
                     Err(error) => ResponseEnvelope::error(request.request_id, error),
                 }
             }
+            ActionKind::PaneSessionPrevious | ActionKind::PaneSessionNext => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match self.cycle_session(request.action.kind, &request.target, ctx) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::InputInsert => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as::<InputInsertParams>()
+                    .and_then(|params| self.insert_input(&request.target, params, ctx))
+                {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::InputReplace => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as::<InputReplaceParams>()
+                    .and_then(|params| self.replace_input(&request.target, params, ctx))
+                {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::InputClear => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as::<InputClearParams>()
+                    .and_then(|params| {
+                        let InputClearParams {} = params;
+                        self.clear_input(&request.target, ctx)
+                    }) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::InputModeSet => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as::<InputModeSetParams>()
+                    .and_then(|params| self.set_input_mode(&request.target, params, ctx))
+                {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
             ActionKind::DriveCreate => {
                 if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
                     return ResponseEnvelope::error(request.request_id, error);
@@ -1538,6 +1627,134 @@ impl LocalControlBridge {
             "handled": true,
             "window_id": window_id.to_string(),
         }))
+    }
+
+    fn cycle_session(
+        &mut self,
+        action: ActionKind,
+        target: &TargetSelector,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<serde_json::Value, ControlError> {
+        validate_active_terminal_target(target, action)?;
+        let window_id = require_active_window_id_for_action(ctx.windows().active_window(), action)?;
+        let workspace = ctx
+            .views_of_type::<Workspace>(window_id)
+            .and_then(|workspaces| workspaces.into_iter().next())
+            .ok_or_else(|| {
+                ControlError::new(
+                    ErrorCode::MissingTarget,
+                    format!(
+                        "{} requires a workspace in the target window",
+                        action.as_str()
+                    ),
+                )
+            })?;
+        let (previous_tab_index, active_tab_index, tab_count) =
+            workspace.update(ctx, |workspace, ctx| {
+                let previous_tab_index = workspace.active_tab_index();
+                let workspace_action = match action {
+                    ActionKind::PaneSessionPrevious => WorkspaceAction::CyclePrevSession,
+                    ActionKind::PaneSessionNext => WorkspaceAction::CycleNextSession,
+                    _ => {
+                        return (
+                            previous_tab_index,
+                            workspace.active_tab_index(),
+                            workspace.tab_count(),
+                        );
+                    }
+                };
+                workspace.handle_action(&workspace_action, ctx);
+                (
+                    previous_tab_index,
+                    workspace.active_tab_index(),
+                    workspace.tab_count(),
+                )
+            });
+        Ok(json!({
+            "action": action.as_str(),
+            "window_id": window_id.to_string(),
+            "previous_tab_index": previous_tab_index,
+            "active_tab_index": active_tab_index,
+            "tab_count": tab_count,
+        }))
+    }
+
+    fn insert_input(
+        &mut self,
+        target: &TargetSelector,
+        params: InputInsertParams,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<serde_json::Value, ControlError> {
+        let resolved = resolve_terminal_read_target(ActionKind::InputInsert, target, ctx)?;
+        let session_id =
+            active_session_id_for_terminal(&resolved.terminal_view, ActionKind::InputInsert, ctx)?;
+        let input = resolved
+            .terminal_view
+            .read(ctx, |terminal, _| terminal.input().clone());
+        if params.replace {
+            input.update(ctx, |input, ctx| {
+                input.replace_buffer_content(&params.text, ctx);
+            });
+        } else {
+            input.update(ctx, |input, ctx| {
+                input.append_to_buffer(&params.text, ctx);
+            });
+        }
+        input_state_result_for_input(input, session_id, ctx).and_then(to_control_data)
+    }
+
+    fn replace_input(
+        &mut self,
+        target: &TargetSelector,
+        params: InputReplaceParams,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<serde_json::Value, ControlError> {
+        let resolved = resolve_terminal_read_target(ActionKind::InputReplace, target, ctx)?;
+        let session_id =
+            active_session_id_for_terminal(&resolved.terminal_view, ActionKind::InputReplace, ctx)?;
+        let input = resolved
+            .terminal_view
+            .read(ctx, |terminal, _| terminal.input().clone());
+        input.update(ctx, |input, ctx| {
+            input.replace_buffer_content(&params.text, ctx);
+        });
+        input_state_result_for_input(input, session_id, ctx).and_then(to_control_data)
+    }
+
+    fn clear_input(
+        &mut self,
+        target: &TargetSelector,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<serde_json::Value, ControlError> {
+        let resolved = resolve_terminal_read_target(ActionKind::InputClear, target, ctx)?;
+        let session_id =
+            active_session_id_for_terminal(&resolved.terminal_view, ActionKind::InputClear, ctx)?;
+        let input = resolved
+            .terminal_view
+            .read(ctx, |terminal, _| terminal.input().clone());
+        input.update(ctx, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+        });
+        input_state_result_for_input(input, session_id, ctx).and_then(to_control_data)
+    }
+
+    fn set_input_mode(
+        &mut self,
+        target: &TargetSelector,
+        params: InputModeSetParams,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<serde_json::Value, ControlError> {
+        let resolved = resolve_terminal_read_target(ActionKind::InputModeSet, target, ctx)?;
+        let session_id =
+            active_session_id_for_terminal(&resolved.terminal_view, ActionKind::InputModeSet, ctx)?;
+        let input = resolved
+            .terminal_view
+            .read(ctx, |terminal, _| terminal.input().clone());
+        input.update(ctx, |input, ctx| match params.mode {
+            InputMode::Terminal => input.set_input_mode_terminal(false, ctx),
+            InputMode::Agent => input.set_input_mode_agent(false, ctx),
+        });
+        input_state_result_for_input(input, session_id, ctx).and_then(to_control_data)
     }
 
     fn list_open_files(
@@ -4125,6 +4342,16 @@ fn validate_active_terminal_target(
             format!("{action_name} only supports the active pane selector"),
         ));
     }
+    if matches!(
+        action,
+        ActionKind::PaneSessionPrevious | ActionKind::PaneSessionNext
+    ) && (target.session.is_some() || target.block.is_some())
+    {
+        return Err(ControlError::new(
+            ErrorCode::InvalidSelector,
+            format!("{action_name} does not accept session or block selectors"),
+        ));
+    }
     if target.file.is_some() || target.drive.is_some() {
         return Err(ControlError::new(
             ErrorCode::InvalidSelector,
@@ -4258,6 +4485,48 @@ fn resolve_terminal_in_pane_group(
         Ok::<_, ControlError>(terminal_view)
     })?;
     Ok(ResolvedTerminalTarget { terminal_view })
+}
+
+fn active_session_id_for_terminal(
+    terminal_view: &ViewHandle<TerminalView>,
+    action: ActionKind,
+    ctx: &mut ModelContext<LocalControlBridge>,
+) -> Result<SessionId, ControlError> {
+    terminal_view
+        .read(ctx, |terminal, _| terminal.active_block_session_id())
+        .ok_or_else(|| {
+            ControlError::new(
+                ErrorCode::MissingTarget,
+                format!("{} requires a target terminal session", action.as_str()),
+            )
+        })
+}
+
+fn input_state_result_for_input(
+    input: ViewHandle<Input>,
+    session_id: SessionId,
+    ctx: &mut ModelContext<LocalControlBridge>,
+) -> Result<InputStateResult, ControlError> {
+    let (text, cursor_offset) = input.read(ctx, |input, ctx| {
+        let cursor_offset = input
+            .editor()
+            .as_ref(ctx)
+            .start_byte_index_of_first_selection(ctx)
+            .as_usize();
+        (input.buffer_text(ctx), cursor_offset)
+    });
+    let cursor_offset = u32::try_from(cursor_offset).map_err(|err| {
+        ControlError::with_details(
+            ErrorCode::Internal,
+            "input cursor offset is too large to encode",
+            err.to_string(),
+        )
+    })?;
+    Ok(InputStateResult {
+        session_id: session_id.as_u64().to_string(),
+        text,
+        cursor_offset,
+    })
 }
 
 fn validate_action_params(action: &::local_control::Action) -> Result<(), ControlError> {

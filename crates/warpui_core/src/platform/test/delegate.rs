@@ -23,6 +23,7 @@ use pathfinder_geometry::{
     vector::{vec2f, Vector2F},
 };
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
@@ -66,6 +67,7 @@ impl IntegrationTestDelegate {
 #[derive(Default)]
 pub(crate) struct WindowManager {
     windows: HashMap<WindowId, Rc<Window>>,
+    active_window: RefCell<Option<WindowId>>,
 }
 
 impl WindowManager {
@@ -95,10 +97,13 @@ impl platform::WindowManager for WindowManager {
 
     fn remove_window(&mut self, window_id: WindowId) {
         self.windows.remove(&window_id);
+        if *self.active_window.borrow() == Some(window_id) {
+            *self.active_window.borrow_mut() = None;
+        }
     }
 
     fn active_window_id(&self) -> Option<WindowId> {
-        None
+        *self.active_window.borrow()
     }
 
     fn key_window_is_modal_panel(&self) -> bool {
@@ -109,21 +114,23 @@ impl platform::WindowManager for WindowManager {
         true
     }
 
-    fn activate_app(&self, _last_active_window: Option<WindowId>) -> Option<WindowId> {
-        // no-op for tests
-        None
+    fn activate_app(&self, last_active_window: Option<WindowId>) -> Option<WindowId> {
+        *self.active_window.borrow_mut() = last_active_window;
+        last_active_window
     }
 
-    fn show_window_and_focus_app(&self, _window_id: WindowId, _behavior: WindowFocusBehavior) {
-        // no-op for tests
+    fn show_window_and_focus_app(&self, window_id: WindowId, _behavior: WindowFocusBehavior) {
+        *self.active_window.borrow_mut() = Some(window_id);
     }
 
     fn hide_app(&self) {
         // no-op for tests
     }
 
-    fn hide_window(&self, _window_id: WindowId) {
-        // no-op for tests
+    fn hide_window(&self, window_id: WindowId) {
+        if *self.active_window.borrow() == Some(window_id) {
+            *self.active_window.borrow_mut() = None;
+        }
     }
 
     fn set_window_bounds(&self, _window_id: WindowId, _bound: RectF) {

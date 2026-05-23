@@ -13,6 +13,7 @@ cfg_if::cfg_if! {
             ai::blocklist::SerializedBlockListItem, pane_group::TerminalViewResources,
             resource_center::TipsCompleted,
         };
+        use crate::terminal::model::block::BlockMetadata;
         use crate::terminal::model::session::Sessions;
         use crate::terminal::model_events::ModelEventDispatcher;
         use crate::terminal::view::WARP_PROMPT_HEIGHT_LINES;
@@ -132,5 +133,17 @@ impl TerminalView {
     #[cfg(test)]
     pub fn rich_content_view_count_for_test(&self) -> usize {
         self.rich_content_views.len()
+    }
+
+    #[cfg(test)]
+    pub fn set_active_block_metadata_for_test(
+        &mut self,
+        block_metadata: BlockMetadata,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.active_block_metadata = Some(block_metadata.clone());
+        self.input.update(ctx, |input, ctx| {
+            input.set_active_block_metadata(block_metadata, false, ctx);
+        });
     }
 }
