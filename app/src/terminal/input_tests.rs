@@ -7372,3 +7372,101 @@ fn ctrl_enter_with_shell_mode_locked_prepends_prefix_and_exits_shell_mode_when_s
         });
     });
 }
+
+// ---------------------------------------------------------------------------
+// Issue #11588 — Keymap-context predicate tests
+//
+// These two tests pin the `keymap_context_modifier` closure behaviour for the
+// inner EditorView that owns the `ctrl-enter` binding.  They must be run on
+// Windows (non-macOS) with AgentView enabled — the exact conditions under
+// which the bug manifested.
+//
+// Test A (RED pre-fix): with the CLI agent rich input open, the editor context
+// must NOT contain CTRL_ENTER_ENTERS_AGENT_VIEW (so the binding can match),
+// and it MUST contain CLI_AGENT_RICH_INPUT_OPEN (sanity).
+//
+// Test B (baseline): without the rich input open, the editor context DOES
+// contain CTRL_ENTER_ENTERS_AGENT_VIEW on non-macOS, preserving the existing
+// agent-view-entry behaviour.
+// ---------------------------------------------------------------------------
+
+/// With the CLI agent rich input open, the EditorView keymap context must NOT
+/// contain `CTRL_ENTER_ENTERS_AGENT_VIEW` (so ctrl-enter binding is not
+/// suppressed) and MUST contain `CLI_AGENT_RICH_INPUT_OPEN`.
+///
+/// Pre-fix this test fails because `CTRL_ENTER_ENTERS_AGENT_VIEW` is inserted
+/// unconditionally whenever the inline agent-view controller is inactive,
+/// regardless of whether the rich input is open.
+#[test]
+fn editor_keymap_context_excludes_ctrl_enter_enters_agent_view_when_rich_input_is_open() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _cli_agent_flag = FeatureFlag::CLIAgentRichInput.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        // Open the CLI agent rich input.
+        open_rich_input_for_terminal(&terminal, &mut app);
+
+        // The EditorView's keymap context (which drives the ctrl-enter binding
+        // predicate) must not set CTRL_ENTER_ENTERS_AGENT_VIEW when the rich
+        // input is open — otherwise the binding is suppressed and ctrl-enter
+        // is silently dropped.
+        input.read(&app, |input, ctx| {
+            let km_ctx = input
+                .editor
+                .read(ctx, |editor, ctx| editor.keymap_context(ctx));
+            assert!(
+                !km_ctx.set.contains(flags::CTRL_ENTER_ENTERS_AGENT_VIEW),
+                "CTRL_ENTER_ENTERS_AGENT_VIEW must NOT be set when the CLI agent rich input \
+                 is open; got flags: {:?}",
+                km_ctx.set
+            );
+            // Sanity: the rich-input-open flag itself must be present.
+            assert!(
+                km_ctx.set.contains(flags::CLI_AGENT_RICH_INPUT_OPEN),
+                "CLI_AGENT_RICH_INPUT_OPEN must be set when the rich input is open; \
+                 got flags: {:?}",
+                km_ctx.set
+            );
+        });
+    });
+}
+
+/// Without the CLI agent rich input open (the default state), the EditorView
+/// keymap context DOES contain `CTRL_ENTER_ENTERS_AGENT_VIEW` on non-macOS
+/// when AgentView is enabled and the inline agent-view controller is inactive.
+///
+/// This pins the existing agent-view-entry behaviour so a future change to the
+/// closure cannot silently break the ctrl-enter-to-agent-view use case.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn editor_keymap_context_includes_ctrl_enter_enters_agent_view_when_rich_input_is_closed() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _cli_agent_flag = FeatureFlag::CLIAgentRichInput.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        // Do NOT open the rich input — the default state with an inactive
+        // inline agent-view controller should set CTRL_ENTER_ENTERS_AGENT_VIEW.
+        input.read(&app, |input, ctx| {
+            let km_ctx = input
+                .editor
+                .read(ctx, |editor, ctx| editor.keymap_context(ctx));
+            assert!(
+                km_ctx.set.contains(flags::CTRL_ENTER_ENTERS_AGENT_VIEW),
+                "CTRL_ENTER_ENTERS_AGENT_VIEW should be set when the rich input is NOT open \
+                 and the inline agent-view controller is inactive on non-macOS; \
+                 got flags: {:?}",
+                km_ctx.set
+            );
+        });
+    });
+}
