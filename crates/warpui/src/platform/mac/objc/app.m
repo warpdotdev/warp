@@ -524,7 +524,14 @@ NSUInteger activeScreenId() {
     statusItem.menu = self.statusItemMenu;
     statusItem.visible = YES;
     NSLog(@"Warp: status item is visible while Dock icon is hidden");
-    [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    if (![NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory]) {
+        NSLog(@"Warp: failed to switch to Accessory activation policy; keeping Dock icon visible");
+        [[NSStatusBar systemStatusBar] removeStatusItem:statusItem];
+        [statusItem release];
+        statusItem = nil;
+        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+        return NO;
+    }
     return YES;
 }
 
