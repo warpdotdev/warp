@@ -17,7 +17,7 @@ fn make_available_shells(shells: Vec<AvailableShell>) -> AvailableShells {
 
 #[test]
 fn test_load_known_shells_with_empty_path_var() {
-    FeatureFlag::ShellSelector.set_enabled(true);
+    let _shell_selector = FeatureFlag::ShellSelector.override_enabled(true);
 
     // First assert that if there is no fallback, and the env var is empty, we do not load ANY shells
     let paths_to_search = vec![];
@@ -85,7 +85,7 @@ fn test_load_known_shells_with_empty_path_var() {
 
 #[test]
 fn test_dedupe_symlinks_when_discovering_paths() {
-    FeatureFlag::ShellSelector.set_enabled(true);
+    let _shell_selector = FeatureFlag::ShellSelector.override_enabled(true);
     VirtualFS::test(
         "test_dedupe_symlinks_when_discovering_paths",
         |dirs, mut sandbox| {

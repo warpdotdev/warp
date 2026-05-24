@@ -1399,7 +1399,7 @@ fn test_remove_rich_content_block() {
 
 #[test]
 fn test_conversation_scoped_rich_content_hidden_outside_fullscreen_agent_view() {
-    FeatureFlag::AgentView.set_enabled(true);
+    let _agent_view = FeatureFlag::AgentView.override_enabled(true);
     let mut block_list =
         new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
     let conversation_id = AIConversationId::new();
