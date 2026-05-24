@@ -194,7 +194,7 @@ fn test_set_marked_text_vim_insert_mode() {
 
 #[test]
 fn test_korean_ime_backspace_clears_marked_syllable() {
-    // Regression test for the Korean IME Backspace flow:
+    // Regression test for the Korean IME Backspace flow (related to #3944):
     //
     //   buffer: "가나" + marked "ㄷ"   (i.e. the user just deleted the vowel
     //   from a previously-marked "다")
@@ -249,8 +249,8 @@ fn test_korean_ime_backspace_clears_marked_syllable() {
 
 #[test]
 fn test_split_commit_with_new_marked_text() {
-    // Regression test for the Korean (and other CJK) IME split-commit
-    // scenario: a single keystroke can both commit the previously-composed
+    // Regression test for #3944 — the Korean (and other CJK) IME
+    // split-commit scenario: a single keystroke can both commit the previously-composed
     // syllable AND start a new composition. Typing 'ㅏ' after '간', for
     // example, commits '가' and starts new marked '나' in the same keyDown.
     //
