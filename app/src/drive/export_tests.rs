@@ -281,7 +281,7 @@ fn test_export_notebook_with_embeds() {
                 r#"
 # This is a notebook
 It has *text*.
-```warp-embedded-object
+```black-embedded-object
 id: {}
 ```
 
@@ -318,7 +318,7 @@ print("hello")
             r#"
 # This is a notebook
 It has *text*\.
-```warp-embedded-object
+```black-embedded-object
 ---
 name: Test workflow
 command: echo hello world

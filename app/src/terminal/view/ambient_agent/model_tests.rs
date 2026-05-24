@@ -95,7 +95,7 @@ fn github_auth_url_for_initial_run_includes_focus_cloud_mode_next() {
             };
             model.request = Some(retry_request("fix tests"));
             model.handle_needs_github_auth(
-                "https://example.com/oauth/connect/github?scheme=warpdev".to_string(),
+                "https://example.com/oauth/connect/github?scheme=blackdev".to_string(),
                 "auth required".to_string(),
                 ctx,
             );

@@ -365,7 +365,7 @@ name: test-skill
 description: Test skill with variables
 ---
 
-Run `{{warp_cli_binary_name}}` to connect to {{warp_server_url}}.
+Run `{{black_cli_binary_name}}` to connect to {{black_server_url}}.
 "#,
     )
     .unwrap();
@@ -398,7 +398,7 @@ name: test-skill
 description: Test skill with mixed variables
 ---
 
-Use {{other_var}} and {{warp_cli_binary_name}} together.
+Use {{other_var}} and {{black_cli_binary_name}} together.
 "#,
     )
     .unwrap();

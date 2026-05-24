@@ -47,7 +47,7 @@ fn not_logged_in_is_error_with_auth_required() {
     );
     assert!(
         update.message.contains("BLACK_API_KEY"),
-        "message should mention WARP_API_KEY: {:?}",
+        "message should mention BLACK_API_KEY: {:?}",
         update.message
     );
 }

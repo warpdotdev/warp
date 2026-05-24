@@ -757,7 +757,7 @@ fn test_render_list_page_with_personal_and_team_environments_shows_section_heade
                 "Expected 'Personal' section header in rendered content: {text_content}"
             );
             assert!(
-                text_content.contains("SHARED BY WARP AND KATARINA'S TEAM"),
+                text_content.contains("SHARED BY BLACK AND KATARINA'S TEAM"),
                 "Expected shared section header in rendered content: {text_content}"
             );
         });

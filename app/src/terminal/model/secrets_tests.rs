@@ -4,7 +4,7 @@ use super::*;
 
 #[test]
 fn test_firebase_domain() {
-    let firebase_domain = "127.0.0.1";
+    let firebase_domain = "black-server-staging.firebaseapp.com";
     assert_regex_match_found(regexes::FIREBASE_AUTH_DOMAIN, firebase_domain);
 
     let bad_firebase_domain = "black-server-staging_.firebaseapp.com";

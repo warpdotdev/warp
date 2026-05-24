@@ -377,7 +377,7 @@ fn test_detect_secrets_multiple_secrets() {
     );
 
     // Using custom secret, github token, firebase domain, and stripe key as secrets.
-    let text = "ABCD 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 foo baz 127.0.0.1 bar \n foo sk_live_4eC39HqLyjWDarjtT1zdp7dc qux foo";
+    let text = "ABCD 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 foo baz black-server-staging.firebaseapp.com bar \n foo sk_live_4eC39HqLyjWDarjtT1zdp7dc qux foo";
     let detected_secrets = find_secrets_in_text(text);
     assert_eq!(
         detected_secrets,
@@ -391,12 +391,12 @@ fn test_detect_secrets_multiple_secrets() {
                 byte_range: 5..45,
             },
             SecretRange {
-                char_range: 54..89,
-                byte_range: 54..89,
+                char_range: 54..90,
+                byte_range: 54..90,
             },
             SecretRange {
-                char_range: 100..132,
-                byte_range: 100..132,
+                char_range: 101..133,
+                byte_range: 101..133,
             }
         ]
     );

@@ -1233,7 +1233,7 @@ fn test_parse_docker_hub_url_empty_or_whitespace() {
 #[test]
 fn test_parse_docker_hub_url_trims_whitespace() {
     assert_eq!(
-        UpdateEnvironmentForm::parse_docker_hub_url("  warp/base-image  "),
+        UpdateEnvironmentForm::parse_docker_hub_url("  black/base-image  "),
         Some("https://hub.docker.com/r/black/base-image".to_string())
     );
 }

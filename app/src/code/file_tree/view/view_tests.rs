@@ -610,9 +610,9 @@ fn click_on_file_under_absorbed_descendant_keeps_file_selected() {
     VirtualFS::test(
         "file_tree_click_file_preserves_selection",
         |dirs, mut vfs| {
-            vfs.mkdir("code/warp-server")
+            vfs.mkdir("code/black-server")
                 .with_files(vec![Stub::FileWithContent(
-                    "code/warp-server/main.rs",
+                    "code/black-server/main.rs",
                     "fn main() {}\n",
                 )]);
             let code = dirs.tests().join("code");
@@ -677,9 +677,9 @@ fn pending_focus_target_does_not_re_scroll_after_first_apply() {
     // rebuilds (e.g. from repo-metadata updates) must keep the
     // selection but NOT re-scroll, so user scrolling is respected.
     VirtualFS::test("file_tree_pending_respects_user_scroll", |dirs, mut vfs| {
-        vfs.mkdir("tree/warp-server")
+        vfs.mkdir("tree/black-server")
             .with_files(vec![Stub::FileWithContent(
-                "tree/warp-server/main.rs",
+                "tree/black-server/main.rs",
                 "fn main() {}\n",
             )]);
         let tree = dirs.tests().join("tree");
@@ -723,9 +723,9 @@ fn pending_focus_target_does_not_re_scroll_after_first_apply() {
 #[test]
 fn focus_follows_absorbed_descendant_once_its_item_is_materialized() {
     VirtualFS::test("file_tree_focus_follow_deferred", |dirs, mut vfs| {
-        vfs.mkdir("tree/warp-server")
+        vfs.mkdir("tree/black-server")
             .with_files(vec![Stub::FileWithContent(
-                "tree/warp-server/main.rs",
+                "tree/black-server/main.rs",
                 "fn main() {}\n",
             )]);
         let tree = dirs.tests().join("tree");

@@ -16,7 +16,7 @@ fn worker_hosts_excluding_sorts_dedups_and_filters_empty_and_warp_hosts() {
             worker("worker-2"),
             worker(""),
             worker("black"),
-            worker("WARP"),
+            worker("BLACK"),
             worker("worker-1"),
             worker("worker-2"),
         ],
