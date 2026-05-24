@@ -1,14 +1,14 @@
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::theme::phenomenon::PhenomenonStyle;
-use warp_core::ui::theme::Fill;
-use warpui::assets::asset_cache::AssetSource;
-use warpui::elements::{
+use black_core::ui::theme::phenomenon::PhenomenonStyle;
+use black_core::ui::theme::Fill;
+use black_ui::assets::asset_cache::AssetSource;
+use black_ui::elements::{
     CacheOption, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Expanded, Flex, Image, MainAxisSize, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Radius, Stack, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::{Element, ViewHandle};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::{Element, ViewHandle};
 
 use crate::appearance::Appearance;
 use crate::ui_components::icons::Icon;
@@ -43,7 +43,7 @@ const FEATURE_ITEMS: &[FeatureItem] = &[
     FeatureItem {
         icon: Icon::MessageCheckSquare,
         title: "Native code review",
-        description: "Send inline comments from Warp's code review directly to Claude Code, Codex, or OpenCode",
+        description: "Send inline comments from Black's code review directly to Claude Code, Codex, or OpenCode",
     },
 ];
 
@@ -105,7 +105,7 @@ pub fn render_welcome_banner(
 
     // Title
     let title = Text::new(
-        "Introducing universal agent support: level up any coding agent with Warp",
+        "Introducing universal agent support: level up any coding agent with Black",
         appearance.ui_font_family(),
         20.,
     )

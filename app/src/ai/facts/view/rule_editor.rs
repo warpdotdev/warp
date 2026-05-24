@@ -1,14 +1,14 @@
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warp_editor::editor::NavigationKey;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::color::internal_colors;
+use black_editor::editor::NavigationKey;
+use black_ui::elements::{
     Border, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
     Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, ParentElement, Radius, ScrollbarWidth,
 };
-use warpui::platform::Cursor;
-use warpui::ui_components::components::UiComponent;
-use warpui::{
+use black_ui::platform::Cursor;
+use black_ui::ui_components::components::UiComponent;
+use black_ui::{
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
@@ -312,7 +312,7 @@ impl RuleEditorView {
                     ScrollbarWidth::Auto,
                     appearance.theme().nonactive_ui_detail().into(),
                     appearance.theme().active_ui_detail().into(),
-                    warpui::elements::Fill::None,
+                    black_ui::elements::Fill::None,
                 )
                 .finish(),
             )

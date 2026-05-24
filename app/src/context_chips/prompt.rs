@@ -1,7 +1,7 @@
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use settings::Setting as _;
-use warpui::{Entity, GetSingletonModelHandle, ModelContext, SingletonEntity, UpdateModel};
+use black_ui::{Entity, GetSingletonModelHandle, ModelContext, SingletonEntity, UpdateModel};
 
 pub use super::ContextChipKind;
 use crate::settings::{
@@ -95,7 +95,7 @@ pub struct PromptConfiguration {
 
     #[schemars(description = "Whether the prompt is displayed on the same line as the input.")]
     same_line_prompt_enabled: bool,
-    /// The separator to use as a trailing character at the end of Warp prompt, if any.
+    /// The separator to use as a trailing character at the end of Black prompt, if any.
     #[schemars(description = "Trailing separator character for the prompt.")]
     separator: WarpPromptSeparator,
 }
@@ -194,7 +194,7 @@ impl Prompt {
         })
     }
 
-    /// Reset to the default Warp prompt.
+    /// Reset to the default Black prompt.
     pub fn reset<C: UpdateModel + GetSingletonModelHandle>(
         &mut self,
         ctx: &mut C,
@@ -244,12 +244,12 @@ impl Prompt {
         }
     }
 
-    /// Whether same line prompt is enabled for Warp prompt.
+    /// Whether same line prompt is enabled for Black prompt.
     pub fn same_line_prompt_enabled(&self) -> bool {
         self.config.same_line_prompt_enabled
     }
 
-    /// The separator to be used for the Warp prompt.
+    /// The separator to be used for the Black prompt.
     pub fn separator(&self) -> WarpPromptSeparator {
         self.config.separator
     }
@@ -315,7 +315,7 @@ impl Entity for Prompt {
 impl SingletonEntity for Prompt {}
 
 impl PromptConfiguration {
-    /// The default Warp prompt, synthesized from legacy prompt settings.
+    /// The default Black prompt, synthesized from legacy prompt settings.
     /// The order of chips is important and would affect a lot of users if rearranged.
     pub fn default_prompt() -> Self {
         Self::default_prompt_with_pr_chip_suppressed(false)

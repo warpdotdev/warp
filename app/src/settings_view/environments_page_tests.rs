@@ -3,10 +3,10 @@ use std::sync::{Arc, Mutex};
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use instant::Instant;
-use warp_core::ui::appearance::Appearance;
-use warpui::elements::Empty;
-use warpui::platform::WindowStyle;
-use warpui::{App, AppContext, Element, Entity, TypedActionView, View, WindowId};
+use black_core::ui::appearance::Appearance;
+use black_ui::elements::Empty;
+use black_ui::platform::WindowStyle;
+use black_ui::{App, AppContext, Element, Entity, TypedActionView, View, WindowId};
 
 use super::*;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
@@ -48,8 +48,8 @@ fn make_test_environment_with_timestamps(
     docker_image: &str,
     github_repos: Vec<(String, String)>,
     setup_commands: Vec<String>,
-    last_edited_ts: Option<warp_graphql::scalars::time::ServerTimestamp>,
-    last_used_ts: Option<warp_graphql::scalars::time::ServerTimestamp>,
+    last_edited_ts: Option<black_graphql::scalars::time::ServerTimestamp>,
+    last_used_ts: Option<black_graphql::scalars::time::ServerTimestamp>,
 ) -> EnvironmentDisplayData {
     EnvironmentDisplayData {
         id: SyncId::ClientId(ClientId::new()),
@@ -691,7 +691,7 @@ fn test_render_list_page_with_personal_and_team_environments_shows_section_heade
 
         app.update(|ctx| {
             // Ensure UserWorkspaces has a current team name so the "Team" section renders with the
-            // shared header copy ("Shared by Warp and <team>").
+            // shared header copy ("Shared by Black and <team>").
             UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
                 user_workspaces.setup_test_workspace(ctx);
                 user_workspaces.update_current_workspace(
@@ -757,7 +757,7 @@ fn test_render_list_page_with_personal_and_team_environments_shows_section_heade
                 "Expected 'Personal' section header in rendered content: {text_content}"
             );
             assert!(
-                text_content.contains("SHARED BY WARP AND KATARINA'S TEAM"),
+                text_content.contains("SHARED BY BLACK AND KATARINA'S TEAM"),
                 "Expected shared section header in rendered content: {text_content}"
             );
         });
@@ -1181,15 +1181,15 @@ fn test_environments_page_edit_variant() {
 
 #[test]
 fn test_github_repo_new() {
-    let repo = GithubRepo::new("warpdotdev".to_string(), "warp-internal".to_string());
-    assert_eq!(repo.owner, "warpdotdev");
-    assert_eq!(repo.repo, "warp-internal");
+    let repo = GithubRepo::new("blackdagger".to_string(), "black-internal".to_string());
+    assert_eq!(repo.owner, "blackdagger");
+    assert_eq!(repo.repo, "black-internal");
 }
 
 #[test]
 fn test_github_repo_display() {
-    let repo = GithubRepo::new("warpdotdev".to_string(), "warp-internal".to_string());
-    assert_eq!(repo.to_string(), "warpdotdev/warp-internal");
+    let repo = GithubRepo::new("blackdagger".to_string(), "black-internal".to_string());
+    assert_eq!(repo.to_string(), "blackdagger/black-internal");
 }
 
 #[test]
@@ -1211,7 +1211,7 @@ fn test_environment_matches_search_query_empty_query_matches_all() {
     let environment = make_test_environment(
         "Searchable Environment",
         "ubuntu:latest",
-        vec![("warpdotdev".to_string(), "warp-internal".to_string())],
+        vec![("blackdagger".to_string(), "black-internal".to_string())],
         vec![],
     );
 
@@ -1222,19 +1222,19 @@ fn test_environment_matches_search_query_empty_query_matches_all() {
 #[test]
 fn test_environment_matches_search_query_name_description_image_repos() {
     let mut environment = make_test_environment(
-        "Warp Env",
+        "Black Env",
         "node:20-alpine",
-        vec![("warpdotdev".to_string(), "warp-internal".to_string())],
+        vec![("blackdagger".to_string(), "black-internal".to_string())],
         vec![],
     );
     environment.description = Some("Front end focused agents".to_string());
 
-    assert!(environment.matches_search_query("warp"));
+    assert!(environment.matches_search_query("black"));
     assert!(environment.matches_search_query("Front end"));
     assert!(environment.matches_search_query("node:20"));
-    assert!(environment.matches_search_query("warp-internal"));
-    assert!(environment.matches_search_query("warpdotdev"));
-    assert!(environment.matches_search_query("warpdotdev/warp"));
+    assert!(environment.matches_search_query("black-internal"));
+    assert!(environment.matches_search_query("blackdagger"));
+    assert!(environment.matches_search_query("blackdagger/black-internal"));
 
     assert!(!environment.matches_search_query("definitely-not-present"));
 }
@@ -1253,16 +1253,16 @@ fn test_environment_matches_search_query_env_id_substring() {
 #[test]
 fn test_environment_matches_search_query_is_case_insensitive() {
     let mut environment = make_test_environment(
-        "warp-env",
+        "black-env",
         "ubuntu:latest",
-        vec![("WarpDotDev".to_string(), "Warp-Internal".to_string())],
+        vec![("WarpDotDev".to_string(), "Black-Internal".to_string())],
         vec![],
     );
     environment.description = Some("Some Description".to_string());
 
     assert!(environment.matches_search_query("WARP"));
     assert!(environment.matches_search_query("description"));
-    assert!(environment.matches_search_query("warp-internal"));
+    assert!(environment.matches_search_query("black-internal"));
 }
 
 #[test]
@@ -1332,7 +1332,7 @@ fn test_toolbar_renders_search_editor_view() {
 #[test]
 fn test_render_environment_card_with_last_used_never() {
     use chrono::{Duration, Utc};
-    use warp_graphql::scalars::time::ServerTimestamp;
+    use black_graphql::scalars::time::ServerTimestamp;
 
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
@@ -1403,7 +1403,7 @@ fn test_render_environment_card_with_last_used_never() {
 #[test]
 fn test_render_environment_card_with_last_used_timestamp() {
     use chrono::{Duration, Utc};
-    use warp_graphql::scalars::time::ServerTimestamp;
+    use black_graphql::scalars::time::ServerTimestamp;
 
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());

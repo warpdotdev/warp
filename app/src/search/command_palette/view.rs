@@ -4,18 +4,18 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use warp_core::send_telemetry_from_app_ctx;
-use warp_util::path::LineAndColumnArg;
-use warpui::elements::{
+use black_core::send_telemetry_from_app_ctx;
+use black_util::path::LineAndColumnArg;
+use black_ui::elements::{
     Align, Border, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
     Container, CornerRadius, Dismiss, DispatchEventResult, Empty, EventHandler, Fill, Flex,
     ParentElement, Radius, SavePosition, Shrinkable,
 };
-use warpui::event::KeyState;
-use warpui::keymap::BindingId;
-use warpui::platform::keyboard::KeyCode;
-use warpui::units::{IntoPixels, Pixels};
-use warpui::{
+use black_ui::event::KeyState;
+use black_ui::keymap::BindingId;
+use black_ui::platform::keyboard::KeyCode;
+use black_ui::units::{IntoPixels, Pixels};
+use black_ui::{
     AppContext, Element, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity,
     TypedActionView, ViewContext, ViewHandle, WindowId,
 };
@@ -94,7 +94,7 @@ pub enum Event {
     InvokeEnvironmentVariables { id: SyncId },
     /// Open a notebook identified by `id`.
     OpenNotebook { id: SyncId },
-    /// View the relevant object in the Warp Drive sidebar.
+    /// View the relevant object in the Black Drive sidebar.
     ViewInWarpDrive { id: CloudObjectTypeAndId },
     /// Open a file at the given path.
     OpenFile {
@@ -163,7 +163,7 @@ impl TypedActionView for View {
     }
 }
 
-impl warpui::View for View {
+impl black_ui::View for View {
     fn ui_name() -> &'static str {
         "CommandPaletteView"
     }
@@ -1000,11 +1000,11 @@ impl View {
         self.close(ctx, Some(result_action.result_type()));
     }
 
-    /// Dispatches `action` to the correct window and [`warpui::View`] by using the current state of
+    /// Dispatches `action` to the correct window and [`black_ui::View`] by using the current state of
     /// the [`BindingSource`] model.
     fn dispatch_typed_action_on_view(
         &self,
-        action: &dyn warpui::Action,
+        action: &dyn black_ui::Action,
         ctx: &mut ViewContext<Self>,
     ) {
         send_telemetry_from_ctx!(

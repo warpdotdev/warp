@@ -1,5 +1,5 @@
-use warpui::elements::MouseStateHandle;
-use warpui::Element;
+use black_ui::elements::MouseStateHandle;
+use black_ui::Element;
 
 use super::{
     render_inline_block_list_banner, InlineBannerButtonState, InlineBannerCloseButton,
@@ -47,7 +47,7 @@ pub fn render_vim_mode_banner(
         InlineBannerStyle::LowPriority,
         appearance,
         InlineBannerContent {
-            title: "Enable Warp's Vim keybindings?".to_string(),
+            title: "Enable Black's Vim keybindings?".to_string(),
             buttons,
             close_button: Some(close_button),
             ..Default::default()

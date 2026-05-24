@@ -3,10 +3,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use warp_core::settings::macros::define_settings_group;
-use warp_core::settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
-use warp_core::user_preferences::GetUserPreferences;
-use warpui::{App, SingletonEntity};
+use black_core::settings::macros::define_settings_group;
+use black_core::settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
+use black_core::user_preferences::GetUserPreferences;
+use black_ui::{App, SingletonEntity};
 
 use super::{
     initialize_cloud_preferences_syncer, ClientIdProvider, CloudPreferencesSyncer,
@@ -203,7 +203,7 @@ async fn wait_for_num_spawned_futures(app: &mut App, expected_num: usize, messag
         if num_spawned_futures == expected_num {
             return;
         }
-        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
+        black_ui::r#async::Timer::after(Duration::from_millis(100)).await;
     }
 
     assert_num_spawned_futures(app, expected_num, message);
@@ -314,7 +314,7 @@ fn test_sync_local_pref_to_cloud_after_initial_sync_creates_prefs_setting() {
         });
 
         // Spend time waiting for the initial load to finish etc.
-        warpui::r#async::Timer::after(Duration::from_secs(1)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(1)).await;
 
         // Wait for the syncer to create the preferences and privacy settings.
         await_spawned_futures(
@@ -423,7 +423,7 @@ fn test_sync_local_pref_to_cloud_after_initial_sync() {
         });
 
         // Spend time waiting for the initial load to finish etc.
-        warpui::r#async::Timer::after(Duration::from_secs(1)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(1)).await;
 
         app.update(|ctx| {
             // And then update all settings forcing the create requests
@@ -543,7 +543,7 @@ fn run_initial_sync_test(is_onboarded: bool) {
         });
 
         // Spend time waiting for the initial load to finish etc.
-        warpui::r#async::Timer::after(Duration::from_secs(1)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(1)).await;
 
         let expected_num_spawned_futures = if !is_onboarded { 4 } else { 3 };
         await_spawned_futures(
@@ -563,7 +563,7 @@ fn run_initial_sync_test(is_onboarded: bool) {
             });
         });
 
-        warpui::r#async::Timer::after(Duration::from_secs(1)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(1)).await;
 
         assert_eq!(
             is_onboarded,
@@ -655,7 +655,7 @@ fn test_sync_local_pref_to_cloud_updates_existing_pref() {
         });
 
         // Give the initial load time to complete
-        warpui::r#async::Timer::after(Duration::from_secs(1)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(1)).await;
 
         // complete the create request for the cloud settings and the telemetry/crash reporting settings
         await_spawned_futures(
@@ -677,7 +677,7 @@ fn test_sync_local_pref_to_cloud_updates_existing_pref() {
         });
 
         // Give the update time to spawn futures
-        warpui::r#async::Timer::after(Duration::from_secs(1)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(1)).await;
 
         assert_num_spawned_futures(&mut app, 4, "expect the syncer to send an update request");
         spawned_sync_queue_future_at_index(&mut app, 3).await;
@@ -747,7 +747,7 @@ fn test_sync_cloud_pref_to_local_on_initial_load_or_collab_update() {
         });
 
         // Spend time waiting for the initial load to finish etc.
-        warpui::r#async::Timer::after(Duration::from_secs(1)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(1)).await;
 
         // complete the create request for the cloud settings and the telemetry/crash reporting settings
         await_spawned_futures(
@@ -912,7 +912,7 @@ fn test_cloud_preferences_setting_initial_load_skipped_when_setting_is_off() {
         enable_settings_sync(&mut app);
 
         // Spend time waiting for the initial load to finish etc.
-        warpui::r#async::Timer::after(Duration::from_secs(1)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(1)).await;
 
         // complete the create request for the cloud settings and the telemetry/crash reporting settings
         await_spawned_futures(
@@ -977,7 +977,7 @@ fn test_sync_local_pref_to_cloud_doesnt_update_equal_pref() {
         });
 
         // Spend time waiting for the initial load to finish etc.
-        warpui::r#async::Timer::after(Duration::from_secs(1)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(1)).await;
 
         // Complete the create request for cloud prefs syncing
         await_spawned_futures(
@@ -1065,7 +1065,7 @@ fn test_cloud_preferences_setting_enabling_setting_syncs_prefs() {
         });
 
         // Spend time waiting for the initial load to finish etc.
-        warpui::r#async::Timer::after(Duration::from_secs(1)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(1)).await;
 
         await_spawned_futures(
             &mut app,
@@ -1137,7 +1137,7 @@ fn test_cloud_pref_not_synced_when_current_value_not_syncable() {
         });
 
         // Run any spawned futures
-        warpui::r#async::Timer::after(Duration::from_secs(1)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(1)).await;
         await_spawned_futures(&mut app, 3, "initial load").await;
 
         // Verify that the local value remains false and wasn't synced from cloud's true
@@ -1216,7 +1216,7 @@ fn test_ensure_no_duplicate_cloud_prefs() {
         });
 
         // Give time for the initial load and deduplication to complete
-        warpui::r#async::Timer::after(Duration::from_secs(1)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(1)).await;
 
         // Wait for the initial creation of cloud settings and telemetry settings
         await_spawned_futures(
@@ -1274,7 +1274,7 @@ async fn drain_sync_queue(app: &mut App) {
     // one can cause others to be spawned (e.g. an update in response
     // to a cloud change).
     for _ in 0..5 {
-        warpui::r#async::Timer::after(Duration::from_millis(200)).await;
+        black_ui::r#async::Timer::after(Duration::from_millis(200)).await;
         let num = SyncQueue::handle(app).read(app, |sq, _| sq.spawned_futures().len());
         if num == 0 {
             return;
@@ -1290,7 +1290,7 @@ async fn drain_sync_queue(app: &mut App) {
 /// syncer will compare against.
 fn write_settings_file_with_content(path: &std::path::Path, content: &str) -> String {
     std::fs::write(path, content).expect("write temp settings file");
-    warpui_extras::user_preferences::toml_backed::TomlBackedUserPreferences::file_content_hash(path)
+    black_ui_extras::user_preferences::toml_backed::TomlBackedUserPreferences::file_content_hash(path)
         .expect("hash should be Some for non-empty file")
 }
 
@@ -1712,7 +1712,7 @@ fn test_offline_ui_change_does_not_update_hash_until_sync_succeeds() {
 
         // Give the syncer a moment to finish handling the setting
         // change event.
-        warpui::r#async::Timer::after(Duration::from_millis(200)).await;
+        black_ui::r#async::Timer::after(Duration::from_millis(200)).await;
 
         // CRITICAL ASSERTION: the stored hash must NOT have been
         // updated. The upload is enqueued but the SyncQueue is

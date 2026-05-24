@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use warp_util::standardized_path::StandardizedPath;
+use black_util::standardized_path::StandardizedPath;
 
 use super::super::proto;
 use crate::code_review::diff_size_limits::DiffSize;

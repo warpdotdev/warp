@@ -1,9 +1,9 @@
 #[cfg(test)]
-use warpui::App;
+use black_ui::App;
 
 #[cfg(test)]
 pub fn initialize_settings_for_tests(app: &mut App) {
-    use warp_core::execution_mode::ExecutionMode;
+    use black_core::execution_mode::ExecutionMode;
     initialize_settings_for_tests_with_mode(app, ExecutionMode::App, false);
 }
 
@@ -20,11 +20,11 @@ pub fn initialize_history_persistence_for_tests(app: &mut App) {
 #[cfg(test)]
 pub fn initialize_settings_for_tests_with_mode(
     app: &mut App,
-    mode: warp_core::execution_mode::ExecutionMode,
+    mode: black_core::execution_mode::ExecutionMode,
     is_sandboxed: bool,
 ) {
-    use warp_core::execution_mode::AppExecutionMode;
-    use warp_core::semantic_selection::SemanticSelection;
+    use black_core::execution_mode::AppExecutionMode;
+    use black_core::semantic_selection::SemanticSelection;
 
     use crate::ai::cloud_agent_settings::CloudAgentSettings;
     use crate::drive::settings::WarpDriveSettings;
@@ -46,7 +46,7 @@ pub fn initialize_settings_for_tests_with_mode(
     use crate::terminal::session_settings::SessionSettings;
     use crate::terminal::settings::TerminalSettings;
     use crate::terminal::shared_session::settings::SharedSessionSettings;
-    use crate::terminal::warpify::settings::WarpifySettings;
+    use crate::terminal::blackify::settings::BlackifySettings;
     use crate::terminal::BlockListSettings;
     use crate::undo_close::UndoCloseSettings;
     use crate::user_config::WarpConfig;
@@ -97,7 +97,7 @@ pub fn initialize_settings_for_tests_with_mode(
     ScrollSettings::register(app);
     SelectionSettings::register(app);
     app.update(|ctx| {
-        WarpifySettings::register(ctx);
+        BlackifySettings::register(ctx);
     });
     SessionSettings::register(app);
     SshSettings::register(app);
@@ -115,7 +115,7 @@ pub fn initialize_settings_for_tests_with_mode(
 
     app.update(|ctx| {
         // Register a no-op secure storage provider for testing.
-        warpui_extras::secure_storage::register_noop("test", ctx);
+        black_ui_extras::secure_storage::register_noop("test", ctx);
 
         // Add settings models that are backed by secure storage, not user preferences.
         ctx.add_singleton_model(ai::api_keys::ApiKeyManager::new);

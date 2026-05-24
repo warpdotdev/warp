@@ -1,16 +1,16 @@
 use pathfinder_geometry::vector::vec2f;
-use warpui::elements::{
+use black_ui::elements::{
     Align, Border, ChildAnchor, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
     Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Flex,
     Hoverable, Icon, MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
     PositionedElementOffsetBounds, Radius, ScrollbarWidth, Shrinkable, Stack,
 };
-use warpui::fonts::Weight;
-use warpui::keymap::{FixedBinding, Keystroke};
-use warpui::platform::Cursor;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::Weight;
+use black_ui::keymap::{FixedBinding, Keystroke};
+use black_ui::platform::Cursor;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{
     Action, AppContext, BlurContext, Entity, EntityId, ModelHandle, SingletonEntity,
     TypedActionView, View, ViewContext, WindowId,
 };
@@ -90,7 +90,7 @@ pub enum TipsAction {
 }
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings(vec![FixedBinding::new(
         "escape",
@@ -126,7 +126,7 @@ impl TipsView {
         let tip_items = vec![
             TipItem::new(
                 "Command Palette".to_string(),
-                "Easily discover everything you can do in Warp without your hands leaving the keyboard.".to_string(),
+                "Easily discover everything you can do in Black without your hands leaving the keyboard.".to_string(),
                 TipAction::CommandPalette,
                 ctx,
             ),
@@ -151,7 +151,7 @@ impl TipsView {
             ),
             TipItem::new(
                 "Theme Picker".to_string(),
-                "Make Warp your own by choosing a built-in theme. Or create your own.".to_string(),
+                "Make Black your own by choosing a built-in theme. Or create your own.".to_string(),
                 TipAction::ThemePicker,
                 ctx,
             ),

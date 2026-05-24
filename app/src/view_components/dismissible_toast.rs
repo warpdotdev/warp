@@ -4,19 +4,19 @@ use std::time::Duration;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use uuid::Uuid;
-use warp_core::ui::builder::UiBuilder;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::{
+use black_core::ui::builder::UiBuilder;
+use black_core::ui::theme::color::internal_colors;
+use black_ui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     DispatchEventResult, EventHandler, Flex, Hoverable, Icon, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
     PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable, Stack,
 };
-use warpui::fonts::Weight;
-use warpui::keymap::Keystroke;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::Weight;
+use black_ui::keymap::Keystroke;
+use black_ui::r#async::{SpawnedFutureHandle, Timer};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{
     Action, AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
@@ -453,14 +453,14 @@ impl<A: Action + Clone> DismissibleToast<A> {
 
         let is_clickable = self.is_clickable();
         // On mobile devices, always show close button since hover effects don't work with touch
-        let is_mobile = warpui::platform::is_mobile_device();
+        let is_mobile = black_ui::platform::is_mobile_device();
 
         Hoverable::new(self.close_button_hover_state.clone(), move |mouse_state| {
             let toast_container = Container::new(row.finish())
                 .with_vertical_padding(VERTICAL_PADDING)
                 .with_horizontal_padding(HORIZONTAL_PADDING)
                 .with_background(self.flavor.bg_color(appearance))
-                .with_corner_radius(warpui::elements::CornerRadius::with_all(Radius::Pixels(
+                .with_corner_radius(black_ui::elements::CornerRadius::with_all(Radius::Pixels(
                     TOAST_CORNER_RADIUS,
                 )))
                 .with_border(Border::all(1.).with_border_fill(self.flavor.border_color(appearance)))

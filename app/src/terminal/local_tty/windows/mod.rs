@@ -15,7 +15,7 @@ use conpty_api::ConptyApiError;
 use environment::get_shell_environment_variables;
 pub use environment::get_user_and_system_env_variable;
 use thiserror::Error;
-use warpui::{AppContext, SingletonEntity};
+use black_ui::{AppContext, SingletonEntity};
 use windows::core::{HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Console::{COORD, HPCON};

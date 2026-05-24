@@ -6,11 +6,11 @@ use pathfinder_color::ColorU;
 use serde::Serialize;
 use strum_macros::EnumIter;
 use thiserror::Error;
-use warp_core::ui::color::hex_color::HexColorError as UiHexColorError;
-use warp_core::ui::theme::{AnsiColors, WarpTheme};
-use warpui::fonts::FontInfo;
-use warpui::keymap::Keystroke;
-use warpui::DisplayIdx;
+use black_core::ui::color::hex_color::HexColorError as UiHexColorError;
+use black_core::ui::theme::{AnsiColors, WarpTheme};
+use black_ui::fonts::FontInfo;
+use black_ui::keymap::Keystroke;
+use black_ui::DisplayIdx;
 
 use super::alacritty_parser::AlacrittyConfig;
 #[cfg(target_os = "macos")]
@@ -40,7 +40,7 @@ pub enum ThemeError {
 
 #[derive(Clone, Error, Debug)]
 pub enum HotkeyError {
-    #[error("A hotkey window opens in a way Warp does not support")]
+    #[error("A hotkey window opens in a way Black does not support")]
     UnsupportedWindowType,
     #[error("There are multiple hotkeys configured")]
     MultipleHotkeys,
@@ -390,7 +390,7 @@ pub trait ParseableConfig: PartialEq + Sized + Send {
     /// Reads the file at the given path into the struct implementing ParseableConfig.
     async fn from_file(path: PathBuf) -> Result<Vec<Self>, ConfigError>;
 
-    /// Creates a Warp-readable `Config`. Sets corresponding errors if values have
+    /// Creates a Black-readable `Config`. Sets corresponding errors if values have
     /// not been configured from the default.
     fn parse(self, fonts: &[FontInfo]) -> Config;
 

@@ -1,4 +1,4 @@
-use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
+use black_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
 use super::{classify_renderable_error, map_cli_session_status};
 use crate::ai::agent::RenderableAIError;

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use shell_words::quote as shell_quote;
 use uuid::Uuid;
-use warp_cli::agent::Harness;
+use black_cli::agent::Harness;
 
 use crate::ai::agent_sdk::driver::harness::claude_code::prepare_claude_environment_config;
 use crate::ai::agent_sdk::driver::harness::{harness_kind, harness_model_env_vars, HarnessKind};
@@ -136,7 +136,7 @@ pub(super) async fn prepare_local_harness_child_launch(
                 .map_err(|error: AgentDriverError| error.to_string())?;
             // Local child harness panes inherit the user's existing local
             // auth/session state. We still prepare harness config files here,
-            // but there are no Warp-managed secrets to materialize into the
+            // but there are no Black-managed secrets to materialize into the
             // hidden child pane.
             prepare_claude_environment_config(&working_dir, &HashMap::new())
                 .map_err(|error| error.to_string())?;

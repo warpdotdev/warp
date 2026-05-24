@@ -1,4 +1,4 @@
-use warpui::{App, EntityId};
+use black_ui::{App, EntityId};
 
 use super::*;
 use crate::ai::blocklist::BlocklistAIHistoryModel;

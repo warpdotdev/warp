@@ -58,47 +58,47 @@ use settings::{Setting as _, ToggleableSetting};
 use string_offset::{ByteOffset, CharOffset};
 use vec1::Vec1;
 use vim::vim::{VimHandler, VimMode};
-use warp_cli::agent::Harness;
-use warp_completer::completer::{
+use black_cli::agent::Harness;
+use black_completer::completer::{
     self, CompleterOptions, CompletionContext, CompletionsFallbackStrategy, Description, Match,
     MatchStrategy, MatchType, PathSeparators, SuggestionResults,
 };
-use warp_completer::meta::{HasSpan, Spanned};
-use warp_completer::parsers::simple::command_at_cursor_position;
-use warp_completer::parsers::LiteCommand;
-use warp_completer::signatures::CommandRegistry;
-use warp_completer::util::parse_current_commands_and_tokens;
-use warp_core::context_flag::ContextFlag;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::AnsiColorIdentifier;
-use warp_core::user_preferences::GetUserPreferences as _;
-use warp_editor::editor::NavigationKey;
-use warp_util::path::ShellFamily;
-use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
-use warpui::clipboard::{ClipboardContent, ImageData};
-use warpui::clipboard_utils::CLIPBOARD_IMAGE_MIME_TYPES;
-use warpui::color::ColorU;
-use warpui::elements::{
+use black_completer::meta::{HasSpan, Spanned};
+use black_completer::parsers::simple::command_at_cursor_position;
+use black_completer::parsers::LiteCommand;
+use black_completer::signatures::CommandRegistry;
+use black_completer::util::parse_current_commands_and_tokens;
+use black_core::context_flag::ContextFlag;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::AnsiColorIdentifier;
+use black_core::user_preferences::GetUserPreferences as _;
+use black_editor::editor::NavigationKey;
+use black_util::path::ShellFamily;
+use black_ui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
+use black_ui::clipboard::{ClipboardContent, ImageData};
+use black_ui::clipboard_utils::CLIPBOARD_IMAGE_MIME_TYPES;
+use black_ui::color::ColorU;
+use black_ui::elements::{
     resizable_state_handle, Align, AnchorPair, ChildAnchor, Clipped, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, DispatchEventResult, DropTargetData, Element, EventHandler,
     Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, OffsetType,
     ParentAnchor, ParentElement, PositionedElementOffsetBounds, PositioningAxis, Radius,
     ResizableStateHandle, SavePosition, SelectionHandle, Text, Wrap, XAxisAnchor, YAxisAnchor,
 };
-pub use warpui::elements::{ParentElement as _, Stack};
-pub use warpui::geometry::vector::{vec2f, Vector2F};
-use warpui::keymap::{BindingDescription, EditableBinding, FixedBinding, Keystroke};
-use warpui::platform::OperatingSystem;
-use warpui::presenter::ChildView;
+pub use black_ui::elements::{ParentElement as _, Stack};
+pub use black_ui::geometry::vector::{vec2f, Vector2F};
+use black_ui::keymap::{BindingDescription, EditableBinding, FixedBinding, Keystroke};
+use black_ui::platform::OperatingSystem;
+use black_ui::presenter::ChildView;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use warpui::r#async::FutureExt as _;
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::text_layout::TextStyle;
-use warpui::ui_components::chip::Chip;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::units::IntoPixels;
-pub use warpui::WindowId;
-use warpui::{
+use black_ui::r#async::FutureExt as _;
+use black_ui::r#async::SpawnedFutureHandle;
+use black_ui::text_layout::TextStyle;
+use black_ui::ui_components::chip::Chip;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::units::IntoPixels;
+pub use black_ui::WindowId;
+use black_ui::{
     end_trace, start_trace, AppContext, Entity, EntityId, FocusContext, ModelAsRef, ModelHandle,
     SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle,
 };
@@ -137,7 +137,7 @@ use super::view::inline_banner::{
 use super::view::{
     ExecuteCommandEvent, SyncInputType, TerminalAction, PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT,
 };
-use super::warpify::SubshellSource;
+use super::blackify::SubshellSource;
 use super::{prompt, History, HistoryEntry, SizeInfo, TerminalModel, UpArrowHistoryConfig};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentContext, AIAgentExchangeId, CancellationReason, EntrypointType};
@@ -400,26 +400,26 @@ const AGENT_MODE_AI_DISABLED_AUTODETECTION_DISABLED_HINT_TEXT: &str = "Run comma
 
 // Rotating hint text options for new Agent Mode conversations
 const AGENT_MODE_HINT_OPTIONS: &[&str] = &[
-    "Warp anything e.g. Deploy my React app to Vercel and set up environment variables",
-    "Warp anything e.g. Help me debug why my Python tests are failing in CI",
-    "Warp anything e.g. Set up a new microservice with Docker and create the deployment pipeline",
-    "Warp anything e.g. Find and fix the memory leak in my Node.js application",
-    "Warp anything e.g. Create a backup script for my PostgreSQL database and schedule it",
-    "Warp anything e.g. Help me migrate my data from MySQL to PostgreSQL",
-    "Warp anything e.g. Set up monitoring and alerts for my AWS infrastructure",
-    "Warp anything e.g. Build a REST API for my mobile app using FastAPI",
-    "Warp anything e.g. Help me optimize my SQL queries that are running slowly",
-    "Warp anything e.g. Create a GitHub Actions workflow to automatically deploy on merge",
-    "Warp anything e.g. Set up Redis caching for my web application",
-    "Warp anything e.g. Help me troubleshoot why my Kubernetes pods keep crashing",
-    "Warp anything e.g. Build a data pipeline to process CSV files and load them into BigQuery",
-    "Warp anything e.g. Set up SSL certificates and configure HTTPS for my domain",
-    "Warp anything e.g. Help me refactor this legacy code to use modern design patterns",
-    "Warp anything e.g. Create unit tests for my authentication service",
-    "Warp anything e.g. Set up log aggregation with ELK stack for my distributed system",
-    "Warp anything e.g. Help me implement OAuth2 authentication in my Express.js app",
-    "Warp anything e.g. Optimize my Docker images to reduce build times and size",
-    "Warp anything e.g. Set up A/B testing infrastructure for my web application",
+    "Black anything e.g. Deploy my React app to Vercel and set up environment variables",
+    "Black anything e.g. Help me debug why my Python tests are failing in CI",
+    "Black anything e.g. Set up a new microservice with Docker and create the deployment pipeline",
+    "Black anything e.g. Find and fix the memory leak in my Node.js application",
+    "Black anything e.g. Create a backup script for my PostgreSQL database and schedule it",
+    "Black anything e.g. Help me migrate my data from MySQL to PostgreSQL",
+    "Black anything e.g. Set up monitoring and alerts for my AWS infrastructure",
+    "Black anything e.g. Build a REST API for my mobile app using FastAPI",
+    "Black anything e.g. Help me optimize my SQL queries that are running slowly",
+    "Black anything e.g. Create a GitHub Actions workflow to automatically deploy on merge",
+    "Black anything e.g. Set up Redis caching for my web application",
+    "Black anything e.g. Help me troubleshoot why my Kubernetes pods keep crashing",
+    "Black anything e.g. Build a data pipeline to process CSV files and load them into BigQuery",
+    "Black anything e.g. Set up SSL certificates and configure HTTPS for my domain",
+    "Black anything e.g. Help me refactor this legacy code to use modern design patterns",
+    "Black anything e.g. Create unit tests for my authentication service",
+    "Black anything e.g. Set up log aggregation with ELK stack for my distributed system",
+    "Black anything e.g. Help me implement OAuth2 authentication in my Express.js app",
+    "Black anything e.g. Optimize my Docker images to reduce build times and size",
+    "Black anything e.g. Set up A/B testing infrastructure for my web application",
 ];
 
 fn get_agent_mode_new_conversation_hint_text() -> &'static str {
@@ -849,7 +849,7 @@ struct ViewerCommandExecutionRequest {
 /// Where a command execution request originates from.
 #[derive(Clone)]
 pub enum CommandExecutionSource {
-    /// A non-shared command execution request from Warp AI++.
+    /// A non-shared command execution request from Black AI++.
     /// Shared commands use the SharedSession variant instead.
     AI {
         /// Metadata associated with the execution.
@@ -1751,7 +1751,7 @@ impl DeferredRemoteOperations {
 }
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     if cfg!(feature = "integration_tests") {
         app.register_fixed_bindings([
@@ -1788,7 +1788,7 @@ pub fn init(app: &mut AppContext) {
 
     app.register_editable_bindings([EditableBinding::new(
         "input:insert_network_logging_workflow",
-        "Show Warp network log",
+        "Show Black network log",
         WorkspaceAction::OpenNetworkLogPane,
     )
     .with_enabled(|| ContextFlag::NetworkLogConsole.is_enabled())]);
@@ -2286,7 +2286,7 @@ impl Input {
                             HostSelector::new(menu_positioning_provider.clone(), ctx)
                         });
                         // Env var takes priority over workspace setting for developer testing.
-                        let effective_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
+                        let effective_host = std::env::var("BLACK_CLOUD_MODE_DEFAULT_HOST")
                             .ok()
                             .filter(|s| !s.is_empty())
                             .or_else(|| {
@@ -2337,7 +2337,7 @@ impl Input {
                                 if !matches!(event, UserWorkspacesEvent::TeamsChanged) {
                                     return;
                                 }
-                                let effective_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
+                                let effective_host = std::env::var("BLACK_CLOUD_MODE_DEFAULT_HOST")
                                     .ok()
                                     .filter(|s| !s.is_empty())
                                     .or_else(|| {
@@ -5846,7 +5846,7 @@ impl Input {
             }
             (InputType::AI, _) => {
                 // Follow the `agent_indicator` pattern (see `app/src/tab.rs`):
-                //  * `None` (no conversation, empty, passive, or untitled) => new conversation => "Warp anything"
+                //  * `None` (no conversation, empty, passive, or untitled) => new conversation => "Black anything"
                 //  * `InProgress`                                           => agent running    => "Steer"
                 //  * Any other status                                       => finished         => "Ask a follow up"
                 match self
@@ -6236,7 +6236,7 @@ impl Input {
         });
     }
 
-    /// Predicts the next action using an AI model and past context on blocks within Warp.
+    /// Predicts the next action using an AI model and past context on blocks within Black.
     /// Populates the autosuggestion with the predicted action, if any. Otherwise, falls back to
     /// existing autosuggestion logic.
     #[cfg_attr(target_family = "wasm", allow(unused_variables))]
@@ -7475,7 +7475,7 @@ impl Input {
             .string_model;
 
         if shell_type == ShellType::Fish {
-            // Warp currently doesn't support newlines in Fish, just prepend the vars
+            // Black currently doesn't support newlines in Fish, just prepend the vars
             let mut command = env_vars.export_variables_for_shell(ShellType::Fish);
             command.push(' ');
             Some(command)
@@ -9838,7 +9838,7 @@ impl Input {
                             // the completions finish quickly, since that causes a jittery UX.
                             let _ = ctx.spawn(
                                 async move {
-                                    warpui::r#async::Timer::after(Duration::from_millis(750)).await;
+                                    black_ui::r#async::Timer::after(Duration::from_millis(750)).await;
                                     old_buffer_text_original
                                 },
                                 move |input, old_buffer_text_original, ctx| {
@@ -10454,7 +10454,7 @@ impl Input {
                                     .and_then(|pwd| {
                                         // Find git repo and construct absolute path
                                         use repo_metadata::repositories::DetectedRepositories;
-                                        use warp_util::local_or_remote_path::LocalOrRemotePath;
+                                        use black_util::local_or_remote_path::LocalOrRemotePath;
                                         let git_repo_path = DetectedRepositories::as_ref(ctx)
                                             .get_root_for_path(&LocalOrRemotePath::Local(
                                                 Path::new(pwd).to_path_buf(),
@@ -10468,7 +10468,7 @@ impl Input {
                                             .map(|session| session.is_wsl())
                                             .unwrap_or(false);
 
-                                        let relative_path = warp_util::path::to_relative_path(
+                                        let relative_path = black_util::path::to_relative_path(
                                             is_wsl,
                                             &absolute_path,
                                             Path::new(pwd),
@@ -10545,7 +10545,7 @@ impl Input {
                         None => image_filepaths.clone(),
                     };
                     let paths_str =
-                        warpui::clipboard_utils::escaped_paths_str(&transformed, shell_family);
+                        black_ui::clipboard_utils::escaped_paths_str(&transformed, shell_family);
 
                     self.editor.update(ctx, |editor, ctx| {
                         editor.user_insert(&paths_str, ctx);
@@ -10595,7 +10595,7 @@ impl Input {
 
         // Check if we should insert clipboard text in advance
         let mut already_inserted_text = false;
-        if warpui::clipboard::should_insert_text_on_paste(&content) {
+        if black_ui::clipboard::should_insert_text_on_paste(&content) {
             self.insert_clipboard_text_content(ctx, content.clone());
             already_inserted_text = true;
         }
@@ -10607,7 +10607,7 @@ impl Input {
             self.handle_pasted_image_data(content.clone(), ctx) == 0
         } else if content.num_paths() > 0 {
             // Else, we check the pasted file paths for any images.
-            let image_filepaths = warpui::clipboard_utils::get_image_filepaths_from_paths(
+            let image_filepaths = black_ui::clipboard_utils::get_image_filepaths_from_paths(
                 content.paths.as_deref().unwrap_or(&[]),
             );
             let num_images_expected = image_filepaths.len();
@@ -11353,7 +11353,7 @@ impl Input {
 
         // CLI agent rich input in shell mode (! prefix) should allow completions
         // even though the active block is a long-running command.
-        // However, completions are disabled on warpified remote hosts because
+        // However, completions are disabled on blackified remote hosts because
         // in-band generators don't work in this context (with CLI agent).
         let is_cli_agent_shell_mode = self.is_locked_in_shell_mode(ctx)
             && CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id)
@@ -15108,7 +15108,7 @@ impl View for Input {
         }
     }
 
-    fn keymap_context(&self, app: &AppContext) -> warpui::keymap::Context {
+    fn keymap_context(&self, app: &AppContext) -> black_ui::keymap::Context {
         let mut ctx = Self::default_keymap_context();
         let ai_settings = AISettings::as_ref(app);
 

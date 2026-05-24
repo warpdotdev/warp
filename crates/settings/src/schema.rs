@@ -25,7 +25,7 @@ pub struct SettingSchemaEntry {
     /// Feature flag gating this setting.
     /// If Some, the setting is only included in the schema when the flag
     /// is active for the target build channel.
-    pub feature_flag: Option<warp_features::FeatureFlag>,
+    pub feature_flag: Option<black_features::FeatureFlag>,
 
     /// Returns which platforms this setting applies to.
     pub supported_platforms_fn: fn() -> SupportedPlatforms,

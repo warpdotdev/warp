@@ -9,12 +9,12 @@ use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
 pub(crate) use saved_prompts::*;
 #[cfg(not(target_family = "wasm"))]
-use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::Icon as WarpIcon;
-use warpui::fonts::FamilyId;
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+use black_cli::agent::Harness;
+use black_core::features::FeatureFlag;
+use black_core::ui::appearance::Appearance;
+use black_core::ui::Icon as WarpIcon;
+use black_ui::fonts::FamilyId;
+use black_ui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 pub use zero_state::*;
 
 use super::AcceptSlashCommandOrSavedPrompt;
@@ -298,7 +298,7 @@ impl SlashCommandDataSource {
         }
 
         // Hide /host when no default host is configured (env var or workspace setting).
-        let has_default_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
+        let has_default_host = std::env::var("BLACK_CLOUD_MODE_DEFAULT_HOST")
             .ok()
             .filter(|s| !s.is_empty())
             .is_some()
@@ -410,7 +410,7 @@ impl SlashCommandDataSource {
 
     /// Returns true when the active conversation is associated with a cloud Oz
     /// `AmbientAgentTask`. Used to gate `/continue-locally` to runs that can
-    /// actually be forked into a local Warp conversation.
+    /// actually be forked into a local Black conversation.
     ///
     /// Permissive when the harness is not yet known: we consider an absent task or
     /// missing `agent_config_snapshot.harness` to be Oz, matching the existing
@@ -462,7 +462,7 @@ impl SyncDataSource for SlashCommandDataSource {
     fn run_query(
         &self,
         query: &Query,
-        app: &warpui::AppContext,
+        app: &black_ui::AppContext,
     ) -> Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper> {
         if query.text.is_empty() {
             return Ok(vec![]);

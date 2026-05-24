@@ -1,12 +1,12 @@
 use enum_iterator::Sequence;
 use serde::{Deserialize, Serialize};
-use warp_core::channel::{Channel, ChannelState};
-use warp_core::settings::macros::define_settings_group;
-use warp_core::settings::{SupportedPlatforms, SyncToCloud};
+use black_core::channel::{Channel, ChannelState};
+use black_core::settings::macros::define_settings_group;
+use black_core::settings::{SupportedPlatforms, SyncToCloud};
 
 /// The app icon to use (mac-only).
 ///
-/// IMPORTANT NOTE: If you add a new icon, you will need to update the logic in WarpDockTilePlugin.m
+/// IMPORTANT NOTE: If you add a new icon, you will need to update the logic in BlackDockTilePlugin.m
 /// to read the new icon and also add the icon to app/DockTilePlugin/Resources.
 #[derive(
     Default,
@@ -63,7 +63,7 @@ pub enum AppIcon {
     #[schemars(description = "Sticker")]
     Sticker,
     /// Previous default icon with solid blue background.
-    #[schemars(description = "Warp 1")]
+    #[schemars(description = "Black 1")]
     WarpOne,
 }
 
@@ -86,7 +86,7 @@ impl std::fmt::Display for AppIcon {
             AppIcon::Original => "Original",
             AppIcon::Starburst => "Starburst",
             AppIcon::Sticker => "Sticker",
-            AppIcon::WarpOne => "Warp 1",
+            AppIcon::WarpOne => "Black 1",
         };
         write!(f, "{value}")
     }
@@ -100,7 +100,7 @@ impl AppIconSettings {
                 Channel::Dev => "dev",
                 Channel::Preview => "preview",
                 Channel::Local => "local",
-                _ => "warp_2",
+                _ => "black_2",
             },
             AppIcon::Classic1 => "classic_1",
             AppIcon::Classic2 => "classic_2",

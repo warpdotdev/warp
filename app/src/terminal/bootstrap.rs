@@ -1,14 +1,14 @@
 use std::borrow::Cow;
 
+use black_ui::{AppContext, AssetProvider, SingletonEntity};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use memo_map::MemoMap;
-use warpui::{AppContext, AssetProvider, SingletonEntity};
 
 #[cfg(feature = "local_fs")]
 use super::{
+    blackify::settings::{PIPENV_SUBSHELL_COMMAND_REGEX, POETRY_SUBSHELL_COMMAND_REGEX},
     model::session::{BootstrapSessionType, SessionInfo},
-    warpify::settings::{PIPENV_SUBSHELL_COMMAND_REGEX, POETRY_SUBSHELL_COMMAND_REGEX},
 };
 use crate::env_vars::EnvVar;
 use crate::terminal::session_settings::SessionSettings;
@@ -37,7 +37,7 @@ pub fn is_container_subshell(session_info: &SessionInfo) -> bool {
     })
 }
 
-/// Returns `true` if Warp should use an RC-file based bootstrap (e.g. dump the bootstrap script to
+/// Returns `true` if Black should use an RC-file based bootstrap (e.g. dump the bootstrap script to
 /// a temp file and `source` it) for a newly spawned session with the given `shell_type`, and
 /// associated `session_type` and `subshell_initialization_info`.
 ///
@@ -117,6 +117,16 @@ pub fn should_use_rc_file_bootstrap_method(
 /// and is not performed recursively, but it would be useful to add such support
 /// in the future.
 pub fn script_for_shell(shell_type: ShellType, assets: &dyn AssetProvider) -> Cow<'static, [u8]> {
+    BOOTSTRAP_CACHE
+        .get_or_insert(&shell_type, || compute_script_for_shell(shell_type, assets))
+        .into()
+}
+
+/// Builds the bootstrap script for `shell_type` from `assets` without consulting
+/// the process-global `BOOTSTRAP_CACHE`. Tests call this directly so they observe
+/// their own asset provider regardless of what earlier code cached for the same
+/// `ShellType`.
+fn compute_script_for_shell(shell_type: ShellType, assets: &dyn AssetProvider) -> Vec<u8> {
     let file = match shell_type {
         ShellType::Bash => "bash.sh",
         ShellType::Zsh => "zsh.sh",
@@ -124,83 +134,75 @@ pub fn script_for_shell(shell_type: ShellType, assets: &dyn AssetProvider) -> Co
         ShellType::PowerShell => "pwsh.ps1",
     };
 
-    BOOTSTRAP_CACHE
-        .get_or_insert(&shell_type, || {
-            let file_path = format!("bundled/bootstrap/{file}");
-            let bootstrap = assets
-                .get(&file_path)
-                .unwrap_or_else(|_| panic!("failed to retrieve {file_path} from assets"));
+    let file_path = format!("bundled/bootstrap/{file}");
+    let bootstrap = assets
+        .get(&file_path)
+        .unwrap_or_else(|_| panic!("failed to retrieve {file_path} from assets"));
 
-            // Interpret the file as UTF-8.  We do this in an unchecked way
-            // for performance, expecting that any issues here will be caught by
-            // unit tests.
-            let bootstrap = unsafe { String::from_utf8_unchecked(bootstrap.to_vec()) };
+    // Interpret the file as UTF-8.  We do this in an unchecked way
+    // for performance, expecting that any issues here will be caught by
+    // unit tests.
+    let bootstrap = unsafe { String::from_utf8_unchecked(bootstrap.to_vec()) };
 
-            let additional_files = memo_map::MemoMap::new();
+    let additional_files = memo_map::MemoMap::new();
 
-            // Parse through the file, looking for any lines which start with
-            // "#include", and replacing that line with the contents of the file
-            // located at the path specified.
-            //
-            // We trim most leading and all trailing whitespace from lines, and
-            // drop all empty lines and lines that only contain a comment.  We
-            // keep a single leading space on each line, if one exists, to
-            // avoid interfering with histignorespace behavior.
-            //
-            // This minimizes the number of bytes we send over the pty during the
-            // bootstrap process.
-            fn trim_and_borrow_line(mut line: &str) -> Cow<'_, str> {
-                let len = line.len();
-                let trimmed_len = line.trim_start().len();
-                if trimmed_len < len {
-                    let trimmed_chars = len - trimmed_len;
-                    line = &line[trimmed_chars - 1..];
-                }
-                Cow::Borrowed(line.trim_end())
+    // Parse through the file, looking for any lines which start with
+    // "#include", and replacing that line with the contents of the file
+    // located at the path specified.
+    //
+    // We trim most leading and all trailing whitespace from lines, and
+    // drop all empty lines and lines that only contain a comment.  We
+    // keep a single leading space on each line, if one exists, to
+    // avoid interfering with histignorespace behavior.
+    //
+    // This minimizes the number of bytes we send over the pty during the
+    // bootstrap process.
+    fn trim_and_borrow_line(mut line: &str) -> Cow<'_, str> {
+        let len = line.len();
+        let trimmed_len = line.trim_start().len();
+        if trimmed_len < len {
+            let trimmed_chars = len - trimmed_len;
+            line = &line[trimmed_chars - 1..];
+        }
+        Cow::Borrowed(line.trim_end())
+    }
+    let mut script = bootstrap
+        .trim_start_matches(BYTE_ORDER_MARK)
+        .split('\n')
+        .map(trim_and_borrow_line)
+        .flat_map(|line| {
+            if let Some(path) = line.strip_prefix("#include ") {
+                additional_files
+                    .get_or_insert(path, || {
+                        let data = assets
+                            .get(path)
+                            .unwrap_or_else(|_| panic!("failed to retrieve {path} from assets"));
+                        let data_string = unsafe { String::from_utf8_unchecked(data.to_vec()) };
+                        data_string
+                            .replace("@@USING_CON_PTY_BOOLEAN@@", &(cfg!(windows).to_string()))
+                    })
+                    .split('\n')
+                    .map(trim_and_borrow_line)
+                    .collect_vec()
+            } else {
+                vec![line]
             }
-            let mut script = bootstrap
-                .trim_start_matches(BYTE_ORDER_MARK)
-                .split('\n')
-                .map(trim_and_borrow_line)
-                .flat_map(|line| {
-                    if let Some(path) = line.strip_prefix("#include ") {
-                        additional_files
-                            .get_or_insert(path, || {
-                                let data = assets.get(path).unwrap_or_else(|_| {
-                                    panic!("failed to retrieve {path} from assets")
-                                });
-                                let data_string =
-                                    unsafe { String::from_utf8_unchecked(data.to_vec()) };
-                                data_string.replace(
-                                    "@@USING_CON_PTY_BOOLEAN@@",
-                                    &(cfg!(windows).to_string()),
-                                )
-                            })
-                            .split('\n')
-                            .map(trim_and_borrow_line)
-                            .collect_vec()
-                    } else {
-                        vec![line]
-                    }
-                })
-                // Filter out empty lines and comments, to minimize the amount
-                // of data we send over the pty during the bootstrap process.
-                .filter(|line| {
-                    let line = line.trim_start();
-                    !(line.is_empty()
-                        || line.starts_with('#')
-                        || shell_type == ShellType::PowerShell
-                            && line
-                                .starts_with("[Diagnostics.CodeAnalysis.SuppressMessageAttribute"))
-                })
-                .join("\n");
-
-            // Make sure there's a newline at the end of the bootstrap script,
-            // otherwise we'll never submit the final line to the shell.
-            script.push('\n');
-            script.into_bytes()
         })
-        .into()
+        // Filter out empty lines and comments, to minimize the amount
+        // of data we send over the pty during the bootstrap process.
+        .filter(|line| {
+            let line = line.trim_start();
+            !(line.is_empty()
+                || line.starts_with('#')
+                || shell_type == ShellType::PowerShell
+                    && line.starts_with("[Diagnostics.CodeAnalysis.SuppressMessageAttribute"))
+        })
+        .join("\n");
+
+    // Make sure there's a newline at the end of the bootstrap script,
+    // otherwise we'll never submit the final line to the shell.
+    script.push('\n');
+    script.into_bytes()
 }
 
 /// Returns the init shell script for the given `shell_type` (e.g. the script that emits the
@@ -231,7 +233,7 @@ pub fn init_subshell_command(
         Some(shell_type) => {
             let subshell_script =
                 init_subshell_script_for_shell(shell_type, &crate::ASSETS, vars, ctx);
-            format!(r#" [ -z $WARP_BOOTSTRAPPED ] && eval '{subshell_script}'"#)
+            format!(r#" [ -z $BLACK_BOOTSTRAPPED ] && eval '{subshell_script}'"#)
         }
         None => init_subshell_script_for_unknown_shell(&crate::ASSETS),
     }
@@ -253,7 +255,7 @@ fn init_subshell_script_for_shell(
 
     // Prepend environment variable settings to the script
     let env_setup_script = format!(
-        "export WARP_HONOR_PS1={}; {}",
+        "export BLACK_HONOR_PS1={}; {}",
         honor_ps1_env_var_value,
         env_vars
             .iter()

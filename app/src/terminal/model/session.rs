@@ -21,15 +21,15 @@ use parking_lot::{Mutex, RwLock};
 use smol_str::SmolStr;
 use typed_path::{TypedPath, TypedPathBuf, WindowsPath};
 use version_compare::Version;
-use warp_completer::completer::{
+use black_completer::completer::{
     CommandExitStatus, CommandOutput, PathSeparators, TopLevelCommandCaseSensitivity,
 };
-use warp_util::path::{
+use black_util::path::{
     convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
     ShellFamily,
 };
-use warpui::platform::OperatingSystem;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_ui::platform::OperatingSystem;
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 use super::ansi::{BootstrappedValue, InitShellValue, SSHValue};
 use super::terminal_model::{HistoryEntry, SubshellInitializationInfo};
@@ -40,7 +40,7 @@ use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEven
 use crate::server::telemetry::{BootstrappingInfo, TelemetryEvent};
 use crate::terminal::event::{ExecutedExecutorCommandEvent, RemoteServerSetupState};
 use crate::terminal::shell::{Shell, ShellType};
-use crate::terminal::warpify::SubshellSource;
+use crate::terminal::blackify::SubshellSource;
 use crate::terminal::{History, ShellHost, ShellLaunchData};
 
 #[derive(thiserror::Error, Debug)]
@@ -64,8 +64,8 @@ pub enum ReadHistoryContentsError {
     AsyncFsError(std::io::Error),
 }
 
-// SessionId is defined in warp_core and re-exported here for backward compatibility.
-pub use warp_core::SessionId;
+// SessionId is defined in black_core and re-exported here for backward compatibility.
+pub use black_core::SessionId;
 
 /// Information about the sessions within a given terminal pane/top-level
 /// shell.
@@ -352,7 +352,7 @@ impl Sessions {
         let session = Arc::new(session);
         self.sessions.insert(session.id(), session.clone());
 
-        // For warpified-remote sessions, pick up the current host_id from
+        // For blackified-remote sessions, pick up the current host_id from
         // the manager so session.remote_host_id() is populated without
         // waiting for the next SessionConnected event. The
         // RemoteServerCommandExecutor already has its client baked in, so
@@ -840,26 +840,26 @@ impl SessionInfo {
 /// which happens *after* the session is bootstrapped.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BootstrapSessionType {
-    /// The session host is the same host where Warp is running.
+    /// The session host is the same host where Black is running.
     Local,
 
-    /// The session host is a different host from where Warp is running.
+    /// The session host is a different host from where Black is running.
     WarpifiedRemote,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionType {
-    /// The session host is the same host where Warp is running.
+    /// The session host is the same host where Black is running.
     Local,
 
-    /// The session host is a different host from where Warp is running.
-    /// Note that we only know this for sure when we Warpify a block.
+    /// The session host is a different host from where Black is running.
+    /// Note that we only know this for sure when we Blackify a block.
     ///
     /// `host_id` is `Some` when the remote server feature flag is enabled and
     /// `RemoteServerManager` has completed the connection handshake. It is
     /// `None` when the feature flag is off or the connection hasn't been
     /// established yet.
-    WarpifiedRemote { host_id: Option<warp_core::HostId> },
+    WarpifiedRemote { host_id: Option<black_core::HostId> },
 }
 
 impl From<BootstrapSessionType> for SessionType {
@@ -935,7 +935,7 @@ impl Session {
 
     /// Updates the `host_id` on a `WarpifiedRemote` session type after the
     /// remote server handshake completes (or clears it on disconnect).
-    pub fn set_remote_host_id(&self, host_id: Option<warp_core::HostId>) {
+    pub fn set_remote_host_id(&self, host_id: Option<black_core::HostId>) {
         let mut st = self.session_type.lock();
         if let SessionType::WarpifiedRemote { host_id: ref mut h } = *st {
             *h = host_id;
@@ -963,7 +963,7 @@ impl Session {
 
     pub fn home_dir(&self) -> Option<&str> {
         if cfg!(test) {
-            return warp_util::path::TEST_SESSION_HOME_DIR.as_deref();
+            return black_util::path::TEST_SESSION_HOME_DIR.as_deref();
         }
 
         self.info.home_dir.as_deref()
@@ -1010,9 +1010,9 @@ impl Session {
     /// representation, or `None` when no conversion is appropriate.
     pub fn windows_path_converter(&self) -> Option<fn(&str) -> String> {
         if self.is_wsl() {
-            Some(warp_util::path::convert_windows_path_to_wsl)
+            Some(black_util::path::convert_windows_path_to_wsl)
         } else if self.is_msys2() {
-            Some(warp_util::path::convert_windows_path_to_msys2)
+            Some(black_util::path::convert_windows_path_to_msys2)
         } else {
             None
         }
@@ -1525,22 +1525,22 @@ impl Session {
     /// Converts the given directory into a [`typed_path::TypedPathBuf`].
     pub fn convert_directory_to_typed_path_buf(&self, pwd: String) -> TypedPathBuf {
         // We need to determine whether this session requires windows file paths
-        // or unix file paths. This needs to be resilient to warpified ssh. Some examples:
+        // or unix file paths. This needs to be resilient to blackified ssh. Some examples:
         // - bash on mac ---> unix
         // - powershell on linux ---> unix
         // - powershell on windows ---> windows
         // - wsl on windows ---> unix
-        // - warpified zsh --> unix
+        // - blackified zsh --> unix
 
         // If the host architecture is unix, we can infer unix file paths. This would break
-        // if we supported warpifying a powershell-on-windows SSH session.
+        // if we supported blackifying a powershell-on-windows SSH session.
         if cfg!(unix) {
             return TypedPathBuf::from_unix(pwd);
         }
 
         // We assume that we're on Windows.
         match self.shell_family() {
-            // Cases: WSL, MSYS2, warpified bash
+            // Cases: WSL, MSYS2, blackified bash
             ShellFamily::Posix => TypedPathBuf::from_unix(pwd),
             // Cases: powershell sessions
             ShellFamily::PowerShell => TypedPathBuf::from_windows(pwd),
@@ -1561,7 +1561,7 @@ impl Display for Session {
     }
 }
 
-/// Returns the hostname for the local machine where Warp is running.
+/// Returns the hostname for the local machine where Black is running.
 pub fn get_local_hostname() -> Result<String> {
     cfg_if::cfg_if! {
         if #[cfg(not(target_family = "wasm"))] {

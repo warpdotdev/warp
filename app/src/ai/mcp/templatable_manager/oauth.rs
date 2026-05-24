@@ -11,9 +11,9 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
-use warp_core::channel::ChannelState;
-use warpui::{ModelSpawner, SingletonEntity};
-use warpui_extras::secure_storage::AppContextExt as _;
+use black_core::channel::ChannelState;
+use black_ui::{ModelSpawner, SingletonEntity};
+use black_ui_extras::secure_storage::AppContextExt as _;
 
 use super::{MCPServerState, TemplatableMCPServerManager};
 use crate::ai::mcp::FileBasedMCPManager;
@@ -53,7 +53,7 @@ pub type PersistedCredentialsMap = HashMap<Uuid, PersistedCredentials>;
 pub type FileBasedPersistedCredentialsMap = HashMap<u64, PersistedCredentials>;
 
 /// A credential store that wraps [`InMemoryCredentialStore`] and persists token
-/// updates to Warp's secure storage via a channel.
+/// updates to Black's secure storage via a channel.
 ///
 /// When rmcp auto-refreshes an expired access token at runtime, the rotated
 /// tokens are only saved to the in-memory store by default. This wrapper
@@ -129,7 +129,7 @@ impl CredentialStore for PersistingCredentialStore {
 }
 
 /// Installs a [`PersistingCredentialStore`] on the given auth manager so that
-/// runtime token auto-refreshes are written back to Warp's secure storage.
+/// runtime token auto-refreshes are written back to Black's secure storage.
 ///
 /// A background tokio task is spawned to receive credential updates and persist
 /// them via the [`ModelSpawner`]. The task terminates when the auth manager (and
@@ -261,12 +261,12 @@ pub async fn make_authenticated_client(
             log::warn!(
                 "File-based MCP server {uuid} requires OAuth authentication; \
                  skipping in headless mode. To use this server, authenticate it \
-                 in the Warp desktop app first."
+                 in the Black desktop app first."
             );
         }
         return Err(AuthError::AuthorizationFailed(
             "MCP server requires OAuth authentication. Please authenticate this server in the \
-             Warp desktop app first, then try again."
+             Black desktop app first, then try again."
                 .to_string(),
         ));
     }
@@ -309,7 +309,7 @@ pub async fn make_authenticated_client(
         // Try dynamic client registration.
         let mut oauth_state = OAuthState::Unauthorized(auth_manager);
         oauth_state
-            .start_authorization(&[], &redirect_uri, Some("Warp"))
+            .start_authorization(&[], &redirect_uri, Some("Black"))
             .await?;
         oauth_state
     };
@@ -411,7 +411,7 @@ impl TemplatableMCPServerManager {
             bail!("No spawned server found for uuid={server_uuid}");
         };
 
-        warpui::r#async::block_on(server_info.oauth_result_tx.send(result)).map_err(|_| {
+        black_ui::r#async::block_on(server_info.oauth_result_tx.send(result)).map_err(|_| {
             anyhow!("Failed to send OAuth result to server {server_uuid} - receiver dropped")
         })?;
 
@@ -421,7 +421,7 @@ impl TemplatableMCPServerManager {
 
     pub fn save_credentials_to_secure_storage(
         &mut self,
-        app: &mut warpui::AppContext,
+        app: &mut black_ui::AppContext,
         installation_uuid: Uuid,
         credentials: PersistedCredentials,
     ) {
@@ -452,7 +452,7 @@ impl TemplatableMCPServerManager {
     pub fn delete_credentials_from_secure_storage(
         &mut self,
         installation_uuid: Uuid,
-        app: &mut warpui::AppContext,
+        app: &mut black_ui::AppContext,
     ) {
         if let Some(template_uuid) = self.get_template_uuid(installation_uuid) {
             self.server_credentials.remove(&template_uuid);
@@ -469,13 +469,13 @@ impl TemplatableMCPServerManager {
 
 /// Loads credentials from secure storage at the provided key.
 pub(crate) fn load_credentials_from_secure_storage<T: DeserializeOwned + Default>(
-    app: &mut warpui::AppContext,
+    app: &mut black_ui::AppContext,
     key: &str,
 ) -> T {
     app.secure_storage()
         .read_value(key)
         .inspect_err(|err| {
-            if !matches!(err, warpui_extras::secure_storage::Error::NotFound) {
+            if !matches!(err, black_ui_extras::secure_storage::Error::NotFound) {
                 log::warn!("Failed to read MCP credentials from secure storage: {err:#}");
             }
         })
@@ -486,7 +486,7 @@ pub(crate) fn load_credentials_from_secure_storage<T: DeserializeOwned + Default
 
 /// Writes credentials to secure storage at the provided key.
 pub(crate) fn write_to_secure_storage<T: Serialize>(
-    app: &mut warpui::AppContext,
+    app: &mut black_ui::AppContext,
     key: &str,
     credentials: &T,
 ) {

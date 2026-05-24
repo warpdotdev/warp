@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use warp_util::local_or_remote_path::LocalOrRemotePath;
-use warp_util::remote_path::RemotePath;
-use warp_util::standardized_path::StandardizedPath;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle};
+use black_util::local_or_remote_path::LocalOrRemotePath;
+use black_util::remote_path::RemotePath;
+use black_util::standardized_path::StandardizedPath;
+use black_ui::{AppContext, Entity, ModelContext, ModelHandle};
 
 use super::{Session, SessionType, Sessions};
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;

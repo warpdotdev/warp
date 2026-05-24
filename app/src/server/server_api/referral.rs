@@ -3,11 +3,11 @@ use async_trait::async_trait;
 use cynic::{MutationBuilder, QueryBuilder};
 #[cfg(test)]
 use mockall::{automock, predicate::*};
-use warp_core::channel::ChannelState;
-use warp_graphql::mutations::send_referral_invite_emails::{
+use black_core::channel::ChannelState;
+use black_graphql::mutations::send_referral_invite_emails::{
     SendReferralInviteEmails, SendReferralInviteEmailsResult, SendReferralInviteEmailsVariables,
 };
-use warp_graphql::queries::get_referral_info::{GetReferralInfo, GetReferralInfoVariables};
+use black_graphql::queries::get_referral_info::{GetReferralInfo, GetReferralInfoVariables};
 
 use super::ServerApi;
 use crate::server::graphql::{get_request_context, get_user_facing_error_message};
@@ -46,7 +46,7 @@ impl ReferralsClient for ServerApi {
         let response = self.send_graphql_request(operation, None).await?;
 
         match response.user {
-            warp_graphql::queries::get_referral_info::UserResult::UserOutput(user_output) => {
+            black_graphql::queries::get_referral_info::UserResult::UserOutput(user_output) => {
                 Ok(ReferralInfo {
                     url: format!(
                         "{}/referral/{}",
@@ -59,7 +59,7 @@ impl ReferralsClient for ServerApi {
                     is_referred: user_output.user.referrals.is_referred,
                 })
             }
-            warp_graphql::queries::get_referral_info::UserResult::Unknown => {
+            black_graphql::queries::get_referral_info::UserResult::Unknown => {
                 Err(anyhow!("Unable to fetch referral info"))
             }
         }
@@ -67,7 +67,7 @@ impl ReferralsClient for ServerApi {
 
     async fn send_invite(&self, emails: Vec<String>) -> Result<Vec<String>> {
         let variables = SendReferralInviteEmailsVariables {
-            input: warp_graphql::mutations::send_referral_invite_emails::SendReferralInviteEmailsInput {
+            input: black_graphql::mutations::send_referral_invite_emails::SendReferralInviteEmailsInput {
                 emails,
             },
             request_context: get_request_context(),

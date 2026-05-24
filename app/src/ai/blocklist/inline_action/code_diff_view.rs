@@ -14,21 +14,21 @@ use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_geometry::vector::vec2f;
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng as _};
-use warp_core::features::FeatureFlag;
-use warp_core::platform::SessionPlatform;
-use warp_core::settings::ToggleableSetting;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::color::CLAUDE_ORANGE;
-use warp_core::ui::theme::color::internal_colors::{fg_overlay_6, neutral_1, neutral_4};
-use warp_core::ui::theme::Fill;
-use warp_core::HostId;
-use warp_editor::content::buffer::InitialBufferState;
-use warp_editor::render::element::VerticalExpansionBehavior;
-use warp_util::file::FileSaveError;
-use warp_util::path::common_path;
-use warp_util::standardized_path::StandardizedPath;
-use warpui::elements::new_scrollable::{ScrollableAppearance, SingleAxisConfig};
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::platform::SessionPlatform;
+use black_core::settings::ToggleableSetting;
+use black_core::ui::appearance::Appearance;
+use black_core::ui::color::CLAUDE_ORANGE;
+use black_core::ui::theme::color::internal_colors::{fg_overlay_6, neutral_1, neutral_4};
+use black_core::ui::theme::Fill;
+use black_core::HostId;
+use black_editor::content::buffer::InitialBufferState;
+use black_editor::render::element::VerticalExpansionBehavior;
+use black_util::file::FileSaveError;
+use black_util::path::common_path;
+use black_util::standardized_path::StandardizedPath;
+use black_ui::elements::new_scrollable::{ScrollableAppearance, SingleAxisConfig};
+use black_ui::elements::{
     Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox,
     Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty, EventHandler, Flex,
     FormattedTextElement, HighlightedHyperlink, Hoverable, MainAxisAlignment, MainAxisSize,
@@ -37,10 +37,10 @@ use warpui::elements::{
     SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable,
     SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
 };
-use warpui::keymap::{EditableBinding, FixedBinding, Keystroke};
-use warpui::platform::{Cursor, OperatingSystem};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::keymap::{EditableBinding, FixedBinding, Keystroke};
+use black_ui::platform::{Cursor, OperatingSystem};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };
@@ -142,7 +142,7 @@ lazy_static! {
 }
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings([
         FixedBinding::new(
@@ -569,8 +569,8 @@ impl CodeDiffView {
                 ctx,
             )
             .with_horizontal_scrollbar_appearance(
-                warpui::elements::new_scrollable::ScrollableAppearance::new(
-                    warpui::elements::ScrollbarWidth::Auto,
+                black_ui::elements::new_scrollable::ScrollableAppearance::new(
+                    black_ui::elements::ScrollbarWidth::Auto,
                     true,
                 ),
             )
@@ -1241,7 +1241,7 @@ impl CodeDiffView {
 
     fn render_scroll_icon_for_inline_banner(&self, appearance: &Appearance) -> Box<dyn Element> {
         let background = appearance.theme().foreground();
-        let icon = warpui::elements::Icon::new(
+        let icon = black_ui::elements::Icon::new(
             Icon::ArrowDown.into(),
             appearance.theme().main_text_color(background).into_solid(),
         )
@@ -1447,7 +1447,7 @@ impl CodeDiffView {
             }
             CodeDiffState::WaitingForUser => {
                 if self.display_mode().is_inline_banner() {
-                    warpui::elements::Icon::new(
+                    black_ui::elements::Icon::new(
                         Icon::Code2.into(),
                         appearance
                             .theme()
@@ -1947,7 +1947,7 @@ impl CodeDiffView {
                 },
                 theme.nonactive_ui_detail().into(),
                 theme.active_ui_detail().into(),
-                warpui::elements::Fill::None,
+                black_ui::elements::Fill::None,
             )
             .with_horizontal_scrollbar(ScrollableAppearance::new(ScrollbarWidth::Custom(4.), true))
             .with_propagate_mousewheel_if_not_handled(true)
@@ -2595,7 +2595,7 @@ impl CodeDiffView {
             DiffSessionType::Local => Some(LocalOrRemotePath::Local(PathBuf::from(path_str))),
             DiffSessionType::Remote(host_id) => {
                 StandardizedPath::try_new(&path_str).ok().map(|path| {
-                    LocalOrRemotePath::Remote(warp_util::remote_path::RemotePath {
+                    LocalOrRemotePath::Remote(black_util::remote_path::RemotePath {
                         host_id: host_id.clone(),
                         path,
                     })
@@ -2709,7 +2709,7 @@ impl View for CodeDiffView {
         root_stack.finish()
     }
 
-    fn keymap_context(&self, _app: &AppContext) -> warpui::keymap::Context {
+    fn keymap_context(&self, _app: &AppContext) -> black_ui::keymap::Context {
         let mut context = Self::default_keymap_context();
 
         if self.display_mode().is_full_pane() {
@@ -3143,7 +3143,7 @@ impl BackingView for CodeDiffView {
             title: "Requested Edit".to_string(),
             title_secondary: None,
             title_style: None,
-            title_clip_config: warpui::text_layout::ClipConfig::start(),
+            title_clip_config: black_ui::text_layout::ClipConfig::start(),
             title_max_width: None,
             left_of_title: None,
             right_of_title: None,

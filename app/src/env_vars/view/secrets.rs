@@ -1,17 +1,17 @@
 use pathfinder_geometry::vector::vec2f;
-use warp_core::features::FeatureFlag;
-use warp_core::ui::appearance::Appearance;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::ui::appearance::Appearance;
+use black_ui::elements::{
     ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, Empty, Fill, MainAxisAlignment,
     MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
     ParentOffsetBounds, Shrinkable, Stack,
 };
-use warpui::fonts::Weight;
-use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::fonts::Weight;
+use black_ui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
 #[cfg(not(target_family = "wasm"))]
-use warpui::SingletonEntity;
-use warpui::{Element, ViewContext};
+use black_ui::SingletonEntity;
+use black_ui::{Element, ViewContext};
 
 use super::env_var_collection::{
     EnvVarCollectionAction, EnvVarCollectionView, VariableRowIndex, CORE_MAX_WIDTH, ROW_SPACING,

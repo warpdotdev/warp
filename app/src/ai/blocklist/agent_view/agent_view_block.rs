@@ -1,18 +1,18 @@
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 use settings::Setting;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::Icon;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::Icon;
+use black_ui::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, Empty, Expanded, Flex, Hoverable, MainAxisSize,
     MouseStateHandle, ParentElement, SavePosition, Shrinkable, Text,
 };
-use warpui::fonts::Weight::Bold;
-use warpui::fonts::{Properties, Style};
-use warpui::platform::Cursor;
-use warpui::prelude::{Border, CornerRadius, Radius};
-use warpui::text_layout::ClipConfig;
-use warpui::{
+use black_ui::fonts::Weight::Bold;
+use black_ui::fonts::{Properties, Style};
+use black_ui::platform::Cursor;
+use black_ui::prelude::{Border, CornerRadius, Radius};
+use black_ui::text_layout::ClipConfig;
+use black_ui::{
     AppContext, Element, Entity, EntityId, EventContext, ModelHandle, SingletonEntity,
     TypedActionView, View, ViewContext,
 };
@@ -244,7 +244,7 @@ impl View for AgentViewEntryBlock {
         "EnterAgentBlock"
     }
 
-    fn render(&self, app: &warpui::AppContext) -> Box<dyn warpui::Element> {
+    fn render(&self, app: &black_ui::AppContext) -> Box<dyn black_ui::Element> {
         if self.agent_view_controller.as_ref(app).is_fullscreen() {
             return Empty::new().finish();
         }

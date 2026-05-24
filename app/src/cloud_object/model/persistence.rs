@@ -4,9 +4,9 @@ use std::sync::mpsc::SyncSender;
 use chrono::{DateTime, Duration, Utc};
 use itertools::Itertools;
 use rand::Rng;
-use warp_core::features::FeatureFlag;
-use warp_graphql::scalars::time::ServerTimestamp;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+use black_core::features::FeatureFlag;
+use black_graphql::scalars::time::ServerTimestamp;
+use black_ui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use super::generic_string_model::GenericStringObjectId;
 use crate::ai::execution_profiles::CloudAIExecutionProfile;
@@ -1095,7 +1095,7 @@ impl CloudModel {
             .count()
     }
 
-    /// Number of cloud objects that have errored in some way and are visible in the Warp Drive index
+    /// Number of cloud objects that have errored in some way and are visible in the Black Drive index
     pub fn num_visible_errored_objects(&self) -> usize {
         self.objects_by_id
             .values()

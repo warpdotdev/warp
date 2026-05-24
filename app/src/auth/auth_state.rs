@@ -5,9 +5,9 @@ use anyhow::anyhow;
 use chrono::{DateTime, Duration, Utc};
 use parking_lot::RwLock;
 use uuid::Uuid;
-use warp_core::channel::{Channel, ChannelState};
-use warp_graphql::object_permissions::OwnerType;
-use warpui::{AppContext, Entity, SingletonEntity};
+use black_core::channel::{Channel, ChannelState};
+use black_graphql::object_permissions::OwnerType;
+use black_ui::{AppContext, Entity, SingletonEntity};
 
 use super::anonymous_id::get_or_create_anonymous_id;
 use super::auth_manager::user_persistence::PersistedUser;
@@ -124,7 +124,7 @@ impl AuthState {
         }
 
         // Try WARP_USER_SECRET environment variable.
-        if let Some(persisted) = option_env!("WARP_USER_SECRET")
+        if let Some(persisted) = option_env!("BLACK_USER_SECRET")
             .and_then(|s| serde_json::from_str::<PersistedUser>(s).ok())
         {
             state.apply_persisted_user(persisted);
@@ -353,7 +353,7 @@ impl AuthState {
             .map(|user| user.metadata.email.clone())
     }
 
-    /// Returns whether the user considered onboarded to Warp.
+    /// Returns whether the user considered onboarded to Black.
     pub fn is_onboarded(&self) -> Option<bool> {
         self.user.read().as_ref().map(|user| user.is_onboarded)
     }
@@ -382,7 +382,7 @@ impl AuthState {
     }
 
     /// Returns whether or not the user is a "web client anonymous user", aka their account
-    /// originated from viewing Warp on web.
+    /// originated from viewing Black on web.
     pub fn is_user_web_anonymous_user(&self) -> Option<bool> {
         self.user.read().as_ref().map(|user| {
             user.anonymous_user_type() == Some(AnonymousUserType::WebClientAnonymousUser)
@@ -404,7 +404,7 @@ impl AuthState {
         })
     }
 
-    /// Returns whether or not the anonymous user is past any of their Warp Drive object limits.
+    /// Returns whether or not the anonymous user is past any of their Black Drive object limits.
     pub fn is_anonymous_user_past_object_limit(
         &self,
         object_type: ObjectType,
@@ -554,8 +554,8 @@ impl AuthState {
     }
 }
 
-// Adapter for the [`warp_managed_secrets`] crate, which needs to access the current user.
-impl warp_managed_secrets::ActorProvider for AuthState {
+// Adapter for the [`black_managed_secrets`] crate, which needs to access the current user.
+impl black_managed_secrets::ActorProvider for AuthState {
     fn actor_uid(&self) -> Option<String> {
         self.user_id().map(|uid| uid.as_string())
     }

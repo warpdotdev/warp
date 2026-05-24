@@ -1,16 +1,16 @@
-use warp::integration_testing::agent_mode::AgentViewState;
-use warp::integration_testing::step::new_step_with_default_assertions;
-use warp::integration_testing::terminal::util::current_shell_starter_and_version;
-use warp::integration_testing::terminal::{
+use black::integration_testing::agent_mode::AgentViewState;
+use black::integration_testing::step::new_step_with_default_assertions;
+use black::integration_testing::terminal::util::current_shell_starter_and_version;
+use black::integration_testing::terminal::{
     assert_active_block_output_for_single_terminal_in_tab, assert_input_editor_contents,
     assert_long_running_block_executing_for_single_terminal_in_tab,
     assert_no_visible_background_blocks, wait_until_bootstrapped_single_pane_for_tab,
 };
-use warp::integration_testing::view_getters::single_terminal_view_for_tab;
-use warp::terminal::model::terminal_model::BlockIndex;
-use warp::terminal::shell::{Shell, ShellType};
-use warpui::integration::{AssertionCallback, AssertionOutcome, TestStep};
-use warpui::{async_assert, async_assert_eq};
+use black::integration_testing::view_getters::single_terminal_view_for_tab;
+use black::terminal::model::terminal_model::BlockIndex;
+use black::terminal::shell::{Shell, ShellType};
+use black_ui::integration::{AssertionCallback, AssertionOutcome, TestStep};
+use black_ui::{async_assert, async_assert_eq};
 
 use super::{new_builder, Builder};
 use crate::util::skip_if_powershell_core_2303;
@@ -65,7 +65,7 @@ macro_rules! check_command {
     };
 }
 
-/// Tests that the shell reports its input buffer to the Warp typeahead model after
+/// Tests that the shell reports its input buffer to the Black typeahead model after
 /// a long-running command completes.
 pub fn test_input_reporting_posix_shells() -> Builder {
     // When the shell can report its input buffer, we can handle typeahead with
@@ -206,9 +206,9 @@ pub fn test_background_output() -> Builder {
     use std::os::unix::prelude::OpenOptionsExt;
 
     use regex::Regex;
-    use warp::integration_testing::block::assert_background_output;
-    use warp::integration_testing::terminal::execute_command_for_single_terminal_in_tab;
-    use warp::integration_testing::terminal::util::ExpectedExitStatus;
+    use black::integration_testing::block::assert_background_output;
+    use black::integration_testing::terminal::execute_command_for_single_terminal_in_tab;
+    use black::integration_testing::terminal::util::ExpectedExitStatus;
 
     let (starter, _) = current_shell_starter_and_version();
     let (spawn_command, kill_command) = match starter.shell_type() {

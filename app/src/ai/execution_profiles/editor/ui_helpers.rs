@@ -1,15 +1,15 @@
 use pathfinder_geometry::vector::vec2f;
 use thousands::Separable;
 use uuid::Uuid;
-use warp_core::features::FeatureFlag;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_ui::elements::{
     ChildAnchor, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Dismiss, Flex,
     Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Shrinkable, Stack, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{AppContext, Element, SingletonEntity, ViewHandle};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{AppContext, Element, SingletonEntity, ViewHandle};
 
 use super::{ExecutionProfileEditorView, ExecutionProfileEditorViewAction};
 use crate::ai::execution_profiles::{AIExecutionProfile, ActionPermission};
@@ -254,7 +254,7 @@ pub fn render_models_section(
         .with_child(render_filterable_dropdown_row(
             appearance,
             "Base model",
-            "This model serves as the primary engine behind the agent. It powers most interactions and invokes other models for tasks like planning or code generation when necessary. Warp may automatically switch to alternate models based on model availability or for auxiliary tasks such as conversation summarization.",
+            "This model serves as the primary engine behind the agent. It powers most interactions and invokes other models for tasks like planning or code generation when necessary. Black may automatically switch to alternate models based on model availability or for auxiliary tasks such as conversation summarization.",
             &view.base_model_dropdown,
         ));
 
@@ -430,7 +430,7 @@ pub fn render_permissions_section(
     appearance: &Appearance,
     view: &ExecutionProfileEditorView,
     profile_data: &AIExecutionProfile,
-    app: &warpui::AppContext,
+    app: &black_ui::AppContext,
 ) -> Box<dyn Element> {
     let ai_settings = AISettings::as_ref(app);
     let mut column = Flex::column().with_children([
@@ -701,7 +701,7 @@ fn render_directory_allowlist_section(
     view: &ExecutionProfileEditorView,
     profile_data: &AIExecutionProfile,
     appearance: &Appearance,
-    app: &warpui::AppContext,
+    app: &black_ui::AppContext,
 ) -> Box<dyn Element> {
     let ai_settings = AISettings::as_ref(app);
     let is_editable = ai_settings.is_directory_allowlist_editable(app);
@@ -726,7 +726,7 @@ fn render_command_allowlist_section(
     view: &ExecutionProfileEditorView,
     profile_data: &AIExecutionProfile,
     appearance: &Appearance,
-    app: &warpui::AppContext,
+    app: &black_ui::AppContext,
 ) -> Box<dyn Element> {
     let ai_settings = AISettings::as_ref(app);
     let is_editable = ai_settings.is_command_allowlist_editable(app);
@@ -752,7 +752,7 @@ fn render_command_denylist_section(
     view: &ExecutionProfileEditorView,
     profile_data: &AIExecutionProfile,
     appearance: &Appearance,
-    app: &warpui::AppContext,
+    app: &black_ui::AppContext,
 ) -> Box<dyn Element> {
     use crate::ai::blocklist::BlocklistAIPermissions;
 
@@ -819,7 +819,7 @@ fn display_mcp_name(uuid: &Uuid, app: &AppContext) -> String {
 fn render_mcp_allowlist_section(
     view: &ExecutionProfileEditorView,
     profile_data: &AIExecutionProfile,
-    app: &warpui::AppContext,
+    app: &black_ui::AppContext,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let ai_settings = AISettings::as_ref(app);
@@ -845,7 +845,7 @@ fn render_mcp_allowlist_section(
 fn render_mcp_denylist_section(
     view: &ExecutionProfileEditorView,
     profile_data: &AIExecutionProfile,
-    app: &warpui::AppContext,
+    app: &black_ui::AppContext,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let ai_settings = AISettings::as_ref(app);
@@ -895,7 +895,7 @@ pub fn render_plan_auto_sync_toggle(
     .finish();
 
     let desc_elem = Text::new(
-        "The plans this agent creates will be automatically added and synced to Warp Drive."
+        "The plans this agent creates will be automatically added and synced to Black Drive."
             .to_string(),
         appearance.ui_font_family(),
         11.,

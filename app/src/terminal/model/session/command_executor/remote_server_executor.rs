@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use warp_completer::completer::{CommandExitStatus, CommandOutput};
-use warp_core::command::ExitCode;
-use warp_core::SessionId;
+use black_completer::completer::{CommandExitStatus, CommandOutput};
+use black_core::command::ExitCode;
+use black_core::SessionId;
 
 use crate::remote_server::client::RemoteServerClient;
 use crate::remote_server::proto::{run_command_response, RunCommandErrorCode};
@@ -95,7 +95,7 @@ impl CommandExecutor for RemoteServerCommandExecutor {
             }
             Some(run_command_response::Result::Error(err)) => {
                 if err.code() == RunCommandErrorCode::SessionNotFound {
-                    warp_core::safe_error!(
+                    black_core::safe_error!(
                         safe: ("Remote command SESSION_NOT_FOUND — SessionBootstrapped notification likely lost"),
                         full: ("Remote command SESSION_NOT_FOUND (session={:?}): {} — the SessionBootstrapped notification was likely lost", self.session_id, err.message)
                     );
@@ -108,7 +108,7 @@ impl CommandExecutor for RemoteServerCommandExecutor {
                 ))
             }
             None => {
-                warp_core::safe_error!(
+                black_core::safe_error!(
                     safe: ("Remote command returned empty response — proto-level bug"),
                     full: ("Remote command returned empty response (session={:?}) — proto-level bug", self.session_id)
                 );

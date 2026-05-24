@@ -1,21 +1,21 @@
 use pathfinder_color::ColorU;
 use ui_components::{button, Component as _, Options as _};
-use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::WarpTheme;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::send_telemetry_from_ctx;
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::WarpTheme;
+use black_ui::elements::{
     Border, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Empty, Flex, FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, ParentElement, Radius, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::keymap::Keystroke;
-use warpui::platform::Cursor;
-use warpui::text_layout::TextAlignment;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::keymap::Keystroke;
+use black_ui::platform::Cursor;
+use black_ui::text_layout::TextAlignment;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
@@ -53,7 +53,7 @@ pub enum ThemePickerSlideAction {
     PrivacySettingsClicked,
 }
 
-const TOS_URL: &str = "https://www.warp.dev/terms-of-service";
+const TOS_URL: &str = "https://blackdagger.io/terms-of-service";
 
 #[derive(Debug, Clone)]
 struct ThemeOption {
@@ -172,7 +172,7 @@ impl ThemePickerSlide {
         // Add the Privacy Settings / Terms of Service disclaimer block below the
         // theme options when the user has selected the terminal intention and
         // won't hit the login slide afterwards. The terminal-intent flow skips
-        // the login slide (which surfaces the same links) unless Warp Drive is
+        // the login slide (which surfaces the same links) unless Black Drive is
         // enabled — in that case the login slide will still run after the theme
         // step and show the disclaimer, so duplicating it here is unnecessary.
         let state = self.onboarding_state.as_ref(app);
@@ -274,7 +274,7 @@ impl ThemePickerSlide {
 
         let theme_picker_last = FeatureFlag::OpenWarpNewSettingsModes.is_enabled();
         let next_label = if theme_picker_last {
-            "Get Warping"
+            "Get started"
         } else {
             "Next"
         };
@@ -603,7 +603,7 @@ impl ThemePickerSlide {
         let tos_line = Flex::row()
             .with_child(
                 ui_builder
-                    .span("By continuing, you agree to Warp's ")
+                    .span("By continuing, you agree to Black's ")
                     .with_style(disclaimer_styles)
                     .build()
                     .finish(),

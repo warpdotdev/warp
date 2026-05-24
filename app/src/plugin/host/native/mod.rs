@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use logging::initialize_logging;
-use warpui::r#async::executor::Background;
+use black_ui::r#async::executor::Background;
 
 use self::plugin_caller::PluginCaller;
 use self::plugin_ref::PluginRef;
@@ -26,7 +26,7 @@ use super::PLUGIN_HOST_ADDRESS_ENV_VAR;
 use crate::plugin::host::runners::PluginRunners;
 
 pub fn run() -> Result<()> {
-    warpui::r#async::block_on(async move {
+    black_ui::r#async::block_on(async move {
         let executor = Arc::new(Background::default());
 
         // Initialize a client connection to the warp app process.
@@ -110,7 +110,7 @@ fn plugin_paths() -> Vec<PathBuf> {
         .collect()
 }
 
-/// Returns `true` if the directory at the given path is directory containing JS source for a Warp plugin.
+/// Returns `true` if the directory at the given path is directory containing JS source for a Black plugin.
 fn is_plugin_dir(path: &Path) -> bool {
     if !path.is_dir() {
         return false;

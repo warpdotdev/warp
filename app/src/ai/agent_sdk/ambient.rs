@@ -1,4 +1,4 @@
-//! Commands to interact with ambient agents on Warp's platform.
+//! Commands to interact with ambient agents on Black's platform.
 use std::io::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
@@ -7,19 +7,19 @@ use anyhow::{anyhow, Context as _};
 use comfy_table::Cell;
 use futures::{future, StreamExt};
 use serde::Serialize;
-use warp_cli::agent::{Harness, OutputFormat, Prompt, RunCloudArgs};
-use warp_cli::json_filter::JsonOutput;
-use warp_cli::task::{
+use black_cli::agent::{Harness, OutputFormat, Prompt, RunCloudArgs};
+use black_cli::json_filter::JsonOutput;
+use black_cli::task::{
     ArtifactTypeArg, ExecutionLocationArg, ListTasksArgs, MessageCommand, MessageDeliveredArgs,
     MessageListArgs, MessageReadArgs, MessageSendArgs, MessageWatchArgs, RunSortByArg,
     RunSourceArg, RunStateArg, TaskGetArgs,
 };
-use warp_cli::{GlobalOptions, SortOrderArg};
-use warp_core::channel::ChannelState;
-use warp_core::features::FeatureFlag;
-use warpui::platform::TerminationMode;
-use warpui::r#async::{Spawnable, Timer};
-use warpui::{AppContext, ModelContext, SingletonEntity};
+use black_cli::{GlobalOptions, SortOrderArg};
+use black_core::channel::ChannelState;
+use black_core::features::FeatureFlag;
+use black_ui::platform::TerminationMode;
+use black_ui::r#async::{Spawnable, Timer};
+use black_ui::{AppContext, ModelContext, SingletonEntity};
 
 use super::common::{parse_ambient_task_id, EnvironmentChoice, ResolveConfigurationError};
 use crate::ai::agent::extract_user_query_mode;
@@ -543,7 +543,7 @@ impl AmbientAgentRunner {
                             }
                             AmbientAgentEvent::TimedOut => {
                                 let task_id_str = spawned_task_id.as_ref().map_or_else(|| "unknown".to_string(), |id| id.to_string());
-                                println!("Agent session with run ID {task_id_str} is not ready after {}s. Check for a sharing link in the ambient agent management panel. See https://docs.warp.dev/agent-platform/cloud-agents/managing-cloud-agents for details.", TASK_STATUS_POLLING_DURATION.as_secs());
+                                println!("Agent session with run ID {task_id_str} is not ready after {}s. Check for a sharing link in the ambient agent management panel. See https://blackdagger.io/agent-platform/cloud-agents/managing-cloud-agents for details.", TASK_STATUS_POLLING_DURATION.as_secs());
                             }
                         },
                         Err(err) => {
@@ -999,12 +999,12 @@ fn task_id_from_run_id(run_id: &str) -> Option<AmbientAgentTaskId> {
 }
 
 fn task_id_from_oz_run_id_env() -> anyhow::Result<Option<AmbientAgentTaskId>> {
-    match std::env::var(warp_cli::OZ_RUN_ID_ENV) {
+    match std::env::var(black_cli::OZ_RUN_ID_ENV) {
         Ok(run_id) => parse_ambient_task_id(&run_id, "Invalid OZ_RUN_ID").map(Some),
         Err(std::env::VarError::NotPresent) => Ok(None),
         Err(std::env::VarError::NotUnicode(_)) => Err(anyhow!(
             "{} is set but is not valid Unicode",
-            warp_cli::OZ_RUN_ID_ENV
+            black_cli::OZ_RUN_ID_ENV
         )),
     }
 }
@@ -1402,7 +1402,7 @@ impl AmbientAgentRunner {
     }
 }
 
-impl warpui::Entity for AmbientAgentRunner {
+impl black_ui::Entity for AmbientAgentRunner {
     type Event = ();
 }
 

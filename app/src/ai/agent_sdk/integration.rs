@@ -1,12 +1,12 @@
 use futures::future;
-use warp_cli::integration::{CreateIntegrationArgs, IntegrationCommand, UpdateIntegrationArgs};
-use warp_cli::provider::ProviderType;
-use warp_cli::GlobalOptions;
-use warp_graphql::mutations::create_simple_integration::CreateSimpleIntegrationOutput;
-use warp_graphql::queries::get_oauth_connect_tx_status::OauthConnectTxStatus;
-use warp_graphql::queries::get_simple_integrations::SimpleIntegrationsOutput;
-use warpui::platform::TerminationMode;
-use warpui::{AppContext, ModelContext, SingletonEntity};
+use black_cli::integration::{CreateIntegrationArgs, IntegrationCommand, UpdateIntegrationArgs};
+use black_cli::provider::ProviderType;
+use black_cli::GlobalOptions;
+use black_graphql::mutations::create_simple_integration::CreateSimpleIntegrationOutput;
+use black_graphql::queries::get_oauth_connect_tx_status::OauthConnectTxStatus;
+use black_graphql::queries::get_simple_integrations::SimpleIntegrationsOutput;
+use black_ui::platform::TerminationMode;
+use black_ui::{AppContext, ModelContext, SingletonEntity};
 
 use super::common::{EnvironmentChoice, ResolveConfigurationError};
 use super::integration_output;
@@ -517,7 +517,7 @@ impl IntegrationCommandRunner {
     }
 }
 
-impl warpui::Entity for IntegrationCommandRunner {
+impl black_ui::Entity for IntegrationCommandRunner {
     type Event = ();
 }
 impl SingletonEntity for IntegrationCommandRunner {}

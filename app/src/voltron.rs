@@ -1,4 +1,4 @@
-//! Voltron (https://en.wikipedia.org/wiki/Voltron) in Warp is a code name for the UI element used
+//! Voltron (https://en.wikipedia.org/wiki/Voltron) in Black is a code name for the UI element used
 //! for workflows, ai commands and history search. As @charlespierce pointed out: it's 3 mini lions
 //! (features) coming together to form one super bot (this view). Hence the name. Don't ask me, I
 //! haven't watched it.
@@ -18,18 +18,18 @@ use std::path::PathBuf;
 use enclose::enclose;
 use pathfinder_geometry::vector::Vector2F;
 use vec1::Vec1;
-use warpui::accessibility::AccessibilityContent;
-use warpui::elements::{
+use black_ui::accessibility::AccessibilityContent;
+use black_ui::elements::{
     resizable_state_handle, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, Dismiss, DispatchEventResult, Element, EventHandler, Flex,
     Icon, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Radius, Resizable, ResizableStateHandle, Shrinkable, Stack,
 };
-use warpui::geometry::vector::vec2f;
-use warpui::keymap::{Context, FixedBinding};
-use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
-use warpui::ui_components::components::UiComponent;
-use warpui::{
+use black_ui::geometry::vector::vec2f;
+use black_ui::keymap::{Context, FixedBinding};
+use black_ui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use black_ui::ui_components::components::UiComponent;
+use black_ui::{
     AppContext, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
@@ -55,7 +55,7 @@ const VOLTRON_RIGHT_PADDING: f32 = 15.;
 const EDITOR_PADDING_LEFT: f32 = 14.;
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings([FixedBinding::new(
         "escape",
@@ -491,7 +491,7 @@ impl View for Voltron {
         }
     }
 
-    fn render(&self, app: &AppContext) -> Box<dyn warpui::Element> {
+    fn render(&self, app: &AppContext) -> Box<dyn black_ui::Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
         let current_feature = self

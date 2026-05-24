@@ -7,7 +7,7 @@ use itertools::Itertools;
 use mio::Interest;
 use parking_lot::Mutex;
 use signal_hook_mio::v1_0::Signals;
-use warp_cli::TerminalServerArgs;
+use black_cli::TerminalServerArgs;
 
 use super::{api, logging, protocol, RECV_SOCKET_FILENO, SEND_SOCKET_FILENO};
 use crate::terminal::local_tty::server::protocol::NonblockingSocketFd;
@@ -213,7 +213,7 @@ impl EventLoop {
             }
 
             // If we've been reparented to a different process, stop running -
-            // the original host Warp process died and we're now an orphan.
+            // the original host Black process died and we're now an orphan.
             if nix::unistd::Pid::parent() != self.original_parent_pid {
                 log::info!("Detected a change in parent process; shutting down terminal server.");
                 break 'event_loop;

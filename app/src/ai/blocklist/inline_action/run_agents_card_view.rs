@@ -11,14 +11,14 @@ use ai::agent::action_result::{RunAgentsAgentOutcomeKind, RunAgentsResult};
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 use ai::skills::SkillReference;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::send_telemetry_from_ctx;
-use warpui::elements::{
+use black_core::send_telemetry_from_ctx;
+use black_ui::elements::{
     Border, ChildAnchor, ChildView, Container, CornerRadius, CrossAxisAlignment, Empty, Flex,
     MainAxisSize, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
     Stack, Text,
 };
-use warpui::keymap::FixedBinding;
-use warpui::{
+use black_ui::keymap::FixedBinding;
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
@@ -73,7 +73,7 @@ use crate::view_components::{FilterableDropdownEvent, FilterableDropdownOrientat
 const RUN_AGENTS_CARD_TITLE: &str = "Can I start additional agents for this task?";
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings([
         FixedBinding::new(
@@ -262,8 +262,8 @@ fn resolve_interactive_defaults(
 ) {
     if state.orch.model_id.is_empty() {
         let harness =
-            warp_cli::agent::Harness::parse_orchestration_harness(&state.orch.harness_type);
-        if matches!(harness, Some(warp_cli::agent::Harness::Oz) | None) {
+            black_cli::agent::Harness::parse_orchestration_harness(&state.orch.harness_type);
+        if matches!(harness, Some(black_cli::agent::Harness::Oz) | None) {
             if let Some(base) = block_model.base_model(ctx).map(|id| id.to_string()) {
                 state.orch.model_id = base;
             }
@@ -396,7 +396,7 @@ impl RunAgentsCardView {
             _ => {}
         });
 
-        // Repopulate the model picker when available Warp LLMs change.
+        // Repopulate the model picker when available Black LLMs change.
         // Only relevant for Oz harness — non-Oz harnesses get their
         // model catalog from HarnessAvailabilityModel, not LLMPreferences.
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |me, _, event, ctx| {
@@ -518,8 +518,8 @@ impl RunAgentsCardView {
         }
         if new_state.orch.model_id.is_empty() {
             let harness =
-                warp_cli::agent::Harness::parse_orchestration_harness(&new_state.orch.harness_type);
-            if matches!(harness, Some(warp_cli::agent::Harness::Oz) | None) {
+                black_cli::agent::Harness::parse_orchestration_harness(&new_state.orch.harness_type);
+            if matches!(harness, Some(black_cli::agent::Harness::Oz) | None) {
                 if let Some(base) = self.block_model.base_model(ctx).map(|id| id.to_string()) {
                     new_state.orch.model_id = base;
                 }
@@ -679,7 +679,7 @@ impl RunAgentsCardView {
             return;
         }
         let Some(harness) =
-            warp_cli::agent::Harness::parse_orchestration_harness(&self.state.orch.harness_type)
+            black_cli::agent::Harness::parse_orchestration_harness(&self.state.orch.harness_type)
         else {
             return;
         };
@@ -783,8 +783,8 @@ impl RunAgentsCardView {
             // matching the other dropdowns in this card.
             handle.update(ctx, |picker, picker_ctx| {
                 picker.set_menu_position(
-                    warpui::elements::PositionedElementAnchor::TopLeft,
-                    warpui::elements::ChildAnchor::BottomLeft,
+                    black_ui::elements::PositionedElementAnchor::TopLeft,
+                    black_ui::elements::ChildAnchor::BottomLeft,
                     picker_ctx,
                 );
             });
@@ -845,8 +845,8 @@ impl RunAgentsCardView {
     ) {
         dropdown_handle.update(ctx, |dropdown, ctx| {
             dropdown.set_menu_position(
-                warpui::elements::PositionedElementAnchor::TopLeft,
-                warpui::elements::ChildAnchor::BottomLeft,
+                black_ui::elements::PositionedElementAnchor::TopLeft,
+                black_ui::elements::ChildAnchor::BottomLeft,
                 ctx,
             );
         });
@@ -987,9 +987,9 @@ impl View for RunAgentsCardView {
                 OffsetPositioning::offset_from_save_position_element(
                     Self::get_position_id_for_accept_split_button(&self.position_id_prefix),
                     vec2f(0., 8.),
-                    warpui::elements::PositionedElementOffsetBounds::WindowByPosition,
-                    warpui::elements::PositionedElementAnchor::BottomRight,
-                    warpui::elements::ChildAnchor::TopRight,
+                    black_ui::elements::PositionedElementOffsetBounds::WindowByPosition,
+                    black_ui::elements::PositionedElementAnchor::BottomRight,
+                    black_ui::elements::ChildAnchor::TopRight,
                 ),
             );
         }
@@ -1097,7 +1097,7 @@ impl TypedActionView for RunAgentsCardView {
             }
             RunAgentsCardViewAction::CreateNewAuthSecretRequested => {
                 oc::apply_create_new_auth_secret_requested(&mut self.state.orch, ctx);
-                if let Some(harness) = warp_cli::agent::Harness::parse_orchestration_harness(
+                if let Some(harness) = black_cli::agent::Harness::parse_orchestration_harness(
                     &self.state.orch.harness_type,
                 ) {
                     ctx.dispatch_typed_action(
@@ -1433,7 +1433,7 @@ fn render_editor(
     handles: &RunAgentsCardHandles,
     app: &AppContext,
 ) -> Box<dyn Element> {
-    use warpui::elements::ConstrainedBox;
+    use black_ui::elements::ConstrainedBox;
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);

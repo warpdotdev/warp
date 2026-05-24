@@ -1,5 +1,5 @@
 use serde::Serialize;
-use warpui::{AppContext, SingletonEntity};
+use black_ui::{AppContext, SingletonEntity};
 
 use super::conversation::AIConversationId;
 use super::{

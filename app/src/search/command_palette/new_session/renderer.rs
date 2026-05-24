@@ -1,6 +1,6 @@
-use warpui::elements::{Container, Flex, Highlight, ParentElement, Text};
-use warpui::fonts::{Properties, Weight};
-use warpui::Element;
+use black_ui::elements::{Container, Flex, Highlight, ParentElement, Text};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::Element;
 
 use super::new_session_option::NewSessionOption;
 use crate::appearance::Appearance;

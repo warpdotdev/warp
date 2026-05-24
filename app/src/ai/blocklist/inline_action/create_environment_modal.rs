@@ -1,5 +1,5 @@
-use warpui::elements::{ChildView, Element, Empty};
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+use black_ui::elements::{ChildView, Element, Empty};
+use black_ui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use crate::settings_view::handoff_environment_creation_modal::{
     HandoffEnvironmentCreationModal, HandoffEnvironmentCreationModalEvent,

@@ -7,8 +7,8 @@ use lazy_static::lazy_static;
 pub use new_session_shell::*;
 use serde::{Deserialize, Serialize};
 pub use startup_shell::*;
-use warp_core::settings::macros::define_settings_group;
-use warp_core::settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
+use black_core::settings::macros::define_settings_group;
+use black_core::settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 pub use working_directory_config::*;
 
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
@@ -58,7 +58,7 @@ pub enum NotificationsMode {
  * Added [serde(default)] to ensure that new notification settings are backwards compatible with old clients.
  * Otherwise, clients will fail to deserialize existing settings after updating.
  *
- * @see https://github.com/warpdotdev/warp-internal/pull/14596/files#diff-90221c7ecae01c6faf8f170158dea3e49d34d40225a306da42ccc76489d1f84cR43-R44
+ * @see https://github.com/blackdagger/black-internal/pull/14596/files#diff-90221c7ecae01c6faf8f170158dea3e49d34d40225a306da42ccc76489d1f84cR43-R44
  *
  * Alternative considered: Using Option<bool> fields would have required more
  * complex defaulting logic to set the default value to true.
@@ -283,7 +283,7 @@ define_settings_group!(SessionSettings, settings: [
         sync_to_cloud: SyncToCloud::Never,
         private: false,
         toml_path: "session.startup_shell_override",
-        description: "The shell to use when Warp starts up.",
+        description: "The shell to use when Black starts up.",
     },
     new_session_shell_override: NewSessionShellOverride {
         type: Option<NewSessionShell>,
@@ -301,7 +301,7 @@ define_settings_group!(SessionSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "terminal.input.honor_ps1",
-        description: "Whether to use your shell's PS1 prompt instead of the Warp prompt.",
+        description: "Whether to use your shell's PS1 prompt instead of the Black prompt.",
     },
     saved_prompt: SavedPrompt {
         type: PromptSelection,

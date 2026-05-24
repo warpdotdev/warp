@@ -11,10 +11,10 @@ use std::time::Duration;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use warp_core::SessionId;
-use warp_util::remote_path::RemotePath;
-use warp_util::standardized_path::StandardizedPath;
-use warpui::{AppContext, ModelContext, ModelHandle};
+use black_core::SessionId;
+use black_util::remote_path::RemotePath;
+use black_util::standardized_path::StandardizedPath;
+use black_ui::{AppContext, ModelContext, ModelHandle};
 
 use crate::code_review::diff_size_limits::DiffSize;
 use crate::util::git::{BranchEntry, Commit, PrInfo};
@@ -339,7 +339,7 @@ pub enum DiffStateModel {
     Remote(ModelHandle<RemoteDiffStateModel>),
 }
 
-impl warpui::Entity for DiffStateModel {
+impl black_ui::Entity for DiffStateModel {
     type Event = DiffStateModelEvent;
 }
 

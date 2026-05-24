@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use warp_server_client::cloud_object::CloudObjectUpsertParams;
-// Re-exported from warp_server_client.
-pub use warp_server_client::ids::GenericStringObjectId;
+use black_server_client::cloud_object::CloudObjectUpsertParams;
+// Re-exported from black_server_client.
+pub use black_server_client::ids::GenericStringObjectId;
 
 use crate::appearance::Appearance;
 use crate::cloud_object::{
@@ -89,7 +89,7 @@ pub trait StringModel: Clone + Debug + PartialEq + Send + Sync + 'static {
     fn set_display_name(&mut self, _name: &str) {}
 
     /// Creates a new warp drive item for this model type. Returns None
-    /// if this object does not render in Warp Drive.
+    /// if this object does not render in Black Drive.
     fn to_warp_drive_item(
         &self,
         _id: SyncId,

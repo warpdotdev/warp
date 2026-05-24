@@ -1,4 +1,4 @@
-use warpui::EntityId;
+use black_ui::EntityId;
 
 use super::*;
 use crate::ai::agent::conversation::AIConversationId;

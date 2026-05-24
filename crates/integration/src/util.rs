@@ -6,13 +6,13 @@ use itertools::Itertools as _;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use version_compare::Version;
-use warp::integration_testing::terminal::util::{
+use black::integration_testing::terminal::util::{
     current_shell_starter_and_version, default_histfile_directory, ExpectedOutput,
 };
-use warp::integration_testing::view_getters;
-use warp::terminal::shell;
-use warp::terminal::shell::ShellType;
-use warpui::{App, WindowId};
+use black::integration_testing::view_getters;
+use black::terminal::shell;
+use black::terminal::shell::ShellType;
+use black_ui::{App, WindowId};
 
 use crate::builder::cargo_target_tmpdir;
 
@@ -130,7 +130,7 @@ pub fn write_rc_files_for_test<P, C>(
     }
 }
 
-/// Writes the same `rc_contents` for all possible shell types supported by Warp.
+/// Writes the same `rc_contents` for all possible shell types supported by Black.
 pub fn write_all_rc_files_for_test<P, C>(dir: P, rc_contents: C)
 where
     P: AsRef<Path>,

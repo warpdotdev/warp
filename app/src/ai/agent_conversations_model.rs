@@ -14,16 +14,16 @@ use futures::stream::AbortHandle;
 use instant::Instant;
 use itertools::Itertools;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use warp_cli::agent::Harness;
-use warp_core::execution_mode::AppExecutionMode;
-use warp_core::features::FeatureFlag;
-use warp_core::report_error;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::WarpTheme;
-use warpui::color::ColorU;
-use warpui::r#async::Timer;
-use warpui::windowing::{StateEvent, WindowManager};
-use warpui::{
+use black_cli::agent::Harness;
+use black_core::execution_mode::AppExecutionMode;
+use black_core::features::FeatureFlag;
+use black_core::report_error;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::WarpTheme;
+use black_ui::color::ColorU;
+use black_ui::r#async::Timer;
+use black_ui::windowing::{StateEvent, WindowManager};
+use black_ui::{
     duration_with_jitter, AppContext, Entity, EntityId, ModelContext, RequestState,
     SingletonEntity, WindowId,
 };

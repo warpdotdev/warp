@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use warpui::elements::{ChildView, Flex, ParentElement, SavePosition};
-use warpui::{Action, Element, TypedActionView, View, ViewContext, ViewHandle};
+use black_ui::elements::{ChildView, Flex, ParentElement, SavePosition};
+use black_ui::{Action, Element, TypedActionView, View, ViewContext, ViewHandle};
 
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{

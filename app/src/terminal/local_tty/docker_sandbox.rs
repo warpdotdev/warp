@@ -1,6 +1,6 @@
 //! Docker-sandbox-specific shell-starter types and helpers.
 //!
-//! This module owns everything specific to running a Warp shell inside a
+//! This module owns everything specific to running a Black shell inside a
 //! `sbx`-managed Docker sandbox: the [`DockerSandboxShellStarter`] that
 //! carries per-instance state, the host-side mount-point layout, and the
 //! `sbx` binary resolution logic.
@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use futures::future::BoxFuture;
 use futures::FutureExt as _;
 use serde::{Deserialize, Serialize};
-use warpui::{AppContext, SingletonEntity as _};
+use black_ui::{AppContext, SingletonEntity as _};
 
 use super::shell::DirectShellStarter;
 #[cfg(feature = "local_tty")]
@@ -30,12 +30,12 @@ use crate::util::path::{resolve_executable, resolve_executable_in_path};
 pub const DOCKER_SANDBOX_HOME_DIR: &str = "/home/agent";
 
 /// Prefix for generated container names: `warp-sandbox-<id>`.
-const DOCKER_SANDBOX_NAME_PREFIX: &str = "warp-sandbox";
+const DOCKER_SANDBOX_NAME_PREFIX: &str = "black-sandbox";
 
 /// Root directory on the host under which Docker-sandbox scratch files
 /// (bash init scripts, empty workspace mount points) live.
 ///
-/// Lives under the Warp per-user cache directory rather than `/tmp` so:
+/// Lives under the Black per-user cache directory rather than `/tmp` so:
 /// - other users on a multi-user host can't pre-create or symlink-attack the
 ///   mount path,
 /// - file contents are protected by the user's home-directory permissions
@@ -44,14 +44,14 @@ const DOCKER_SANDBOX_NAME_PREFIX: &str = "warp-sandbox";
 ///
 /// Layout: `<cache_dir>/docker-sandbox/{init,workspace}/<sandbox_id>/`.
 fn docker_sandbox_host_root() -> PathBuf {
-    warp_core::paths::cache_dir().join("docker-sandbox")
+    black_core::paths::cache_dir().join("docker-sandbox")
 }
 
-/// Resolves the absolute path to the `sbx` CLI binary using the Warp
+/// Resolves the absolute path to the `sbx` CLI binary using the Black
 /// process's `PATH`.
 ///
-/// Warp's process `PATH` is minimal and often misses user-shell-installed
-/// tools (e.g. homebrew on Apple Silicon when Warp is launched from Finder,
+/// Black's process `PATH` is minimal and often misses user-shell-installed
+/// tools (e.g. homebrew on Apple Silicon when Black is launched from Finder,
 /// or `~/.local/bin`). Prefer [`resolve_sbx_path_from_user_shell`], which
 /// captures the PATH from the user's interactive login shell, the same way
 /// MCP servers and LSP resolve binaries.
@@ -135,7 +135,7 @@ impl DockerSandboxShellStarter {
         format!("{DOCKER_SANDBOX_NAME_PREFIX}-{}", self.sandbox_id)
     }
 
-    /// Host directory where Warp writes this sandbox's bash init script.
+    /// Host directory where Black writes this sandbox's bash init script.
     /// Mounted read-only into the container at the same absolute path.
     pub fn init_dir(&self) -> PathBuf {
         docker_sandbox_host_root()

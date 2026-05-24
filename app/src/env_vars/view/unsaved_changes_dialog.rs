@@ -1,10 +1,10 @@
-use warp_core::ui::appearance::Appearance;
-use warpui::elements::{Container, MouseStateHandle};
-use warpui::fonts::Weight;
-use warpui::platform::Cursor;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::Element;
+use black_core::ui::appearance::Appearance;
+use black_ui::elements::{Container, MouseStateHandle};
+use black_ui::fonts::Weight;
+use black_ui::platform::Cursor;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::Element;
 
 use super::env_var_collection::{EnvVarCollectionAction, EnvVarCollectionView};
 use crate::ui_components::dialog::{dialog_styles, Dialog};

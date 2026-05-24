@@ -20,16 +20,16 @@ use oneshot::{Canceled, Receiver, Sender};
 use repo_metadata::local_model::IndexedRepoState;
 use repo_metadata::{RepoMetadataModel, RepositoryIdentifier};
 use uuid::Uuid;
-use warp_cli::agent::{Harness, OutputFormat};
-use warp_cli::mcp::MCPSpec;
-use warp_cli::share::ShareRequest;
-use warp_cli::skill::SkillSpec;
-use warp_core::features::FeatureFlag;
-use warp_core::{report_error, report_if_error, safe_debug, safe_error, safe_info};
-use warp_graphql::ai::AgentTaskState;
-use warp_managed_secrets::ManagedSecretValue;
-use warpui::r#async::{FutureExt, TimeoutError};
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
+use black_cli::agent::{Harness, OutputFormat};
+use black_cli::mcp::MCPSpec;
+use black_cli::share::ShareRequest;
+use black_cli::skill::SkillSpec;
+use black_core::features::FeatureFlag;
+use black_core::{report_error, report_if_error, safe_debug, safe_error, safe_info};
+use black_graphql::ai::AgentTaskState;
+use black_managed_secrets::ManagedSecretValue;
+use black_ui::r#async::{FutureExt, TimeoutError};
+use black_ui::{AppContext, Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
@@ -112,17 +112,17 @@ const SETUP_FAILED_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 /// If no follow-up status arrives within this window, the driver terminates with the
 /// original error so the CLI does not hang indefinitely.
 const AUTO_RESUME_TIMEOUT: Duration = Duration::from_secs(120);
-/// Signals to Claude child-harness hooks that Warp already owns the background
+/// Signals to Claude child-harness hooks that Black already owns the background
 /// message-listener lifecycle, so the plugin should reuse the shared state
 /// files instead of spawning and cleaning up its own listener.
 ///
 /// When this variable is absent, the Claude plugin falls back to its legacy
-/// self-managed listener path so older Warp builds and standalone plugin
+/// self-managed listener path so older Black builds and standalone plugin
 /// invocations keep working.
 pub(crate) const OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV: &str =
     "OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY";
 /// Optional root directory for the per-session Claude message-listener state
-/// that Warp and the Claude hook scripts share.
+/// that Black and the Claude hook scripts share.
 pub(crate) const OZ_MESSAGE_LISTENER_STATE_ROOT_ENV: &str = "OZ_MESSAGE_LISTENER_STATE_ROOT";
 // Keep exporting the legacy `OZ_PARENT_*` names to child hooks until the
 // external Claude plugin has fully migrated to the canonical
@@ -404,7 +404,7 @@ pub enum AgentDriverError {
         #[source]
         error: terminal::ShareSessionError,
     },
-    #[error("Error syncing Warp Drive")]
+    #[error("Error syncing Black Drive")]
     WarpDriveSyncFailed,
     #[error("Requested environment not found: {0}")]
     EnvironmentNotFound(String),
@@ -490,8 +490,8 @@ pub enum AgentDriverError {
     },
 }
 
-impl From<warpui::ModelDropped> for AgentDriverError {
-    fn from(_: warpui::ModelDropped) -> Self {
+impl From<black_ui::ModelDropped> for AgentDriverError {
+    fn from(_: black_ui::ModelDropped) -> Self {
         AgentDriverError::InvalidRuntimeState
     }
 }
@@ -582,7 +582,7 @@ impl AgentDriver {
 
         // Signal to third-party harnesses (e.g. Claude Code) that we're in a sandbox
         // so they allow root execution with permissive flags.
-        if warp_isolation_platform::detect().is_some() {
+        if black_isolation_platform::detect().is_some() {
             env_vars.insert(OsString::from("IS_SANDBOX"), OsString::from("1"));
         }
 
@@ -803,7 +803,7 @@ impl AgentDriver {
                 ) {
                     let timeout = idle_timeout.min(SETUP_FAILED_IDLE_TIMEOUT);
                     log::info!("Environment setup failed; keeping session alive for {timeout:?}");
-                    warpui::r#async::Timer::after(timeout).await;
+                    black_ui::r#async::Timer::after(timeout).await;
                 }
             }
 
@@ -1905,7 +1905,7 @@ impl AgentDriver {
                 // and then call stop_sharing_session when they're done. To know when streams are finished, we would need to modify start_ordered_terminal_events_listener
                 // to send a message when the streams are finished, flushed, and the websocket is disconnected. For now, we'll just sleep for a second, as this seems
                 // to be enough time for the streams to be finished and the events to be flushed.
-                warpui::r#async::Timer::after(Duration::from_secs(1)).await;
+                black_ui::r#async::Timer::after(Duration::from_secs(1)).await;
 
                 conversation_status.into_result()
             }
@@ -2054,7 +2054,7 @@ impl AgentDriver {
     }
 
     /// Sets up the third-party harness by subscribing to CLI session events and
-    /// installing the Warp plugin and platform plugin, if applicable.
+    /// installing the Black plugin and platform plugin, if applicable.
     ///
     /// Returns a oneshot receiver that fires when the harness should exit
     /// (either immediately on completion or after the idle-on-complete timeout).
@@ -2256,7 +2256,7 @@ impl AgentDriver {
         let command_result = loop {
             futures::select! {
                 exit_code = command_handle => break exit_code,
-                _ = warpui::r#async::Timer::after(HARNESS_SAVE_INTERVAL).fuse() => {
+                _ = black_ui::r#async::Timer::after(HARNESS_SAVE_INTERVAL).fuse() => {
                     log::debug!("Triggering periodic save of harness conversation data");
                     report_if_error!(runner
                         .save_conversation(SavePoint::Periodic, foreground)
@@ -2281,7 +2281,7 @@ impl AgentDriver {
                         let telemetry_pattern = error.pattern.clone();
                         let _ = foreground
                             .spawn(move |_, ctx| {
-                                use warp_core::telemetry::TelemetryEvent as _;
+                                use black_core::telemetry::TelemetryEvent as _;
                                 let event =
                                     ThirdPartyHarnessTelemetryEvent::RuntimeErrorDetected {
                                         harness: telemetry_harness,
@@ -2684,7 +2684,7 @@ impl AgentDriver {
             }
         });
 
-        // Subscribe to document model events to emit artifact_created when plans sync to Warp Drive.
+        // Subscribe to document model events to emit artifact_created when plans sync to Black Drive.
         ctx.subscribe_to_model(&AIDocumentModel::handle(ctx), move |me, event, ctx| {
             let AIDocumentModelEvent::DocumentSaveStatusUpdated(document_id) = event else {
                 return;
@@ -2921,7 +2921,7 @@ impl AgentDriver {
         match event {
             TerminalDriverEvent::SlowBootstrap => {
                 eprintln!(
-                    "Warning: Terminal session is slow to bootstrap. See https://docs.warp.dev/support-and-community/troubleshooting-and-support/known-issues#shells to troubleshoot."
+                    "Warning: Terminal session is slow to bootstrap. See https://blackdagger.io/support-and-community/troubleshooting-and-support/known-issues#shells to troubleshoot."
                 );
             }
             TerminalDriverEvent::EstablishedSharedSession {

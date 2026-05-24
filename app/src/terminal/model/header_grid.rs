@@ -1,13 +1,13 @@
 //! This module defines HeaderGrid, a struct which manages the prompt and command grid's within
-//! Warp. This struct is abstracted away from Block, for the purposes of enabling same-line prompt,
+//! Black. This struct is abstracted away from Block, for the purposes of enabling same-line prompt,
 //! utilizing a combined prompt/command grid, with helper methods to expose the prompt and command.
 use std::cmp::max;
 use std::io;
 
 use instant::Instant;
 use pathfinder_color::ColorU;
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
-use warpui::units::{IntoLines as _, Lines};
+use black_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use black_ui::units::{IntoLines as _, Lines};
 
 use super::ansi::{self, Attr, Handler, PrecmdValue, PreexecValue, Processor};
 use super::block::{BlockGridPoint, BlockSize};
@@ -119,7 +119,7 @@ pub struct HeaderGrid {
     /// with remote subshells correctly).
     /// TODO(CORE-2403): Rename this field to should_populate_prompt_preview_grid.
     ignore_next_prompt_preview: bool,
-    /// The height of the Warp prompt in lines (non-PS1).
+    /// The height of the Black prompt in lines (non-PS1).
     warp_prompt_height_lines: f32,
     // whether to honor users ps1 and rprompt values, can be changed by a user in the settings
     // note that the change will only apply to the active block; historical blocks will keep the
@@ -184,7 +184,7 @@ impl HeaderGrid {
     pub fn set_honor_ps1(&mut self, honor_ps1: bool) {
         self.honor_ps1 = honor_ps1;
         if !self.honor_ps1 {
-            // If we are switching to Warp prompt (from PS1), we need to clear the cached prompt end point
+            // If we are switching to Black prompt (from PS1), we need to clear the cached prompt end point
             // and update the command start point appropriately!
             self.cached_prompt_end_point = Some(PromptEndPoint::EmptyPrompt);
             self.cached_command_start_point = Some(CommandStartPoint::CommandStart {
@@ -311,7 +311,7 @@ impl HeaderGrid {
     /// the command to be finished.
     fn is_command_finished_and_empty(&self) -> bool {
         if !self.honor_ps1 {
-            // If we are using Warp prompt, we expect the combined grid cursor to be at the start, if
+            // If we are using Black prompt, we expect the combined grid cursor to be at the start, if
             // the command is truly empty.
             return self.prompt_and_command_grid.finished()
                 && self.prompt_and_command_grid.grid_handler().cursor_point() == Point::new(0, 0);
@@ -1156,7 +1156,7 @@ impl ansi::Handler for HeaderGrid {
 
                 // We synchronize the state of our `honor_ps1` setting with the value passed from the shell.
                 // Note that we ALWAYS want this to be synced properly since the shell determines the prompt
-                // to be emitted. This may be de-synced from Warp settings in particular niche cases (which are
+                // to be emitted. This may be de-synced from Black settings in particular niche cases (which are
                 // bugs), however, we still want consistent behavior for the prompt in the blocklist (we want to
                 // avoid double prompt or empty prompt issues).
                 self.honor_ps1 = honor_ps1;

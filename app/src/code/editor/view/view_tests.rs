@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use warp_core::ui::appearance::Appearance;
-use warp_editor::render::element::VerticalExpansionBehavior;
-use warp_util::user_input::UserInput;
-use warpui::elements::new_scrollable::ScrollableAppearance;
-use warpui::elements::ScrollbarWidth;
-use warpui::platform::WindowStyle;
-use warpui::{App, TypedActionView, ViewHandle, WindowId};
+use black_core::ui::appearance::Appearance;
+use black_editor::render::element::VerticalExpansionBehavior;
+use black_util::user_input::UserInput;
+use black_ui::elements::new_scrollable::ScrollableAppearance;
+use black_ui::elements::ScrollbarWidth;
+use black_ui::platform::WindowStyle;
+use black_ui::{App, TypedActionView, ViewHandle, WindowId};
 
 use super::{CodeEditorRenderOptions, CodeEditorView, CodeEditorViewAction};
 use crate::cloud_object::model::persistence::CloudModel;

@@ -9,6 +9,6 @@ disallowed-types = [
 ]
 
 disallowed-methods = [
-    { path = "async_channel::Sender::send_blocking", reason = "send_blocking() does not exist for wasm.  Use warpui::r#async::block_on() with send() instead.", allow-invalid = true },
-    { path = "line_ending::LineEnding::from_current_platform", reason = "line_ending::LineEnding::from_current_platform does not account for Unix-like subsystems for Windows. In most cases, use warp_core::platform::SessionPlatform::default_line_ending() instead." },
+    { path = "async_channel::Sender::send_blocking", reason = "send_blocking() does not exist for wasm.  Use black_ui::r#async::block_on() with send() instead.", allow-invalid = true },
+    { path = "line_ending::LineEnding::from_current_platform", reason = "line_ending::LineEnding::from_current_platform does not account for Unix-like subsystems for Windows. In most cases, use black_core::platform::SessionPlatform::default_line_ending() instead." },
 ]

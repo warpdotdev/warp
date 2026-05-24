@@ -2,28 +2,28 @@ use std::collections::HashMap;
 
 use regex::Regex;
 use settings::Setting as _;
-use warp::features::FeatureFlag;
-use warp::integration_testing::step::new_step_with_default_assertions;
-use warp::integration_testing::subshell::{
+use black::features::FeatureFlag;
+use black::integration_testing::step::new_step_with_default_assertions;
+use black::integration_testing::subshell::{
     accept_tmux_install, assert_subshell_banner_is_showing, assert_subshell_is_bootstrapped,
     enter_ssh_command, enter_ssh_password, run_exit_command, setup_gcloud_sdk,
     trigger_subshell_bootstrap, wait_for_password_prompt,
 };
-use warp::integration_testing::terminal::util::{
+use black::integration_testing::terminal::util::{
     current_shell_starter_and_version, nonce, ExactLine, ExpectedExitStatus,
 };
-use warp::integration_testing::terminal::{
+use black::integration_testing::terminal::{
     assert_active_block_output_for_single_terminal_in_tab,
     assert_long_running_block_executing_for_single_terminal_in_tab,
     execute_command_for_single_terminal_in_tab, validate_block_output,
     wait_until_bootstrapped_single_pane_for_tab,
 };
-use warp::integration_testing::view_getters::{single_terminal_view, single_terminal_view_for_tab};
-use warp::terminal::model::bootstrap::BootstrapStage;
-use warp::terminal::session_settings::{StartupShell, StartupShellOverride};
-use warp::terminal::shell::ShellType;
-use warpui::integration::{AssertionCallback, AssertionOutcome, TestStep};
-use warpui::{async_assert, async_assert_eq};
+use black::integration_testing::view_getters::{single_terminal_view, single_terminal_view_for_tab};
+use black::terminal::model::bootstrap::BootstrapStage;
+use black::terminal::session_settings::{StartupShell, StartupShellOverride};
+use black::terminal::shell::ShellType;
+use black_ui::integration::{AssertionCallback, AssertionOutcome, TestStep};
+use black_ui::{async_assert, async_assert_eq};
 
 use super::new_builder;
 use crate::Builder;
@@ -119,7 +119,7 @@ fn verify_login_shell(shell: &str) -> TestStep {
         "zsh" => "[[ -o login ]]",
         "fish" => "status --is-login",
         // For other shells, we don't actually start a login shell but do source /etc/profile.
-        _ => "test \"$WARP_PROFILE_LOADED\" = true",
+        _ => "test \"$BLACK_PROFILE_LOADED\" = true",
     };
 
     match shell {
@@ -190,7 +190,7 @@ macro_rules! generate_can_bootstrap_tmux_ssh_test_for_shell {
         /// Ensure we can successfully ssh into a $shell remote shell and bootstrap it
         /// successfully.
         pub fn $fn_name() -> Builder {
-            fn warpify(builder: Builder) -> Builder {
+            fn blackify(builder: Builder) -> Builder {
                 builder
                     .with_step(enter_ssh_command($shell))
                     .with_step(wait_for_password_prompt(0 /*tab_idx*/, $shell))
@@ -227,14 +227,14 @@ macro_rules! generate_can_bootstrap_tmux_ssh_test_for_shell {
                 .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
                 .with_step(setup_gcloud_sdk());
             // Install Tmux
-            let builder = warpify(builder).with_step(
+            let builder = blackify(builder).with_step(
                 accept_tmux_install().set_post_step_pause(std::time::Duration::from_secs(3)),
             );
             // Quit SSH Session once we validate warpificaiton works with Tmux Install
             let builder = assert_warpification(builder).with_step(run_exit_command());
 
-            // Validate we can Warpify when Tmux is already installed
-            assert_warpification(warpify(builder))
+            // Validate we can Blackify when Tmux is already installed
+            assert_warpification(blackify(builder))
         }
     };
 }

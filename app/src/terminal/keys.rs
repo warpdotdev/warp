@@ -1,6 +1,6 @@
 //! Utilities for terminal keybindings.
 
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
 use crate::terminal::input::{
@@ -17,7 +17,7 @@ pub struct TerminalKeybindings {
     // looking up a keybinding requires a [`AppContext`], so it can't be done when
     // rendering.
     //
-    // Inspired by https://github.com/warpdotdev/warp-internal/pull/8274
+    // Inspired by https://github.com/blackdagger/black-internal/pull/8274
     set_input_mode_agent_keybinding: Option<String>,
     set_input_mode_terminal_keybinding: Option<String>,
     set_input_mode_unlocked_agent_keybinding: Option<String>,

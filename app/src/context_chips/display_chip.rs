@@ -4,19 +4,19 @@ use std::sync::Arc;
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
-use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::Fill;
+use black_ui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Empty, Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
     ParentOffsetBounds, Radius, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
-use warpui::fonts::{Cache, FamilyId, Properties, Weight};
-use warpui::keymap::Keystroke;
-use warpui::platform::Cursor;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::{Cache, FamilyId, Properties, Weight};
+use black_ui::keymap::Keystroke;
+use black_ui::platform::Cursor;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, EntityId, Gradient, ModelHandle, SingletonEntity, TypedActionView,
     View, ViewContext, ViewHandle,
 };
@@ -1868,7 +1868,7 @@ pub fn format_git_branch_command(encoded_git_branch_on_click_value: &str) -> Str
         return format!(
             "echo {}",
             shell_single_quote(&format!(
-                "Branch '{}' is already checked out in another worktree, but Warp couldn't find its path.",
+                "Branch '{}' is already checked out in another worktree, but Black couldn't find its path.",
                 branch.branch_name
             ))
         );

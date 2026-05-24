@@ -2,23 +2,23 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 use string_offset::CharCounter;
-use warp_completer::signatures::CommandRegistry;
-use warp_completer::util::parse_current_commands_and_tokens;
-use warp_completer::ParsedTokensSnapshot;
-use warp_core::report_error;
-use warp_core::ui::theme::{AnsiColorIdentifier, AnsiColors};
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::new_scrollable::{ClippedAxisConfiguration, DualAxisConfig, NewScrollable};
-use warpui::elements::{
+use black_completer::signatures::CommandRegistry;
+use black_completer::util::parse_current_commands_and_tokens;
+use black_completer::ParsedTokensSnapshot;
+use black_core::report_error;
+use black_core::ui::theme::{AnsiColorIdentifier, AnsiColors};
+use black_ui::clipboard::ClipboardContent;
+use black_ui::elements::new_scrollable::{ClippedAxisConfiguration, DualAxisConfig, NewScrollable};
+use black_ui::elements::{
     Align, Border, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Element, Empty, Expanded, Flex, Highlight, HighlightedRange,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::prelude::ChildView;
-use warpui::text_layout::TextStyle;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::prelude::ChildView;
+use black_ui::text_layout::TextStyle;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use crate::ai::agent_management::telemetry::{AgentManagementTelemetryEvent, SetupGuideStep};
 use crate::ai::blocklist::code_block::{
@@ -31,9 +31,9 @@ use crate::view_components::action_button::{ActionButton, SecondaryTheme};
 use crate::workflows::workflow::{Argument, ArgumentType, Workflow};
 use crate::workflows::WorkflowType;
 
-const DOCS_URL: &str = "https://docs.warp.dev/agent-platform/cloud-agents/overview";
+const DOCS_URL: &str = "https://blackdagger.io/agent-platform/cloud-agents/overview";
 const ENV_DOCS_URL: &str =
-    "https://docs.warp.dev/reference/cli/integration-setup#creating-an-environment";
+    "https://blackdagger.io/reference/cli/integration-setup#creating-an-environment";
 const OZ_URL: &str = "https://oz.warp.dev";
 
 const CONTENT_MAX_WIDTH: f32 = 720.;
@@ -156,7 +156,7 @@ impl CloudSetupGuideView {
         header_container.add_child(title);
 
         let subtitle = Text::new(
-            "Start Oz cloud agents directly in Warp from an integration (Linear, Slack), with an event (GitHub, built-in schedule), or programmatically with the Oz SDK or CLI.",
+            "Start Oz cloud agents directly in Black from an integration (Linear, Slack), with an event (GitHub, built-in schedule), or programmatically with the Oz SDK or CLI.",
             appearance.ui_font_family(),
             subtitle_font_size,
         )
@@ -455,7 +455,7 @@ impl CloudSetupGuideView {
         .finish();
 
         let sub_description = Container::new(Self::render_description_with_link(
-            "Use Warp's environment setup command to have an agent help you through it. ",
+            "Use Black's environment setup command to have an agent help you through it. ",
             "Visit docs",
             self.env_docs_link_mouse_state.clone(),
             SetupGuideDocs::Environment,
@@ -528,7 +528,7 @@ impl CloudSetupGuideView {
             .finish();
 
         let sub_description = Container::new(Self::render_description_with_link(
-            "Integrate Slack or Linear to assign Warp's Agent tasks with @Warp. ",
+            "Integrate Slack or Linear to assign Black's Agent tasks with @Black. ",
             "Visit docs",
             self.integration_docs_link_mouse_state.clone(),
             SetupGuideDocs::Integration,
@@ -620,7 +620,7 @@ impl View for CloudSetupGuideView {
             },
             theme.nonactive_ui_detail().into(),
             theme.active_ui_detail().into(),
-            warpui::elements::Fill::None,
+            black_ui::elements::Fill::None,
         )
         .finish();
 

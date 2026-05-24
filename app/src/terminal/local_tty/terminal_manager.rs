@@ -27,10 +27,10 @@ use session_sharing_protocol::sharer::{
     TeamAccessLevelUpdateResponse, UpdatePendingUserRoleResponse,
 };
 use settings::Setting as _;
-use warp_core::execution_mode::AppExecutionMode;
-use warp_core::send_telemetry_from_ctx;
-use warpui::r#async::executor::Background;
-use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity, ViewHandle, WindowId};
+use black_core::execution_mode::AppExecutionMode;
+use black_core::send_telemetry_from_ctx;
+use black_ui::r#async::executor::Background;
+use black_ui::{AppContext, ModelContext, ModelHandle, SingletonEntity, ViewHandle, WindowId};
 #[cfg(unix)]
 use {
     super::terminal_attributes::TerminalAttributesPoller,
@@ -95,7 +95,7 @@ use crate::terminal::shared_session::{
 };
 use crate::terminal::shell::ShellName;
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event as TerminalViewEvent};
-use crate::terminal::warpify::settings::WarpifySettings;
+use crate::terminal::blackify::settings::BlackifySettings;
 use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
 use crate::terminal::writeable_pty::terminal_manager_util::{
     init_pty_controller_model, init_remote_server_controller, wire_up_pty_controller_with_view,
@@ -1025,7 +1025,7 @@ impl TerminalManager {
         });
     }
 
-    /// Sends bindkey to notify shell process to switch to Warp prompt logic for prompt
+    /// Sends bindkey to notify shell process to switch to Black prompt logic for prompt
     /// with the combined prompt/command grid (we unset the PS1, but save the value for potential
     /// future restoration).
     pub fn send_switch_to_warp_prompt_bindkey(&self, app_ctx: &mut AppContext) {
@@ -1084,10 +1084,10 @@ impl TerminalManager {
 
         // The TMUX SSH wrapper supercedes the original ControlMaster wrapper.
         let enable_ssh_wrapper = if FeatureFlag::SSHTmuxWrapper.is_enabled() {
-            *WarpifySettings::as_ref(ctx)
+            *BlackifySettings::as_ref(ctx)
                 .enable_ssh_warpification
                 .value()
-                && !*WarpifySettings::as_ref(ctx).use_ssh_tmux_wrapper.value()
+                && !*BlackifySettings::as_ref(ctx).use_ssh_tmux_wrapper.value()
         } else {
             *SshSettings::as_ref(ctx).enable_legacy_ssh_wrapper.value()
         };
@@ -2548,7 +2548,7 @@ pub fn get_shell_starter(
     // TODO(alokedesai): Further refactor this function to make it clear that it's expensive.
     shell_starter_or_wsl_name
         .and_then(|starter| {
-            warpui::r#async::block_on(async { starter.to_shell_starter_source().await })
+            black_ui::r#async::block_on(async { starter.to_shell_starter_source().await })
         })
         .map(|starter_source| {
             get_shell_starter_internal(

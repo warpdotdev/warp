@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::json;
 use serde_with::SerializeDisplay;
 use strum_macros::{EnumDiscriminants, EnumIter};
-use warp_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
+use black_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
 
 use crate::code_review::diff_state::DiffMode;
 use crate::features::FeatureFlag;
@@ -137,7 +137,7 @@ pub enum CodeReviewContextDestination {
     /// Written directly to the terminal PTY for an active CLI agent.
     #[serde(rename = "pty")]
     Pty,
-    /// Inserted into the Warp AI input buffer as plain text.
+    /// Inserted into the Black AI input buffer as plain text.
     #[serde(rename = "agent_input")]
     AgentInput,
     /// Registered as an AI attachment and referenced from the input.
@@ -146,7 +146,7 @@ pub enum CodeReviewContextDestination {
     /// Inserted into the active command buffer while a command is running.
     #[serde(rename = "active_command_buffer")]
     ActiveCommandBuffer,
-    /// Submitted as an inline code review request through the Warp AI path.
+    /// Submitted as an inline code review request through the Black AI path.
     #[serde(rename = "agent_review")]
     AgentReview,
     /// Inserted into CLI agent rich input.
@@ -518,7 +518,7 @@ impl TelemetryEvent for CodeReviewTelemetryEvent {
     }
 
     fn event_descs() -> impl Iterator<Item = Box<dyn TelemetryEventDesc>> {
-        warp_core::telemetry::enum_events::<Self>()
+        black_core::telemetry::enum_events::<Self>()
     }
 }
 
@@ -610,4 +610,4 @@ impl TelemetryEventDesc for CodeReviewTelemetryEventDiscriminants {
     }
 }
 
-warp_core::register_telemetry_event!(CodeReviewTelemetryEvent);
+black_core::register_telemetry_event!(CodeReviewTelemetryEvent);

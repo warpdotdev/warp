@@ -3,14 +3,14 @@ use std::sync::Arc;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting;
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::color::blend::Blend;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{
+use black_core::send_telemetry_from_ctx;
+use black_core::ui::color::blend::Blend;
+use black_core::ui::theme::Fill;
+use black_ui::elements::{
     ChildAnchor, ChildView, ConstrainedBox, OffsetPositioning, ParentAnchor, ParentElement,
     ParentOffsetBounds, Stack,
 };
-use warpui::{
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };

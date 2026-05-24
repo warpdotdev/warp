@@ -1,15 +1,15 @@
 use enum_iterator::{all, Sequence};
 use itertools::{Either, Itertools};
-use warpui::elements::{
+use black_ui::elements::{
     Align, Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, Element, Fill, Flex, MainAxisSize, MouseStateHandle,
     ParentElement, Radius, Shrinkable,
 };
-use warpui::keymap::{DescriptionContext, Keystroke};
-use warpui::presenter::ChildView;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::units::Pixels;
-use warpui::{
+use black_ui::keymap::{DescriptionContext, Keystroke};
+use black_ui::presenter::ChildView;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::units::Pixels;
+use black_ui::{
     AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };
@@ -56,7 +56,7 @@ pub struct KeybindingsView {
 
 /// Keybindings are sorted into these sections,
 /// where "Fundamentals" is the default for any remaining non-categorized ones.
-/// This should always align with documentation: https://docs.warp.dev/getting-started/keyboard-shortcuts
+/// This should always align with documentation: https://blackdagger.io/getting-started/keyboard-shortcuts
 #[derive(Clone, Eq, PartialEq, Sequence)]
 pub enum KeybindingSection {
     Essentials,

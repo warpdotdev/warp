@@ -5,13 +5,13 @@ use ai::index::full_source_code_embedding::manager::{
     CodebaseIndexManager, CodebaseIndexManagerEvent,
 };
 use settings::Setting;
-use warp_util::path::user_friendly_path;
-use warpui::elements::{
+use black_util::path::user_friendly_path;
+use black_ui::elements::{
     Border, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable,
     MainAxisSize, MouseStateHandle, ParentElement, Text,
 };
-use warpui::platform::Cursor;
-use warpui::{
+use black_ui::platform::Cursor;
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 

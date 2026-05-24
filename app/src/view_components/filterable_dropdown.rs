@@ -1,14 +1,14 @@
-use warp_editor::editor::NavigationKey;
-use warpui::elements::{
+use black_editor::editor::NavigationKey;
+use black_ui::elements::{
     Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Dismiss, Element, EventHandler, Flex, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
     PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable, Stack,
 };
-use warpui::geometry::vector::vec2f;
-use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::geometry::vector::vec2f;
+use black_ui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{
     Action, AppContext, BlurContext, Entity, FocusContext, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };

@@ -1,8 +1,8 @@
 use futures::future::BoxFuture;
 use futures::FutureExt;
 #[cfg(not(target_family = "wasm"))]
-use warpui::SingletonEntity;
-use warpui::{Entity, EntityId, ModelContext, ModelHandle};
+use black_ui::SingletonEntity;
+use black_ui::{Entity, EntityId, ModelContext, ModelHandle};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 #[cfg(not(target_family = "wasm"))]

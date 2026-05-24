@@ -6,25 +6,25 @@ use itertools::Itertools as _;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting;
-use warp_core::settings::SyncToCloud;
-use warp_core::ui::color::blend::Blend;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::new_scrollable::{
+use black_core::settings::SyncToCloud;
+use black_core::ui::color::blend::Blend;
+use black_core::ui::theme::color::internal_colors;
+use black_ui::elements::new_scrollable::{
     ClippedAxisConfiguration, DualAxisConfig, SingleAxisConfig,
 };
-use warpui::elements::{
+use black_ui::elements::{
     Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, Element, Empty, Expanded, Flex, Hoverable, MainAxisAlignment,
     MainAxisSize, MouseStateHandle, NewScrollable, OffsetPositioning, ParentAnchor, ParentElement,
     ParentOffsetBounds, Radius, SavePosition, ScrollTarget, ScrollToPositionMode, Shrinkable,
     SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::platform::Cursor;
-use warpui::ui_components::button::{Button, ButtonVariant};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::units::Pixels;
-use warpui::{Action, AppContext, SingletonEntity, ViewContext, ViewHandle};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::platform::Cursor;
+use black_ui::ui_components::button::{Button, ButtonVariant};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::units::Pixels;
+use black_ui::{Action, AppContext, SingletonEntity, ViewContext, ViewHandle};
 
 use super::about_page::AboutPageView;
 use super::ai_page::{AISettingsPageAction, AISettingsPageView};
@@ -41,7 +41,7 @@ use super::referrals_page::ReferralsPageView;
 use super::show_blocks_view::ShowBlocksView;
 use super::teams_page::TeamsPageView;
 use super::warp_drive_page::WarpDriveSettingsPageView;
-use super::warpify_page::WarpifyPageView;
+use super::blackify_page::BlackifyPageView;
 use super::SettingsSection;
 use crate::appearance::Appearance;
 use crate::settings::CloudPreferencesSettings;
@@ -109,7 +109,7 @@ pub enum SettingsPageViewHandle {
     Teams(ViewHandle<TeamsPageView>),
     OzCloudAPIKeys(ViewHandle<super::platform_page::PlatformPageView>),
     Privacy(ViewHandle<PrivacyPageView>),
-    Warpify(ViewHandle<WarpifyPageView>),
+    Blackify(ViewHandle<BlackifyPageView>),
     Referrals(ViewHandle<ReferralsPageView>),
     AI(ViewHandle<AISettingsPageView>),
     CloudEnvironments(ViewHandle<EnvironmentsPageView>),
@@ -132,7 +132,7 @@ impl SettingsPageViewHandle {
             Teams(view_handle) => ChildView::new(view_handle).finish(),
             OzCloudAPIKeys(view_handle) => ChildView::new(view_handle).finish(),
             Privacy(view_handle) => ChildView::new(view_handle).finish(),
-            Warpify(view_handle) => ChildView::new(view_handle).finish(),
+            Blackify(view_handle) => ChildView::new(view_handle).finish(),
             Referrals(view_handle) => ChildView::new(view_handle).finish(),
             AI(view_handle) => ChildView::new(view_handle).finish(),
             CloudEnvironments(view_handle) => ChildView::new(view_handle).finish(),
@@ -1239,7 +1239,7 @@ where
 
 /// Structured contents of a settings tab page. This type breaks all the content into
 /// [`SettingsWidget`]s.
-pub(super) enum PageType<V: warpui::View> {
+pub(super) enum PageType<V: black_ui::View> {
     /// A page where the contents cannot be separated for showing search results. If any part
     /// matches the search query, the whole page must show. The whole page is one big
     /// [`SettingsWidget`].
@@ -1319,7 +1319,7 @@ impl From<usize> for MatchData {
     }
 }
 
-impl<V: warpui::View> PageType<V> {
+impl<V: black_ui::View> PageType<V> {
     /// A page where the contents cannot be separated for showing search results. If any part
     /// matches the search query, the whole page must show. The whole page is one big
     /// [`SettingsWidget`].
@@ -1740,7 +1740,7 @@ impl<V: warpui::View> PageType<V> {
                 },
                 theme.nonactive_ui_detail().into(),
                 theme.active_ui_detail().into(),
-                warpui::elements::Fill::None,
+                black_ui::elements::Fill::None,
             )
             .finish(),
             vec![(
@@ -1767,7 +1767,7 @@ impl<V: warpui::View> PageType<V> {
                     },
                     theme.nonactive_ui_detail().into(),
                     theme.active_ui_detail().into(),
-                    warpui::elements::Fill::None,
+                    black_ui::elements::Fill::None,
                 )
                 .finish(),
             )],
@@ -1791,7 +1791,7 @@ impl<V: warpui::View> PageType<V> {
 }
 
 /// The results from a [`PageType`] with only matching [`SettingsWidget`]s.
-pub(super) enum FilteredPageType<'a, V: warpui::View> {
+pub(super) enum FilteredPageType<'a, V: black_ui::View> {
     Monolith {
         widget: Option<&'a dyn SettingsWidget<View = V>>,
         title: Option<&'static str>,
@@ -1815,13 +1815,13 @@ pub(super) enum FilteredPageType<'a, V: warpui::View> {
 }
 
 /// A grouping of related [`SettingsWidget`]s that fall under the same sub-header.
-pub(super) struct Category<V: warpui::View> {
+pub(super) struct Category<V: black_ui::View> {
     title: &'static str,
     subtitle: Option<&'static str>,
     widgets: Vec<Box<dyn SettingsWidget<View = V>>>,
 }
 
-impl<V: warpui::View> Category<V> {
+impl<V: black_ui::View> Category<V> {
     pub(super) fn new(
         title: &'static str,
         widgets: Vec<Box<dyn SettingsWidget<View = V>>>,
@@ -1840,7 +1840,7 @@ impl<V: warpui::View> Category<V> {
 }
 
 /// A [`Category`] with only the results which match a search query.
-pub(super) struct FilteredCategory<'a, V: warpui::View> {
+pub(super) struct FilteredCategory<'a, V: black_ui::View> {
     pub(super) title: &'static str,
     pub(super) subtitle: Option<&'static str>,
     pub(super) widgets: Vec<&'a dyn SettingsWidget<View = V>>,
@@ -1850,7 +1850,7 @@ pub(super) struct FilteredCategory<'a, V: warpui::View> {
 /// content to match against.
 pub(super) trait SettingsWidget {
     /// Which View (settings page) this widget belongs to.
-    type View: warpui::View;
+    type View: black_ui::View;
 
     fn static_widget_id() -> &'static str
     where

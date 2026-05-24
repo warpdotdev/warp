@@ -3,13 +3,13 @@
 use ai::document::AIDocumentId;
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
-use warp_core::ui::theme::Fill;
-use warp_core::ui::Icon;
-use warpui::elements::{ConstrainedBox, Container, Highlight, ParentElement, Shrinkable, Text};
-use warpui::fonts::{Properties, Weight};
-use warpui::prelude::{Align, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize};
-use warpui::text_layout::ClipConfig;
-use warpui::{AppContext, Element, SingletonEntity};
+use black_core::ui::theme::Fill;
+use black_core::ui::Icon;
+use black_ui::elements::{ConstrainedBox, Container, Highlight, ParentElement, Shrinkable, Text};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::prelude::{Align, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize};
+use black_ui::text_layout::ClipConfig;
+use black_ui::{AppContext, Element, SingletonEntity};
 
 use crate::ai::document::ai_document_model::{AIDocument, AIDocumentVersion};
 use crate::appearance::Appearance;

@@ -5,7 +5,7 @@ mod telemetry;
 #[cfg(windows)]
 mod windows;
 
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 /// Singleton model that reports the currently running antivirus software.
 #[derive(Debug, Clone)]

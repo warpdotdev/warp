@@ -3,16 +3,16 @@ use vim::vim::{
     InsertPosition, LineMotion, ModeTransition, MotionType, TextObjectType, VimHandler, VimMode,
     VimMotion, VimOperand, VimOperator, VimTextObject, WordMotion,
 };
-use warp_editor::content::buffer::{
+use black_editor::content::buffer::{
     AutoScrollBehavior, BufferEditAction, EditOrigin, SelectionOffsets, ToBufferCharOffset as _,
     VimInsertPoint,
 };
-use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
-use warp_editor::render::model::AutoScrollMode;
-use warp_editor::selection::{TextDirection, TextUnit};
-use warpui::text::point::Point;
-use warpui::units::IntoPixels;
-use warpui::{SingletonEntity, ViewContext};
+use black_editor::model::{CoreEditorModel, PlainTextEditorModel};
+use black_editor::render::model::AutoScrollMode;
+use black_editor::selection::{TextDirection, TextUnit};
+use black_ui::text::point::Point;
+use black_ui::units::IntoPixels;
+use black_ui::{SingletonEntity, ViewContext};
 
 use super::{CodeEditorEvent, CodeEditorView};
 use crate::code::editor::find::view::Event as FindViewEvent;
@@ -152,7 +152,7 @@ impl VimHandler for CodeEditorView {
     ) {
         // Selection logic is almost the same for all operators, so capture that in a closure first.
         let selection_change =
-            |model: &mut CodeEditorModel, ctx: &mut warpui::ModelContext<CodeEditorModel>| {
+            |model: &mut CodeEditorModel, ctx: &mut black_ui::ModelContext<CodeEditorModel>| {
                 match operand {
                     VimOperand::Motion {
                         motion,

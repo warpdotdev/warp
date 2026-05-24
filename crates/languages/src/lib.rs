@@ -7,8 +7,8 @@ use arborium::tree_sitter::{Language as ParserGrammar, Query};
 use lazy_static::lazy_static;
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
-use warp_editor::content::text::IndentUnit;
-use warp_util::standardized_path::StandardizedPath;
+use black_editor::content::text::IndentUnit;
+use black_util::standardized_path::StandardizedPath;
 
 #[derive(RustEmbed)]
 #[folder = "grammars"]

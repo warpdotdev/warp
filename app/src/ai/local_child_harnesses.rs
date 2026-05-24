@@ -1,5 +1,5 @@
-use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
+use black_cli::agent::Harness;
+use black_core::features::FeatureFlag;
 
 pub(crate) fn local_child_harness_disabled_message(harness: Harness) -> Option<&'static str> {
     if FeatureFlag::LocalClaudeCodexChildHarnesses.is_enabled() {

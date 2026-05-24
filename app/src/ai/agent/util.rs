@@ -9,7 +9,7 @@ use markdown_parser::{
 };
 use mermaid_to_svg::is_mermaid_diagram;
 use regex::Regex;
-use warp_util::path::LineAndColumnArg;
+use black_util::path::LineAndColumnArg;
 
 use super::{
     AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram,
@@ -261,7 +261,7 @@ fn image_section(image: FormattedImage, layout: AgentOutputImageLayout) -> AIAge
 }
 
 fn markdown_source_for_image(image: &FormattedImage) -> String {
-    warp_editor::content::text::format_image_markdown(
+    black_editor::content::text::format_image_markdown(
         &image.alt_text,
         &image.source,
         image.title.as_deref(),

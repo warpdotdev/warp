@@ -6,8 +6,8 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
-warp_core.workspace = true
-warpui.workspace = true
+black_core.workspace = true
+black_ui.workspace = true
 log.workspace = true
 itertools.workspace = true
 string-offset.workspace = true

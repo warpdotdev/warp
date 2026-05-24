@@ -3,8 +3,8 @@ use std::sync::Arc;
 use serde_json::Value;
 use session_sharing_protocol::common::{Scrollback, ScrollbackBlock};
 use url::Url;
-use warpui::r#async::executor::Background;
-use warpui::units::Lines;
+use black_ui::r#async::executor::Background;
+use black_ui::units::Lines;
 
 use super::{decode_scrollback, SharedSessionScrollbackType};
 use crate::ai::blocklist::agent_view::AgentViewState;

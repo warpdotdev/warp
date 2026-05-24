@@ -1,8 +1,8 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
-use warp_server_client::cloud_object::Owner;
-use warpui::{AppContext, SingletonEntity as _};
+use black_server_client::cloud_object::Owner;
+use black_ui::{AppContext, SingletonEntity as _};
 
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::generic_string_model::{
@@ -18,9 +18,9 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GithubRepo {
-    /// Repository owner (e.g. "warpdotdev")
+    /// Repository owner (e.g. "blackdagger")
     pub owner: String,
-    /// Repository name (e.g. "warp-internal")
+    /// Repository name (e.g. "black-internal")
     pub repo: String,
 }
 

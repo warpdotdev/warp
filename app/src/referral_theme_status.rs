@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use warp_core::user_preferences::GetUserPreferences as _;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_core::user_preferences::GetUserPreferences as _;
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 use crate::auth::AuthStateProvider;
 use crate::safe_info;

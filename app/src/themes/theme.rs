@@ -4,16 +4,16 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-pub use warp_core::ui::color::blend::Blend;
-use warp_core::ui::color::pick_foreground_color;
-pub use warp_core::ui::theme::*;
-use warpui::assets::asset_cache::AssetSource;
-use warpui::color::ColorU;
-use warpui::elements::{
+pub use black_core::ui::color::blend::Blend;
+use black_core::ui::color::pick_foreground_color;
+pub use black_core::ui::theme::*;
+use black_ui::assets::asset_cache::AssetSource;
+use black_ui::color::ColorU;
+use black_ui::elements::{
     Align, Border, ConstrainedBox, Container, Element, Empty, Flex, ParentElement, Rect,
     Shrinkable, Stack, Text,
 };
-use warpui::fonts::FamilyId;
+use black_ui::fonts::FamilyId;
 
 use super::default_themes::*;
 use super::theme_creator::{pick_accent_color_from_options, top_colors_for_image};
@@ -131,8 +131,8 @@ impl std::fmt::Display for ThemeKind {
             ThemeKind::Phenomenon => "Phenomenon",
             ThemeKind::SolarFlare => "Solar Flare",
             ThemeKind::Adeberry => "Adeberry",
-            ThemeKind::SentReferralReward => "Warp Referral",
-            ThemeKind::ReceivedReferralReward => "Referred to Warp",
+            ThemeKind::SentReferralReward => "Black Referral",
+            ThemeKind::ReceivedReferralReward => "Referred to Black",
             ThemeKind::Custom(custom_theme) => custom_theme.name.as_str(),
             ThemeKind::CustomBase16(custom_theme) => custom_theme.name.as_str(),
             ThemeKind::InMemory(in_memory_theme) => in_memory_theme.name.as_str(),
@@ -515,9 +515,9 @@ pub fn render_preview(
         thumbnail.add_child(
             Shrinkable::new(
                 1.,
-                warpui::elements::Image::new(
+                black_ui::elements::Image::new(
                     background_image.source(),
-                    warpui::elements::CacheOption::BySize,
+                    black_ui::elements::CacheOption::BySize,
                 )
                 .cover()
                 .finish(),

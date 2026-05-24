@@ -8,8 +8,8 @@ use repo_metadata::watcher::DirectoryWatcher;
 use repo_metadata::RepoMetadataModel;
 use settings::Setting as _;
 use tempfile::TempDir;
-use warp_core::features::FeatureFlag;
-use warpui::App;
+use black_core::features::FeatureFlag;
+use black_ui::App;
 use watcher::HomeDirectoryWatcher;
 
 use super::*;

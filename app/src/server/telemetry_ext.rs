@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
-use warp_core::channel::{Channel, ChannelState};
-use warp_core::execution_mode;
-use warpui::telemetry::EventPayload;
+use black_core::channel::{Channel, ChannelState};
+use black_core::execution_mode;
+use black_ui::telemetry::EventPayload;
 
 use super::telemetry::rudder_message::{
     BatchMessage as RudderBatchMessage, BatchMessageItem as RudderBatchMessageItem,
@@ -16,7 +16,7 @@ pub trait TelemetryExt {
     fn to_rudder_batch_message(self) -> RudderBatchMessage;
 }
 
-impl TelemetryExt for warpui::telemetry::Event {
+impl TelemetryExt for black_ui::telemetry::Event {
     fn to_rudder_batch_message(self) -> RudderBatchMessage {
         let message = match self.payload {
             EventPayload::IdentifyUser {

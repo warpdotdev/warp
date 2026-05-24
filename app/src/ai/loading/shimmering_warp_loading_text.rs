@@ -1,16 +1,16 @@
-//! Shimmering Warp loading text - renders Warp logo with shimmering text for loading states.
+//! Shimmering Black loading text - renders Black logo with shimmering text for loading states.
 
-use warp_core::ui::appearance::Appearance;
-use warpui::elements::shimmering_text::{
+use black_core::ui::appearance::Appearance;
+use black_ui::elements::shimmering_text::{
     ShimmerConfig, ShimmeringTextElement, ShimmeringTextStateHandle,
 };
-use warpui::elements::Element;
-use warpui::{AppContext, SingletonEntity};
+use black_ui::elements::Element;
+use black_ui::{AppContext, SingletonEntity};
 
-/// Warp icon glyph character
+/// Black icon glyph character
 const WARP_GLYPH: &str = "\u{E500}";
 
-/// Creates a shimmering text element with the Warp glyph.
+/// Creates a shimmering text element with the Black glyph.
 pub fn shimmering_warp_loading_text(
     text: impl Into<String>,
     font_size: f32,

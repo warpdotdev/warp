@@ -1,4 +1,4 @@
-//! Node.js and npm runtime management for Warp.
+//! Node.js and npm runtime management for Black.
 //!
 //! This module provides functionality to install and manage Node.js/npm,
 //! supporting multiple platforms (macOS, Linux, Windows) and architectures
@@ -137,7 +137,7 @@ impl NodeDistribution {
 pub fn node_installation_dir() -> Result<PathBuf> {
     let dist = NodeDistribution::current()?;
     let folder_name = dist.folder_name(NODE_VERSION);
-    Ok(warp_core::paths::data_dir().join("node").join(folder_name))
+    Ok(black_core::paths::data_dir().join("node").join(folder_name))
 }
 
 /// Returns the path to the installed node binary.
@@ -175,7 +175,7 @@ pub async fn install_npm(client: &http_client::Client) -> Result<PathBuf> {
     let version = NODE_VERSION;
 
     let folder_name = dist.folder_name(version);
-    let node_containing_dir = warp_core::paths::data_dir().join("node");
+    let node_containing_dir = black_core::paths::data_dir().join("node");
     let node_dir = node_containing_dir.join(&folder_name);
     let node_binary = node_dir.join(NODE_BINARY_PATH);
 
@@ -453,7 +453,7 @@ pub async fn detect_system_node(path_env_var: impl AsRef<OsStr>) -> Result<()> {
     // (set via `.env("PATH", ...)`) is used for executable search.
     // `CreateProcessW` uses the parent process's PATH, not the child's
     // `lpEnvironment` PATH, so running `node` directly would find node.exe
-    // via Warp's inherited env rather than the captured interactive PATH.
+    // via Black's inherited env rather than the captured interactive PATH.
     #[cfg(windows)]
     let output = Command::new("cmd.exe")
         .args(["/c", "node", "--version"])

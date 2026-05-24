@@ -1,4 +1,4 @@
-use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
+use black_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
 use super::terminal::ShareSessionError;
 use super::AgentDriverError;
@@ -9,7 +9,7 @@ use crate::server::server_api::ai::TaskStatusUpdate;
 /// suitable for reporting via `update_agent_task`.
 pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskStatusUpdate) {
     match error {
-        // --- Warp-side errors (task → ERROR) ---
+        // --- Black-side errors (task → ERROR) ---
         AgentDriverError::TerminalUnavailable | AgentDriverError::InvalidRuntimeState => (
             AgentTaskState::Error,
             TaskStatusUpdate::with_error_code(
@@ -66,17 +66,17 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
         AgentDriverError::WarpDriveSyncFailed => (
             AgentTaskState::Error,
             TaskStatusUpdate::with_error_code(
-                "Warp Drive failed to sync. Please check your network connection and try again.",
+                "Black Drive failed to sync. Please check your network connection and try again.",
                 PlatformErrorCode::InternalError,
             ),
         ),
         AgentDriverError::NotLoggedIn => {
-            let bin = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
+            let bin = black_cli::binary_name().unwrap_or_else(|| "black".to_string());
             (
                 AgentTaskState::Error,
                 TaskStatusUpdate::with_error_code(
                     format!(
-                        "Authentication required. Log in via '{bin} login', provide an API key via '--api-key', or set the WARP_API_KEY environment variable."
+                        "Authentication required. Log in via '{bin} login', provide an API key via '--api-key', or set the BLACK_API_KEY environment variable."
                     ),
                     PlatformErrorCode::AuthenticationRequired,
                 ),
@@ -95,7 +95,7 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
                 format!(
-                    "MCP server {uuid} was not found. Verify the server exists in your Warp Drive and the UUID is correct."
+                    "MCP server {uuid} was not found. Verify the server exists in your Black Drive and the UUID is correct."
                 ),
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
@@ -125,7 +125,7 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
                 format!(
-                    "Agent profile \"{name}\" not found. Check the profile ID and ensure it exists in your team's Warp Drive."
+                    "Agent profile \"{name}\" not found. Check the profile ID and ensure it exists in your team's Black Drive."
                 ),
                 PlatformErrorCode::ResourceNotFound,
             ),
@@ -134,7 +134,7 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
                 format!(
-                    "Saved prompt not found for ID {id}. Verify the prompt exists in your Warp Drive."
+                    "Saved prompt not found for ID {id}. Verify the prompt exists in your Black Drive."
                 ),
                 PlatformErrorCode::ResourceNotFound,
             ),

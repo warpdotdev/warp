@@ -1,10 +1,10 @@
-use warp_core::context_flag::ContextFlag;
-use warpui::keymap::{
+use black_core::context_flag::ContextFlag;
+use black_ui::keymap::{
     BindingDescription, ContextPredicate, EditableBinding, FixedBinding, PerPlatformKeystroke,
 };
-use warpui::platform::OperatingSystem;
-use warpui::units::IntoLines;
-use warpui::AppContext;
+use black_ui::platform::OperatingSystem;
+use black_ui::units::IntoLines;
+use black_ui::AppContext;
 
 use super::{
     AgentOnboardingVersion, AskAISource, ContextMenuAction, OnboardingIntention, OnboardingVersion,
@@ -56,7 +56,7 @@ pub const CAN_SHOW_CONVERSATION_DETAILS_KEY: &str = "CanShowConversationDetails"
 /// these into their own function to ensure we pay special attention to
 /// these overlaps, and ensure only 1 action is taken.
 fn init_overlapping_keybindings(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     let escape_key: &str = "escape";
     let cmd_or_ctrl_enter: &str = "cmdorctrl-enter";
@@ -89,13 +89,13 @@ fn init_overlapping_keybindings(app: &mut AppContext) {
 
 /// Register keybindings for [`TerminalView`] actions.
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_binding_validator::<TerminalView>(is_binding_pty_compliant);
 
     init_overlapping_keybindings(app);
-    // Register input mode bindings before warpify bindings so ctrl-i warpifies
-    // instead of opening inline agent when a warpify banner is visible.
+    // Register input mode bindings before blackify bindings so ctrl-i blackifies
+    // instead of opening inline agent when a blackify banner is visible.
     register_input_mode_bindings(app);
 
     app.register_fixed_bindings([
@@ -180,7 +180,7 @@ pub fn init(app: &mut AppContext) {
         // On the web, we get pastes from system paste events.
         #[cfg(target_family = "wasm")]
         FixedBinding::standard(
-            warpui::actions::StandardAction::Paste,
+            black_ui::actions::StandardAction::Paste,
             TerminalAction::Paste,
             id!("Terminal") & !id!("IMEOpen"),
         ),
@@ -333,8 +333,8 @@ pub fn init(app: &mut AppContext) {
             | (id!("Terminal") & !id!("IMEOpen") & id!(flags::CLI_AGENT_RICH_INPUT_OPEN)),
         ),
         EditableBinding::new(
-            "terminal:warpify_subshell",
-            "Warpify subshell",
+            "terminal:blackify_subshell",
+            "Blackify subshell",
             TerminalAction::TriggerSubshellBootstrap,
         )
         .with_key_binding("ctrl-i")
@@ -342,9 +342,9 @@ pub fn init(app: &mut AppContext) {
             id!("Terminal") & !id!("IMEOpen") & id!("LongRunningCommand") & id!("SubshellBanner"),
         ),
         EditableBinding::new(
-            "terminal:warpify_ssh_session",
-            "Warpify ssh session",
-            TerminalAction::WarpifySSHSession,
+            "terminal:blackify_ssh_session",
+            "Blackify ssh session",
+            TerminalAction::BlackifySSHSession,
         )
         .with_key_binding("ctrl-i")
         .with_context_predicate(
@@ -800,7 +800,7 @@ pub fn init(app: &mut AppContext) {
         // this is a block selection or text selection later on.
         EditableBinding::new(
             "terminal:ask_ai_assistant",
-            "Ask Warp AI about Selection",
+            "Ask Black AI about Selection",
             TerminalAction::ContextMenu(ContextMenuAction::AskAI(AskAISource::SelectedBlockOrText)),
         )
         .with_enabled(|| !FeatureFlag::AgentMode.is_enabled())
@@ -818,7 +818,7 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "terminal:ask_ai_assistant_last_block",
-            "Ask Warp AI about last block",
+            "Ask Black AI about last block",
             TerminalAction::ContextMenu(ContextMenuAction::AskAI(AskAISource::LastBlock)),
         )
         .with_enabled(|| !FeatureFlag::AgentMode.is_enabled())
@@ -829,7 +829,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:ask_ai_assistant",
-            "Ask Warp AI",
+            "Ask Black AI",
             TerminalAction::ContextMenu(ContextMenuAction::AskAI(AskAISource::SelectedInputText)),
         )
         .with_enabled(|| !FeatureFlag::AgentMode.is_enabled())
@@ -1076,7 +1076,7 @@ pub fn init(app: &mut AppContext) {
 
     app.register_editable_bindings([EditableBinding::new(
         "workspace:init_project_rules",
-        BindingDescription::new("Initiate project for warp"),
+        BindingDescription::new("Initiate project for black"),
         TerminalAction::InitProject,
     )
     .with_context_predicate(id!("Workspace") & id!(flags::IS_ANY_AI_ENABLED))]);
@@ -1131,7 +1131,7 @@ pub fn init(app: &mut AppContext) {
 
 /// Registers bindings related to input modes.
 fn register_input_mode_bindings(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     // A context predicate that matches when the input mode bindings are
     // available for use. Disabled when a CLI agent session is active — the

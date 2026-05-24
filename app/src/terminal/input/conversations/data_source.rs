@@ -2,7 +2,7 @@
 
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
-use warpui::{AppContext, Entity, ModelHandle, SingletonEntity};
+use black_ui::{AppContext, Entity, ModelHandle, SingletonEntity};
 
 use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentConversationEntryId, AgentManagementFilters,

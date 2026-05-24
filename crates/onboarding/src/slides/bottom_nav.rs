@@ -1,8 +1,8 @@
-use warp_core::ui::appearance::Appearance;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_ui::elements::{
     Align, Container, CrossAxisAlignment, Empty, Flex, MainAxisSize, ParentElement, Shrinkable,
 };
-use warpui::Element;
+use black_ui::Element;
 
 use crate::slides::progress_dots;
 

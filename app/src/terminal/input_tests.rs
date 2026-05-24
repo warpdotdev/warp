@@ -12,17 +12,17 @@ use smol_str::SmolStr;
 use unindent::Unindent;
 #[cfg(feature = "voice_input")]
 use voice_input::VoiceInputToggledFrom;
-use warp_completer::completer::{
+use black_completer::completer::{
     EngineFileType, Match, MatchStrategy, MatchedSuggestion, Priority, Suggestion,
     SuggestionResults, SuggestionType,
 };
-use warp_completer::meta::Span;
-use warp_util::user_input::UserInput;
-use warpui::platform::WindowStyle;
-use warpui::r#async::Timer;
-use warpui::telemetry::EventPayload;
-use warpui::text::SelectionType;
-use warpui::{App, ReadModel, UpdateView, WindowId};
+use black_completer::meta::Span;
+use black_util::user_input::UserInput;
+use black_ui::platform::WindowStyle;
+use black_ui::r#async::Timer;
+use black_ui::telemetry::EventPayload;
+use black_ui::text::SelectionType;
+use black_ui::{App, ReadModel, UpdateView, WindowId};
 use watcher::HomeDirectoryWatcher;
 use workflows::workflow::{Argument, ArgumentType, Workflow};
 
@@ -6211,7 +6211,7 @@ fn test_source_less_locked_config_clears_decision_source() {
 #[test]
 fn test_input_buffer_submitted_telemetry_uses_raw_input_type_decision_source() {
     fn input_buffer_submitted_events() -> Vec<serde_json::Value> {
-        warpui::telemetry::flush_events()
+        black_ui::telemetry::flush_events()
             .into_iter()
             .filter_map(|event| match event.payload {
                 EventPayload::NamedEvent { name, value, .. }
@@ -7071,7 +7071,7 @@ fn test_custom_terminal_page_scroll_binding_applies_when_prompt_is_focused() {
         app.update(|ctx| {
             ctx.set_custom_trigger(
                 "terminal:scroll_up_one_page".to_owned(),
-                warpui::keymap::Trigger::Keystrokes(
+                black_ui::keymap::Trigger::Keystrokes(
                     vec![Keystroke::parse("shift-pageup").unwrap()],
                 ),
             );

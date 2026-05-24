@@ -17,7 +17,7 @@ pub async fn fetch_channel_versions(
     include_changelogs: bool,
     is_daily: bool,
 ) -> Result<ChannelVersions> {
-    if let Ok(path) = env::var("WARP_CHANNEL_VERSIONS_PATH") {
+    if let Ok(path) = env::var("BLACK_CHANNEL_VERSIONS_PATH") {
         // Load channel versions from local filesystem. Used for testing both
         // autoupdate and changelog behavior.
         let path = shellexpand::tilde(&path);
@@ -29,7 +29,7 @@ pub async fn fetch_channel_versions(
     let channel_versions = server_api
         .fetch_channel_versions(include_changelogs, is_daily)
         .await
-        .context("Failed to retrieve channel versions from Warp server");
+        .context("Failed to retrieve channel versions from Black server");
     match channel_versions {
         channel_versions @ Ok(_) => channel_versions,
         Err(err) => {
@@ -48,8 +48,8 @@ pub async fn fetch_channel_versions(
     }
 }
 
-// Synchronously fetches updated Warp [`ChannelVersions`] from GCP JSON storage. This will soon
-// be deprecated in favor of retrieving updated channel versions from the Warp Server.
+// Synchronously fetches updated Black [`ChannelVersions`] from GCP JSON storage. This will soon
+// be deprecated in favor of retrieving updated channel versions from the Black Server.
 // Note, in order to run against a test file you can use the "channel_versions_test.json" file
 // and update the file using gsutil cp channel_versions_test.json gs://warp-releases/channel_versions_test.json
 async fn fetch_channel_versions_from_json_storage(

@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use string_offset::CharOffset;
 use sum_tree::SumTree;
-use warpui::App;
+use black_ui::App;
 
 use super::{AnchorSide, Anchors};
 use crate::content::anchor::{Anchor, AnchorUpdate};

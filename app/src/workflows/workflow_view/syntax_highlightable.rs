@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use async_channel::Sender;
 use string_offset::ByteOffset;
-use warp_completer::completer::SuggestionTypeName;
-use warp_completer::signatures::CommandRegistry;
-use warp_core::ui::theme::AnsiColorIdentifier;
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::{Entity, ModelContext, SingletonEntity, ViewHandle};
+use black_completer::completer::SuggestionTypeName;
+use black_completer::signatures::CommandRegistry;
+use black_core::ui::theme::AnsiColorIdentifier;
+use black_ui::r#async::SpawnedFutureHandle;
+use black_ui::{Entity, ModelContext, SingletonEntity, ViewHandle};
 
 use crate::appearance::Appearance;
 use crate::completer::SessionAgnosticContext;

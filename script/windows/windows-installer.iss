@@ -30,7 +30,7 @@
   ((ReleaseChannel == "integration") ? "Integration" : \
   ((ReleaseChannel == "oss") ? "Oss" : \
   "Unknown")))))
-#define AppMutexName "Local\Warp" + ChannelPascalCase + "_SingleInstance"
+#define AppMutexName "Local\Black" + ChannelPascalCase + "_SingleInstance"
 
 
 [Setup]

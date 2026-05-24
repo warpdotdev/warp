@@ -1,6 +1,6 @@
 use settings::Setting as _;
-use warp_core::features::FeatureFlag;
-use warpui::{Entity, ModelContext, SingletonEntity, WindowId};
+use black_core::features::FeatureFlag;
+use black_ui::{Entity, ModelContext, SingletonEntity, WindowId};
 
 use super::hoa_onboarding;
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;

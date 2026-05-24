@@ -9,17 +9,17 @@ use session_sharing_protocol::common::{
 use session_sharing_protocol::sharer::{RoleUpdateReason, SessionEndedReason, SessionSourceType};
 use session_sharing_protocol::viewer::RoleUpdatedReason;
 use settings::Setting as _;
-use warp_core::features::FeatureFlag;
-use warp_core::semantic_selection::SemanticSelection;
-use warp_core::ui::appearance::Appearance;
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::MouseStateHandle;
-use warpui::platform::Cursor;
-use warpui::r#async::Timer;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::UiComponent;
-use warpui::units::IntoLines;
-use warpui::{AppContext, Element, ModelHandle, SingletonEntity, ViewContext};
+use black_core::features::FeatureFlag;
+use black_core::semantic_selection::SemanticSelection;
+use black_core::ui::appearance::Appearance;
+use black_ui::clipboard::ClipboardContent;
+use black_ui::elements::MouseStateHandle;
+use black_ui::platform::Cursor;
+use black_ui::r#async::Timer;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::UiComponent;
+use black_ui::units::IntoLines;
+use black_ui::{AppContext, Element, ModelHandle, SingletonEntity, ViewContext};
 
 use super::adapter::{Adapter, Kind, Participant};
 use super::cloud_conversation_continuation::{

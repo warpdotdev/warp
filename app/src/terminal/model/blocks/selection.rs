@@ -5,11 +5,11 @@ use std::ops::RangeInclusive;
 
 use sum_tree::SeekBias;
 use vec1::{vec1, Vec1};
-use warp_core::semantic_selection::SemanticSelection;
-use warp_terminal::model::grid::CellType;
-use warpui::text::{IsRect, SelectionType};
-use warpui::units::{IntoLines as _, Lines};
-use warpui::{AppContext, EntityId, ViewAsRef as _};
+use black_core::semantic_selection::SemanticSelection;
+use black_terminal::model::grid::CellType;
+use black_ui::text::{IsRect, SelectionType};
+use black_ui::units::{IntoLines as _, Lines};
+use black_ui::{AppContext, EntityId, ViewAsRef as _};
 
 use super::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, BlockListPoint, RichContentItem,
@@ -22,7 +22,7 @@ use crate::terminal::model::block::BlockSection;
 use crate::terminal::model::index::{Direction, Point, Side};
 use crate::terminal::model::selection::{ExpandedSelectionRange, Selection, SelectionDirection};
 use crate::terminal::model::terminal_model::{BlockIndex, WithinBlock};
-use crate::terminal::warpify::success_block::WarpifySuccessBlock;
+use crate::terminal::blackify::success_block::BlackifySuccessBlock;
 use crate::terminal::GridType;
 
 /// A selection that can span multiple blocks (and thus grids). Here row is the number of lines from
@@ -955,11 +955,11 @@ impl BlockList {
 
                             if let Some(active_window_id) = app.windows().active_window() {
                                 if let Some(ssh_block) = app
-                                    .view_with_id::<WarpifySuccessBlock>(active_window_id, *view_id)
+                                    .view_with_id::<BlackifySuccessBlock>(active_window_id, *view_id)
                                 {
-                                    let warpify_success_block = app.view(&ssh_block);
+                                    let blackify_success_block = app.view(&ssh_block);
                                     if let Some(selected_text) =
-                                        warpify_success_block.selected_text()
+                                        blackify_success_block.selected_text()
                                     {
                                         selected_texts.push(selected_text);
                                     }
@@ -1079,10 +1079,10 @@ impl BlockList {
                         }
 
                         if let Some(ssh_block) =
-                            app.view_with_id::<WarpifySuccessBlock>(active_window_id, view_id)
+                            app.view_with_id::<BlackifySuccessBlock>(active_window_id, view_id)
                         {
-                            let warpify_success_block = app.view(&ssh_block);
-                            if let Some(selected_text) = warpify_success_block.selected_text() {
+                            let blackify_success_block = app.view(&ssh_block);
+                            if let Some(selected_text) = blackify_success_block.selected_text() {
                                 selected_texts.push(selected_text);
                             }
                         }

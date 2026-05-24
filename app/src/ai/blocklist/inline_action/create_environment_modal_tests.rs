@@ -1,7 +1,7 @@
-use warp_core::ui::appearance::Appearance;
-use warpui::elements::Empty;
-use warpui::platform::WindowStyle;
-use warpui::{
+use black_core::ui::appearance::Appearance;
+use black_ui::elements::Empty;
+use black_ui::platform::WindowStyle;
+use black_ui::{
     AddSingletonModel, App, AppContext, Element, Entity, TypedActionView, View, WindowId,
 };
 

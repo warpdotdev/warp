@@ -1,5 +1,5 @@
 // We can use `std::process:Command` here because this is invoked within a build script,
-// _not_ within the Warp binary (where it could cause a terminal to temporarily flash on
+// _not_ within the Black binary (where it could cause a terminal to temporarily flash on
 // Windows).
 #![allow(clippy::disallowed_types)]
 
@@ -11,11 +11,11 @@ use anyhow::Result;
 use cfg_aliases::cfg_aliases;
 use sha2::Digest;
 use walkdir::WalkDir;
-use warp_util::assets::{
+use black_util::assets::{
     ASSETS_DIR, ASYNC_ASSETS_DIR, CONPTY_DLL_FILE, DXCOMPILER_DLL_FILE, DXIL_DLL_FILE,
     OPEN_CONSOLE_EXE_FILE, REMOTE_ASSETS_DIR, WINDOWS_ASSETS_DIR,
 };
-use warp_util::path::app_target_dir;
+use black_util::path::app_target_dir;
 
 fn main() -> Result<()> {
     cfg_aliases! {
@@ -45,11 +45,11 @@ fn main() -> Result<()> {
         cc::Build::new()
             .file("src/platform/mac/objc/app_bundle.m")
             .file("src/platform/mac/objc/services.m")
-            .compile("warp_objc");
+            .compile("black_objc");
 
         // Build the dock tile plugin
-        println!("cargo:rerun-if-changed=DockTilePlugin/WarpDockTilePlugin.m");
-        println!("cargo:rerun-if-changed=DockTilePlugin/WarpDockTilePlugin.h");
+        println!("cargo:rerun-if-changed=DockTilePlugin/BlackDockTilePlugin.m");
+        println!("cargo:rerun-if-changed=DockTilePlugin/BlackDockTilePlugin.h");
         println!("cargo:rerun-if-changed=DockTilePlugin/Info.plist");
         println!("cargo:rerun-if-changed=DockTilePlugin/Makefile");
 
@@ -67,8 +67,8 @@ fn main() -> Result<()> {
         // Copy the dock tile plugin to the output directory
         let profile = get_build_profile_name();
         let target_dir = app_target_dir(&profile).expect("Failed to get app target directory");
-        let plugin_src = Path::new("DockTilePlugin/WarpDockTilePlugin.docktileplugin");
-        let plugin_dst = target_dir.join("WarpDockTilePlugin.docktileplugin");
+        let plugin_src = Path::new("DockTilePlugin/BlackDockTilePlugin.docktileplugin");
+        let plugin_dst = target_dir.join("BlackDockTilePlugin.docktileplugin");
 
         if !status.success() {
             fs::remove_dir_all(plugin_src).expect("Failed to clean up plugin directory");
@@ -157,10 +157,10 @@ fn generate_channel_config_if_needed(target_family: &str, target_os: &str) {
         return;
     }
 
-    let config_bin = "warp-channel-config";
+    let config_bin = "black-channel-config";
 
     // Check if the config binary is available on PATH. If not, we can't generate embedded
-    // configs. This is expected for external contributors building Warp OSS.
+    // configs. This is expected for external contributors building Black OSS.
     if Command::new(config_bin)
         .arg("--help")
         .stdout(std::process::Stdio::null())
@@ -327,7 +327,7 @@ fn compile_sentry_objc_lib(sentry_framework_path: &str) {
     cc::Build::new()
         .file("src/platform/mac/objc/crash_reporting.m")
         .flag(format!("-F{sentry_framework_path}").as_str())
-        .compile("warp_sentry_objc");
+        .compile("black_sentry_objc");
 }
 
 #[cfg(unix)]
@@ -386,7 +386,7 @@ fn copy_async_assets() {
                 let mut hasher = sha2::Sha256::new();
                 hasher.update(&contents);
                 let hash: [u8; 32] = hasher.finalize().into();
-                let new_relative_path = warp_util::assets::hashed_asset_path(
+                let new_relative_path = black_util::assets::hashed_asset_path(
                     asset_path
                         .strip_prefix(&asset_dir)
                         .expect("asset in unexpected location"),
@@ -402,7 +402,7 @@ fn copy_async_assets() {
     }
 }
 
-/// Copies the DLLs needed to run Warp on Windows.
+/// Copies the DLLs needed to run Black on Windows.
 ///
 /// They are organized as follows:
 /// - `conpty.dll`
@@ -462,7 +462,7 @@ fn embed_resource_file(target_dir: &Path) {
     use std::io::Write;
 
     let version = env::var("GIT_RELEASE_TAG").unwrap_or("v0".to_owned());
-    let app_name = env::var("WARP_APP_NAME").unwrap_or("Warp".to_owned());
+    let app_name = env::var("BLACK_APP_NAME").unwrap_or("Black".to_owned());
     let bin_name = env::var("CARGO_BIN_NAME").unwrap_or("local".to_owned());
 
     let icon_path = Path::new("channels")
@@ -503,7 +503,7 @@ BEGIN
             VALUE "LegalCopyright",   "© 2025, Denver Technologies, Inc\0"
             VALUE "InternalName",     "\0"
             VALUE "OriginalFilename", "\0"
-            VALUE "ProductName",      "Warp\0"
+            VALUE "ProductName",      "Black\0"
             VALUE "ProductVersion",   "{version}\0"
         END
     END

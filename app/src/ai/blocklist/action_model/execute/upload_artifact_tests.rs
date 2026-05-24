@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use async_channel::unbounded;
-use warpui::{App, EntityId, ModelHandle};
+use black_ui::{App, EntityId, ModelHandle};
 
 use super::*;
 use crate::ai::agent::task::TaskId;

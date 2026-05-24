@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 
 use comfy_table::Cell;
 use serde::Serialize;
-use warp_cli::model::ModelCommand;
-use warp_cli::GlobalOptions;
-use warpui::platform::TerminationMode;
-use warpui::{AppContext, ModelContext, SingletonEntity};
+use black_cli::model::ModelCommand;
+use black_cli::GlobalOptions;
+use black_ui::platform::TerminationMode;
+use black_ui::{AppContext, ModelContext, SingletonEntity};
 
 use crate::ai::agent_sdk::output::{self, TableFormat};
 use crate::ai::llms::LLMPreferences;
@@ -62,7 +62,7 @@ impl ModelCommandRunner {
     }
 }
 
-impl warpui::Entity for ModelCommandRunner {
+impl black_ui::Entity for ModelCommandRunner {
     type Event = ();
 }
 

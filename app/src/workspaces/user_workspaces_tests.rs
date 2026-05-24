@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use mockall::Sequence;
 use settings::{PrivatePreferences, PublicPreferences};
-use warpui::{AddSingletonModel, App};
-use warpui_extras::user_preferences;
+use black_ui::{AddSingletonModel, App};
+use black_ui_extras::user_preferences;
 
 use super::*;
 use crate::ai::llms::LLMModelHost;
@@ -171,7 +171,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
         });
 
         // Spend time waiting for the initial load to finish etc.
-        warpui::r#async::Timer::after(Duration::from_secs(1)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(1)).await;
 
         // Lets go offline
         NetworkStatus::handle(&app).update(&mut app, |network_status, ctx| {
@@ -184,7 +184,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
         });
 
         // Spend time waiting for the load to finish etc.
-        warpui::r#async::Timer::after(Duration::from_secs(1)).await;
+        black_ui::r#async::Timer::after(Duration::from_secs(1)).await;
 
         // We also ensure that UserWorkspaces stores a team
         UserWorkspaces::handle(&app).read(&app, |teams, _| {

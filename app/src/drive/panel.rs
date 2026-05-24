@@ -1,10 +1,10 @@
 use futures::Future;
-use warpui::elements::{
+use black_ui::elements::{
     Align, Flex, Hoverable, MouseStateHandle, ParentElement, SavePosition, Shrinkable,
 };
-use warpui::presenter::ChildView;
-use warpui::windowing::{StateEvent, WindowManager};
-use warpui::{
+use black_ui::presenter::ChildView;
+use black_ui::windowing::{StateEvent, WindowManager};
+use black_ui::{
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
@@ -38,12 +38,12 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 pub const MIN_SIDEBAR_WIDTH: f32 = 250.;
 pub const MAX_SIDEBAR_WIDTH_RATIO: f32 = 0.75;
 
-pub const WARP_DRIVE_POSITION_ID: &str = "warp_drive";
+pub const WARP_DRIVE_POSITION_ID: &str = "black_drive";
 
-/// The sidebar that houses Warp Drive.
+/// The sidebar that houses Black Drive.
 /// `DrivePanel` is different from `DriveIndex` in that it is responsible for
-/// how Warp Drive interacts with the workspace and the rest of the app, whereas
-/// `DriveIndex` is the main warp drive view and responsible for the internals of Warp Drive.
+/// how Black Drive interacts with the workspace and the rest of the app, whereas
+/// `DriveIndex` is the main warp drive view and responsible for the internals of Black Drive.
 pub struct DrivePanel {
     index_view: ViewHandle<DriveIndex>,
     mouse_state_handles: MouseStateHandles,
@@ -603,14 +603,14 @@ impl DrivePanel {
         })
     }
 
-    /// This functions scrolls the relevant Warp Drive item into view.
+    /// This functions scrolls the relevant Black Drive item into view.
     pub fn scroll_item_into_view(&mut self, item_id: WarpDriveItemId, ctx: &mut ViewContext<Self>) {
         self.index_view.update(ctx, |index, ctx| {
             index.scroll_item_into_view(item_id, ctx);
         })
     }
 
-    /// This functions sets the index of a focused Warp Drive item.
+    /// This functions sets the index of a focused Black Drive item.
     pub fn set_focused_index(&mut self, focused_index: Option<usize>, ctx: &mut ViewContext<Self>) {
         self.index_view.update(ctx, |index, ctx| {
             index.set_focused_index(focused_index, true, ctx);
@@ -683,7 +683,7 @@ impl View for DrivePanel {
         }
     }
 
-    fn render(&self, _app: &warpui::AppContext) -> Box<dyn warpui::Element> {
+    fn render(&self, _app: &black_ui::AppContext) -> Box<dyn black_ui::Element> {
         let body = Hoverable::new(
             self.mouse_state_handles.focus_panel_mouse_state.clone(),
             |_| {
@@ -705,7 +705,7 @@ impl View for DrivePanel {
 
         let mut col = Flex::column();
         col.add_child(Shrinkable::new(1., body).finish());
-        col.with_main_axis_size(warpui::elements::MainAxisSize::Max)
+        col.with_main_axis_size(black_ui::elements::MainAxisSize::Max)
             .finish()
     }
 }

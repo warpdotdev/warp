@@ -1,11 +1,11 @@
 //! Provider command for linking third-party services.
 use comfy_table::Cell;
 use serde::Serialize;
-use warp_cli::provider::{ProviderCommand, ProviderType};
-use warp_cli::GlobalOptions;
-use warp_core::channel::ChannelState;
-use warpui::platform::TerminationMode;
-use warpui::{AppContext, ModelContext, SingletonEntity};
+use black_cli::provider::{ProviderCommand, ProviderType};
+use black_cli::GlobalOptions;
+use black_core::channel::ChannelState;
+use black_ui::platform::TerminationMode;
+use black_ui::{AppContext, ModelContext, SingletonEntity};
 
 use crate::ai::agent_sdk::output::{self, TableFormat};
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -122,7 +122,7 @@ impl ProviderCommandRunner {
     }
 }
 
-impl warpui::Entity for ProviderCommandRunner {
+impl black_ui::Entity for ProviderCommandRunner {
     type Event = ();
 }
 impl SingletonEntity for ProviderCommandRunner {}

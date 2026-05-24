@@ -1,9 +1,9 @@
 use pathfinder_color::ColorU;
-use warpui::elements::{
+use black_ui::elements::{
     ConstrainedBox, Container, Element, Empty, Flex, MouseStateHandle, ParentElement, Shrinkable,
 };
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use super::{
     SectionAction, SectionView, CHEVRON_ICON_SIZE, DESCRIPTION_FONT_SIZE, ICON_PADDING,

@@ -1,10 +1,10 @@
-use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::{
+use black_core::ui::theme::color::internal_colors;
+use black_ui::elements::{
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable, Icon,
     MouseStateHandle, ParentElement, Radius, Text,
 };
-use warpui::platform::Cursor;
-use warpui::{Element, EventContext};
+use black_ui::platform::Cursor;
+use black_ui::{Element, EventContext};
 
 use crate::appearance::Appearance;
 use crate::search::QueryFilter;

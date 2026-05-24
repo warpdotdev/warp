@@ -2,20 +2,20 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
-use warp_core::features::FeatureFlag;
-use warp_graphql::object_permissions::OwnerType;
-use warp_graphql::queries::api_keys::ApiKeyProperties as GqlApiKeyProperties;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_graphql::object_permissions::OwnerType;
+use black_graphql::queries::api_keys::ApiKeyProperties as GqlApiKeyProperties;
+use black_ui::elements::{
     resizable_state_handle, Align, Border, ChildView, ConstrainedBox, Container,
     CrossAxisAlignment, DragBarSide, Element, Empty, Expanded, Flex, FormattedTextElement,
     HighlightedHyperlink, MainAxisSize, MouseStateHandle, Padding, ParentElement, Resizable,
     ResizableStateHandle, Shrinkable, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::text_layout::ClipConfig;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::text_layout::ClipConfig;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use super::platform::{
     CreateApiKeyModal, CreateApiKeyModalEvent, CreateApiKeyModalViewState, ExpireApiKeyButton,
@@ -41,7 +41,7 @@ use crate::util::time_format::format_approx_duration_from_now_utc;
 
 const MODAL_WIDTH: f32 = 460.;
 const MODAL_HEIGHT: f32 = 320.;
-const API_KEY_DOCS_URL: &str = "https://docs.warp.dev/reference/cli/api-keys";
+const API_KEY_DOCS_URL: &str = "https://blackdagger.io/reference/cli/api-keys";
 const API_KEY_NAME_COLUMN_DEFAULT_WIDTH: f32 = 220.;
 const API_KEY_NAME_COLUMN_MIN_WIDTH: f32 = 120.;
 const API_KEY_KEY_COLUMN_WIDTH: f32 = 120.;
@@ -200,7 +200,7 @@ impl PlatformPageView {
                         right: 24.,
                     }),
                     font_size: Some(16.),
-                    font_weight: Some(warpui::fonts::Weight::Bold),
+                    font_weight: Some(black_ui::fonts::Weight::Bold),
                     ..Default::default()
                 })
                 .with_body_style(UiComponentStyles {
@@ -489,7 +489,7 @@ impl PlatformPageWidget {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let text = vec![
-            FormattedTextFragment::plain_text("Create and manage API keys to allow other Oz cloud agents to access your Warp account.\nFor more information, visit the "),
+            FormattedTextFragment::plain_text("Create and manage API keys to allow other Oz cloud agents to access your Black account.\nFor more information, visit the "),
             FormattedTextFragment::hyperlink("Documentation.", API_KEY_DOCS_URL),
         ];
 
@@ -871,7 +871,7 @@ impl PlatformPageWidget {
                     .with_child(
                         Container::new(
                             Text::new(
-                                "Create a key to manage external access to Warp",
+                                "Create a key to manage external access to Black",
                                 appearance.ui_font_family(),
                                 CONTENT_FONT_SIZE,
                             )

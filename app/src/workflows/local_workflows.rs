@@ -2,11 +2,11 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use warp_util::path::ShellFamily;
+use black_util::path::ShellFamily;
 use warp_workflows::workflows as global_workflows;
 #[cfg(not(target_family = "wasm"))]
-use warpui::platform::OperatingSystem;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+use black_ui::platform::OperatingSystem;
+use black_ui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use super::workflow::Workflow;
 use super::WorkflowSource;
@@ -43,12 +43,12 @@ impl LocalWorkflows {
         }
     }
 
-    /// Returns an iterator over hardcoded "application" workflows included in the Warp binary.
+    /// Returns an iterator over hardcoded "application" workflows included in the Black binary.
     pub fn app_workflows(&self) -> impl Iterator<Item = &Workflow> {
         self.app_workflows.iter()
     }
 
-    /// Returns an iterator over the static set of workflows for 3rd party tools loaded from Warp's
+    /// Returns an iterator over the static set of workflows for 3rd party tools loaded from Black's
     /// workflows GitHub repo.
     pub fn global_workflows(
         &self,
@@ -183,7 +183,7 @@ pub(super) fn load_project_workflows(path: &Path) -> Vec<Workflow> {
     match git2::Repository::discover(path) {
         Ok(repository) => repository.workdir().map_or(Vec::new(), |workdir| {
             load_workflows(&workflows_dir(
-                workdir.join(warp_core::paths::WARP_CONFIG_DIR),
+                workdir.join(black_core::paths::WARP_CONFIG_DIR),
             ))
         }),
         Err(_) => Vec::new(),
@@ -209,21 +209,21 @@ pub fn tail_command_for_shell(shell_family: ShellFamily, path: &PathBuf) -> Stri
 
 #[cfg(not(target_family = "wasm"))]
 pub fn prompt_chip_logging_workflow(shell_family: ShellFamily) -> Option<Workflow> {
-    if !warp_core::channel::ChannelState::enable_debug_features() {
+    if !black_core::channel::ChannelState::enable_debug_features() {
         return None;
     }
     let log_file_path = crate::context_chips::logging::log_file_path().ok()?;
     Some(Workflow::Command {
         name: "Tail prompt chip log".into(),
         command: tail_command_for_shell(shell_family, &log_file_path),
-        tags: vec!["warp".into(), "debug".into()],
+        tags: vec!["black".into(), "debug".into()],
         description: Some(
             "Shows the diagnostic log of shell commands run by prompt context chips (dogfood only)"
                 .into(),
         ),
         arguments: vec![],
         source_url: None,
-        author: Some("Warp".into()),
+        author: Some("Black".into()),
         author_url: None,
         shells: vec![],
         environment_variables: None,

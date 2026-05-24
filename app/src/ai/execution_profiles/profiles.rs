@@ -5,9 +5,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use warp_core::channel::ChannelState;
-use warp_core::user_preferences::GetUserPreferences;
-use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
+use black_core::channel::ChannelState;
+use black_core::user_preferences::GetUserPreferences;
+use black_ui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::{
     AIExecutionProfile, ActionPermission, CloudAIExecutionProfileModel, WriteToPtyPermission,
@@ -58,7 +58,7 @@ impl AIExecutionProfileInfo {
         &self.id
     }
 
-    /// The Warp Drive sync ID of this profile, if it has been synced.
+    /// The Black Drive sync ID of this profile, if it has been synced.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn sync_id(&self) -> Option<SyncId> {
         self.sync_id

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use warp_core::ui::appearance::Appearance;
+use black_core::ui::appearance::Appearance;
 
 use crate::ai::agent::SuggestedLoggingId;
 use crate::cloud_object::model::generic_string_model::{

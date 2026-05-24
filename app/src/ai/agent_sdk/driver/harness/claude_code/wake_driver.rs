@@ -6,8 +6,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use shell_words::quote as shell_quote;
 use uuid::Uuid;
-use warp_cli::agent::Harness;
-use warp_graphql::ai::AgentTaskState;
+use black_cli::agent::Harness;
+use black_graphql::ai::AgentTaskState;
 
 use super::super::claude_transcript::{
     claude_config_dir, write_envelope, write_session_index_entry, ClaudeTranscriptEnvelope,
@@ -234,7 +234,7 @@ fn local_wake_task_env_vars(
 ) -> HashMap<OsString, OsString> {
     let mut env_vars = task_env_vars(task_id, parent_run_id, Harness::Claude);
     // The local wake command is executed directly in the existing child
-    // terminal, not through `AgentDriver::run_harness`, so Warp does not start
+    // terminal, not through `AgentDriver::run_harness`, so Black does not start
     // `MessageBridge` for this resumed Claude process. Leave the listener in
     // the Claude plugin's self-managed mode; otherwise the hook waits for
     // state files that no managed bridge is producing and the wake message is

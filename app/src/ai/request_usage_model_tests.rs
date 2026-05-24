@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use ai::api_keys::ApiKeyManager;
 use chrono::Duration;
-use warp_core::features::FeatureFlag;
-use warp_graphql::billing::{AddonCreditsOption, OveragesPricing, PricingInfo};
-use warpui::{App, ModelHandle};
+use black_core::features::FeatureFlag;
+use black_graphql::billing::{AddonCreditsOption, OveragesPricing, PricingInfo};
+use black_ui::{App, ModelHandle};
 
 use super::*;
 use crate::auth::AuthStateProvider;
@@ -49,7 +49,7 @@ fn add_request_usage_model_for_anonymous_users(app: &mut App) -> ModelHandle<AIR
 fn add_request_usage_model_without_auth(app: &mut App) -> ModelHandle<AIRequestUsageModel> {
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
     app.update(|ctx| {
-        warpui_extras::secure_storage::register_noop("test", ctx);
+        black_ui_extras::secure_storage::register_noop("test", ctx);
         ctx.add_singleton_model(ApiKeyManager::new);
     });
     app.add_singleton_model(|_| PricingInfoModel::new());

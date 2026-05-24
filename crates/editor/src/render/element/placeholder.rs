@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use warpui::geometry::vector::{Vector2F, vec2f};
-use warpui::text_layout::Line;
-use warpui::{AppContext, LayoutContext};
+use black_ui::geometry::vector::{Vector2F, vec2f};
+use black_ui::text_layout::Line;
+use black_ui::{AppContext, LayoutContext};
 
 use super::{CursorData, RenderContext};
 use crate::content::text::BufferBlockStyle;

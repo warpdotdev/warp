@@ -13,11 +13,11 @@ use repo_metadata::watcher::DirectoryWatcher;
 use repo_metadata::RepoMetadataModel;
 use shared_session::permissions_manager::SessionPermissionsManager;
 use uuid::Uuid;
-use warp_core::features::FeatureFlag;
-use warpui::platform::{WindowBounds, WindowStyle};
-use warpui::windowing::state::ApplicationStage;
-use warpui::windowing::WindowManager;
-use warpui::{App, ModelHandle};
+use black_core::features::FeatureFlag;
+use black_ui::platform::{WindowBounds, WindowStyle};
+use black_ui::windowing::state::ApplicationStage;
+use black_ui::windowing::WindowManager;
+use black_ui::{App, ModelHandle};
 use watcher::HomeDirectoryWatcher;
 
 use super::child_agent::{
@@ -2525,7 +2525,7 @@ fn test_terminal_pane_headers() {
 
 /// Tests that focusing two different panes in quick succession does not cause
 /// an infinite loop of focus changes, as outlined in this PR's description:
-/// https://github.com/warpdotdev/warp-internal/pull/8990
+/// https://github.com/blackdagger/black-internal/pull/8990
 #[cfg_attr(windows, ignore = "TODO(CORE-3626)")]
 #[test]
 fn test_pane_focus_does_not_have_an_infinite_event_loop() {

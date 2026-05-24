@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+use black_ui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use super::env_var_collection_search_item::EnvVarCollectionSearchItem;
 use super::notebook_search_item::NotebookSearchItem;
@@ -23,7 +23,7 @@ use crate::server::ids::{ObjectUid, SyncId};
 use crate::settings::AISettings;
 use crate::workflows::CloudWorkflow;
 
-/// Datasource that searches against all Warp Drive objects
+/// Datasource that searches against all Black Drive objects
 pub struct DataSource {
     searcher: Box<dyn WarpDriveSearcher>,
 }
@@ -31,7 +31,7 @@ pub struct DataSource {
 impl DataSource {
     #[cfg(not(target_family = "wasm"))]
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        if warp_core::features::FeatureFlag::UseTantivySearch.is_enabled() {
+        if black_core::features::FeatureFlag::UseTantivySearch.is_enabled() {
             Self::new_full_text(ctx)
         } else {
             Self::new_fuzzy(ctx)
@@ -545,8 +545,8 @@ mod full_text_searcher {
 
     use fuzzy_match::FuzzyMatchResult;
     use itertools::Itertools;
-    use warpui::r#async::executor::Background;
-    use warpui::{AppContext, SingletonEntity};
+    use black_ui::r#async::executor::Background;
+    use black_ui::{AppContext, SingletonEntity};
 
     use crate::cloud_object::model::persistence::CloudModel;
     use crate::cloud_object::{
@@ -571,10 +571,10 @@ mod full_text_searcher {
     use crate::workflows::CloudWorkflow;
 
     /// Memory budget for the search index of warp drive.
-    /// Warp could potentially have a lot of objects, so we increase it from the default of 50MB to 100MB
+    /// Black could potentially have a lot of objects, so we increase it from the default of 50MB to 100MB
     const MEMORY_BUDGET: usize = 100_000_000; // TODO: is 100MB really necessary?
 
-    // All Warp Drive objects are boosted due to multiple fields being a part of the same total score,
+    // All Black Drive objects are boosted due to multiple fields being a part of the same total score,
     // putting them at an inherent disadvantage, as each field would only have a fractional weight.
     define_search_schema!(
         schema_name: NOTEBOOK_SEARCH_SCHEMA,

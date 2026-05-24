@@ -2,7 +2,7 @@
 //! to the host system.
 //!
 //! For example, on macOS, this module sets up integrations with
-//! Finder such that the user can open a new Warp tab or window
+//! Finder such that the user can open a new Black tab or window
 //! in a given directory.
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -12,7 +12,7 @@ mod mac;
 #[cfg(windows)]
 pub mod windows;
 
-use warpui::AppContext;
+use black_ui::AppContext;
 
 pub fn init(_ctx: &mut AppContext) {
     log::info!("Initializing app services");

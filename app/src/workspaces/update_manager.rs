@@ -4,8 +4,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use futures::channel::oneshot::{self, Receiver};
 use futures::stream::AbortHandle;
-use warpui::r#async::Timer;
-use warpui::{duration_with_jitter, Entity, ModelContext, RequestState, SingletonEntity};
+use black_ui::r#async::Timer;
+use black_ui::{duration_with_jitter, Entity, ModelContext, RequestState, SingletonEntity};
 
 use super::team_tester::{TeamTesterStatus, TeamTesterStatusEvent};
 use super::user_workspaces::{

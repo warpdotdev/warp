@@ -15,27 +15,27 @@ use regex::Regex;
 use string_offset::CharOffset;
 use url::Url;
 use vec1::{vec1, Vec1};
-use warp_core::features::FeatureFlag;
-use warp_core::semantic_selection::SemanticSelection;
-use warp_editor::content::buffer::{
+use black_core::features::FeatureFlag;
+use black_core::semantic_selection::SemanticSelection;
+use black_editor::content::buffer::{
     AutoScrollBehavior, Buffer, BufferEditAction, BufferEvent, BufferSelectAction, EditOrigin,
     SelectionOffsets, ShouldAutoscroll,
 };
-use warp_editor::content::selection_model::BufferSelectionModel;
-use warp_editor::content::text::{
+use black_editor::content::selection_model::BufferSelectionModel;
+use black_editor::content::text::{
     BlockHeaderSize, BlockType, BufferBlockItem, BufferBlockStyle, BufferTextStyle, CodeBlockType,
     IndentBehavior, IndentUnit, TextStyles, TextStylesWithMetadata,
 };
-use warp_editor::model::{BufferUpdateWrapper, CoreEditorModel, RichTextEditorModel};
-use warp_editor::render::model::{
+use black_editor::model::{BufferUpdateWrapper, CoreEditorModel, RichTextEditorModel};
+use black_editor::render::model::{
     AutoScrollMode, BlockItem, RenderEvent, RenderState, RichTextStyles, StyleUpdateAction,
 };
-use warp_editor::search::Searcher;
-use warp_editor::selection::{SelectionMode, SelectionModel, TextDirection, TextUnit};
-use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::ListIndentLevel;
-use warpui::{
+use black_editor::search::Searcher;
+use black_editor::selection::{SelectionMode, SelectionModel, TextDirection, TextUnit};
+use black_ui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
+use black_ui::clipboard::ClipboardContent;
+use black_ui::elements::ListIndentLevel;
+use black_ui::{
     AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity, WindowId,
 };
 

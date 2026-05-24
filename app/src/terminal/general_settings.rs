@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use warp_core::settings::macros::define_settings_group;
-use warp_core::settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
+use black_core::settings::macros::define_settings_group;
+use black_core::settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 
 use crate::banner::BannerState;
 use crate::resource_center::Tip;
@@ -14,7 +14,7 @@ define_settings_group!(GeneralSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "general.show_warning_before_quitting",
-        description: "Whether to show a warning dialog before quitting Warp.",
+        description: "Whether to show a warning dialog before quitting Black.",
     },
     quit_on_last_window_closed: QuitOnLastWindowClosed {
         type: bool,
@@ -23,7 +23,7 @@ define_settings_group!(GeneralSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "general.quit_on_last_window_closed",
-        description: "Whether to quit Warp when the last window is closed.",
+        description: "Whether to quit Black when the last window is closed.",
     },
     restore_session: RestoreSession {
         type: bool,
@@ -32,7 +32,7 @@ define_settings_group!(GeneralSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "general.restore_session",
-        description: "Whether to restore the previous session when Warp starts up.",
+        description: "Whether to restore the previous session when Black starts up.",
     },
     add_app_as_login_item: LoginItem {
         type: bool,
@@ -44,13 +44,13 @@ define_settings_group!(GeneralSettings, settings: [
         sync_to_cloud: SyncToCloud::Never,
         private: false,
         toml_path: "general.login_item",
-        description: "Whether to launch Warp automatically when you log in.",
+        description: "Whether to launch Black automatically when you log in.",
     },
     // Records whether the app has been added as a login item.
     // If it has, we don't try to add it again unless the user explicitly
     // retoggles the setting. This is to allow a user to remove the login item
     // directly from their OS's startup UI and not have it re-added when they
-    // next start Warp.
+    // next start Black.
     app_added_as_login_item: AppAddedAsLoginItem {
         type: bool,
         default: false,

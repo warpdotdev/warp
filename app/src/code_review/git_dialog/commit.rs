@@ -4,15 +4,15 @@
 
 use std::path::Path;
 
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::appearance::Appearance;
-use warpui::elements::{
+use black_core::send_telemetry_from_ctx;
+use black_core::ui::appearance::Appearance;
+use black_ui::elements::{
     ChildView, ClippedScrollStateHandle, Container, CornerRadius, CrossAxisAlignment, Element,
     Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
 };
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::ui_components::switch::SwitchStateHandle;
-use warpui::{AppContext, SingletonEntity, ViewContext, ViewHandle};
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::ui_components::switch::SwitchStateHandle;
+use black_ui::{AppContext, SingletonEntity, ViewContext, ViewHandle};
 
 use crate::ai::generate_code_review_content::api::{GenerateCodeReviewContentRequest, OutputType};
 use crate::code_review::git_dialog::pr::{create_pr_with_ai_content, show_pr_created_toast};

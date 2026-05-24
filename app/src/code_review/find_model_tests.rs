@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use repo_metadata::repositories::DetectedRepositories;
 use string_offset::CharOffset;
-use warp_core::ui::appearance::Appearance;
-use warp_editor::content::buffer::InitialBufferState;
-use warp_editor::render::element::VerticalExpansionBehavior;
-use warpui::elements::Empty;
-use warpui::platform::WindowStyle;
-use warpui::{App, Element as _, ModelHandle, ViewHandle};
+use black_core::ui::appearance::Appearance;
+use black_editor::content::buffer::InitialBufferState;
+use black_editor::render::element::VerticalExpansionBehavior;
+use black_ui::elements::Empty;
+use black_ui::platform::WindowStyle;
+use black_ui::{App, Element as _, ModelHandle, ViewHandle};
 
 use super::*;
 use crate::auth::AuthStateProvider;
@@ -34,12 +34,12 @@ use crate::NotebookKeybindings;
 #[derive(Default)]
 struct TestView;
 
-impl warpui::Entity for TestView {
+impl black_ui::Entity for TestView {
     type Event = ();
 }
 
-impl warpui::View for TestView {
-    fn render(&self, _: &warpui::AppContext) -> Box<dyn warpui::Element> {
+impl black_ui::View for TestView {
+    fn render(&self, _: &black_ui::AppContext) -> Box<dyn black_ui::Element> {
         Empty::new().finish()
     }
 
@@ -48,7 +48,7 @@ impl warpui::View for TestView {
     }
 }
 
-impl warpui::TypedActionView for TestView {
+impl black_ui::TypedActionView for TestView {
     type Action = ();
 }
 

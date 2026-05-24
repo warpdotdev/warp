@@ -12,10 +12,10 @@ mod package_installers;
 pub(crate) use history::UpArrowHistoryConfig;
 pub use history::{History, HistoryEntry, HistoryEvent, ShellHost};
 pub use view::{Event, TerminalView};
-pub use warp_terminal::shell::{self, ShellLaunchData};
-use warpui::geometry::vector::Vector2F;
-use warpui::units::{IntoPixels, Lines, Pixels};
-use warpui::{AppContext, WindowId};
+pub use black_terminal::shell::{self, ShellLaunchData};
+use black_ui::geometry::vector::Vector2F;
+use black_ui::units::{IntoPixels, Lines, Pixels};
+use black_ui::{AppContext, WindowId};
 mod block_list_settings;
 
 mod alias;
@@ -79,7 +79,7 @@ pub mod ssh;
 pub mod terminal_manager;
 mod terminal_size_element;
 pub mod view;
-pub mod warpify;
+pub mod blackify;
 mod waterfall_gap_element;
 mod writeable_pty;
 #[cfg(windows)]
@@ -365,7 +365,7 @@ impl SizeInfo {
     }
 
     /// Create SizeInfo for a [`TerminalModel`] instance that doesn't have font metrics,
-    /// which comes from either a headless Warp instance or tests.
+    /// which comes from either a headless Black instance or tests.
     pub fn new_without_font_metrics(rows: usize, cols: usize) -> Self {
         let width = cols as f32;
         let height = rows as f32;

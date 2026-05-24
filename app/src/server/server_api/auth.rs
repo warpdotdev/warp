@@ -11,35 +11,35 @@ use instant::Duration;
 use mockall::{automock, predicate::*};
 use oauth2::TokenResponse;
 use thiserror::Error;
-use warp_core::errors::{AnyhowErrorExt, ErrorExt};
-use warp_graphql::client::Operation;
-use warp_graphql::mutations::create_anonymous_user::{
+use black_core::errors::{AnyhowErrorExt, ErrorExt};
+use black_graphql::client::Operation;
+use black_graphql::mutations::create_anonymous_user::{
     AnonymousUserType, CreateAnonymousUser, CreateAnonymousUserResult, CreateAnonymousUserVariables,
 };
-use warp_graphql::mutations::expire_api_key::{
+use black_graphql::mutations::expire_api_key::{
     ExpireApiKey, ExpireApiKeyResult, ExpireApiKeyVariables,
 };
-use warp_graphql::mutations::generate_api_key::{
+use black_graphql::mutations::generate_api_key::{
     GenerateApiKey, GenerateApiKeyInput, GenerateApiKeyResult, GenerateApiKeyVariables,
 };
-use warp_graphql::mutations::mint_custom_token::{MintCustomTokenResult, MintCustomTokenVariables};
-use warp_graphql::mutations::set_user_is_onboarded::{
+use black_graphql::mutations::mint_custom_token::{MintCustomTokenResult, MintCustomTokenVariables};
+use black_graphql::mutations::set_user_is_onboarded::{
     SetUserIsOnboarded, SetUserIsOnboardedResult, SetUserIsOnboardedVariables,
 };
-use warp_graphql::mutations::update_user_settings::{
+use black_graphql::mutations::update_user_settings::{
     UpdateUserSettings, UpdateUserSettingsInput, UpdateUserSettingsResult,
     UpdateUserSettingsVariables,
 };
-use warp_graphql::object_permissions::OwnerType;
-use warp_graphql::queries::api_keys::{
+use black_graphql::object_permissions::OwnerType;
+use black_graphql::queries::api_keys::{
     ApiKeyProperties, ApiKeyPropertiesResult, ApiKeys, ApiKeysVariables,
 };
-use warp_graphql::queries::get_conversation_usage::{
+use black_graphql::queries::get_conversation_usage::{
     ConversationUsage, GetConversationUsage, GetConversationUsageVariables, UserResult,
 };
-use warp_graphql::queries::get_user::{GetUser, GetUserVariables, UserOutput as GqlUserOutput};
-use warp_graphql::queries::get_user_settings::{GetUserSettings, GetUserSettingsVariables};
-use warpui::r#async::BoxFuture;
+use black_graphql::queries::get_user::{GetUser, GetUserVariables, UserOutput as GqlUserOutput};
+use black_graphql::queries::get_user_settings::{GetUserSettings, GetUserSettingsVariables};
+use black_ui::r#async::BoxFuture;
 
 use super::ServerApi;
 use crate::auth::credentials::{AuthToken, Credentials, FirebaseToken, LoginToken, RefreshToken};
@@ -90,10 +90,10 @@ static FETCH_ACCESS_TOKEN_HARD_ERROR_MESSAGES: &[&str] = &["USER_DISABLED", "USE
 const FETCH_ACCESS_TOKEN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Header key for the ambient workload token attached to multi-agent requests.
-pub const AMBIENT_WORKLOAD_TOKEN_HEADER: &str = "X-Warp-Ambient-Workload-Token";
+pub const AMBIENT_WORKLOAD_TOKEN_HEADER: &str = "X-Black-Ambient-Workload-Token";
 
 /// Header key for the cloud agent task ID attached to requests from ambient agents.
-pub const CLOUD_AGENT_ID_HEADER: &str = "X-Warp-Cloud-Agent-ID";
+pub const CLOUD_AGENT_ID_HEADER: &str = "X-Black-Cloud-Agent-ID";
 
 /// Duration for which the ambient workload token is valid (3 hours).
 const AMBIENT_WORKLOAD_TOKEN_DURATION: Duration = Duration::from_secs(3 * 60 * 60);
@@ -122,7 +122,7 @@ pub struct FetchUserResult {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait AuthClient: 'static + Send + Sync {
-    /// Creates an anonymous user, who is allowed to use Warp but may lack the ability
+    /// Creates an anonymous user, who is allowed to use Black but may lack the ability
     /// to interact with particular features.
     async fn create_anonymous_user(
         &self,
@@ -172,7 +172,7 @@ pub trait AuthClient: 'static + Send + Sync {
         &self,
         days: Option<i32>,
         limit: Option<i32>,
-        last_updated_end_timestamp: Option<warp_graphql::scalars::Time>,
+        last_updated_end_timestamp: Option<black_graphql::scalars::Time>,
     ) -> Result<Vec<ConversationUsage>>;
 
     async fn set_is_telemetry_enabled(&self, value: bool) -> Result<()>;
@@ -206,7 +206,7 @@ pub trait AuthClient: 'static + Send + Sync {
         name: String,
         team_id: Option<cynic::Id>,
         agent_uid: Option<cynic::Id>,
-        expires_at: Option<warp_graphql::scalars::Time>,
+        expires_at: Option<black_graphql::scalars::Time>,
     ) -> Result<GenerateApiKeyResult>;
 
     async fn expire_api_key(&self, key_uid: &ApiKeyUid) -> Result<ExpireApiKeyResult>;
@@ -277,9 +277,9 @@ impl AuthClient for ServerApi {
         anonymous_user_type: AnonymousUserType,
     ) -> Result<CreateAnonymousUserResult> {
         let variables = CreateAnonymousUserVariables {
-            input: warp_graphql::mutations::create_anonymous_user::CreateAnonymousUserInput {
+            input: black_graphql::mutations::create_anonymous_user::CreateAnonymousUserInput {
                 anonymous_user_type,
-                expiration_type: warp_graphql::mutations::create_anonymous_user::AnonymousUserExpirationType::NoExpiration,
+                expiration_type: black_graphql::mutations::create_anonymous_user::AnonymousUserExpirationType::NoExpiration,
                 referral_code,
             },
             request_context: get_request_context(),
@@ -344,7 +344,7 @@ impl AuthClient for ServerApi {
         };
 
         let operation =
-            warp_graphql::mutations::mint_custom_token::MintCustomToken::build(variables);
+            black_graphql::mutations::mint_custom_token::MintCustomToken::build(variables);
         let response = self.send_graphql_request(operation, None).await?;
         Ok(response.mint_custom_token)
     }
@@ -378,7 +378,7 @@ impl AuthClient for ServerApi {
         let response = operation
             .send_request(
                 self.client.clone(),
-                warp_graphql::client::RequestOptions {
+                black_graphql::client::RequestOptions {
                     auth_token: auth_token.map(ToOwned::to_owned),
                     headers: std::collections::HashMap::from([(
                         EXPERIMENT_ID_HEADER.to_string(),
@@ -392,8 +392,8 @@ impl AuthClient for ServerApi {
             .ok_or_else(|| anyhow!("Expected valid response.data"))?;
 
         match response.user {
-            warp_graphql::queries::get_user::UserResult::UserOutput(user_output) => Ok(user_output),
-            warp_graphql::queries::get_user::UserResult::Unknown => {
+            black_graphql::queries::get_user::UserResult::UserOutput(user_output) => Ok(user_output),
+            black_graphql::queries::get_user::UserResult::Unknown => {
                 Err(anyhow!("Unable to fetch user"))
             }
         }
@@ -407,7 +407,7 @@ impl AuthClient for ServerApi {
         let response = self.send_graphql_request(operation, None).await?;
 
         match response.user {
-            warp_graphql::queries::get_user_settings::UserResult::UserOutput(user_output) => {
+            black_graphql::queries::get_user_settings::UserResult::UserOutput(user_output) => {
                 match user_output.user.settings {
                     Some(user_settings) => Ok(Some(SyncedUserSettings {
                         is_cloud_conversation_storage_enabled: user_settings
@@ -418,7 +418,7 @@ impl AuthClient for ServerApi {
                     None => Ok(None),
                 }
             }
-            warp_graphql::queries::get_user_settings::UserResult::Unknown => {
+            black_graphql::queries::get_user_settings::UserResult::Unknown => {
                 Err(anyhow!("Unable to fetch user settings"))
             }
         }
@@ -429,7 +429,7 @@ impl AuthClient for ServerApi {
         &self,
         days: Option<i32>,
         limit: Option<i32>,
-        last_updated_end_timestamp: Option<warp_graphql::scalars::Time>,
+        last_updated_end_timestamp: Option<black_graphql::scalars::Time>,
     ) -> Result<Vec<ConversationUsage>> {
         let operation = GetConversationUsage::build(GetConversationUsageVariables {
             request_context: get_request_context(),
@@ -587,7 +587,7 @@ impl AuthClient for ServerApi {
             .exchange_device_access_token(details)
             .request_async(
                 self.client.as_ref(),
-                |delay| warpui::r#async::Timer::after(delay).map(|_| ()),
+                |delay| black_ui::r#async::Timer::after(delay).map(|_| ()),
                 Some(timeout),
             )
             .await
@@ -622,7 +622,7 @@ impl AuthClient for ServerApi {
         name: String,
         team_id: Option<cynic::Id>,
         agent_uid: Option<cynic::Id>,
-        expires_at: Option<warp_graphql::scalars::Time>,
+        expires_at: Option<black_graphql::scalars::Time>,
     ) -> Result<GenerateApiKeyResult> {
         let variables = GenerateApiKeyVariables {
             input: GenerateApiKeyInput {
@@ -673,13 +673,13 @@ impl AuthClient for ServerApi {
         }
 
         // Issue a new token.
-        let workload_token = match warp_isolation_platform::issue_workload_token(Some(
+        let workload_token = match black_isolation_platform::issue_workload_token(Some(
             AMBIENT_WORKLOAD_TOKEN_DURATION,
         ))
         .await
         {
             Ok(token) => token,
-            Err(warp_isolation_platform::IsolationPlatformError::NoIsolationPlatformDetected) => {
+            Err(black_isolation_platform::IsolationPlatformError::NoIsolationPlatformDetected) => {
                 return Ok(None);
             }
             Err(e) => return Err(e.into()),

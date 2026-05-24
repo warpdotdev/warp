@@ -6,18 +6,18 @@ use std::sync::Arc;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use serde_yaml::Mapping;
 use uuid::Uuid;
-use warp_editor::content::markdown::MarkdownStyle;
-use warp_editor::editor::EmbeddedItemModel;
-use warp_editor::render::element::{RenderContext, RenderableBlock};
-use warp_editor::render::layout::TextLayout;
-use warp_editor::render::model::viewport::ViewportItem;
-use warp_editor::render::model::{
+use black_editor::content::markdown::MarkdownStyle;
+use black_editor::editor::EmbeddedItemModel;
+use black_editor::render::element::{RenderContext, RenderableBlock};
+use black_editor::render::layout::TextLayout;
+use black_editor::render::model::viewport::ViewportItem;
+use black_editor::render::model::{
     BlockSpacing, EmbeddedItem, EmbeddedItemHTMLRepresentation, EmbeddedItemRichFormat,
     LaidOutEmbeddedItem, RenderState,
 };
-use warpui::event::DispatchedEvent;
-use warpui::units::Pixels;
-use warpui::{AppContext, EntityId, EventContext, LayoutContext, ViewHandle, WindowId};
+use black_ui::event::DispatchedEvent;
+use black_ui::units::Pixels;
+use black_ui::{AppContext, EntityId, EventContext, LayoutContext, ViewHandle, WindowId};
 
 use crate::code::editor::comment_editor::CommentEditor;
 use crate::code_review::comments::CommentId;

@@ -5,7 +5,7 @@ use futures::channel::oneshot;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use itertools::Itertools;
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+use black_ui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{
     read_local_file_context, ActionExecution, AnyActionExecution, ExecuteActionInput,

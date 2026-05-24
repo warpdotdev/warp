@@ -9,20 +9,20 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting;
 use thousands::Separable;
-use warp_core::features::FeatureFlag;
-use warp_core::ui::appearance::Appearance;
-use warp_graphql::billing::AddonCreditsOption;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::ui::appearance::Appearance;
+use black_graphql::billing::AddonCreditsOption;
+use black_ui::elements::{
     Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
     Expanded, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, ParentElement, Radius, Shrinkable, Text, Wrap,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::prelude::ChildView;
-use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ui_components::switch::SwitchStateHandle;
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::prelude::ChildView;
+use black_ui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::ui_components::switch::SwitchStateHandle;
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView, View,
     ViewContext, ViewHandle,
 };
@@ -742,7 +742,7 @@ impl BillingAndUsagePageV2View {
         let theme = appearance.theme();
         let icon_color = theme.sub_text_color(theme.background());
         let mouse_state = self.plan_mouse_states.refresh_button.clone();
-        warpui::elements::Hoverable::new(mouse_state, move |_| {
+        black_ui::elements::Hoverable::new(mouse_state, move |_| {
             Container::new(
                 ConstrainedBox::new(Icon::Refresh.to_warpui_icon(icon_color).finish())
                     .with_width(16.)
@@ -752,7 +752,7 @@ impl BillingAndUsagePageV2View {
             .with_uniform_padding(2.)
             .finish()
         })
-        .with_cursor(warpui::platform::Cursor::PointingHand)
+        .with_cursor(black_ui::platform::Cursor::PointingHand)
         .on_click(|ctx, _, _| {
             ctx.dispatch_typed_action(BillingAndUsagePageAction::RefreshWorkspaceData);
         })
@@ -1186,11 +1186,11 @@ impl BillingAndUsagePageV2View {
                     let credits = option.credits.separate_with_commas();
                     let price = format!("${:.2}", option.price_usd_cents as f64 / 100.0);
                     format!(
-                        "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Warp will automatically purchase {credits} credits for {price} and add them to your balance."
+                        "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Black will automatically purchase {credits} credits for {price} and add them to your balance."
                     )
                 }
                 None => {
-                    "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Warp will automatically purchase add-on credits and add them to your balance.".to_string()
+                    "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Black will automatically purchase add-on credits and add them to your balance.".to_string()
                 }
             };
             return AddonCreditsPanelState::AutoreloadNonAdmin {
@@ -1234,8 +1234,8 @@ impl BillingAndUsagePageV2View {
                 .with_hyperlink_font_color(theme.accent().into_solid())
                 .register_default_click_handlers_with_action_support(
                     |lens, event, ctx| match lens {
-                        warpui::elements::HyperlinkLens::Url(u) => ctx.open_url(u),
-                        warpui::elements::HyperlinkLens::Action(a) => {
+                        black_ui::elements::HyperlinkLens::Url(u) => ctx.open_url(u),
+                        black_ui::elements::HyperlinkLens::Action(a) => {
                             if let Some(act) =
                                 a.as_any().downcast_ref::<BillingAndUsagePageAction>()
                             {

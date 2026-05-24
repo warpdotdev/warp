@@ -1,18 +1,18 @@
 use pathfinder_geometry::vector::{vec2f, Vector2F};
-use warp_core::features::FeatureFlag;
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_ui::clipboard::ClipboardContent;
+use black_ui::elements::{
     Align, AnchorPair, ChildAnchor, Clipped, ClippedScrollStateHandle, ClippedScrollable,
     ConstrainedBox, Container, CrossAxisAlignment, DispatchEventResult, EventHandler, Fill, Flex,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, OffsetType, ParentAnchor,
     ParentElement, ParentOffsetBounds, PositioningAxis, SavePosition, ScrollbarWidth, Shrinkable,
     Stack, XAxisAnchor, YAxisAnchor,
 };
-use warpui::keymap::EditableBinding;
-use warpui::platform::Cursor;
-use warpui::presenter::ChildView;
-use warpui::ui_components::components::UiComponent;
-use warpui::{
+use black_ui::keymap::EditableBinding;
+use black_ui::platform::Cursor;
+use black_ui::presenter::ChildView;
+use black_ui::ui_components::components::UiComponent;
+use black_ui::{
     id, AppContext, BlurContext, Element, Entity, FocusContext, ModelAsRef, ModelHandle,
     SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, WindowId,
 };
@@ -69,7 +69,7 @@ const SECTION_SPACING: f32 = 16.;
 
 // Variable rows
 pub(super) const ROW_SPACING: f32 = 8.;
-pub const EDUCATION_TEXT: &str = "Add secret or command. Warp never stores external secrets";
+pub const EDUCATION_TEXT: &str = "Add secret or command. Black never stores external secrets";
 const VARIABLE_FONT_SIZE: f32 = 13.;
 const DESCRIPTION_EDITOR_CUTOFF: f32 = 30.;
 const DESCRIPTION_BOTTOM_MARGIN: f32 = 12.;
@@ -1281,7 +1281,7 @@ impl View for EnvVarCollectionView {
         }
     }
 
-    fn render(&self, app: &AppContext) -> Box<dyn warpui::Element> {
+    fn render(&self, app: &AppContext) -> Box<dyn black_ui::Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
         let mut content = Flex::column();

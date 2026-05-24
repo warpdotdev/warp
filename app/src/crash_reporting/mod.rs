@@ -17,12 +17,12 @@ use regex::Regex;
 use sentry::{ClientInitGuard, IntoDsn, SessionMode};
 #[cfg(linux_or_windows)]
 pub use sentry_minidump::run_server as run_minidump_server;
-use warp_core::channel::Channel;
-use warpui::r#async::block_on;
-use warpui::rendering::GPUDeviceInfo;
-use warpui::windowing::state::ApplicationStage;
-use warpui::windowing::{self, StateEvent, WindowManager};
-use warpui::{AppContext, SingletonEntity};
+use black_core::channel::Channel;
+use black_ui::r#async::block_on;
+use black_ui::rendering::GPUDeviceInfo;
+use black_ui::windowing::state::ApplicationStage;
+use black_ui::windowing::{self, StateEvent, WindowManager};
+use black_ui::{AppContext, SingletonEntity};
 
 use crate::antivirus::{AntivirusInfo, AntivirusInfoEvent};
 use crate::auth::anonymous_id::get_or_create_anonymous_id;
@@ -163,11 +163,11 @@ impl ToSentryTags for CrashRecoveryMetadata {
 
             [
                 (
-                    "warp.crash_recovery_process.running",
+                    "black.crash_recovery_process.running",
                     bool_to_sentry_value(self.is_crash_recovery_process_running),
                 ),
                 (
-                    "warp.handled_by_crash_recovery_process",
+                    "black.handled_by_crash_recovery_process",
                     bool_to_sentry_value(self.was_unhandled_event),
                 ),
             ]
@@ -520,7 +520,7 @@ fn release_version() -> &'static str {
 
 /// Sets the warp.client_type Sentry tag.
 pub fn set_client_type_tag(client_id: &str) {
-    set_tag("warp.client_type", client_id);
+    set_tag("black.client_type", client_id);
 }
 
 /// Initializes the warp.virtual_env Sentry tag group.
@@ -570,18 +570,18 @@ trait ToSentryTags {
 
 impl ToSentryTags for ApplicationStage {
     fn to_sentry_tags(&self) -> impl IntoIterator<Item = (&str, String)> {
-        [("warp.application_stage", self.to_string())]
+        [("black.application_stage", self.to_string())]
     }
 }
 
 impl ToSentryTags for GPUDeviceInfo {
     fn to_sentry_tags(&self) -> impl IntoIterator<Item = (&str, String)> {
         [
-            ("warp.gpu.device.name", self.device_name.to_string()),
-            ("warp.gpu.device.type", self.device_type.to_string()),
-            ("warp.gpu.backend", self.backend.to_string()),
-            ("warp.gpu.driver.name", self.driver_name.to_string()),
-            ("warp.gpu.driver.info", self.driver_info.to_string()),
+            ("black.gpu.device.name", self.device_name.to_string()),
+            ("black.gpu.device.type", self.device_type.to_string()),
+            ("black.gpu.backend", self.backend.to_string()),
+            ("black.gpu.driver.name", self.driver_name.to_string()),
+            ("black.gpu.driver.info", self.driver_info.to_string()),
         ]
     }
 }
@@ -590,7 +590,7 @@ impl ToSentryTags for Option<VirtualEnvironment> {
     fn to_sentry_tags(&self) -> impl IntoIterator<Item = (&str, String)> {
         let env = self.clone();
         [(
-            "warp.virtual_env.name",
+            "black.virtual_env.name",
             env.map(|env| env.name).unwrap_or_else(|| "none".to_owned()),
         )]
     }
@@ -599,7 +599,7 @@ impl ToSentryTags for Option<VirtualEnvironment> {
 impl ToSentryTags for Option<windowing::System> {
     fn to_sentry_tags(&self) -> impl IntoIterator<Item = (&str, String)> {
         [(
-            "warp.window.system",
+            "black.window.system",
             self.as_ref()
                 .map(|windowing_system| windowing_system.to_string())
                 .unwrap_or_else(|| "unknown".to_owned()),
@@ -610,7 +610,7 @@ impl ToSentryTags for Option<windowing::System> {
 impl ToSentryTags for &AntivirusInfo {
     fn to_sentry_tags(&self) -> impl IntoIterator<Item = (&str, String)> {
         [(
-            "warp.window.antivirus.name",
+            "black.window.antivirus.name",
             self.get().unwrap_or("none").into(),
         )]
     }

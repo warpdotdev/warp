@@ -1,4 +1,4 @@
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+use black_ui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use super::{CloudNotebookModel, NotebookId};
 use crate::ai::document::ai_document_model::AIDocumentId;

@@ -6,14 +6,14 @@ use std::sync::Arc;
 use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
 use instant::Instant;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::builder::MIN_FONT_SIZE;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::Fill;
-use warp_editor::editor::NavigationKey;
-use warpui::clipboard::ClipboardContent;
-use warpui::color::ColorU;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::builder::MIN_FONT_SIZE;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::Fill;
+use black_editor::editor::NavigationKey;
+use black_ui::clipboard::ClipboardContent;
+use black_ui::color::ColorU;
+use black_ui::elements::{
     Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
     Container, CornerRadius, CrossAxisAlignment, Dismiss, DispatchEventResult, DropShadow, Empty,
     EventHandler, Flex, Highlight, Hoverable, MainAxisAlignment, MainAxisSize, MouseInBehavior,
@@ -21,12 +21,12 @@ use warpui::elements::{
     PositionedElementOffsetBounds, Radius, SavePosition, ScrollStateHandle, Scrollable,
     ScrollableElement, ScrollbarWidth, Shrinkable, Stack, Text, UniformList, UniformListState,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::keymap::FixedBinding;
-use warpui::r#async::Timer;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::units::Pixels;
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::keymap::FixedBinding;
+use black_ui::r#async::Timer;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::units::Pixels;
+use black_ui::{
     AppContext, Element, Entity, FocusContext, SingletonEntity as _, TypedActionView, View,
     ViewContext, ViewHandle, WindowId,
 };
@@ -124,7 +124,7 @@ const ENV_SIDE_CAR_OUTER_RADIUS: f32 = 6.;
 const ENV_SIDE_CAR_INNER_RADIUS: f32 = 4.;
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings([
         FixedBinding::new(
@@ -896,7 +896,7 @@ impl DisplayChipMenu {
             theme.nonactive_ui_detail().into(),
             theme.active_ui_detail().into(),
             // Leave the scrollbar gutter background transparent.
-            warpui::elements::Fill::None,
+            black_ui::elements::Fill::None,
         )
         .with_padding_start(0.)
         .with_padding_end(0.)
@@ -1305,7 +1305,7 @@ impl DisplayChipMenu {
             scrollbar_width,
             theme.nonactive_ui_detail().into(),
             theme.active_ui_detail().into(),
-            warpui::elements::Fill::None,
+            black_ui::elements::Fill::None,
         )
         .with_padding_end(0.)
         .with_padding_start(0.);

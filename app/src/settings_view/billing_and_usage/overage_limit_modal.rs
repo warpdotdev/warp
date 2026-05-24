@@ -1,10 +1,10 @@
-use warpui::elements::{
+use black_ui::elements::{
     Align, Border, ChildView, Clipped, Container, CornerRadius, CrossAxisAlignment, Expanded, Flex,
     MouseStateHandle, Padding, ParentElement, Radius, Text,
 };
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
@@ -195,7 +195,7 @@ impl View for SpendingLimitModal {
         let theme = appearance.theme();
 
         let description_text = Text::new(
-            "Warp will prevent use of premium models when this dollar limit is reached. Resets on a monthly basis.",
+            "Black will prevent use of premium models when this dollar limit is reached. Resets on a monthly basis.",
             appearance.ui_font_family(),
             14.,
         )

@@ -1,18 +1,18 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::Icon;
-use warp_util::path::LineAndColumnArg;
-use warpui::elements::{
+use black_core::send_telemetry_from_ctx;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::Icon;
+use black_util::path::LineAndColumnArg;
+use black_ui::elements::{
     resizable_state_handle, ChildView, ConstrainedBox, Container, CrossAxisAlignment, DragBarSide,
     Element, Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
     Resizable, ResizableStateHandle, Shrinkable,
 };
-use warpui::platform::Cursor;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::platform::Cursor;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle, WeakViewHandle,
 };
@@ -93,7 +93,7 @@ pub enum LeftPanelEvent {
     ShowDeleteConfirmationDialog {
         conversation_id: AIConversationId,
         conversation_title: String,
-        terminal_view_id: Option<warpui::EntityId>,
+        terminal_view_id: Option<black_ui::EntityId>,
     },
 }
 
@@ -108,7 +108,7 @@ pub enum ToolPanelView {
 /// Encapsulates the active view state to enforce that all mutations go through
 /// `active_view_state::set`, which handles necessary side effects.
 mod active_view_state {
-    use warpui::ViewContext;
+    use black_ui::ViewContext;
 
     use super::ToolPanelView;
 
@@ -147,9 +147,9 @@ mod active_view_state {
 }
 
 pub struct ToolbeltButtonConfig {
-    pub icon: warp_core::ui::Icon,
+    pub icon: black_core::ui::Icon,
     /// Optional icon to use when the given toolbelt option is in an active state.
-    pub active_icon: Option<warp_core::ui::Icon>,
+    pub active_icon: Option<black_core::ui::Icon>,
     pub tooltip_text: String,
     pub action: LeftPanelAction,
     /// Whether the button should be rendered with an "active" state.
@@ -436,7 +436,7 @@ impl LeftPanelView {
                 ToolbeltButtonConfig {
                     icon: Icon::WarpDrive,
                     active_icon: None,
-                    tooltip_text: "Warp Drive".to_string(),
+                    tooltip_text: "Black Drive".to_string(),
                     action: LeftPanelAction::WarpDrive,
                     render_with_active_state: false,
                     tooltip_keybinding: toolbelt_tooltip_keybinding(&tooltip_keybinding_names, ctx),
@@ -464,7 +464,7 @@ impl LeftPanelView {
 
     fn get_or_create_global_search_view_for_pane_group(
         &mut self,
-        pane_group_id: warpui::EntityId,
+        pane_group_id: black_ui::EntityId,
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<GlobalSearchView> {
         if let Some(view) = self
@@ -490,7 +490,7 @@ impl LeftPanelView {
 
     fn get_or_create_file_tree_view_for_pane_group(
         &mut self,
-        pane_group_id: warpui::EntityId,
+        pane_group_id: black_ui::EntityId,
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<FileTreeView> {
         if let Some(view) = self
@@ -1023,7 +1023,7 @@ impl LeftPanelView {
 
     fn deactivate_file_tree_view_for_pane_group(
         &self,
-        pane_group_id: warpui::EntityId,
+        pane_group_id: black_ui::EntityId,
         ctx: &mut ViewContext<Self>,
     ) {
         if let Some(view) = self
@@ -1217,7 +1217,7 @@ impl View for LeftPanelView {
         })
         .finish();
 
-        if warpui::platform::is_mobile_device() {
+        if black_ui::platform::is_mobile_device() {
             return panel_content;
         }
 

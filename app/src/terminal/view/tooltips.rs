@@ -1,11 +1,11 @@
 //! Grid tooltips for the terminal view
 
 use pathfinder_geometry::vector::vec2f;
-use warpui::elements::{
+use black_ui::elements::{
     ChildAnchor, Dismiss, MouseStateHandle, OffsetPositioning, PositionedElementAnchor,
     PositionedElementOffsetBounds, Stack,
 };
-use warpui::{AppContext, Element, EventContext};
+use black_ui::{AppContext, Element, EventContext};
 
 use super::{TerminalAction, TerminalView};
 use crate::appearance::Appearance;
@@ -37,13 +37,13 @@ struct GridTooltipLink {
 #[cfg(feature = "local_fs")]
 fn open_in_warp_tooltip(
     path: std::path::PathBuf,
-    line_and_column_num: Option<warp_util::path::LineAndColumnArg>,
+    line_and_column_num: Option<black_util::path::LineAndColumnArg>,
     detail_for_default: &mut Option<String>,
     mouse_state: MouseStateHandle,
     app: &AppContext,
 ) -> Option<GridTooltipLink> {
     use settings::Setting as _;
-    use warpui::SingletonEntity;
+    use black_ui::SingletonEntity;
 
     use crate::settings::CodeSettings;
     use crate::util::file::external_editor::EditorSettings;
@@ -59,7 +59,7 @@ fn open_in_warp_tooltip(
         None
     };
     Some(GridTooltipLink {
-        text: "Open in Warp".to_string(),
+        text: "Open in Black".to_string(),
         action: TerminalAction::OpenCodeInWarp {
             path,
             layout: *EditorSettings::as_ref(app).open_file_layout.value(),

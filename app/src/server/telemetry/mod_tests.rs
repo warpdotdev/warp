@@ -6,6 +6,11 @@ use super::*;
 // Tests that events with UGC are not persisted to desk.
 #[test]
 fn test_persist_events_doesnt_include_ugc_events() {
+    // The telemetry event queue is process-global; other tests in this binary
+    // enqueue events via record_event and may leave them queued. Drain it first
+    // so this test's flush only sees its own two events regardless of run order.
+    clear_event_queue();
+
     let telemetry_api = TelemetryApi::new();
 
     VirtualFS::test(
@@ -15,22 +20,22 @@ fn test_persist_events_doesnt_include_ugc_events() {
             let user_id = Some("user".into());
             let anonymous_id = "anonymous_id".to_owned();
 
-            warpui::telemetry::record_event(
+            black_ui::telemetry::record_event(
                 user_id.clone(),
                 anonymous_id.clone(),
                 "non UGC event name".into(),
                 None,  /* payload */
                 false, /* contains_ugc  */
-                warpui::time::get_current_time(),
+                black_ui::time::get_current_time(),
             );
 
-            warpui::telemetry::record_event(
+            black_ui::telemetry::record_event(
                 user_id.clone(),
                 anonymous_id.clone(),
                 "UGC event name".into(),
                 None, /* payload */
                 true, /* contains_ugc  */
-                warpui::time::get_current_time(),
+                black_ui::time::get_current_time(),
             );
 
             let file_path = dirs.root().join("rudderstack");

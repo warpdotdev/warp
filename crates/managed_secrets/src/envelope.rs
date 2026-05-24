@@ -2,7 +2,7 @@ use std::io;
 use std::sync::Once;
 
 use base64::Engine;
-use warp_graphql::managed_secrets::ManagedSecretType;
+use black_graphql::managed_secrets::ManagedSecretType;
 
 use crate::secret_value::ManagedSecretValue;
 

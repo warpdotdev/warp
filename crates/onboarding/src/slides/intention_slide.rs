@@ -1,21 +1,21 @@
 use ui_components::{button, Component as _, Options as _};
-use warp_core::features::FeatureFlag;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::Fill;
-use warp_core::ui::Icon;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::Fill;
+use black_core::ui::Icon;
+use black_ui::elements::{
     Border, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Flex, FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
     ParentElement, Radius,
 };
-use warpui::fonts::Weight;
-use warpui::keymap::Keystroke;
-use warpui::platform::Cursor;
-use warpui::prelude::Align;
-use warpui::text_layout::TextAlignment;
-use warpui::ui_components::components::{UiComponent as _, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::Weight;
+use black_ui::keymap::Keystroke;
+use black_ui::platform::Cursor;
+use black_ui::prelude::Align;
+use black_ui::text_layout::TextAlignment;
+use black_ui::ui_components::components::{UiComponent as _, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
     ViewContext,
 };
@@ -83,7 +83,7 @@ impl IntentionSlide {
 
         let title = appearance
             .ui_builder()
-            .paragraph("Welcome to Warp")
+            .paragraph("Welcome to Black")
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -401,7 +401,7 @@ impl IntentionSlide {
 
         let new_settings_modes = FeatureFlag::OpenWarpNewSettingsModes.is_enabled();
         let next_text = if !new_settings_modes && selected_index == 1 {
-            "Get Warping"
+            "Get started"
         } else {
             "Next"
         };

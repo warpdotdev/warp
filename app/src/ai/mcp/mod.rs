@@ -8,8 +8,8 @@ use diesel::{QueryDsl, RunQueryDsl, SqliteConnection};
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::Icon;
+use black_core::ui::appearance::Appearance;
+use black_core::ui::Icon;
 
 use crate::cloud_object::model::generic_string_model::{
     GenericStringModel, GenericStringObjectId, StringModel,
@@ -581,7 +581,7 @@ pub enum MCPServerUpdate {
 
 pub(crate) fn home_config_file_path(provider: MCPProvider) -> Option<PathBuf> {
     match provider {
-        MCPProvider::Warp => warp_core::paths::warp_home_mcp_config_file_path(),
+        MCPProvider::Warp => black_core::paths::warp_home_mcp_config_file_path(),
         _ => dirs::home_dir().map(|home_dir| home_dir.join(provider.home_config_path())),
     }
 }
@@ -597,7 +597,7 @@ pub enum MCPProvider {
 impl MCPProvider {
     pub fn display_name(&self) -> &str {
         match self {
-            MCPProvider::Warp => "Warp",
+            MCPProvider::Warp => "Black",
             MCPProvider::Claude => "Claude",
             MCPProvider::Codex => "Codex",
             MCPProvider::Agents => "Other Agents",

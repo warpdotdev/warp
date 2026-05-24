@@ -6,12 +6,12 @@ use std::time::Duration;
 use futures::{pin_mut, FutureExt as _};
 use itertools::Itertools;
 use settings::Setting as _;
-use warp_completer::completer::{CommandExitStatus, CommandOutput};
-use warp_core::user_preferences::GetUserPreferences;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
+use black_completer::completer::{CommandExitStatus, CommandOutput};
+use black_core::user_preferences::GetUserPreferences;
+use black_ui::r#async::{SpawnedFutureHandle, Timer};
 #[cfg(feature = "local_fs")]
-use warpui::WeakModelHandle;
-use warpui::{
+use black_ui::WeakModelHandle;
+use black_ui::{
     AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity, ViewHandle,
 };
 
@@ -160,7 +160,7 @@ pub struct CurrentPrompt {
     renderable_chips: HashSet<ContextChipKind>,
 
     same_line_prompt_enabled: bool,
-    /// The separator to use as a trailing character at the end of Warp prompt, if any.
+    /// The separator to use as a trailing character at the end of Black prompt, if any.
     separator: WarpPromptSeparator,
 
     latest_context: Option<PromptContext>,
@@ -319,12 +319,12 @@ impl CurrentPrompt {
             .collect()
     }
 
-    /// Whether same line prompt is enabled for the Warp prompt.
+    /// Whether same line prompt is enabled for the Black prompt.
     pub fn same_line_prompt_enabled(&self) -> bool {
         self.same_line_prompt_enabled
     }
 
-    /// The separator for the current Warp prompt.
+    /// The separator for the current Black prompt.
     pub fn separator(&self) -> WarpPromptSeparator {
         self.separator
     }
@@ -593,7 +593,7 @@ impl CurrentPrompt {
         current_dir_path: Option<String>,
         environment_variables: Option<HashMap<String, String>>,
         timeout: Option<Duration>,
-    ) -> (Option<warp_completer::completer::CommandOutput>, bool) {
+    ) -> (Option<black_completer::completer::CommandOutput>, bool) {
         let command_future = session
             .execute_command(
                 &command,
@@ -1225,7 +1225,7 @@ impl CurrentPrompt {
     #[cfg(test)]
     pub fn await_generators(
         &self,
-        ctx: &mut warpui::AppContext,
+        ctx: &mut black_ui::AppContext,
     ) -> futures_util::future::BoxFuture<'static, ()> {
         use futures_util::FutureExt;
         use itertools::Itertools;

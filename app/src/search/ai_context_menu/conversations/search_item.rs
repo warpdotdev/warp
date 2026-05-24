@@ -1,10 +1,10 @@
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
-use warpui::elements::{
+use black_ui::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, Flex, Highlight, Icon, ParentElement, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::{AppContext, Element, SingletonEntity};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::{AppContext, Element, SingletonEntity};
 
 use super::ConversationContextItem;
 use crate::appearance::Appearance;

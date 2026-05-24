@@ -5,20 +5,20 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use thousands::Separable;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::Fill;
-use warp_graphql::billing::{AddonCreditsOption, StripeSubscriptionPlan};
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::Fill;
+use black_graphql::billing::{AddonCreditsOption, StripeSubscriptionPlan};
+use black_ui::elements::{
     Align, Border, CacheOption, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, DropShadow, Flex, FormattedTextElement, HighlightedHyperlink, Image,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack,
 };
-use warpui::fonts::{FamilyId, Weight};
-use warpui::platform::Cursor;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::{FamilyId, Weight};
+use black_ui::platform::Cursor;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
@@ -283,7 +283,7 @@ impl BuildPlanMigrationModal {
             ChildView::new(&self.reload_denominations_dropdown).finish()
         } else {
             // Match dropdown height to prevent layout shift (dropdown is typically ~28-32px)
-            ConstrainedBox::new(warpui::elements::Empty::new().finish())
+            ConstrainedBox::new(black_ui::elements::Empty::new().finish())
                 .with_width(DROPDOWN_WIDTH)
                 .with_height(28.)
                 .finish()
@@ -516,7 +516,7 @@ impl BuildPlanMigrationModal {
         let title_text = if is_business {
             "Welcome to the New Business Plan"
         } else {
-            "Welcome to Warp Build"
+            "Welcome to Black Build"
         };
 
         let title = Self::create_text(
@@ -528,9 +528,9 @@ impl BuildPlanMigrationModal {
         );
 
         let intro_text = if is_business {
-            "Your workspace has been updated to the new Warp Business Plan as the legacy Business plan is sunset."
+            "Your workspace has been updated to the new Black Business Plan as the legacy Business plan is sunset."
         } else {
-            "Your workspace has been updated to the Warp Build Plan as the legacy Pro, Turbo, and Lightspeed plans are sunset."
+            "Your workspace has been updated to the Black Build Plan as the legacy Pro, Turbo, and Lightspeed plans are sunset."
         };
 
         let intro = Self::create_text(intro_text.to_string(), font_family, 14., text_color, None);
@@ -539,7 +539,7 @@ impl BuildPlanMigrationModal {
             if is_business {
                 "The new Business plan is a primarily usage-based plan, starting at:"
             } else {
-                "Warp Build is a primarily usage-based plan, starting at:"
+                "Black Build is a primarily usage-based plan, starting at:"
             }
             .to_string(),
             font_family,
@@ -632,7 +632,7 @@ impl BuildPlanMigrationModal {
 
         let learn_more_fragments = vec![
             FormattedTextFragment::plain_text("Learn more on our "),
-            FormattedTextFragment::hyperlink("pricing page", "https://www.warp.dev/pricing"),
+            FormattedTextFragment::hyperlink("pricing page", "https://blackdagger.io/pricing"),
             FormattedTextFragment::plain_text("."),
         ];
         let learn_more = Container::new(
@@ -647,7 +647,7 @@ impl BuildPlanMigrationModal {
             .with_hyperlink_font_color(appearance.theme().accent().into_solid())
             .register_default_click_handlers(|_url, ctx, _| {
                 ctx.dispatch_typed_action(BuildPlanMigrationModalViewAction::OpenUrl(
-                    "https://www.warp.dev/pricing",
+                    "https://blackdagger.io/pricing",
                 ));
             })
             .finish(),

@@ -4,12 +4,12 @@ use std::ops::Range;
 
 use string_offset::CharOffset;
 use vim::vim::VimMode;
-use warp_core::ui::appearance::DEFAULT_UI_FONT_SIZE;
-use warpui::PaintContext;
-use warpui::elements::{CornerRadius, Point, Radius};
-use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::{Vector2F, vec2f};
-use warpui::text_layout::{Line, PaintStyleOverride, TextFrame};
+use black_core::ui::appearance::DEFAULT_UI_FONT_SIZE;
+use black_ui::PaintContext;
+use black_ui::elements::{CornerRadius, Point, Radius};
+use black_ui::geometry::rect::RectF;
+use black_ui::geometry::vector::{Vector2F, vec2f};
+use black_ui::text_layout::{Line, PaintStyleOverride, TextFrame};
 
 use crate::editor::TextDecoration;
 use crate::render::layout::line_height;

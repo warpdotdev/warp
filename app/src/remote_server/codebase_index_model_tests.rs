@@ -282,8 +282,8 @@ fn availability_uses_requested_path_when_it_matches_known_remote_repo() {
 fn codebases_for_agent_context_includes_searchable_remote_paths() {
     let mut model = RemoteCodebaseIndexModel::default();
     model.apply_status_update(
-        remote_path("/workspaces/warp"),
-        ready_status("/workspaces/warp"),
+        remote_path("/workspaces/black"),
+        ready_status("/workspaces/black"),
     );
     model.apply_status_update(
         remote_path("/workspaces/stale"),
@@ -296,12 +296,12 @@ fn codebases_for_agent_context_includes_searchable_remote_paths() {
         entries,
         vec![
             RemoteCodebaseContextEntry {
-                name: "stale".to_string(),
-                path: "/workspaces/stale".to_string(),
+                name: "black".to_string(),
+                path: "/workspaces/black".to_string(),
             },
             RemoteCodebaseContextEntry {
-                name: "warp".to_string(),
-                path: "/workspaces/warp".to_string(),
+                name: "stale".to_string(),
+                path: "/workspaces/stale".to_string(),
             },
         ]
     );

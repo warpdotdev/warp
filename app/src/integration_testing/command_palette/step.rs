@@ -1,5 +1,5 @@
-use warpui::integration::{AssertionOutcome, TestStep};
-use warpui::{App, WindowId};
+use black_ui::integration::{AssertionOutcome, TestStep};
+use black_ui::{App, WindowId};
 
 use crate::integration_testing::command_palette::assertions::{
     assert_command_palette_has_results, assert_command_palette_is_closed,

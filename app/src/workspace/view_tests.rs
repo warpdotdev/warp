@@ -14,9 +14,9 @@ use session_sharing_protocol::common::SessionId;
 use tempfile::TempDir;
 use terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use terminal::view::ActiveSessionState;
-use warp_editor::editor::NavigationKey;
-use warpui::platform::WindowStyle;
-use warpui::{AddSingletonModel, App, ViewHandle};
+use black_editor::editor::NavigationKey;
+use black_ui::platform::WindowStyle;
+use black_ui::{AddSingletonModel, App, ViewHandle};
 use watcher::HomeDirectoryWatcher;
 
 use super::*;
@@ -1676,7 +1676,7 @@ fn test_open_or_toggle_warp_drive() {
 
         let workspace = mock_workspace(&mut app);
         workspace.update(&mut app, |workspace, ctx| {
-            // First, unconditionally open Warp Drive as a system action. WD should be open and welcome tips should not have opening warp drive.
+            // First, unconditionally open Black Drive as a system action. WD should be open and welcome tips should not have opening warp drive.
             workspace.open_or_toggle_warp_drive(
                 false, /* toggle */
                 false, /* explicit_user_action */
@@ -1684,7 +1684,7 @@ fn test_open_or_toggle_warp_drive() {
             );
             assert!(
                 workspace.current_workspace_state.is_warp_drive_open,
-                "Warp Drive should be open"
+                "Black Drive should be open"
             );
             assert!(
                 !workspace
@@ -1692,7 +1692,7 @@ fn test_open_or_toggle_warp_drive() {
                     .as_ref(ctx)
                     .features_used
                     .contains(&Tip::Action(TipAction::OpenWarpDrive)),
-                "Warp drive welcome tip should not be completed"
+                "Black drive welcome tip should not be completed"
             );
 
             // Next, toggle warp drive as a user action. WD should be closed and tip should not be filled out.
@@ -1703,7 +1703,7 @@ fn test_open_or_toggle_warp_drive() {
             );
             assert!(
                 !workspace.current_workspace_state.is_warp_drive_open,
-                "Warp Drive should be closed"
+                "Black Drive should be closed"
             );
             assert!(
                 !workspace
@@ -1711,7 +1711,7 @@ fn test_open_or_toggle_warp_drive() {
                     .as_ref(ctx)
                     .features_used
                     .contains(&Tip::Action(TipAction::OpenWarpDrive)),
-                "Warp drive welcome tip should not be completed"
+                "Black drive welcome tip should not be completed"
             );
 
             // Finally, toggle warp drive again as a user action. WD should be open and tip filled out.
@@ -1722,7 +1722,7 @@ fn test_open_or_toggle_warp_drive() {
             );
             assert!(
                 workspace.current_workspace_state.is_warp_drive_open,
-                "Warp Drive should be open"
+                "Black Drive should be open"
             );
             assert!(
                 workspace
@@ -1730,7 +1730,7 @@ fn test_open_or_toggle_warp_drive() {
                     .as_ref(ctx)
                     .features_used
                     .contains(&Tip::Action(TipAction::OpenWarpDrive)),
-                "Warp drive welcome tip should not be completed"
+                "Black drive welcome tip should not be completed"
             );
         });
     });
@@ -1963,7 +1963,7 @@ fn test_switch_focus_panels() {
         workspace.update(&mut app, |view, ctx| {
             assert!(
                 view.left_panel_view.is_self_or_child_focused(ctx),
-                "Expected Warp Drive panel to be focused"
+                "Expected Black Drive panel to be focused"
             );
         });
 
@@ -3026,11 +3026,11 @@ fn test_worktree_sidecar_hides_linked_worktrees_from_repo_list() {
             let external_git_dir_canon = CanonicalizedPath::try_from(external_git_dir.as_path())
                 .expect("canonical external git dir");
 
-            let main_repo_std: warp_util::standardized_path::StandardizedPath =
+            let main_repo_std: black_util::standardized_path::StandardizedPath =
                 main_repo_canon.into();
-            let linked_worktree_std: warp_util::standardized_path::StandardizedPath =
+            let linked_worktree_std: black_util::standardized_path::StandardizedPath =
                 linked_worktree_canon.into();
-            let external_git_dir_std: warp_util::standardized_path::StandardizedPath =
+            let external_git_dir_std: black_util::standardized_path::StandardizedPath =
                 external_git_dir_canon.into();
 
             DetectedRepositories::handle(ctx).update(ctx, |repos, _ctx| {

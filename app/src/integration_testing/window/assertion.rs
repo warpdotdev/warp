@@ -1,6 +1,6 @@
-use warpui::integration::{AssertionCallback, AssertionOutcome, StepData};
-use warpui::windowing::WindowManager;
-use warpui::{async_assert_eq, SingletonEntity};
+use black_ui::integration::{AssertionCallback, AssertionOutcome, StepData};
+use black_ui::windowing::WindowManager;
+use black_ui::{async_assert_eq, SingletonEntity};
 
 /// Saves the active window id with the given step data key.
 pub fn save_active_window_id<K>(window_key: K) -> AssertionCallback

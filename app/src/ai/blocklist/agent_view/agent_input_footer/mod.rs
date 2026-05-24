@@ -21,15 +21,15 @@ use tokio::fs;
 use toolbar_item::AgentToolbarItemKind;
 #[cfg(feature = "voice_input")]
 use voice_input::{StartListeningError, VoiceSessionResult};
-use warp_cli::agent::Harness;
-use warp_core::context_flag::ContextFlag;
-use warp_core::report_if_error;
-use warp_core::ui::color::blend::Blend;
-use warp_core::ui::color::contrast::MinimumAllowedContrast;
-use warp_core::ui::color::ContrastingColor;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
-use warpui::elements::{
+use black_cli::agent::Harness;
+use black_core::context_flag::ContextFlag;
+use black_core::report_if_error;
+use black_core::ui::color::blend::Blend;
+use black_core::ui::color::contrast::MinimumAllowedContrast;
+use black_core::ui::color::ContrastingColor;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::{AnsiColorIdentifier, Fill};
+use black_ui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Expanded, Flex,
     MainAxisAlignment, MainAxisSize, OffsetPositioning, ParentElement, PositionedElementAnchor,
@@ -37,10 +37,10 @@ use warpui::elements::{
     WrapFillEntireRun, DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
 #[cfg(feature = "voice_input")]
-use warpui::r#async::SpawnedFutureHandle;
+use black_ui::r#async::SpawnedFutureHandle;
 #[cfg(not(target_family = "wasm"))]
-use warpui::r#async::Timer;
-use warpui::{
+use black_ui::r#async::Timer;
+use black_ui::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
@@ -411,7 +411,7 @@ impl AgentInputFooter {
             ActionButton::new("Enable notifications", InstallPluginButtonTheme)
                 .with_icon(Icon::Download)
                 .with_tooltip(
-                    "Install the Warp plugin to enable rich agent notifications within Warp",
+                    "Install the Black plugin to enable rich agent notifications within Black",
                 )
                 .with_size(cli_button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
@@ -424,7 +424,7 @@ impl AgentInputFooter {
         let plugin_instructions_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("Notifications setup instructions", InstallPluginButtonTheme)
                 .with_icon(Icon::Info)
-                .with_tooltip("View instructions to install the Warp plugin")
+                .with_tooltip("View instructions to install the Black plugin")
                 .with_size(cli_button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .with_adjoined_side(AdjoinedSide::Right)
@@ -436,9 +436,9 @@ impl AgentInputFooter {
         });
 
         let update_plugin_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Update Warp plugin", InstallPluginButtonTheme)
+            ActionButton::new("Update Black plugin", InstallPluginButtonTheme)
                 .with_icon(Icon::Download)
-                .with_tooltip("A new version of the Warp plugin is available")
+                .with_tooltip("A new version of the Black plugin is available")
                 .with_size(cli_button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .with_adjoined_side(AdjoinedSide::Right)
@@ -450,7 +450,7 @@ impl AgentInputFooter {
         let update_instructions_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("Plugin update instructions", InstallPluginButtonTheme)
                 .with_icon(Icon::Info)
-                .with_tooltip("View instructions to update the Warp plugin")
+                .with_tooltip("View instructions to update the Black plugin")
                 .with_size(cli_button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .with_adjoined_side(AdjoinedSide::Right)
@@ -1006,7 +1006,7 @@ impl AgentInputFooter {
     fn select_cli_file(&mut self, ctx: &mut ViewContext<Self>) {
         let window_id = ctx.window_id();
         let view_id = ctx.view_id();
-        let file_picker_config = warpui::platform::FilePickerConfiguration::new();
+        let file_picker_config = black_ui::platform::FilePickerConfiguration::new();
 
         ctx.open_file_picker(
             move |result, ctx| match result {
@@ -1236,7 +1236,7 @@ impl AgentInputFooter {
             // executor so it runs inside the container and targets the
             // container's shell / package layout. A common use case will be
             // running a 3p harness (e.g. Claude Code) inside a sandbox and
-            // needing the Warp plugin to integrate with it.
+            // needing the Black plugin to integrate with it.
             Some(ShellLaunchData::DockerSandbox { .. }) => return false,
         };
 
@@ -1354,10 +1354,10 @@ impl AgentInputFooter {
             .cli_agent(ctx)
             .and_then(plugin_manager_for)
             .map(|m| m.install_success_message())
-            .unwrap_or("Warp plugin installed. Please restart the session to activate.");
+            .unwrap_or("Black plugin installed. Please restart the session to activate.");
         self.handle_plugin_operation(
-            "Installing Warp plugin...",
-            "Failed to install Warp plugin",
+            "Installing Black plugin...",
+            "Failed to install Black plugin",
             success_msg,
             PluginChipTelemetryKind::Install,
             |manager| async move { manager.install().await },
@@ -1371,10 +1371,10 @@ impl AgentInputFooter {
             .cli_agent(ctx)
             .and_then(plugin_manager_for)
             .map(|m| m.update_success_message())
-            .unwrap_or("Warp plugin updated. Please restart the session to activate.");
+            .unwrap_or("Black plugin updated. Please restart the session to activate.");
         self.handle_plugin_operation(
-            "Updating Warp plugin...",
-            "Failed to update Warp plugin",
+            "Updating Black plugin...",
+            "Failed to update Black plugin",
             success_msg,
             PluginChipTelemetryKind::Update,
             |manager| async move { manager.update().await },
@@ -1718,8 +1718,8 @@ impl AgentInputFooter {
         // For key-based toggling, validate the key state against current voice state.
         if let voice_input::VoiceInputToggledFrom::Key { state } = source {
             match (&self.cli_voice_input_state, state) {
-                (CLIVoiceInputState::Stopped, warpui::event::KeyState::Released) => return,
-                (CLIVoiceInputState::Listening, warpui::event::KeyState::Pressed) => return,
+                (CLIVoiceInputState::Stopped, black_ui::event::KeyState::Released) => return,
+                (CLIVoiceInputState::Listening, black_ui::event::KeyState::Pressed) => return,
                 _ => {}
             }
         }
@@ -2106,7 +2106,7 @@ impl View for AgentInputFooter {
         "AgentViewFooter"
     }
 
-    fn render(&self, app: &warpui::AppContext) -> Box<dyn warpui::Element> {
+    fn render(&self, app: &black_ui::AppContext) -> Box<dyn black_ui::Element> {
         if self.should_render_cloud_mode_v2(app) {
             return self.render_cloud_mode_v2_footer(app);
         }
@@ -2346,7 +2346,7 @@ pub enum AgentInputFooterAction {
 impl TypedActionView for AgentInputFooter {
     type Action = AgentInputFooterAction;
 
-    fn handle_action(&mut self, action: &Self::Action, ctx: &mut warpui::ViewContext<Self>) {
+    fn handle_action(&mut self, action: &Self::Action, ctx: &mut black_ui::ViewContext<Self>) {
         match action {
             #[cfg(feature = "voice_input")]
             AgentInputFooterAction::ToggleVoiceInput => {
@@ -2636,10 +2636,10 @@ impl ActionButtonTheme for AgentInputButtonTheme {
         true
     }
 
-    fn font_properties(&self) -> Option<warpui::fonts::Properties> {
+    fn font_properties(&self) -> Option<black_ui::fonts::Properties> {
         if crate::features::FeatureFlag::CloudModeInputV2.is_enabled() {
-            Some(warpui::fonts::Properties {
-                weight: warpui::fonts::Weight::Semibold,
+            Some(black_ui::fonts::Properties {
+                weight: black_ui::fonts::Weight::Semibold,
                 ..Default::default()
             })
         } else {
@@ -2706,12 +2706,12 @@ impl ActionButtonTheme for ActiveMicButtonTheme {
         true
     }
 
-    fn font_properties(&self) -> Option<warpui::fonts::Properties> {
+    fn font_properties(&self) -> Option<black_ui::fonts::Properties> {
         AgentInputButtonTheme.font_properties()
     }
 }
 
-/// Green-accented theme for the "Install Warp plugin" chip.
+/// Green-accented theme for the "Install Black plugin" chip.
 struct InstallPluginButtonTheme;
 
 impl ActionButtonTheme for InstallPluginButtonTheme {
@@ -2748,10 +2748,10 @@ impl ActionButtonTheme for InstallPluginButtonTheme {
 /// Returns the log file path on success, or `None` if writing failed.
 #[cfg(not(target_family = "wasm"))]
 async fn write_install_log(agent: CLIAgent, err: &PluginInstallError) -> Option<PathBuf> {
-    let log_path = env::temp_dir().join("warp-plugin-install.log");
+    let log_path = env::temp_dir().join("black-plugin-install.log");
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
     let contents = format!(
-        "Warp plugin installation — {agent:?}\n\
+        "Black plugin installation — {agent:?}\n\
          {now}\n\
          \n\
          {log}",

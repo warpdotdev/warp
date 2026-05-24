@@ -1,12 +1,12 @@
 use std::collections::HashSet;
 
 use pathfinder_color::ColorU;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::color::internal_colors;
+use black_ui::elements::{
     Border, ChildView, ConstrainedBox, Container, CornerRadius, DropShadow, Radius,
 };
-use warpui::{
+use black_ui::{
     AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, View, ViewContext,
     ViewHandle,
 };

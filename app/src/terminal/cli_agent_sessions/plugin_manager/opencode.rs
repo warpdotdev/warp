@@ -33,9 +33,9 @@ impl CliAgentPluginManager for OpenCodePluginManager {
 
 static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| {
     PluginInstructions {
-        title: "Install Warp Plugin for OpenCode",
+        title: "Install Black Plugin for OpenCode",
         subtitle:
-            "Add the Warp plugin to your OpenCode configuration, then restart OpenCode.",
+            "Add the Black plugin to your OpenCode configuration, then restart OpenCode.",
         steps: &[
             PluginInstructionStep {
                 description: "Open or create your opencode.json. This can be in your project root, or the global config path:",
@@ -56,7 +56,7 @@ static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| {
 
 static UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| {
     PluginInstructions {
-        title: "Update Warp Plugin for OpenCode",
+        title: "Update Black Plugin for OpenCode",
         subtitle: "Pin the plugin to the latest version in your opencode.json. OpenCode caches plugins per version spec, so changing the pin forces it to re-fetch on restart.",
         steps: &[
             PluginInstructionStep {

@@ -1,5 +1,5 @@
 use float_cmp::assert_approx_eq;
-use warpui::App;
+use black_ui::App;
 
 use super::*;
 use crate::ai::blocklist::agent_view::AgentViewState;
@@ -703,8 +703,8 @@ fn test_smart_selection_in_single_block() {
 
             let block_index = insert_block(
                 &mut block_list,
-                "echo https://warp.dev/about hello/world.js\n",
-                "https://warp.dev/about hello/world.js\n",
+                "echo https://blackdagger.io/about hello/world.js\n",
+                "https://blackdagger.io/about hello/world.js\n",
             );
             let block = block_list
                 .block_at(block_index)
@@ -728,7 +728,7 @@ fn test_smart_selection_in_single_block() {
 
             assert_eq!(
                 block_list.selection_to_string(&semantic_selection, false, ctx),
-                Some("https://warp.dev/about".to_string())
+                Some("https://blackdagger.io/about".to_string())
             );
             block_list.clear_selection();
 
@@ -746,37 +746,37 @@ fn test_smart_selection_in_single_block() {
 
             assert_eq!(
                 block_list.selection_to_string(&semantic_selection, false, ctx),
-                Some("https://warp.dev/about".to_string())
+                Some("https://blackdagger.io/about".to_string())
             );
             block_list.clear_selection();
 
             // Start a selection at the "a" in "about" and drag to the "e" in "hello";
-            // this spans the 4th and 5th lines of the command grid.
+            // this spans the 5th and 6th lines of the command grid.
             block_list.start_selection(
-                BlockListPoint::new(command_grid_offset + 3.0, 1),
+                BlockListPoint::new(command_grid_offset + 4.0, 0),
                 SelectionType::Semantic,
                 Side::Left,
             );
             block_list.update_selection(
-                BlockListPoint::new(command_grid_offset + 4.0, 1),
+                BlockListPoint::new(command_grid_offset + 5.0, 0),
                 Side::Right,
             );
 
             assert_eq!(
                 block_list.selection_to_string(&semantic_selection, false, ctx),
-                Some("https://warp.dev/about hello".to_string())
+                Some("https://blackdagger.io/about hello".to_string())
             );
             block_list.clear_selection();
 
             // Start a selection at the "e" in "hello" and drag to the "o" in "about";
-            // this goes from the 5th line of the command grid back to the 4th.
+            // this goes from the 6th line of the command grid back to the 5th.
             block_list.start_selection(
-                BlockListPoint::new(command_grid_offset + 4.0, 1),
+                BlockListPoint::new(command_grid_offset + 5.0, 0),
                 SelectionType::Semantic,
                 Side::Left,
             );
             block_list.update_selection(
-                BlockListPoint::new(command_grid_offset + 3.0, 3),
+                BlockListPoint::new(command_grid_offset + 4.0, 2),
                 Side::Right,
             );
 
@@ -798,8 +798,8 @@ fn test_smart_selection_in_multiple_blocks() {
 
             let first_block_index = insert_block(
                 &mut block_list,
-                "echo https://warp.dev/about hello/world.js\n",
-                "https://warp.dev/about hello/world.js\n",
+                "echo https://blackdagger.io/about hello/world.js\n",
+                "https://blackdagger.io/about hello/world.js\n",
             );
             let second_block_index =
                 insert_block(&mut block_list, "echo 192.168.0.1\n", "192.168.0.1\n");
@@ -835,15 +835,15 @@ fn test_smart_selection_in_multiple_blocks() {
 
             assert_eq!(
                 block_list.selection_to_string(&semantic_selection, false, ctx),
-                Some("https://warp.dev/about hello/world.js\nhttps".to_string())
+                Some("https://blackdagger.io/about hello/world.js\nhttps".to_string())
             );
             block_list.clear_selection();
 
             // Start a selection at "e" in "hello" in the 1st command (which has wrapped
-            // to the third line of the command grid) to the "6" in the "168" in
+            // to the 6th line of the command grid) to the "6" in the "168" in
             // the 2nd output.
             block_list.start_selection(
-                BlockListPoint::new(first_command_grid_offset + 4.0, 1),
+                BlockListPoint::new(first_command_grid_offset + 5.0, 0),
                 SelectionType::Semantic,
                 Side::Left,
             );
@@ -855,7 +855,7 @@ fn test_smart_selection_in_multiple_blocks() {
             assert_eq!(
         block_list.selection_to_string(&semantic_selection, false, ctx),
         Some(
-            "hello/world.js\nhttps://warp.dev/about hello/world.js\necho 192.168.0.1\n192.168"
+            "hello/world.js\nhttps://blackdagger.io/about hello/world.js\necho 192.168.0.1\n192.168"
                 .to_string()
         )
     );
@@ -875,7 +875,7 @@ fn test_smart_selection_in_multiple_blocks() {
 
             assert_eq!(
                 block_list.selection_to_string(&semantic_selection, false, ctx),
-                Some("dev/about hello/world.js\necho 192.168.0.1".to_string())
+                Some("blackdagger.io/about hello/world.js\necho 192.168.0.1".to_string())
             );
             block_list.clear_selection();
         })
@@ -928,13 +928,13 @@ fn test_smart_selection_override() {
 
             let block_index = insert_block(
                 &mut block_list,
-                "echo https://warp.dev/about hello/world",
-                "https://warp.dev/about hello/world",
+                "echo https://blackdagger.io/about hello/world",
+                "https://blackdagger.io/about hello/world",
             );
 
-            // the override wraps "https://warp.dev/about hello/world"
+            // the override wraps "https://blackdagger.io/about hello/world"
             block_list.set_smart_select_override(WithinBlock::new(
-                Point::new(0, 5)..=Point::new(5, 3),
+                Point::new(0, 5)..=Point::new(6, 2),
                 block_index,
                 GridType::PromptAndCommand,
             ));
@@ -952,7 +952,7 @@ fn test_smart_selection_override() {
 
             assert_eq!(
                 block_list.selection_to_string(&semantic_selection, false, ctx),
-                Some("https://warp.dev/about hello/world".to_string())
+                Some("https://blackdagger.io/about hello/world".to_string())
             );
         })
     })

@@ -19,14 +19,14 @@ use lazy_static::lazy_static;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 pub use serialized_block::*;
-use warp_core::command::ExitCode;
-use warp_core::features::FeatureFlag;
-use warp_terminal::model::grid::Dimensions as _;
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
-use warp_util::path::user_friendly_path;
-use warpui::r#async::executor::Background;
-use warpui::record_trace_event;
-use warpui::units::{IntoLines, Lines};
+use black_core::command::ExitCode;
+use black_core::features::FeatureFlag;
+use black_terminal::model::grid::Dimensions as _;
+use black_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use black_util::path::user_friendly_path;
+use black_ui::r#async::executor::Background;
+use black_ui::record_trace_event;
+use black_ui::units::{IntoLines, Lines};
 
 use super::bootstrap::BootstrapStage;
 use super::find::RegexDFAs;
@@ -628,7 +628,7 @@ pub enum BlockState {
     /// any particular execution or command.
     Background,
 
-    /// This block holds static content and is programmatically added to the blocklist by Warp. An
+    /// This block holds static content and is programmatically added to the blocklist by Black. An
     /// example is the information subshell bootstrap "success" block.
     Static,
 }
@@ -1528,7 +1528,7 @@ impl Block {
     }
 
     /// Whether we render the prompt on the same line, in the context of a finished block. Post-same
-    /// line prompt, we render on the same line for PS1, but not for Warp prompt!
+    /// line prompt, we render on the same line for PS1, but not for Black prompt!
     pub fn render_prompt_on_same_line(&self) -> bool {
         self.honor_ps1()
     }
@@ -1688,7 +1688,7 @@ impl Block {
 
     /// A command-grid is active in the period after we have received the precmd
     /// hook but before the command has started executing. This includes the time
-    /// when the shell echoes the command bytes that Warp wrote to the PTY.
+    /// when the shell echoes the command bytes that Black wrote to the PTY.
     pub fn is_command_grid_active(&self) -> bool {
         self.state == BlockState::BeforeExecution
     }
@@ -1915,7 +1915,7 @@ impl Block {
         if self.header_grid.honor_ps1() {
             self.block_banner_height() + self.padding_top()
         } else {
-            // Grid is drawn below custom Warp prompt in finished blocks.
+            // Grid is drawn below custom Black prompt in finished blocks.
             self.block_banner_height()
                 + self.padding_top()
                 + self.prompt_height()
@@ -1953,7 +1953,7 @@ impl Block {
     }
 
     /// Returns the ENTIRE HEIGHT of the prompt and command (no padding top or middle included).
-    /// In the case of combined grid: for Warp prompt, this includes the height of both the Warp prompt
+    /// In the case of combined grid: for Black prompt, this includes the height of both the Black prompt
     /// AND combined grid; for PS1, this is just the combined grid (PS1 is included there).
     pub fn prompt_and_command_height(&self) -> Lines {
         if !self.ready_to_render() || self.should_hide_command_grid {
@@ -1962,7 +1962,7 @@ impl Block {
             // No padding between prompt and command in the case of PS1 (combined grid).
             self.header_grid.prompt_and_command_height()
         } else {
-            // Handle the case of Warp built-in prompt with combined grid.
+            // Handle the case of Black built-in prompt with combined grid.
             // Note that we have non-zero `command_padding_top` in this case, unlike above!
             if self.header_grid.is_command_empty() {
                 Lines::zero()
@@ -2195,7 +2195,7 @@ impl Block {
         let escape_char = session.shell_family().escape_char();
 
         // Parse the raw command string to get the top-level command.
-        let command = warp_completer::parsers::simple::top_level_command(
+        let command = black_completer::parsers::simple::top_level_command(
             self.command_to_string(),
             escape_char,
         )?;
@@ -2205,7 +2205,7 @@ impl Block {
             .alias_value(command.as_str())
             .map(|s| s.to_owned())
             // An alias can technically expand into an entire command (e.g. "gl" => "PAGER=0 git log").
-            .and_then(|s| warp_completer::parsers::simple::top_level_command(s, escape_char))
+            .and_then(|s| black_completer::parsers::simple::top_level_command(s, escape_char))
             // If alias expansion didn't work, then just return the original top-level command.
             .or(Some(command))
     }
@@ -2535,7 +2535,7 @@ impl Block {
 
         self.background_executor
             .spawn(async move {
-                warpui::r#async::Timer::after(std::time::Duration::from_millis(delay_ms)).await;
+                black_ui::r#async::Timer::after(std::time::Duration::from_millis(delay_ms)).await;
                 ready_to_render.store(true, Ordering::Relaxed);
                 event_proxy.send_wakeup_event();
             })
@@ -2880,7 +2880,7 @@ impl Block {
     }
 
     pub fn grid_storage_lines(&self) -> usize {
-        use warp_terminal::model::grid::Dimensions as _;
+        use black_terminal::model::grid::Dimensions as _;
 
         self.all_grids_iter()
             .map(|grid| grid.grid_storage().total_rows())
@@ -3049,7 +3049,7 @@ impl ansi::Handler for Block {
         // If we're processing a prompt and we receive an initial blank line,
         // ignore it.  This is sometimes used in prompts (e.g.: oh-my-zsh's
         // "re5et" theme) to separate the previous command's output from the
-        // prompt, but this is not needed in Warp due to us visually separating
+        // prompt, but this is not needed in Black due to us visually separating
         // blocks.
         match self.header_grid.receiving_chars_for_prompt {
             Some(ansi::PromptKind::Initial) if !self.header_grid.prompt_has_received_content() => {

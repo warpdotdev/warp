@@ -1,5 +1,5 @@
-use warp_core::features::FeatureFlag;
-use warpui::{App, EntityId, ModelHandle};
+use black_core::features::FeatureFlag;
+use black_ui::{App, EntityId, ModelHandle};
 
 use super::AgentNotificationsModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use itertools::Itertools;
-use warpui::{AppContext, Entity};
+use black_ui::{AppContext, Entity};
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::conversation_navigation::ConversationNavigationData;

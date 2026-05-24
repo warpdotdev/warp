@@ -7,13 +7,13 @@ use onboarding::components::onboarding_callout::{
 };
 use rust_embed::RustEmbed;
 use ui_components::Component as _;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::{AnsiColor, AnsiColors, Details, Fill, TerminalColors, WarpTheme};
-use warpui::color::ColorU;
-use warpui::elements::{Rect, Stack};
-use warpui::fonts::{Cache, FamilyId, Weight};
-use warpui::prelude::*;
-use warpui::{platform, AddWindowOptions, AssetProvider, ModelContext};
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::{AnsiColor, AnsiColors, Details, Fill, TerminalColors, WarpTheme};
+use black_ui::color::ColorU;
+use black_ui::elements::{Rect, Stack};
+use black_ui::fonts::{Cache, FamilyId, Weight};
+use black_ui::prelude::*;
+use black_ui::{platform, AddWindowOptions, AssetProvider, ModelContext};
 
 #[derive(Clone, Copy, RustEmbed)]
 #[folder = "../../app/assets"]
@@ -82,7 +82,7 @@ impl View for RootView {
         let callout = self.callout.render(
             appearance,
             CalloutParams {
-                title: "Meet your Warp input".into(),
+                title: "Meet your Black input".into(),
                 text: "Your terminal input can detect natural language as well as commands.".into(),
                 step: StepStatus::new(1, 2),
                 right_button: CalloutButton {

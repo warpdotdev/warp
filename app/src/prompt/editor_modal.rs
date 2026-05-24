@@ -2,17 +2,17 @@ use itertools::Itertools;
 use pathfinder_geometry::vector::vec2f;
 use serde::Serialize;
 use settings::Setting as _;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{
+use black_core::ui::theme::Fill;
+use black_ui::elements::{
     Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Empty, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack,
 };
-use warpui::keymap::FixedBinding;
-use warpui::platform::Cursor;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::keymap::FixedBinding;
+use black_ui::platform::Cursor;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
@@ -52,12 +52,12 @@ const MODAL_CONTENT_FONT_SIZE: f32 = 14.;
 const CHECKBOX_SIZE: f32 = 16.;
 
 const MODAL_TITLE: &str = "Edit prompt";
-const WARP_PROMPT_SECTION_HEADER: &str = "Warp terminal prompt";
+const WARP_PROMPT_SECTION_HEADER: &str = "Black terminal prompt";
 const SHELL_PROMPT_SECTION_HEADER: &str = "Shell prompt (PS1)";
 const RESTORE_DEFAULT_BUTTON: &str = "Restore default";
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings([FixedBinding::new(
         "escape",
@@ -108,10 +108,10 @@ pub struct EditorModal {
     /// used for saving changes.
     same_line_prompt_enabled: bool,
 
-    /// Dropdown to select the separator for the Warp prompt, in the case of
-    /// same line prompt. This separator is added at the end of the Warp prompt.
+    /// Dropdown to select the separator for the Black prompt, in the case of
+    /// same line prompt. This separator is added at the end of the Black prompt.
     warp_prompt_separator_dropdown: ViewHandle<Dropdown<EditorModalAction>>,
-    /// The separator currently selected for the Warp prompt.
+    /// The separator currently selected for the Black prompt.
     warp_prompt_separator: WarpPromptSeparator,
 
     /// True if there was any change while the modal was open.
@@ -170,7 +170,7 @@ impl EditorModal {
 
         let warp_prompt_separator = match SessionSettings::as_ref(ctx).saved_prompt.value() {
             PromptSelection::CustomChipSelection(config) => config.separator(),
-            // If the "default Warp prompt" i.e. no context chips, is selected, then default to no Warp prompt separator.
+            // If the "default Black prompt" i.e. no context chips, is selected, then default to no Black prompt separator.
             _ => WarpPromptSeparator::None,
         };
         let warp_prompt_separator_label = warp_prompt_separator.dropdown_item_label().to_owned();
@@ -287,9 +287,9 @@ impl EditorModal {
         ctx.notify();
     }
 
-    /// Updates the state of the Warp prompt separator dropdown to be enabled/disabled based on the current state of the modal.
+    /// Updates the state of the Black prompt separator dropdown to be enabled/disabled based on the current state of the modal.
     fn update_warp_separator_dropdown_state(&mut self, ctx: &mut ViewContext<Self>) {
-        // If we are using the Warp prompt and SLP is enabled, then we enable the dropdown. Otherwise, disable it.
+        // If we are using the Black prompt and SLP is enabled, then we enable the dropdown. Otherwise, disable it.
         if self.prompt_type != PromptType::PS1 && self.same_line_prompt_enabled {
             self.warp_prompt_separator_dropdown
                 .update(ctx, |dropdown, ctx| {
@@ -307,7 +307,7 @@ impl EditorModal {
         if self.is_dirty {
             match self.prompt_type {
                 PromptType::PS1 => {
-                    // TODO: we need to stop the Warp prompt generators from running at this point
+                    // TODO: we need to stop the Black prompt generators from running at this point
                     SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
                         report_if_error!(settings.honor_ps1.set_value(true, ctx));
                     });
@@ -405,14 +405,14 @@ impl TypedActionView for EditorModal {
             Self::Action::UsePS1 => {
                 self.is_dirty = true;
                 self.prompt_type = PromptType::PS1;
-                // Disable the Warp separator dropdown (only applies to Warp prompt).
+                // Disable the Black separator dropdown (only applies to Black prompt).
                 self.update_warp_separator_dropdown_state(ctx);
                 ctx.notify();
             }
             Self::Action::UseWarpPrompt => {
                 self.is_dirty = true;
                 self.prompt_type = PromptType::warp_prompt_from_settings(ctx);
-                // Enable the Warp separator dropdown, if SLP is on.
+                // Enable the Black separator dropdown, if SLP is on.
                 self.update_warp_separator_dropdown_state(ctx);
                 ctx.notify();
             }
@@ -423,7 +423,7 @@ impl TypedActionView for EditorModal {
                 let default_prompt = PromptConfiguration::default_prompt();
                 self.same_line_prompt_enabled = default_prompt.same_line_prompt_enabled();
                 self.warp_prompt_separator = default_prompt.separator();
-                // Disable the Warp separator dropdown, since SLP is off for the default Warp prompt.
+                // Disable the Black separator dropdown, since SLP is off for the default Black prompt.
                 self.update_warp_separator_dropdown_state(ctx);
                 let restored_chips = default_prompt.chip_kinds();
                 self.update_used_chips(restored_chips, ctx);
@@ -433,7 +433,7 @@ impl TypedActionView for EditorModal {
                 self.is_dirty = true;
                 self.same_line_prompt_enabled = !self.same_line_prompt_enabled;
 
-                // In case we had previously picked default Warp prompt, but now the user toggled
+                // In case we had previously picked default Black prompt, but now the user toggled
                 // same line prompt - it's no longer the default prompt.
                 self.prompt_type = PromptType::Warp;
 
@@ -482,7 +482,7 @@ impl EditorModal {
             .span(MODAL_TITLE.to_string())
             .with_style(UiComponentStyles {
                 font_size: Some(MODAL_TITLE_FONT_SIZE),
-                font_weight: Some(warpui::fonts::Weight::Bold),
+                font_weight: Some(black_ui::fonts::Weight::Bold),
                 ..Default::default()
             })
             .build()
@@ -589,7 +589,7 @@ impl EditorModal {
         }
     }
 
-    // TODO: consider supporting SLP with the new Warp prompt.
+    // TODO: consider supporting SLP with the new Black prompt.
     #[allow(dead_code)]
     fn render_same_line_prompt_section(&self, appearance: &Appearance) -> Box<dyn Element> {
         let label = appearance
@@ -673,7 +673,7 @@ impl EditorModal {
                     .span(WARP_PROMPT_SECTION_HEADER.to_string())
                     .with_style(UiComponentStyles {
                         font_size: Some(MODAL_CONTENT_FONT_SIZE),
-                        font_weight: Some(warpui::fonts::Weight::Semibold),
+                        font_weight: Some(black_ui::fonts::Weight::Semibold),
                         ..Default::default()
                     })
                     .build()
@@ -722,7 +722,7 @@ impl EditorModal {
             .span(SHELL_PROMPT_SECTION_HEADER.to_string())
             .with_style(UiComponentStyles {
                 font_size: Some(MODAL_CONTENT_FONT_SIZE),
-                font_weight: Some(warpui::fonts::Weight::Semibold),
+                font_weight: Some(black_ui::fonts::Weight::Semibold),
                 ..Default::default()
             })
             .build()
@@ -789,7 +789,7 @@ impl EditorModal {
 
         // We disable the save button in a couple of cases:
         // - there are no changes
-        // - the Warp prompt is used but there are no chips selected
+        // - the Black prompt is used but there are no chips selected
         let save_disabled = !self.is_dirty
             || (matches!(self.prompt_type, PromptType::Warp)
                 && self.chip_configurator.used_chips.is_empty());

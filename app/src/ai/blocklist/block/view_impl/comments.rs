@@ -1,11 +1,11 @@
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::Icon;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::Icon;
+use black_ui::elements::{
     Axis, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
     Expanded, Flex, Hoverable, MouseState, ParentElement, Radius, Text, Wrap, WrapFillEntireRun,
 };
-use warpui::{AppContext, Element, SingletonEntity};
+use black_ui::{AppContext, Element, SingletonEntity};
 
 use crate::ai::agent::comment::ReviewComment;
 use crate::ai::agent::icons::addressed_comment_icon;

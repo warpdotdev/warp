@@ -10,12 +10,12 @@ use ai::skills::{
 pub use file_watchers::{
     extract_skill_parent_directory, read_skills_from_directories, SkillWatcher, SkillWatcherEvent,
 };
-use warp_core::channel::ChannelState;
-use warp_core::features::FeatureFlag;
-use warp_core::ui::icons::Icon;
-use warp_core::{report_error, safe_warn};
-use warp_util::local_or_remote_path::LocalOrRemotePath;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+use black_core::channel::ChannelState;
+use black_core::features::FeatureFlag;
+use black_core::ui::icons::Icon;
+use black_core::{report_error, safe_warn};
+use black_util::local_or_remote_path::LocalOrRemotePath;
+use black_ui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::SkillDescriptor;
 use crate::ai::mcp::{McpIntegration, TemplatableMCPServerManager};
@@ -74,7 +74,7 @@ pub struct SkillManager {
     /// Reverse lookup: skill name → set of paths with that name.
     /// This allows efficient lookup by skill name without scanning all paths.
     skills_by_name: HashMap<String, HashSet<PathBuf>>,
-    /// Skills bundled into Warp, each with activation condition and icon.
+    /// Skills bundled into Black, each with activation condition and icon.
     bundled_skills: HashMap<String, BundledSkill>,
     /// When true, all skills in `directory_skills` are in scope regardless of
     /// the current working directory. Set by `AgentDriver` when a cloud
@@ -439,9 +439,9 @@ impl SkillManager {
         }
     }
 
-    /// Load skill definitions bundled with Warp.
+    /// Load skill definitions bundled with Black.
     async fn load_bundled_skills() -> HashMap<String, BundledSkill> {
-        let Some(resources_dir) = warp_core::paths::bundled_resources_dir() else {
+        let Some(resources_dir) = black_core::paths::bundled_resources_dir() else {
             return HashMap::new();
         };
         let skills_dir = resources_dir.join("bundled").join("skills");
@@ -463,7 +463,7 @@ impl SkillManager {
 
     /// Load Figma-specific bundled skills from the `figma/` subdirectory.
     async fn load_figma_skills() -> HashMap<String, BundledSkill> {
-        let Some(resources_dir) = warp_core::paths::bundled_resources_dir() else {
+        let Some(resources_dir) = black_core::paths::bundled_resources_dir() else {
             return HashMap::new();
         };
         let figma_skills_dir = resources_dir
@@ -564,24 +564,24 @@ async fn read_bundled_skills(skills_dir: &Path) -> HashMap<String, ParsedSkill> 
 /// Builds the context map for bundled skill variable substitution.
 ///
 /// Supported variables:
-/// - `{{warp_server_url}}` - The server root URL (e.g., `https://api.warp.dev`)
-/// - `{{warp_cli_binary_name}}` - The CLI binary name (e.g., `warp` or `warp-cli`)
-/// - `{{warp_url_scheme}}` - The URL scheme (e.g., `warp`, `warpdev`, `warppreview`)
+/// - `{{black_server_url}}` - The server root URL (e.g., `https://api.blackdagger.io`)
+/// - `{{black_cli_binary_name}}` - The CLI binary name (e.g., `black` or `black-cli`)
+/// - `{{black_url_scheme}}` - The URL scheme (e.g., `black`, `blackdev`, `blackpreview`)
 /// - `{{settings_schema_path}}` - Path to the bundled JSON settings schema
 /// - `{{settings_file_path}}` - Path to the user's settings TOML file
 /// - `{{keybindings_file_path}}` - Path to the user's keybindings YAML file
 fn build_bundled_skill_context() -> HashMap<String, String> {
     let mut context: HashMap<String, String> = [
         (
-            "warp_server_url".to_owned(),
+            "black_server_url".to_owned(),
             ChannelState::server_root_url().into_owned(),
         ),
         (
-            "warp_cli_binary_name".to_owned(),
+            "black_cli_binary_name".to_owned(),
             ChannelState::channel().cli_command_name().to_owned(),
         ),
         (
-            "warp_url_scheme".to_owned(),
+            "black_url_scheme".to_owned(),
             ChannelState::url_scheme().to_owned(),
         ),
         (
@@ -597,7 +597,7 @@ fn build_bundled_skill_context() -> HashMap<String, String> {
     .collect();
 
     if let Some(schema_path) =
-        warp_core::paths::bundled_resources_dir().map(|dir| dir.join("settings_schema.json"))
+        black_core::paths::bundled_resources_dir().map(|dir| dir.join("settings_schema.json"))
     {
         context.insert(
             "settings_schema_path".to_owned(),
@@ -610,7 +610,7 @@ fn build_bundled_skill_context() -> HashMap<String, String> {
 
 /// Returns the icon for a bundled skill, given its directory-based ID.
 /// Skills with a known brand (e.g. `pr-comments` → GitHub) get a
-/// branded icon; everything else falls back to the Warp logo.
+/// branded icon; everything else falls back to the Black logo.
 fn icon_for_bundled_skill(skill_id: &str) -> Icon {
     match skill_id {
         "pr-comments" => Icon::Github,

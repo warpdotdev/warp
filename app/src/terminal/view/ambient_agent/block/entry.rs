@@ -1,16 +1,16 @@
 use settings::Setting;
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::Icon;
-use warpui::elements::{
+use black_core::send_telemetry_from_ctx;
+use black_core::ui::appearance::Appearance;
+use black_core::ui::Icon;
+use black_ui::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable, MainAxisSize, MouseStateHandle,
     ParentElement, Shrinkable, Text,
 };
-use warpui::fonts::Properties;
-use warpui::platform::Cursor;
-use warpui::prelude::Empty;
-use warpui::text_layout::ClipConfig;
-use warpui::{
+use black_ui::fonts::Properties;
+use black_ui::platform::Cursor;
+use black_ui::prelude::Empty;
+use black_ui::text_layout::ClipConfig;
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle, WeakModelHandle,
 };
@@ -257,7 +257,7 @@ impl View for AmbientAgentEntryBlock {
                 )
                 .with_color(theme.main_text_color(theme.background()).into_solid())
                 .with_style(Properties {
-                    weight: warpui::fonts::Weight::Bold,
+                    weight: black_ui::fonts::Weight::Bold,
                     ..Default::default()
                 })
                 .soft_wrap(false)

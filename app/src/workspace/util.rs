@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
-use warpui::elements::MouseStateHandle;
-use warpui::{AppContext, EntityId, SingletonEntity, ViewContext, ViewHandle, WindowId};
+use black_ui::elements::MouseStateHandle;
+use black_ui::{AppContext, EntityId, SingletonEntity, ViewContext, ViewHandle, WindowId};
 
 use super::OneTimeModalModel;
 use crate::appearance::Appearance;
@@ -285,7 +285,7 @@ pub enum TerminalSessionFallbackBehavior {
 /// Given a [`WindowId`], see if its [`Workspace`] contains an active [`TerminalView`] and return
 /// that.
 ///
-/// Note that "active" is not the same as "focused" in Warp's pane management.
+/// Note that "active" is not the same as "focused" in Black's pane management.
 pub fn active_terminal_in_window<T, F>(
     window_id: WindowId,
     ctx: &mut AppContext,
@@ -363,7 +363,7 @@ pub fn get_context_target_terminal_view(
 pub fn get_terminal_background_fill(
     window_id: WindowId,
     app: &AppContext,
-) -> warpui::elements::Fill {
+) -> black_ui::elements::Fill {
     let theme = Appearance::as_ref(app).theme();
     let terminal_opacity = get_terminal_background_opacity(window_id, app);
     theme.background().with_opacity(terminal_opacity).into()

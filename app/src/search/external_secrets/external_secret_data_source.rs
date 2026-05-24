@@ -1,5 +1,5 @@
 use itertools::Itertools;
-use warpui::AppContext;
+use black_ui::AppContext;
 
 use super::external_secret_fuzzy_match::FuzzyMatchExternalSecretResult;
 use super::external_secret_search_item::ExternalSecretSearchItem;

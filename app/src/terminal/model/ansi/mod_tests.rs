@@ -4,8 +4,8 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use hex;
-use warp_core::command::ExitCode;
-use warpui::color::ColorU;
+use black_core::command::ExitCode;
+use black_ui::color::ColorU;
 
 use super::*;
 use crate::terminal::model::ansi::InputBufferValue;

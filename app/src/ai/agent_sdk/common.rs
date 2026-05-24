@@ -7,10 +7,10 @@ use std::time::Duration;
 
 use futures::TryFutureExt;
 use inquire::{InquireError, Select};
-use warp_cli::agent::Harness;
-use warp_cli::environment::{EnvironmentCreateArgs, EnvironmentUpdateArgs};
-use warpui::r#async::FutureExt;
-use warpui::{AppContext, GetSingletonModelHandle, SingletonEntity as _, UpdateModel};
+use black_cli::agent::Harness;
+use black_cli::environment::{EnvironmentCreateArgs, EnvironmentUpdateArgs};
+use black_ui::r#async::FutureExt;
+use black_ui::{AppContext, GetSingletonModelHandle, SingletonEntity as _, UpdateModel};
 
 use crate::ai::agent::conversation::ServerAIConversationMetadata;
 use crate::ai::agent_sdk::driver::{AgentDriverError, WARP_DRIVE_SYNC_TIMEOUT};
@@ -134,14 +134,14 @@ where
     }
 }
 
-/// Refresh Warp Drive before executing an operation.
+/// Refresh Black Drive before executing an operation.
 pub fn refresh_warp_drive(
     ctx: &AppContext,
 ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static {
     UpdateManager::as_ref(ctx)
         .initial_load_complete()
         .with_timeout(WARP_DRIVE_SYNC_TIMEOUT)
-        .map_err(|_| anyhow::anyhow!("Timed out waiting for Warp Drive to sync"))
+        .map_err(|_| anyhow::anyhow!("Timed out waiting for Black Drive to sync"))
 }
 
 /// Fetch the conversation's server metadata and validate that its harness matches the caller's
@@ -213,7 +213,7 @@ pub enum EnvironmentChoice {
 
 impl EnvironmentChoice {
     /// Resolve the environment to use when creating an agent integration.
-    /// Warp Drive *must* have been synced first.
+    /// Black Drive *must* have been synced first.
     pub fn resolve_for_create(
         args: EnvironmentCreateArgs,
         ctx: &AppContext,
@@ -252,7 +252,7 @@ impl EnvironmentChoice {
 
             // If there are no synced environments, require the user to create one or use --no-environment.
             if options.len() == 1 {
-                let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
+                let cli_name = black_cli::binary_name().unwrap_or_else(|| "black".to_string());
                 return Err(ResolveConfigurationError::Other(anyhow::anyhow!(
                     "No environments are configured for this account.\n\
 You can create an environment with `{cli_name} environment create`.\n\
@@ -279,7 +279,7 @@ Without an environment, the agent will not be able to access private repositorie
 
     /// Resolve the environment to use when updating an agent integration. If the user did not
     /// request any changes to the environment, this returns `Ok(None)`.
-    /// Warp Drive *must* have been synced first.
+    /// Black Drive *must* have been synced first.
     pub fn resolve_for_update(
         args: EnvironmentUpdateArgs,
         ctx: &AppContext,

@@ -1,6 +1,6 @@
 //! Indexing-related newtypes for strongly typed tty/grid/terminal APIs.
 
-pub use warp_terminal::model::{Index, IndexRange, Point, VisiblePoint, VisibleRow};
+pub use black_terminal::model::{Index, IndexRange, Point, VisiblePoint, VisibleRow};
 
 /// The side of a cell.
 pub type Side = Direction;

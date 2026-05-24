@@ -1,14 +1,14 @@
-use warp_core::features::FeatureFlag;
-use warp_core::report_if_error;
-use warp_core::settings::ToggleableSetting as _;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::report_if_error;
+use black_core::settings::ToggleableSetting as _;
+use black_ui::elements::{
     Container, Element, Flex, MouseStateHandle, ParentElement, Shrinkable, Text,
 };
-use warpui::fonts::Weight;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ui_components::switch::SwitchStateHandle;
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+use black_ui::fonts::Weight;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::ui_components::switch::SwitchStateHandle;
+use black_ui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use super::settings_page::{
     render_body_item, AdditionalInfo, MatchData, PageType, SettingsPageMeta,
@@ -120,7 +120,7 @@ impl SettingsWidget for WarpDriveHeaderWidget {
     type View = WarpDriveSettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "warp drive sign up"
+        "black drive sign up"
     }
 
     fn should_render(&self, app: &AppContext) -> bool {
@@ -140,7 +140,7 @@ impl SettingsWidget for WarpDriveHeaderWidget {
 
         let message = Container::new(
             Text::new_inline(
-                "To use Warp Drive, please create an account.".to_string(),
+                "To use Black Drive, please create an account.".to_string(),
                 appearance.ui_font_family(),
                 14.,
             )
@@ -161,8 +161,8 @@ impl SettingsWidget for WarpDriveHeaderWidget {
                 .with_style(UiComponentStyles {
                     font_size: Some(14.),
                     font_weight: Some(Weight::Semibold),
-                    border_radius: Some(warpui::elements::CornerRadius::with_all(
-                        warpui::elements::Radius::Pixels(4.),
+                    border_radius: Some(black_ui::elements::CornerRadius::with_all(
+                        black_ui::elements::Radius::Pixels(4.),
                     )),
                     padding: Some(Coords {
                         top: 8.,
@@ -183,7 +183,7 @@ impl SettingsWidget for WarpDriveHeaderWidget {
 
         Container::new(
             Flex::row()
-                .with_cross_axis_alignment(warpui::elements::CrossAxisAlignment::Center)
+                .with_cross_axis_alignment(black_ui::elements::CrossAxisAlignment::Center)
                 .with_child(Shrinkable::new(1., message).finish())
                 .with_child(button)
                 .finish(),
@@ -203,7 +203,7 @@ impl SettingsWidget for WarpDriveToggleWidget {
     type View = WarpDriveSettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "warp drive tools panel command palette search workflows prompts notebooks environment variables"
+        "black drive tools panel command palette search workflows prompts notebooks environment variables"
     }
 
     fn render(
@@ -219,11 +219,11 @@ impl SettingsWidget for WarpDriveToggleWidget {
                 .is_anonymous_or_logged_out();
 
         render_body_item::<WarpDriveSettingsPageAction>(
-            "Warp Drive".into(),
+            "Black Drive".into(),
             Some(AdditionalInfo {
                 mouse_state: self.info_icon_mouse_state.clone(),
                 on_click_action: Some(WarpDriveSettingsPageAction::OpenUrl(
-                    "https://docs.warp.dev/knowledge-and-collaboration/warp-drive".to_string(),
+                    "https://blackdagger.io/knowledge-and-collaboration/warp-drive".to_string(),
                 )),
                 secondary_text: None,
                 tooltip_override_text: None,
@@ -249,7 +249,7 @@ impl SettingsWidget for WarpDriveToggleWidget {
                     }
                 })
                 .finish(),
-            Some("Warp Drive is a workspace in your terminal where you can save Workflows, Notebooks, Prompts, and Environment Variables for personal use or to share with a team.".into()),
+            Some("Black Drive is a workspace in your terminal where you can save Workflows, Notebooks, Prompts, and Environment Variables for personal use or to share with a team.".into()),
         )
     }
 }

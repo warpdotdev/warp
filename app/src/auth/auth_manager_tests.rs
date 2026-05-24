@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use warpui::{App, SingletonEntity};
+use black_ui::{App, SingletonEntity};
 
 use super::{AuthManager, AuthManagerEvent};
 use crate::auth::auth_view_modal::AuthRedirectPayload;
@@ -36,7 +36,7 @@ fn track_invalid_state_failures(app: &mut App) -> Arc<AtomicBool> {
 }
 
 /// After a logged-in user successfully completes auth, pressing the browser's
-/// "Take me to Warp" button a second time should silently drop the stale
+/// "Take me to Black" button a second time should silently drop the stale
 /// redirect rather than surface an `InvalidStateParameter` error.
 #[test]
 fn test_duplicate_redirect_for_logged_in_user_is_silently_ignored() {
@@ -180,7 +180,7 @@ fn test_log_out_clears_pending_auth_state() {
         // routes to `PersistedUser::remove_from_secure_storage`. That requires
         // a `SecureStorage` singleton, so register a no-op one for this test.
         app.update(|ctx| {
-            warpui_extras::secure_storage::register_noop("warp_test", ctx);
+            black_ui_extras::secure_storage::register_noop("black_test", ctx);
         });
 
         AuthManager::handle(&app).update(&mut app, |auth_manager, ctx| {

@@ -1,5 +1,5 @@
-use warpui::integration::AssertionCallback;
-use warpui::{async_assert, async_assert_eq};
+use black_ui::integration::AssertionCallback;
+use black_ui::{async_assert, async_assert_eq};
 
 use crate::integration_testing::view_getters::{input_view, single_input_view_for_tab};
 use crate::terminal::input::InputSuggestionsMode;

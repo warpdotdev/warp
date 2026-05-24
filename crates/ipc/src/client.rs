@@ -5,7 +5,7 @@ use futures::channel::oneshot;
 use futures::future::FutureExt;
 use futures::io::BufReader;
 use futures::{AsyncRead, AsyncWrite};
-use warpui::r#async::executor::Background;
+use black_ui::r#async::executor::Background;
 
 use super::protocol::{
     receive_message, send_message, ConnectionAddress, ProtocolError, RequestId, Response,

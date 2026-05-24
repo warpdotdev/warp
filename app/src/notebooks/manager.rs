@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use futures_util::stream::AbortHandle;
 use markdown_parser::markdown_parser::parse_markdown_to_raw_text;
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::{Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle, WindowId};
+use black_ui::r#async::SpawnedFutureHandle;
+use black_ui::{Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle, WindowId};
 
 use super::notebook::NotebookView;
 use super::CloudNotebook;
@@ -30,7 +30,7 @@ mod tests;
 /// [pane group](crate::pane_group::PaneGroup) views, as they contain all open notebook panes.
 ///
 /// The overall flow is:
-/// 1. A `Workspace` is asked to open a notebook (from the Warp Drive index, universal search, etc.).
+/// 1. A `Workspace` is asked to open a notebook (from the Black Drive index, universal search, etc.).
 /// 2. It checks the `NotebookManager` to see if the notebook is already open.
 /// 3. If it is, the existing notebook pane is focused (this may be in another window).
 /// 4. If not, the `Workspace` uses the `NotebookManager` to create a new notebook pane and

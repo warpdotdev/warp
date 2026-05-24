@@ -1,17 +1,17 @@
 use ui_components::{button, Component as _, Options as _};
-use warp_core::features::FeatureFlag;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::color::internal_colors;
+use black_ui::elements::{
     ClippedScrollStateHandle, Container, CrossAxisAlignment, Flex, FormattedTextElement,
     MainAxisSize, MouseStateHandle, ParentElement,
 };
-use warpui::fonts::Weight;
-use warpui::keymap::Keystroke;
-use warpui::prelude::Align;
-use warpui::text_layout::TextAlignment;
-use warpui::ui_components::components::{UiComponent as _, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::Weight;
+use black_ui::keymap::Keystroke;
+use black_ui::prelude::Align;
+use black_ui::text_layout::TextAlignment;
+use black_ui::ui_components::components::{UiComponent as _, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
     ViewContext,
 };
@@ -146,7 +146,7 @@ impl CustomizeUISlide {
     fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
         let title = appearance
             .ui_builder()
-            .paragraph("Customize your Warp")
+            .paragraph("Customize your Black")
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -315,7 +315,7 @@ impl CustomizeUISlide {
             });
 
             chips.push(ChipSpec {
-                label: "Warp Drive",
+                label: "Black Drive",
                 is_enabled: ui.show_warp_drive,
                 mouse_state: self.chip_warp_drive_mouse.clone(),
                 on_click: Box::new(|ctx, _, _| {
@@ -469,8 +469,8 @@ impl CustomizeUISlide {
         "async/png/onboarding/agent_intention/customize_fileexplorer_horizontal.png",
         "async/png/onboarding/agent_intention/customize_filesearch_vertical.png",
         "async/png/onboarding/agent_intention/customize_filesearch_horizontal.png",
-        "async/png/onboarding/agent_intention/customize_warpdrive_vertical.png",
-        "async/png/onboarding/agent_intention/customize_warpdrive_horizontal.png",
+        "async/png/onboarding/agent_intention/customize_blackdrive_vertical.png",
+        "async/png/onboarding/agent_intention/customize_blackdrive_horizontal.png",
         "async/png/onboarding/agent_intention/customize_codereview_enabled_vertical.png",
         "async/png/onboarding/agent_intention/customize_codereview_enabled_horizontal.png",
         "async/png/onboarding/agent_intention/customize_codereview_disabled_vertical.png",
@@ -482,8 +482,8 @@ impl CustomizeUISlide {
         "async/png/onboarding/terminal_intention/terminal_customize_fileexplorer_horizontal.png",
         "async/png/onboarding/terminal_intention/terminal_customize_filesearch_vertical.png",
         "async/png/onboarding/terminal_intention/terminal_customize_filesearch_horizontal.png",
-        "async/png/onboarding/terminal_intention/terminal_customize_warpdrive_vertical.png",
-        "async/png/onboarding/terminal_intention/terminal_customize_warpdrive_horizontal.png",
+        "async/png/onboarding/terminal_intention/terminal_customize_blackdrive_vertical.png",
+        "async/png/onboarding/terminal_intention/terminal_customize_blackdrive_horizontal.png",
         "async/png/onboarding/terminal_intention/terminal_codereview_enabled.png",
         "async/png/onboarding/terminal_intention/terminal_codereview_disabled.png",
     ];
@@ -554,8 +554,8 @@ impl CustomizeUISlide {
                             (ToolsPanelSubSetting::ProjectExplorer, false) => "async/png/onboarding/agent_intention/customize_fileexplorer_horizontal.png",
                             (ToolsPanelSubSetting::GlobalSearch, true) => "async/png/onboarding/agent_intention/customize_filesearch_vertical.png",
                             (ToolsPanelSubSetting::GlobalSearch, false) => "async/png/onboarding/agent_intention/customize_filesearch_horizontal.png",
-                            (ToolsPanelSubSetting::WarpDrive, true) => "async/png/onboarding/agent_intention/customize_warpdrive_vertical.png",
-                            (ToolsPanelSubSetting::WarpDrive, false) => "async/png/onboarding/agent_intention/customize_warpdrive_horizontal.png",
+                            (ToolsPanelSubSetting::WarpDrive, true) => "async/png/onboarding/agent_intention/customize_blackdrive_vertical.png",
+                            (ToolsPanelSubSetting::WarpDrive, false) => "async/png/onboarding/agent_intention/customize_blackdrive_horizontal.png",
                         }
                     } else {
                         // Terminal: no conversation chip; ConversationHistory falls through to file explorer.
@@ -564,8 +564,8 @@ impl CustomizeUISlide {
                             (ToolsPanelSubSetting::ConversationHistory | ToolsPanelSubSetting::ProjectExplorer, false) => "async/png/onboarding/terminal_intention/terminal_customize_fileexplorer_horizontal.png",
                             (ToolsPanelSubSetting::GlobalSearch, true) => "async/png/onboarding/terminal_intention/terminal_customize_filesearch_vertical.png",
                             (ToolsPanelSubSetting::GlobalSearch, false) => "async/png/onboarding/terminal_intention/terminal_customize_filesearch_horizontal.png",
-                            (ToolsPanelSubSetting::WarpDrive, true) => "async/png/onboarding/terminal_intention/terminal_customize_warpdrive_vertical.png",
-                            (ToolsPanelSubSetting::WarpDrive, false) => "async/png/onboarding/terminal_intention/terminal_customize_warpdrive_horizontal.png",
+                            (ToolsPanelSubSetting::WarpDrive, true) => "async/png/onboarding/terminal_intention/terminal_customize_blackdrive_vertical.png",
+                            (ToolsPanelSubSetting::WarpDrive, false) => "async/png/onboarding/terminal_intention/terminal_customize_blackdrive_horizontal.png",
                         }
                     }
                 }

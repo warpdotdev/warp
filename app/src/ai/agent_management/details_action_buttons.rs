@@ -1,8 +1,8 @@
 //! Action buttons row for conversation details panel.
 
-use warp_core::ui::theme::AnsiColorIdentifier;
-use warpui::elements::{ChildView, CrossAxisAlignment, Empty, Flex, ParentElement};
-use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
+use black_core::ui::theme::AnsiColorIdentifier;
+use black_ui::elements::{ChildView, CrossAxisAlignment, Empty, Flex, ParentElement};
+use black_ui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::{AgentConversationEntryId, AgentRunDisplayStatus};
@@ -270,7 +270,7 @@ impl TypedActionView for ConversationActionButtonsRow {
                     let duration = COPY_FEEDBACK_DURATION;
                     ctx.spawn(
                         async move {
-                            warpui::r#async::Timer::after(duration).await;
+                            black_ui::r#async::Timer::after(duration).await;
                         },
                         |me, _, ctx| {
                             me.copy_link_button.update(ctx, |button, ctx| {

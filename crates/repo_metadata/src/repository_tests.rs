@@ -6,9 +6,9 @@ use std::time::Duration;
 use futures::channel::mpsc;
 use futures::{FutureExt as _, StreamExt as _};
 use virtual_fs::{Stub, VirtualFS};
-use warp_util::standardized_path::StandardizedPath;
-use warpui::r#async::Timer;
-use warpui::{App, ModelContext};
+use black_util::standardized_path::StandardizedPath;
+use black_ui::r#async::Timer;
+use black_ui::{App, ModelContext};
 
 use super::{merge_repository_updates, Repository, RepositorySubscriber, TrackedRemoteRef};
 use crate::repositories::stub_git_repository;

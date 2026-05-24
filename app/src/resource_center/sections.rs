@@ -1,6 +1,6 @@
-use warp_core::context_flag::ContextFlag;
-use warp_core::features::FeatureFlag;
-use warpui::ViewContext;
+use black_core::context_flag::ContextFlag;
+use black_core::features::FeatureFlag;
+use black_ui::ViewContext;
 
 use super::{
     ContentItem, ContentSectionData, FeatureItem, FeatureSection, FeatureSectionData,
@@ -37,13 +37,13 @@ pub fn sections(ctx: &mut ViewContext<ResourceCenterMainView>) -> Vec<Section> {
             ),
             FeatureItem::new(
                 "Open command palette",
-                "Access all of Warp via the keyboard.",
+                "Access all of Black via the keyboard.",
                 Tip::Action(TipAction::CommandPalette),
                 ctx,
             ),
             FeatureItem::new(
                 "Set your theme",
-                "Make Warp your own by choosing a theme.",
+                "Make Black your own by choosing a theme.",
                 Tip::Action(TipAction::ThemePicker),
                 ctx,
             ),
@@ -62,20 +62,20 @@ pub fn sections(ctx: &mut ViewContext<ResourceCenterMainView>) -> Vec<Section> {
         items: vec![
             ContentItem {
                 title: "Use your custom prompt",
-                description: "Set up Warp to honor your PS1 setting",
-                url: "https://docs.warp.dev/terminal/appearance/prompt",
+                description: "Set up Black to honor your PS1 setting",
+                url: "https://blackdagger.io/terminal/appearance/prompt",
                 button_label: "View documentation",
             },
             ContentItem {
-                title: "Integrate Warp with your IDE",
-                description: "Configure Warp to launch from your most used development tools",
-                url: "https://docs.warp.dev/terminal/integrations-and-plugins",
+                title: "Integrate Black with your IDE",
+                description: "Configure Black to launch from your most used development tools",
+                url: "https://blackdagger.io/terminal/integrations-and-plugins",
                 button_label: "View documentation",
             },
             ContentItem {
-                title: "How Warp uses Warp",
-                description: "Learn how Warp's engineering team uses their favorite features",
-                url: "https://www.warp.dev/blog/how-warp-uses-warp",
+                title: "How Black uses Black",
+                description: "Learn how Black's engineering team uses their favorite features",
+                url: "https://blackdagger.io/blog/how-warp-uses-warp",
                 button_label: "Read article",
             },
         ],

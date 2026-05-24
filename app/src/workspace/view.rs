@@ -59,28 +59,28 @@ use serde_json;
 use session_sharing_protocol::common::SessionId as SharedSessionId;
 #[cfg(target_family = "wasm")]
 use url::Url;
-use warp_cli::agent::Harness;
-use warp_core::context_flag::ContextFlag;
-use warp_core::execution_mode::AppExecutionMode;
-use warp_core::features::FeatureFlag;
-use warp_core::semantic_selection::SemanticSelection;
-use warp_core::ui::color::coloru_with_opacity;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::phenomenon::PhenomenonStyle;
-use warp_core::ui::theme::Fill;
-use warp_core::ui::Icon;
-use warp_core::user_preferences::GetUserPreferences as _;
-use warp_editor::editor::NavigationKey;
-use warp_util::path::{user_friendly_path, LineAndColumnArg};
+use black_cli::agent::Harness;
+use black_core::context_flag::ContextFlag;
+use black_core::execution_mode::AppExecutionMode;
+use black_core::features::FeatureFlag;
+use black_core::semantic_selection::SemanticSelection;
+use black_core::ui::color::coloru_with_opacity;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::phenomenon::PhenomenonStyle;
+use black_core::ui::theme::Fill;
+use black_core::ui::Icon;
+use black_core::user_preferences::GetUserPreferences as _;
+use black_editor::editor::NavigationKey;
+use black_util::path::{user_friendly_path, LineAndColumnArg};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use warp_util::standardized_path::StandardizedPath;
-use warpui::accessibility::{
+use black_util::standardized_path::StandardizedPath;
+use black_ui::accessibility::{
     AccessibilityContent, AccessibilityVerbosity, ActionAccessibilityContent, WarpA11yRole,
 };
-use warpui::clipboard::ClipboardContent;
+use black_ui::clipboard::ClipboardContent;
 #[cfg(target_family = "wasm")]
-use warpui::elements::Percentage;
-use warpui::elements::{
+use black_ui::elements::Percentage;
+use black_ui::elements::{
     Align, Border, CacheOption, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, Dismiss, DispatchEventResult, DraggableState, DropTarget,
     Element, Empty, EventHandler, Expanded, Fill as ElementFill, Flex, Highlight, Hoverable,
@@ -88,20 +88,20 @@ use warpui::elements::{
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
     PositionedElementOffsetBounds, Radius, Rect, SavePosition, Shrinkable, Stack, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::geometry::vector::{vec2f, Vector2F};
-use warpui::keymap::Context;
-use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
-use warpui::notification::{NotificationSendError, RequestPermissionsOutcome, UserNotification};
-use warpui::platform::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::geometry::vector::{vec2f, Vector2F};
+use black_ui::keymap::Context;
+use black_ui::modals::{AlertDialogWithCallbacks, AppModalCallback};
+use black_ui::notification::{NotificationSendError, RequestPermissionsOutcome, UserNotification};
+use black_ui::platform::{
     Cursor, FilePickerConfiguration, FullscreenState, SystemTheme, TerminationMode,
 };
-use warpui::text_layout::ClipConfig;
-use warpui::ui_components::button::{Button, ButtonVariant};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::windowing::state::ApplicationStage;
-use warpui::windowing::{StateEvent, WindowManager};
-use warpui::{
+use black_ui::text_layout::ClipConfig;
+use black_ui::ui_components::button::{Button, ButtonVariant};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::windowing::state::ApplicationStage;
+use black_ui::windowing::{StateEvent, WindowManager};
+use black_ui::{
     AppContext, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity, TypedActionView,
     UpdateModel, UpdateView, View, ViewAsRef, ViewContext, ViewHandle, WeakViewHandle, WindowId,
 };
@@ -402,7 +402,7 @@ use crate::terminal::view::{
     OnboardingIntention, OnboardingVersion, SyncEvent, SyncInputType, TerminalAction,
     NOTIFICATIONS_TROUBLESHOOT_URL,
 };
-use crate::terminal::warpify::settings::WarpifySettings;
+use crate::terminal::blackify::settings::BlackifySettings;
 use crate::terminal::{self, BlockListSettings, SizeInfo, TerminalModel, TerminalView};
 use crate::themes::theme::{AnsiColorIdentifier, RespectSystemTheme, ThemeKind};
 use crate::themes::theme_chooser::{ThemeChooser, ThemeChooserEvent, ThemeChooserMode};
@@ -530,9 +530,9 @@ const TAB_BAR_ICON_PADDING: f32 = 4.;
 
 const TAB_BAR_PILL_WIDTH: f32 = 100.;
 const PILL_FONT_SIZE: f32 = 12.;
-// We use the word "Warp" in the Update Ready button to make it obvious that the terminal is Warp.
-// This can lead to free advertising when users screen-share Warp when an update is available.
-const UPDATE_READY_TEXT: &str = "Update Warp";
+// We use the word "Black" in the Update Ready button to make it obvious that the terminal is Black.
+// This can lead to free advertising when users screen-share Black when an update is available.
+const UPDATE_READY_TEXT: &str = "Update Black";
 
 const TAB_BAR_OVERFLOW_MENU_WIDTH: f32 = 300.;
 
@@ -561,7 +561,7 @@ const AI_ASSISTANT_BUTTON_ID: &str = "workspace_view:ai_assistant_button";
 
 const VERSION_DEPRECATION_BANNER_TEXT: &str = "Your app is out of date and some features may not work as expected. Please update immediately.";
 
-const VERSION_DEPRECATION_WITHOUT_PERMISSIONS_BANNER_TEXT: &str = "Some Warp features may not work as expected without updating immediately, but Warp is unable to perform the update.";
+const VERSION_DEPRECATION_WITHOUT_PERMISSIONS_BANNER_TEXT: &str = "Some Black features may not work as expected without updating immediately, but Black is unable to perform the update.";
 
 const ASK_AI_ASSISTANT_KEYBINDING_NAME: &str = "workspace:toggle_ai_assistant";
 const TOGGLE_RESOURCE_CENTER_KEYBINDING_NAME: &str = "workspace:toggle_resource_center";
@@ -635,7 +635,7 @@ const MAX_WINDOW_TITLE_LENGTH: usize = 80;
 
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 const AUTO_CLOUD_HANDOFF_PROMPT: &str =
-    "Continue this local Warp Agent task in the cloud from the current conversation state.";
+    "Continue this local Black Agent task in the cloud from the current conversation state.";
 
 /// The default display name used for the user if they have no associated display name.
 pub const DEFAULT_USER_DISPLAY_NAME: &str = "User";
@@ -786,7 +786,7 @@ impl ShowTabBar {
 #[cfg(target_family = "wasm")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SimplifiedWasmTabBarContent {
-    /// Viewing a Warp Drive object (notebook, workflow, env vars, AI facts, MCP servers)
+    /// Viewing a Black Drive object (notebook, workflow, env vars, AI facts, MCP servers)
     WarpDriveObject,
     /// Participating in a shared session (viewer or writer). Contains the optional ambient agent task ID.
     SharedSession { task_id: Option<AmbientAgentTaskId> },
@@ -2868,7 +2868,7 @@ impl Workspace {
             me.handle_window_settings_changed_event(event, ctx);
         });
 
-        // Show the Warp AI warm welcome iff the user hasn't dismissed it nor interacted with Warp AI before.
+        // Show the Black AI warm welcome iff the user hasn't dismissed it nor interacted with Black AI before.
         // Also, avoid showing it in integration tests to prevent interaction with other tests.
         let mut should_show_ai_assistant_warm_welcome: bool = !FeatureFlag::AgentMode.is_enabled()
             && AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
@@ -2881,7 +2881,7 @@ impl Workspace {
                 .map(|dismissed: bool| !dismissed)
                 .unwrap_or(true);
 
-        // Don't automatically show the Warp AI welcome during onboarding if the block onboarding flow is being used.
+        // Don't automatically show the Black AI welcome during onboarding if the block onboarding flow is being used.
         // This way, we can delay the reveal until the end of the onboarding flow so as not to overwhelm the user.
         if matches!(
             BlockOnboarding::get_group(ctx),
@@ -3902,15 +3902,15 @@ impl Workspace {
             placeholder_pane = Some(home_pane.as_pane().id());
             self.add_tab_from_existing_pane(home_pane, 0, ctx);
 
-            // If we can't start a terminal session to run the onboarding flow, show the Warp Home
-            // placeholder along with Warp Drive.
+            // If we can't start a terminal session to run the onboarding flow, show the Black Home
+            // placeholder along with Black Drive.
             true
         };
         let initial_tab = self.active_tab_pane_group().clone();
 
         if open_warp_drive {
-            // We open Warp Drive automatically in two cases:
-            // * The user is new to Warp, and went through the overall onboarding flow
+            // We open Black Drive automatically in two cases:
+            // * The user is new to Black, and went through the overall onboarding flow
             // * The user is on the web, so we can't open a terminal session.
             let initial_load_complete = UpdateManager::as_ref(ctx).initial_load_complete();
             ctx.spawn(initial_load_complete, move |me, _, ctx| {
@@ -3919,7 +3919,7 @@ impl Workspace {
                 if CloudModel::as_ref(ctx).has_non_welcome_objects() {
                     me.open_or_toggle_warp_drive(false, false, ctx);
 
-                    // After opening Warp Drive, if we rendered the Warp Home placeholder panel, replace it with one of
+                    // After opening Black Drive, if we rendered the Black Home placeholder panel, replace it with one of
                     // the user's own objects.
                     if show_warp_home {
                         let cloud_model = CloudModel::as_ref(ctx);
@@ -4094,7 +4094,7 @@ impl Workspace {
                 // Open the transcript details panel by default on WASM (unless on mobile)
                 #[cfg(target_family = "wasm")]
                 {
-                    if !warpui::platform::wasm::is_mobile_device() {
+                    if !black_ui::platform::wasm::is_mobile_device() {
                         me.current_workspace_state.is_transcript_details_panel_open = true;
                         me.transcript_info_button.update(ctx, |button, ctx| {
                             button.set_active(true, ctx);
@@ -4213,7 +4213,7 @@ impl Workspace {
                             .ambient_agent_task_id();
                         if task_id.is_some() {
                             // Open the details panel for shared ambient agent sessions (unless on mobile)
-                            if !warpui::platform::wasm::is_mobile_device() {
+                            if !black_ui::platform::wasm::is_mobile_device() {
                                 me.current_workspace_state.is_transcript_details_panel_open = true;
                                 me.transcript_info_button.update(ctx, |button, ctx| {
                                     button.set_active(true, ctx);
@@ -4300,7 +4300,7 @@ impl Workspace {
             }
         }
 
-        // Check if focused pane is a Warp Drive object
+        // Check if focused pane is a Black Drive object
         let focused_pane_id = pane_group.focused_pane_id(ctx);
         if focused_pane_id.is_warp_drive_object_pane() {
             return Some(SimplifiedWasmTabBarContent::WarpDriveObject);
@@ -4410,9 +4410,9 @@ impl Workspace {
         });
 
         // The panel is already open and no models are open, so just refocus the panel.
-        // If there is a modal open, it would sit above the Warp AI panel and we would end up
-        // focusing the Warp AI panel _behind_ the floating modal. Instead, we opt for the normal
-        // toggle behavior which will close the current modal view and then toggle Warp AI.
+        // If there is a modal open, it would sit above the Black AI panel and we would end up
+        // focusing the Black AI panel _behind_ the floating modal. Instead, we opt for the normal
+        // toggle behavior which will close the current modal view and then toggle Black AI.
         if self.current_workspace_state.is_ai_assistant_panel_open
             && !self.ai_assistant_panel.is_self_or_child_focused(ctx)
             && !self.current_workspace_state.is_any_modal_open(ctx)
@@ -4425,7 +4425,7 @@ impl Workspace {
         self.current_workspace_state.is_ai_assistant_panel_open =
             !self.current_workspace_state.is_ai_assistant_panel_open;
 
-        // Close any other modals that could be floating on top of the Warp AI panel.
+        // Close any other modals that could be floating on top of the Black AI panel.
         self.current_workspace_state.close_all_modals();
 
         if self.current_workspace_state.is_ai_assistant_panel_open {
@@ -4462,8 +4462,8 @@ impl Workspace {
             .has_warp_drive_initialized_sections(app)
     }
 
-    /// Check if Warp Drive view is focused within.
-    /// Routes to the appropriate Warp Drive panel.
+    /// Check if Black Drive view is focused within.
+    /// Routes to the appropriate Black Drive panel.
     fn is_warp_drive_view_focused(&self, ctx: &mut ViewContext<Self>) -> bool {
         let app = ctx;
         self.left_panel_view.is_self_or_child_focused(app)
@@ -4665,7 +4665,7 @@ impl Workspace {
     }
 
     /// This function shifts focus to the panel on the left.
-    /// The current focusable panels are: Warp Drive, theme chooser, AI, and resource center (keyboard shortcuts page only)
+    /// The current focusable panels are: Black Drive, theme chooser, AI, and resource center (keyboard shortcuts page only)
     fn focus_left_panel(&mut self, ctx: &mut ViewContext<Self>) {
         // Starts from terminal
         if self.active_tab_pane_group().is_self_or_child_focused(ctx) {
@@ -4685,7 +4685,7 @@ impl Workspace {
         {
             self.focus_active_tab(ctx);
         }
-        // Starts from a left panel: Warp Drive
+        // Starts from a left panel: Black Drive
         else if self.is_warp_drive_view_focused(ctx) {
             if self.current_workspace_state.is_right_panel_open() {
                 self.set_selected_object(None, ctx);
@@ -4730,7 +4730,7 @@ impl Workspace {
                 ctx.focus(&self.theme_chooser_view);
             }
         }
-        // Starts from a left panel: Warp Drive, theme chooser
+        // Starts from a left panel: Black Drive, theme chooser
         else if self.is_warp_drive_view_focused(ctx)
             || self.theme_chooser_view.is_self_or_child_focused(ctx)
         {
@@ -6130,7 +6130,7 @@ impl Workspace {
     #[cfg(not(target_family = "wasm"))]
     fn view_logs(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.spawn(
-            async { tokio::task::spawn_blocking(warp_logging::create_log_bundle_zip).await },
+            async { tokio::task::spawn_blocking(black_logging::create_log_bundle_zip).await },
             |me, result, ctx| match result {
                 Ok(Ok(path)) => {
                     ctx.open_file_path_in_explorer(&path);
@@ -6447,7 +6447,7 @@ impl Workspace {
                 },
             ),
             NewSessionMenuItem::OpenLaunchConfigDocs => {
-                ctx.open_url("https://docs.warp.dev/terminal/sessions/launch-configurations")
+                ctx.open_url("https://blackdagger.io/terminal/sessions/launch-configurations")
             }
             #[cfg(feature = "local_fs")]
             NewSessionMenuItem::CreateNewTabConfig => {
@@ -6680,7 +6680,7 @@ impl Workspace {
     }
 
     /// The tab bar overflow menu is the context menu that appears when
-    /// a user clicks "Update Warp" in the top right of the tab bar.
+    /// a user clicks "Update Black" in the top right of the tab bar.
     pub fn toggle_tab_bar_overflow_menu(&mut self, ctx: &mut ViewContext<Self>) {
         if self.show_tab_bar_overflow_menu {
             self.close_tab_bar_overflow_menu(ctx);
@@ -6708,7 +6708,7 @@ impl Workspace {
                             .into_item(),
                     ),
                     AutoupdateStage::UnableToUpdateToNewVersion { .. } => menu_items.push(
-                        MenuItemFields::new("Update Warp manually")
+                        MenuItemFields::new("Update Black manually")
                             .with_on_select_action(WorkspaceAction::DownloadNewVersion)
                             .into_item(),
                     ),
@@ -6967,7 +6967,7 @@ impl Workspace {
         ctx.notify();
     }
 
-    /// Opens the Warp Drive object identified by `uid` in a new pane
+    /// Opens the Black Drive object identified by `uid` in a new pane
     /// if it has a pane representation.
     fn open_warp_drive_object_in_new_pane(&mut self, uid: &ObjectUid, ctx: &mut ViewContext<Self>) {
         let Some(object) = CloudModel::as_ref(ctx).get_by_uid(uid) else {
@@ -7095,7 +7095,7 @@ impl Workspace {
         }
     }
 
-    /// Open a Warp Drive workflow in response to an intent URL.
+    /// Open a Black Drive workflow in response to an intent URL.
     pub fn open_workflow_from_intent(
         &mut self,
         workflow_id: SyncId,
@@ -7729,14 +7729,14 @@ impl Workspace {
         ctx.notify();
     }
 
-    /// Find an active session and pre-fill the input editor the Warp executable with the
-    /// [`warp_cli::Command::DumpDebugInfo`] subcommand.
+    /// Find an active session and pre-fill the input editor the Black executable with the
+    /// [`black_cli::Command::DumpDebugInfo`] subcommand.
     fn dump_debug_info(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(exec) = std::env::current_exe()
             .ok()
             .map(|path| path.to_string_lossy().into_owned())
         {
-            let command = format!("{exec} {}", warp_cli::dump_debug_info_flag());
+            let command = format!("{exec} {}", black_cli::dump_debug_info_flag());
             // Get the active session for this tab if it exists.
             let mut active_session_handle = self
                 .active_tab_pane_group()
@@ -7768,7 +7768,7 @@ impl Workspace {
         }
     }
 
-    /// Install the Warp CLI by creating a symlink in /usr/local/bin
+    /// Install the Black CLI by creating a symlink in /usr/local/bin
     #[cfg(target_os = "macos")]
     fn install_cli(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.spawn(async { cli_install::install_cli() }, |view, result, ctx| {
@@ -7780,7 +7780,7 @@ impl Workspace {
                         let toast = DismissibleToast::success(message.to_string())
                             .with_link(
                                 ToastLink::new("Learn more".to_string()).with_href(
-                                    "https://docs.warp.dev/reference/cli".to_string(),
+                                    "https://blackdagger.io/reference/cli".to_string(),
                                 ),
                             );
                         toast_stack.add_ephemeral_toast(toast, ctx);
@@ -7798,7 +7798,7 @@ impl Workspace {
         });
     }
 
-    /// Uninstall the Warp CLI by removing the symlink from /usr/local/bin
+    /// Uninstall the Black CLI by removing the symlink from /usr/local/bin
     #[cfg(target_os = "macos")]
     fn uninstall_cli(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.spawn(
@@ -7896,21 +7896,21 @@ impl Workspace {
         self.current_workspace_state.is_warp_drive_open =
             if toggle { !was_warp_drive_open } else { true };
 
-        // Set selected object to None upon toggle close of Warp Drive
+        // Set selected object to None upon toggle close of Black Drive
         if !self.current_workspace_state.is_warp_drive_open {
             self.set_selected_object(None, ctx);
             self.focus_active_tab(ctx);
         }
 
-        // Reset focused index when opening/toggling Warp Drive open
+        // Reset focused index when opening/toggling Black Drive open
         if self.current_workspace_state.is_warp_drive_open {
             self.reset_focused_index_in_warp_drive(true, ctx);
         }
 
         ctx.notify();
 
-        // Telemetry and welcome tip logic is only for when the user explicitly opens Warp Drive
-        // AND warp drive wasn't open before. There are other scenarios where we open Warp Drive like:
+        // Telemetry and welcome tip logic is only for when the user explicitly opens Black Drive
+        // AND warp drive wasn't open before. There are other scenarios where we open Black Drive like:
         // new user onboarding, user joins a team, etc so we want to avoid counting those.
         if explicit_user_action
             && !was_warp_drive_open
@@ -8448,7 +8448,7 @@ impl Workspace {
                     ) =>
                 {
                     items.push(
-                        MenuItemFields::new("Update and relaunch Warp")
+                        MenuItemFields::new("Update and relaunch Black")
                             .with_on_select_action(WorkspaceAction::ApplyUpdate)
                             .with_override_text_color(appearance.theme().ansi_fg_red())
                             .into_item(),
@@ -8471,7 +8471,7 @@ impl Workspace {
                     ) =>
                 {
                     items.push(
-                        MenuItemFields::new("Update Warp manually")
+                        MenuItemFields::new("Update Black manually")
                             .with_on_select_action(WorkspaceAction::DownloadNewVersion)
                             .with_override_text_color(appearance.theme().ansi_fg_red())
                             .into_item(),
@@ -8502,7 +8502,7 @@ impl Workspace {
 
         #[cfg(not(target_family = "wasm"))]
         items.push(
-            MenuItemFields::new("View Warp logs")
+            MenuItemFields::new("View Black logs")
                 .with_on_select_action(WorkspaceAction::ViewLogs)
                 .into_item(),
         );
@@ -8862,7 +8862,7 @@ impl Workspace {
                     .finish()
                 })
                 .with_cursor(Cursor::PointingHand)
-                .on_click(|ctx: &mut warpui::elements::EventContext, _, _| {
+                .on_click(|ctx: &mut black_ui::elements::EventContext, _, _| {
                     ctx.dispatch_typed_action(WorkspaceAction::OpenWorktreeAddRepoPicker);
                     ctx.dispatch_typed_action(crate::menu::MenuAction::Close(true));
                 })
@@ -9258,7 +9258,7 @@ impl Workspace {
                     });
                 });
             },
-            warpui::platform::FilePickerConfiguration::new().folders_only(),
+            black_ui::platform::FilePickerConfiguration::new().folders_only(),
         );
     }
 
@@ -9332,7 +9332,7 @@ impl Workspace {
             .map(crate::util::git::list_local_branches_sync)
             .unwrap_or_default();
         let branch_refs: HashSet<&str> = branches.iter().map(|s| s.as_str()).collect();
-        Some(warp_util::worktree_names::generate_worktree_branch_name(
+        Some(black_util::worktree_names::generate_worktree_branch_name(
             &branch_refs,
         ))
     }
@@ -9372,7 +9372,7 @@ impl Workspace {
         } else {
             let branches = crate::util::git::list_local_branches_sync(Path::new(repo));
             let branch_refs: HashSet<&str> = branches.iter().map(|s| s.as_str()).collect();
-            warp_util::worktree_names::generate_worktree_branch_name(&branch_refs)
+            black_util::worktree_names::generate_worktree_branch_name(&branch_refs)
         };
 
         let toml_content = crate::tab_configs::build_worktree_config_toml(
@@ -9458,7 +9458,7 @@ impl Workspace {
                     });
                 });
             },
-            warpui::platform::FilePickerConfiguration::new().folders_only(),
+            black_ui::platform::FilePickerConfiguration::new().folders_only(),
         );
     }
 
@@ -9479,7 +9479,7 @@ impl Workspace {
         };
         let branches = crate::util::git::list_local_branches_sync(Path::new(&repo_path));
         let branch_refs: HashSet<&str> = branches.iter().map(|s| s.as_str()).collect();
-        let branch_name = warp_util::worktree_names::generate_worktree_branch_name(&branch_refs);
+        let branch_name = black_util::worktree_names::generate_worktree_branch_name(&branch_refs);
         let repo_display_name = Path::new(&repo_path)
             .file_name()
             .map(|name| name.to_string_lossy().to_string())
@@ -9559,7 +9559,7 @@ impl Workspace {
                     persisted.user_added_workspace(path_buf, ctx);
                 });
             },
-            warpui::platform::FilePickerConfiguration::new().folders_only(),
+            black_ui::platform::FilePickerConfiguration::new().folders_only(),
         );
     }
 
@@ -10749,7 +10749,7 @@ impl Workspace {
 
     pub fn open_autoupdate_failure_link(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.open_url(
-            "https://docs.warp.dev/support-and-community/troubleshooting-and-support/updating-warp",
+            "https://blackdagger.io/support-and-community/troubleshooting-and-support/updating-warp",
         );
     }
 
@@ -12325,7 +12325,7 @@ impl Workspace {
 
     #[cfg(target_os = "macos")]
     pub fn sync_window_button_visibility(&self, ctx: &mut ViewContext<Self>) {
-        use warpui::platform::mac::WindowExt;
+        use black_ui::platform::mac::WindowExt;
         let show = if FeatureFlag::FullScreenZenMode.is_enabled()
             && TabSettings::as_ref(ctx)
                 .workspace_decoration_visibility
@@ -12373,7 +12373,7 @@ impl Workspace {
                         let url = NOTIFICATIONS_TROUBLESHOOT_URL.to_string();
                         view.toast_stack.update(ctx, |toast_stack, ctx| {
                             let toast = DismissibleToast::error(
-                                "Warp doesn't have permission to send desktop notifications.".to_string(),
+                                "Black doesn't have permission to send desktop notifications.".to_string(),
                             )
                             .with_link(ToastLink::new("Troubleshoot notifications".to_string()).with_href(url));
                             toast_stack.add_persistent_toast(toast, ctx);
@@ -12845,12 +12845,12 @@ impl Workspace {
                             .and_then(|wd| match wd {
                                 LocalOrRemotePath::Remote(remote) => {
                                     let std_path =
-                                        warp_util::standardized_path::StandardizedPath::try_new(
+                                        black_util::standardized_path::StandardizedPath::try_new(
                                             path,
                                         )
                                         .ok()?;
                                     Some(LocalOrRemotePath::Remote(
-                                        warp_util::remote_path::RemotePath::new(
+                                        black_util::remote_path::RemotePath::new(
                                             remote.host_id.clone(),
                                             std_path,
                                         ),
@@ -12889,7 +12889,7 @@ impl Workspace {
     }
 
     /// This function is used when we set a selected object, which is an object open in an active pane.
-    /// We do not want to focus Warp Drive, instead we want to focus the editor of the open object.
+    /// We do not want to focus Black Drive, instead we want to focus the editor of the open object.
     fn view_in_warp_drive(&mut self, item_id: WarpDriveItemId, ctx: &mut ViewContext<Self>) {
         self.open_left_panel(ctx);
         self.left_panel_view.update(ctx, |left_panel, ctx| {
@@ -12908,7 +12908,7 @@ impl Workspace {
         });
     }
 
-    /// This function is used when we want to view an item in Warp Drive AND focus Warp Drive.
+    /// This function is used when we want to view an item in Black Drive AND focus Black Drive.
     pub fn view_in_and_focus_warp_drive(
         &mut self,
         item_id: WarpDriveItemId,
@@ -12935,7 +12935,7 @@ impl Workspace {
         });
     }
 
-    /// View an object in Warp Drive and open its sharing settings.
+    /// View an object in Black Drive and open its sharing settings.
     fn open_object_sharing_settings(
         &mut self,
         object_id: CloudObjectTypeAndId,
@@ -13002,7 +13002,7 @@ impl Workspace {
 
                     request_type = Some(ChangelogRequestType::WindowLaunch);
                     // Do not show changelog on quake mode window or if it has already been shown
-                    // or if we are opening Warp Drive on start up
+                    // or if we are opening Black Drive on start up
                     quake_mode_window_id() != Some(ctx.window_id())
                         && !Settings::has_changelog_been_shown(version, ctx)
                         && !*opening_warp_drive_on_start_up
@@ -13037,13 +13037,13 @@ impl Workspace {
                                 link = link.with_keystroke(keystroke);
                             }
 
-                            let toast = DismissibleToast::default(String::from("Warp updated!"))
+                            let toast = DismissibleToast::default(String::from("Black updated!"))
                                 .with_link(link);
 
                             stack.add_ephemeral_toast(toast, ctx);
                         });
                     } else {
-                        // If resource center isn't already open and Warp AI isn't open, then open resource center
+                        // If resource center isn't already open and Black AI isn't open, then open resource center
                         if !self.current_workspace_state.is_resource_center_open
                             && !self.current_workspace_state.is_ai_assistant_panel_open
                         {
@@ -13595,7 +13595,7 @@ impl Workspace {
             WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
                     DismissibleToast::error(
-                        "Couldn't open a cloud pane for handoff. Try again, or restart Warp if this keeps happening."
+                        "Couldn't open a cloud pane for handoff. Try again, or restart Black if this keeps happening."
                             .to_owned(),
                     ),
                     window_id,
@@ -13983,7 +13983,7 @@ impl Workspace {
                 WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
                         DismissibleToast::error(
-                            "Couldn't open a cloud pane for handoff. Try again, or restart Warp if this keeps happening."
+                            "Couldn't open a cloud pane for handoff. Try again, or restart Black if this keeps happening."
                                 .to_owned(),
                         ),
                         window_id,
@@ -14326,7 +14326,7 @@ impl Workspace {
                         ctx,
                     ),
                     _ => {
-                        log::warn!("Attempted to open an unsupported Warp Drive link")
+                        log::warn!("Attempted to open an unsupported Black Drive link")
                     }
                 }
             }
@@ -15442,7 +15442,7 @@ impl Workspace {
     }
 
     /// Insert the given command that should open a subshell. And set a flag that we should
-    /// automatically bootstrap AKA "warpify" that subshell if we support it. No-op if there is
+    /// automatically bootstrap AKA "blackify" that subshell if we support it. No-op if there is
     /// no active terminal session.
     pub fn insert_subshell_command_and_bootstrap_if_supported(
         &mut self,
@@ -15543,7 +15543,7 @@ impl Workspace {
 
             // Check whether this remote session has an active remote server
             // connection (or is in the process of connecting). This is only
-            // true for Auto SSH Warpification (mode 1) sessions where
+            // true for Auto SSH Blackification (mode 1) sessions where
             // `connect_session` was called at `InitShell` time.
             let has_remote_server = is_remote
                 && FeatureFlag::SshRemoteServer.is_enabled()
@@ -16254,7 +16254,7 @@ impl Workspace {
                                             },
                                         ) {
                                             new_toast = DismissibleToast::success(
-                                                "Plan synced to your Warp Drive".to_string(),
+                                                "Plan synced to your Black Drive".to_string(),
                                             )
                                             .with_object_id(object_id_clone)
                                             .with_link(
@@ -16997,7 +16997,7 @@ impl Workspace {
                 let command = code.trim().to_string();
                 let args_state =
                     ArgumentsState::for_command_workflow(&Default::default(), command.clone());
-                let workflow = Workflow::new("Command from Warp AI", command)
+                let workflow = Workflow::new("Command from Black AI", command)
                     .with_arguments(args_state.arguments);
                 self.run_workflow_in_active_input(
                     &WorkflowType::AIGenerated {
@@ -17700,7 +17700,7 @@ impl Workspace {
             .with_child(
                 Text::new_inline(AI_ASSISTANT_FEATURE_NAME, appearance.ui_font_family(), 14.)
                     .with_style(Properties {
-                        weight: warpui::fonts::Weight::Bold,
+                        weight: black_ui::fonts::Weight::Bold,
                         ..Default::default()
                     })
                     .finish(),
@@ -17734,7 +17734,7 @@ impl Workspace {
         let body = appearance
             .ui_builder()
             .wrappable_text(
-                "Ask Warp AI to explain errors, suggest commands or write scripts.".to_owned(),
+                "Ask Black AI to explain errors, suggest commands or write scripts.".to_owned(),
                 true,
             )
             .with_style(UiComponentStyles {
@@ -17915,7 +17915,7 @@ impl Workspace {
                     {
                         ToolPanelView::ProjectExplorer => "Project explorer",
                         ToolPanelView::GlobalSearch { .. } => "Global search",
-                        ToolPanelView::WarpDrive => "Warp Drive",
+                        ToolPanelView::WarpDrive => "Black Drive",
                         ToolPanelView::ConversationListView => "Agent conversations",
                     }
                 } else {
@@ -17969,7 +17969,7 @@ impl Workspace {
             {
                 ToolPanelView::ProjectExplorer => "Project explorer",
                 ToolPanelView::GlobalSearch { .. } => "Global search",
-                ToolPanelView::WarpDrive => "Warp Drive",
+                ToolPanelView::WarpDrive => "Black Drive",
                 ToolPanelView::ConversationListView => "Agent conversations",
             }
         } else {
@@ -18276,7 +18276,7 @@ impl Workspace {
             .is_user_web_anonymous_user()
             .unwrap_or_default();
 
-        // Simplified mode for viewing Warp Drive objects, shared sessions, or conversation transcripts on WASM
+        // Simplified mode for viewing Black Drive objects, shared sessions, or conversation transcripts on WASM
         #[cfg(target_family = "wasm")]
         if let Some(content_type) = self.get_simplified_wasm_tab_bar_content(ctx) {
             // Use MainAxisAlignment::SpaceBetween and expand to fill width
@@ -18285,10 +18285,10 @@ impl Workspace {
                 .with_main_axis_size(MainAxisSize::Max);
             let bg_color = blended_colors::neutral_1(appearance.theme());
 
-            // Left: Warp logo - clickable to link to warp.dev
+            // Left: Black logo - clickable to link to warp.dev
             let warp_logo = Hoverable::new(self.mouse_states.warp_logo.clone(), |_state| {
                 ConstrainedBox::new(
-                    warp_core::ui::Icon::Warp
+                    black_core::ui::Icon::Warp
                         .to_warpui_icon(appearance.theme().foreground())
                         .finish(),
                 )
@@ -18303,7 +18303,7 @@ impl Workspace {
             .finish();
             tab_bar.add_child(warp_logo);
 
-            // Right: Info button + "View all cloud runs" button (for ambient agent sessions) + "Open in Warp" button
+            // Right: Info button + "View all cloud runs" button (for ambient agent sessions) + "Open in Black" button
             let mut right_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_main_axis_size(MainAxisSize::Min);
@@ -18343,8 +18343,8 @@ impl Workspace {
                 }
             }
 
-            // Hide "Open in Warp" button on mobile devices
-            if !warpui::platform::wasm::is_mobile_device() {
+            // Hide "Open in Black" button on mobile devices
+            if !black_ui::platform::wasm::is_mobile_device() {
                 right_row.add_child(ChildView::new(&self.open_in_warp_button).finish());
             }
             tab_bar.add_child(right_row.finish());
@@ -19135,7 +19135,7 @@ impl Workspace {
                 icons::Icon::Lightbulb,
                 &self.mouse_states.resource_center_icon,
                 WorkspaceAction::ToggleResourceCenter,
-                "Warp Essentials".to_string(),
+                "Black Essentials".to_string(),
                 self.cached_keybindings[TOGGLE_RESOURCE_CENTER_KEYBINDING_NAME].clone(),
                 false,
                 false,
@@ -19697,7 +19697,7 @@ impl Workspace {
                         if is_incoming_version_past_current(new_version.soft_cutoff.as_deref()) {
                             VERSION_DEPRECATION_WITHOUT_PERMISSIONS_BANNER_TEXT.to_owned()
                         } else {
-                            "A new version is available but Warp is unable to perform the update."
+                            "A new version is available but Black is unable to perform the update."
                                 .to_owned()
                         };
 
@@ -19708,7 +19708,7 @@ impl Workspace {
                         description,
                         secondary_button: None,
                         button: Some(WorkspaceBannerButtonDetails {
-                            text: "Update Warp manually".to_string(),
+                            text: "Update Black manually".to_string(),
                             action: WorkspaceAction::DownloadNewVersion,
                             variant: BannerButtonVariant::Outlined,
                             icon: None,
@@ -19723,7 +19723,7 @@ impl Workspace {
                         if is_incoming_version_past_current(new_version.soft_cutoff.as_deref()) {
                             VERSION_DEPRECATION_WITHOUT_PERMISSIONS_BANNER_TEXT.to_owned()
                         } else {
-                            "Warp was unable to launch the new installed version.".to_owned()
+                            "Black was unable to launch the new installed version.".to_owned()
                         };
 
                     Some(WorkspaceBannerFields {
@@ -19733,7 +19733,7 @@ impl Workspace {
                         description,
                         secondary_button: None,
                         button: Some(WorkspaceBannerButtonDetails {
-                            text: "Update Warp manually".to_string(),
+                            text: "Update Black manually".to_string(),
                             action: WorkspaceAction::DownloadNewVersion,
                             variant: BannerButtonVariant::Outlined,
                             icon: None,
@@ -20213,7 +20213,7 @@ impl Workspace {
         }
 
         #[cfg(target_family = "wasm")]
-        if !warpui::platform::wasm::is_mobile_device()
+        if !black_ui::platform::wasm::is_mobile_device()
             && self
                 .current_workspace_state
                 .is_transcript_details_panel_open
@@ -20294,7 +20294,7 @@ impl Workspace {
                 )
             }
             HeaderToolbarItemKind::ToolsPanel => {
-                if !pane_group.left_panel_open || warpui::platform::is_mobile_device() {
+                if !pane_group.left_panel_open || black_ui::platform::is_mobile_device() {
                     return None;
                 }
                 Some(ChildView::new(&self.left_panel_view).finish())
@@ -20401,7 +20401,7 @@ impl Workspace {
         let general_settings = GeneralSettings::as_ref(app);
         let theme_settings = ThemeSettings::as_ref(app);
         let ssh_settings = SshSettings::as_ref(app);
-        let warpify_settings = WarpifySettings::as_ref(app);
+        let blackify_settings = BlackifySettings::as_ref(app);
         let terminal_settings = TerminalSettings::as_ref(app);
         let pane_settings = PaneSettings::as_ref(app);
         let keys_settings = KeysSettings::as_ref(app);
@@ -20450,7 +20450,7 @@ impl Workspace {
             context.set.insert(flags::LEGACY_SSH_WRAPPER_CONTEXT_FLAG);
         }
 
-        if *warpify_settings.use_ssh_tmux_wrapper.value() {
+        if *blackify_settings.use_ssh_tmux_wrapper.value() {
             context.set.insert(flags::SSH_TMUX_WRAPPER_CONTEXT_FLAG);
         }
 
@@ -20969,7 +20969,7 @@ impl Workspace {
         });
     }
 
-    /// Opens a given URL in the desktop Warp app if installed, or redirects to download page.
+    /// Opens a given URL in the desktop Black app if installed, or redirects to download page.
     #[cfg(target_family = "wasm")]
     fn open_link_on_desktop(&mut self, url: &Url, ctx: &mut ViewContext<Self>) {
         use crate::settings::app_installation_detection::{
@@ -20984,7 +20984,7 @@ impl Workspace {
 
         if !is_app_installed {
             // App not installed - redirect to download page
-            ctx.open_url("https://warp.dev/download");
+            ctx.open_url("https://blackdagger.io/download");
             // In webapp code we cannot distinguish between
             // the localhost:9277/install_detection endpoint not running (not installed) vs
             // the browser blocking Local Network Access which results in CORS error;
@@ -20992,7 +20992,7 @@ impl Workspace {
             // Many users' browser settings will block Local Network Access so this will end up redirecting to download page,
             // even if they have the app installed.
             let toast_message = format!(
-                "Have Warp installed but redirecting to download page?\nEnable Local Network Access for {} in your browser.",
+                "Have Black installed but redirecting to download page?\nEnable Local Network Access for {} in your browser.",
                 ChannelState::server_root_url()
             );
             self.toast_stack.update(ctx, |toast_stack, ctx| {
@@ -21689,7 +21689,7 @@ impl TypedActionView for Workspace {
                             ctx
                         );
                     } else if warp_drive_active {
-                        // Tools panel opened with Warp Drive as the active view
+                        // Tools panel opened with Black Drive as the active view
                         send_telemetry_from_ctx!(
                             TelemetryEvent::WarpDriveOpened {
                                 source: WarpDriveSource::LeftPanelToolbelt,
@@ -22068,7 +22068,7 @@ impl TypedActionView for Workspace {
                 // Blocking is ok here only because this action is only registered in dev and local
                 // builds to aid in debugging and development.
                 let access_token =
-                    warpui::r#async::block_on(self.server_api.get_or_refresh_access_token());
+                    black_ui::r#async::block_on(self.server_api.get_or_refresh_access_token());
                 if let Ok(token) = access_token {
                     if let Some(bearer) = token.bearer_token() {
                         ctx.clipboard().write(ClipboardContent::plain_text(bearer));
@@ -22321,7 +22321,7 @@ impl TypedActionView for Workspace {
             #[cfg(all(enable_crash_recovery, target_os = "linux"))]
             DismissWaylandCrashRecoveryBannerAndOpenLink => {
                 self.dismiss_workspace_banner(ctx, &WorkspaceBanner::WaylandCrashRecovery);
-                ctx.open_url("https://docs.warp.dev/terminal/more-features/linux#native-wayland");
+                ctx.open_url("https://blackdagger.io/terminal/more-features/linux#native-wayland");
             }
             FixInAgentMode { query } => {
                 self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
@@ -22859,7 +22859,7 @@ impl TypedActionView for Workspace {
                     .unwrap_or_default()
                     .as_secs();
                 let output_path = env::temp_dir()
-                    .join(format!("warp_sample_{timestamp}.txt"))
+                    .join(format!("black_sample_{timestamp}.txt"))
                     .display()
                     .to_string();
 
@@ -23183,7 +23183,7 @@ impl View for Workspace {
         self.sync_window_button_visibility(ctx);
     }
 
-    fn keymap_context(&self, app: &AppContext) -> warpui::keymap::Context {
+    fn keymap_context(&self, app: &AppContext) -> black_ui::keymap::Context {
         let mut context = Self::default_keymap_context();
 
         if NetworkStatus::as_ref(app).is_online() {
@@ -23275,7 +23275,7 @@ impl View for Workspace {
         }
 
         if self.team_uid(app).is_some() {
-            context.set.insert("WarpDrive_BelongsToTeam");
+            context.set.insert("BlackDrive_BelongsToTeam");
         }
 
         if self.auth_state.is_anonymous_or_logged_out() {
@@ -23376,7 +23376,7 @@ impl View for Workspace {
 
         let tab_bar_mode = self.tab_bar_mode(app);
 
-        // For WASM simplified tab bar views (Warp Drive objects, shared sessions, conversation transcripts),
+        // For WASM simplified tab bar views (Black Drive objects, shared sessions, conversation transcripts),
         // we render the tab bar outside of panels so that the details panel only affects content below the tab bar.
         cfg_if::cfg_if! {
             if #[cfg(target_family = "wasm")] {
@@ -23418,7 +23418,7 @@ impl View for Workspace {
         #[cfg(target_family = "wasm")]
         {
             let pane_group = self.active_tab_pane_group().as_ref(app);
-            if warpui::platform::wasm::is_mobile_device() && pane_group.left_panel_open {
+            if black_ui::platform::wasm::is_mobile_device() && pane_group.left_panel_open {
                 let scrim = Rect::new()
                     .with_background(Fill::Solid(ColorU::new(
                         0,
@@ -23522,7 +23522,7 @@ impl View for Workspace {
 
         // Transcript details panel overlay (right side, mobile only)
         #[cfg(target_family = "wasm")]
-        if warpui::platform::wasm::is_mobile_device()
+        if black_ui::platform::wasm::is_mobile_device()
             && self
                 .current_workspace_state
                 .is_transcript_details_panel_open
@@ -25294,7 +25294,7 @@ fn render_cross_window_ghost_chip(
     appearance: &Appearance,
     app: &AppContext,
 ) -> Box<dyn Element> {
-    use warpui::elements::DropShadow;
+    use black_ui::elements::DropShadow;
 
     let theme = appearance.theme();
 
@@ -25386,10 +25386,10 @@ fn set_opencode_warp_plugin(new_entry: &str) -> String {
         return "opencode.json has unexpected structure (plugin is not an array)".to_string();
     };
 
-    // Remove any existing opencode-warp entries
+    // Remove any existing opencode-black entries
     plugins.retain(|entry| {
         let s = entry.as_str().unwrap_or("");
-        !s.contains("opencode-warp")
+        !s.contains("opencode-black")
     });
 
     plugins.push(serde_json::Value::String(new_entry.to_string()));

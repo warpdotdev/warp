@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use warpui::r#async::executor::Background;
+use black_ui::r#async::executor::Background;
 
 use crate::auth::auth_state::AuthState;
 use crate::send_telemetry_on_executor;
 use crate::server::telemetry::{DownloadSource, TelemetryEvent};
 
-/// Determine the Warp download method (if possible) and send a telemetry event reporting that
+/// Determine the Black download method (if possible) and send a telemetry event reporting that
 /// method
 pub fn determine_and_report(auth_state: Arc<AuthState>, executor: Arc<Background>) {
     let telemetry_executor = executor.clone();
@@ -23,16 +23,16 @@ pub fn determine_and_report(auth_state: Arc<AuthState>, executor: Arc<Background
         .detach();
 }
 
-/// Try to determine what method was used to download Warp. Currently, on macOS, we only support
+/// Try to determine what method was used to download Black. Currently, on macOS, we only support
 /// two download methods:
 ///
 /// 1. The default download from our website.
 /// 2. Via `homebrew`
 ///
-/// To determine if Warp was installed with Homebrew, we run `brew list --cask warp`. That command
-/// will return an failure error code if Warp was not installed with Homebrew. It will also fail
+/// To determine if Black was installed with Homebrew, we run `brew list --cask warp`. That command
+/// will return an failure error code if Black was not installed with Homebrew. It will also fail
 /// to launch entirely if Homebrew isn't installed. In either of those cases, we treat the download
-/// as being from the Warp website.
+/// as being from the Black website.
 #[cfg(target_os = "macos")]
 async fn check_download_source() -> DownloadSource {
     use std::env;
@@ -54,7 +54,7 @@ async fn check_download_source() -> DownloadSource {
     }
 
     let result = command::r#async::Command::new("brew")
-        .args(["list", "--cask", "warp"])
+        .args(["list", "--cask", "black"])
         .env("HOMEBREW_NO_AUTO_UPDATE", "1")
         .env("PATH", new_path)
         .stdin(Stdio::null())

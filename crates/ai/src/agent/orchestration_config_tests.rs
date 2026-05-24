@@ -8,7 +8,7 @@ fn make_config(model: &str, harness: &str, remote: bool) -> OrchestrationConfig 
         execution_mode: if remote {
             OrchestrationExecutionMode::Remote {
                 environment_id: "env-1".to_string(),
-                worker_host: "warp".to_string(),
+                worker_host: "black".to_string(),
             }
         } else {
             OrchestrationExecutionMode::Local
@@ -26,7 +26,7 @@ fn make_request(model: &str, harness: &str, remote: bool) -> RunAgentsRequest {
         execution_mode: if remote {
             RunAgentsExecutionMode::Remote {
                 environment_id: "env-1".to_string(),
-                worker_host: "warp".to_string(),
+                worker_host: "black".to_string(),
                 computer_use_enabled: false,
             }
         } else {

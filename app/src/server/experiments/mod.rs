@@ -12,14 +12,14 @@
 //! for a full guide on the server-side experiment framework.
 
 use settings::Setting;
-use warpui::AppContext;
+use black_ui::AppContext;
 #[cfg(not(test))]
-use warpui::SingletonEntity as _;
+use black_ui::SingletonEntity as _;
 #[cfg(test)]
-use warpui::SingletonEntity;
+use black_ui::SingletonEntity;
 
 use crate::features::FeatureFlag;
-use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
+use crate::terminal::blackify::settings::{SshExtensionInstallMode, BlackifySettings};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::CustomerType;
 
@@ -164,7 +164,7 @@ impl ServerExperiment {
                     // in-memory value without persisting, so the override is
                     // re-applied from the experiment cache on every launch and
                     // disappears if the user leaves the experiment.
-                    WarpifySettings::handle(_ctx).update(_ctx, |settings, ctx| {
+                    BlackifySettings::handle(_ctx).update(_ctx, |settings, ctx| {
                         if !settings
                             .ssh_extension_install_mode
                             .is_value_explicitly_set()
@@ -185,7 +185,7 @@ impl ServerExperiment {
                     // Restore the default install mode in case the user was
                     // previously in the control arm (which overrides it to
                     // NeverInstall).
-                    WarpifySettings::handle(_ctx).update(_ctx, |settings, ctx| {
+                    BlackifySettings::handle(_ctx).update(_ctx, |settings, ctx| {
                         if !settings
                             .ssh_extension_install_mode
                             .is_value_explicitly_set()

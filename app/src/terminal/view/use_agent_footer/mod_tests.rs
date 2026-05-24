@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
-use warp_core::settings::Setting as _;
-use warpui::{App, AppContext, SingletonEntity, ViewContext};
+use black_core::settings::Setting as _;
+use black_ui::{App, AppContext, SingletonEntity, ViewContext};
 
 use super::super::{AIBlockMetadata, RichContentMetadata, RichContentType};
 use super::*;
@@ -192,7 +192,7 @@ fn insert_pending_ai_block(
 fn use_agent_footer_renders_for_manual_handoff_even_when_user_command_footer_setting_disabled() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        FeatureFlag::AgentView.set_enabled(true);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             let _ = settings
                 .should_render_use_agent_footer_for_user_commands
@@ -234,7 +234,7 @@ fn use_agent_footer_renders_for_manual_handoff_even_when_user_command_footer_set
 fn use_agent_footer_renders_for_manual_handoff_when_unfinished_ai_block_remains() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        FeatureFlag::AgentView.set_enabled(true);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
 

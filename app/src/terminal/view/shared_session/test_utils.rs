@@ -1,7 +1,7 @@
 use session_sharing_protocol::common::{ParticipantId, ParticipantList, SessionId};
 use session_sharing_protocol::sharer::SessionSourceType;
-use warpui::platform::WindowStyle;
-use warpui::{App, SingletonEntity, ViewHandle};
+use black_ui::platform::WindowStyle;
+use black_ui::{App, SingletonEntity, ViewHandle};
 
 use crate::auth::UserUid;
 use crate::editor::ReplicaId;

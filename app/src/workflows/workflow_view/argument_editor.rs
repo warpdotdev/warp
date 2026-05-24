@@ -2,17 +2,17 @@ use std::cmp::Ordering;
 
 use itertools::Itertools;
 use pathfinder_color::ColorU;
-use warp_core::features::FeatureFlag;
-use warp_core::ui::appearance::Appearance;
-use warp_editor::editor::NavigationKey;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::ui::appearance::Appearance;
+use black_editor::editor::NavigationKey;
+use black_ui::elements::{
     ChildView, ConstrainedBox, Container, CrossAxisAlignment, Fill, Flex, MainAxisAlignment,
     MainAxisSize, ParentElement, Shrinkable,
 };
-use warpui::text_layout::TextStyle;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{AppContext, Element, SingletonEntity as _, ViewContext, ViewHandle};
+use black_ui::text_layout::TextStyle;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{AppContext, Element, SingletonEntity as _, ViewContext, ViewHandle};
 
 use super::alias_argument_selector::{AliasArgumentSelector, AliasArgumentSelectorEvent};
 use super::{

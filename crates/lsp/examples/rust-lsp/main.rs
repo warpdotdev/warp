@@ -16,8 +16,8 @@ use log::LevelFilter;
 use lsp::supported_servers::LSPServerType;
 use lsp::{spawn_lsp_service, LspServerConfig, LspService, LspServiceInitializationResult};
 use lsp_types::Position;
-use warpui::r#async::executor::Background;
-use warpui::r#async::Timer;
+use black_ui::r#async::executor::Background;
+use black_ui::r#async::Timer;
 
 fn init_logging() {
     let mut base_logger = env_logger::builder();
@@ -111,7 +111,7 @@ fn main() -> anyhow::Result<()> {
         }
     });
 
-    warpui::r#async::block_on(task)?;
+    black_ui::r#async::block_on(task)?;
     Ok(())
 }
 
@@ -122,7 +122,7 @@ async fn async_main(executor: Arc<Background>, workspace_root: PathBuf) -> anyho
         LSPServerType::RustAnalyzer,
         workspace_root,
         None,
-        "warp-dev-example".to_string(),
+        "black-dev-example".to_string(),
         Arc::new(http_client::Client::new()),
     );
 

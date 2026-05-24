@@ -4,23 +4,23 @@ use ::settings::{Setting, ToggleableSetting};
 use lazy_static::lazy_static;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::channel::ChannelState;
-use warp_core::context_flag::ContextFlag;
-use warp_core::features::FeatureFlag;
-use warp_core::ui::icons::Icon;
-use warpui::assets::asset_cache::AssetSource;
-use warpui::elements::{
+use black_core::channel::ChannelState;
+use black_core::context_flag::ContextFlag;
+use black_core::features::FeatureFlag;
+use black_core::ui::icons::Icon;
+use black_ui::assets::asset_cache::AssetSource;
+use black_ui::elements::{
     Align, Border, CacheOption, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Element, Empty, Flex, Image, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
     Radius, Shrinkable, Text,
 };
-use warpui::fonts::Weight;
-use warpui::keymap::ContextPredicate;
-use warpui::platform::Cursor;
-use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ui_components::switch::SwitchStateHandle;
-use warpui::{
+use black_ui::fonts::Weight;
+use black_ui::keymap::ContextPredicate;
+use black_ui::platform::Cursor;
+use black_ui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::ui_components::switch::SwitchStateHandle;
+use black_ui::{
     id, Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };
@@ -46,7 +46,7 @@ use crate::workspaces::workspace::CustomerType;
 use crate::{report_if_error, send_telemetry_from_ctx, TelemetryEvent};
 
 const PHOTO_SIZE: f32 = 40.;
-const REFERRAL_CTA: &str = "Earn rewards by sharing Warp with friends & colleagues";
+const REFERRAL_CTA: &str = "Earn rewards by sharing Black with friends & colleagues";
 const REGULAR_TEXT_FONT_SIZE: f32 = 12.;
 const VERTICAL_MARGIN: f32 = 24.;
 const LOG_OUT_TEXT: &str = "Log out";
@@ -611,7 +611,7 @@ impl SettingsWidget for AccountWidget {
             self.render_anonymous_account_info(view.auth_state.as_ref(), appearance)
         } else {
             let profile_image_source = view.auth_state.user_photo_url().map(|url| {
-                asset_cache::url_source_with_persistence(url, &warp_core::paths::cache_dir())
+                asset_cache::url_source_with_persistence(url, &black_core::paths::cache_dir())
             });
             self.render_account_info(
                 profile_image_source.as_ref(),
@@ -686,7 +686,7 @@ impl SettingsWidget for SettingsSyncWidget {
         let label_info = AdditionalInfo {
             mouse_state: self.tooltip_state.clone(),
             on_click_action: Some(MainPageAction::OpenUrl(
-                "https://docs.warp.dev/terminal/more-features/settings-sync".into(),
+                "https://blackdagger.io/terminal/more-features/settings-sync".into(),
             )),
             secondary_text: None,
             tooltip_override_text: None,
@@ -855,7 +855,7 @@ impl VersionInfoWidget {
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
-                            text: "Relaunch Warp",
+                            text: "Relaunch Black",
                             action: MainPageAction::Relaunch,
                         }),
                     ),
@@ -872,28 +872,28 @@ impl VersionInfoWidget {
                             color: faded_text_color,
                         }),
                         Some(CallToActionContent {
-                            text: "Relaunch Warp",
+                            text: "Relaunch Black",
                             action: MainPageAction::Relaunch,
                         }),
                     ),
                     AutoupdateStage::UnableToUpdateToNewVersion { .. } => (
                         Some(StatusContent {
-                            text: "A new version of Warp is available but can't be installed",
+                            text: "A new version of Black is available but can't be installed",
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
-                            text: "Update Warp manually",
+                            text: "Update Black manually",
                             // note: the handler for this action is a no-op
                             action: MainPageAction::DownloadUpdate,
                         }),
                     ),
                     AutoupdateStage::UnableToLaunchNewVersion { .. } => (
                         Some(StatusContent {
-                            text: "A new version of Warp is installed but can't be launched.",
+                            text: "A new version of Black is installed but can't be launched.",
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
-                            text: "Update Warp manually",
+                            text: "Update Black manually",
                             // note: the handler for this action is a no-op
                             action: MainPageAction::DownloadUpdate,
                         }),

@@ -18,7 +18,7 @@ http_client = { workspace = true }
 semver = "1.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
-warp_core = { workspace = true }
+black_core = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 async-fs = { workspace = true }

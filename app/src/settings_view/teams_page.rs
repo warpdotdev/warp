@@ -10,23 +10,23 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::ui::theme::color::internal_colors;
+use black_ui::clipboard::ClipboardContent;
+use black_ui::elements::{
     Align, Border, ChildAnchor, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Element, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
     SavePosition, ScrollTarget, ScrollToPositionMode, Shrinkable, Stack, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::platform::Cursor;
-use warpui::presenter::ChildView;
-use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ui_components::switch::SwitchStateHandle;
-use warpui::ui_components::text_input::TextInput;
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::platform::Cursor;
+use black_ui::presenter::ChildView;
+use black_ui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::ui_components::switch::SwitchStateHandle;
+use black_ui::ui_components::text_input::TextInput;
+use black_ui::{
     AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };
@@ -984,7 +984,7 @@ impl TeamsPageView {
                 self.show_error("Failed to toggle team discoverability", Some(err), ctx);
             }
             UserWorkspacesEvent::JoinTeamWithTeamDiscoverySuccess => {
-                // Force refresh of Warp Drive objects after joining a team
+                // Force refresh of Black Drive objects after joining a team
                 UpdateManager::handle(ctx).update(ctx, move |update_manager, ctx| {
                     update_manager.refresh_updated_objects(ctx);
                 });
@@ -2149,9 +2149,9 @@ impl TeamsWidget {
         has_admin_permissions: bool,
     ) -> Box<dyn Element> {
         let prorated_message = if has_admin_permissions {
-            "You'll be charged for a portion of the team member's usage of Warp."
+            "You'll be charged for a portion of the team member's usage of Black."
         } else {
-            "Your admin will be charged for a portion of the team member's usage of Warp."
+            "Your admin will be charged for a portion of the team member's usage of Black."
         };
 
         let additional_members_cost_money_msg = if let Some((monthly_cost, yearly_cost)) =
@@ -3242,7 +3242,7 @@ impl TeamsWidget {
 
         let domain = current_user_email.split('@').nth(1).unwrap_or("");
         let team_discoverability_instructions =
-            format!("Allow Warp users with an @{domain} email to find and join the team.");
+            format!("Allow Black users with an @{domain} email to find and join the team.");
         let subtext = self.render_sub_text(
             team_discoverability_instructions,
             appearance,
@@ -3995,9 +3995,9 @@ impl TeamsWidget {
             .with_margin_left(-4.)
             .finish();
             let checkbox_row_text = if let Some(domain) = view.auth_state.user_email_domain() {
-                format!("Allow Warp users with an @{domain} email to find and join the team.")
+                format!("Allow Black users with an @{domain} email to find and join the team.")
             } else {
-                "Allow Warp users with the same email domain as you to find and join the team."
+                "Allow Black users with the same email domain as you to find and join the team."
                     .to_string()
             };
             let checkbox_row = Container::new(

@@ -1,21 +1,21 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::Icon;
-use warp_editor::editor::NavigationKey;
-use warpui::elements::{
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::Icon;
+use black_editor::editor::NavigationKey;
+use black_ui::elements::{
     Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, Padding, ParentElement, Radius, SavePosition, ScrollTarget,
     ScrollToPositionMode, ScrollbarWidth, Shrinkable, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::keymap::macros::*;
-use warpui::keymap::{FixedBinding, Keystroke};
-use warpui::platform::Cursor;
-use warpui::ui_components::components::UiComponent;
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::keymap::macros::*;
+use black_ui::keymap::{FixedBinding, Keystroke};
+use black_ui::platform::Cursor;
+use black_ui::ui_components::components::UiComponent;
+use black_ui::{
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };

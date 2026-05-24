@@ -9,7 +9,7 @@ use session_sharing_protocol::common::{
     SessionId,
 };
 use session_sharing_protocol::sharer::{DownstreamMessage, ReconnectToken, UpstreamMessage};
-use warpui::{App, ModelHandle};
+use black_ui::{App, ModelHandle};
 use websocket::{Message, WebsocketMessage as _};
 
 use super::{Network, PtyBytesBatchStatus, Stage};
@@ -692,7 +692,7 @@ fn test_events_are_saved_on_send_and_removed_on_ack() {
         // Simulate receiving the EventsProcessedAck message from the server.
         network.update(
             &mut app,
-            |network, ctx: &mut warpui::ModelContext<'_, Network>| {
+            |network, ctx: &mut black_ui::ModelContext<'_, Network>| {
                 let downstream_message = DownstreamMessage::EventsProcessedAck {
                     latest_processed_event_no: 1,
                 };

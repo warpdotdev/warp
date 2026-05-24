@@ -15,7 +15,7 @@ use keyboard::Keyboard;
 use mouse::Mouse;
 use pathfinder_geometry::vector::Vector2I;
 use session::PortalSession;
-use warpui::r#async::Timer;
+use black_ui::r#async::Timer;
 
 use crate::{Action, ActionResult, Options};
 

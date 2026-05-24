@@ -8,11 +8,11 @@ use derivative::Derivative;
 use http::StatusCode;
 use lazy_static::lazy_static;
 use uuid::Uuid;
-use warp_graphql::scalars::time::ServerTimestamp;
-// Re-exported from warp_server_client.
-pub use warp_server_client::cloud_object::SerializedModel;
-use warpui::r#async::FutureId;
-use warpui::{Entity, ModelContext, RequestState, RetryOption, SingletonEntity};
+use black_graphql::scalars::time::ServerTimestamp;
+// Re-exported from black_server_client.
+pub use black_server_client::cloud_object::SerializedModel;
+use black_ui::r#async::FutureId;
+use black_ui::{Entity, ModelContext, RequestState, RetryOption, SingletonEntity};
 
 use super::graphql::GraphQLError;
 use super::ids::{ClientId, HashableId, ObjectUid, ServerId, SyncId, ToServerId};

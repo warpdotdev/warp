@@ -8,8 +8,8 @@ use num_traits::Zero;
 use ordered_float::OrderedFloat;
 use serde::Serialize;
 use sysinfo::ProcessesToUpdate;
-use warp_core::channel::ChannelState;
-use warpui::{App, AppContext, Entity, ModelContext, SingletonEntity};
+use black_core::channel::ChannelState;
+use black_ui::{App, AppContext, Entity, ModelContext, SingletonEntity};
 
 use crate::server::telemetry;
 use crate::system::memory_footprint;
@@ -128,7 +128,7 @@ impl SystemInfo {
     fn schedule_refresh(ctx: &mut ModelContext<Self>) {
         ctx.spawn(
             async {
-                warpui::r#async::Timer::after(REFRESH_INTERVAL).await;
+                black_ui::r#async::Timer::after(REFRESH_INTERVAL).await;
             },
             |me, _, ctx| {
                 me.refresh(ctx);

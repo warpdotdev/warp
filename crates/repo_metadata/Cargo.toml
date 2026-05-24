@@ -21,9 +21,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 walkdir.workspace = true
 itertools.workspace = true
-warpui.workspace = true
-warp_core.workspace = true
-warp_util.workspace = true
+black_ui.workspace = true
+black_core.workspace = true
+black_util.workspace = true
 ignore = "0.4.23"
 once_cell.workspace = true
 log.workspace = true
@@ -47,4 +47,4 @@ anyhow.workspace = true
 env_logger.workspace = true
 futures = "0.3"
 virtual-fs.workspace = true
-warpui = { workspace = true, features = ["test-util"] }
+black_ui = { workspace = true, features = ["test-util"] }

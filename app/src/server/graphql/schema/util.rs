@@ -4,31 +4,31 @@ use crate::cloud_object::model::actions::{
 };
 use crate::server::ids::{HashedSqliteId, ObjectUid, ServerId, SyncId};
 
-impl From<ObjectActionType> for warp_graphql::object_actions::ActionType {
+impl From<ObjectActionType> for black_graphql::object_actions::ActionType {
     fn from(action: ObjectActionType) -> Self {
         match action {
-            ObjectActionType::Execute => warp_graphql::object_actions::ActionType::Executed,
+            ObjectActionType::Execute => black_graphql::object_actions::ActionType::Executed,
         }
     }
 }
 
 /// Converts the graphql action type ("EXECUTED", etc) to ObjectActionType.
 fn try_into_object_action_type(
-    action_type: warp_graphql::object_actions::ActionType,
+    action_type: black_graphql::object_actions::ActionType,
 ) -> Result<ObjectActionType, anyhow::Error> {
     match action_type {
-        warp_graphql::object_actions::ActionType::Executed => Ok(ObjectActionType::Execute),
+        black_graphql::object_actions::ActionType::Executed => Ok(ObjectActionType::Execute),
     }
 }
 
 /// Converts the graphql action entry (SingleAction, BundledActions) into its ObjectAction corollary.
 fn try_into_object_action(
-    record: &warp_graphql::object_actions::ActionRecord,
+    record: &black_graphql::object_actions::ActionRecord,
     uid: ObjectUid,
     hashed_sqlite_id: HashedSqliteId,
 ) -> Result<ObjectAction, anyhow::Error> {
     match record {
-        warp_graphql::object_actions::ActionRecord::SingleAction(s) => Ok(ObjectAction {
+        black_graphql::object_actions::ActionRecord::SingleAction(s) => Ok(ObjectAction {
             action_type: try_into_object_action_type(s.action_type)?,
             action_subtype: ObjectActionSubtype::SingleAction {
                 timestamp: s.timestamp.utc(),
@@ -39,7 +39,7 @@ fn try_into_object_action(
             uid,
             hashed_sqlite_id,
         }),
-        warp_graphql::object_actions::ActionRecord::BundledActions(b) => Ok(ObjectAction {
+        black_graphql::object_actions::ActionRecord::BundledActions(b) => Ok(ObjectAction {
             action_type: try_into_object_action_type(b.action_type)?,
             action_subtype: ObjectActionSubtype::BundledActions {
                 count: b.count,
@@ -50,7 +50,7 @@ fn try_into_object_action(
             uid,
             hashed_sqlite_id,
         }),
-        warp_graphql::object_actions::ActionRecord::Unknown => {
+        black_graphql::object_actions::ActionRecord::Unknown => {
             Err(anyhow!("Unknown object action subtype"))
         }
     }
@@ -58,7 +58,7 @@ fn try_into_object_action(
 
 /// Converts the graphql action history type into an ObjectActionHistory, requires converting
 /// the individual actions, action types, and action subtypes.
-impl TryInto<ObjectActionHistory> for warp_graphql::object_actions::ObjectActionHistory {
+impl TryInto<ObjectActionHistory> for black_graphql::object_actions::ObjectActionHistory {
     type Error = anyhow::Error;
     fn try_into(self) -> Result<ObjectActionHistory, Self::Error> {
         let uid: ObjectUid = self.uid.into_inner();

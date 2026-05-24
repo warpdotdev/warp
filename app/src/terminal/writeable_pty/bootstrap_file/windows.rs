@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use typed_path::TypedPath;
-use warp_util::path::{convert_wsl_to_windows_host_path, WSLPathConversionError};
+use black_util::path::{convert_wsl_to_windows_host_path, WSLPathConversionError};
 
 use crate::terminal::shell::ShellType;
 
@@ -107,7 +107,7 @@ impl Drop for TempBootstrapFile {
 /// Returns the path to the permanent bootstrap file in bytes, if it exists.
 ///
 /// Currently we only create a permanent bootstrap file for PowerShell, located
-/// alongside the Warp executable.
+/// alongside the Black executable.
 pub fn path_to_permanent_bootstrap_file(shell_type: ShellType) -> Option<Vec<u8>> {
     if shell_type != ShellType::PowerShell {
         return None;

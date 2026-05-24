@@ -1,5 +1,5 @@
-use warpui::elements::ChildView;
-use warpui::{
+use black_ui::elements::ChildView;
+use black_ui::{
     Element, Entity, EntityId, ModelHandle, SingletonEntity as _, View, ViewContext, ViewHandle,
 };
 
@@ -210,7 +210,7 @@ impl View for InlineProfileSelectorView {
         "InlineProfileSelectorView"
     }
 
-    fn render(&self, _app: &warpui::AppContext) -> Box<dyn Element> {
+    fn render(&self, _app: &black_ui::AppContext) -> Box<dyn Element> {
         ChildView::new(&self.menu_view).finish()
     }
 }

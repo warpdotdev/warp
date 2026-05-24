@@ -1,18 +1,18 @@
-use warp_cli::agent::Harness;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::Fill;
-use warp_editor::editor::NavigationKey;
-use warp_managed_secrets::client::SecretOwner;
-use warpui::elements::{
+use black_cli::agent::Harness;
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::Fill;
+use black_editor::editor::NavigationKey;
+use black_managed_secrets::client::SecretOwner;
+use black_ui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Empty, Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement as _, ParentOffsetBounds,
     Radius, Stack, Text, Wrap,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
@@ -436,7 +436,7 @@ impl AuthSecretFtuxView {
             }
             container.finish()
         })
-        .with_cursor(warpui::platform::Cursor::PointingHand)
+        .with_cursor(black_ui::platform::Cursor::PointingHand)
         .on_click(|ctx, _, _| {
             ctx.dispatch_typed_action(AuthSecretFtuxAction::ToggleHarnessMenu);
         })
@@ -449,7 +449,7 @@ impl AuthSecretFtuxView {
                 stack.add_positioned_overlay_child(
                     ChildView::new(menu).finish(),
                     OffsetPositioning::offset_from_parent(
-                        warpui::geometry::vector::vec2f(0., 4.),
+                        black_ui::geometry::vector::vec2f(0., 4.),
                         ParentOffsetBounds::WindowByPosition,
                         ParentAnchor::BottomLeft,
                         ChildAnchor::TopLeft,
@@ -725,7 +725,7 @@ impl AuthSecretFtuxView {
             .map(|info| info.learn_more_url)
             .unwrap_or_else(|| learn_more_url_for_harness(self.harness));
         let learn_more_label =
-            format!("Learn more about authentication for {harness_name} in Warp.");
+            format!("Learn more about authentication for {harness_name} in Black.");
         let learn_more = Hoverable::new(self.learn_more_mouse_state.clone(), move |state| {
             let color = if state.is_hovered() {
                 accent_color
@@ -742,7 +742,7 @@ impl AuthSecretFtuxView {
             .soft_wrap(true)
             .finish()
         })
-        .with_cursor(warpui::platform::Cursor::PointingHand)
+        .with_cursor(black_ui::platform::Cursor::PointingHand)
         .on_click(move |ctx, _, _| {
             ctx.dispatch_typed_action(AuthSecretFtuxAction::LearnMore(learn_more_url));
         })
@@ -826,7 +826,7 @@ impl AuthSecretFtuxView {
             .on_click(|ctx, _, _| {
                 ctx.dispatch_typed_action(AuthSecretFtuxAction::ToggleTeamScope);
             })
-            .with_cursor(warpui::platform::Cursor::PointingHand)
+            .with_cursor(black_ui::platform::Cursor::PointingHand)
             .finish();
 
         let theme = appearance.theme();
@@ -914,7 +914,7 @@ impl AuthSecretFtuxView {
             };
             inner.finish()
         })
-        .with_cursor(warpui::platform::Cursor::PointingHand)
+        .with_cursor(black_ui::platform::Cursor::PointingHand)
         .on_click(move |ctx, _, _| {
             ctx.dispatch_typed_action(action.clone());
         })

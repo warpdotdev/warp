@@ -29,16 +29,16 @@ use crate::terminal::remote_tty::TerminalManager as RemoteTtyTerminalManager;
 #[cfg(feature = "local_tty")]
 use crate::terminal::TerminalManager;
 #[cfg(not(target_family = "wasm"))]
-use warp_cli::agent::Harness;
+use black_cli::agent::Harness;
 #[cfg(feature = "local_tty")]
-use warpui::geometry::vector::Vector2F;
+use black_ui::geometry::vector::Vector2F;
 #[cfg(not(target_family = "wasm"))]
-use warpui::r#async::FutureExt;
+use black_ui::r#async::FutureExt;
 #[cfg(feature = "local_tty")]
-use warpui::ModelHandle;
-use warpui::ViewContext;
+use black_ui::ModelHandle;
+use black_ui::ViewContext;
 #[cfg(not(target_family = "wasm"))]
-use warpui::{SingletonEntity, View, ViewHandle};
+use black_ui::{SingletonEntity, View, ViewHandle};
 
 /// Default base Docker image used for newly created sandbox shells.
 ///
@@ -215,14 +215,14 @@ impl TerminalView {
         let sync_future = UpdateManager::as_ref(ctx).initial_load_complete();
         ctx.spawn(
             async move {
-                // Wait for Warp Drive initial sync so environment lookup succeeds.
+                // Wait for Black Drive initial sync so environment lookup succeeds.
 
                 if sync_future
                     .with_timeout(WARP_DRIVE_SYNC_TIMEOUT)
                     .await
                     .is_err()
                 {
-                    return Err("Timed out waiting for Warp Drive to sync for docker sandbox");
+                    return Err("Timed out waiting for Black Drive to sync for docker sandbox");
                 }
 
                 // Wait for the terminal session to bootstrap.

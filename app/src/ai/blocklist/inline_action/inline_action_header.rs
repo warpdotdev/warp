@@ -2,17 +2,17 @@ use std::borrow::Cow;
 use std::rc::Rc;
 
 use pathfinder_color::ColorU;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::color::internal_colors;
+use black_ui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult,
     EventHandler, Expanded, Flex, FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, ParentElement, Radius, Shrinkable, SizeConstraintCondition,
     SizeConstraintSwitch, Text,
 };
-use warpui::fonts::FamilyId;
-use warpui::platform::Cursor;
-use warpui::{AppContext, Element, EventContext, SingletonEntity};
+use black_ui::fonts::FamilyId;
+use black_ui::platform::Cursor;
+use black_ui::{AppContext, Element, EventContext, SingletonEntity};
 
 use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
 use crate::ui_components::blended_colors;
@@ -112,7 +112,7 @@ pub struct HeaderConfig {
     pub font_family: FamilyId,
     /// Whether to parse the title as markdown when rendering.
     pub use_markdown: bool,
-    pub icon: Option<warpui::elements::Icon>,
+    pub icon: Option<black_ui::elements::Icon>,
     pub badge: Option<String>,
     pub interaction_mode: Option<InteractionMode>,
     pub is_text_selectable: bool,
@@ -147,7 +147,7 @@ impl HeaderConfig {
         self
     }
 
-    pub fn with_icon(mut self, icon: warpui::elements::Icon) -> Self {
+    pub fn with_icon(mut self, icon: black_ui::elements::Icon) -> Self {
         self.icon = Some(icon);
         self
     }

@@ -6,7 +6,7 @@ pub(crate) mod plugin_manager;
 use std::collections::{HashMap, HashSet};
 
 use event::{CLIAgentEvent, CLIAgentEventType};
-use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+use black_ui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use self::listener::CLIAgentSessionListener;
 use super::CLIAgent;
@@ -130,7 +130,7 @@ pub struct CLIAgentSession {
     /// `None` if the plugin predates version reporting or hasn't connected yet.
     pub plugin_version: Option<String>,
     /// `None` when the session is local.
-    /// `Some("user@hostname")` when running over SSH (warpified or legacy).
+    /// `Some("user@hostname")` when running over SSH (blackified or legacy).
     /// Used as a key for per-host plugin install failure tracking.
     pub remote_host: Option<String>,
     /// Draft text saved from the rich input composer when it was closed.

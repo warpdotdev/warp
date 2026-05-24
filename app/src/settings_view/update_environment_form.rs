@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use instant::{Duration, Instant};
 use log::debug;
 use url::Url;
-use warp_core::send_telemetry_from_ctx;
-use warp_editor::editor::NavigationKey;
-use warp_graphql::queries::user_github_info::UserGithubInfoResult;
-use warpui::elements::{
+use black_core::send_telemetry_from_ctx;
+use black_editor::editor::NavigationKey;
+use black_graphql::queries::user_github_info::UserGithubInfoResult;
+use black_ui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable,
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Element, Empty, Expanded,
     Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
@@ -15,13 +15,13 @@ use warpui::elements::{
     PositionedElementOffsetBounds, Radius, SavePosition, ScrollTarget, ScrollToPositionMode,
     ScrollbarWidth, SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::geometry::vector::vec2f;
-use warpui::keymap::FixedBinding;
-use warpui::platform::Cursor;
-use warpui::prelude::Coords;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::geometry::vector::vec2f;
+use black_ui::keymap::FixedBinding;
+use black_ui::platform::Cursor;
+use black_ui::prelude::Coords;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
@@ -54,7 +54,7 @@ use crate::ChannelState;
 const SUBMIT_BUTTON_FOCUSED: &str = "SubmitButtonFocused";
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings([
         FixedBinding::new(
@@ -1529,7 +1529,7 @@ impl UpdateEnvironmentForm {
 
                 match result {
                     Ok(result) => match result {
-                        warp_graphql::queries::suggest_cloud_environment_image::SuggestCloudEnvironmentImageResult::SuggestCloudEnvironmentImageOutput(output) => {
+                        black_graphql::queries::suggest_cloud_environment_image::SuggestCloudEnvironmentImageResult::SuggestCloudEnvironmentImageOutput(output) => {
                             let image = output.image;
                             let needs_custom_image = output.needs_custom_image;
                             let reason = output.reason;
@@ -1541,7 +1541,7 @@ impl UpdateEnvironmentForm {
                                 ctx,
                             );
                         }
-                        warp_graphql::queries::suggest_cloud_environment_image::SuggestCloudEnvironmentImageResult::SuggestCloudEnvironmentImageAuthRequiredOutput(output) => {
+                        black_graphql::queries::suggest_cloud_environment_image::SuggestCloudEnvironmentImageResult::SuggestCloudEnvironmentImageAuthRequiredOutput(output) => {
                             me.suggest_image_cache.insert(
                                 key.clone(),
                                 CachedSuggestImageResult::AuthRequired {
@@ -1553,7 +1553,7 @@ impl UpdateEnvironmentForm {
                                 auth_url: output.auth_url,
                             };
                         }
-                        warp_graphql::queries::suggest_cloud_environment_image::SuggestCloudEnvironmentImageResult::UserFacingError(_) => {
+                        black_graphql::queries::suggest_cloud_environment_image::SuggestCloudEnvironmentImageResult::UserFacingError(_) => {
                             let error_message = "Failed to suggest a Docker image".to_string();
                             send_telemetry_from_ctx!(
                                 CloudAgentTelemetryEvent::ImageSuggestionFailed {
@@ -1566,7 +1566,7 @@ impl UpdateEnvironmentForm {
                                 message: error_message,
                             };
                         }
-                        warp_graphql::queries::suggest_cloud_environment_image::SuggestCloudEnvironmentImageResult::Unknown => {
+                        black_graphql::queries::suggest_cloud_environment_image::SuggestCloudEnvironmentImageResult::Unknown => {
                             let error_message = "Unknown response from suggestCloudEnvironmentImage".to_string();
                             send_telemetry_from_ctx!(
                                 CloudAgentTelemetryEvent::ImageSuggestionFailed {
@@ -3095,7 +3095,7 @@ impl UpdateEnvironmentForm {
             "Suggest image"
         };
 
-        let tooltip_text = "Warp will suggest a Docker image based on your selected repositories.";
+        let tooltip_text = "Black will suggest a Docker image based on your selected repositories.";
 
         let button = Hoverable::new(
             self.suggest_image_button_mouse_state.clone(),
@@ -3486,8 +3486,8 @@ impl TypedActionView for UpdateEnvironmentForm {
         &mut self,
         _action: &Self::Action,
         _ctx: &mut ViewContext<Self>,
-    ) -> warpui::accessibility::ActionAccessibilityContent {
-        warpui::accessibility::ActionAccessibilityContent::default()
+    ) -> black_ui::accessibility::ActionAccessibilityContent {
+        black_ui::accessibility::ActionAccessibilityContent::default()
     }
 }
 
@@ -3496,7 +3496,7 @@ impl View for UpdateEnvironmentForm {
         "UpdateEnvironmentForm"
     }
 
-    fn keymap_context(&self, app: &AppContext) -> warpui::keymap::Context {
+    fn keymap_context(&self, app: &AppContext) -> black_ui::keymap::Context {
         let mut context = Self::default_keymap_context();
         if self.submit_button.is_focused(app) {
             context.set.insert(SUBMIT_BUTTON_FOCUSED);

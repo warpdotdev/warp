@@ -77,11 +77,11 @@ fn test_offset_map_placeholders() {
 fn test_end_to_end() {
     // Group imports here so they don't cause "unused import" warnings on other targets.
 
-    use warpui::App;
-    use warpui::color::ColorU;
-    use warpui::elements::Fill;
-    use warpui::fonts::Cache as FontCache;
-    use warpui::text_layout::LayoutCache;
+    use black_ui::App;
+    use black_ui::color::ColorU;
+    use black_ui::elements::Fill;
+    use black_ui::fonts::Cache as FontCache;
+    use black_ui::text_layout::LayoutCache;
 
     use crate::content::buffer::{Buffer, BufferEditAction, EditOrigin};
     use crate::content::selection_model::BufferSelectionModel;
@@ -94,7 +94,7 @@ fn test_end_to_end() {
     };
 
     App::test((), |mut app| async move {
-        let mut font_cache = FontCache::new(Box::new(warpui::platform::current::FontDB::new()));
+        let mut font_cache = FontCache::new(Box::new(black_ui::platform::current::FontDB::new()));
         let layout_cache = LayoutCache::new();
         let paragraph_styles = ParagraphStyles {
             font_family: font_cache

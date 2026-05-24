@@ -1,17 +1,17 @@
 use vec1::{vec1, Vec1};
-use warp_core::features::FeatureFlag;
-use warp_core::ui::builder::AnimatedButtonOptions;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::ui::builder::AnimatedButtonOptions;
+use black_ui::elements::{
     Align, Border, ConstrainedBox, Container, CrossAxisAlignment, Element, Flex, Icon,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, SavePosition, Shrinkable,
 };
-use warpui::fonts::Weight;
-use warpui::platform::Cursor;
-use warpui::presenter::ChildView;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::windowing::{StateEvent, WindowManager};
-use warpui::{
+use black_ui::fonts::Weight;
+use black_ui::platform::Cursor;
+use black_ui::presenter::ChildView;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::windowing::{StateEvent, WindowManager};
+use black_ui::{
     AppContext, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity, TypedActionView,
     View, ViewContext, ViewHandle, WindowId,
 };
@@ -332,7 +332,7 @@ impl ResourceCenterView {
                 if FeatureFlag::AvatarInTabBar.is_enabled() {
                     String::new()
                 } else {
-                    "Warp Essentials".to_string()
+                    "Black Essentials".to_string()
                 }
             }
         };

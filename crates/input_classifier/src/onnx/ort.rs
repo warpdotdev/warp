@@ -6,7 +6,7 @@ use ort::tensor::ArrayExtensions as _;
 use ort::value::Value;
 use parking_lot::Mutex;
 use tokenizers::Tokenizer;
-use warp_completer::ParsedTokensSnapshot;
+use black_completer::ParsedTokensSnapshot;
 
 use super::{ClassificationResult, Model};
 use crate::InputClassifierDecisionSource;

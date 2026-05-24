@@ -2,12 +2,12 @@ use std::time::Duration;
 
 use ai::LLMId;
 use instant::Instant;
-use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
-use warpui::assets::asset_cache::AssetSource;
-use warpui::image_cache::ImageType;
-use warpui::windowing::state::{ApplicationStage, StateEvent};
-use warpui::windowing::WindowManager;
+use black_core::features::FeatureFlag;
+use black_core::send_telemetry_from_ctx;
+use black_ui::assets::asset_cache::AssetSource;
+use black_ui::image_cache::ImageType;
+use black_ui::windowing::state::{ApplicationStage, StateEvent};
+use black_ui::windowing::WindowManager;
 
 use crate::model::{
     OnboardingAuthState, OnboardingStateEvent, OnboardingStateModel, OnboardingStep,
@@ -24,16 +24,16 @@ const APP_BECAME_ACTIVE_DEBOUNCE: Duration = Duration::from_secs(15);
 
 use pathfinder_geometry::vector::vec2f;
 use ui_components::{button, Component as _, Options as _};
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::WarpTheme;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::WarpTheme;
+use black_ui::elements::{
     CacheOption, ChildAnchor, Container, Empty, Image, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Rect, Shrinkable, Stack,
 };
-use warpui::keymap::macros::*;
-use warpui::keymap::{FixedBinding, Keystroke};
-use warpui::presenter::ChildView;
-use warpui::{
+use black_ui::keymap::macros::*;
+use black_ui::keymap::{FixedBinding, Keystroke};
+use black_ui::presenter::ChildView;
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
     ViewContext, ViewHandle,
 };
@@ -339,7 +339,7 @@ impl AgentOnboardingView {
     /// Eagerly loads all onboarding slide images into the asset cache
     /// so they display instantly when the user navigates between slides.
     fn preload_onboarding_images(ctx: &mut ViewContext<Self>) {
-        let asset_cache = warpui::assets::asset_cache::AssetCache::as_ref(ctx);
+        let asset_cache = black_ui::assets::asset_cache::AssetCache::as_ref(ctx);
         // Preload the shared background image used on all right panels.
         asset_cache.load_asset::<ImageType>(AssetSource::Bundled {
             path: crate::slides::layout::ONBOARDING_BG_PATH,

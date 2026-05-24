@@ -5,28 +5,28 @@ use pathfinder_geometry::vector::vec2f;
 use regex::Regex;
 use settings::{Setting, ToggleableSetting};
 use strum::IntoEnumIterator;
-use warp_core::channel::ChannelState;
-use warp_core::context_flag::ContextFlag;
-use warp_core::features::FeatureFlag;
-use warp_core::ui::color::contrast::MinimumAllowedContrast;
-use warp_core::ui::color::ContrastingColor;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::Fill as ThemeFill;
-use warpui::elements::{
+use black_core::channel::ChannelState;
+use black_core::context_flag::ContextFlag;
+use black_core::features::FeatureFlag;
+use black_core::ui::color::contrast::MinimumAllowedContrast;
+use black_core::ui::color::ContrastingColor;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::Fill as ThemeFill;
+use black_ui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Dismiss, Empty, Expanded, Fill, Flex, FormattedTextElement, HighlightedHyperlink, Hoverable,
     HyperlinkLens, HyperlinkUrl, MainAxisAlignment, MainAxisSize, MouseStateHandle,
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack,
     Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::keymap::{ContextPredicate, Keystroke};
-use warpui::platform::Cursor;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ui_components::slider::SliderStateHandle;
-use warpui::ui_components::switch::{SwitchStateHandle, TooltipConfig};
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::keymap::{ContextPredicate, Keystroke};
+use black_ui::platform::Cursor;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::ui_components::slider::SliderStateHandle;
+use black_ui::ui_components::switch::{SwitchStateHandle, TooltipConfig};
+use black_ui::{
     id, Action, AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
@@ -165,8 +165,8 @@ const GIT_OPERATIONS_AUTOGEN_DESCRIPTION: &str =
     "Let AI generate commit messages and pull request titles and descriptions.";
 const WISPR_FLOW_URL: &str = "https://wisprflow.ai/";
 const CUSTOM_INFERENCE_LEARN_MORE_URL: &str =
-    "https://docs.warp.dev/support-and-community/plans-and-billing/bring-your-own-api-key/";
-const CUSTOM_INFERENCE_TERMS_URL: &str = "https://www.warp.dev/legal/terms-of-service";
+    "https://blackdagger.io/support-and-community/plans-and-billing/bring-your-own-api-key/";
+const CUSTOM_INFERENCE_TERMS_URL: &str = "https://blackdagger.io/legal/terms-of-service";
 const CUSTOM_INFERENCE_INFO_TOOLTIP_MAX_WIDTH: f32 = 320.;
 
 pub fn init_actions_from_parent_view<T: Action + Clone>(
@@ -304,7 +304,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         app,
     );
     {
-        use warpui::keymap::FixedBinding;
+        use black_ui::keymap::FixedBinding;
 
         use crate::settings::ThinkingDisplayMode;
 
@@ -756,7 +756,7 @@ impl AISettingsPageView {
         });
         // The coding agent footer command editor is always enabled,
         // independent of the global AI toggle, because it controls
-        // third-party coding agents rather than Warp's own AI.
+        // third-party coding agents rather than Black's own AI.
         Self::update_editor_interaction_state(
             cli_agent_footer_command_editor.as_ref(ctx).editor().clone(),
             true,
@@ -2576,7 +2576,7 @@ impl View for AISettingsPageView {
         "AISettingsPage"
     }
 
-    fn render(&self, app: &warpui::AppContext) -> Box<dyn warpui::Element> {
+    fn render(&self, app: &black_ui::AppContext) -> Box<dyn black_ui::Element> {
         self.page.render(self, app)
     }
 }
@@ -3712,7 +3712,7 @@ impl SettingsWidget for GlobalAIWidget {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
                 Text::new_inline(
-                    "Warp Agent",
+                    "Black Agent",
                     appearance.ui_font_family(),
                     PRIMARY_HEADER_FONT_SIZE,
                 )
@@ -3827,7 +3827,7 @@ impl UsageWidget {
         is_unlimited: bool,
         workspace_is_delinquent_due_to_payment_issue: bool,
         appearance: &Appearance,
-    ) -> Box<dyn warpui::Element> {
+    ) -> Box<dyn black_ui::Element> {
         let mut row = Flex::row();
         if used >= limit || workspace_is_delinquent_due_to_payment_issue {
             row.add_child(
@@ -3892,7 +3892,7 @@ impl UsageWidget {
         is_unlimited: bool,
         workspace_is_delinquent_due_to_payment_issue: bool,
         appearance: &Appearance,
-    ) -> Box<dyn warpui::Element> {
+    ) -> Box<dyn black_ui::Element> {
         let request_usage_details = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::End)
             .with_child(self.render_request_usage_count(
@@ -4170,8 +4170,8 @@ impl ActiveAIWidget {
     fn render_next_command_section(
         &self,
         view: &AISettingsPageView,
-        app: &warpui::AppContext,
-    ) -> Box<dyn warpui::Element> {
+        app: &black_ui::AppContext,
+    ) -> Box<dyn black_ui::Element> {
         let ai_settings = AISettings::as_ref(app);
         let is_toggleable = ai_settings.is_active_ai_enabled(app);
 
@@ -4198,8 +4198,8 @@ impl ActiveAIWidget {
     fn render_prompt_suggestions_section(
         &self,
         view: &AISettingsPageView,
-        app: &warpui::AppContext,
-    ) -> Box<dyn warpui::Element> {
+        app: &black_ui::AppContext,
+    ) -> Box<dyn black_ui::Element> {
         let ai_settings = AISettings::as_ref(app);
         let is_toggleable = ai_settings.is_active_ai_enabled(app);
         Flex::column()
@@ -4225,8 +4225,8 @@ impl ActiveAIWidget {
     fn render_suggested_code_banners_section(
         &self,
         view: &AISettingsPageView,
-        app: &warpui::AppContext,
-    ) -> Box<dyn warpui::Element> {
+        app: &black_ui::AppContext,
+    ) -> Box<dyn black_ui::Element> {
         let ai_settings = AISettings::as_ref(app);
         let is_toggleable = ai_settings.is_active_ai_enabled(app);
         Flex::column()
@@ -4252,8 +4252,8 @@ impl ActiveAIWidget {
     fn render_natural_language_autosuggestions_section(
         &self,
         view: &AISettingsPageView,
-        app: &warpui::AppContext,
-    ) -> Box<dyn warpui::Element> {
+        app: &black_ui::AppContext,
+    ) -> Box<dyn black_ui::Element> {
         let ai_settings = AISettings::as_ref(app);
         let is_toggleable = ai_settings.is_active_ai_enabled(app);
         Flex::column()
@@ -4279,8 +4279,8 @@ impl ActiveAIWidget {
     fn render_shared_block_title_generation_section(
         &self,
         view: &AISettingsPageView,
-        app: &warpui::AppContext,
-    ) -> Box<dyn warpui::Element> {
+        app: &black_ui::AppContext,
+    ) -> Box<dyn black_ui::Element> {
         let ai_settings = AISettings::as_ref(app);
         let is_toggleable = ai_settings.is_active_ai_enabled(app);
         Flex::column()
@@ -4306,8 +4306,8 @@ impl ActiveAIWidget {
     fn render_git_operations_autogen_section(
         &self,
         view: &AISettingsPageView,
-        app: &warpui::AppContext,
-    ) -> Box<dyn warpui::Element> {
+        app: &black_ui::AppContext,
+    ) -> Box<dyn black_ui::Element> {
         let ai_settings = AISettings::as_ref(app);
         let is_toggleable = ai_settings.is_active_ai_enabled(app);
         Flex::column()
@@ -4870,7 +4870,7 @@ impl AgentsWidget {
         dropdown_menu: &ViewHandle<Dropdown<AISettingsPageAction>>,
         ai_settings: &AISettings,
         appearance: &Appearance,
-        app: &warpui::AppContext,
+        app: &black_ui::AppContext,
     ) -> Box<dyn Element> {
         let header = Container::new(render_body_item_label_with_icon::<AISettingsPageAction>(
             header_text.into(),
@@ -4968,7 +4968,7 @@ impl AgentsWidget {
         );
         render_ai_list(
             "Command denylist",
-            "Regular expressions to match commands that the Warp Agent should always ask permission to execute.",
+            "Regular expressions to match commands that the Black Agent should always ask permission to execute.",
             list,
             view,
             ai_settings,
@@ -5003,7 +5003,7 @@ impl AgentsWidget {
 
         render_ai_list(
             "Command allowlist",
-            "Regular expressions to match commands that can be automatically executed by the Warp Agent.",
+            "Regular expressions to match commands that can be automatically executed by the Black Agent.",
             list,
             view,
             ai_settings,
@@ -5105,7 +5105,7 @@ impl AgentsWidget {
             appearance,
             "Base model",
             Some(
-                "This model serves as the primary engine behind the Warp Agent. It powers most interactions and invokes other models for tasks like planning or code generation when necessary. Warp may automatically switch to alternate models based on model availability or for auxiliary tasks such as conversation summarization.",
+                "This model serves as the primary engine behind the Black Agent. It powers most interactions and invokes other models for tasks like planning or code generation when necessary. Black may automatically switch to alternate models based on model availability or for auxiliary tasks such as conversation summarization.",
             ),
             Some(show_in_prompt_checkbox),
             LocalOnlyIconState::Hidden,
@@ -5121,7 +5121,7 @@ impl AgentsWidget {
         view: &AISettingsPageView,
         ai_settings: &AISettings,
         appearance: &Appearance,
-        app: &warpui::AppContext,
+        app: &black_ui::AppContext,
     ) -> Box<dyn Element> {
         let code_settings = CodeSettings::as_ref(app);
         let toggle = render_ai_setting_toggle::<CodebaseContextEnabled>(
@@ -5136,11 +5136,11 @@ impl AgentsWidget {
 
         let codebase_context_description = vec![
             FormattedTextFragment::plain_text(
-                "Allow the Warp Agent to generate an outline of your codebase that can be used for context. No code is ever stored on our servers. ",
+                "Allow the Black Agent to generate an outline of your codebase that can be used for context. No code is ever stored on our servers. ",
             ),
             FormattedTextFragment::hyperlink(
                 "Learn more",
-                "https://docs.warp.dev/agent-platform/capabilities/codebase-context",
+                "https://blackdagger.io/agent-platform/capabilities/codebase-context",
             ),
         ];
         let description = Container::new(
@@ -5209,7 +5209,7 @@ impl AgentsWidget {
         let subtext = {
             let subtext_fragments = vec![
                 FormattedTextFragment::plain_text(
-                    "You haven't added any MCP servers yet. Once you do, you'll be able to control how much autonomy the Warp Agent has when interacting with them. ",
+                    "You haven't added any MCP servers yet. Once you do, you'll be able to control how much autonomy the Black Agent has when interacting with them. ",
                 ),
                 FormattedTextFragment::hyperlink_action(
                     "Add a server",
@@ -5218,7 +5218,7 @@ impl AgentsWidget {
                 FormattedTextFragment::plain_text(" or "),
                 FormattedTextFragment::hyperlink(
                     "learn more about MCPs.",
-                    "https://docs.warp.dev/agent-platform/capabilities/mcp",
+                    "https://blackdagger.io/agent-platform/capabilities/mcp",
                 ),
             ];
 
@@ -5290,7 +5290,7 @@ impl AgentsWidget {
         {
             let allowlist = self.render_mcp_list(
                 "MCP allowlist",
-                "Allow the Warp Agent to call these MCP servers.",
+                "Allow the Black Agent to call these MCP servers.",
                 &view.mcp_allowlist_dropdown,
                 BlocklistAIPermissions::as_ref(app).get_mcp_allowlist(app, None),
                 view.mcp_allowlist_mouse_state_handles.clone(),
@@ -5307,7 +5307,7 @@ impl AgentsWidget {
         {
             let denylist = self.render_mcp_list(
                 "MCP denylist",
-                "The Warp Agent will always ask for permission before calling any MCP servers on this list.",
+                "The Black Agent will always ask for permission before calling any MCP servers on this list.",
                 &view.mcp_denylist_dropdown,
                 BlocklistAIPermissions::as_ref(app).get_mcp_denylist(app, None),
                 view.mcp_denylist_mouse_state_handles.clone(),
@@ -5485,8 +5485,8 @@ impl AIInputWidget {
         view: &AISettingsPageView,
         ai_settings: &AISettings,
         appearance: &Appearance,
-        app: &warpui::AppContext,
-    ) -> Box<dyn warpui::Element> {
+        app: &black_ui::AppContext,
+    ) -> Box<dyn black_ui::Element> {
         let is_toggleable = ai_settings.is_any_ai_enabled(app);
         let is_nld_enabled = *ai_settings.ai_autodetection_enabled_internal.value();
 
@@ -5679,12 +5679,12 @@ impl SettingsWidget for MCPServersWidget {
 
         let mcp_description = vec![
             FormattedTextFragment::plain_text(
-                "Add MCP servers to extend the Warp Agent's capabilities. \
+                "Add MCP servers to extend the Black Agent's capabilities. \
             MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins. ",
             ),
             FormattedTextFragment::hyperlink(
                 "Learn more",
-                "https://docs.warp.dev/agent-platform/capabilities/mcp",
+                "https://blackdagger.io/agent-platform/capabilities/mcp",
             ),
         ];
 
@@ -5730,7 +5730,7 @@ impl SettingsWidget for MCPServersWidget {
                                 ),
                                 FormattedTextFragment::hyperlink(
                                     "See supported providers.",
-                                    "https://docs.warp.dev/agent-platform/capabilities/mcp#file-based-mcp-servers",
+                                    "https://blackdagger.io/agent-platform/capabilities/mcp#file-based-mcp-servers",
                                 ),
                             ]
                         });
@@ -5797,7 +5797,7 @@ impl AIFactWidget {
         view: &AISettingsPageView,
         ai_settings: &AISettings,
         appearance: &Appearance,
-        app: &warpui::AppContext,
+        app: &black_ui::AppContext,
     ) -> Box<dyn Element> {
         let toggle = render_ai_setting_toggle::<MemoryEnabled>(
             "Rules",
@@ -5811,11 +5811,11 @@ impl AIFactWidget {
 
         let rules_description = vec![
             FormattedTextFragment::plain_text(
-                "Rules help the Warp Agent follow your conventions, whether for codebases or specific workflows. ",
+                "Rules help the Black Agent follow your conventions, whether for codebases or specific workflows. ",
             ),
             FormattedTextFragment::hyperlink(
                 "Learn more",
-                "https://docs.warp.dev/agent-platform/capabilities/rules",
+                "https://blackdagger.io/agent-platform/capabilities/rules",
             ),
         ];
         let description = Container::new(
@@ -5848,7 +5848,7 @@ impl AIFactWidget {
         &self,
         view: &AISettingsPageView,
         ai_settings: &AISettings,
-        app: &warpui::AppContext,
+        app: &black_ui::AppContext,
     ) -> Box<dyn Element> {
         let toggle = render_ai_setting_toggle::<RuleSuggestionsEnabled>(
             "Suggested Rules",
@@ -5876,10 +5876,10 @@ impl AIFactWidget {
         &self,
         view: &AISettingsPageView,
         ai_settings: &AISettings,
-        app: &warpui::AppContext,
+        app: &black_ui::AppContext,
     ) -> Box<dyn Element> {
         let toggle = render_ai_setting_toggle::<WarpDriveContextEnabled>(
-            "Warp Drive as agent context",
+            "Black Drive as agent context",
             AISettingsPageAction::ToggleWarpDriveContext,
             *ai_settings.warp_drive_context_enabled,
             ai_settings.is_any_ai_enabled(app),
@@ -5889,7 +5889,7 @@ impl AIFactWidget {
         );
 
         let description = render_ai_setting_description(
-            "The Warp Agent can leverage your Warp Drive Contents to tailor responses to your personal and team developer workflows and environments. This includes any Workflows, Notebooks, and Environment Variables.",
+            "The Black Agent can leverage your Black Drive Contents to tailor responses to your personal and team developer workflows and environments. This includes any Workflows, Notebooks, and Environment Variables.",
             ai_settings.is_any_ai_enabled(app),
             app,
         );
@@ -5963,8 +5963,8 @@ impl VoiceWidget {
         &self,
         view: &AISettingsPageView,
         appearance: &Appearance,
-        app: &warpui::AppContext,
-    ) -> Box<dyn warpui::Element> {
+        app: &black_ui::AppContext,
+    ) -> Box<dyn black_ui::Element> {
         let ai_settings = AISettings::as_ref(app);
         let is_toggleable = ai_settings.is_any_ai_enabled(app);
         let mut column = Flex::column().with_child(render_ai_setting_toggle::<VoiceInputEnabled>(
@@ -5979,7 +5979,7 @@ impl VoiceWidget {
 
         let voice_input_description_text_fragments = vec![
             FormattedTextFragment::plain_text(
-                "Voice input allows you to control Warp by speaking directly to your terminal (powered by ",
+                "Voice input allows you to control Black by speaking directly to your terminal (powered by ",
             ),
             FormattedTextFragment::hyperlink("Wispr Flow", WISPR_FLOW_URL),
             FormattedTextFragment::plain_text(")."),
@@ -6179,7 +6179,7 @@ impl SettingsWidget for OtherAIWidget {
             app,
         ));
         column.add_child(render_ai_setting_description(
-            "Let Oz use Warp's built-in skill for turning Warp product feedback into GitHub issues.",
+            "Let Oz use Black's built-in skill for turning Black product feedback into GitHub issues.",
             is_toggleable,
             app,
         ));
@@ -6256,7 +6256,7 @@ impl SettingsWidget for CLIAgentWidget {
 
         // The Coding Agents section is always enabled, independent of the
         // global AI toggle, because these settings control third-party coding
-        // agents (Claude Code, Codex, Gemini CLI) rather than Warp's own AI.
+        // agents (Claude Code, Codex, Gemini CLI) rather than Black's own AI.
         let cli_agent_footer_toggle = render_ai_setting_toggle::<ShouldRenderCLIAgentToolbar>(
             "Show coding agent toolbar",
             AISettingsPageAction::ToggleCLIAgentToolbar,
@@ -6326,7 +6326,7 @@ impl SettingsWidget for CLIAgentWidget {
                         on_click_action: None,
                         secondary_text: None,
                         tooltip_override_text: Some(
-                            "Requires the Warp plugin for your coding agent".to_owned(),
+                            "Requires the Black plugin for your coding agent".to_owned(),
                         ),
                     }),
                     LocalOnlyIconState::for_setting(
@@ -6728,7 +6728,7 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
             )
             .with_child(toggle_row)
             .with_child(render_ai_setting_description(
-                "Enable computer use in cloud agent conversations started from the Warp app.",
+                "Enable computer use in cloud agent conversations started from the Black app.",
                 !is_disabled,
                 app,
             ))
@@ -6861,7 +6861,7 @@ impl SettingsWidget for CloudHandoffWidget {
                 );
                 column.add_child(auto_handoff_on_sleep_row);
                 column.add_child(render_ai_setting_description(
-                    "When macOS is about to sleep, automatically moves the most recently focused running local Warp Agent conversation to Cloud Mode so it can keep working.",
+                    "When macOS is about to sleep, automatically moves the most recently focused running local Black Agent conversation to Cloud Mode so it can keep working.",
                     true,
                     app,
                 ));
@@ -7100,7 +7100,7 @@ impl ApiKeysWidget {
         let appearance = Appearance::as_ref(app);
         let text_fragments = vec![
             FormattedTextFragment::plain_text(
-                "Use your own API keys from model providers for Warp Agent. You can also add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API. API keys are stored locally and are never synced to the cloud. Using auto models or models from providers you have not provided API keys for will consume Warp credits. ",
+                "Use your own API keys from model providers for Black Agent. You can also add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API. API keys are stored locally and are never synced to the cloud. Using auto models or models from providers you have not provided API keys for will consume Black credits. ",
             ),
             FormattedTextFragment::hyperlink(
                 "Learn more",
@@ -7144,11 +7144,11 @@ impl ApiKeysWidget {
                 "By using BYOK or custom endpoints, you agree to use them only as permitted by ",
             ),
             FormattedTextFragment::hyperlink(
-                "Warp's Terms of Service",
+                "Black's Terms of Service",
                 CUSTOM_INFERENCE_TERMS_URL,
             ),
             FormattedTextFragment::plain_text(
-                ". BYOK and custom endpoints are intended for individual use and small teams. Companies or organizations with more than 10 employees should use Warp Business or Enterprise.",
+                ". BYOK and custom endpoints are intended for individual use and small teams. Companies or organizations with more than 10 employees should use Black Business or Enterprise.",
             ),
         ])]);
         let tooltip_background = appearance.theme().tooltip_background();
@@ -7283,7 +7283,7 @@ impl ApiKeysWidget {
         let ai_settings = AISettings::as_ref(app);
 
         let toggle = render_ai_setting_toggle::<CanUseWarpCreditsForFallback>(
-            "Warp credit fallback",
+            "Black credit fallback",
             AISettingsPageAction::ToggleCanUseWarpCreditsForFallback,
             *ai_settings.can_use_warp_credits_for_fallback,
             ai_settings.is_any_ai_enabled(app),
@@ -7293,7 +7293,7 @@ impl ApiKeysWidget {
         );
 
         let description = render_ai_setting_description(
-            "When enabled, agent requests may be routed to one of Warp's provided models in the event of an error. Warp will prioritize using your API keys over your Warp credits.",
+            "When enabled, agent requests may be routed to one of Black's provided models in the event of an error. Black will prioritize using your API keys over your Black credits.",
             ai_settings.is_any_ai_enabled(app),
             app,
         );
@@ -7412,7 +7412,7 @@ impl SettingsWidget for ApiKeysWidget {
             }
         }
 
-        // Warp credit fallback toggle (shown when BYO or custom inference is enabled)
+        // Black credit fallback toggle (shown when BYO or custom inference is enabled)
         if is_byo_enabled || show_custom_inference {
             column.add_child(
                 Container::new(self.render_warp_credit_fallback_toggle(view, app))
@@ -7718,9 +7718,9 @@ impl AwsBedrockWidget {
         let are_credentials_enabled = user_workspaces.is_aws_bedrock_credentials_enabled(app);
         let is_usage_enabled = is_section_enabled && are_credentials_enabled;
         let toggle_description = if is_admin_enforced {
-            "Warp loads and sends local AWS CLI credentials for Bedrock-supported models. This setting is managed by your organization.".to_string()
+            "Black loads and sends local AWS CLI credentials for Bedrock-supported models. This setting is managed by your organization.".to_string()
         } else {
-            "Warp loads and sends local AWS CLI credentials for Bedrock-supported models."
+            "Black loads and sends local AWS CLI credentials for Bedrock-supported models."
                 .to_string()
         };
 
@@ -7942,9 +7942,9 @@ impl SettingsWidget for AwsBedrockWidget {
 }
 
 mod styles {
-    use warp_core::ui::appearance::Appearance;
-    use warp_core::ui::theme::Fill;
-    use warpui::{AppContext, SingletonEntity};
+    use black_core::ui::appearance::Appearance;
+    use black_core::ui::theme::Fill;
+    use black_ui::{AppContext, SingletonEntity};
 
     // Apply a negative margin to the description text so it appears closer to the main
     // settings option text.

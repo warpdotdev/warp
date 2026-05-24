@@ -1,6 +1,6 @@
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use warpui::{AppContext, SingletonEntity};
+use black_ui::{AppContext, SingletonEntity};
 
 use super::current_prompt::CurrentPrompt;
 use super::prompt::Prompt;
@@ -14,7 +14,7 @@ pub struct PromptSnapshot {
     chips: Vec<ChipResult>,
 
     same_line_prompt_enabled: bool,
-    /// The separator to use as a trailing character at the end of Warp prompt, if any.
+    /// The separator to use as a trailing character at the end of Black prompt, if any.
     separator: WarpPromptSeparator,
 }
 

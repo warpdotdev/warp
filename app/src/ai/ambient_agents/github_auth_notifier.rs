@@ -4,7 +4,7 @@
 //! any component in the app (e.g., `UpdateEnvironmentForm`) to react to
 //! auth state changes without relying on window activation timing.
 
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 /// Events emitted by the GitHub auth notifier.
 #[derive(Debug, Clone)]

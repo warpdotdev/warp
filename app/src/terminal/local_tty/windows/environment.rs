@@ -3,8 +3,8 @@ use std::ffi::OsString;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
 use itertools::Itertools;
-use warp_core::channel::ChannelState;
-use warp_core::features::FeatureFlag;
+use black_core::channel::ChannelState;
+use black_core::features::FeatureFlag;
 use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use winreg::enums::{RegType, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
@@ -17,16 +17,16 @@ use crate::terminal::focus_env::{FOCUS_URL_ENV, TERMINAL_SESSION_UUID_ENV};
 use crate::terminal::local_tty::shell::{extra_path_entries, ssh_socket_dir, ShellStarter};
 use crate::terminal::local_tty::PtyOptions;
 
-const HONOR_PS1_NAME: &str = "WARP_HONOR_PS1";
-const INITIAL_WORKING_DIR_NAME: &str = "WARP_INITIAL_WORKING_DIR";
-const USE_SSH_WRAPPER_NAME: &str = "WARP_USE_SSH_WRAPPER";
-const SHELL_DEBUG_MODE_NAME: &str = "WARP_SHELL_DEBUG_MODE";
+const HONOR_PS1_NAME: &str = "BLACK_HONOR_PS1";
+const INITIAL_WORKING_DIR_NAME: &str = "BLACK_INITIAL_WORKING_DIR";
+const USE_SSH_WRAPPER_NAME: &str = "BLACK_USE_SSH_WRAPPER";
+const SHELL_DEBUG_MODE_NAME: &str = "BLACK_SHELL_DEBUG_MODE";
 const TERM_PROGRAM_NAME: &str = "TERM_PROGRAM";
-const IS_LOCAL_SESSION_NAME: &str = "WARP_IS_LOCAL_SHELL_SESSION";
+const IS_LOCAL_SESSION_NAME: &str = "BLACK_IS_LOCAL_SHELL_SESSION";
 const SSH_SOCKET_DIR: &str = "SSH_SOCKET_DIR";
-const PATH_APPEND_NAME: &str = "WARP_PATH_APPEND";
-const CLIENT_VERSION_NAME: &str = "WARP_CLIENT_VERSION";
-const CLI_AGENT_PROTOCOL_VERSION_NAME: &str = "WARP_CLI_AGENT_PROTOCOL_VERSION";
+const PATH_APPEND_NAME: &str = "BLACK_PATH_APPEND";
+const CLIENT_VERSION_NAME: &str = "BLACK_CLIENT_VERSION";
+const CLI_AGENT_PROTOCOL_VERSION_NAME: &str = "BLACK_CLI_AGENT_PROTOCOL_VERSION";
 const WSLENV: &str = "WSLENV";
 const HISTIGNORE: &str = "HISTIGNORE";
 
@@ -90,7 +90,7 @@ pub(super) fn get_shell_environment_variables(options: &PtyOptions) -> Vec<u16> 
         map_key(TERM_PROGRAM_NAME.into()),
         EnvEntry {
             preferred_key: TERM_PROGRAM_NAME.into(),
-            value: "WarpTerminal".into(),
+            value: "BlackTerminal".into(),
         },
     );
 

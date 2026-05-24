@@ -1,10 +1,10 @@
 use pathfinder_color::ColorU;
-use warpui::elements::{
+use black_ui::elements::{
     Align, ChildView, ClippedScrollStateHandle, ClippedScrollable, CrossAxisAlignment, Dismiss,
     Element, Flex, MouseStateHandle, ParentElement, ScrollbarWidth,
 };
-use warpui::ui_components::components::UiComponent;
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+use black_ui::ui_components::components::UiComponent;
+use black_ui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use crate::ai::ambient_agents::github_auth_url::{AuthSource, GithubAuthRedirectTarget};
 use crate::ai::cloud_environments;
@@ -182,11 +182,11 @@ impl HandoffEnvironmentCreationModal {
             ScrollbarWidth::Auto,
             theme.nonactive_ui_text_color().into(),
             theme.active_ui_text_color().into(),
-            warpui::elements::Fill::None,
+            black_ui::elements::Fill::None,
         )
         .finish();
 
-        let padded_form = warpui::elements::Container::new(scrollable_form)
+        let padded_form = black_ui::elements::Container::new(scrollable_form)
             .with_uniform_padding(8.)
             .finish();
 
@@ -207,7 +207,7 @@ impl HandoffEnvironmentCreationModal {
             })
             .finish();
 
-        warpui::elements::Container::new(Align::new(dialog).finish())
+        black_ui::elements::Container::new(Align::new(dialog).finish())
             .with_background_color(ColorU::new(0, 0, 0, MODAL_BACKDROP_OPACITY))
             .with_corner_radius(app.windows().window_corner_radius())
             .finish()

@@ -16,14 +16,14 @@ default-members = [
   "crates/graphql",
   "crates/markdown_parser",
   "crates/sum_tree",
-  "crates/warpui",
-  "crates/warp_completer",
-  "crates/warp_terminal",
-  "crates/warp_util",
+  "crates/black_ui",
+  "crates/black_completer",
+  "crates/black_terminal",
+  "crates/black_util",
 ]
 
 [workspace.package]
-authors = ["Warp Team <dev@warp.dev>"]
+authors = ["Black Team <dev@blackdagger.io>"]
 license = "AGPL-3.0-only"
 publish = false
 
@@ -69,28 +69,28 @@ ui_components = { path = "crates/ui_components" }
 vim = { path = "crates/vim" }
 virtual-fs = { path = "crates/virtual_fs" }
 voice_input = { path = "crates/voice_input" }
-warp = { path = "app" }
-warp_assets = { path = "crates/warp_assets" }
-warp_cli = { path = "crates/warp_cli" }
-warp_completer = { path = "crates/warp_completer" }
-warp_core = { path = "crates/warp_core" }
-warp_editor = { path = "crates/editor" }
-warp_features = { path = "crates/warp_features" }
-warp_files = { path = "crates/warp_files" }
-warp_graphql = { path = "crates/graphql" }
-warp_graphql_schema = { path = "crates/warp_graphql_schema" }
-warp_isolation_platform = { path = "crates/isolation_platform" }
-warp_js = { path = "crates/warp_js" }
-warp_logging = { path = "crates/warp_logging" }
-warp_managed_secrets = { path = "crates/managed_secrets" }
-warp_ripgrep = { path = "crates/warp_ripgrep" }
-warp_server_client = { path = "crates/warp_server_client" }
-warp_terminal = { path = "crates/warp_terminal" }
-warp_util = { path = "crates/warp_util" }
-warp_web_event_bus = { path = "crates/warp_web_event_bus" }
-warpui = { path = "crates/warpui" }
-warpui_core = { path = "crates/warpui_core" }
-warpui_extras = { path = "crates/warpui_extras", default-features = false }
+black = { path = "app" }
+black_assets = { path = "crates/black_assets" }
+black_cli = { path = "crates/black_cli" }
+black_completer = { path = "crates/black_completer" }
+black_core = { path = "crates/black_core" }
+black_editor = { path = "crates/editor" }
+black_features = { path = "crates/black_features" }
+black_files = { path = "crates/black_files" }
+black_graphql = { path = "crates/graphql" }
+black_graphql_schema = { path = "crates/black_graphql_schema" }
+black_isolation_platform = { path = "crates/isolation_platform" }
+black_js = { path = "crates/black_js" }
+black_logging = { path = "crates/black_logging" }
+black_managed_secrets = { path = "crates/managed_secrets" }
+black_ripgrep = { path = "crates/black_ripgrep" }
+black_server_client = { path = "crates/black_server_client" }
+black_terminal = { path = "crates/black_terminal" }
+black_util = { path = "crates/black_util" }
+black_web_event_bus = { path = "crates/black_web_event_bus" }
+black_ui = { path = "crates/black_ui" }
+black_ui_core = { path = "crates/black_ui_core" }
+black_ui_extras = { path = "crates/black_ui_extras", default-features = false }
 watcher = { path = "crates/watcher" }
 websocket = { path = "crates/websocket" }
 
@@ -405,7 +405,7 @@ split-debuginfo = "unpacked"
 
 [profile.dev.package]
 # Improve the performance of core terminal logic.
-warp_terminal.opt-level = 3
+black_terminal.opt-level = 3
 # Minimize the runtime overhead of CPU profiling at the cost of a small
 # increase in compile time for this crate.
 backtrace.opt-level = 3

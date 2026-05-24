@@ -1,10 +1,10 @@
 use pathfinder_color::ColorU;
-use warpui::elements::{
+use black_ui::elements::{
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable, Icon,
     MouseStateHandle, ParentElement, Radius, Text,
 };
-use warpui::platform::Cursor;
-use warpui::{Element, EventContext};
+use black_ui::platform::Cursor;
+use black_ui::{Element, EventContext};
 
 use crate::appearance::Appearance;
 use crate::drive::cloud_object_styling::warp_drive_icon_color;
@@ -147,7 +147,7 @@ impl FilterChipRenderer for QueryFilter {
 }
 
 mod styles {
-    use warpui::elements::{Border, MouseState};
+    use black_ui::elements::{Border, MouseState};
 
     use crate::themes::theme::{Blend, Fill, WarpTheme};
 

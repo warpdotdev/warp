@@ -1,8 +1,8 @@
 use typed_path::TypedPathBuf;
-use warp_completer::meta::SpannedItem;
-use warp_completer::parsers::ParsedToken;
-use warp_completer::signatures::CommandRegistry;
-use warpui::App;
+use black_completer::meta::SpannedItem;
+use black_completer::parsers::ParsedToken;
+use black_completer::signatures::CommandRegistry;
+use black_ui::App;
 
 use super::*;
 use crate::completer::SessionContext;

@@ -3,13 +3,13 @@ use std::sync::Arc;
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
 use pathfinder_color::ColorU;
-use warpui::elements::{
+use black_ui::elements::{
     Align, ConstrainedBox, Container, Flex, Highlight, ParentElement, Shrinkable, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::keymap::{DescriptionContext, Keystroke};
-use warpui::ui_components::components::UiComponent;
-use warpui::{AppContext, Element, SingletonEntity};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::keymap::{DescriptionContext, Keystroke};
+use black_ui::ui_components::components::UiComponent;
+use black_ui::{AppContext, Element, SingletonEntity};
 
 use crate::appearance::Appearance;
 use crate::drive::cloud_object_styling::warp_drive_icon_color;

@@ -16,17 +16,17 @@ use session_sharing_protocol::common::{
     AICommandMetadata, OrderedTerminalEventType, ParticipantId,
 };
 use session_sharing_protocol::sharer::SessionSourceType;
-use warp_core::features::FeatureFlag;
-use warp_core::report_error;
-use warp_core::semantic_selection::SemanticSelection;
-pub use warp_terminal::model::BlockIndex;
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
-use warpui::assets::asset_cache::Asset;
-use warpui::image_cache::ImageType;
-use warpui::r#async::executor::Background;
+use black_core::features::FeatureFlag;
+use black_core::report_error;
+use black_core::semantic_selection::SemanticSelection;
+pub use black_terminal::model::BlockIndex;
+use black_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use black_ui::assets::asset_cache::Asset;
+use black_ui::image_cache::ImageType;
+use black_ui::r#async::executor::Background;
 #[cfg(not(target_family = "wasm"))]
-use warpui::util::save_as_file;
-use warpui::AppContext;
+use black_ui::util::save_as_file;
+use black_ui::AppContext;
 
 use super::super::{AltScreen, BlockList};
 use super::ansi::{
@@ -360,7 +360,7 @@ enum IsReceivingHook {
     No,
 }
 
-/// Information needed to render a warpify "success" block upon successful subshell bootstrap.
+/// Information needed to render a blackify "success" block upon successful subshell bootstrap.
 #[derive(Debug, Clone)]
 pub struct SubshellSuccessBlockInfo {
     /// The ID of the newly bootstrapped subshell session.
@@ -380,11 +380,11 @@ pub struct SubshellSuccessBlockInfo {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TmuxInstallationState {
-    /// This means tmux was installed by Warp in this session, successfully or unsuccessfully.
+    /// This means tmux was installed by Black in this session, successfully or unsuccessfully.
     /// It also means we had root access and used a package manager to install tmux and all
     /// dependencies.
     InstalledByWarpRootInThisSession,
-    /// This means tmux was installed by Warp in this session, successfully or unsuccessfully.
+    /// This means tmux was installed by Black in this session, successfully or unsuccessfully.
     InstalledByWarpInThisSession,
     InstalledByWarpInPriorSession,
     /// This means that warp did not install it locally. It was either installed by the user
@@ -406,7 +406,7 @@ impl FromStr for TmuxInstallationState {
             "installed_by_warp_in_this_session" => {
                 Ok(TmuxInstallationState::InstalledByWarpInThisSession)
             }
-            "warp" | "installed_by_warp_in_prior_session" => {
+            "black" | "installed_by_black_in_prior_session" => {
                 Ok(TmuxInstallationState::InstalledByWarpInPriorSession)
             }
             "user" | "installed_by_user" => Ok(TmuxInstallationState::InstalledByUser),
@@ -487,7 +487,7 @@ pub struct TerminalModel {
     pending_legacy_ssh_session: Option<SSHValue>,
 
     /// This variable allows us to differentiate between warp-initiated and user-initiated invocations of
-    /// control mode. Whenever we attempt to warpify an ssh session, we track the context of when warp initiated
+    /// control mode. Whenever we attempt to blackify an ssh session, we track the context of when warp initiated
     /// control mode, indicating that we expect the shell to enter control mode. We reset to None whenever
     /// the active block finishes. If we enter control mode and option is None, then we know it's user-initiated.
     pending_warp_initiated_control_mode: Option<WarpInitiatedTmuxControlMode>,
@@ -1009,7 +1009,7 @@ impl SelectedBlocks {
 pub enum TerminalInputState {
     /// Alt-screen on which programs like vim run is visible.
     AltScreen,
-    /// Warp Input View is visible.
+    /// Black Input View is visible.
     InputEditor,
     /// Block-list is visible but input will go to the running command.
     LongRunningCommand,
@@ -2193,7 +2193,7 @@ impl TerminalModel {
     pub fn set_custom_title(&mut self, custom_title: Option<String>) {
         self.custom_title.clone_from(&custom_title);
         // If the custom title set by the user is None, we "reset" to whatever the title was set by
-        // the shell / Warp itself.
+        // the shell / Black itself.
         self.send_title_event(match custom_title {
             Some(_) => custom_title,
             None => self.title.clone(),
@@ -2272,7 +2272,7 @@ impl TerminalModel {
     /// a line of output that is not a known SSH output, we consider that to be some mild evidence that
     /// login is complete. Though, because that output line might be a false alarm (i.e., it could be
     /// an SSH banner OR a line like "Permission denied."), we wait some amount of time and check again
-    /// before indicating we're ready for warpification.
+    /// before indicating we're ready for blackification.
     pub fn check_for_end_of_ssh_login(&mut self, confirmation_check: bool) {
         let Some(mut ssh_login_state) = self.notify_on_end_of_ssh_login.clone() else {
             return;
@@ -2295,7 +2295,7 @@ impl TerminalModel {
             SshLoginState::LastLogin | SshLoginState::PromptDetected => {
                 self.event_proxy
                     .send_terminal_event(Event::DetectedEndOfSshLogin(
-                        SshLoginStatus::ReadyToWarpify,
+                        SshLoginStatus::ReadyToBlackify,
                     ));
 
                 ssh_login_state.notification_state = SshLoginNotificationState::Completed;
@@ -2306,7 +2306,7 @@ impl TerminalModel {
                     if ssh_login_state.notification_state == SshLoginNotificationState::Monitoring {
                         self.event_proxy
                             .send_terminal_event(Event::DetectedEndOfSshLogin(
-                                SshLoginStatus::RecheckBeforeWarpifying,
+                                SshLoginStatus::RecheckBeforeBlackifying,
                             ));
 
                         // We want to avoid emitting redundant events for the initial check.
@@ -2316,7 +2316,7 @@ impl TerminalModel {
                 } else {
                     self.event_proxy
                         .send_terminal_event(Event::DetectedEndOfSshLogin(
-                            SshLoginStatus::ReadyToWarpify,
+                            SshLoginStatus::ReadyToBlackify,
                         ));
 
                     ssh_login_state.notification_state = SshLoginNotificationState::Completed;
@@ -2711,7 +2711,7 @@ impl ansi::Handler for TerminalModel {
         delegate!(self.configure_charset(index, charset));
     }
 
-    fn set_color(&mut self, index: usize, color: warpui::color::ColorU) {
+    fn set_color(&mut self, index: usize, color: black_ui::color::ColorU) {
         self.override_colors[index] = Some(color);
     }
 
@@ -3618,7 +3618,7 @@ impl ModeProvider for TerminalModel {
     }
 }
 
-/// Validates and decodes in-band command output sent via `warp_send_generator_output_osc_message`.
+/// Validates and decodes in-band command output sent via `black_send_generator_output_osc_message`.
 /// Upon success, returns the string content of the generator output. The OSC payload is expected
 /// to conform to the following format:
 ///

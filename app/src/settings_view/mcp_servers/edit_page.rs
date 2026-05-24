@@ -10,19 +10,19 @@ use diesel::SqliteConnection;
 use parking_lot::Mutex;
 use pathfinder_geometry::vector::vec2f;
 use uuid::Uuid;
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warp_editor::content::buffer::InitialBufferState;
-use warp_editor::render::element::VerticalExpansionBehavior;
-use warpui::elements::{
+use black_core::send_telemetry_from_ctx;
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::color::internal_colors;
+use black_editor::content::buffer::InitialBufferState;
+use black_editor::render::element::VerticalExpansionBehavior;
+use black_ui::elements::{
     Border, ChildAnchor, ChildView, Container, CornerRadius, CrossAxisAlignment, Flex,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack, Text,
 };
-use warpui::platform::Cursor;
-use warpui::ui_components::components::UiComponent;
-use warpui::{
+use black_ui::platform::Cursor;
+use black_ui::ui_components::components::UiComponent;
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
@@ -165,8 +165,8 @@ impl MCPServersEditPageView {
                 ctx,
             )
             .with_horizontal_scrollbar_appearance(
-                warpui::elements::new_scrollable::ScrollableAppearance::new(
-                    warpui::elements::ScrollbarWidth::Auto,
+                black_ui::elements::new_scrollable::ScrollableAppearance::new(
+                    black_ui::elements::ScrollbarWidth::Auto,
                     true,
                 ),
             );

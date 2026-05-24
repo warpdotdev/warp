@@ -1,4 +1,4 @@
-use warpui::integration::TestStep;
+use black_ui::integration::TestStep;
 
 use crate::integration_testing::step::new_step_with_default_assertions;
 use crate::integration_testing::tab::assert_tab_title;

@@ -1,11 +1,11 @@
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::external_product_icon::ExternalProductIcon;
-use warp_core::ui::icons::Icon;
-use warpui::elements::{
+use black_core::ui::external_product_icon::ExternalProductIcon;
+use black_core::ui::icons::Icon;
+use black_ui::elements::{
     self, Align, Border, CacheOption, ChildAnchor, ConstrainedBox, Container, Element, Image,
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Stack, Text,
 };
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
 
 use super::red_notification_dot::RedNotificationDot;
 

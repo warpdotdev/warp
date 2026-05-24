@@ -6,8 +6,8 @@ use chrono::Utc;
 use diesel::connection::SimpleConnection;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
-use warp_core::features::FeatureFlag;
-use warp_graphql::scalars::time::ServerTimestamp;
+use black_core::features::FeatureFlag;
+use black_graphql::scalars::time::ServerTimestamp;
 
 use super::{
     app_database_file_path, database_file_path_for_scope, decode_path, deduplicate_events,
@@ -47,7 +47,7 @@ fn remote_server_daemon_scope_database_path_uses_identity_data_dir() {
     assert!(path.is_absolute());
     assert_eq!(
         path,
-        PathBuf::from(shellexpand::tilde(&expected_data_dir).into_owned()).join("warp.sqlite")
+        PathBuf::from(shellexpand::tilde(&expected_data_dir).into_owned()).join("black.sqlite")
     );
 }
 
@@ -60,7 +60,7 @@ fn remote_server_daemon_scope_database_path_handles_empty_identity_key() {
 
     assert_eq!(
         path,
-        PathBuf::from(shellexpand::tilde(&expected_data_dir).into_owned()).join("warp.sqlite")
+        PathBuf::from(shellexpand::tilde(&expected_data_dir).into_owned()).join("black.sqlite")
     );
 }
 
@@ -72,7 +72,7 @@ fn remote_server_daemon_database_permissions_are_owner_only() {
 
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
     let daemon_dir = tempdir.path().join("daemon");
-    let database_path = daemon_dir.join("warp.sqlite");
+    let database_path = daemon_dir.join("black.sqlite");
 
     std::fs::create_dir_all(&daemon_dir).expect("daemon dir should be created");
     std::fs::set_permissions(&daemon_dir, Permissions::from_mode(0o755))
@@ -100,7 +100,7 @@ fn test_codebase_metadata(path: &str) -> WorkspaceMetadata {
 #[test]
 fn sqlite_read_restores_app_state_and_codebase_metadata() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let database_path = tempdir.path().join("warp.sqlite");
+    let database_path = tempdir.path().join("black.sqlite");
     let mut conn = setup_database(&database_path).expect("database should initialize");
 
     let app_state = AppState {
@@ -123,7 +123,7 @@ fn sqlite_read_restores_app_state_and_codebase_metadata() {
 #[test]
 fn sqlite_writer_reuses_codebase_index_metadata_events() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let database_path = tempdir.path().join("warp.sqlite");
+    let database_path = tempdir.path().join("black.sqlite");
     let conn = setup_database(&database_path).expect("database should initialize");
 
     let writer = start_writer(conn, database_path.clone()).expect("writer should start");
@@ -299,7 +299,7 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
 #[test]
 fn test_sqlite_round_trips_vertical_tabs_panel_open() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let database_path = tempdir.path().join("warp.sqlite");
+    let database_path = tempdir.path().join("black.sqlite");
     let mut conn = setup_database(&database_path).expect("database should initialize");
 
     let app_state = AppState {
@@ -332,7 +332,7 @@ fn test_sqlite_round_trips_vertical_tabs_panel_open() {
 #[test]
 fn test_sqlite_round_trips_custom_vertical_tabs_title() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let database_path = tempdir.path().join("warp.sqlite");
+    let database_path = tempdir.path().join("black.sqlite");
     let mut conn = setup_database(&database_path).expect("database should initialize");
 
     let app_state = AppState {
@@ -404,7 +404,7 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
 #[test]
 fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let database_path = tempdir.path().join("warp.sqlite");
+    let database_path = tempdir.path().join("black.sqlite");
     let mut conn = setup_database(&database_path).expect("database should initialize");
 
     let app_state = AppState {
@@ -569,7 +569,7 @@ fn test_sqlite_drops_too_small_bounds_on_save() {
     use crate::persistence::schema::windows;
 
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let database_path = tempdir.path().join("warp.sqlite");
+    let database_path = tempdir.path().join("black.sqlite");
     let mut conn = setup_database(&database_path).expect("database should initialize");
 
     let mut snapshot = test_terminal_window_snapshot(false);
@@ -612,7 +612,7 @@ fn test_sqlite_drops_too_small_bounds_on_save() {
 #[test]
 fn test_sqlite_drops_too_small_bounds_on_read() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let database_path = tempdir.path().join("warp.sqlite");
+    let database_path = tempdir.path().join("black.sqlite");
     let mut conn = setup_database(&database_path).expect("database should initialize");
 
     // Save with no bounds so a row exists, then corrupt it directly to bypass

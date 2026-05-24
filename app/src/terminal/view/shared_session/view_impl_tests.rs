@@ -5,8 +5,8 @@ use pathfinder_geometry::vector::vec2f;
 use persistence::model::ConversationUsageMetadata;
 use session_sharing_protocol::sharer::SessionSourceType;
 use warp_multi_agent_api::{self as api, client_action as api_client_action};
-use warpui::platform::WindowStyle;
-use warpui::{App, EntityId, TypedActionView, ViewHandle};
+use black_ui::platform::WindowStyle;
+use black_ui::{App, EntityId, TypedActionView, ViewHandle};
 
 use super::*;
 use crate::ai::agent::api::ServerConversationToken;
@@ -1499,7 +1499,7 @@ fn test_deep_linked_ambient_continuation_refreshes_when_task_data_arrives() {
 
         terminal.update(&mut app, |view, ctx| {
             // Mirrors opening a cloud conversation directly (for example, a
-            // Warp-on-Web deep link) before AgentConversationsModel has loaded
+            // Black-on-Web deep link) before AgentConversationsModel has loaded
             // the ambient task. The restored pane only has the task id from
             // conversation metadata, so it first renders the conservative
             // ended-session UI.

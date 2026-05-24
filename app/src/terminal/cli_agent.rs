@@ -12,12 +12,12 @@ use markdown_parser::parse_markdown;
 use pathfinder_color::ColorU;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
-use warp_cli::agent::Harness;
-use warp_completer::parsers::simple::top_level_command;
-use warp_editor::content::buffer::Buffer;
-use warp_editor::content::markdown::MarkdownStyle;
-use warp_util::path::EscapeChar;
-use warpui::{AppContext, SingletonEntity};
+use black_cli::agent::Harness;
+use black_completer::parsers::simple::top_level_command;
+use black_editor::content::buffer::Buffer;
+use black_editor::content::markdown::MarkdownStyle;
+use black_util::path::EscapeChar;
+use black_ui::{AppContext, SingletonEntity};
 
 use crate::ai::agent::{AgentReviewCommentBatch, DiffSetHunk};
 use crate::ai::blocklist::CLAUDE_ORANGE;
@@ -183,7 +183,7 @@ impl CLIAgent {
     }
 
     /// Returns the [`CLIAgent`] corresponding to a cloud-agent [`Harness`] when it represents a
-    /// third-party agent. Returns `None` for [`Harness::Oz`] (Warp's built-in harness has no
+    /// third-party agent. Returns `None` for [`Harness::Oz`] (Black's built-in harness has no
     /// distinct CLI agent identity).
     pub fn from_harness(harness: Harness) -> Option<Self> {
         match harness {

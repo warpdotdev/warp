@@ -3,13 +3,13 @@ use std::sync::Arc;
 use chrono::{Duration, Utc};
 use futures_util::future::BoxFuture;
 use itertools::Itertools;
-use warp_core::ui::appearance::Appearance;
-use warp_editor::editor::EditorView;
-use warpui::platform::WindowStyle;
-use warpui::presenter::ChildView;
-use warpui::r#async::Timer;
-use warpui::telemetry::EventPayload;
-use warpui::{
+use black_core::ui::appearance::Appearance;
+use black_editor::editor::EditorView;
+use black_ui::platform::WindowStyle;
+use black_ui::presenter::ChildView;
+use black_ui::r#async::Timer;
+use black_ui::telemetry::EventPayload;
+use black_ui::{
     AddSingletonModel, App, AppContext, Element, Entity, SingletonEntity, TypedActionView, View,
     ViewHandle, WindowId,
 };
@@ -383,7 +383,7 @@ fn test_focus_tracking() {
 #[ignore]
 fn test_edit_telemetry() {
     fn edit_events() -> Vec<serde_json::Value> {
-        warpui::telemetry::flush_events()
+        black_ui::telemetry::flush_events()
             .into_iter()
             .filter_map(|event| match event.payload {
                 EventPayload::NamedEvent { name, value, .. } if name == "Notebook Edited" => value,
@@ -521,8 +521,8 @@ fn test_not_eager_baton_grab_different_editor() {
         // Complete the initial load so that grab-the-baton behavior applies.
         initial_load(&mut app, vec![]).await;
 
-        let uid = "ian@warp.dev".to_string();
-        let email = "ian@warp.dev".to_string();
+        let uid = "ian.io".to_string();
+        let email = "ian.io".to_string();
 
         let (_, notebook_view, _) = create_notebook(&mut app);
         let mut cloud_notebook = cloud_notebook("Test Notebook", r#"A notebook"#);
@@ -568,14 +568,14 @@ fn test_not_eager_baton_grab_different_editor() {
 }
 
 /// Test to make sure we do not eagerly enter edit mode when another editor took the baton
-/// while Warp was closed.
+/// while Black was closed.
 #[test]
 fn test_baton_grab_editor_changed_offline() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
-        let other_uid = "ben@warp.dev";
-        let other_email = "ben@warp.dev";
+        let other_uid = "ben.io";
+        let other_email = "ben.io";
 
         let (_, notebook_view, _) = create_notebook(&mut app);
 
@@ -630,7 +630,7 @@ fn test_baton_grab_editor_left_offline() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
-        let other_uid = "ben@warp.dev";
+        let other_uid = "ben.io";
 
         let (_, notebook_view, _) = create_notebook(&mut app);
 

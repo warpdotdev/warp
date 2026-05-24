@@ -10,11 +10,11 @@ use aho_corasick::{AhoCorasick, MatchKind};
 use anyhow::{anyhow, Context};
 #[cfg(feature = "local_fs")]
 use futures::AsyncWriteExt;
-use warp_util::path::ShellFamily;
-use warpui::platform::file_picker::FilePickerError;
-use warpui::platform::{FilePickerConfiguration, OperatingSystem};
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
+use black_util::path::ShellFamily;
+use black_ui::platform::file_picker::FilePickerError;
+use black_ui::platform::{FilePickerConfiguration, OperatingSystem};
+use black_ui::r#async::SpawnedFutureHandle;
+use black_ui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
 
 use super::CloudObjectTypeAndId;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -29,7 +29,7 @@ use crate::{
     workspace::WorkspaceAction,
 };
 
-/// Singleton model for exporting from Warp Drive.
+/// Singleton model for exporting from Black Drive.
 pub struct ExportManager {
     exports: HashMap<ExportId, Export>,
 }
@@ -52,7 +52,7 @@ pub enum ExportEvent {
     Completed { id: ExportId, path: PathBuf },
 }
 
-/// A single Warp Drive export.
+/// A single Black Drive export.
 struct Export {
     /// The ID of the window that started this export, for showing toasts.
     window_id: WindowId,
@@ -360,7 +360,7 @@ impl ExportManager {
         ctx: &mut ModelContext<Self>,
     ) {
         let id = *export.key();
-        // Don't send the error to Sentry, since it likely includes a user file path and their Warp
+        // Don't send the error to Sentry, since it likely includes a user file path and their Black
         // Drive object name. Also don't report this as an error, since the most likely failure
         // reason is an I/O issue on the user's machine (like being out of disk space, or exporting
         // to a directory they can't write to).

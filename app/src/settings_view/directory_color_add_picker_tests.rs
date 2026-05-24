@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use warp_core::ui::theme::AnsiColorIdentifier;
+use black_core::ui::theme::AnsiColorIdentifier;
 
 use super::compute_candidate_paths;
 use crate::workspace::tab_settings::{DirectoryTabColor, DirectoryTabColors};

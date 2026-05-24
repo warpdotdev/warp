@@ -2,7 +2,7 @@ use url::Url;
 
 use super::web_intent_parser::WebIntent;
 
-const DEFAULT_TITLE: &str = "Warp";
+const DEFAULT_TITLE: &str = "Black";
 const BASE_APP_PATH: &str = "/app";
 
 pub fn update_browser_url(url: Option<Url>, force_redirect: bool) {

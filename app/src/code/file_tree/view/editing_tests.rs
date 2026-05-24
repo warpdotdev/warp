@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use repo_metadata::file_tree_store::{FileTreeDirectoryEntryState, FileTreeEntryState};
 use repo_metadata::{FileMetadata, FileTreeEntry};
-use warp_util::standardized_path::StandardizedPath;
+use black_util::standardized_path::StandardizedPath;
 
 use super::sort_entries_for_file_tree;
 

@@ -3,7 +3,7 @@ use std::iter;
 use std::sync::Arc;
 
 use ignore::gitignore::Gitignore;
-use warp_util::standardized_path::StandardizedPath;
+use black_util::standardized_path::StandardizedPath;
 
 use crate::file_tree_store::{FileTreeDirectoryEntryState, FileTreeEntry, FileTreeEntryState};
 use crate::{BuildTreeError, DirectoryEntry, Entry};

@@ -7,9 +7,9 @@ use chrono::{DateTime, Local};
 use markdown_parser::FormattedTextFragment;
 use session_sharing_protocol::common::{ParticipantId, ParticipantList, Role, SessionId};
 use session_sharing_protocol::sharer::SessionSourceType;
-use warp_core::features::FeatureFlag;
-use warpui::elements::MouseStateHandle;
-use warpui::{AppContext, Element, ModelHandle, ViewContext, ViewHandle};
+use black_core::features::FeatureFlag;
+use black_ui::elements::MouseStateHandle;
+use black_ui::{AppContext, Element, ModelHandle, ViewContext, ViewHandle};
 
 use super::sharer::Sharer;
 use super::viewer::Viewer;

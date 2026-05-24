@@ -1,15 +1,15 @@
 use pathfinder_color::ColorU;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{
+use black_core::ui::theme::Fill;
+use black_ui::elements::{
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, MouseStateHandle,
     ParentElement, Radius, Shrinkable,
 };
-use warpui::fonts::Weight;
-use warpui::platform::Cursor;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ui_components::text_input::TextInput;
-use warpui::{Action, AppContext, Element, SingletonEntity, ViewHandle};
+use black_ui::fonts::Weight;
+use black_ui::platform::Cursor;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::ui_components::text_input::TextInput;
+use black_ui::{Action, AppContext, Element, SingletonEntity, ViewHandle};
 
 use crate::appearance::Appearance;
 use crate::editor::EditorView;

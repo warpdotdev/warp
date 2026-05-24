@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use std::{env, path};
 
 use anyhow::{anyhow, Result};
-use warpui::{AppContext, SingletonEntity};
+use black_ui::{AppContext, SingletonEntity};
 
 use crate::system::SystemInfo;
 use crate::util::path::{file_exists_and_is_executable, resolve_executable};
@@ -17,7 +17,7 @@ static POWERSHELL_7_PATH: LazyLock<Option<PathBuf>> = LazyLock::new(find_powersh
 static POWERSHELL_5_PATH: LazyLock<Option<PathBuf>> = LazyLock::new(find_powershell_5_path);
 static WSL_PATH: LazyLock<Option<PathBuf>> = LazyLock::new(find_wsl_path);
 
-/// Returns the location which Warp was installed to.
+/// Returns the location which Black was installed to.
 #[cfg(feature = "local_fs")]
 pub fn install_dir() -> Result<path::PathBuf> {
     let current_exe = env::current_exe()?;

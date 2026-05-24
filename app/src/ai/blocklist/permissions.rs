@@ -3,13 +3,13 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use warp_completer::parsers::simple::decompose_command;
-use warp_core::execution_mode::AppExecutionMode;
-use warp_core::features::FeatureFlag;
-use warp_core::settings::Setting;
-use warp_core::user_preferences::GetUserPreferences;
-use warp_util::path::EscapeChar;
-use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
+use black_completer::parsers::simple::decompose_command;
+use black_core::execution_mode::AppExecutionMode;
+use black_core::features::FeatureFlag;
+use black_core::settings::Setting;
+use black_core::user_preferences::GetUserPreferences;
+use black_util::path::EscapeChar;
+use black_ui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversationId;
@@ -674,7 +674,7 @@ impl BlocklistAIPermissions {
         self.can_read_files(Some(conversation_id), paths, terminal_view_id, ctx)
     }
 
-    /// Returns whether or not Warp can auto-read the given files (e.g. for codebase indexing).
+    /// Returns whether or not Black can auto-read the given files (e.g. for codebase indexing).
     pub fn can_read_files(
         &self,
         conversation_id: Option<&AIConversationId>,

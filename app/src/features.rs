@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use warp_core::channel::ChannelState;
-pub use warp_core::features::*;
+use black_core::channel::ChannelState;
+pub use black_core::features::*;
 
 /// Mark all features which should be enabled on the current channel as enabled.
 /// This sets global feature flag state and should never be called in a unit test.
@@ -121,7 +121,7 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::AutoupdateUIRevamp,
         #[cfg(all(not(windows), feature = "kitty_images"))]
         FeatureFlag::KittyImages,
-        #[cfg(feature = "warp_packs")]
+        #[cfg(feature = "black_packs")]
         FeatureFlag::WarpPacks,
         #[cfg(feature = "global_ai_analytics_banner")]
         FeatureFlag::GlobalAIAnalyticsBanner,
@@ -335,7 +335,7 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::AgentView,
         #[cfg(feature = "agent_view_block_context")]
         FeatureFlag::AgentViewBlockContext,
-        #[cfg(feature = "warp_managed_secrets")]
+        #[cfg(feature = "black_managed_secrets")]
         FeatureFlag::WarpManagedSecrets,
         #[cfg(feature = "v4a_file_diffs")]
         FeatureFlag::V4AFileDiffs,
@@ -459,8 +459,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CLIAgentRichInput,
         #[cfg(feature = "transfer_control_tool")]
         FeatureFlag::TransferControlTool,
-        #[cfg(feature = "warpify_footer")]
-        FeatureFlag::WarpifyFooter,
+        #[cfg(feature = "blackify_footer")]
+        FeatureFlag::BlackifyFooter,
         #[cfg(feature = "solo_user_byok")]
         FeatureFlag::SoloUserByok,
         #[cfg(feature = "billing_and_usage_page_v2")]

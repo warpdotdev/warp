@@ -3,23 +3,23 @@ use std::time::Duration;
 
 use chrono::Local;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
-use warp_editor::editor::NavigationKey;
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::{
+use black_editor::editor::NavigationKey;
+use black_ui::clipboard::ClipboardContent;
+use black_ui::elements::{
     resizable_state_handle, Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, DispatchEventResult, DragBarSide, Element, Empty, EventHandler, Fill, Flex,
     HyperlinkUrl, Icon, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
     ParentAnchor, ParentElement, PositionedElementAnchor, PositionedElementOffsetBounds, Radius,
     Resizable, ResizableStateHandle, SavePosition, Shrinkable, Stack, Text,
 };
-use warpui::fonts::Properties;
-use warpui::keymap::{EditableBinding, FixedBinding};
-use warpui::platform::Cursor;
-use warpui::presenter::ChildView;
-use warpui::r#async::Timer;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::Properties;
+use black_ui::keymap::{EditableBinding, FixedBinding};
+use black_ui::platform::Cursor;
+use black_ui::presenter::ChildView;
+use black_ui::r#async::Timer;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };
@@ -68,7 +68,7 @@ const BODY_FONT_SIZE: f32 = 13.;
 const TITLE_FONT_SIZE: f32 = 16.;
 const ZERO_STATE_HELP_TEXT_FONT_SIZE: f32 = 12.;
 
-const ZERO_STATE_HELP_TEXT: &str = "Shift + ctrl + space a block or text selection to ask Warp AI.";
+const ZERO_STATE_HELP_TEXT: &str = "Shift + ctrl + space a block or text selection to ask Black AI.";
 const SCRIPT_ZERO_STATE_PROMPT: &str = "Write a script to connect to an AWS EC2 instance.";
 const GIT_ZERO_STATE_PROMPT: &str = "How do I undo the most recent commits in git?";
 const FILES_ZERO_STATE_PROMPT: &str = "How do I find all files containing specific text?";
@@ -139,33 +139,33 @@ pub enum AIAssistantAction {
 }
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings([FixedBinding::custom(
         CustomAction::CloseCurrentSession,
         AIAssistantAction::ClosePanel,
-        "Close Warp AI",
+        "Close Black AI",
         id!("AIAssistantPanel"),
     )]);
 
     app.register_editable_bindings([
         EditableBinding::new(
             "ai_assistant_panel:focus_terminal_input",
-            "Focus Terminal Input From Warp AI",
+            "Focus Terminal Input From Black AI",
             AIAssistantAction::FocusTerminalInput,
         )
         .with_context_predicate(id!("AIAssistantPanel"))
         .with_key_binding(cmd_or_ctrl_shift("l")),
         EditableBinding::new(
             "ai_assistant_panel:reset_context",
-            "Restart Warp AI",
+            "Restart Black AI",
             AIAssistantAction::ResetContext,
         )
         .with_context_predicate(id!("AIAssistantPanel"))
         .with_key_binding("ctrl-l"),
         EditableBinding::new(
             "ai_assistant_panel:reset_context",
-            "Restart Warp AI",
+            "Restart Black AI",
             AIAssistantAction::ResetContext,
         )
         .with_context_predicate(id!("AIAssistantPanel"))
@@ -230,7 +230,7 @@ impl AIAssistantPanelView {
         {
             Some(handle) => handle,
             None => {
-                log::error!("Couldn't retrieve warp ai resizable state handle.");
+                log::error!("Couldn't retrieve black ai resizable state handle.");
                 resizable_state_handle(DEFAULT_WARP_AI_WIDTH)
             }
         };
@@ -285,7 +285,7 @@ impl AIAssistantPanelView {
     fn format_as_code_block(&self, content: &str) -> String {
         // Intentionally choose a language that won't be interpreted as a shell language
         // i.e. (*sh)
-        format!("```warp\n{}\n```", content.trim())
+        format!("```black\n{}\n```", content.trim())
     }
 
     // TODO: reconsider if we should be doing all the formatting in here as opposed
@@ -654,14 +654,14 @@ impl AIAssistantPanelView {
         let time_now = Local::now();
 
         result.push_str(&format!(
-            "## Warp AI Transcript ({})\n\n",
+            "## Black AI Transcript ({})\n\n",
             time_now.format("%x %l:%M %p")
         ));
 
         for part in transcript {
             result.push_str(&format!("Prompt: {}\n\n", part.raw_user_prompt().trim()));
             result.push_str(&format!(
-                "Warp AI: {}\n\n",
+                "Black AI: {}\n\n",
                 part.raw_assistant_answer().trim()
             ));
         }
@@ -718,7 +718,7 @@ impl AIAssistantPanelView {
                         .with_style(UiComponentStyles {
                             font_family_id: Some(appearance.ui_font_family()),
                             font_size: Some(TITLE_FONT_SIZE),
-                            font_weight: Some(warpui::fonts::Weight::Semibold),
+                            font_weight: Some(black_ui::fonts::Weight::Semibold),
                             font_color: Some(appearance.theme().active_ui_text_color().into()),
                             ..Default::default()
                         })
@@ -844,7 +844,7 @@ impl AIAssistantPanelView {
                         BODY_FONT_SIZE,
                     )
                     .with_style(Properties {
-                        weight: warpui::fonts::Weight::Bold,
+                        weight: black_ui::fonts::Weight::Bold,
                         ..Default::default()
                     })
                     .with_color(appearance.theme().ui_error_color())
@@ -1136,7 +1136,7 @@ impl View for AIAssistantPanelView {
             .finish(),
             OffsetPositioning::offset_from_parent(
                 vec2f(0., HEADER_HEIGHT),
-                warpui::elements::ParentOffsetBounds::Unbounded,
+                black_ui::elements::ParentOffsetBounds::Unbounded,
                 ParentAnchor::TopLeft,
                 ChildAnchor::BottomLeft,
             ),

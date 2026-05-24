@@ -1,5 +1,5 @@
-use warpui::elements::MouseStateHandle;
-use warpui::{AppContext, Element};
+use black_ui::elements::MouseStateHandle;
+use black_ui::{AppContext, Element};
 
 use super::cloud_object_styling::warp_drive_icon_color;
 use super::index::{warp_drive_section_header_position_id, DriveIndexAction, DriveIndexSection};
@@ -67,7 +67,7 @@ impl WarpDriveItemId {
         }
     }
 }
-/// This uniquely identifies an item in Warp Drive index
+/// This uniquely identifies an item in Black Drive index
 /// Includes spaces (which CloudObjectTypeAndId does not entail)
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum WarpDriveItemId {

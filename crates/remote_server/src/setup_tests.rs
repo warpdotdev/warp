@@ -253,7 +253,7 @@ fn parse_preinstall_unsupported_non_glibc() {
 ///      in the replacement as the matched pattern, so a `$HOME`
 ///      containing `&` resolves to a `~`-substituted path.
 ///
-/// Both bugs surface as the install binary landing somewhere Warp's
+/// Both bugs surface as the install binary landing somewhere Black's
 /// launch step doesn't look, producing a misleading "Response channel
 /// closed before receiving a reply".
 ///
@@ -266,7 +266,7 @@ fn parse_preinstall_unsupported_non_glibc() {
 ///
 /// Gated to Unix because the test invokes `/bin/bash` (or `bash` from
 /// PATH) directly. The bug only matters on Unix remotes anyway —
-/// Warp's remote-server SSH wrapper doesn't target Windows hosts.
+/// Black's remote-server SSH wrapper doesn't target Windows hosts.
 #[cfg(unix)]
 #[test]
 fn install_script_tilde_expansion_resolves_correctly() {
@@ -432,8 +432,8 @@ fn socket_path_fits_within_sun_path_worst_case() {
     let hashed_socket = "server-a1b2c3d4.sock";
     let old_socket = "server-v0.2026.05.13.09.15.stable_01.sock";
 
-    // Use .warp-preview (longest channel base dir) for worst case.
-    let daemon_dir = format!("{long_home}/.warp-preview/remote-server/{identity_dir}");
+    // Use .black-preview (longest channel base dir) for worst case.
+    let daemon_dir = format!("{long_home}/.black-preview/remote-server/{identity_dir}");
 
     let hashed_path = format!("{daemon_dir}/{hashed_socket}");
 
@@ -449,7 +449,7 @@ fn socket_path_fits_within_sun_path_worst_case() {
     // The OLD naming scheme (full version + unhashed identity) should
     // exceed the limit, confirming the regression.
     let old_identity = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"; // 36 chars unhashed
-    let old_daemon_dir = format!("{long_home}/.warp-preview/remote-server/{old_identity}");
+    let old_daemon_dir = format!("{long_home}/.black-preview/remote-server/{old_identity}");
     let old_full_path = format!("{old_daemon_dir}/{old_socket}");
     assert!(
         old_full_path.len() > 107,

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::SyncSender;
 
 use chrono::Utc;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 use crate::persistence::model::Project;
 use crate::persistence::ModelEvent;

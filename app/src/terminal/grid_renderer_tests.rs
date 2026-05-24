@@ -1,7 +1,7 @@
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
-use warpui::fonts::Cache as FontCache;
-use warpui::units::{IntoLines, Lines, Pixels};
+use black_ui::fonts::Cache as FontCache;
+use black_ui::units::{IntoLines, Lines, Pixels};
 
 use super::{active_or_next_match, CachedBackgroundColor};
 use crate::terminal::grid_size_util::calculate_grid_baseline_position;
@@ -20,7 +20,7 @@ fn rect_from_points(min_x: f32, min_y: f32, max_x: f32, max_y: f32) -> RectF {
     ignore = "Assumes existence of Arial font, which is only guaranteed on macOS"
 )]
 fn test_calculate_grid_baseline_position() {
-    let font_db = warpui::platform::test::FontDB::new();
+    let font_db = black_ui::platform::test::FontDB::new();
     let mut font_cache = FontCache::new(Box::new(font_db));
     // Note we've restricted this unit test to Mac, so we expect Arial to exist.
     let arial = font_cache

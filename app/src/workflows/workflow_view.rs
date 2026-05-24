@@ -10,24 +10,24 @@ use pathfinder_geometry::vector::vec2f;
 use string_offset::CharOffset;
 use syntax_highlightable::SyntaxHighlightable;
 use url::Url;
-use warp_core::context_flag::ContextFlag;
-use warp_core::settings::Setting;
-use warp_core::ui::theme::AnsiColorIdentifier;
-use warp_editor::editor::NavigationKey;
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::{
+use black_core::context_flag::ContextFlag;
+use black_core::settings::Setting;
+use black_core::ui::theme::AnsiColorIdentifier;
+use black_editor::editor::NavigationKey;
+use black_ui::clipboard::ClipboardContent;
+use black_ui::elements::{
     Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable,
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Hoverable,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Radius, Rect, ScrollbarWidth, Shrinkable, Stack,
 };
-use warpui::fonts::{FamilyId, Weight};
-use warpui::keymap::EditableBinding;
-use warpui::platform::Cursor;
-use warpui::text_layout::TextStyle;
-use warpui::ui_components::button::{Button, ButtonVariant, TextAndIcon, TextAndIconAlignment};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::{FamilyId, Weight};
+use black_ui::keymap::EditableBinding;
+use black_ui::platform::Cursor;
+use black_ui::text_layout::TextStyle;
+use black_ui::ui_components::button::{Button, ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle, WindowId,
 };
@@ -105,7 +105,7 @@ pub mod env_var_selector;
 mod syntax_highlightable;
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::id;
+    use black_ui::keymap::macros::id;
     app.register_editable_bindings([EditableBinding::new(
         "workflowview:save",
         "Save workflow",
@@ -169,7 +169,7 @@ const AI_ASSIST_LOADING_TEXT: &str = "Loading";
 
 const ALIAS_HELP_TEXT: &str = "Aliases allow you to create short strings to execute workflows. Each alias can have different argument values and environment variables, and aliases are personal to you.";
 
-const RUN_ON_DESKTOP_BUTTON_TEXT: &str = "Run in Warp";
+const RUN_ON_DESKTOP_BUTTON_TEXT: &str = "Run in Black";
 const RUN_ON_DESKTOP_BUTTON_WIDTH: f32 = 108.;
 
 const UNSAVED_CHANGES_TEXT: &str = "You have unsaved changes.";
@@ -1565,7 +1565,7 @@ impl WorkflowView {
     }
 
     /// Save the workflow and associated state. This makes a best-effort attempt to not
-    /// unnecessarily modify the backing Warp Drive object.
+    /// unnecessarily modify the backing Black Drive object.
     fn save(&mut self, ctx: &mut ViewContext<Self>) {
         if FeatureFlag::WorkflowAliases.is_enabled() && self.are_aliases_dirty(ctx) {
             self.save_aliases(ctx);
@@ -2450,7 +2450,7 @@ impl WorkflowView {
                     .finish();
 
                 let button_with_tool_tip = appearance.ui_builder().tool_tip_on_element(
-                    "Generate a title, descriptions, or parameters with Warp AI".to_string(),
+                    "Generate a title, descriptions, or parameters with Black AI".to_string(),
                     self.ui_state_handles.ai_assist_tool_tip.clone(),
                     rendered_button,
                     ParentAnchor::TopMiddle,
@@ -3044,7 +3044,7 @@ impl View for WorkflowView {
                 SCROLLBAR_WIDTH,
                 theme.nonactive_ui_detail().into(),
                 theme.active_ui_detail().into(),
-                warpui::elements::Fill::None,
+                black_ui::elements::Fill::None,
             )
             .finish(),
         );

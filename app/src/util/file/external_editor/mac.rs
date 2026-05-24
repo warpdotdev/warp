@@ -8,10 +8,10 @@ use cocoa::base::{id, nil};
 use cocoa::foundation::{NSAutoreleasePool, NSString};
 use command::r#async::Command;
 use instant::Instant;
-use warp_core::channel::ChannelState;
-use warp_core::AppId;
-use warpui::platform::mac::make_nsstring;
-use warpui::ApplicationBundleInfo;
+use black_core::channel::ChannelState;
+use black_core::AppId;
+use black_ui::platform::mac::make_nsstring;
+use black_ui::ApplicationBundleInfo;
 
 use super::*;
 
@@ -348,8 +348,8 @@ pub fn open_file_path_with_line_and_col(
         }
 
         // NSWorkspace's default-app routing can hand files to a sibling
-        // Warp channel (e.g. Stable handling files while Preview is running).
-        // When the resolved default is a different Warp, open with the
+        // Black channel (e.g. Stable handling files while Preview is running).
+        // When the resolved default is a different Black, open with the
         // running channel's bundle directly.
         let bundle_id = unsafe { default_app_to_open_path(full_path) };
         if let Some(bundle_id) = bundle_id.as_deref() {
@@ -367,7 +367,7 @@ pub fn open_file_path_with_line_and_col(
 
 fn is_warp_bundle(bundle_id: &str) -> bool {
     AppId::parse(bundle_id)
-        .map(|id| id.qualifier() == "dev" && id.organization() == "warp")
+        .map(|id| id.qualifier() == "io" && id.organization() == "blackdagger")
         .unwrap_or(false)
 }
 

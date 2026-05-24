@@ -1,10 +1,10 @@
-use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::{
+use black_core::ui::theme::color::internal_colors;
+use black_ui::elements::{
     Border, ChildView, Container, CornerRadius, Dismiss, Empty, Flex, ParentElement, Radius, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::ui_components::components::UiComponent;
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::ui_components::components::UiComponent;
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 

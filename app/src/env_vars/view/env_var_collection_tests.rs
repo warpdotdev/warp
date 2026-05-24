@@ -1,6 +1,6 @@
-use warp_core::ui::appearance::Appearance;
-use warpui::platform::WindowStyle;
-use warpui::{App, ViewHandle};
+use black_core::ui::appearance::Appearance;
+use black_ui::platform::WindowStyle;
+use black_ui::{App, ViewHandle};
 
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::actions::ObjectActions;

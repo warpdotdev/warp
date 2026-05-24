@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context as _, Result};
-use warp_cli::skill::SkillSpec;
+use black_cli::skill::SkillSpec;
 
 use super::*;
 
@@ -84,7 +84,7 @@ fn resolve_from_root_path_by_directory_scan_respects_directory_precedence() -> R
 
     assert_eq!(resolved.skill_path, agents_skill);
     assert!(resolved.instructions.contains("Agents version"));
-    assert!(!resolved.instructions.contains("Warp version"));
+    assert!(!resolved.instructions.contains("Black version"));
     assert!(!resolved.instructions.contains("Claude version"));
     assert!(!resolved.instructions.contains("Codex version"));
     assert!(!resolved.instructions.contains("name:"));
@@ -122,13 +122,13 @@ fn instructions_body_strips_front_matter_using_line_range() -> Result<()> {
 #[test]
 fn parse_org_from_git_url_supports_ssh_and_https() {
     assert_eq!(
-        parse_org_from_git_url("git@github.com:warpdotdev/warp-internal.git"),
-        Some("warpdotdev".to_string())
+        parse_org_from_git_url("git@github.com:blackdagger/black-internal.git"),
+        Some("blackdagger".to_string())
     );
 
     assert_eq!(
-        parse_org_from_git_url("https://github.com/warpdotdev/warp-internal.git"),
-        Some("warpdotdev".to_string())
+        parse_org_from_git_url("https://github.com/blackdagger/black-internal.git"),
+        Some("blackdagger".to_string())
     );
 }
 
@@ -219,7 +219,7 @@ fn resolve_simple_name_uses_directory_precedence() -> Result<()> {
         .context("Expected to resolve skill by name")?;
     assert_eq!(resolved.skill_path, agents_skill);
     assert!(resolved.instructions.contains("Agents version"));
-    assert!(!resolved.instructions.contains("Warp version"));
+    assert!(!resolved.instructions.contains("Black version"));
     assert!(!resolved.instructions.contains("Claude version"));
 
     Ok(())

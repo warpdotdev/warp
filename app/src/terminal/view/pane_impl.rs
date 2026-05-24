@@ -1,17 +1,17 @@
 //! This module contains the implementation of `BackingView` for `TerminalView`, as well as
 //! business logic for integrating the terminal view with the pane infra (`crate::pane_group`).
 use settings::Setting as _;
-use warp_core::context_flag::ContextFlag;
-use warpui::elements::{
+use black_core::context_flag::ContextFlag;
+use black_ui::elements::{
     ConstrainedBox, CrossAxisAlignment, Empty, Flex, MainAxisAlignment, MainAxisSize,
     ParentElement, Shrinkable,
 };
-use warpui::prelude::{ChildView, Container};
-use warpui::text_layout::ClipConfig;
-use warpui::ui_components::components::UiComponent;
+use black_ui::prelude::{ChildView, Container};
+use black_ui::text_layout::ClipConfig;
+use black_ui::ui_components::components::UiComponent;
 #[cfg(not(target_arch = "wasm32"))]
-use warpui::ui_components::components::UiComponentStyles;
-use warpui::{
+use black_ui::ui_components::components::UiComponentStyles;
+use black_ui::{
     AppContext, Element, ModelHandle, SingletonEntity, TypedActionView, ViewContext,
     WeakModelHandle,
 };
@@ -239,7 +239,7 @@ impl TerminalView {
     /// Renders the back button for the pane header, or an empty element if the
     /// back button should not be shown.
     fn maybe_render_header_back_button(&self, app: &AppContext) -> Box<dyn Element> {
-        if !FeatureFlag::AgentView.is_enabled() || warpui::platform::is_mobile_device() {
+        if !FeatureFlag::AgentView.is_enabled() || black_ui::platform::is_mobile_device() {
             return Flex::row().finish();
         }
 

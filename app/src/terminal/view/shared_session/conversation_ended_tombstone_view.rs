@@ -1,15 +1,15 @@
 use std::path::Path;
 
-use warp_core::paths::home_relative_path;
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::icons::Icon;
-use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
-use warpui::elements::{
+use black_core::paths::home_relative_path;
+use black_core::send_telemetry_from_ctx;
+use black_core::ui::icons::Icon;
+use black_core::ui::theme::{AnsiColorIdentifier, Fill};
+use black_ui::elements::{
     Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
     Expanded, Flex, MainAxisSize, Padding, ParentElement, Radius, Shrinkable, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::{
     AppContext, Element, Entity, EntityId, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
@@ -236,8 +236,8 @@ impl ConversationEndedTombstoneView {
             } else {
                 conversation_id.map(|conv_id| {
                     ctx.add_typed_action_view(move |_| {
-                        ActionButton::new("Open in Warp", PrimaryTheme)
-                            .with_tooltip("Open this conversation in the Warp desktop app")
+                        ActionButton::new("Open in Black", PrimaryTheme)
+                            .with_tooltip("Open this conversation in the Black desktop app")
                             .on_click(move |ctx| {
                                 ctx.dispatch_typed_action(
                                     ConversationEndedTombstoneAction::OpenInWarp(conv_id),
@@ -279,7 +279,7 @@ impl ConversationEndedTombstoneView {
                         ctx
                     );
                     ctx.clipboard()
-                        .write(warpui::clipboard::ClipboardContent::plain_text(
+                        .write(black_ui::clipboard::ClipboardContent::plain_text(
                             branch.clone(),
                         ));
                 }
@@ -507,7 +507,7 @@ impl ConversationEndedTombstoneView {
         #[cfg(target_family = "wasm")]
         {
             // Don't show on mobile devices - they can't use the desktop app
-            if !warpui::platform::wasm::is_mobile_device() {
+            if !black_ui::platform::wasm::is_mobile_device() {
                 if let Some(ref open_in_warp_button) = self.open_in_warp_button {
                     row.add_child(ChildView::new(open_in_warp_button).finish());
                     has_button = true;

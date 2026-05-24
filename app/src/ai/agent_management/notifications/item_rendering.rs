@@ -1,19 +1,19 @@
 use std::sync::Arc;
 
 use pathfinder_color::ColorU;
-use warp_core::ui::appearance::Appearance as CoreAppearance;
-use warp_core::ui::icons::Icon;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::{Fill, WarpTheme};
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance as CoreAppearance;
+use black_core::ui::icons::Icon;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::{Fill, WarpTheme};
+use black_ui::clipboard::ClipboardContent;
+use black_ui::elements::{
     ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult,
     Element, EventHandler, Flex, MainAxisAlignment, MainAxisSize, ParentElement, Radius, Rect,
     Shrinkable,
 };
-use warpui::fonts::Weight;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{View, ViewContext, ViewHandle};
+use black_ui::fonts::Weight;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{View, ViewContext, ViewHandle};
 
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent_management::notifications::item::NotificationSourceAgent;
@@ -82,7 +82,7 @@ impl ActionButtonTheme for NotificationArtifactButtonTheme {
 }
 
 /// Callback invoked when the user clicks the expand/collapse affordance on a clamped message.
-pub(crate) type OnExpandClick = Box<dyn Fn(&mut warpui::EventContext)>;
+pub(crate) type OnExpandClick = Box<dyn Fn(&mut black_ui::EventContext)>;
 
 /// Renders the inner content of a notification item.
 /// Dispatches to the rich layout (with branch row) or simple layout based on `item.branch`.

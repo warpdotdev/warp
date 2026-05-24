@@ -4,10 +4,10 @@ use ai::api_keys::ApiKeyManager;
 use chrono::{DateTime, Local, Utc};
 use instant::Instant;
 use serde::{Deserialize, Serialize};
-use warp_core::user_preferences::GetUserPreferences as _;
-pub use warp_graphql::billing::BonusGrantType;
-use warp_graphql::scalars::time::ServerTimestamp;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+use black_core::user_preferences::GetUserPreferences as _;
+pub use black_graphql::billing::BonusGrantType;
+use black_graphql::scalars::time::ServerTimestamp;
+use black_ui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;

@@ -1,8 +1,8 @@
 use ai::agent::action_result::StartAgentVersion;
-use warp_cli::agent::Harness;
-use warp_core::ui::appearance::Appearance;
-use warpui::elements::MouseStateHandle;
-use warpui::{App, EntityId};
+use black_cli::agent::Harness;
+use black_core::ui::appearance::Appearance;
+use black_ui::elements::MouseStateHandle;
+use black_ui::{App, EntityId};
 
 use super::{
     agent_display_name_from_id, child_conversation_card_data_for_result, participant_for_agent_id,

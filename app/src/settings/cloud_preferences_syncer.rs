@@ -5,12 +5,12 @@ use std::time::Duration;
 
 use lazy_static::lazy_static;
 use settings::{Setting as _, SyncToCloud};
-use warp_core::execution_mode::AppExecutionMode;
-use warp_core::settings::ChangeEventReason;
-use warp_core::user_preferences::GetUserPreferences;
-use warpui::r#async::Timer;
-use warpui::{Entity, ModelContext, SingletonEntity};
-use warpui_extras::user_preferences::toml_backed::TomlBackedUserPreferences;
+use black_core::execution_mode::AppExecutionMode;
+use black_core::settings::ChangeEventReason;
+use black_core::user_preferences::GetUserPreferences;
+use black_ui::r#async::Timer;
+use black_ui::{Entity, ModelContext, SingletonEntity};
+use black_ui_extras::user_preferences::toml_backed::TomlBackedUserPreferences;
 
 use super::cloud_preferences::{CloudPreferencesSettings, CloudPreferencesSettingsChangedEvent};
 use super::manager::SettingsEvent;
@@ -99,7 +99,7 @@ pub fn initialize_cloud_preferences_syncer(
     CloudPreferencesSyncer::new(force_local_wins_on_startup, toml_file_path, ctx)
 }
 
-/// Handles syncing CloudPreferences (the Warp Drive objects) and local Settings models that
+/// Handles syncing CloudPreferences (the Black Drive objects) and local Settings models that
 /// have been created using the define_settings_group macro.
 pub struct CloudPreferencesSyncer {
     // A channel used for debouncing local settings updates so that we don't spam the

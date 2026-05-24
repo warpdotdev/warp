@@ -6,12 +6,12 @@
 
 use std::path::Path;
 
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::appearance::Appearance;
-use warpui::elements::{
+use black_core::send_telemetry_from_ctx;
+use black_core::ui::appearance::Appearance;
+use black_ui::elements::{
     ClippedScrollStateHandle, Container, Element, Flex, MouseStateHandle, ParentElement, Text,
 };
-use warpui::{SingletonEntity, ViewContext};
+use black_ui::{SingletonEntity, ViewContext};
 
 use crate::ai::generate_code_review_content::api::{GenerateCodeReviewContentRequest, OutputType};
 use crate::code_review::git_dialog::{

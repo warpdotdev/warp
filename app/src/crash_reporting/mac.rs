@@ -2,7 +2,7 @@
 
 use cocoa::base::{id, nil, BOOL};
 use cocoa::foundation::NSAutoreleasePool;
-use warpui::platform::mac::make_nsstring;
+use black_ui::platform::mac::make_nsstring;
 
 use super::*;
 

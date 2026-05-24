@@ -1,11 +1,11 @@
 //! Shared context menu implementation for notebooks.
 
 use pathfinder_geometry::vector::Vector2F;
-use warp_core::context_flag::ContextFlag;
-use warpui::elements::{ChildAnchor, OffsetPositioning, ParentAnchor, ParentOffsetBounds, Stack};
-use warpui::keymap::Trigger;
-use warpui::presenter::ChildView;
-use warpui::{Action, Element, EventContext, TypedActionView, View, ViewContext, ViewHandle};
+use black_core::context_flag::ContextFlag;
+use black_ui::elements::{ChildAnchor, OffsetPositioning, ParentAnchor, ParentOffsetBounds, Stack};
+use black_ui::keymap::Trigger;
+use black_ui::presenter::ChildView;
+use black_ui::{Action, Element, EventContext, TypedActionView, View, ViewContext, ViewHandle};
 
 use super::editor::keys::custom_action_to_display;
 use super::editor::view::RichTextEditorView;
@@ -245,7 +245,7 @@ where
 
     #[cfg(test)]
     /// List out the context menu items by name.
-    pub fn item_names<'a>(&self, ctx: &'a impl warpui::ViewAsRef) -> Vec<&'a str> {
+    pub fn item_names<'a>(&self, ctx: &'a impl black_ui::ViewAsRef) -> Vec<&'a str> {
         self.menu
             .as_ref(ctx)
             .items()

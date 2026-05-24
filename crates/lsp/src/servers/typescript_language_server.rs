@@ -41,7 +41,7 @@ impl TypeScriptLanguageServerCandidate {
     pub async fn find_installed_binary_config(
         path_env_var: Option<&str>,
     ) -> Option<CustomBinaryConfig> {
-        let install_dir = warp_core::paths::data_dir().join("typescript-language-server");
+        let install_dir = black_core::paths::data_dir().join("typescript-language-server");
 
         // Check for the JS file - prefer new path (cli.mjs) over old path (cli.js)
         let server_js = {
@@ -140,7 +140,7 @@ impl LanguageServerCandidate for TypeScriptLanguageServerCandidate {
             metadata.version
         );
 
-        let install_dir = warp_core::paths::data_dir().join("typescript-language-server");
+        let install_dir = black_core::paths::data_dir().join("typescript-language-server");
 
         // Create the installation directory
         async_fs::create_dir_all(&install_dir)

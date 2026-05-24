@@ -1,4 +1,4 @@
-use warpui::ModelContext;
+use black_ui::ModelContext;
 
 use crate::content::buffer::BufferSnapshot;
 use crate::content::edit::PreciseDelta;

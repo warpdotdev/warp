@@ -82,7 +82,7 @@ fn test_format_git_branch_command_reports_missing_linked_worktree_path() {
 
     assert_eq!(
         format_git_branch_command(&value),
-        "echo 'Branch '\\''feature-a'\\'' is already checked out in another worktree, but Warp couldn'\\''t find its path.'"
+        "echo 'Branch '\\''feature-a'\\'' is already checked out in another worktree, but Black couldn'\\''t find its path.'"
     );
 }
 

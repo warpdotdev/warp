@@ -1,11 +1,11 @@
 use std::any::Any;
 
 use async_channel::Sender;
-use warpui::elements::Point;
-use warpui::event::DispatchedEvent;
-use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::Vector2F;
-use warpui::{
+use black_ui::elements::Point;
+use black_ui::event::DispatchedEvent;
+use black_ui::geometry::rect::RectF;
+use black_ui::geometry::vector::Vector2F;
+use black_ui::{
     AfterLayoutContext, AppContext, Element, Event, EventContext, LayoutContext, PaintContext,
     SizeConstraint,
 };

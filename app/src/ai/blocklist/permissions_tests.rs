@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use uuid::Uuid;
-use warp_core::execution_mode::ExecutionMode;
-use warp_util::path::EscapeChar;
-use warpui::{App, EntityId, ModelHandle};
+use black_core::execution_mode::ExecutionMode;
+use black_util::path::EscapeChar;
+use black_ui::{App, EntityId, ModelHandle};
 
 use super::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;

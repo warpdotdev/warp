@@ -25,24 +25,24 @@ use settings_page::{
 };
 use show_blocks_view::{ShowBlocksEvent, ShowBlocksView};
 use teams_page::{TeamsPageView, TeamsPageViewEvent};
-use warp_core::channel::ChannelState;
-use warp_core::context_flag::ContextFlag;
-use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
-use warp_core::settings::ToggleableSetting as _;
-use warp_core::ui::theme::color::internal_colors;
-use warp_editor::editor::NavigationKey;
-use warpify_page::{WarpifyPageAction, WarpifyPageView};
-use warpui::elements::{
+use black_core::channel::ChannelState;
+use black_core::context_flag::ContextFlag;
+use black_core::features::FeatureFlag;
+use black_core::send_telemetry_from_ctx;
+use black_core::settings::ToggleableSetting as _;
+use black_core::ui::theme::color::internal_colors;
+use black_editor::editor::NavigationKey;
+use blackify_page::{BlackifyPageAction, BlackifyPageView};
+use black_ui::elements::{
     Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable,
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty,
     EventHandler, Expanded, Fill, Flex, MainAxisSize, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, Shrinkable, Stack,
     Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::keymap::{ContextPredicate, EnabledPredicate, FixedBinding};
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::keymap::{ContextPredicate, EnabledPredicate, FixedBinding};
+use black_ui::{
     id, Action, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView,
     UpdateView as _, View, ViewContext, ViewHandle,
 };
@@ -109,7 +109,7 @@ mod telemetry;
 mod transfer_ownership_confirmation_modal;
 pub mod update_environment_form;
 mod warp_drive_page;
-mod warpify_page;
+mod blackify_page;
 
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use ai_page::cli_agent_settings_widget_id;
@@ -167,10 +167,10 @@ pub(super) fn editor_text_colors(appearance: &Appearance) -> TextColors {
 pub(super) fn render_model_chips(
     labels: impl IntoIterator<Item = String>,
     appearance: &Appearance,
-    text_color: warp_core::ui::theme::Fill,
+    text_color: black_core::ui::theme::Fill,
 ) -> Box<dyn Element> {
-    use warpui::ui_components::chip::Chip;
-    use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+    use black_ui::ui_components::chip::Chip;
+    use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
 
     let theme = appearance.theme();
     let chip_border = internal_colors::neutral_4(theme).into();
@@ -231,7 +231,7 @@ pub enum SettingsSection {
     SharedBlocks,
     Teams,
     WarpDrive,
-    Warpify,
+    Blackify,
     /// Internal backing-page identifier for AISettingsPageView. Multiple subpages
     /// (WarpAgent, AgentProfiles, Knowledge, ThirdPartyCLIAgents) share this single
     /// backing page, so this variant is needed as the key in `settings_pages`.
@@ -267,8 +267,8 @@ impl Display for SettingsSection {
             SettingsSection::Keybindings => write!(f, "Keyboard shortcuts"),
             SettingsSection::SharedBlocks => write!(f, "Shared blocks"),
             SettingsSection::MCPServers => write!(f, "MCP Servers"),
-            SettingsSection::WarpDrive => write!(f, "Warp Drive"),
-            SettingsSection::WarpAgent => write!(f, "Warp Agent"),
+            SettingsSection::WarpDrive => write!(f, "Black Drive"),
+            SettingsSection::WarpAgent => write!(f, "Black Agent"),
             SettingsSection::AgentProfiles => write!(f, "Profiles"),
             SettingsSection::AgentMCPServers => write!(f, "MCP servers"),
             SettingsSection::Knowledge => write!(f, "Knowledge"),
@@ -366,10 +366,10 @@ impl FromStr for SettingsSection {
             "Referrals" => Ok(Self::Referrals),
             "Shared blocks" => Ok(Self::SharedBlocks),
             "Teams" => Ok(Self::Teams),
-            "Warpify" => Ok(Self::Warpify),
-            "WarpDrive" | "Warp Drive" => Ok(Self::WarpDrive),
+            "Blackify" => Ok(Self::Blackify),
+            "WarpDrive" | "Black Drive" => Ok(Self::WarpDrive),
             // This page was called "Oz" at one point, keep for backward compatibility.
-            "Oz" | "Warp Agent" => Ok(Self::WarpAgent),
+            "Oz" | "Black Agent" => Ok(Self::WarpAgent),
             "Profiles" | "AgentProfiles" => Ok(Self::AgentProfiles),
             "MCP servers" | "AgentMCPServers" => Ok(Self::AgentMCPServers),
             "Knowledge" => Ok(Self::Knowledge),
@@ -417,7 +417,7 @@ pub mod flags {
     pub const EXTRA_META_KEYS_LEFT_CONTEXT_FLAG: &str = "Extra_Meta_Keys_Left";
     pub const SCROLL_REPORTING_CONTEXT_FLAG: &str = "Scroll_Reporting";
     pub const FOCUS_REPORTING_CONTEXT_FLAG: &str = "Focus_Reporting";
-    #[deprecated = "Use `SSH_TMUX_WRAPPER_CONTEXT_FLAG` for new ssh warpification logic"]
+    #[deprecated = "Use `SSH_TMUX_WRAPPER_CONTEXT_FLAG` for new ssh blackification logic"]
     pub const LEGACY_SSH_WRAPPER_CONTEXT_FLAG: &str = "SSH_Wrapper";
     pub const SSH_TMUX_WRAPPER_CONTEXT_FLAG: &str = "SSH_Tmux_Wrapper";
     pub const NOTIFICATIONS_CONTEXT_FLAG: &str = "Notifications_Enabled";
@@ -493,7 +493,7 @@ pub mod flags {
     pub const IS_AUTOINDEXING_ENABLED: &str = "IsAutoIndexingEnabled";
     pub const LIGATURE_RENDERING_CONTEXT_FLAG: &str = "Ligature_Rendering_Enabled";
     pub const HAS_SETTINGS_TO_IMPORT_FLAG: &str = "HasSettingsToImport";
-    /// The user's setting enabled UDI, but we may show a classic input (e.g. ssh/subshell warpification)
+    /// The user's setting enabled UDI, but we may show a classic input (e.g. ssh/subshell blackification)
     pub const UNIVERSAL_DEVELOPER_INPUT_ENABLED: &str = "UniversalDeveloperInputEnabled";
     pub const AGENT_MODE_INPUT: &str = "InputAgentMode";
     pub const TERMINAL_MODE_INPUT: &str = "InputTerminalMode";
@@ -535,7 +535,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     main_page::init_actions_from_parent_view(app, context, builder);
     appearance_page::init_actions_from_parent_view(app, context, builder);
     features_page::init_actions_from_parent_view(app, context, builder);
-    warpify_page::init_actions_from_parent_view(app, context, builder);
+    blackify_page::init_actions_from_parent_view(app, context, builder);
     privacy_page::init_actions_from_parent_view(app, context, builder);
     ai_page::init_actions_from_parent_view(app, context, builder);
     code_page::init_actions_from_parent_view(app, context, builder);
@@ -694,7 +694,7 @@ impl<T: Action + Clone> ToggleSettingActionPair<T> {
         context_prefix: &ContextPredicate,
         context_boolean_flag: &'static str,
     ) -> Self {
-        use warpui::keymap::macros::id;
+        use black_ui::keymap::macros::id;
 
         ToggleSettingActionPair {
             descriptions: SettingActionPairDescriptions {
@@ -850,7 +850,7 @@ pub enum SettingsAction {
     AI(AISettingsPageAction),
     Code(CodeSettingsPageAction),
     WarpDrive(warp_drive_page::WarpDriveSettingsPageAction),
-    WarpifyPageToggle(WarpifyPageAction),
+    BlackifyPageToggle(BlackifyPageAction),
     Tab,
     Split(Direction),
     ToggleMaximizePane,
@@ -996,7 +996,7 @@ macro_rules! update_page {
             SettingsPageViewHandle::SharedBlocks(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Keybindings(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Teams(handle) => $ctx.update_view(handle, $update),
-            SettingsPageViewHandle::Warpify(handle) => $ctx.update_view(handle, $update),
+            SettingsPageViewHandle::Blackify(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::OzCloudAPIKeys(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Privacy(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Referrals(handle) => $ctx.update_view(handle, $update),
@@ -1131,9 +1131,9 @@ impl SettingsView {
             }
         });
 
-        let warpify_page_handle = ctx.add_typed_action_view(WarpifyPageView::new);
-        ctx.subscribe_to_view(&warpify_page_handle, |me, _, event, ctx| {
-            me.handle_warpify_page_event(event, ctx);
+        let blackify_page_handle = ctx.add_typed_action_view(BlackifyPageView::new);
+        ctx.subscribe_to_view(&blackify_page_handle, |me, _, event, ctx| {
+            me.handle_blackify_page_event(event, ctx);
         });
 
         // Render the privacy page only if telemetry opt-out is enabled.
@@ -1149,7 +1149,7 @@ impl SettingsView {
             me.handle_referrals_page_event(event, ctx);
         });
 
-        // Warp Drive page
+        // Black Drive page
         let warp_drive_page_handle =
             ctx.add_typed_action_view(warp_drive_page::WarpDriveSettingsPageView::new);
         ctx.subscribe_to_view(&warp_drive_page_handle, |me, _, event, ctx| {
@@ -1205,7 +1205,7 @@ impl SettingsView {
             SettingsPage::new(features_page_handle),
             SettingsPage::new(keybindings_handle),
             SettingsPage::new(platform_page_handle),
-            SettingsPage::new(warpify_page_handle),
+            SettingsPage::new(blackify_page_handle),
             SettingsPage::new(referrals_page_handle),
             SettingsPage::new(show_blocks_view_handle),
             SettingsPage::new(warp_drive_page_handle),
@@ -1245,7 +1245,7 @@ impl SettingsView {
             SettingsNavItem::Page(SettingsSection::Appearance),
             SettingsNavItem::Page(SettingsSection::Features),
             SettingsNavItem::Page(SettingsSection::Keybindings),
-            SettingsNavItem::Page(SettingsSection::Warpify),
+            SettingsNavItem::Page(SettingsSection::Blackify),
             SettingsNavItem::Page(SettingsSection::Referrals),
             SettingsNavItem::Page(SettingsSection::SharedBlocks),
             SettingsNavItem::Page(SettingsSection::WarpDrive),
@@ -1701,7 +1701,7 @@ impl SettingsView {
         }
     }
 
-    fn handle_warpify_page_event(
+    fn handle_blackify_page_event(
         &mut self,
         event: &SettingsPageEvent,
         ctx: &mut ViewContext<Self>,
@@ -1956,7 +1956,7 @@ impl SettingsView {
 
         #[cfg(feature = "crash_reporting")]
         {
-            crate::crash_reporting::set_tag("warp.settings_page", section.to_string());
+            crate::crash_reporting::set_tag("black.settings_page", section.to_string());
         }
 
         if let Some(settings_page) = self.current_settings_page() {
@@ -1997,7 +1997,7 @@ impl SettingsView {
             SettingsPageViewHandle::About(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::OzCloudAPIKeys(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Privacy(v) => v.as_ref(app).should_render(app),
-            SettingsPageViewHandle::Warpify(v) => v.as_ref(app).should_render(app),
+            SettingsPageViewHandle::Blackify(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Referrals(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::AI(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::CloudEnvironments(v) => v.as_ref(app).should_render(app),
@@ -2633,11 +2633,11 @@ impl TypedActionView for SettingsView {
                     }
                 }
             }
-            SettingsAction::WarpifyPageToggle(warpify_action) => {
-                if let Some(warpify_page) = self.settings_page(SettingsSection::Warpify) {
-                    if let SettingsPageViewHandle::Warpify(view) = &warpify_page.view_handle {
+            SettingsAction::BlackifyPageToggle(blackify_action) => {
+                if let Some(blackify_page) = self.settings_page(SettingsSection::Blackify) {
+                    if let SettingsPageViewHandle::Blackify(view) = &blackify_page.view_handle {
                         view.update(ctx, |view, ctx| {
-                            view.handle_action(warpify_action, ctx);
+                            view.handle_action(blackify_action, ctx);
                         })
                     }
                 }
@@ -2681,16 +2681,16 @@ impl BackingView for SettingsView {
     fn handle_pane_header_overflow_menu_action(
         &mut self,
         action: &Self::PaneHeaderOverflowMenuAction,
-        ctx: &mut warpui::ViewContext<Self>,
+        ctx: &mut black_ui::ViewContext<Self>,
     ) {
         self.handle_action(action, ctx)
     }
 
-    fn close(&mut self, ctx: &mut warpui::ViewContext<Self>) {
+    fn close(&mut self, ctx: &mut black_ui::ViewContext<Self>) {
         ctx.emit(SettingsViewEvent::Pane(PaneEvent::Close));
     }
 
-    fn focus_contents(&mut self, ctx: &mut warpui::ViewContext<Self>) {
+    fn focus_contents(&mut self, ctx: &mut black_ui::ViewContext<Self>) {
         ctx.focus(&self.search_editor)
     }
 

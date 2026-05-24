@@ -1,9 +1,9 @@
 use std::fmt::Display;
 
-use warpui::elements::MouseStateHandle;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::Element;
+use black_ui::elements::MouseStateHandle;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::Element;
 
 use super::teams_page::TeamsPageAction;
 use crate::cloud_object::model::persistence::CloudModel;

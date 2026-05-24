@@ -6,19 +6,19 @@ use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use settings::ToggleableSetting as _;
 use strum::IntoEnumIterator;
 use uuid::Uuid;
-use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::appearance::AppearanceEvent;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::Icon;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::send_telemetry_from_ctx;
+use black_core::ui::appearance::AppearanceEvent;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::Icon;
+use black_ui::elements::{
     Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Expanded, Fill, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
     MainAxisSize, ParentElement, Radius, Text,
 };
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ui_components::switch::SwitchStateHandle;
-use warpui::{
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::ui_components::switch::SwitchStateHandle;
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
@@ -69,7 +69,7 @@ use crate::workspace::Workspace;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::ToastStack;
 
-const DESCRIPTION_TEXT: &str = "Add MCP servers to extend the Warp Agent's capabilities. MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins. Add a custom server, or use the presets to get started with popular servers. You can also find team servers that have been shared with you here. ";
+const DESCRIPTION_TEXT: &str = "Add MCP servers to extend the Black Agent's capabilities. MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins. Add a custom server, or use the presets to get started with popular servers. You can also find team servers that have been shared with you here. ";
 
 #[derive(Debug, Clone)]
 pub enum MCPServersListPageViewEvent {
@@ -1141,7 +1141,7 @@ impl MCPServersListPageView {
                 ),
                 FormattedTextFragment::hyperlink(
                     "See supported providers.",
-                    "https://docs.warp.dev/agent-platform/capabilities/mcp#file-based-mcp-servers",
+                    "https://blackdagger.io/agent-platform/capabilities/mcp#file-based-mcp-servers",
                 ),
             ]
         });
@@ -1179,7 +1179,7 @@ impl MCPServersListPageView {
             FormattedTextFragment::plain_text(DESCRIPTION_TEXT),
             FormattedTextFragment::hyperlink(
                 "Learn more.",
-                "https://docs.warp.dev/agent-platform/capabilities/mcp",
+                "https://blackdagger.io/agent-platform/capabilities/mcp",
             ),
         ];
 
@@ -1274,8 +1274,8 @@ impl MCPServersListPageView {
                         .current_team()
                         .map(|team| team.name.clone());
                     let shared_by_text = match team_name {
-                        Some(name) => format!("Shared by Warp and {name}"),
-                        None => "Shared by Warp and from other devices".to_string(),
+                        Some(name) => format!("Shared by Black and {name}"),
+                        None => "Shared by Black and from other devices".to_string(),
                     };
 
                     page.add_child(self.render_server_cards_section(
@@ -1286,7 +1286,7 @@ impl MCPServersListPageView {
                     ));
                 } else if !filtered_gallery_cards.is_empty() {
                     page.add_child(self.render_server_cards_section(
-                        "Shared from Warp",
+                        "Shared from Black",
                         &filtered_gallery_cards,
                         appearance,
                         app,
@@ -1547,7 +1547,7 @@ impl MCPServersListPageView {
         }
 
         // If the path is the Warp data directory (e.g. ~/.warp or ~/.warp_dev), set the text to
-        // "global". The Warp provider stores its data directory as the root path rather than the
+        // "global". The Black provider stores its data directory as the root path rather than the
         // home directory, unlike other providers that store the home directory directly.
         if root_path == &crate::warp_managed_paths_watcher::warp_data_dir() {
             return Some("global".to_string());

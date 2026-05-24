@@ -38,22 +38,22 @@ strum.workspace = true
 strum_macros.workspace = true
 sum_tree.workspace = true
 version-compare.workspace = true
-warp = { workspace = true, features = ["integration_tests"] }
-warp_cli = { workspace = true, features = ["integration_tests"] }
-warp_core.workspace = true
+black = { workspace = true, features = ["integration_tests"] }
+black_cli = { workspace = true, features = ["integration_tests"] }
+black_core.workspace = true
 warp-command-signatures.workspace = true
 warp_multi_agent_api.workspace = true
 warp-workflows.workspace = true
-warpui.workspace = true
-warpui_extras = { workspace = true, features = [
+black_ui.workspace = true
+black_ui_extras = { workspace = true, features = [
     "user_preferences-file",
 ] }
 whoami = "1.5.2"
 
 [dev-dependencies]
 command = { workspace = true, features = ["test-util"] }
-warpui = { workspace = true, features = ["integration_tests"] }
-warp_core = { workspace = true, features = ["test-util"] }
+black_ui = { workspace = true, features = ["integration_tests"] }
+black_core = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 app-installation-detection.workspace = true
@@ -65,5 +65,5 @@ nix = { workspace = true, features = ["user", "signal"] }
 
 [features]
 run_on_linux = []
-drag_tabs_to_windows = ["warp/drag_tabs_to_windows"]
+drag_tabs_to_windows = ["black/drag_tabs_to_windows"]
 default = ["run_on_linux"]

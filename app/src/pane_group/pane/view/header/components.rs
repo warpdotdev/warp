@@ -1,13 +1,13 @@
-use warp_core::ui::icons::ICON_DIMENSIONS;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{
+use black_core::ui::icons::ICON_DIMENSIONS;
+use black_core::ui::theme::Fill;
+use black_ui::elements::{
     Align, Clipped, ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, SavePosition, Shrinkable,
     Text,
 };
-use warpui::text_layout::ClipConfig;
-use warpui::ui_components::components::UiComponent;
-use warpui::Element;
+use black_ui::text_layout::ClipConfig;
+use black_ui::ui_components::components::UiComponent;
+use black_ui::Element;
 
 use super::super::header_content::HeaderRenderContext;
 use super::{ActionPayload, PaneHeaderAction};

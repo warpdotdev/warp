@@ -5,7 +5,7 @@ use async_channel::Sender;
 use futures::Future;
 use repo_metadata::repository::RepositorySubscriber;
 use repo_metadata::{Repository, RepositoryUpdate};
-use warpui::ModelContext;
+use black_ui::ModelContext;
 
 /// Messages sent from [`RepositorySubscriber`]s to [`SkillManager`].
 pub enum SkillRepositoryMessage {

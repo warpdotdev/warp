@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use warpui::elements::{MouseStateHandle, Text};
-use warpui::Element;
+use black_ui::elements::{MouseStateHandle, Text};
+use black_ui::Element;
 
 use super::{
     render_inline_block_list_banner, InlineBannerButtonState, InlineBannerCloseButton,
@@ -12,7 +12,7 @@ use crate::appearance::Appearance;
 use crate::terminal::view::inline_banner::InlineBannerIcon;
 use crate::terminal::view::{InlineBannerId, TerminalAction};
 
-const SPEEDBUMP_HEADER: &str = "Optimize Warp for this codebase?";
+const SPEEDBUMP_HEADER: &str = "Optimize Black for this codebase?";
 const SPEEDBUMP_TEXT: &str = "Unlock smarter, more consistent responses by letting the Agent understand your codebase and generate rules for it. You can also do this at any point by running /init";
 /// Text for the button that allows execution
 const ALLOW_BUTTON_TEXT: &str = "Optimize";

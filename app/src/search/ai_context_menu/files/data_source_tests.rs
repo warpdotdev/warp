@@ -6,11 +6,11 @@ use std::sync::Arc;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::RepoMetadataModel;
 use tempfile::tempdir;
-use warpui::elements::Empty;
-use warpui::platform::WindowStyle;
-use warpui::r#async::block_on;
-use warpui::windowing::WindowManager;
-use warpui::{App, AppContext, Element, Entity, SingletonEntity, TypedActionView, View};
+use black_ui::elements::Empty;
+use black_ui::platform::WindowStyle;
+use black_ui::r#async::block_on;
+use black_ui::windowing::WindowManager;
+use black_ui::{App, AppContext, Element, Entity, SingletonEntity, TypedActionView, View};
 
 use crate::search::ai_context_menu::files::data_source::{
     file_data_source_for_pwd, fuzzy_match_files, FileSnapshot,

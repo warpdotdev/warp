@@ -8,8 +8,8 @@ use async_channel::Sender;
 use async_trait::async_trait;
 use futures_util::stream::AbortHandle;
 use itertools::Itertools;
-use warpui::r#async::Timer;
-use warpui::{Action, AppContext, Entity, ModelContext};
+use black_ui::r#async::Timer;
+use black_ui::{Action, AppContext, Entity, ModelContext};
 
 use super::data_source::{Query, QueryResult};
 use crate::debounce::debounce;

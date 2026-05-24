@@ -1,5 +1,5 @@
 // The code in this file is adapted from the alacritty_terminal crate under the
-// Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
+// Apache license; see: crates/black_terminal/src/model/LICENSE-ALACRITTY.
 
 //! Grid resize and reflow.
 
@@ -220,7 +220,7 @@ impl GridStorage {
                     // We rotate the cursor down to ensure that the wrapping subtraction logic below with
                     // `num_wrapped` can be completed correctly, without saturating at (0, 0) (which previously
                     // occurred, if the cursor isn't adjusted). Ultimately, the user-facing impact resulted in an
-                    // incorrect cursor position comparison leading to incorrect block heights, since Warp
+                    // incorrect cursor position comparison leading to incorrect block heights, since Black
                     // erroneously believed a command to be "empty" (when comparing the "end of prompt" cursor
                     // to the "end of the command").
                     // Note that last_row is a wrapped line in this case (see `should_reflow` and `debug_assert` above)!

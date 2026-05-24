@@ -1,18 +1,18 @@
-use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::new_scrollable::{ScrollableAppearance, SingleAxisConfig};
-use warpui::elements::{
+use black_core::ui::theme::color::internal_colors;
+use black_ui::elements::new_scrollable::{ScrollableAppearance, SingleAxisConfig};
+use black_ui::elements::{
     Border, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Dismiss, DispatchEventResult, Element, Empty, EventHandler,
     Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
     NewScrollable, Padding, ParentElement, Radius, SavePosition, ScrollTarget,
     ScrollToPositionMode, ScrollbarWidth, Shrinkable,
 };
-use warpui::fonts::Weight;
-use warpui::keymap::macros::id;
-use warpui::keymap::FixedBinding;
-use warpui::platform::Cursor;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+use black_ui::fonts::Weight;
+use black_ui::keymap::macros::id;
+use black_ui::keymap::FixedBinding;
+use black_ui::platform::Cursor;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use crate::ai::agent_management::notifications::item::NotificationFilter;
 use crate::ai::agent_management::notifications::item_rendering::{
@@ -56,7 +56,7 @@ impl Entity for NotificationMailboxView {
 
 #[derive(Debug, Clone)]
 pub enum NotificationMailboxViewEvent {
-    NavigateToTerminal { terminal_view_id: warpui::EntityId },
+    NavigateToTerminal { terminal_view_id: black_ui::EntityId },
     Dismissed,
 }
 

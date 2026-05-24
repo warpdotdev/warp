@@ -68,8 +68,8 @@ fn get_binary_confidence_color(is_correct: bool, is_low_confidence: bool) -> Str
 }
 #[cfg(feature = "onnx")]
 use input_classifier::{OnnxClassifier, OnnxModel};
-use warp_completer::ParsedTokensSnapshot;
-use warp_completer::util::parse_current_commands_and_tokens;
+use black_completer::ParsedTokensSnapshot;
+use black_completer::util::parse_current_commands_and_tokens;
 #[cfg(feature = "onnx")]
 fn default_onnx_model() -> Option<OnnxModel> {
     cfg_if::cfg_if! {

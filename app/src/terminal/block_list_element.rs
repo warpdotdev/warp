@@ -12,27 +12,27 @@ use parking_lot::FairMutex;
 use pathfinder_color::ColorU;
 use session_sharing_protocol::common::{ParticipantId, Selection};
 use vec1::Vec1;
-use warp_core::semantic_selection::SemanticSelection;
-use warp_core::ui::builder::UiBuilder;
-use warp_core::ui::theme::AnsiColorIdentifier;
-use warp_util::user_input::UserInput;
-use warpui::elements::new_scrollable::{NewScrollableElement, ScrollableAxis};
-use warpui::elements::{
+use black_core::semantic_selection::SemanticSelection;
+use black_core::ui::builder::UiBuilder;
+use black_core::ui::theme::AnsiColorIdentifier;
+use black_util::user_input::UserInput;
+use black_ui::elements::new_scrollable::{NewScrollableElement, ScrollableAxis};
+use black_ui::elements::{
     Axis, Border, ChildAnchor, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
     Hoverable, Icon, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
     ParentOffsetBounds, Point, Radius, SavePosition, ScrollData, ScrollableElement, Stack, Text,
     ZIndex,
 };
-use warpui::event::{DispatchedEvent, KeyState, ModifiersState};
-use warpui::fonts::{FamilyId, Properties, Weight};
-use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::{vec2f, Vector2F};
-use warpui::platform::keyboard::KeyCode;
-use warpui::platform::Cursor;
-use warpui::text::SelectionType;
-use warpui::ui_components::components::UiComponent;
-use warpui::units::{IntoLines, IntoPixels, Lines, Pixels};
-use warpui::{
+use black_ui::event::{DispatchedEvent, KeyState, ModifiersState};
+use black_ui::fonts::{FamilyId, Properties, Weight};
+use black_ui::geometry::rect::RectF;
+use black_ui::geometry::vector::{vec2f, Vector2F};
+use black_ui::platform::keyboard::KeyCode;
+use black_ui::platform::Cursor;
+use black_ui::text::SelectionType;
+use black_ui::ui_components::components::UiComponent;
+use black_ui::units::{IntoLines, IntoPixels, Lines, Pixels};
+use black_ui::{
     AfterLayoutContext, AppContext, ClipBounds, Element, EntityId, Event, EventContext,
     LayoutContext, ModelHandle, PaintContext, SingletonEntity as _, SizeConstraint,
 };
@@ -58,7 +58,7 @@ use super::view::{
     BlocklistAIRenderContext, InlineBannerId, RichContentMetadata, SeparatorId,
     SharedSessionBanners, TerminalEditor, TerminalViewRenderContext, BLOCK_BANNER_HEIGHT,
 };
-use super::warpify::render::{draw_flag_pole, render_subshell_flag};
+use super::blackify::render::{draw_flag_pole, render_subshell_flag};
 use super::{heights_approx_eq, TerminalModel, HEIGHT_FUDGE_FACTOR_LINES};
 use crate::ai::blocklist::agent_view::{agent_view_bg_fill, AgentViewState};
 use crate::ai::blocklist::{ai_brand_color, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT};
@@ -86,7 +86,7 @@ use crate::terminal::model::selection::{SelectAction, SelectionPoint};
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::view::TerminalAction;
-use crate::terminal::warpify::SubshellSource;
+use crate::terminal::blackify::SubshellSource;
 use crate::terminal::{grid_renderer, SizeInfo};
 use crate::themes::theme::{Fill, WarpTheme};
 use crate::ui_components::{self, icons as UIIcon};
@@ -711,7 +711,7 @@ pub struct BlockListElement {
     use_ligature_rendering: bool,
 
     /// When true, suppresses cursor rendering for CLI agents when rich input is open. For agents that draw their own cursor (SHOW_CURSOR off),
-    /// the cursor cell is skipped. For agents that let Warp draw the cursor
+    /// the cursor cell is skipped. For agents that let Black draw the cursor
     /// (SHOW_CURSOR on), the `draw_cursor` call and cursor contrast colouring
     /// are suppressed instead.
     hide_cursor_cell: bool,
@@ -1276,7 +1276,7 @@ impl BlockListElement {
     }
 
     /// We only want to process control characters here and return `false` for everything else.
-    /// That way, we'll receive a `warpui::Event::TypedCharacters` event for printable characters.
+    /// That way, we'll receive a `black_ui::Event::TypedCharacters` event for printable characters.
     /// So `TerminalAction::KeyDown` is for control characters only while
     /// `TerminalAction::TypedCharacters` is for characters that can go into the editor.
     fn key_down(&mut self, chars: &str, ctx: &mut EventContext) -> bool {
@@ -1570,7 +1570,7 @@ impl BlockListElement {
                                 .is_some_and(|block| block.is_active_and_long_running());
 
                             // On mobile, request soft keyboard so users can input
-                            if warpui::platform::is_mobile_device() && on_long_running_block {
+                            if black_ui::platform::is_mobile_device() && on_long_running_block {
                                 ctx.request_soft_keyboard();
                             }
 
@@ -2546,7 +2546,7 @@ impl BlockListElement {
                 }
             }
 
-            // If Warp prompt (non-PS1) is being used, the command is drawn below the prompt,
+            // If Black prompt (non-PS1) is being used, the command is drawn below the prompt,
             // hence we account for the prompt's vertical offset.
             let prompt_vertical_offset_px = if !block.honor_ps1() {
                 cell_size_height
@@ -2704,9 +2704,9 @@ impl BlockListElement {
             if block.is_active_and_long_running()
             // Check if the "hide cursor" escape sequence is present.
             && block.is_mode_set(TermMode::SHOW_CURSOR)
-            // Don't draw the Warp cursor when rich input is hiding
+            // Don't draw the Black cursor when rich input is hiding
             // the CLI agent's cursor cell — agents like OpenCode and Codex
-            // rely on Warp's cursor, so we suppress it here too.
+            // rely on Black's cursor, so we suppress it here too.
             && !block_grid_params.grid_render_params.hide_cursor_cell
             {
                 block.output_grid().draw_cursor(
@@ -4115,7 +4115,7 @@ impl Element for BlockListElement {
                                 None => 0.,
                             },
                             // Otherwise, we need to measure the prompt grid(s). Grids
-                            // aren't warpui::Elements, and hence their width isn't
+                            // aren't black_ui::Elements, and hence their width isn't
                             // straightforward to measure. We'll use the column index of the
                             // right-most non-empty cell as a proxy for width.
                             None => {

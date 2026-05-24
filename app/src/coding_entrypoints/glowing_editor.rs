@@ -1,14 +1,14 @@
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::Icon;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::Icon;
+use black_ui::elements::{
     Align, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow, Flex,
     MainAxisAlignment, ParentElement as _, Radius, Shrinkable,
 };
-use warpui::fonts::Weight;
-use warpui::ui_components::components::{BorderStyle, Coords, UiComponent as _, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::Weight;
+use black_ui::ui_components::components::{BorderStyle, Coords, UiComponent as _, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, FocusContext, SingletonEntity as _, TypedActionView, View,
     ViewContext, ViewHandle,
 };

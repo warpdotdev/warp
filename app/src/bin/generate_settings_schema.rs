@@ -1,4 +1,4 @@
-//! Generates a JSON Schema file describing Warp's user-facing settings.
+//! Generates a JSON Schema file describing Black's user-facing settings.
 //!
 //! Usage:
 //! ```
@@ -11,7 +11,7 @@ use std::io::Write;
 use schemars::SchemaGenerator;
 use serde_json::{Map, Value};
 use settings::schema::SettingSchemaEntry;
-use warp_core::features::{FeatureFlag, DEBUG_FLAGS, DOGFOOD_FLAGS, PREVIEW_FLAGS, RELEASE_FLAGS};
+use black_core::features::{FeatureFlag, DEBUG_FLAGS, DOGFOOD_FLAGS, PREVIEW_FLAGS, RELEASE_FLAGS};
 
 /// Ensures all `inventory::submit!` registrations from the app crate's
 /// dependency tree are linked into the binary.
@@ -21,7 +21,7 @@ use warp_core::features::{FeatureFlag, DEBUG_FLAGS, DOGFOOD_FLAGS, PREVIEW_FLAGS
 /// not include most of the app's object files and the `inventory`
 /// submissions they contain.
 fn ensure_settings_linked() {
-    let _ = std::hint::black_box(warp::settings::RESTORE_SESSION);
+    let _ = std::hint::black_box(black::settings::RESTORE_SESSION);
 }
 
 /// Recursively strips `minimum`, `maximum`, and `format` from integer and
@@ -229,12 +229,12 @@ fn main() {
     );
     root.insert(
         "title".to_string(),
-        Value::String("Warp Settings".to_string()),
+        Value::String("Black Settings".to_string()),
     );
     root.insert(
         "description".to_string(),
         Value::String(format!(
-            "JSON Schema for Warp settings ({channel} channel, {entry_count} settings)"
+            "JSON Schema for Black settings ({channel} channel, {entry_count} settings)"
         )),
     );
     root.insert("type".to_string(), Value::String("object".to_string()));

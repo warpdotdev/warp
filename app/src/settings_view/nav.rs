@@ -1,7 +1,7 @@
 use pathfinder_geometry::vector::vec2f;
-use warpui::elements::{Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle};
-use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::elements::{Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle};
+use black_ui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 
 use super::settings_page::{MatchData, NAV_ITEM_LEFT_MARGIN};
 use super::SettingsSection;

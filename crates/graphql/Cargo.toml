@@ -1,7 +1,7 @@
 [package]
 authors = ["Warp Team <dev@warp.dev>"]
 edition = "2021"
-name = "warp_graphql"
+name = "black_graphql"
 version = "0.1.0"
 publish.workspace = true
 license.workspace = true
@@ -21,8 +21,8 @@ persistence.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 thiserror.workspace = true
-warp_core.workspace = true
-warp_graphql_schema.workspace = true
+black_core.workspace = true
+black_graphql_schema.workspace = true
 websocket = {path = "../websocket"}
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]

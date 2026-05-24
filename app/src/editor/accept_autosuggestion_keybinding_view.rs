@@ -2,17 +2,17 @@
 //! shown inline in the input.
 use lazy_static::lazy_static;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{
+use black_core::ui::theme::Fill;
+use black_ui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Element, Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
     ParentOffsetBounds, Radius, Stack, DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
-use warpui::keymap::Keystroke;
-use warpui::platform::Cursor;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::ui_components::keyboard_shortcut::KeyboardShortcut;
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+use black_ui::keymap::Keystroke;
+use black_ui::platform::Cursor;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::ui_components::keyboard_shortcut::KeyboardShortcut;
+use black_ui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use super::EditorElement;
 use crate::appearance::Appearance;

@@ -1,16 +1,16 @@
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::Fill;
+use black_ui::elements::{
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Expanded, Flex, Hoverable,
     MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
 };
-use warpui::fonts::Properties;
-use warpui::fonts::Weight::Bold;
-use warpui::platform::Cursor;
-use warpui::text_layout::ClipConfig;
-use warpui::{AppContext, Element, EntityId, EventContext, SingletonEntity};
+use black_ui::fonts::Properties;
+use black_ui::fonts::Weight::Bold;
+use black_ui::platform::Cursor;
+use black_ui::text_layout::ClipConfig;
+use black_ui::{AppContext, Element, EntityId, EventContext, SingletonEntity};
 
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};

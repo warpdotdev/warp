@@ -40,9 +40,9 @@ pub use model_selector::{
 pub use progress::{render_progress, ProgressProps, ProgressStep, ProgressStepState};
 pub use progress_ui_state::AmbientAgentProgressUIState;
 pub use tips::{get_cloud_mode_tips, CloudModeTip};
-use warp_core::features::FeatureFlag;
-use warpui::geometry::vector::Vector2F;
-use warpui::{AppContext, ModelHandle, ViewHandle, WindowId};
+use black_core::features::FeatureFlag;
+use black_ui::geometry::vector::Vector2F;
+use black_ui::{AppContext, ModelHandle, ViewHandle, WindowId};
 
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewState};
 use crate::pane_group::TerminalViewResources;

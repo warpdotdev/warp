@@ -3,16 +3,16 @@
 
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
-use warp_core::ui::color::coloru_with_opacity;
-use warp_core::ui::theme::Fill;
-use warp_core::ui::Icon;
-use warpui::elements::{
+use black_core::ui::color::coloru_with_opacity;
+use black_core::ui::theme::Fill;
+use black_core::ui::Icon;
+use black_ui::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, Flex, Highlight, ParentElement, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::scene::{CornerRadius, Radius};
-use warpui::text_layout::ClipConfig;
-use warpui::{AppContext, Element, SingletonEntity};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::scene::{CornerRadius, Radius};
+use black_ui::text_layout::ClipConfig;
+use black_ui::{AppContext, Element, SingletonEntity};
 
 use crate::ai::agent::AIAgentExchangeId;
 use crate::appearance::Appearance;
@@ -135,7 +135,7 @@ impl SearchItem for RewindSearchItem {
         }
 
         // Line 2: Code changes summary
-        let secondary_text_color: warpui::color::ColorU =
+        let secondary_text_color: black_ui::color::ColorU =
             theme.sub_text_color(theme.surface_1()).into();
 
         let changes_element: Box<dyn Element> = if self.is_current {

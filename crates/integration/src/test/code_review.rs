@@ -3,18 +3,18 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use command::blocking::Command;
-use warp::features::FeatureFlag;
-use warp::integration_testing::code_review::{
+use black::features::FeatureFlag;
+use black::integration_testing::code_review::{
     assert_code_review_anchor, assert_code_review_line_text, assert_code_review_loaded,
     assert_code_review_scroll_region, scroll_code_review_to_deleted_range,
     scroll_code_review_to_footer, scroll_code_review_to_header, scroll_code_review_to_line,
     ScrollRegion,
 };
-use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
-use warp::integration_testing::view_getters::{single_terminal_view_for_tab, workspace_view};
-use warp::workspace::WorkspaceAction;
-use warpui::integration::{AssertionCallback, TestStep};
-use warpui::{async_assert, App, WindowId};
+use black::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
+use black::integration_testing::view_getters::{single_terminal_view_for_tab, workspace_view};
+use black::workspace::WorkspaceAction;
+use black_ui::integration::{AssertionCallback, TestStep};
+use black_ui::{async_assert, App, WindowId};
 
 use super::new_builder;
 use crate::util::write_all_rc_files_for_test;
@@ -157,7 +157,7 @@ fn code_review_scroll_anchor_builder(
                 .expect("should write initial committed contents");
             run_git(&repo_dir, &["init", "-b", "main"]);
             run_git(&repo_dir, &["config", "user.email", "test@example.com"]);
-            run_git(&repo_dir, &["config", "user.name", "Warp Integration Test"]);
+            run_git(&repo_dir, &["config", "user.name", "Black Integration Test"]);
             run_git(&repo_dir, &["add", TEST_FILE_NAME]);
             run_git(&repo_dir, &["commit", "-m", "Initial commit"]);
 
@@ -315,7 +315,7 @@ pub fn test_code_review_scroll_preserved_deleted_range() -> Builder {
                 .expect("should write initial committed contents");
             run_git(&repo_dir, &["init", "-b", "main"]);
             run_git(&repo_dir, &["config", "user.email", "test@example.com"]);
-            run_git(&repo_dir, &["config", "user.name", "Warp Integration Test"]);
+            run_git(&repo_dir, &["config", "user.name", "Black Integration Test"]);
             run_git(&repo_dir, &["add", TEST_FILE_NAME]);
             run_git(&repo_dir, &["commit", "-m", "Initial commit"]);
 
@@ -395,7 +395,7 @@ pub fn test_code_review_scroll_preserved_header_range() -> Builder {
                 .expect("should write initial committed contents");
             run_git(&repo_dir, &["init", "-b", "main"]);
             run_git(&repo_dir, &["config", "user.email", "test@example.com"]);
-            run_git(&repo_dir, &["config", "user.name", "Warp Integration Test"]);
+            run_git(&repo_dir, &["config", "user.name", "Black Integration Test"]);
             run_git(&repo_dir, &["add", TEST_FILE_NAME]);
             run_git(&repo_dir, &["commit", "-m", "Initial commit"]);
 
@@ -488,7 +488,7 @@ pub fn test_code_review_scroll_preserved_footer_range() -> Builder {
 
             run_git(&repo_dir, &["init", "-b", "main"]);
             run_git(&repo_dir, &["config", "user.email", "test@example.com"]);
-            run_git(&repo_dir, &["config", "user.name", "Warp Integration Test"]);
+            run_git(&repo_dir, &["config", "user.name", "Black Integration Test"]);
             run_git(&repo_dir, &["add", FIRST_FILE_NAME, SECOND_FILE_NAME]);
             run_git(&repo_dir, &["commit", "-m", "Initial commit"]);
 
@@ -582,7 +582,7 @@ pub fn test_code_review_scroll_preserved_second_file() -> Builder {
 
             run_git(&repo_dir, &["init", "-b", "main"]);
             run_git(&repo_dir, &["config", "user.email", "test@example.com"]);
-            run_git(&repo_dir, &["config", "user.name", "Warp Integration Test"]);
+            run_git(&repo_dir, &["config", "user.name", "Black Integration Test"]);
             run_git(&repo_dir, &["add", FIRST_FILE_NAME, SECOND_FILE_NAME]);
             run_git(&repo_dir, &["commit", "-m", "Initial commit"]);
 

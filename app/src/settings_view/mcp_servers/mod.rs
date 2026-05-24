@@ -16,7 +16,7 @@ pub mod update_modal;
 // TODO(aeybel/pei): In the future, to enable the re-use of ServerCard for different types of servers (eg. MCP, LSP, etc.)
 // We should make ServerCardView and its corresponding events and actions generic
 // And define different types of server card ids (eg. MCPId, LSPId) that can be used with this generic card
-// As an example of what this might look like: https://github.com/warpdotdev/warp-internal/pull/19291/files
+// As an example of what this might look like: https://github.com/blackdagger/black-internal/pull/19291/files
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ServerCardItemId {
     TemplatableMCP(Uuid),

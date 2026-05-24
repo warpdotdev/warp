@@ -324,7 +324,7 @@ fn resolve_key(key: &Key, hkl: HKL) -> Result<ResolvedKey, String> {
 /// Resolves a character to either a VK (with optional shift) or a Unicode code-unit dispatch,
 /// using the given keyboard layout handle (typically the foreground window's). This matches what
 /// a real keystroke would look like to the target application when the user is running a
-/// different input language / IME than Warp's thread.
+/// different input language / IME than Black's thread.
 ///
 /// Falls back to `ResolvedKey::Unicode` when the layout would require ctrl/alt to produce the
 /// character (e.g., AltGr-accessed keys on several European layouts) so `Key::Char` remains
@@ -429,7 +429,7 @@ fn is_shift_vk(vk: u16) -> bool {
 /// Returns the keyboard layout (`HKL`) currently active on the foreground window's thread,
 /// falling back to the calling thread's layout (HKL `0`) if there is no foreground window. Using
 /// the foreground window's HKL makes `Key::Char` resolution match what a real keystroke would
-/// produce for the target application, which matters in multilingual setups where Warp's thread
+/// produce for the target application, which matters in multilingual setups where Black's thread
 /// layout can differ from the app's.
 fn foreground_keyboard_layout() -> HKL {
     // SAFETY: `GetForegroundWindow` has no preconditions; returns null if no foreground window.

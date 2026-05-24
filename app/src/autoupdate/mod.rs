@@ -15,13 +15,13 @@ use ::channel_versions::{ParsedVersion, VersionInfo};
 use anyhow::{anyhow, Context as _, Result};
 use chrono::{DateTime, FixedOffset, NaiveDate};
 use rand::Rng as _;
-use warp_core::execution_mode::AppExecutionMode;
-use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
-use warpui::platform::TerminationMode;
-use warpui::r#async::Timer;
-use warpui::windowing::state::ApplicationStage;
-use warpui::windowing::{self, WindowManager};
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity, ViewContext};
+use black_core::execution_mode::AppExecutionMode;
+use black_ui::accessibility::{AccessibilityContent, WarpA11yRole};
+use black_ui::platform::TerminationMode;
+use black_ui::r#async::Timer;
+use black_ui::windowing::state::ApplicationStage;
+use black_ui::windowing::{self, WindowManager};
+use black_ui::{AppContext, Entity, ModelContext, SingletonEntity, ViewContext};
 
 pub use self::changelog::get_current_changelog;
 use self::channel_versions::fetch_channel_versions;
@@ -65,7 +65,7 @@ pub enum AutoupdateStage {
     },
     /// A relaunch was initiated to use the new version, but failed.
     UnableToLaunchNewVersion { new_version: VersionInfo },
-    /// A new version was installed, but Warp hasn't restarted yet.
+    /// A new version was installed, but Black hasn't restarted yet.
     ///
     /// This state is only used on macOS, where the update isn't fully applied until right before
     /// restarting.
@@ -737,7 +737,7 @@ pub fn accessibility_content(
         // Found autoupdate
         (RequestType::ManualCheck, Ok(UpdateReady::Yes { .. })) => Some(AccessibilityContent::new(
             "Update available.",
-            "Use the command palette to install and relaunch Warp",
+            "Use the command palette to install and relaunch Black",
             WarpA11yRole::HelpRole,
         )),
         // Any non-successful autoupdate check
@@ -857,7 +857,7 @@ pub fn apply_update(
     }
 }
 
-/// Relaunch Warp to apply an update.
+/// Relaunch Black to apply an update.
 ///
 /// This will:
 /// 1. Perform any last update steps.

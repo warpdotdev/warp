@@ -1,17 +1,17 @@
 use settings::Setting;
-use warp_core::report_if_error;
-use warp_core::ui::Icon;
-use warpui::elements::{
+use black_core::report_if_error;
+use black_core::ui::Icon;
+use black_ui::elements::{
     ChildAnchor, Container, CrossAxisAlignment, Flex, MainAxisSize, OffsetPositioning,
     ParentAnchor, ParentElement, ParentOffsetBounds, Shrinkable, Stack, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::keymap::Keystroke;
-use warpui::prelude::{vec2f, ConstrainedBox, Cursor, Empty, Hoverable, MouseStateHandle};
-use warpui::scene::{Border, CornerRadius, Radius};
-use warpui::ui_components::checkbox::Checkbox;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::keymap::Keystroke;
+use black_ui::prelude::{vec2f, ConstrainedBox, Cursor, Empty, Hoverable, MouseStateHandle};
+use black_ui::scene::{Border, CornerRadius, Radius};
+use black_ui::ui_components::checkbox::Checkbox;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 

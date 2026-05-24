@@ -5,8 +5,8 @@ use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::{DirectoryWatcher, RepoMetadataModel, RepositoryUpdate, TargetFile};
 use tempfile::TempDir;
-use warp_util::standardized_path::StandardizedPath;
-use warpui::App;
+use black_util::standardized_path::StandardizedPath;
+use black_ui::App;
 
 use super::SkillWatcher;
 use crate::ai::skills::skill_manager::SkillWatcherEvent;

@@ -7,13 +7,13 @@ use anyhow::Result;
 use async_recursion::async_recursion;
 use futures_lite::StreamExt;
 use pathfinder_color::ColorU;
-use warpui::elements::{
+use black_ui::elements::{
     Align, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
     MouseStateHandle, ParentElement, Radius, Shrinkable,
 };
-use warpui::platform::Cursor;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::Element;
+use black_ui::platform::Cursor;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::Element;
 
 use super::modal_body::{ImportModalBodyAction, BASE_INDENT, IMPORT_FONT_SIZE, INDENT_MARGIN};
 use crate::appearance::Appearance;

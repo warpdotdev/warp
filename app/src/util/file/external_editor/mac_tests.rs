@@ -1,11 +1,11 @@
 use super::is_warp_bundle;
 
 #[test]
-fn is_warp_bundle_recognises_warp_channels() {
-    assert!(is_warp_bundle("dev.warp.Warp"));
-    assert!(is_warp_bundle("dev.warp.WarpDev"));
-    assert!(is_warp_bundle("dev.warp.WarpPreview"));
-    assert!(is_warp_bundle("dev.warp.WarpOss"));
+fn is_warp_bundle_recognises_black_channels() {
+    assert!(is_warp_bundle("io.blackdagger.Black"));
+    assert!(is_warp_bundle("io.blackdagger.BlackDev"));
+    assert!(is_warp_bundle("io.blackdagger.BlackPreview"));
+    assert!(is_warp_bundle("io.blackdagger.BlackOss"));
 }
 
 #[test]

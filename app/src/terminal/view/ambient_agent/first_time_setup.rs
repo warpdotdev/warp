@@ -4,15 +4,15 @@
 //! and need to create an environment.
 
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
-use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
-use warpui::elements::new_scrollable::SingleAxisConfig;
-use warpui::elements::{
+use black_core::ui::theme::{AnsiColorIdentifier, Fill};
+use black_ui::elements::new_scrollable::SingleAxisConfig;
+use black_ui::elements::{
     Align, Border, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Element, Expanded, Flex, FormattedTextElement, HighlightedHyperlink,
     NewScrollable, ParentElement, Radius, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use crate::ai::ambient_agents::github_auth_url::{AuthSource, GithubAuthRedirectTarget};
 use crate::ai::request_usage_model::AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD;
@@ -161,7 +161,7 @@ impl FirstTimeCloudAgentSetupView {
             ),
             FormattedTextFragment::hyperlink(
                 "Visit docs",
-                "https://docs.warp.dev/agent-platform/cloud-agents/overview",
+                "https://blackdagger.io/agent-platform/cloud-agents/overview",
             ),
         ];
         column.add_child(
@@ -352,7 +352,7 @@ impl View for FirstTimeCloudAgentSetupView {
             },
             appearance.theme().nonactive_ui_detail().into(),
             appearance.theme().active_ui_detail().into(),
-            warpui::elements::Fill::None,
+            black_ui::elements::Fill::None,
         )
         .finish();
 

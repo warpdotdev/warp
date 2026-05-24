@@ -22,9 +22,9 @@
 //! framework's render path (which needs `Appearance` / theme singletons
 //! that aren't relevant to the handler's correctness).
 
-use warp_core::ui::appearance::Appearance;
-use warpui::platform::WindowStyle;
-use warpui::App;
+use black_core::ui::appearance::Appearance;
+use black_ui::platform::WindowStyle;
+use black_ui::App;
 
 use super::*;
 
@@ -49,7 +49,7 @@ fn initialize_test_app(app: &mut App) {
     app.add_singleton_model(|_| Appearance::mock());
 }
 
-fn build_view(_ctx: &mut warpui::ViewContext<ConversationUsageView>) -> ConversationUsageView {
+fn build_view(_ctx: &mut black_ui::ViewContext<ConversationUsageView>) -> ConversationUsageView {
     ConversationUsageView::new(
         placeholder_usage_info(),
         DisplayMode::Footer,

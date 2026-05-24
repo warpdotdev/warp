@@ -4,8 +4,8 @@
 #![deny(clippy::assertions_on_constants)]
 
 use warp_multi_agent_api as api;
-use warpui::integration::{AssertionCallback, AssertionOutcome};
-use warpui::{integration_assert, EntityId, SingletonEntity};
+use black_ui::integration::{AssertionCallback, AssertionOutcome};
+use black_ui::{integration_assert, EntityId, SingletonEntity};
 
 use super::llm_judge::{LLMJudge, LLMJudgeConfig};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use warp_core::features::FeatureFlag;
-use warpui::{AppContext, ModelContext, SingletonEntity};
+use black_core::features::FeatureFlag;
+use black_ui::{AppContext, ModelContext, SingletonEntity};
 
 use super::{
     input_context_for_request, parse_context_attachments, BlocklistAIController,

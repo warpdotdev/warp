@@ -1,9 +1,9 @@
-use warpui::elements::{
+use black_ui::elements::{
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable, MouseStateHandle,
     ParentElement, Radius, Text,
 };
-use warpui::platform::Cursor;
-use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+use black_ui::platform::Cursor;
+use black_ui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use crate::appearance::Appearance;
 use crate::ui_components::icons::Icon;

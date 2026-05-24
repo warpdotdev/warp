@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use chrono::{DateTime, Local, TimeZone as _};
 use serde::{Deserialize, Serialize};
 use serde_bytes_repr::{ByteFmtDeserializer, ByteFmtSerializer};
-use warp_core::command::ExitCode;
+use black_core::command::ExitCode;
 
 use super::AgentInteractionMetadata;
 use crate::ai::agent::conversation::AIConversationId;
@@ -191,7 +191,7 @@ pub struct SerializedBlock {
 
     pub shell_host: Option<ShellHost>,
 
-    /// JSON-serialized representation of the Warp prompt snapshot (Context Chips). Note that this
+    /// JSON-serialized representation of the Black prompt snapshot (Context Chips). Note that this
     /// is different from PS1 and RPROMPT1
     pub prompt_snapshot: Option<String>,
 

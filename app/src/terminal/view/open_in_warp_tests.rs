@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use warp_completer::completer::TopLevelCommandCaseSensitivity;
-use warp_util::path::EscapeChar;
+use black_completer::completer::TopLevelCommandCaseSensitivity;
+use black_util::path::EscapeChar;
 
 use super::{check_openable_in_warp, OpenablePath};
 use crate::util::openable_file_type::OpenableFileType;
@@ -40,7 +40,7 @@ fn test_any_text_file_type_supported() {
         TopLevelCommandCaseSensitivity::CaseInsensitive,
         EscapeChar::Backslash,
     ));
-    // .svg is a non-markdown file, and we allow opening it in the Warp Editor (as a "code" file).
+    // .svg is a non-markdown file, and we allow opening it in the Black Editor (as a "code" file).
     assert_eq!(
         result,
         Some(OpenablePath {

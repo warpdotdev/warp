@@ -1,5 +1,5 @@
-use warpui::elements::MouseStateHandle;
-use warpui::Element;
+use black_ui::elements::MouseStateHandle;
+use black_ui::Element;
 
 use super::{
     render_inline_block_list_banner, InlineBannerButtonState, InlineBannerContent,
@@ -39,12 +39,12 @@ pub fn render_inline_ssh_wrapper_banner(
     let (style, title) = if state.wrapper_enabled {
         (
             InlineBannerStyle::LowPriority,
-            "Warp SSH wrapper enabled".to_string(),
+            "Black SSH wrapper enabled".to_string(),
         )
     } else {
         (
             InlineBannerStyle::VeryLowPriority,
-            "Warp SSH wrapper disabled".to_string(),
+            "Black SSH wrapper disabled".to_string(),
         )
     };
     let buttons = vec![

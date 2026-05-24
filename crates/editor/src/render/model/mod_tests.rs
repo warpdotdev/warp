@@ -6,14 +6,14 @@ use rangemap::RangeSet;
 use string_offset::CharOffset;
 use sum_tree::SumTree;
 use vec1::{Vec1, vec1};
-use warpui::assets::asset_cache::AssetSource;
-use warpui::color::ColorU;
-use warpui::elements::ListIndentLevel;
-use warpui::fonts::FamilyId;
-use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::vec2f;
-use warpui::text_layout::TextFrame;
-use warpui::units::{IntoPixels, Pixels};
+use black_ui::assets::asset_cache::AssetSource;
+use black_ui::color::ColorU;
+use black_ui::elements::ListIndentLevel;
+use black_ui::fonts::FamilyId;
+use black_ui::geometry::rect::RectF;
+use black_ui::geometry::vector::vec2f;
+use black_ui::text_layout::TextFrame;
+use black_ui::units::{IntoPixels, Pixels};
 
 use super::debug::Describe;
 use super::test_utils::{layout_paragraph, layout_paragraphs};
@@ -923,7 +923,7 @@ fn test_multiselect_autoscroll_bounding_box() {
     );
 }
 
-// 18:09:15 [INFO] [warp_editor::render::model] Initial tree:
+// 18:09:15 [INFO] [black_editor::render::model] Initial tree:
 // -------- 0.00px / 0 characters --------
 // Hidden (3067 characters, 87 lines, 20.00px tall)
 // -------- 20.00px / 3067 characters --------
@@ -1026,7 +1026,7 @@ fn test_dedupe_hidden_ranges_logged_tree_is_unchanged() {
     assert_eq!(initial, resulting);
 }
 
-// 18:09:14 [INFO] [warp_editor::render::model] Initial tree:
+// 18:09:14 [INFO] [black_editor::render::model] Initial tree:
 // -------- 0.00px / 0 characters --------
 // Hidden (3066 characters, 87 lines, 20.00px tall)
 // -------- 20.00px / 3067 characters --------
@@ -1151,17 +1151,17 @@ fn make_test_cell_layout() -> CellLayout {
         line_char_ranges: vec![CharOffset::from(0)..CharOffset::from(3)],
         line_widths: vec![30.0],
         line_caret_positions: vec![vec![
-            warpui::text_layout::CaretPosition {
+            black_ui::text_layout::CaretPosition {
                 position_in_line: 0.0,
                 start_offset: 0,
                 last_offset: 0,
             },
-            warpui::text_layout::CaretPosition {
+            black_ui::text_layout::CaretPosition {
                 position_in_line: 10.0,
                 start_offset: 1,
                 last_offset: 1,
             },
-            warpui::text_layout::CaretPosition {
+            black_ui::text_layout::CaretPosition {
                 position_in_line: 20.0,
                 start_offset: 2,
                 last_offset: 2,

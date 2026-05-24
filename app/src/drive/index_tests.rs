@@ -1,7 +1,7 @@
-use warp_core::ui::appearance::Appearance;
-use warp_server_client::cloud_object::ServerPermissions;
-use warpui::platform::WindowStyle;
-use warpui::{AddSingletonModel, App, SingletonEntity, TypedActionView, ViewHandle};
+use black_core::ui::appearance::Appearance;
+use black_server_client::cloud_object::ServerPermissions;
+use black_ui::platform::WindowStyle;
+use black_ui::{AddSingletonModel, App, SingletonEntity, TypedActionView, ViewHandle};
 
 use super::{DriveIndex, DriveIndexAction};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
@@ -102,7 +102,7 @@ fn create_notebook(app: &mut App) -> SyncId {
 fn set_object_in_error(app: &mut App, cloud_object_type_and_id: &CloudObjectTypeAndId) {
     CloudModel::handle(app).update(
         app,
-        |cloud_model, _ctx: &mut warpui::ModelContext<'_, CloudModel>| {
+        |cloud_model, _ctx: &mut black_ui::ModelContext<'_, CloudModel>| {
             if let Some(object) = cloud_model.get_mut_by_uid(&cloud_object_type_and_id.uid()) {
                 object.set_pending_content_changes_status(CloudObjectSyncStatus::Errored);
             }

@@ -1,11 +1,11 @@
 use pathfinder_color::ColorU;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::{
+use black_core::ui::theme::color::internal_colors;
+use black_ui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Icon, MainAxisSize,
     ParentElement, Radius, Shrinkable,
 };
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::Element;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::Element;
 
 use crate::appearance::Appearance;
 use crate::themes::theme::Fill;

@@ -1,5 +1,5 @@
 [package]
-name = "warp_editor"
+name = "black_editor"
 authors = ["Warp Team <dev@warp.dev>"]
 version = "0.1.0"
 edition = "2024"
@@ -46,9 +46,9 @@ sum_tree.workspace = true
 thiserror.workspace = true
 pathfinder_color = "0.5.0"
 vec1.workspace = true
-warpui.workspace = true
-warp_core.workspace = true
-warp_util.workspace = true
+black_ui.workspace = true
+black_core.workspace = true
+black_util.workspace = true
 rayon.workspace = true
 line-ending.workspace = true
 vim.workspace = true
@@ -59,8 +59,8 @@ rust-embed.workspace = true
 enclose = "1.1.8"
 env_logger.workspace = true
 sum_tree = { workspace = true, features = ["test-util"] }
-warp_core = { workspace = true, features = ["test-util"] }
-warpui = { workspace = true, features = ["test-util"] }
+black_core = { workspace = true, features = ["test-util"] }
+black_ui = { workspace = true, features = ["test-util"] }
 criterion = { version = "0.5.1", features = ["html_reports"] }
 
 [[bench]]

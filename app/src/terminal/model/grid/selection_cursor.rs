@@ -1,4 +1,4 @@
-use warp_terminal::model::grid::CellType;
+use black_terminal::model::grid::CellType;
 
 use super::grid_handler::GridHandler;
 use super::{CursorDirection, CursorState, Dimensions as _};

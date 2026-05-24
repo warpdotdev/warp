@@ -1,9 +1,9 @@
 use itertools::Itertools;
-use warp_core::context_flag::ContextFlag;
-use warpui::elements::{Clipped, Container, Flex, MouseStateHandle, ParentElement};
-use warpui::fonts::Weight;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{AppContext, Element, SingletonEntity};
+use black_core::context_flag::ContextFlag;
+use black_ui::elements::{Clipped, Container, Flex, MouseStateHandle, ParentElement};
+use black_ui::fonts::Weight;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{AppContext, Element, SingletonEntity};
 
 use super::{WarpDriveItem, WarpDriveItemId};
 use crate::appearance::Appearance;

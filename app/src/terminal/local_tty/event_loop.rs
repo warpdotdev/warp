@@ -1,5 +1,5 @@
 // The code in this file is adapted from the alacritty_terminal crate under the
-// Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
+// Apache license; see: crates/black_terminal/src/model/LICENSE-ALACRITTY.
 
 //! The main event loop which performs I/O on the pseudoterminal.
 
@@ -316,7 +316,7 @@ where
 
     pub fn spawn(mut self) -> JoinHandle<()> {
         #[cfg(test)]
-        let feature_flag_overrides = warp_core::features::get_overrides();
+        let feature_flag_overrides = black_core::features::get_overrides();
 
         thread::Builder::new()
             .name("PTY reader".into())
@@ -324,7 +324,7 @@ where
                 // Make sure any overridden feature flags are also overridden
                 // in the PTY reader thread.
                 #[cfg(test)]
-                warp_core::features::set_overrides(feature_flag_overrides);
+                black_core::features::set_overrides(feature_flag_overrides);
 
                 let mut state = State::default();
                 let mut buf = [0u8; READ_BUFFER_SIZE];

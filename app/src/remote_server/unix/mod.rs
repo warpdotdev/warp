@@ -16,8 +16,8 @@ pub(super) mod proxy;
 use std::fs::Permissions;
 use std::os::unix::fs::PermissionsExt;
 
-use warpui::r#async::executor;
-use warpui::SingletonEntity;
+use black_ui::r#async::executor;
+use black_ui::SingletonEntity;
 
 use super::server_model::{ConnectionId, ServerModel};
 use crate::{send_telemetry_from_app_ctx, TelemetryEvent};
@@ -46,7 +46,7 @@ pub fn run_daemon(identity_key: String) -> anyhow::Result<()> {
 /// Called from `launch()` inside the headless AppBuilder callback.
 /// Binds the Unix domain socket, writes the PID file, spawns the
 /// accept loop, and registers the `ServerModel` singleton.
-pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
+pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut black_ui::AppContext) {
     let socket_path = proxy::socket_path(identity_key);
     let pid_path = proxy::pid_path(identity_key);
 
@@ -83,7 +83,7 @@ pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
     // The flush sends directly to Rudderstack using a baked-in write
     // key — no user auth token is required.
     let timing_data =
-        warp_core::interval_timer::IntervalTimer::handle(ctx).update(ctx, |timer, _| {
+        black_core::interval_timer::IntervalTimer::handle(ctx).update(ctx, |timer, _| {
             timer.mark_interval_end("DAEMON_SOCKET_BOUND");
             timer.compute_stats()
         });
@@ -149,7 +149,7 @@ pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
 pub(super) async fn handle_daemon_connection(
     conn_id: ConnectionId,
     stream: async_io::Async<std::os::unix::net::UnixStream>,
-    spawner: warpui::ModelSpawner<ServerModel>,
+    spawner: black_ui::ModelSpawner<ServerModel>,
     exec: std::sync::Arc<executor::Background>,
 ) {
     use futures::io::{AsyncWriteExt, BufReader, BufWriter};

@@ -13,9 +13,9 @@ use anyhow::{anyhow, ensure, Result};
 use itertools::Itertools;
 use session_sharing_protocol::common::SessionId;
 use url::Url;
-use warpui::notification::UserNotification;
-use warpui::platform::TerminationMode;
-use warpui::{AppContext, EntityId, SingletonEntity as _, TypedActionView, ViewHandle, WindowId};
+use black_ui::notification::UserNotification;
+use black_ui::platform::TerminationMode;
+use black_ui::{AppContext, EntityId, SingletonEntity as _, TypedActionView, ViewHandle, WindowId};
 
 use self::docker::open_docker_container;
 use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
@@ -1087,7 +1087,7 @@ impl Action {
             | Self::AutoHandoffToCloud { .. } => W::default(),
             Self::NewTab => W::ShowPrimaryWindow(WindowActivationFallbackBehavior::Notify {
                 title: "New tab created".to_owned(),
-                description: "Go to Warp to see your new tab.".to_owned(),
+                description: "Go to Black to see your new tab.".to_owned(),
             }),
             Self::NewWindow => W::Nothing,
         }
@@ -1173,7 +1173,7 @@ fn get_primary_window(
 enum OpenFileAction {
     /// Open in the markdown notebook pane.
     Notebook,
-    /// Open in Warp's code/text editor pane.
+    /// Open in Black's code/text editor pane.
     Editor,
     /// Open a session at the parent directory and queue the file as the pending command,
     /// or just open a session at the directory path if `path` is a directory.
@@ -1233,7 +1233,7 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
             use crate::util::file::external_editor::EditorSettings;
             use crate::util::openable_file_type::resolve_file_target_to_open_in_warp;
 
-            // Open text/code files in Warp's code editor, respecting the user's layout preference.
+            // Open text/code files in Black's code editor, respecting the user's layout preference.
             let editor_settings = EditorSettings::as_ref(ctx);
             let target = resolve_file_target_to_open_in_warp(&path, editor_settings, None);
 

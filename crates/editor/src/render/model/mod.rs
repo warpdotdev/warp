@@ -19,25 +19,25 @@ use string_offset::{CharOffset, impl_offset};
 use sum_tree::{SeekBias, SumTree};
 use vec1::Vec1;
 use vim::vim::{MotionType, VimMode};
-use warp_core::channel::ChannelState;
-use warp_core::ui::Icon;
-use warp_core::ui::theme::Fill as ThemeFill;
-use warpui::assets::asset_cache::AssetSource;
-use warpui::color::ColorU;
-use warpui::elements::{
+use black_core::channel::ChannelState;
+use black_core::ui::Icon;
+use black_core::ui::theme::Fill as ThemeFill;
+use black_ui::assets::asset_cache::AssetSource;
+use black_ui::color::ColorU;
+use black_ui::elements::{
     Border, Fill, ListIndentLevel, ListNumbering, Margin, MouseStateHandle, Padding, ScrollData,
 };
-use warpui::fonts::{FamilyId, Properties, Weight};
-use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::{Vector2F, vec2f};
-use warpui::platform::LineStyle;
-use warpui::text_layout::{CaretPosition, LayoutCache, Line, TextFrame};
-use warpui::text_selection_utils::{
+use black_ui::fonts::{FamilyId, Properties, Weight};
+use black_ui::geometry::rect::RectF;
+use black_ui::geometry::vector::{Vector2F, vec2f};
+use black_ui::platform::LineStyle;
+use black_ui::text_layout::{CaretPosition, LayoutCache, Line, TextFrame};
+use black_ui::text_selection_utils::{
     NewlineTickParams, calculate_tick_width, create_newline_tick_rect,
     selection_crosses_newline_offset_based,
 };
-use warpui::units::{IntoPixels, Pixels};
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
+use black_ui::units::{IntoPixels, Pixels};
+use black_ui::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
 
 use self::location::WrapDirection;
 pub use self::location::{HitTestOptions, Location};
@@ -648,7 +648,7 @@ impl LineCount {
 }
 
 /// A character offset within a [`TextFrame`]. These offsets count characters in the Rust string
-/// passed to [`warpui::text_layout::LayoutCache::layout_text()`].
+/// passed to [`black_ui::text_layout::LayoutCache::layout_text()`].
 ///
 /// Frame offsets often, but not always, correspond to glyph indices and caret positions. However,
 /// they do not line up 1:1 if a glyph or grapheme contains multiple characters
@@ -4302,7 +4302,7 @@ impl<'a> Positioned<'a, Paragraph> {
                 vec2f(underline_width, UNDERLINE_THICKNESS),
             );
 
-            let dash = warpui::scene::Dash {
+            let dash = black_ui::scene::Dash {
                 dash_length: DASHED_UNDERLINE_DASH_LENGTH,
                 gap_length: DASHED_UNDERLINE_GAP_LENGTH,
                 force_consistent_gap_length: true,
@@ -4311,7 +4311,7 @@ impl<'a> Positioned<'a, Paragraph> {
                 .scene
                 .draw_rect_without_hit_recording(underline_rect)
                 .with_border(
-                    warpui::scene::Border::bottom(UNDERLINE_THICKNESS)
+                    black_ui::scene::Border::bottom(UNDERLINE_THICKNESS)
                         .with_dashed_border(dash)
                         .with_border_color(color),
                 );

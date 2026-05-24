@@ -14,9 +14,9 @@ mod tests {
     use futures::executor::block_on;
     use ignore::gitignore::Gitignore;
     use virtual_fs::{Stub, VirtualFS};
-    use warp_util::standardized_path::StandardizedPath;
-    use warpui::r#async::FutureExt as _;
-    use warpui::App;
+    use black_util::standardized_path::StandardizedPath;
+    use black_ui::r#async::FutureExt as _;
+    use black_ui::App;
 
     use crate::entry::{DirectoryEntry, Entry, FileMetadata};
     use crate::file_tree_store::{FileTreeEntry, FileTreeEntryState, FileTreeState};
@@ -1204,7 +1204,7 @@ Thumbs.db
 
     #[test]
     fn test_canonicalized_path_functionality() {
-        use warp_util::standardized_path::StandardizedPath;
+        use black_util::standardized_path::StandardizedPath;
         VirtualFS::test("canonicalized_path_test", |dirs, mut vfs| {
             let repo_path = dirs.tests();
 
@@ -1273,7 +1273,7 @@ Thumbs.db
 
     #[test]
     fn test_repository_operations_with_standardized_paths() {
-        use warp_util::standardized_path::StandardizedPath;
+        use black_util::standardized_path::StandardizedPath;
 
         VirtualFS::test("repo_canonicalized_test", |dirs, mut vfs| {
             let test_root = dirs.tests();
@@ -1386,7 +1386,7 @@ Thumbs.db
 
     #[test]
     fn test_standardized_path_edge_cases() {
-        use warp_util::standardized_path::StandardizedPath;
+        use black_util::standardized_path::StandardizedPath;
 
         VirtualFS::test("canonicalized_edge_cases", |dirs, mut vfs| {
             let test_root = dirs.tests();

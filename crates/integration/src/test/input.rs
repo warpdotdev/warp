@@ -1,24 +1,24 @@
 use std::time::Duration;
 
-use warp::features::FeatureFlag;
-use warp::integration_testing::clipboard::write_to_clipboard;
-use warp::integration_testing::input::{
+use black::features::FeatureFlag;
+use black::integration_testing::clipboard::write_to_clipboard;
+use black::integration_testing::input::{
     assert_autosuggestion_state, input_contains_string, input_is_empty,
     latest_buffer_operations_are_empty, tab_completions_menu_is_open, AutosuggestionState,
 };
-use warp::integration_testing::step::new_step_with_default_assertions;
-use warp::integration_testing::terminal::util::{
+use black::integration_testing::step::new_step_with_default_assertions;
+use black::integration_testing::terminal::util::{
     current_shell_starter_and_version, ExpectedExitStatus,
 };
-use warp::integration_testing::terminal::{
+use black::integration_testing::terminal::{
     execute_command_for_single_terminal_in_tab, wait_until_bootstrapped_single_pane_for_tab,
 };
-use warp::integration_testing::view_getters::{
+use black::integration_testing::view_getters::{
     single_input_view_for_tab, single_terminal_view_for_tab,
 };
-use warp::terminal::shell::ShellType;
-use warpui::integration::TestStep;
-use warpui::{async_assert_eq, Event};
+use black::terminal::shell::ShellType;
+use black_ui::integration::TestStep;
+use black_ui::{async_assert_eq, Event};
 
 use super::new_builder;
 use crate::Builder;

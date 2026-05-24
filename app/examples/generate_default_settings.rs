@@ -17,9 +17,9 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use settings::schema::SettingSchemaEntry;
-use warp_core::features::{FeatureFlag, DEBUG_FLAGS, DOGFOOD_FLAGS, PREVIEW_FLAGS, RELEASE_FLAGS};
-use warpui_extras::user_preferences::toml_backed::TomlBackedUserPreferences;
-use warpui_extras::user_preferences::UserPreferences as _;
+use black_core::features::{FeatureFlag, DEBUG_FLAGS, DOGFOOD_FLAGS, PREVIEW_FLAGS, RELEASE_FLAGS};
+use black_ui_extras::user_preferences::toml_backed::TomlBackedUserPreferences;
+use black_ui_extras::user_preferences::UserPreferences as _;
 
 /// Ensures all `inventory::submit!` registrations from the app crate's
 /// dependency tree are linked into the binary.
@@ -29,7 +29,7 @@ use warpui_extras::user_preferences::UserPreferences as _;
 /// not include most of the app's object files and the `inventory`
 /// submissions they contain.
 fn ensure_settings_linked() {
-    let _ = std::hint::black_box(warp::settings::RESTORE_SESSION);
+    let _ = std::hint::black_box(black::settings::RESTORE_SESSION);
 }
 
 fn active_flags_for_channel(channel: &str) -> HashSet<FeatureFlag> {

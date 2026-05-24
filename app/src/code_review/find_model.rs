@@ -3,15 +3,15 @@ use std::ops::Range;
 
 use string_offset::CharOffset;
 #[cfg(not(target_family = "wasm"))]
-use warp_core::channel::ChannelState;
-use warp_core::send_telemetry_from_ctx;
+use black_core::channel::ChannelState;
+use black_core::send_telemetry_from_ctx;
 #[cfg(not(target_family = "wasm"))]
-use warp_editor::content::find::SearchConfig;
+use black_editor::content::find::SearchConfig;
 #[cfg(not(target_family = "wasm"))]
-use warp_editor::search::Searcher;
-use warp_editor::search::{RestorableSearchResults, SelectedResult};
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::{AppContext, Entity, EntityId, ModelContext, ViewHandle, WeakViewHandle};
+use black_editor::search::Searcher;
+use black_editor::search::{RestorableSearchResults, SelectedResult};
+use black_ui::r#async::SpawnedFutureHandle;
+use black_ui::{AppContext, Entity, EntityId, ModelContext, ViewHandle, WeakViewHandle};
 
 use crate::code::local_code_editor::LocalCodeEditorView;
 use crate::code_review::code_review_view::CodeReviewView;
@@ -236,7 +236,7 @@ impl CodeReviewFindModel {
         &self,
         editor_id: EntityId,
         ctx: &AppContext,
-    ) -> Option<warpui::ModelHandle<Searcher>> {
+    ) -> Option<black_ui::ModelHandle<Searcher>> {
         let view = self.weak_view_handle.upgrade(ctx);
         if view.is_none() {
             if ChannelState::enable_debug_features() {

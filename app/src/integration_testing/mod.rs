@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use warpui::{App, AssetProvider, View, ViewHandle, WindowId};
+use black_ui::{App, AssetProvider, View, ViewHandle, WindowId};
 
 pub mod agent_mode;
 pub mod assertions;

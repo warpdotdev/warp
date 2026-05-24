@@ -10,7 +10,7 @@ define_settings_group!(SshSettings,
             sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
             private: false,
             storage_key: "EnableSSHWrapper",
-            toml_path: "warpify.ssh.enable_legacy_ssh_wrapper",
+            toml_path: "blackify.ssh.enable_legacy_ssh_wrapper",
             description: "Whether the legacy SSH wrapper is enabled for SSH sessions.",
         },
     ]

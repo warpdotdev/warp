@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use fuzzy_match::FuzzyMatchResult;
-use warpui::{AppContext, Entity, SingletonEntity};
+use black_ui::{AppContext, Entity, SingletonEntity};
 
 use super::search_item::SkillSearchItem;
 use crate::ai::skills::SkillManager;

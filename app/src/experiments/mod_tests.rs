@@ -146,6 +146,11 @@ fn test_from_group_id_errors_if_incorrect_experiment() {
 
 #[test]
 fn test_create_experiment_layer_mappings() {
+    // EXPERIMENT_LAYER_MAPPINGS is a process-global DashMap populated by
+    // experiments::init, which several test harnesses call. Reset it so this
+    // test observes only its own TEST_LAYER insertions regardless of run order.
+    EXPERIMENT_LAYER_MAPPINGS.clear();
+
     let layers = vec![&*TEST_LAYER];
     create_experiment_layer_mappings(&layers);
 

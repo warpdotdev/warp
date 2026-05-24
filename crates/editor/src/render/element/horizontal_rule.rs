@@ -1,6 +1,6 @@
-use warpui::elements::{CornerRadius, Radius};
-use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::{Vector2F, vec2f};
+use black_ui::elements::{CornerRadius, Radius};
+use black_ui::geometry::rect::RectF;
+use black_ui::geometry::vector::{Vector2F, vec2f};
 
 use super::{RenderContext, RenderableBlock};
 use crate::extract_block;
@@ -69,12 +69,12 @@ impl RenderableBlock for HorizontalRule {
     fn layout(
         &mut self,
         _model: &RenderState,
-        _ctx: &mut warpui::LayoutContext,
-        _app: &warpui::AppContext,
+        _ctx: &mut black_ui::LayoutContext,
+        _app: &black_ui::AppContext,
     ) {
     }
 
-    fn paint(&mut self, model: &RenderState, ctx: &mut RenderContext, _app: &warpui::AppContext) {
+    fn paint(&mut self, model: &RenderState, ctx: &mut RenderContext, _app: &black_ui::AppContext) {
         let content = model.content();
         let horizontal_rule = extract_block!(self.viewport_item, content, (block, BlockItem::HorizontalRule(rule)) => block.horizontal_rule(rule));
 

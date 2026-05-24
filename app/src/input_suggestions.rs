@@ -9,13 +9,13 @@ use fuzzy_match::match_indices;
 use itertools::Itertools;
 use pathfinder_geometry::vector::vec2f;
 use warp_command_signatures::IconType;
-use warp_completer::completer::{
+use black_completer::completer::{
     MatchType, PathSeparators, Suggestion, SuggestionResults, SuggestionType,
 };
-use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::AnsiColorIdentifier;
-use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::ui::theme::AnsiColorIdentifier;
+use black_ui::accessibility::{AccessibilityContent, WarpA11yRole};
+use black_ui::elements::{
     Align, AnchorPair, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, DispatchEventResult, DropShadow, Element, Empty, EventHandler, Expanded,
     Flex, Highlight, Hoverable, Icon, MouseStateHandle, OffsetPositioning, OffsetType,
@@ -24,9 +24,9 @@ use warpui::elements::{
     ScrollbarWidth, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
     UniformList, UniformListState, XAxisAnchor, YAxisAnchor,
 };
-use warpui::fonts::{Cache, Properties, Weight};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::{Cache, Properties, Weight};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, WeakViewHandle,
 };
 
@@ -809,7 +809,7 @@ impl InputSuggestions {
                                     Properties::default()
                                         .weight(appearance.monospace_font_weight()),
                                 )
-                                .autosize_text(warp_core::ui::builder::MIN_FONT_SIZE)
+                                .autosize_text(black_core::ui::builder::MIN_FONT_SIZE)
                                 .with_color(main_text);
 
                                 let matches = item.matches.clone();

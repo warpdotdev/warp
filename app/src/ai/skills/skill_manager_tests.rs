@@ -6,10 +6,10 @@ use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::{DirectoryWatcher, RepoMetadataModel};
 use settings::Setting as _;
 use tempfile::TempDir;
-use warp_core::channel::ChannelState;
-use warp_core::features::FeatureFlag;
-use warp_core::ui::icons::Icon;
-use warpui::App;
+use black_core::channel::ChannelState;
+use black_core::features::FeatureFlag;
+use black_core::ui::icons::Icon;
+use black_ui::App;
 use watcher::HomeDirectoryWatcher;
 
 use super::*;
@@ -87,7 +87,7 @@ fn get_skills_for_working_directory_scopes_subdirectory_skills() {
 
         // Register the repo root so get_root_for_path returns Some.
         let canonical_repo =
-            warp_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo)
+            black_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo)
                 .unwrap();
         repo_handle.update(&mut app, |repos, _ctx| {
             repos.insert_test_repo_root(canonical_repo);
@@ -210,7 +210,7 @@ fn get_skills_for_working_directory_name_collision_returns_both() {
 
         // Register the repo root so get_root_for_path returns Some.
         let canonical_repo =
-            warp_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo)
+            black_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo)
                 .unwrap();
         repo_handle.update(&mut app, |repos, _ctx| {
             repos.insert_test_repo_root(canonical_repo);
@@ -306,7 +306,7 @@ fn cloud_environment_skills_always_included() {
         let skill_manager_handle = app.add_singleton_model(SkillManager::new);
 
         let canonical_repo_a =
-            warp_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo_a)
+            black_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo_a)
                 .unwrap();
         repo_handle.update(&mut app, |repos, _ctx| {
             repos.insert_test_repo_root(canonical_repo_a);
@@ -365,7 +365,7 @@ name: test-skill
 description: Test skill with variables
 ---
 
-Run `{{warp_cli_binary_name}}` to connect to {{warp_server_url}}.
+Run `{{black_cli_binary_name}}` to connect to {{black_server_url}}.
 "#,
     )
     .unwrap();
@@ -398,7 +398,7 @@ name: test-skill
 description: Test skill with mixed variables
 ---
 
-Use {{other_var}} and {{warp_cli_binary_name}} together.
+Use {{other_var}} and {{black_cli_binary_name}} together.
 "#,
     )
     .unwrap();
@@ -449,22 +449,22 @@ fn test_build_bundled_skill_context() {
     // At least 5 entries: server_url, cli_binary_name, url_scheme, settings_file_path, keybindings_file_path.
     // settings_schema_path is only present when bundled_resources_dir() returns Some.
     assert!(context.len() >= 5);
-    assert!(context.contains_key("warp_server_url"));
-    assert!(context.contains_key("warp_cli_binary_name"));
-    assert!(context.contains_key("warp_url_scheme"));
+    assert!(context.contains_key("black_server_url"));
+    assert!(context.contains_key("black_cli_binary_name"));
+    assert!(context.contains_key("black_url_scheme"));
     assert!(context.contains_key("settings_file_path"));
     assert!(context.contains_key("keybindings_file_path"));
 
     assert_eq!(
-        context.get("warp_server_url").unwrap(),
+        context.get("black_server_url").unwrap(),
         &ChannelState::server_root_url().to_string()
     );
     assert_eq!(
-        context.get("warp_cli_binary_name").unwrap(),
+        context.get("black_cli_binary_name").unwrap(),
         ChannelState::channel().cli_command_name()
     );
     assert_eq!(
-        context.get("warp_url_scheme").unwrap(),
+        context.get("black_url_scheme").unwrap(),
         ChannelState::url_scheme()
     );
     assert_eq!(
@@ -600,7 +600,7 @@ fn disabling_feedback_bundled_skill_does_not_hide_user_feedback_skill() {
         let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
 
         let canonical_repo =
-            warp_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo)
+            black_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo)
                 .unwrap();
         repo_handle.update(&mut app, |repos, _ctx| {
             repos.insert_test_repo_root(canonical_repo);

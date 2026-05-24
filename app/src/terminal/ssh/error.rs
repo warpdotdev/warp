@@ -1,24 +1,24 @@
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
-use warp_core::channel::ChannelState;
-use warp_core::ui::theme::WarpTheme;
-use warpui::elements::{
+use black_core::channel::ChannelState;
+use black_core::ui::theme::WarpTheme;
+use black_ui::elements::{
     Border, Container, CrossAxisAlignment, Flex, HighlightedHyperlink, Hoverable, Icon,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
 };
-use warpui::keymap::FixedBinding;
-use warpui::platform::Cursor;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::keymap::FixedBinding;
+use black_ui::platform::Cursor;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, BlurContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View,
     ViewContext,
 };
 
 use crate::appearance::Appearance;
 use crate::terminal::model::ansi::WarpificationUnavailableReason;
-use crate::terminal::warpify;
-use crate::terminal::warpify::render::{apply_spacing_styles, build_description_row};
-use crate::terminal::warpify::settings::WarpifySettings;
+use crate::terminal::blackify;
+use crate::terminal::blackify::render::{apply_spacing_styles, build_description_row};
+use crate::terminal::blackify::settings::BlackifySettings;
 use crate::ui_components::icons::Icon as UiIcon;
 
 const TMUX_NOT_INSTALLED_ERROR: &str =
@@ -27,13 +27,13 @@ const UNSUPPORTED_TMUX_VERSION_ERROR: &str =
     "The tmux version available on the remote machine is below 3.0. Please install tmux 3.0 or greater using a different method and try again.";
 const TMUX_FAILED_ERROR: &str =
     "tmux failed to execute on the remote machine. Please re-install tmux and try again.";
-const WARPIFY_TIMEOUT_ERROR: &str = "Warpifying the session hit a timeout.";
+const WARPIFY_TIMEOUT_ERROR: &str = "Blackifying the session hit a timeout.";
 const UNSUPPORTED_SHELL_ERROR: &str =
     "Unsupported shell. Please set bash, zsh, or fish as your default shell and try again.";
 const TMUX_INSTALL_FAILED_ERROR: &str =
     "The tmux install hit an unexpected error. Please install tmux manually and try again.";
 
-const SSH_GITHUB_ISSUE_URL: &str = "https://github.com/warpdotdev/Warp/issues/new?assignees=&labels=Bugs,SSH-tmux&projects=&template=03_ssh_tmux.yml";
+const SSH_GITHUB_ISSUE_URL: &str = "https://blackdagger.io/support";
 
 fn get_ssh_github_issue_url(title: &str) -> String {
     let url = if let Some(version) = ChannelState::app_version() {
@@ -74,7 +74,7 @@ impl WarpificationUnavailableReason {
                 if *is_tmux_install {
                     "tmux Install Timeout"
                 } else {
-                    "SSH Warpify Timeout"
+                    "SSH Blackify Timeout"
                 }
             }
             WarpificationUnavailableReason::UnsupportedShell { .. } => "Unsupported Shell",
@@ -86,13 +86,13 @@ impl WarpificationUnavailableReason {
 #[derive(Debug, Clone)]
 pub enum SshErrorBlockEvent {
     ContinueWithoutWarpification,
-    WarpifyWithoutTmux,
+    BlackifyWithoutTmux,
 }
 
 #[derive(Debug, Clone)]
 pub enum SshErrorBlockAction {
     ContinueWithoutWarpification,
-    WarpifyWithoutTmux,
+    BlackifyWithoutTmux,
     OpenUrl(String),
     AddSshHostToDenylist(String),
     Focus,
@@ -101,21 +101,21 @@ pub enum SshErrorBlockAction {
 pub struct SshErrorBlock {
     error_reason: WarpificationUnavailableReason,
     ssh_host: Option<String>,
-    warpify_without_tmux_button_mouse_state: MouseStateHandle,
+    blackify_without_tmux_button_mouse_state: MouseStateHandle,
     continue_button_mouse_state: MouseStateHandle,
     report_link_highlight_index: HighlightedHyperlink,
-    never_warpify_mouse_state_handle: MouseStateHandle,
+    never_blackify_mouse_state_handle: MouseStateHandle,
     block_mouse_state: MouseStateHandle,
     is_focused: bool,
 }
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings([
         FixedBinding::new(
             "enter",
-            SshErrorBlockAction::WarpifyWithoutTmux,
+            SshErrorBlockAction::BlackifyWithoutTmux,
             id!(SshErrorBlock::ui_name()),
         ),
         FixedBinding::new(
@@ -137,10 +137,10 @@ impl SshErrorBlock {
         Self {
             error_reason,
             ssh_host,
-            warpify_without_tmux_button_mouse_state: Default::default(),
+            blackify_without_tmux_button_mouse_state: Default::default(),
             continue_button_mouse_state: Default::default(),
             report_link_highlight_index: Default::default(),
-            never_warpify_mouse_state_handle: Default::default(),
+            never_blackify_mouse_state_handle: Default::default(),
             block_mouse_state: Default::default(),
             is_focused: false,
         }
@@ -165,8 +165,8 @@ impl SshErrorBlock {
         theme: &WarpTheme,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let header_contents = warpify::render::build_header_row(
-            "Error Warpifying session",
+        let header_contents = blackify::render::build_header_row(
+            "Error Blackifying session",
             Icon::new(UiIcon::AlertTriangle.into(), theme.ui_error_color()),
             theme,
             appearance,
@@ -174,11 +174,11 @@ impl SshErrorBlock {
         .with_margin_right(8.)
         .finish();
 
-        let right_hand_size = warpify::render::render_never_warpify_ssh_link(
+        let right_hand_size = blackify::render::render_never_blackify_ssh_link(
             &self.ssh_host,
             app,
             appearance,
-            self.never_warpify_mouse_state_handle.clone(),
+            self.never_blackify_mouse_state_handle.clone(),
             move |ctx, ssh_host| {
                 ctx.dispatch_typed_action(SshErrorBlockAction::AddSshHostToDenylist(
                     ssh_host.to_owned(),
@@ -196,7 +196,7 @@ impl SshErrorBlock {
             row.add_child(right_hand_size);
         }
 
-        warpify::render::apply_spacing_styles(Container::new(row.finish())).finish()
+        blackify::render::apply_spacing_styles(Container::new(row.finish())).finish()
     }
 }
 
@@ -219,7 +219,7 @@ impl View for SshErrorBlock {
 
         content.add_child(self.render_title_ui(app, theme, appearance));
 
-        content.add_child(warpify::render::description_row(
+        content.add_child(blackify::render::description_row(
             self.error_reason.error_message(),
             theme,
             appearance,
@@ -229,7 +229,7 @@ impl View for SshErrorBlock {
 
         if self.should_show_report_to_warp_button() {
             let report_issue_text = build_description_row(FormattedText::new([FormattedTextLine::Line(vec![
-                    FormattedTextFragment::plain_text("We are actively working on improving the stability of SSH in Warp. Please consider "),
+                    FormattedTextFragment::plain_text("We are actively working on improving the stability of SSH in Black. Please consider "),
                     FormattedTextFragment::hyperlink("filing an issue", get_ssh_github_issue_url(self.error_reason.error_title())),
                     FormattedTextFragment::plain_text(" on GitHub so we can better identify the problem."),
                 ])]),
@@ -248,9 +248,9 @@ impl View for SshErrorBlock {
                     ui_builder
                         .button(
                             ButtonVariant::Accent,
-                            self.warpify_without_tmux_button_mouse_state.clone(),
+                            self.blackify_without_tmux_button_mouse_state.clone(),
                         )
-                        .with_centered_text_label("Warpify without TMUX".into())
+                        .with_centered_text_label("Blackify without TMUX".into())
                         .with_style(UiComponentStyles {
                             font_size: Some(appearance.monospace_font_size()),
                             ..Default::default()
@@ -258,7 +258,7 @@ impl View for SshErrorBlock {
                         .build()
                         .with_cursor(Cursor::PointingHand)
                         .on_click(move |ctx, _, _| {
-                            ctx.dispatch_typed_action(SshErrorBlockAction::WarpifyWithoutTmux)
+                            ctx.dispatch_typed_action(SshErrorBlockAction::BlackifyWithoutTmux)
                         })
                         .finish(),
                 )
@@ -271,7 +271,7 @@ impl View for SshErrorBlock {
                         ButtonVariant::Secondary,
                         self.continue_button_mouse_state.clone(),
                     )
-                    .with_centered_text_label("Continue without Warpification".into())
+                    .with_centered_text_label("Continue without Blackification".into())
                     .with_style(UiComponentStyles {
                         font_size: Some(appearance.monospace_font_size()),
                         ..Default::default()
@@ -323,8 +323,8 @@ impl TypedActionView for SshErrorBlock {
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
-            SshErrorBlockAction::WarpifyWithoutTmux => {
-                ctx.emit(SshErrorBlockEvent::WarpifyWithoutTmux)
+            SshErrorBlockAction::BlackifyWithoutTmux => {
+                ctx.emit(SshErrorBlockEvent::BlackifyWithoutTmux)
             }
             SshErrorBlockAction::ContinueWithoutWarpification => {
                 ctx.emit(SshErrorBlockEvent::ContinueWithoutWarpification)
@@ -333,9 +333,9 @@ impl TypedActionView for SshErrorBlock {
                 ctx.open_url(url);
             }
             SshErrorBlockAction::AddSshHostToDenylist(ssh_host) => {
-                let settings = WarpifySettings::handle(ctx);
-                settings.update(ctx, |warpify, ctx| {
-                    warpify.denylist_ssh_host(ssh_host, ctx);
+                let settings = BlackifySettings::handle(ctx);
+                settings.update(ctx, |blackify, ctx| {
+                    blackify.denylist_ssh_host(ssh_host, ctx);
                 });
                 ctx.emit(SshErrorBlockEvent::ContinueWithoutWarpification);
                 ctx.notify()

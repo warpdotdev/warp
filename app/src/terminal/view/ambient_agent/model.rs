@@ -2,12 +2,12 @@ use std::time::Duration;
 
 use instant::Instant;
 use session_sharing_protocol::common::SessionId;
-use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
-use warp_terminal::model::BlockId;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
-use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
+use black_cli::agent::Harness;
+use black_core::features::FeatureFlag;
+use black_core::send_telemetry_from_ctx;
+use black_terminal::model::BlockId;
+use black_ui::r#async::{SpawnedFutureHandle, Timer};
+use black_ui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::AmbientAgentProgressUIState;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
@@ -271,7 +271,7 @@ impl AmbientAgentViewModel {
             }
         });
 
-        // Validate the default environment once Warp Drive sync completes.
+        // Validate the default environment once Black Drive sync completes.
         // The environment ID may be restored from settings before environments are synced,
         // so we need to validate it once the initial load is complete.
         let initial_load_complete = UpdateManager::as_ref(ctx).initial_load_complete();
@@ -402,7 +402,7 @@ impl AmbientAgentViewModel {
         }
     }
 
-    /// Validates the environment ID after Warp Drive initial load completes.
+    /// Validates the environment ID after Black Drive initial load completes.
     /// If the environment no longer exists, clears the selection.
     fn validate_environment_after_initial_load(&mut self, ctx: &mut ModelContext<Self>) {
         if let Some(id) = &self.environment_id {
@@ -894,7 +894,7 @@ impl AmbientAgentViewModel {
 
     /// Applies the run configuration for an existing shared ambient session.
     ///
-    /// Viewed sessions can join before Warp Drive has loaded the referenced environment object,
+    /// Viewed sessions can join before Black Drive has loaded the referenced environment object,
     /// especially on web. Preserve the server-provided environment ID anyway so the selector does
     /// not fall back to an unrelated default while waiting for the environment object to arrive.
     fn apply_viewed_task_config_snapshot(

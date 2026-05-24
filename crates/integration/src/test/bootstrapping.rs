@@ -2,29 +2,29 @@
 
 use settings::Setting as _;
 use version_compare::Cmp;
-use warp::cmd_or_ctrl_shift;
-use warp::integration_testing::input::{
+use black::cmd_or_ctrl_shift;
+use black::integration_testing::input::{
     input_contains_string, input_editor_is_focused, input_editor_is_not_focused, input_is_empty,
 };
-use warp::integration_testing::step::new_step_with_default_assertions;
-use warp::integration_testing::tab::tab_title_step;
-use warp::integration_testing::terminal::util::{
+use black::integration_testing::step::new_step_with_default_assertions;
+use black::integration_testing::tab::tab_title_step;
+use black::integration_testing::terminal::util::{
     current_shell_starter_and_version, ExpectedExitStatus,
 };
-use warp::integration_testing::terminal::{
+use black::integration_testing::terminal::{
     assert_active_block_command_for_single_terminal_in_tab,
     assert_long_running_block_executing_for_single_terminal_in_tab,
     execute_command_for_single_terminal_in_tab, wait_until_bootstrapped_single_pane_for_tab,
 };
-use warp::integration_testing::view_getters::{
+use black::integration_testing::view_getters::{
     single_input_view_for_tab, single_terminal_view_for_tab,
 };
-use warp::terminal::session_settings::HonorPS1;
-use warp::terminal::shell::{self, ShellType};
-use warp::workspace::Workspace;
-use warpui::clipboard::ClipboardContent;
-use warpui::integration::TestStep;
-use warpui::{async_assert, async_assert_eq, ViewHandle};
+use black::terminal::session_settings::HonorPS1;
+use black::terminal::shell::{self, ShellType};
+use black::workspace::Workspace;
+use black_ui::clipboard::ClipboardContent;
+use black_ui::integration::TestStep;
+use black_ui::{async_assert, async_assert_eq, ViewHandle};
 
 use super::{new_builder, Builder};
 use crate::util::{write_all_rc_files_for_test, write_rc_files_for_test, ShellRcType};
@@ -101,7 +101,7 @@ pub fn test_paste_and_type_characters_before_bootstrap() -> Builder {
                 .add_named_assertion("Validate block contents", assert_active_block_command_for_single_terminal_in_tab("Enter some user input: ", 0))
         )
         .with_step(
-            TestStep::new("Warp input should not start focused, since .rc file is reading user input")
+            TestStep::new("Black input should not start focused, since .rc file is reading user input")
                 .add_assertion(input_editor_is_not_focused(0))
         )
         .with_step(
@@ -125,7 +125,7 @@ pub fn test_paste_and_type_characters_before_bootstrap() -> Builder {
                 .add_assertion(input_editor_is_not_focused(0)),
         )
         .with_step(
-            TestStep::new("Pasted text go into the pty and not warp input")
+            TestStep::new("Pasted text go into the pty and not black input")
                 .with_keystrokes(&[cmd_or_ctrl_shift("v")])
                 .add_named_assertion("Input should be empty", input_is_empty(0))
                 .add_named_assertion("Pasted text should go to pty", |app, window_id| {
@@ -143,7 +143,7 @@ pub fn test_paste_and_type_characters_before_bootstrap() -> Builder {
                 .add_named_assertion("Input should not be focused", input_editor_is_not_focused(0)),
         )
         .with_step(
-            TestStep::new("Typed characters should go to the pty and not warp input")
+            TestStep::new("Typed characters should go to the pty and not black input")
                 .with_typed_characters(&["these are some typed characters"])
                 .add_named_assertion("Input should be empty", input_is_empty(0))
                 .add_named_assertion("Typed characters should go to pty", |app, window_id| {
@@ -197,7 +197,7 @@ pub fn test_paste_and_type_characters_before_bootstrap() -> Builder {
         )
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(
-            new_step_with_default_assertions("Warp input should be focused and keep buffered text")
+            new_step_with_default_assertions("Black input should be focused and keep buffered text")
                 .add_assertion(input_editor_is_focused(0))
                 .add_assertion(input_contains_string(0, "this is the pasted textthese are some typed characters".to_owned()))
         )
@@ -252,7 +252,7 @@ pub fn test_instant_prompt_bootstrap() -> Builder {
 }
 
 /// Ensure this issue doesn't happen again.
-/// https://github.com/warpdotdev/Warp/issues/2636
+/// https://github.com/blackdagger/black/issues/2636
 /// Bootstrapping was failing when PROMPT_COMMAND was an array
 pub fn test_bash_bootstraps_with_prompt_command_array() -> Builder {
     new_builder()

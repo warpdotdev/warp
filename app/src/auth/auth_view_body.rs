@@ -1,19 +1,19 @@
 use anyhow::anyhow;
 use lazy_static::lazy_static;
-use warp_core::features::FeatureFlag;
-use warp_core::ui::appearance::DEFAULT_COMMAND_PALETTE_FONT_SIZE;
-use warp_core::ui::builder::UiBuilder;
-use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
-use warpui::clipboard::ClipboardContent;
-use warpui::color::ColorU;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::ui::appearance::DEFAULT_COMMAND_PALETTE_FONT_SIZE;
+use black_core::ui::builder::UiBuilder;
+use black_ui::accessibility::{AccessibilityContent, WarpA11yRole};
+use black_ui::clipboard::ClipboardContent;
+use black_ui::color::ColorU;
+use black_ui::elements::{
     Align, Border, Container, CornerRadius, CrossAxisAlignment, Dismiss, Fill, Flex,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Stack,
 };
-use warpui::fonts::Weight;
-use warpui::keymap::FixedBinding;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::Weight;
+use black_ui::keymap::FixedBinding;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, UpdateModel, View,
     ViewContext, ViewHandle,
 };
@@ -40,7 +40,7 @@ use crate::themes::theme::Fill as ThemeFill;
 use crate::util::color::{darken, lighten};
 use crate::{report_error, send_telemetry_from_ctx, send_telemetry_sync_from_ctx};
 
-const TOS_URL: &str = "https://www.warp.dev/terms-of-service";
+const TOS_URL: &str = "https://blackdagger.io/terms-of-service";
 
 const COMMON_BODY_UI_FONT_SIZE: f32 = 12.;
 const AUTH_MODAL_GAP: f32 = 16.;
@@ -61,7 +61,7 @@ lazy_static! {
 }
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings([FixedBinding::new(
         "enter",
@@ -328,7 +328,7 @@ impl AuthViewBody {
             Flex::row()
                 .with_child(
                     ui_builder
-                        .span("By continuing, you agree to Warp's ")
+                        .span("By continuing, you agree to Black's ")
                         .with_style(disclaimer_styles)
                         .build()
                         .finish(),
@@ -604,10 +604,10 @@ impl AuthViewBody {
 
         let text = match self.variant {
             AuthViewVariant::RequireLoginCloseable  => {
-                "In order to use Warp’s AI features or collaborate with others, please create an account."
+                "In order to use Black’s AI features or collaborate with others, please create an account."
             }
             AuthViewVariant::HitDriveObjectLimitCloseable => {
-                "In order to create more objects in Warp Drive, please create an account."
+                "In order to create more objects in Black Drive, please create an account."
             }
             AuthViewVariant::ShareRequirementCloseable => {
                 "In order to share, please create an account."
@@ -636,10 +636,10 @@ impl AuthViewBody {
         };
 
         let text = match self.variant {
-            AuthViewVariant::Initial => "Welcome to Warp!",
+            AuthViewVariant::Initial => "Welcome to Black!",
             AuthViewVariant::RequireLoginCloseable
             | AuthViewVariant::HitDriveObjectLimitCloseable
-            | AuthViewVariant::ShareRequirementCloseable => "Sign up for Warp",
+            | AuthViewVariant::ShareRequirementCloseable => "Sign up for Black",
         };
 
         ui_builder
@@ -994,7 +994,7 @@ impl View for AuthViewBody {
 
     fn accessibility_contents(&self, _: &AppContext) -> Option<AccessibilityContent> {
         Some(AccessibilityContent::new(
-            "Welcome to Warp!",
+            "Welcome to Black!",
             "Press enter to open your browser to Sign Up or Sign In.",
             WarpA11yRole::HelpRole,
         ))

@@ -1,4 +1,4 @@
-use warpui::text::point::Point;
+use black_ui::text::point::Point;
 
 use super::super::Buffer;
 

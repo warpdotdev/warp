@@ -7,7 +7,7 @@
 //! Internally, [`Performer`] delegates to finer-grained methods for handling
 //! PTY output implemented by the [`Handler`] trait -- this could be printing to
 //! the terminal, executing actions as a result of CSI or OSC sequences,
-//! executing one of Warp's DCS hooks, etc. [`Handler`] should be implemented by
+//! executing one of Black's DCS hooks, etc. [`Handler`] should be implemented by
 //! an app-level model that updates the terminal's state accordingly.
 mod ansi_c_decoder;
 mod dcs_hooks;
@@ -29,9 +29,9 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::debug;
 use vte::{Params, Parser as VteParser, Perform as VtePerform};
-pub use warp_terminal::model::ansi::control_sequence_parameters::*;
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
-use warpui::color::ColorU;
+pub use black_terminal::model::ansi::control_sequence_parameters::*;
+use black_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use black_ui::color::ColorU;
 
 use super::kitty::parse_kitty_chunk;
 use super::terminal_model::TmuxInstallationState;
@@ -49,7 +49,7 @@ use crate::terminal::model::tmux::parser::{
 use crate::terminal::model::tmux::{format_input, ControlModeEvent};
 use crate::{safe_debug, safe_error};
 
-/// Marks an OSC as one that is sent by Warp logic registered in the shell.
+/// Marks an OSC as one that is sent by Black logic registered in the shell.
 ///
 /// 9277 spells out "WARP" on a dialpad :).
 const WARP_IN_BAND_GENERATOR_OSC_MARKER: &[u8] = b"9277";
@@ -59,7 +59,7 @@ const WARP_IN_BAND_GENERATOR_END_BYTE: &[u8] = b"B";
 /// Marks an OSC that is used for messages containing shell hooks.
 const WARP_OSC_MARKER: &[u8] = b"9278";
 /// Marks an OSC that is used for resetting ConPTY's grid. This is useful for performing a series
-/// of checks ensuring that Warp's grids and ConPTY's grid are in sync.
+/// of checks ensuring that Black's grids and ConPTY's grid are in sync.
 const WARP_RESET_GRID_OSC_MARKER: &[u8] = b"9279";
 
 /// The amount of time a single synchronized update can take from the time the corresponding
@@ -273,7 +273,7 @@ struct TmuxControlModeState {
 /// to issue multiple updates to the state of the PTY without causing a redraw
 /// between each update.
 ///
-/// There are two mechanisms to prevent Warp from falling too behind:
+/// There are two mechanisms to prevent Black from falling too behind:
 /// 1. a timeout. After [`SYNC_OUTPUT_MAX_TIMEOUT`] has elapsed, a redraw will be forced.
 /// 2. a max buffer limit. After [`SYNC_OUTPUT_MAX_BUFFER_SIZE`] bytes have been buffered,
 ///    a redraw will be forced.
@@ -1144,21 +1144,21 @@ where
                 }
             }
 
-            // Received a Warp OSC used for in-band generators.
+            // Received a Black OSC used for in-band generators.
             WARP_IN_BAND_GENERATOR_OSC_MARKER => match params.get(1) {
                 Some(&WARP_IN_BAND_GENERATOR_START_BYTE) => {
-                    log::info!("Received a Warp OSC marker for starting in-band command output.");
+                    log::info!("Received a Black OSC marker for starting in-band command output.");
                     self.handler.start_in_band_command_output();
                 }
                 Some(&WARP_IN_BAND_GENERATOR_END_BYTE) => {
                     self.handler.end_in_band_command_output(true);
                 }
                 _ => {
-                    log::warn!("Received a Warp OSC marker missing required param.");
+                    log::warn!("Received a Black OSC marker missing required param.");
                 }
             },
 
-            // Received a Warp OSC used for shell hooks.
+            // Received a Black OSC used for shell hooks.
             WARP_OSC_MARKER => {
                 let Some(json_marker_char) = params
                     .get(1)
@@ -1176,12 +1176,12 @@ where
                             .get(2)
                             .map(|osc_data| String::from_utf8_lossy(osc_data))
                         else {
-                            log::error!("Warp OSC marker did not contain payload");
+                            log::error!("Black OSC marker did not contain payload");
                             return;
                         };
                         safe_debug!(
-                            safe: ("Received Warp OSC string for shell hook"),
-                            full: ("Received Warp OSC string for shell hook with JSON payload: {:?}", data_str)
+                            safe: ("Received Black OSC string for shell hook"),
+                            full: ("Received Black OSC string for shell hook with JSON payload: {:?}", data_str)
                         );
                         let decoded_data = hex::decode(&*data_str);
                         self.handle_decoded_data(decoded_data);
@@ -1192,12 +1192,12 @@ where
                             .get(2)
                             .map(|osc_data| String::from_utf8_lossy(osc_data))
                         else {
-                            log::error!("Warp OSC marker did not contain payload");
+                            log::error!("Black OSC marker did not contain payload");
                             return;
                         };
                         safe_debug!(
-                            safe: ("Received Warp OSC string for shell hook"),
-                            full: ("Received Warp OSC string for shell hook with JSON payload: {:?}", data_str)
+                            safe: ("Received Black OSC string for shell hook"),
+                            full: ("Received Black OSC string for shell hook with JSON payload: {:?}", data_str)
                         );
                         let hook = serde_json::from_str::<DProtoHook>(&data_str);
                         self.handle_unencoded_hook(hook)
@@ -1210,11 +1210,11 @@ where
             }
 
             WARP_RESET_GRID_OSC_MARKER => {
-                log::debug!("Received Warp OSC string for reset grid");
+                log::debug!("Received Black OSC string for reset grid");
                 self.handler.on_reset_grid();
             }
 
-            // Received a Warp OSC used for completions.
+            // Received a Black OSC used for completions.
             WARP_COMPLETIONS_OSC_MARKER => match params.get(1) {
                 Some(&WARP_COMPLETIONS_START_BYTE) => {
                     let Some(format) = params
@@ -1222,7 +1222,7 @@ where
                         .map(|osc_data| String::from_utf8_lossy(osc_data))
                         .and_then(|format| CompletionsShellData::from_format_type(&format))
                     else {
-                        log::warn!("Warp start completions OSC marker contained invalid format.");
+                        log::warn!("Black start completions OSC marker contained invalid format.");
                         return;
                     };
                     self.handler.start_completions_output(format);
@@ -1237,7 +1237,7 @@ where
                         .map(|osc_data| String::from_utf8_lossy(osc_data))
                     else {
                         log::warn!(
-                            "Warp completions match result OSC marker did not contain payload"
+                            "Black completions match result OSC marker did not contain payload"
                         );
                         return;
                     };
@@ -1261,7 +1261,7 @@ where
                         .map(|osc_data| String::from_utf8_lossy(osc_data))
                     else {
                         log::warn!(
-                            "Warp completions match metadata OSC marker did not contain payload"
+                            "Black completions match metadata OSC marker did not contain payload"
                         );
                         return;
                     };
@@ -1276,7 +1276,7 @@ where
                             );
                         }
                         _ => {
-                            log::warn!("Invalid Warp OSC marker parameter for completions match metadata: {parameter}");
+                            log::warn!("Invalid Black OSC marker parameter for completions match metadata: {parameter}");
                         }
                     }
                 }
@@ -1284,7 +1284,7 @@ where
                     self.handler.send_completions_prompt();
                 }
                 _ => {
-                    log::warn!("Received a Warp OSC completions marker missing required param.");
+                    log::warn!("Received a Black OSC completions marker missing required param.");
                 }
             },
 

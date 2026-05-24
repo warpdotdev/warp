@@ -2,15 +2,15 @@ use std::path::PathBuf;
 
 use futures_util::stream::AbortHandle;
 use pathfinder_geometry::vector::vec2f;
-use warpui::elements::{
+use black_ui::elements::{
     Align, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisAlignment,
     MainAxisSize, MouseStateHandle, ParentElement, Radius,
 };
-use warpui::platform::file_picker::FilePickerError;
-use warpui::platform::Cursor;
-use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::platform::file_picker::FilePickerError;
+use black_ui::platform::Cursor;
+use black_ui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
@@ -35,7 +35,7 @@ pub(super) const INDENT_MARGIN: f32 = 22.;
 pub(super) const BASE_INDENT: f32 = 30.;
 
 const FILE_TYPE_DOCS_URL: &str =
-    "https://docs.warp.dev/knowledge-and-collaboration/warp-drive#import-and-export";
+    "https://blackdagger.io/knowledge-and-collaboration/warp-drive#import-and-export";
 const SUPPORTED_FILE_TYPE_TEXT: &str = "md, yaml, yml";
 
 #[cfg(test)]

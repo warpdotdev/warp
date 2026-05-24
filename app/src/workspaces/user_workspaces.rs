@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use regex::Regex;
-use warp_core::features::FeatureFlag;
-use warp_core::settings::{ChangeEventReason, Setting};
-use warp_graphql::workspace::FeatureModelChoice;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity, Tracked};
+use black_core::features::FeatureFlag;
+use black_core::settings::{ChangeEventReason, Setting};
+use black_graphql::workspace::FeatureModelChoice;
+use black_ui::{AppContext, Entity, ModelContext, SingletonEntity, Tracked};
 
 use super::team::{DiscoverableTeam, MembershipRole, Team};
 #[cfg(test)]
@@ -113,7 +113,7 @@ pub struct WorkspacesMetadataResponse {
 // independent queries.
 pub struct WorkspacesMetadataWithPricing {
     pub metadata: WorkspacesMetadataResponse,
-    pub pricing_info: Option<warp_graphql::billing::PricingInfo>,
+    pub pricing_info: Option<black_graphql::billing::PricingInfo>,
 }
 
 pub struct CreateTeamResponse {
@@ -395,7 +395,7 @@ impl UserWorkspaces {
 
     /// Returns `true` if the current team's enterprise status allows AI features that have an
     /// enterprise gate. Non-enterprise teams always pass; enterprise teams pass only if they
-    /// are on the Warp Plan or the build is dogfood (both our internal Warp team and dogfood
+    /// are on the Black Plan or the build is dogfood (both our internal Warp team and dogfood
     /// team are billed as enterprise).
     pub fn ai_allowed_for_current_team(&self) -> bool {
         !self
@@ -492,7 +492,7 @@ impl UserWorkspaces {
     }
     /// Whether custom inference endpoints are enabled for the current user.
     /// Anonymous or logged-out users are not allowed to use custom inference.
-    /// Enterprise workspaces require the enterprise custom inference flag, Warp Plan, or dogfood.
+    /// Enterprise workspaces require the enterprise custom inference flag, Black Plan, or dogfood.
     pub fn is_custom_inference_enabled(&self, app: &AppContext) -> bool {
         if AuthStateProvider::as_ref(app)
             .get()

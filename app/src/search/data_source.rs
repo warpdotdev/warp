@@ -7,9 +7,9 @@ use lazy_static::lazy_static;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::Fill;
-use warpui::{Action, AppContext, Element, Entity, ModelHandle};
+use black_core::features::FeatureFlag;
+use black_core::ui::theme::Fill;
+use black_ui::{Action, AppContext, Element, Entity, ModelHandle};
 
 use super::item::SearchItem;
 use super::mixer::{AsyncDataSource, BoxFuture, DataSourceRunErrorWrapper};
@@ -179,7 +179,7 @@ pub enum QueryFilter {
     /// Filter results for launch configurations.
     LaunchConfigurations,
 
-    /// Filter for objects in Warp Drive
+    /// Filter for objects in Black Drive
     Drive,
 
     /// Filter results for environment variables.
@@ -311,7 +311,7 @@ impl QueryFilter {
             QueryFilter::Tabs => "tabs",
             QueryFilter::Conversations => "conversations",
             QueryFilter::LaunchConfigurations => "launch configurations",
-            QueryFilter::Drive => "Warp Drive",
+            QueryFilter::Drive => "Black Drive",
             QueryFilter::EnvironmentVariables => "environment variables",
             QueryFilter::PromptHistory => "prompt history",
             QueryFilter::Files => "files",
@@ -348,7 +348,7 @@ impl QueryFilter {
             QueryFilter::Tabs => Some("bundled/svg/terminal-input.svg"),
             QueryFilter::Conversations => Some("bundled/svg/conversation.svg"),
             QueryFilter::LaunchConfigurations => Some("bundled/svg/navigation.svg"),
-            QueryFilter::Drive => Some("bundled/svg/warp-drive.svg"),
+            QueryFilter::Drive => Some("bundled/svg/black-drive.svg"),
             QueryFilter::EnvironmentVariables => Some("bundled/svg/env-var-collection.svg"),
             QueryFilter::AgentModeWorkflows | QueryFilter::PromptHistory => {
                 Some(Icon::Prompt.into())

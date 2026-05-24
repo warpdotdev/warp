@@ -18,9 +18,9 @@ use ai::skills::{
 };
 use command::blocking::Command;
 use command::r#async::Command as AsyncCommand;
-use warp_cli::skill::SkillSpec;
-use warp_util::local_or_remote_path::LocalOrRemotePath;
-use warpui::{AppContext, SingletonEntity as _};
+use black_cli::skill::SkillSpec;
+use black_util::local_or_remote_path::LocalOrRemotePath;
+use black_ui::{AppContext, SingletonEntity as _};
 
 use super::SkillManager;
 use crate::warp_managed_paths_watcher::warp_managed_skill_dirs;

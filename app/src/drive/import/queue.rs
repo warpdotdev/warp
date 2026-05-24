@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 use super::nodes::{self, FileId};
 use crate::cloud_object::model::persistence::CloudModel;

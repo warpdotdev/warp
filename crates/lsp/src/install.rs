@@ -60,7 +60,7 @@ async fn fetch_latest_release_from_github(
         // GitHub API recommends specifying these parameters in the header.
         // See: https://docs.github.com/en/rest/using-the-rest-api/getting-started-with-the-rest-api#user-agent
         .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "warp-terminal")
+        .header("User-Agent", "black-terminal")
         .send()
         .await
         .context("Failed to fetch latest release from GitHub")?;
@@ -198,7 +198,7 @@ pub async fn install_from_github(
 
     // Create the destination directory: {data_dir}/{server_name}/{version}
     // If it already exists, remove it first to ensure a clean installation
-    let install_dir = warp_core::paths::data_dir()
+    let install_dir = black_core::paths::data_dir()
         .join(server_name)
         .join(&metadata.version);
     if install_dir.exists() {

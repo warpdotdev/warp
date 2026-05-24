@@ -9,15 +9,15 @@ use std::time::Duration;
 
 use futures::channel::oneshot;
 use session_sharing_protocol::common::{Role, SessionId};
-use warp_cli::share::{ShareAccessLevel, ShareRequest, ShareSubject};
-use warp_completer::completer::CommandOutput;
-use warp_core::command::ExitCode;
-use warp_core::features::FeatureFlag;
-use warp_terminal::model::grid::Dimensions;
-use warp_util::path::ShellFamily;
-use warp_util::sync::Condition;
-use warpui::r#async::FutureExt;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity as _, ViewHandle};
+use black_cli::share::{ShareAccessLevel, ShareRequest, ShareSubject};
+use black_completer::completer::CommandOutput;
+use black_core::command::ExitCode;
+use black_core::features::FeatureFlag;
+use black_terminal::model::grid::Dimensions;
+use black_util::path::ShellFamily;
+use black_util::sync::Condition;
+use black_ui::r#async::FutureExt;
+use black_ui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity as _, ViewHandle};
 
 use super::AgentDriverError;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -189,7 +189,7 @@ impl TerminalDriver {
         // When sharing is disabled (or running against ngrok), leave both halves
         // as None so that `wait_for_session_shared` returns immediately.
         let sharing_expected =
-            should_share && !warp_core::channel::ChannelState::server_root_url().contains("ngrok");
+            should_share && !black_core::channel::ChannelState::server_root_url().contains("ngrok");
         let (mut session_share_tx, session_share_rx) = if sharing_expected {
             if !FeatureFlag::CreatingSharedSessions.is_enabled() {
                 // Session sharing was requested but the feature is not enabled for this
@@ -264,7 +264,7 @@ impl TerminalDriver {
     pub fn with_terminal_view(
         &self,
         ctx: &mut ModelContext<Self>,
-        f: impl FnOnce(&mut TerminalView, &mut warpui::ViewContext<TerminalView>),
+        f: impl FnOnce(&mut TerminalView, &mut black_ui::ViewContext<TerminalView>),
     ) {
         self.terminal_view.update(ctx, f);
     }

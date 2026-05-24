@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use warp_util::standardized_path::StandardizedPath;
+use black_util::standardized_path::StandardizedPath;
 
 use crate::{language_by_filename, language_by_local_filename, load_language, SUPPORTED_LANGUAGES};
 
@@ -29,7 +29,7 @@ fn all_supported_languages_load_successfully() {
 /// the same HTML language entry. `.htm` is widely produced by static-site generators
 /// and historical web tooling (DOS 8.3 filename limits) and is already treated as
 /// an HTML/text file elsewhere in the codebase
-/// (see `is_development_text_extension` in `crates/warp_util/src/file_type.rs`).
+/// (see `is_development_text_extension` in `crates/black_util/src/file_type.rs`).
 #[test]
 fn html_extensions_resolve_to_html() {
     for filename in ["index.html", "index.htm"] {

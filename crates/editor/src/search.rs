@@ -4,9 +4,9 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use pathfinder_color::ColorU;
 use string_offset::CharOffset;
-use warp_core::ui::theme::Fill;
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::{Entity, ModelContext, ModelHandle};
+use black_core::ui::theme::Fill;
+use black_ui::r#async::SpawnedFutureHandle;
+use black_ui::{Entity, ModelContext, ModelHandle};
 
 use crate::content::anchor::Anchor;
 use crate::content::buffer::{Buffer, BufferEvent};
@@ -273,7 +273,7 @@ impl Searcher {
     #[cfg(test)]
     pub fn search_finished(
         &self,
-        ctx: &mut warpui::AppContext,
+        ctx: &mut black_ui::AppContext,
     ) -> impl std::future::Future<Output = ()> + use<> {
         let maybe_search = self
             .search_handle

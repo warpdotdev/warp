@@ -22,22 +22,22 @@ use tree::DEFAULT_FLEX_VALUE;
 use typed_path::TypedPath;
 use url::Url;
 use uuid::Uuid;
-use warp_cli::agent::Harness;
-use warp_core::command::ExitCode;
-use warp_core::context_flag::ContextFlag;
-use warp_terminal::shell::{ShellName, ShellType};
-use warp_util::path::convert_wsl_to_windows_host_path;
+use black_cli::agent::Harness;
+use black_core::command::ExitCode;
+use black_core::context_flag::ContextFlag;
+use black_terminal::shell::{ShellName, ShellType};
+use black_util::path::convert_wsl_to_windows_host_path;
 #[cfg(feature = "local_fs")]
-use warp_util::path::LineAndColumnArg;
-use warp_util::remote_path::RemotePath;
-use warpui::elements::{
+use black_util::path::LineAndColumnArg;
+use black_util::remote_path::RemotePath;
+use black_ui::elements::{
     ChildView, Clipped, CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Flex,
     MainAxisSize, ParentElement, Shrinkable, Stack,
 };
-use warpui::keymap::{Context, EditableBinding, FixedBinding};
-use warpui::notification::NotificationSendError;
-use warpui::windowing::WindowManager;
-use warpui::{
+use black_ui::keymap::{Context, EditableBinding, FixedBinding};
+use black_ui::notification::NotificationSendError;
+use black_ui::windowing::WindowManager;
+use black_ui::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle, WeakViewHandle, WindowId,
 };
@@ -246,7 +246,7 @@ fn get_minimum_pane_size(app: &AppContext) -> f32 {
 /// 2. Otherwise look up by command name in the already-discovered
 ///    [`AvailableShells`]. Its shell discovery supplements the process `PATH`
 ///    with well-known install locations (e.g. `/opt/homebrew/bin` on macOS,
-///    MSYS2/WSL on Windows) that a raw `PATH` lookup would miss when Warp is
+///    MSYS2/WSL on Windows) that a raw `PATH` lookup would miss when Black is
 ///    launched outside an interactive shell.
 /// 3. As a final fallback, perform a plain `PATH` lookup via
 ///    [`AvailableShell::try_from`] in case the user put something exotic in
@@ -264,7 +264,7 @@ fn resolve_tab_config_shell(name: &str, ctx: &AppContext) -> Option<AvailableShe
     AvailableShell::try_from(name).ok()
 }
 const WARP_SHELL_COMPATIBILITY_DOCS: &str =
-    "https://docs.warp.dev/getting-started/supported-shells";
+    "https://blackdagger.io/getting-started/supported-shells";
 // Default minimum width for a newly created Agent Mode pane so that it is legible. Called "default"
 // because this value may be too large for small windows. In that case, we fall back to 50% of the
 // window width.
@@ -314,7 +314,7 @@ enum PaneRemovalReason {
 }
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
     app.register_binding_validator::<PaneGroup>(is_binding_pty_compliant);
 
     self::pane::init(app);
@@ -532,7 +532,7 @@ pub enum Event {
     OpenPromptEditor,
     OpenAgentToolbarEditor,
     OpenCLIAgentToolbarEditor,
-    /// tell the workspace to open a file within Warp.
+    /// tell the workspace to open a file within Black.
     OpenFileInWarp {
         /// The file path to open.
         path: LocalOrRemotePath,
@@ -2455,7 +2455,7 @@ impl PaneGroup {
     }
 
     /// Send prompt change bindkey events to all terminal sessions in this pane group. This
-    /// is used for intra-session prompt switching between Warp prompt and PS1.
+    /// is used for intra-session prompt switching between Black prompt and PS1.
     #[cfg_attr(not(feature = "local_tty"), allow(unused_variables))]
     pub fn send_prompt_change_bindkey_to_all_sessions(
         &self,
@@ -3009,7 +3009,7 @@ impl PaneGroup {
             Banner::<PaneGroupAction>::new_permanently_dismissible(
                 BannerTextContent::formatted_text(vec![
                     FormattedTextFragment::plain_text(
-                        "Warp doesn't currently support your default shell, falling back to zsh.  ",
+                        "Black doesn't currently support your default shell, falling back to zsh.  ",
                     ),
                     FormattedTextFragment::hyperlink("Learn more", WARP_SHELL_COMPATIBILITY_DOCS),
                 ]),
@@ -4325,7 +4325,7 @@ impl PaneGroup {
             });
         }
 
-        // Insert the conversation ended tombstone (includes Open in Warp button on WASM).
+        // Insert the conversation ended tombstone (includes Open in Black button on WASM).
         if terminal_manager.is_some() {
             terminal_view.update(ctx, |view, ctx| {
                 view.insert_conversation_ended_tombstone_with_resolved_cta(ctx);
@@ -5840,7 +5840,7 @@ impl PaneGroup {
         task_id: AmbientAgentTaskId,
         ctx: &mut ViewContext<Self>,
     ) {
-        // URL-loaded conversation transcripts (e.g. Warp-on-Web deep links)
+        // URL-loaded conversation transcripts (e.g. Black-on-Web deep links)
         // restore from conversation data before the ambient task cache is
         // guaranteed to contain this task. Native continuation usually reaches
         // this path after task-backed navigation, but the restored cloud-mode
@@ -6591,7 +6591,7 @@ impl PaneGroup {
         });
 
         let terminal_view = terminal_manager.as_ref(ctx).view();
-        // Insert the conversation ended tombstone (includes Open in Warp button on WASM)
+        // Insert the conversation ended tombstone (includes Open in Black button on WASM)
         terminal_view.update(ctx, |view, ctx| {
             view.insert_conversation_ended_tombstone_with_resolved_cta(ctx);
         });

@@ -13,15 +13,15 @@ use ::ai::index::full_source_code_embedding::{
 use remote_server::proto::OpenBufferSuccess;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
-use warp_core::channel::ChannelState;
-use warp_core::{safe_error, SessionId};
-use warp_files::{FileModel, FileModelEvent};
-use warp_util::content_version::ContentVersion;
-use warp_util::file::FileId;
-use warp_util::standardized_path::StandardizedPath;
-use warpui::platform::TerminationMode;
-use warpui::r#async::{Spawnable, SpawnableOutput, SpawnedFutureHandle};
-use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
+use black_core::channel::ChannelState;
+use black_core::{safe_error, SessionId};
+use black_files::{FileModel, FileModelEvent};
+use black_util::content_version::ContentVersion;
+use black_util::file::FileId;
+use black_util::standardized_path::StandardizedPath;
+use black_ui::platform::TerminationMode;
+use black_ui::r#async::{Spawnable, SpawnableOutput, SpawnedFutureHandle};
+use black_ui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::codebase_index_status::{
     codebase_index_status_to_proto, disabled_codebase_index_status,
@@ -198,7 +198,7 @@ pub struct ServerModel {
     /// Per-connection outbound channels, keyed by `ConnectionId`.
     ///
     /// The daemon can serve multiple proxy connections simultaneously — one
-    /// per SSH session / Warp tab connecting to this host.  Each entry maps
+    /// per SSH session / Black tab connecting to this host.  Each entry maps
     /// a connection's `Uuid` to the channel the connection task drains to
     /// write `ServerMessage`s back to its proxy.
     connection_senders: HashMap<ConnectionId, async_channel::Sender<ServerMessage>>,
@@ -1342,7 +1342,7 @@ impl ServerModel {
     /// Called both during `Initialize` and when re-enabling crash reporting
     /// via `UpdatePreferences`.
     #[cfg(feature = "crash_reporting")]
-    fn apply_sentry_user_id(&self, ctx: &mut warpui::AppContext) {
+    fn apply_sentry_user_id(&self, ctx: &mut black_ui::AppContext) {
         if let Some(user_id) = self.auth_state.user_id() {
             crate::crash_reporting::set_user_id(user_id, self.auth_state.user_email(), ctx);
         }

@@ -3,11 +3,11 @@
 #[cfg(feature = "local_fs")]
 use std::path::Path;
 
-use warpui::elements::{
+use black_ui::elements::{
     Border, Container, CornerRadius, Flex, MouseStateHandle, ParentElement, Radius, Text,
 };
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{AppContext, Element, EventContext, SingletonEntity};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{AppContext, Element, EventContext, SingletonEntity};
 
 use crate::appearance::Appearance;
 use crate::settings::PrivacySettings;
@@ -201,7 +201,7 @@ where
             .with_child(
                 appearance
                     .ui_builder()
-                    .span("*Secrets are not sent to Warp's server.")
+                    .span("*Secrets are not sent to Black's server.")
                     .with_style(UiComponentStyles {
                         font_size: Some(12.),
                         margin: Some(Coords::default().top(4.)),
@@ -234,15 +234,15 @@ where
         .finish()
 }
 
-/// Returns whether "Open in Warp" should be offered for the given file path.
+/// Returns whether "Open in Black" should be offered for the given file path.
 ///
 /// This checks:
-/// - Whether Warp is already the default editor (skip if so)
-/// - Whether this file is openable in Warp (skips binary files and directories)
-/// - Whether Warp is an OS-level default editor (skips Markdown files)
+/// - Whether Black is already the default editor (skip if so)
+/// - Whether this file is openable in Black (skips binary files and directories)
+/// - Whether Black is an OS-level default editor (skips Markdown files)
 #[cfg(feature = "local_fs")]
 pub fn should_show_open_in_warp_link(path: &Path, app: &AppContext) -> bool {
-    use warpui::SingletonEntity;
+    use black_ui::SingletonEntity;
 
     use crate::code::view::is_binary_file;
     use crate::notebooks::file::is_markdown_file;

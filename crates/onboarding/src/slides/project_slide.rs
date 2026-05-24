@@ -1,20 +1,20 @@
 use ui_components::{button, keyboard_shortcut, Component as _, Options as _};
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::color::coloru_with_opacity;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::Icon;
-use warpui::elements::{
+use black_core::send_telemetry_from_ctx;
+use black_core::ui::appearance::Appearance;
+use black_core::ui::color::coloru_with_opacity;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::Icon;
+use black_ui::elements::{
     Align, ClippedScrollStateHandle, ConstrainedBox, Container, CrossAxisAlignment, Flex,
     MouseStateHandle, ParentElement, Shrinkable,
 };
-use warpui::fonts::Weight;
-use warpui::keymap::Keystroke;
-use warpui::platform::file_picker::{FilePickerConfiguration, FilePickerError};
-use warpui::prelude::{MainAxisAlignment, MainAxisSize, Vector2F};
-use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
-use warpui::ui_components::components::{UiComponent as _, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::Weight;
+use black_ui::keymap::Keystroke;
+use black_ui::platform::file_picker::{FilePickerConfiguration, FilePickerError};
+use black_ui::prelude::{MainAxisAlignment, MainAxisSize, Vector2F};
+use black_ui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use black_ui::ui_components::components::{UiComponent as _, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
     ViewContext,
 };
@@ -135,7 +135,7 @@ impl ProjectSlide {
 
         let subtitle = appearance
             .ui_builder()
-            .paragraph("Set up a project to optimize it for coding in Warp.")
+            .paragraph("Set up a project to optimize it for coding in Black.")
             .with_style(UiComponentStyles {
                 font_size: Some(20.),
                 font_weight: Some(Weight::Normal),
@@ -292,14 +292,14 @@ impl ProjectSlide {
         );
 
         let theme_picker_last =
-            warp_core::features::FeatureFlag::OpenWarpNewSettingsModes.is_enabled();
+            black_core::features::FeatureFlag::OpenWarpNewSettingsModes.is_enabled();
 
         let (label, keystroke, action) = match settings {
             ProjectOnboardingSettings::Project { .. } => (
                 if theme_picker_last {
                     "Next"
                 } else {
-                    "Get Warping"
+                    "Get started"
                 },
                 Keystroke::parse("enter").unwrap_or_default(),
                 ProjectSlideAction::NextClicked,
@@ -484,7 +484,7 @@ impl ProjectSlide {
         }
 
         self.onboarding_state.update(ctx, |model, ctx| {
-            if warp_core::features::FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
+            if black_core::features::FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
                 model.next(ctx);
             } else {
                 model.complete(ctx);
@@ -495,7 +495,7 @@ impl ProjectSlide {
     fn skip(&mut self, ctx: &mut ViewContext<Self>) {
         self.onboarding_state.update(ctx, |model, ctx| {
             model.set_project_selected_local_folder(None, ctx);
-            if warp_core::features::FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
+            if black_core::features::FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
                 model.next(ctx);
             } else {
                 model.complete(ctx);

@@ -11,8 +11,8 @@ use enclose::enclose;
 use futures::StreamExt;
 use rand::prelude::StdRng;
 use test::Network;
-use warpui::color::ColorU;
-use warpui::{App, ModelHandle};
+use black_ui::color::ColorU;
+use black_ui::{App, ModelHandle};
 
 use super::*;
 use crate::editor::soft_wrap::ClampDirection;
@@ -4156,7 +4156,7 @@ fn test_merging_selections_with_remote_edits() {
     })
 }
 
-// See https://github.com/warpdotdev/warp-internal/pull/9249 for discussion
+// See https://github.com/blackdagger/black-internal/pull/9249 for discussion
 // about possible strategies to address this.
 #[ignore = "The test points out an eventual consistency problem with selections."]
 #[test]

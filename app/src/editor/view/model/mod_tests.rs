@@ -1,7 +1,7 @@
 use string_offset::{ByteOffset, CharOffset};
 use vec1::vec1;
-use warpui::text_layout::TextStyle;
-use warpui::App;
+use black_ui::text_layout::TextStyle;
+use black_ui::App;
 
 use super::{EditOrigin, EditorModel, Edits, InteractionState, UpdateBufferOption};
 use crate::editor::{EditorSnapshot, PlainTextEditorViewAction, TextRun, ValidInputType};

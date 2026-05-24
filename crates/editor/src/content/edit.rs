@@ -13,16 +13,16 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterato
 use string_offset::{ByteOffset, CharOffset};
 use urlocator::{UrlLocation, UrlLocator};
 use vec1::Vec1;
-use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::Fill as ThemeFill;
-use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
-use warpui::fonts::Weight;
-use warpui::image_cache::ImageType;
-use warpui::text::char_slice;
-use warpui::text::point::Point;
-use warpui::text_layout::{StyleAndFont, TextAlignment};
-use warpui::units::{IntoPixels, Pixels};
-use warpui::{AppContext, SingletonEntity};
+use black_core::features::FeatureFlag;
+use black_core::ui::theme::Fill as ThemeFill;
+use black_ui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
+use black_ui::fonts::Weight;
+use black_ui::image_cache::ImageType;
+use black_ui::text::char_slice;
+use black_ui::text::point::Point;
+use black_ui::text_layout::{StyleAndFont, TextAlignment};
+use black_ui::units::{IntoPixels, Pixels};
+use black_ui::{AppContext, SingletonEntity};
 
 use super::buffer::{StyledBufferBlock, StyledBufferRun, StyledTextBlock};
 use super::mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout};

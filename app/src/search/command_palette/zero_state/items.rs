@@ -1,7 +1,7 @@
-use warpui::elements::{Container, Flex, ParentElement};
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::ui_components::text::WrappableText;
-use warpui::{AppContext, Element, Entity, ModelContext, SingletonEntity};
+use black_ui::elements::{Container, Flex, ParentElement};
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::ui_components::text::WrappableText;
+use black_ui::{AppContext, Element, Entity, ModelContext, SingletonEntity};
 
 use crate::appearance::Appearance;
 use crate::search::command_palette::mixer::CommandPaletteItemAction;

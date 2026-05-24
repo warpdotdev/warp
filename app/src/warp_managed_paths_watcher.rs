@@ -9,17 +9,17 @@ use repo_metadata::RepositoryUpdate;
 #[cfg(any(not(target_family = "wasm"), test))]
 use repo_metadata::TargetFile;
 #[cfg(not(target_family = "wasm"))]
-use warpui::ModelHandle;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_ui::ModelHandle;
+use black_ui::{Entity, ModelContext, SingletonEntity};
 #[cfg(not(target_family = "wasm"))]
 use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
 
-/// Duration between filesystem watch events for the Warp managed paths watcher, in milliseconds.
+/// Duration between filesystem watch events for the Black managed paths watcher, in milliseconds.
 #[cfg(not(target_family = "wasm"))]
 const WARP_MANAGED_PATHS_WATCHER_DEBOUNCE_MILLI_SECS: u64 = 500;
 
 pub(crate) fn warp_data_dir() -> PathBuf {
-    warp_core::paths::data_dir()
+    black_core::paths::data_dir()
 }
 
 #[cfg(target_family = "wasm")]
@@ -30,16 +30,16 @@ pub(crate) fn ensure_warp_watch_roots_exist() {
     let data_dir = warp_data_dir();
     if let Err(err) = fs::create_dir_all(&data_dir) {
         log::warn!(
-            "Failed to create Warp data directory {}: {err}",
+            "Failed to create Black data directory {}: {err}",
             data_dir.display()
         );
     }
 
-    let config_local_dir = warp_core::paths::config_local_dir();
+    let config_local_dir = black_core::paths::config_local_dir();
     if config_local_dir != data_dir {
         if let Err(err) = fs::create_dir_all(&config_local_dir) {
             log::warn!(
-                "Failed to create Warp config directory {}: {err}",
+                "Failed to create Black config directory {}: {err}",
                 config_local_dir.display()
             );
         }
@@ -48,16 +48,16 @@ pub(crate) fn ensure_warp_watch_roots_exist() {
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) fn warp_home_config_dir() -> Option<PathBuf> {
-    warp_core::paths::warp_home_config_dir()
+    black_core::paths::warp_home_config_dir()
 }
 
 pub(crate) fn warp_home_skills_dir() -> Option<PathBuf> {
-    warp_core::paths::warp_home_skills_dir()
+    black_core::paths::warp_home_skills_dir()
 }
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) fn warp_home_mcp_config_file_path() -> Option<PathBuf> {
-    warp_core::paths::warp_home_mcp_config_file_path()
+    black_core::paths::warp_home_mcp_config_file_path()
 }
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
@@ -243,7 +243,7 @@ impl WarpManagedPathsWatcher {
 
         if should_register_watcher {
             let data_dir = warp_data_dir();
-            let config_local_dir = warp_core::paths::config_local_dir();
+            let config_local_dir = black_core::paths::config_local_dir();
             let should_register_config_local_dir = config_local_dir != data_dir;
             let worktrees_dir = data_dir.join("worktrees");
             // Safe to use for both directory registration and event emission.
@@ -256,7 +256,7 @@ impl WarpManagedPathsWatcher {
                 data_dir.clone(),
                 WatchFilter::with_filter(filter.clone(), filter),
                 RecursiveMode::Recursive,
-                "Warp data directory",
+                "Black data directory",
             );
             if should_register_config_local_dir {
                 Self::register_path(
@@ -265,7 +265,7 @@ impl WarpManagedPathsWatcher {
                     config_local_dir.clone(),
                     WatchFilter::accept_all(),
                     RecursiveMode::Recursive,
-                    "Warp config directory",
+                    "Black config directory",
                 );
             }
             if let Some(warp_home_skills_dir) = warp_home_skills_dir() {
@@ -280,7 +280,7 @@ impl WarpManagedPathsWatcher {
                         warp_home_skills_dir,
                         WatchFilter::accept_all(),
                         RecursiveMode::Recursive,
-                        "Warp home skills directory",
+                        "Black home skills directory",
                     );
                 }
             }
@@ -301,7 +301,7 @@ impl WarpManagedPathsWatcher {
                         warp_home_config_dir,
                         WatchFilter::with_filter(Arc::new(|_: &Path| true), emit),
                         RecursiveMode::NonRecursive,
-                        "Warp home MCP config directory",
+                        "Black home MCP config directory",
                     );
                 }
             }
@@ -397,7 +397,7 @@ mod tests {
                 assert_eq!(path.config_path, warp_home_mcp_config_path);
             }
             (_, _, None) => {}
-            _ => panic!("Expected Warp MCP path when home directory is available"),
+            _ => panic!("Expected Black MCP path when home directory is available"),
         }
     }
 

@@ -1,16 +1,16 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::Icon;
-use warpui::elements::{
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::Icon;
+use black_ui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Hoverable,
     MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::platform::Cursor;
-use warpui::text_layout::ClipConfig;
-use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::platform::Cursor;
+use black_ui::text_layout::ClipConfig;
+use black_ui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::agent_view::orchestration_pill_bar::{

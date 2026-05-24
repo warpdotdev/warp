@@ -1,4 +1,4 @@
-use warpui::EntityId;
+use black_ui::EntityId;
 
 /// Utility for consistently creating and referencing saved position IDs for
 /// rich text.
@@ -17,16 +17,16 @@ impl SavedPositions {
 
     /// Saved position ID for the cursor location.
     pub fn cursor_id(&self) -> String {
-        format!("warp_editor:cursor_{}", self.model_id)
+        format!("black_editor:cursor_{}", self.model_id)
     }
 
     /// The bounding box for the text selection.
     pub fn text_selection_id(&self) -> String {
-        format!("warp_editor:text_selection_{}", self.model_id)
+        format!("black_editor:text_selection_{}", self.model_id)
     }
 
     /// The first line of the block that the mouse is currently hovered over.
     pub fn hovered_block_start(&self) -> String {
-        format!("warp_editor:hovered_block_start_{}", self.model_id)
+        format!("black_editor:hovered_block_start_{}", self.model_id)
     }
 }

@@ -2,15 +2,15 @@ use std::future::Future;
 use std::pin::Pin;
 
 use pathfinder_geometry::vector::vec2f;
-use warp::integration_testing::step::new_step_with_default_assertions;
-use warp::integration_testing::terminal::util::ExpectedExitStatus;
-use warp::integration_testing::terminal::{
+use black::integration_testing::step::new_step_with_default_assertions;
+use black::integration_testing::terminal::util::ExpectedExitStatus;
+use black::integration_testing::terminal::{
     assert_view_has_text_selection, clear_blocklist_to_remove_bootstrapped_blocks,
     execute_command_for_single_terminal_in_tab, execute_echo_str,
     wait_until_bootstrapped_single_pane_for_tab,
 };
-use warpui::event::{Event, ModifiersState};
-use warpui::integration::{TestStep, ARTIFACTS_DIR_ENV_VAR};
+use black_ui::event::{Event, ModifiersState};
+use black_ui::integration::{TestStep, ARTIFACTS_DIR_ENV_VAR};
 
 use crate::Builder;
 
@@ -38,7 +38,7 @@ pub fn test_video_recording() -> Builder {
                     let artifacts_root = std::env::var(ARTIFACTS_DIR_ENV_VAR)
                         .map(std::path::PathBuf::from)
                         .unwrap_or_else(|_| {
-                            std::env::temp_dir().join("warp_integration_test_artifacts")
+                            std::env::temp_dir().join("black_integration_test_artifacts")
                         });
                     let test_dir = artifacts_root.join("test_video_recording");
 

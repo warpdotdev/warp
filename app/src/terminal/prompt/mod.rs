@@ -1,4 +1,4 @@
-use warp_util::path::user_friendly_path;
+use black_util::path::user_friendly_path;
 
 use super::model::session::SessionType;
 use crate::terminal::model::block::Block;

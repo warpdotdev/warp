@@ -1,4 +1,4 @@
-use warpui::units::IntoLines as _;
+use black_ui::units::IntoLines as _;
 
 use super::*;
 use crate::terminal::SizeUpdateReason;

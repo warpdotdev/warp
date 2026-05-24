@@ -1,15 +1,15 @@
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::theme::Fill;
-use warpui::assets::asset_cache::AssetSource;
-use warpui::elements::{
+use black_core::ui::theme::Fill;
+use black_ui::assets::asset_cache::AssetSource;
+use black_ui::elements::{
     Align, CacheOption, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Expanded, Flex, Image, MainAxisSize, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Radius, Stack, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::keymap::FixedBinding;
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::keymap::FixedBinding;
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
@@ -20,7 +20,7 @@ use crate::view_components::action_button::{ActionButton, ActionButtonTheme, But
 const MODAL_WIDTH: f32 = 420.;
 const HERO_HEIGHT: f32 = 92.;
 const HERO_IMAGE_PATH: &str = "async/png/onboarding/orchestration_launch_banner.png";
-const LEARN_MORE_URL: &str = "https://www.warp.dev/blog/multi-harness-cloud-agent-orchestration";
+const LEARN_MORE_URL: &str = "https://blackdagger.io/blog/multi-harness-cloud-agent-orchestration";
 fn modal_background(appearance: &Appearance) -> Fill {
     appearance.theme().surface_3()
 }
@@ -73,7 +73,7 @@ const FEATURE_ITEMS: &[FeatureItem] = &[
     FeatureItem {
         icon: Icon::Atom,
         title: "Multi-agent orchestration",
-        description: "Warp Agents will now orchestrate swarms of subagents, allowing you to parallelize tasks.",
+        description: "Black Agents will now orchestrate swarms of subagents, allowing you to parallelize tasks.",
         badge: None,
     },
     FeatureItem {
@@ -85,7 +85,7 @@ const FEATURE_ITEMS: &[FeatureItem] = &[
 ];
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings([FixedBinding::new(
         "escape",
@@ -280,7 +280,7 @@ impl OrchestrationLaunchModal {
 
     fn render_description(appearance: &Appearance) -> Box<dyn Element> {
         Text::new(
-            "We've made major improvements to Warp's cloud agent orchestration platform, Oz.",
+            "We've made major improvements to Black's cloud agent orchestration platform, Oz.",
             appearance.ui_font_family(),
             14.,
         )
@@ -400,7 +400,7 @@ impl View for OrchestrationLaunchModal {
         "OrchestrationLaunchModal"
     }
 
-    fn on_focus(&mut self, _focus_ctx: &warpui::FocusContext, ctx: &mut ViewContext<Self>) {
+    fn on_focus(&mut self, _focus_ctx: &black_ui::FocusContext, ctx: &mut ViewContext<Self>) {
         ctx.focus_self();
     }
 

@@ -175,7 +175,7 @@ impl Warp {
                 .unwrap_or_else(|| Self::root().join(format!("target/{}", &build)))
         };
 
-        path.push("warp");
+        path.push("black");
         path
     }
 

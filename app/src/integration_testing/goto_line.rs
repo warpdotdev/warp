@@ -1,6 +1,6 @@
-use warp_editor::content::buffer::ToBufferPoint;
-use warpui::integration::AssertionCallback;
-use warpui::{async_assert, async_assert_eq, App, ViewHandle, WindowId};
+use black_editor::content::buffer::ToBufferPoint;
+use black_ui::integration::AssertionCallback;
+use black_ui::{async_assert, async_assert_eq, App, ViewHandle, WindowId};
 
 use crate::code::editor::goto_line::view::GoToLineView;
 use crate::code::editor::view::CodeEditorView;

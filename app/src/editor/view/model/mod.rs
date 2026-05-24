@@ -35,12 +35,12 @@ use vim::{
     vim_a_quote, vim_a_word, vim_find_char_on_line, vim_find_matching_bracket, vim_inner_block,
     vim_inner_paragraph, vim_inner_quote, vim_inner_word, vim_word_iterator_from_offset,
 };
-use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
-use warpui::text::point::Point;
-use warpui::text::word_boundaries::WordBoundariesPolicy;
-use warpui::text::TextBuffer;
-use warpui::text_layout::TextStyle;
-use warpui::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity};
+use black_ui::accessibility::{AccessibilityContent, WarpA11yRole};
+use black_ui::text::point::Point;
+use black_ui::text::word_boundaries::WordBoundariesPolicy;
+use black_ui::text::TextBuffer;
+use black_ui::text_layout::TextStyle;
+use black_ui::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity};
 
 use self::buffer::Peer;
 use super::{movement, PlainTextEditorViewAction, SelectionInsertion, ValidInputType};

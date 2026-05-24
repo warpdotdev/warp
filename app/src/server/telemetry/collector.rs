@@ -4,10 +4,10 @@ use std::time::Duration;
 
 use anyhow::Context;
 use chrono::{LocalResult, TimeZone, Utc};
-use warp_core::execution_mode::AppExecutionMode;
-use warp_core::{report_error, report_if_error};
-use warpui::r#async::{FutureExt as _, Timer};
-use warpui::{App, Entity, ModelContext, SingletonEntity};
+use black_core::execution_mode::AppExecutionMode;
+use black_core::{report_error, report_if_error};
+use black_ui::r#async::{FutureExt as _, Timer};
+use black_ui::{App, Entity, ModelContext, SingletonEntity};
 
 use super::{clear_event_queue, rudder_event_file_path, RUDDER_TELEMETRY_EVENTS_FILE_NAME};
 use crate::auth::AuthStateProvider;
@@ -104,7 +104,7 @@ impl TelemetryCollector {
         if execution_mode.send_telemetry_at_shutdown() {
             let privacy_settings_snapshot = PrivacySettings::as_ref(ctx).get_snapshot(ctx);
             let server_api = self.server_api.clone();
-            match warpui::r#async::block_on(async move {
+            match black_ui::r#async::block_on(async move {
                 server_api
                     .flush_telemetry_events(privacy_settings_snapshot)
                     .with_timeout(TELEMETRY_SHUTDOWN_FLUSH_TIMEOUT)
@@ -141,7 +141,7 @@ impl TelemetryCollector {
             async move {
                 let new_path = rudder_event_file_path();
                 let old_path =
-                    warp_core::paths::state_dir().join(RUDDER_TELEMETRY_EVENTS_FILE_NAME);
+                    black_core::paths::state_dir().join(RUDDER_TELEMETRY_EVENTS_FILE_NAME);
 
                 // Try flushing from both new and legacy locations.
                 for path in [new_path, old_path] {
@@ -153,7 +153,7 @@ impl TelemetryCollector {
                     // case where we accidentally try to re-flush the events on the next app startup.
                     if let Err(e) = remove_file(&path) {
                         if e.kind() != std::io::ErrorKind::NotFound {
-                            warp_core::report_error!(
+                            black_core::report_error!(
                                 anyhow::anyhow!(e).context("Failed to remove persisted event file")
                             );
                         }
@@ -181,7 +181,7 @@ impl TelemetryCollector {
                     if let LocalResult::Single(timestamp) =
                         Utc.timestamp_opt(last_active_timestamp, 0)
                     {
-                        warpui::telemetry::record_app_active_event(
+                        black_ui::telemetry::record_app_active_event(
                             auth_state.user_id().map(|uid| uid.as_string()),
                             auth_state.anonymous_id(),
                             timestamp,

@@ -1,16 +1,16 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::builder::UiBuilder;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::WarpTheme;
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::*;
-use warpui::text_layout::ClipConfig;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::UiComponent as _;
-use warpui::{Entity, SingletonEntity as _, TypedActionView, View, ViewContext};
+use black_core::ui::appearance::Appearance;
+use black_core::ui::builder::UiBuilder;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::WarpTheme;
+use black_ui::clipboard::ClipboardContent;
+use black_ui::elements::*;
+use black_ui::text_layout::ClipConfig;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::UiComponent as _;
+use black_ui::{Entity, SingletonEntity as _, TypedActionView, View, ViewContext};
 
 use crate::terminal::model::terminal_model::ExitReason;
 use crate::ui_components;
@@ -183,8 +183,8 @@ impl TerminationType {
                 format!("{pty_spawn_error:#}").into()
             }
             TerminationType::Premature { shell_detail, .. } => format!(
-                "Something went wrong while starting {shell_detail} and Warpifying it, causing the \
-                process to terminate. Warpify script output is displayed here, which may point at \
+                "Something went wrong while starting {shell_detail} and Blackifying it, causing the \
+                process to terminate. Blackify script output is displayed here, which may point at \
                 a cause."
             )
             .into(),
@@ -216,7 +216,7 @@ impl TerminationType {
                         .build()
                         .on_click(|ctx, _, _| {
                             ctx.dispatch_typed_action(Action::OpenUrl(
-                                "https://github.com/warpdotdev/Warp/issues/new/choose".to_string(),
+                                "https://blackdagger.io/support".to_string(),
                             ));
                         })
                         .finish(),
@@ -226,7 +226,7 @@ impl TerminationType {
                         .build()
                         .on_click(|ctx, _, _| {
                             ctx.dispatch_typed_action(Action::OpenUrl(
-                                "https://docs.warp.dev/support-and-community/troubleshooting-and-support/known-issues#debugging".to_string(),
+                                "https://blackdagger.io/support-and-community/troubleshooting-and-support/known-issues#debugging".to_string(),
                             ));
                         })
                         .finish(),
@@ -254,7 +254,7 @@ impl TerminationType {
                         .build()
                         .on_click(|ctx, _, _| {
                             ctx.dispatch_typed_action(Action::OpenUrl(
-                                "https://github.com/warpdotdev/Warp/issues/new/choose".to_string(),
+                                "https://blackdagger.io/support".to_string(),
                             ));
                         })
                         .finish(),
@@ -264,7 +264,7 @@ impl TerminationType {
                         .build()
                         .on_click(|ctx, _, _| {
                             ctx.dispatch_typed_action(Action::OpenUrl(
-                                "https://docs.warp.dev/support-and-community/troubleshooting-and-support/known-issues#debugging".to_string(),
+                                "https://blackdagger.io/support-and-community/troubleshooting-and-support/known-issues#debugging".to_string(),
                             ));
                         })
                         .finish(),

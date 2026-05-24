@@ -1,12 +1,12 @@
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::icons::Icon;
-use warpui::elements::{
+use black_core::send_telemetry_from_ctx;
+use black_core::ui::icons::Icon;
+use black_ui::elements::{
     ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Expanded, Fill, Flex,
     Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement as _, Radius, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::platform::Cursor;
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::platform::Cursor;
+use black_ui::{
     AppContext, Element, Entity, FocusContext, SingletonEntity as _, TypedActionView, View,
     ViewContext, ViewHandle,
 };

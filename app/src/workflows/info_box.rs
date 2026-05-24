@@ -2,23 +2,23 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use string_offset::CharOffset;
-use warp_core::features::FeatureFlag;
-use warp_core::settings::Setting;
-use warpui::color::ColorU;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::settings::Setting;
+use black_ui::color::ColorU;
+use black_ui::elements::{
     self, Align, Border, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
     Container, CornerRadius, CrossAxisAlignment, DropShadow, Flex, Highlight, Icon,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Rect, Shrinkable,
     Stack, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::geometry::vector::Vector2F;
-use warpui::keymap::Keystroke;
-use warpui::presenter::ChildView;
-use warpui::text_layout::{ClipConfig, TextStyle};
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::geometry::vector::Vector2F;
+use black_ui::keymap::Keystroke;
+use black_ui::presenter::ChildView;
+use black_ui::text_layout::{ClipConfig, TextStyle};
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, EventContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
@@ -261,7 +261,7 @@ impl WorkflowsMoreInfoView {
             icons::Icon::Rename,
             Some(label.to_owned()),
             self.button_mouse_states.edit_cloud_workflow.clone(),
-            move |ctx: &mut warpui::EventContext<'_>, _, _| {
+            move |ctx: &mut black_ui::EventContext<'_>, _, _| {
                 ctx.dispatch_typed_action(TerminalAction::OpenWorkflowModalWithCloudWorkflow(
                     workflow.id,
                 ))

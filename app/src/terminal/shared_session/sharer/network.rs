@@ -30,9 +30,9 @@ use session_sharing_protocol::sharer::{
     RoleUpdateReason, SessionEndedReason, SessionTerminatedReason, TeamAccessLevelUpdateResponse,
     UpdatePendingUserRoleResponse, UpstreamMessage,
 };
-use warp_core::features::FeatureFlag;
-use warpui::r#async::Timer;
-use warpui::{Entity, ModelContext, ModelHandle, RequestState, RetryOption, SingletonEntity};
+use black_core::features::FeatureFlag;
+use black_ui::r#async::Timer;
+use black_ui::{Entity, ModelContext, ModelHandle, RequestState, RetryOption, SingletonEntity};
 use websocket::{Message, Sink, Stream, WebSocket, WebsocketMessage as _};
 #[cfg(not(any(test, feature = "integration_tests")))]
 use {
@@ -221,7 +221,7 @@ impl Network {
         active_prompt: ActivePrompt,
         selection: Selection,
         input_replica_id: ReplicaId,
-        terminal_view_id: warpui::EntityId,
+        terminal_view_id: black_ui::EntityId,
         universal_developer_input_context: UniversalDeveloperInputContext,
         lifetime: Lifetime,
         source: SharedSessionSource,
@@ -584,7 +584,7 @@ impl Network {
         window_size: WindowSize,
         init_block_id: BlockId,
         input_replica_id: ReplicaId,
-        terminal_view_id: warpui::EntityId,
+        terminal_view_id: black_ui::EntityId,
         universal_developer_input_context: UniversalDeveloperInputContext,
         lifetime: Lifetime,
         source: SharedSessionSource,
@@ -1283,7 +1283,7 @@ pub fn failed_to_add_guests_user_error(reason: &FailedToAddGuestsReason) -> Stri
     match reason {
         FailedToAddGuestsReason::Invalid => "Something went wrong. Please try again.",
         FailedToAddGuestsReason::NotWarpUsers => {
-            "One or more emails were not associated with Warp accounts."
+            "One or more emails were not associated with Black accounts."
         }
         FailedToAddGuestsReason::GuestAlreadyAdded => {
             "One or more emails have already been added to the session."

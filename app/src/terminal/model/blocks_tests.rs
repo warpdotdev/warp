@@ -1,8 +1,8 @@
 use float_cmp::{approx_eq, assert_approx_eq};
-use warp_core::features::FeatureFlag;
-use warpui::elements::DEFAULT_UI_LINE_HEIGHT_RATIO;
-use warpui::units::IntoLines;
-use warpui::App;
+use black_core::features::FeatureFlag;
+use black_ui::elements::DEFAULT_UI_LINE_HEIGHT_RATIO;
+use black_ui::units::IntoLines;
+use black_ui::App;
 
 use super::*;
 use crate::ai::agent::AIAgentActionId;
@@ -1188,12 +1188,12 @@ pub fn test_block_heights_combined_prompt_command_grid_warp_prompt() {
     // We created one block.
     assert_eq!(block_list.blocks.len(), bootstrapped_block_list_len + 1);
 
-    // Note that this test is using the Warp prompt, hence the prompt is not included in the combined grid.
+    // Note that this test is using the Black prompt, hence the prompt is not included in the combined grid.
     assert_eq!(first_block.prompt_and_command_grid().len(), 3);
     assert_eq!(first_block.output_grid().len(), 3);
 
     // In this case, we SHOULD consider command_padding_top since we have a combined prompt/command grid BUT
-    // we have the built-in Warp prompt, so there's padding between that prompt and the combined grid.
+    // we have the built-in Black prompt, so there's padding between that prompt and the combined grid.
     // The combined grid _just_ has the command in this case! The PS1 is unset!
     // Hence, we expect heights of 8.5.
     assert_lines_approx_eq!(first_block.height(&AgentViewState::Inactive), 8.5);
@@ -1235,7 +1235,7 @@ pub fn test_block_heights_combined_prompt_command_grid_ps1() {
     assert_eq!(first_block.prompt_and_command_grid().len(), 4);
     assert_eq!(first_block.output_grid().len(), 3);
 
-    // We have a 2-line prompt, adding 1 extra line to the combined grid (vs 0.6 default for Warp prompt).
+    // We have a 2-line prompt, adding 1 extra line to the combined grid (vs 0.6 default for Black prompt).
     // Hence, we expect a height of 8.7 rather than 8.3.
     assert_lines_approx_eq!(first_block.height(&AgentViewState::Inactive), 8.7);
 }
@@ -1399,7 +1399,7 @@ fn test_remove_rich_content_block() {
 
 #[test]
 fn test_conversation_scoped_rich_content_hidden_outside_fullscreen_agent_view() {
-    FeatureFlag::AgentView.set_enabled(true);
+    let _agent_view = FeatureFlag::AgentView.override_enabled(true);
     let mut block_list =
         new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
     let conversation_id = AIConversationId::new();
@@ -1936,7 +1936,7 @@ pub fn test_emits_after_block_completed_event() {
     );
     block_list.start_active_block_for_in_band_command();
     block_list.preexec(PreexecValue {
-        command: "warp_run_generator_command 1234 foo".to_owned(),
+        command: "black_run_generator_command 1234 foo".to_owned(),
     });
     command_finished_and_precmd(&mut block_list);
 
@@ -2007,7 +2007,7 @@ fn test_background_blocks_finished() {
     // Running an in-band command should not finish the background block.
     block_list.start_active_block_for_in_band_command();
     block_list.preexec(PreexecValue {
-        command: "warp_run_generator_command abc".to_owned(),
+        command: "black_run_generator_command abc".to_owned(),
     });
     command_finished_and_precmd(&mut block_list);
 

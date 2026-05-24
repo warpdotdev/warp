@@ -3,23 +3,23 @@ use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
 use pathfinder_geometry::vector::Vector2F;
-use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::Icon;
-use warp_editor::editor::NavigationKey;
-use warpui::elements::{
+use black_core::features::FeatureFlag;
+use black_core::send_telemetry_from_ctx;
+use black_core::ui::Icon;
+use black_editor::editor::NavigationKey;
+use black_ui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Element, Fill, Flex, FormattedTextElement, Hoverable, MainAxisAlignment,
     MainAxisSize, MouseStateHandle, OffsetPositioning, Padding, ParentAnchor, ParentElement,
     ParentOffsetBounds, Radius, SavePosition, ScrollStateHandle, Scrollable, ScrollableElement,
     ScrollbarWidth, Shrinkable, Stack, Text, UniformList, UniformListState,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::keymap::macros::*;
-use warpui::keymap::FixedBinding;
-use warpui::platform::Cursor;
-use warpui::text_layout::TextAlignment;
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::keymap::macros::*;
+use black_ui::keymap::FixedBinding;
+use black_ui::platform::Cursor;
+use black_ui::text_layout::TextAlignment;
+use black_ui::{
     AppContext, BlurContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle, WindowId,
 };

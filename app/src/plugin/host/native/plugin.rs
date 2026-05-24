@@ -4,11 +4,11 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use rquickjs::Context;
-use warp_js::{JsFunctionId, JsFunctionRegistry, SerializedJsValue};
+use black_js::{JsFunctionId, JsFunctionRegistry, SerializedJsValue};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "completions_v2")] {
-        use warp_completer::signatures::CommandSignature;
+        use black_completer::signatures::CommandSignature;
 
         use crate::plugin::service::{
             RegisterCommandSignatureRequest, RegisterCommandSignatureService,
@@ -94,7 +94,7 @@ impl Plugin {
     /// Registers the given command signatures.
     #[cfg(feature = "completions_v2")]
     pub(super) fn register_command_signatures(&mut self, signatures: Vec<CommandSignature>) {
-        if let Err(e) = warpui::r#async::block_on(
+        if let Err(e) = black_ui::r#async::block_on(
             self.app_services
                 .register_command_signatures_caller
                 .call(RegisterCommandSignatureRequest { signatures }),

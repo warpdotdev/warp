@@ -6,8 +6,8 @@ use repo_metadata::watcher::DirectoryWatcher;
 use repo_metadata::RepoMetadataModel;
 use settings::Setting as _;
 use uuid::Uuid;
-use warp_core::features::FeatureFlag;
-use warpui::{App, Entity, ModelHandle, SingletonEntity as _};
+use black_core::features::FeatureFlag;
+use black_ui::{App, Entity, ModelHandle, SingletonEntity as _};
 use watcher::HomeDirectoryWatcher;
 
 use super::{CloudEnvMcpScanServer, FileBasedMCPManager, FileBasedMCPManagerEvent, MCPProvider};
@@ -18,7 +18,7 @@ use crate::warp_managed_paths_watcher::{warp_managed_mcp_config_path, WarpManage
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 // Helper to initialize dependencies and return FileBasedMCPManager handle
-fn setup_app(app: &mut App) -> warpui::ModelHandle<FileBasedMCPManager> {
+fn setup_app(app: &mut App) -> black_ui::ModelHandle<FileBasedMCPManager> {
     app.add_singleton_model(DirectoryWatcher::new);
     app.add_singleton_model(|_| DetectedRepositories::default());
     app.add_singleton_model(RepoMetadataModel::new);
@@ -274,7 +274,7 @@ fn test_update_file_based_servers_removes_unreferenced_servers() {
     });
 }
 
-/// A Warp-global installation detected from the managed `~/.warp*/.mcp.json`
+/// A Black-global installation detected from the managed `~/.warp*/.mcp.json`
 /// watcher uses the home directory as its logical root and still always
 /// auto-spawns.
 #[test]
@@ -289,7 +289,7 @@ fn test_global_warp_server_from_managed_home_root_always_spawns() {
         let manager = setup_app(&mut app);
         let events = subscribe_events(&mut app, &manager);
 
-        // Toggle is off by default; the watcher-produced Warp root should still
+        // Toggle is off by default; the watcher-produced Black root should still
         // be classified as the global Warp config and auto-spawn.
         manager.update(&mut app, |m, ctx| {
             m.apply_parsed_servers(
@@ -321,7 +321,7 @@ fn test_global_warp_server_from_managed_home_root_always_spawns() {
         });
     });
 }
-/// A globally-scoped non-Warp installation only auto-spawns when the toggle is on.
+/// A globally-scoped non-Black installation only auto-spawns when the toggle is on.
 #[test]
 fn test_global_non_warp_server_respects_toggle() {
     let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
@@ -376,7 +376,7 @@ fn test_global_non_warp_server_respects_toggle() {
     });
 }
 
-/// Project-scoped installations (both Warp and third-party) never auto-spawn on
+/// Project-scoped installations (both Black and third-party) never auto-spawn on
 /// detection, and the toggle must not spawn or despawn them either.
 #[test]
 fn test_project_scoped_servers_never_auto_spawn() {
@@ -504,7 +504,7 @@ fn test_auto_started_cloud_scan_uuids_are_in_wait_set() {
 }
 
 /// An installation referenced from both a global location and a project location
-/// is considered global (and thus gated only by the toggle for non-Warp providers).
+/// is considered global (and thus gated only by the toggle for non-Black providers).
 #[test]
 fn test_server_referenced_from_both_global_and_project_is_global() {
     let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);

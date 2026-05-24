@@ -1,9 +1,9 @@
 #![allow(deprecated)]
 use std::collections::HashSet;
 
-use warp_core::features::FeatureFlag;
+use black_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
-use warpui::{App, EntityId};
+use black_ui::{App, EntityId};
 
 use super::*;
 use crate::ai::blocklist::BlocklistAIHistoryModel;

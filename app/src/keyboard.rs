@@ -5,13 +5,13 @@ use anyhow::Context;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use vec1::{vec1, Vec1};
-use warpui::keymap::Keystroke;
+use black_ui::keymap::Keystroke;
 #[cfg(not(test))]
-use warpui::keymap::Trigger;
-use warpui::AppContext;
+use black_ui::keymap::Trigger;
+use black_ui::AppContext;
 
 /// Environment variable to disable saving keybindings to file (used in integration tests)
-pub const DISABLE_SAVE_ENV_VAR: &str = "WARP_TEST_DISABLE_KEYBINDING_SAVE";
+pub const DISABLE_SAVE_ENV_VAR: &str = "BLACK_TEST_DISABLE_KEYBINDING_SAVE";
 const REMOVED_KEYBINDING_SERIALIZATION: &str = "none";
 
 #[derive(PartialEq, Debug)]
@@ -93,7 +93,7 @@ where
 }
 
 pub fn keybinding_file_path() -> std::path::PathBuf {
-    warp_core::paths::config_local_dir().join(KEYBINDINGS_FILE_NAME)
+    black_core::paths::config_local_dir().join(KEYBINDINGS_FILE_NAME)
 }
 
 /// Save the custom keybindings map to disk.

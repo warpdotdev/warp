@@ -5,21 +5,21 @@ use std::sync::Arc;
 use itertools::Itertools;
 use pathfinder_geometry::vector::vec2f;
 use string_offset::CharOffset;
-use warp_core::ui::theme::Fill;
-use warp_editor::editor::NavigationKey;
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::{
+use black_core::ui::theme::Fill;
+use black_editor::editor::NavigationKey;
+use black_ui::clipboard::ClipboardContent;
+use black_ui::elements::{
     Align, Border, ChildAnchor, Clipped, ClippedScrollStateHandle, ClippedScrollable,
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisAlignment,
     MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
     ParentOffsetBounds, Radius, ScrollbarWidth, Shrinkable, Stack,
 };
-use warpui::fonts::{FamilyId, Weight};
-use warpui::platform::Cursor;
-use warpui::presenter::ChildView;
-use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::{FamilyId, Weight};
+use black_ui::platform::Cursor;
+use black_ui::presenter::ChildView;
+use black_ui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, UpdateView, View,
     ViewContext, ViewHandle,
 };
@@ -423,7 +423,7 @@ impl WorkflowModal {
     #[allow(dead_code)]
     fn populate(&mut self, workflow: Workflow, ctx: &mut ViewContext<Self>) {
         // Sanitize the arguments generated for the workflow by removing any illegal characters.
-        // Necessary since Warp AI command search sometimes provides arguments in an invalid argument format.
+        // Necessary since Black AI command search sometimes provides arguments in an invalid argument format.
         let mut sanitized_content = workflow.content().to_string();
         let sanitized_arguments = workflow
             .arguments()
@@ -1724,7 +1724,7 @@ impl WorkflowModal {
                 .finish();
 
             let button_with_tool_tip = appearance.ui_builder().tool_tip_on_element(
-                "Generate a title, descriptions, or parameters with Warp AI".to_string(),
+                "Generate a title, descriptions, or parameters with Black AI".to_string(),
                 self.button_mouse_states.ai_assist_tool_tip.clone(),
                 rendered_button,
                 ParentAnchor::BottomMiddle,

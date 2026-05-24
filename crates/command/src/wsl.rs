@@ -2,7 +2,7 @@
 //! invocations made through this crate's [`Command`](crate::r#async::Command)
 //! and [`Command`](crate::blocking::Command) wrappers.
 //!
-//! Warp ships as a Linux ELF that users routinely run inside WSL.
+//! Black ships as a Linux ELF that users routinely run inside WSL.
 //! WSL's default `appendWindowsPath = true` (in `/etc/wsl.conf`)
 //! puts directories like `/mnt/c/Program Files/Git/cmd/` on `PATH`,
 //! so a bare `Command::new("git")` can resolve to Windows `git.exe`
@@ -27,7 +27,7 @@ use std::sync::OnceLock;
 #[path = "wsl_tests.rs"]
 mod tests;
 
-/// Bare program names whose resolution Warp wants to override under
+/// Bare program names whose resolution Black wants to override under
 /// WSL. Anything not in this list is passed through unchanged.
 const KNOWN_NAMES: &[&str] = &["git", "gh"];
 

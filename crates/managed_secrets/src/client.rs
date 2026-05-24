@@ -5,8 +5,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use vec1::Vec1;
-use warp_graphql::managed_secrets::{ManagedSecret, ManagedSecretConfig, ManagedSecretType};
-pub use warp_graphql::queries::task_secrets::ManagedSecretValue;
+use black_graphql::managed_secrets::{ManagedSecret, ManagedSecretConfig, ManagedSecretType};
+pub use black_graphql::queries::task_secrets::ManagedSecretValue;
 
 /// An OIDC identity token issued for a task workload.
 #[derive(Debug, Clone)]
@@ -75,7 +75,7 @@ pub trait ManagedSecretsClient: 'static + Send + Sync {
     /// Returns an empty list for harnesses that do not use auth secrets (e.g. Oz).
     async fn list_harness_auth_secrets(
         &self,
-        harness: warp_graphql::ai::AgentHarness,
+        harness: black_graphql::ai::AgentHarness,
     ) -> Result<Vec<ManagedSecret>>;
 
     async fn get_task_secrets(

@@ -3,20 +3,20 @@ use std::sync::Arc;
 use anyhow::Result;
 use chrono::{DateTime, FixedOffset, Local};
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::clipboard::ClipboardContent;
-use warpui::color::ColorU;
-use warpui::elements::{
+use black_core::ui::theme::color::internal_colors;
+use black_ui::clipboard::ClipboardContent;
+use black_ui::color::ColorU;
+use black_ui::elements::{
     Align, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Dismiss, Expanded, Fill, Flex, Hoverable, Icon, MouseStateHandle, OffsetPositioning,
     ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
     PositionedElementOffsetBounds, Radius, SavePosition, ScrollStateHandle, Scrollable,
     ScrollableElement, ScrollbarWidth, Shrinkable, Stack, UniformList, UniformListState,
 };
-use warpui::fonts::Weight;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::Weight;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
@@ -37,7 +37,7 @@ const SCROLLBAR_WIDTH: ScrollbarWidth = ScrollbarWidth::Auto;
 
 const UNSHARE_BLOCK_CONFIRMATION_DIALOG_TEXT: &str =
     "Are you sure you want to unshare this block?\n\
-\nIt will no longer be accessible by link and will be permanently deleted from Warp servers.";
+\nIt will no longer be accessible by link and will be permanently deleted from Black servers.";
 
 #[derive(Clone, Debug)]
 struct UserOwnedBlock {

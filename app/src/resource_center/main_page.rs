@@ -1,14 +1,14 @@
 use pathfinder_geometry::vector::vec2f;
-use warpui::elements::{
+use black_ui::elements::{
     Align, ClippedScrollStateHandle, ClippedScrollable, Container, CornerRadius, Element, Empty,
     Fill, Flex, Hoverable, Icon, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
     Radius, Shrinkable,
 };
-use warpui::platform::Cursor;
-use warpui::presenter::ChildView;
-use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::platform::Cursor;
+use black_ui::presenter::ChildView;
+use black_ui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle, WindowId,
 };
@@ -133,7 +133,7 @@ impl ResourceCenterMainView {
                             }
                             None => !is_tips_completed && !is_onboarded,
                         },
-                        // Expand Maximize Warp section once user has completed welcome tips,
+                        // Expand Maximize Black section once user has completed welcome tips,
                         // and keep open after users have completed/skipped all tips
                         FeatureSection::MaximizeWarp => match ChannelState::app_version() {
                             Some(version) => {
@@ -390,7 +390,7 @@ impl ResourceCenterMainView {
                 .with_text_and_icon_label(
                     TextAndIcon::new(
                         TextAndIconAlignment::IconFirst,
-                        "Invite a friend to Warp",
+                        "Invite a friend to Black",
                         Icon::new(SEND_SVG_PATH, appearance.theme().accent()),
                         MainAxisSize::Max,
                         MainAxisAlignment::Center,

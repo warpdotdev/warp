@@ -1,4 +1,4 @@
-//! Login-item registration — makes Warp start automatically when the user
+//! Login-item registration — makes Black start automatically when the user
 //! signs in to their OS.
 //!
 //! The user-facing toggle and "already registered" bookkeeping live on
@@ -12,15 +12,15 @@ mod macos;
 mod windows;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-use warp_core::channel::ChannelState;
+use black_core::channel::ChannelState;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-use warpui::AppContext;
+use black_ui::AppContext;
 
-/// Reconciles whether Warp is registered to launch at login with the user's
+/// Reconciles whether Black is registered to launch at login with the user's
 /// current preference.
 ///
 /// Respects the existing `app_added_as_login_item` bookkeeping so a user who
-/// removed Warp from their OS's startup UI isn't silently re-added — the
+/// removed Black from their OS's startup UI isn't silently re-added — the
 /// platform backends only run the registration flow when the setting was
 /// explicitly re-toggled.
 ///
@@ -30,7 +30,7 @@ use warpui::AppContext;
 /// auto-launch `target/debug/{warp,openwarp,...}` at sign-in.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub fn maybe_register_app_as_login_item(ctx: &mut AppContext) {
-    if std::env::var("WARP_INTEGRATION").is_ok() {
+    if std::env::var("BLACK_INTEGRATION").is_ok() {
         log::debug!("Not registering as a login item in integration tests");
         return;
     }

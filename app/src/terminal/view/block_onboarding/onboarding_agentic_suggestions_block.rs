@@ -3,17 +3,17 @@ use markdown_parser::weight::CustomWeight;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::color::internal_colors;
+use black_ui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex,
     FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
     ParentElement, Radius, Text, Wrap,
 };
-use warpui::keymap::Keystroke;
-use warpui::platform::Cursor;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::keymap::Keystroke;
+use black_ui::platform::Cursor;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     WeakViewHandle,
 };
@@ -145,7 +145,7 @@ impl OnboardingAgenticSuggestionsBlock {
         let matrix_save_directory = themes_dir()
             .into_os_string()
             .into_string()
-            .unwrap_or("the Warp themes directory.".to_string());
+            .unwrap_or("the Black themes directory.".to_string());
 
         let agent_suggestions = vec![
             (
@@ -172,7 +172,7 @@ impl OnboardingAgenticSuggestionsBlock {
                 AgenticSuggestionsContent {
                     title: "Create a Matrix-styled custom theme".to_string(),
                     description: "Make your terminal look like you entered the Matrix".to_string(),
-                    prompt: format!("First check if {matrix_save_directory} exists, and create this path if it doesn't already exist. Then create a matrix theme for my Warp terminal without a background image field, following exact YAML structure on the warp website without any extra or missing fields. Call it matrix.yaml and save it in the directory we previously created. Once you've verified that the theme is correct and ready to be applied, let me know by only saying 'The matrix theme is now available at <path>.'."),
+                    prompt: format!("First check if {matrix_save_directory} exists, and create this path if it doesn't already exist. Then create a matrix theme for my Black terminal without a background image field, following the exact YAML structure for Black themes without any extra or missing fields. Call it matrix.yaml and save it in the directory we previously created. Once you've verified that the theme is correct and ready to be applied, let me know by only saying 'The matrix theme is now available at <path>.'."),
                     chip_type: OnboardingChipType::MatrixThemePicker,
                     icon: UIIcon::Icon::PaintBrush,
                 },
@@ -518,7 +518,7 @@ impl OnboardingAgenticSuggestionsBlock {
                         // Use a more muted background for disabled state
                         theme.surface_1()
                     } else {
-                        warp_core::ui::theme::Fill::Solid(internal_colors::neutral_1(theme))
+                        black_core::ui::theme::Fill::Solid(internal_colors::neutral_1(theme))
                     };
 
                     let mut button_content =
@@ -581,7 +581,7 @@ impl OnboardingAgenticSuggestionsBlock {
         let font_size = appearance.monospace_font_size();
         let font_color = current_theme.main_text_color(current_theme.background());
 
-        const WELCOME_TEXT_LINE_ONE: &str = "Welcome to Warp!";
+        const WELCOME_TEXT_LINE_ONE: &str = "Welcome to Black!";
         const WELCOME_TEXT_LINE_TWO_PART_ONE: &str =
             "Here are a few examples of how to leverage the power of AI in your terminal using";
         const WELCOME_TEXT_LINE_TWO_PART_TWO: &str = " Agent Mode";

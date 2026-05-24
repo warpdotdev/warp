@@ -6,7 +6,7 @@ use std::sync::Arc;
 use mockall::predicate::eq;
 use tempfile::TempDir;
 use uuid::Uuid;
-use warp_cli::{OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV};
+use black_cli::{OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV};
 
 use super::*;
 use crate::ai::agent_events::{AgentMessageEventMetadata, MessageHydrator};

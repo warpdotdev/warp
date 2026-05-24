@@ -5,7 +5,7 @@
 //! updates, but we don't try to register against a class that isn't there.
 
 use ::settings::Setting;
-use warpui::{AppContext, SingletonEntity};
+use black_ui::{AppContext, SingletonEntity};
 
 use crate::report_if_error;
 use crate::terminal::general_settings::GeneralSettings;

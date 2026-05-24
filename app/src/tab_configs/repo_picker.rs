@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 
-use warp_util::path::user_friendly_path;
-use warpui::elements::{Border, ChildView, Container, Hoverable, MouseStateHandle, Text};
-use warpui::platform::Cursor;
-use warpui::text_layout::ClipConfig;
-use warpui::ui_components::components::UiComponentStyles;
-use warpui::{
+use black_util::path::user_friendly_path;
+use black_ui::elements::{Border, ChildView, Container, Hoverable, MouseStateHandle, Text};
+use black_ui::platform::Cursor;
+use black_ui::text_layout::ClipConfig;
+use black_ui::ui_components::components::UiComponentStyles;
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 

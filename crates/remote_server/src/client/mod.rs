@@ -7,7 +7,7 @@ use std::time::Duration;
 use dashmap::DashMap;
 use futures::channel::oneshot;
 use futures::io::{AsyncRead, AsyncWrite};
-use warpui::r#async::{executor, FutureExt as _};
+use black_ui::r#async::{executor, FutureExt as _};
 
 use crate::codebase_index_proto::{
     proto_to_codebase_index_status_updated, proto_to_codebase_index_statuses_snapshot,
@@ -32,9 +32,9 @@ use crate::repo_metadata_proto::{proto_snapshot_to_update, proto_to_repo_metadat
 mod remote_server_log;
 #[cfg(not(target_family = "wasm"))]
 pub use remote_server_log::RemoteServerLog;
-use warp_core::{safe_error, safe_warn, SessionId};
-use warp_util::standardized_path::StandardizedPath;
-use warpui::r#async::TransportStream;
+use black_core::{safe_error, safe_warn, SessionId};
+use black_util::standardized_path::StandardizedPath;
+use black_ui::r#async::TransportStream;
 
 use crate::protocol::{self, ProtocolError, RequestId};
 
@@ -164,7 +164,7 @@ pub struct RequestFailedEvent {
 /// This type does **not** own the child subprocess whose stdio backs it.
 /// For transports that spawn a subprocess (e.g. SSH), the caller is
 /// responsible for holding the `Child` for the lifetime of the session
-/// so that `kill_on_drop` fires when teardown occurs. In Warp this is
+/// so that `kill_on_drop` fires when teardown occurs. In Black this is
 /// the `RemoteServerManager`, which stores the child in
 /// `RemoteSessionState` alongside the `Arc<RemoteServerClient>`. That
 /// way the child's lifetime is gated by the manager's session map
@@ -203,7 +203,7 @@ impl RemoteServerClient {
     /// The caller retains ownership of the `Child` itself. Typically the
     /// caller spawns the `Command` with `kill_on_drop(true)` and stashes
     /// the returned `Child` somewhere whose lifetime matches the
-    /// session's (in Warp, on the `RemoteServerManager`'s
+    /// session's (in Black, on the `RemoteServerManager`'s
     /// `RemoteSessionState`). Dropping the `Child` there triggers
     /// SIGKILL on the subprocess, regardless of how many
     /// `Arc<RemoteServerClient>` clones are still alive.

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use uuid::Uuid;
-use warpui::elements::{ChildView, Container};
-use warpui::ui_components::components::{Coords, UiComponentStyles};
-use warpui::{
+use black_ui::elements::{ChildView, Container};
+use black_ui::ui_components::components::{Coords, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
@@ -42,7 +42,7 @@ use crate::workspace::ToastStack;
 /// See `specs/GH686/product.md`.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum InstallOrigin {
-    /// Triggered by a user gesture inside Warp (gallery card click,
+    /// Triggered by a user gesture inside Black (gallery card click,
     /// reinstall button, programmatic in-app flows, etc.).
     InApp,
     /// Triggered by a `warp://settings/mcp?autoinstall=...` deeplink; must be

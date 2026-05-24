@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use string_offset::CharOffset;
 use sum_tree::{Cursor, Dimension};
-use warpui::geometry::vector::Vector2F;
-use warpui::text_layout::Line;
-use warpui::units::{IntoPixels, Pixels};
+use black_ui::geometry::vector::Vector2F;
+use black_ui::text_layout::Line;
+use black_ui::units::{IntoPixels, Pixels};
 
 use super::{
     BlockItem, BlockSpacing, HorizontalRuleConfig, ImageBlockConfig, LaidOutEmbeddedItem,

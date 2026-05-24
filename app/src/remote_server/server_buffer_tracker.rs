@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use warp_editor::content::buffer::Buffer;
-use warp_util::file::FileId;
-use warpui::{ModelContext, ModelHandle, SingletonEntity};
+use black_editor::content::buffer::Buffer;
+use black_util::file::FileId;
+use black_ui::{ModelContext, ModelHandle, SingletonEntity};
 
 use super::server_model::{ConnectionId, ServerModel};
 use crate::code::global_buffer_model::GlobalBufferModel;

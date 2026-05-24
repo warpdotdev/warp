@@ -2,15 +2,15 @@ use std::rc::Rc;
 
 use ai::diff_validation::DiffType;
 #[cfg(not(target_family = "wasm"))]
-use warp_files::{FileModel, FileModelEvent};
-use warp_util::file::FileId;
+use black_files::{FileModel, FileModelEvent};
+use black_util::file::FileId;
 #[cfg(not(target_family = "wasm"))]
-use warp_util::file::FileSaveError;
-use warp_util::standardized_path::StandardizedPath;
-use warpui::elements::ChildView;
+use black_util::file::FileSaveError;
+use black_util::standardized_path::StandardizedPath;
+use black_ui::elements::ChildView;
 #[cfg(not(target_family = "wasm"))]
-use warpui::SingletonEntity;
-use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
+use black_ui::SingletonEntity;
+use black_ui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
 use super::diff_viewer::{DiffViewer, DisplayMode};
 use super::editor::scroll::{ScrollPosition, ScrollTrigger};

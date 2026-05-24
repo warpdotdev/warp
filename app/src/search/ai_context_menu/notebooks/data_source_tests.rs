@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use chrono::{Duration, Utc};
 use settings::manager::SettingsManager;
-use warpui::{App, SingletonEntity};
+use black_ui::{App, SingletonEntity};
 
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;

@@ -3,8 +3,8 @@ use instant::Duration;
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::{Role, Scrollback, ScrollbackBlock, SessionId};
 use session_sharing_protocol::sharer::SessionSourceType;
-use warpui::keymap::ContextPredicate;
-use warpui::{id, AppContext};
+use black_ui::keymap::ContextPredicate;
+use black_ui::{id, AppContext};
 
 use super::model::block::SerializedBlock;
 use super::model::terminal_model::BlockIndex;
@@ -284,7 +284,7 @@ impl SharedSessionScrollbackType {
 
 #[cfg(not(test))]
 pub fn max_session_size(ctx: &AppContext) -> Byte {
-    use warpui::SingletonEntity;
+    use black_ui::SingletonEntity;
 
     use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -327,7 +327,7 @@ pub enum SharedSessionActionSource {
 }
 
 /// Returns the native intent URL to join a shared session.
-/// This should be used when opening the session from within Warp.
+/// This should be used when opening the session from within Black.
 pub fn join_native_intent(session_id: &SessionId) -> String {
     format!(
         "{}://shared_session/{}",

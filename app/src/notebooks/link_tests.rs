@@ -7,8 +7,8 @@ use parking_lot::Mutex;
 use settings::Setting as _;
 use tempfile::tempdir;
 use url::Url;
-use warp_util::path::LineAndColumnArg;
-use warpui::{App, ModelHandle, SingletonEntity, WindowId};
+use black_util::path::LineAndColumnArg;
+use black_ui::{App, ModelHandle, SingletonEntity, WindowId};
 
 use super::{LinkTarget, NotebookLinks, ResolveError, SessionSource};
 use crate::notebooks::file::is_markdown_file;
@@ -143,8 +143,8 @@ fn test_resolve_bare_url() {
             url("http://google.com")
         );
         assert_eq!(
-            resolve(&app, &links, "warp.dev").await,
-            url("http://warp.dev")
+            resolve(&app, &links, "blackdagger.io").await,
+            url("http://blackdagger.io")
         );
         assert_eq!(
             resolve(&app, &links, "bbc.co.uk").await,
@@ -216,12 +216,12 @@ fn test_resolve_valid_url() {
         let links = init_link_model(&mut app, None);
 
         assert_eq!(
-            resolve(&app, &links, "https://warp.dev").await,
-            url("https://warp.dev")
+            resolve(&app, &links, "https://blackdagger.io").await,
+            url("https://blackdagger.io")
         );
         assert_eq!(
-            resolve(&app, &links, "mailto:test@warp.dev").await,
-            url("mailto:test@warp.dev")
+            resolve(&app, &links, "mailto:test@blackdagger.io").await,
+            url("mailto:test@blackdagger.io")
         );
     });
 }

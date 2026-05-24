@@ -37,11 +37,11 @@ pub use view::{
     Workspace, NEW_SESSION_MENU_BUTTON_POSITION_ID, NEW_TAB_BUTTON_POSITION_ID,
     PANEL_HEADER_HEIGHT, TAB_BAR_HEIGHT, TOTAL_TAB_BAR_HEIGHT, WORKSPACE_PADDING,
 };
-use warp_core::context_flag::ContextFlag;
-use warpui::accessibility::AccessibilityVerbosity;
-use warpui::elements::DropTargetData;
-use warpui::keymap::{BindingDescription, EditableBinding, FixedBinding};
-use warpui::{AppContext, SingletonEntity};
+use black_core::context_flag::ContextFlag;
+use black_ui::accessibility::AccessibilityVerbosity;
+use black_ui::elements::DropTargetData;
+use black_ui::keymap::{BindingDescription, EditableBinding, FixedBinding};
+use black_ui::{AppContext, SingletonEntity};
 
 use crate::ai::blocklist::NEW_AGENT_PANE_LABEL;
 use crate::ai::skills::SkillManager;
@@ -58,8 +58,8 @@ use crate::util::bindings::{self, cmd_or_ctrl_shift, is_binding_pty_compliant, C
 use crate::{code, modal, notebooks, tab_configs};
 
 // Helper function to access panel header corner radius from other modules
-pub fn panel_header_corner_radius() -> warpui::elements::CornerRadius {
-    warpui::elements::CornerRadius::with_top(warpui::elements::Radius::Pixels(8.))
+pub fn panel_header_corner_radius() -> black_ui::elements::CornerRadius {
+    black_ui::elements::CornerRadius::with_top(black_ui::elements::Radius::Pixels(8.))
 }
 
 /// Returns `true` when `WorkspaceAction::SendFeedback` will launch the guided
@@ -94,7 +94,7 @@ use crate::workspace::view::{
 pub fn init(app: &mut AppContext) {
     app.add_singleton_model(|_| WorkspaceRegistry::new());
     app.add_singleton_model(|_| cross_window_tab_drag::CrossWindowTabDrag::new());
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
     app.register_binding_validator::<Workspace>(is_binding_pty_compliant);
 
     modal::init(app);
@@ -211,14 +211,14 @@ pub fn init(app: &mut AppContext) {
                 )
                 .with_context_predicate(id!("Workspace")),
                 EditableBinding::new(
-                    "workspace:open_openwarp_launch_modal",
-                    "[Debug] Open OpenWarp Launch Modal",
+                    "workspace:open_openblack_launch_modal",
+                    "[Debug] Open OpenBlack Launch Modal",
                     WorkspaceAction::OpenOpenWarpLaunchModal,
                 )
                 .with_context_predicate(id!("Workspace")),
                 EditableBinding::new(
-                    "workspace:reset_openwarp_launch_modal_state",
-                    "[Debug] Reset OpenWarp Launch Modal State",
+                    "workspace:reset_openblack_launch_modal_state",
+                    "[Debug] Reset OpenBlack Launch Modal State",
                     WorkspaceAction::ResetOpenWarpLaunchModalState,
                 )
                 .with_context_predicate(id!("Workspace")),
@@ -235,14 +235,14 @@ pub fn init(app: &mut AppContext) {
                 )
                 .with_context_predicate(id!("Workspace")),
                 EditableBinding::new(
-                    "workspace:install_opencode_warp_plugin",
-                    "[Debug] Install OpenCode Warp plugin",
+                    "workspace:install_opencode_black_plugin",
+                    "[Debug] Install OpenCode Black plugin",
                     WorkspaceAction::InstallOpenCodeWarpPlugin,
                 )
                 .with_context_predicate(id!("Workspace")),
                 EditableBinding::new(
-                    "workspace:use_local_opencode_warp_plugin",
-                    "[Debug] Use local OpenCode Warp plugin (testing only)",
+                    "workspace:use_local_opencode_black_plugin",
+                    "[Debug] Use local OpenCode Black plugin (testing only)",
                     WorkspaceAction::UseLocalOpenCodeWarpPlugin,
                 )
                 .with_context_predicate(id!("Workspace")),
@@ -618,7 +618,7 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(
             id!("Workspace")
                 & id!(flags::ENABLE_WARP_DRIVE)
-                & id!("WarpDrive_BelongsToTeam")
+                & id!("BlackDrive_BelongsToTeam")
                 & id!("IsOnline"),
         )
         .with_group(bindings::BindingGroup::Notebooks.as_str()),
@@ -642,7 +642,7 @@ pub fn init(app: &mut AppContext) {
             id!("Workspace")
                 & id!(flags::ENABLE_WARP_DRIVE)
                 & id!("IsOnline")
-                & id!("WarpDrive_BelongsToTeam"),
+                & id!("BlackDrive_BelongsToTeam"),
         )
         .with_group(bindings::BindingGroup::Workflow.as_str()),
         EditableBinding::new(
@@ -664,7 +664,7 @@ pub fn init(app: &mut AppContext) {
             id!("Workspace")
                 & id!(flags::ENABLE_WARP_DRIVE)
                 & id!("IsOnline")
-                & id!("WarpDrive_BelongsToTeam"),
+                & id!("BlackDrive_BelongsToTeam"),
         )
         .with_group(bindings::BindingGroup::Folders.as_str()),
         EditableBinding::new(
@@ -770,7 +770,7 @@ pub fn init(app: &mut AppContext) {
         .with_custom_action(CustomAction::ToggleGlobalSearch),
         EditableBinding::new(
             LEFT_PANEL_WARP_DRIVE_BINDING_NAME,
-            BindingDescription::new("Left Panel: Warp Drive"),
+            BindingDescription::new("Left Panel: Black Drive"),
             WorkspaceAction::ToggleWarpDrive,
         )
         .with_group(bindings::BindingGroup::Navigation.as_str())
@@ -796,8 +796,8 @@ pub fn init(app: &mut AppContext) {
         .with_linux_or_windows_key_binding("alt-shift-F"),
         EditableBinding::new(
             TOGGLE_WARP_DRIVE_BINDING_NAME,
-            BindingDescription::new("Toggle Warp Drive")
-                .with_custom_description(bindings::MAC_MENUS_CONTEXT, "Warp Drive"),
+            BindingDescription::new("Toggle Black Drive")
+                .with_custom_description(bindings::MAC_MENUS_CONTEXT, "Black Drive"),
             WorkspaceAction::ToggleWarpDrive,
         )
         .with_context_predicate(id!("Workspace") & id!(flags::ENABLE_WARP_DRIVE)),
@@ -935,7 +935,7 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "workspace:terminate_app",
-            "Quit Warp",
+            "Quit Black",
             WorkspaceAction::TerminateApp,
         )
         .with_context_predicate(id!("Workspace"))
@@ -1040,7 +1040,7 @@ pub fn init(app: &mut AppContext) {
         EditableBinding::new(
             // If you rename this name, please update the name in command_palette/action/data_source.rs
             "workspace:search_drive",
-            "Search Warp Drive",
+            "Search Black Drive",
             WorkspaceAction::OpenPalette {
                 mode: PaletteMode::WarpDrive,
                 source: PaletteSource::Keybinding,
@@ -1094,8 +1094,8 @@ pub fn init(app: &mut AppContext) {
 
     if cfg!(not(target_family = "wasm")) {
         app.register_editable_bindings([EditableBinding::new(
-            "workspace:export_all_warp_drive_objects",
-            "Export all Warp Drive objects",
+            "workspace:export_all_black_drive_objects",
+            "Export all Black Drive objects",
             WorkspaceAction::ExportAllWarpDriveObjects,
         )
         .with_group(bindings::BindingGroup::Settings.as_str())
@@ -1168,14 +1168,14 @@ pub fn init(app: &mut AppContext) {
         .with_custom_action(CustomAction::NewAgentModePane),
         EditableBinding::new(
             "workspace:toggle_ai_assistant",
-            "Toggle Warp AI",
+            "Toggle Black AI",
             WorkspaceAction::ToggleAIAssistant,
         )
         .with_enabled(|| !FeatureFlag::AgentMode.is_enabled())
         .with_context_predicate(id!("Workspace") & id!(flags::IS_ANY_AI_ENABLED))
         .with_group(bindings::BindingGroup::WarpAi.as_str())
         // We use the same custom action as AM so that we don't have
-        // two mac menu items for AM vs Warp AI since they are mutually exclusive.
+        // two mac menu items for AM vs Black AI since they are mutually exclusive.
         .with_custom_action(CustomAction::NewAgentModePane),
     ]);
 
@@ -1193,7 +1193,7 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(
             id!("Workspace")
                 & id!(flags::ENABLE_WARP_DRIVE)
-                & id!("WarpDrive_BelongsToTeam")
+                & id!("BlackDrive_BelongsToTeam")
                 & id!("IsOnline"),
         )
         .with_group(bindings::BindingGroup::EnvVarCollection.as_str()),
@@ -1231,7 +1231,7 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(
             id!("Workspace")
                 & id!(flags::ENABLE_WARP_DRIVE)
-                & id!("WarpDrive_BelongsToTeam")
+                & id!("BlackDrive_BelongsToTeam")
                 & id!("IsOnline")
                 & id!(flags::IS_ANY_AI_ENABLED),
         ),
@@ -1267,7 +1267,7 @@ pub fn init(app: &mut AppContext) {
             WorkspaceAction::ImportToTeamDrive,
         )
         .with_context_predicate(
-            id!("Workspace") & id!(flags::ENABLE_WARP_DRIVE) & id!("WarpDrive_BelongsToTeam"),
+            id!("Workspace") & id!(flags::ENABLE_WARP_DRIVE) & id!("BlackDrive_BelongsToTeam"),
         ),
     ]);
 
@@ -1356,7 +1356,7 @@ pub fn init(app: &mut AppContext) {
 }
 
 fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     // Add the ability to open setting modals to the command palette.
     app.register_editable_bindings([
@@ -1416,7 +1416,7 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
         EditableBinding::new(
             "workspace:show_settings_about_page",
             BindingDescription::new("Open Settings: About")
-                .with_custom_description(bindings::MAC_MENUS_CONTEXT, "About Warp"),
+                .with_custom_description(bindings::MAC_MENUS_CONTEXT, "About Black"),
             WorkspaceAction::ShowSettingsPage(SettingsSection::About),
         )
         .with_group(bindings::BindingGroup::Settings.as_str())
@@ -1439,10 +1439,10 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_context_predicate(id!("Workspace")),
         EditableBinding::new(
-            "workspace:show_settings_warpify_page",
-            BindingDescription::new("Open Settings: Warpify")
-                .with_custom_description(bindings::MAC_MENUS_CONTEXT, "Configure Warpify..."),
-            WorkspaceAction::ShowSettingsPage(SettingsSection::Warpify),
+            "workspace:show_settings_blackify_page",
+            BindingDescription::new("Open Settings: Blackify")
+                .with_custom_description(bindings::MAC_MENUS_CONTEXT, "Configure Blackify..."),
+            WorkspaceAction::ShowSettingsPage(SettingsSection::Blackify),
         )
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_context_predicate(id!("Workspace")),
@@ -1501,7 +1501,7 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
 }
 
 fn add_overflow_menu_items_as_editable_binding(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     // Add the ability to open all overflow menu items to the command palette.
     app.register_editable_bindings([
@@ -1535,7 +1535,7 @@ fn add_overflow_menu_items_as_editable_binding(app: &mut AppContext) {
         #[cfg(not(target_family = "wasm"))]
         EditableBinding::new(
             "workspace:view_logs",
-            "View Warp logs",
+            "View Black logs",
             WorkspaceAction::ViewLogs,
         )
         .with_context_predicate(id!("Workspace")),

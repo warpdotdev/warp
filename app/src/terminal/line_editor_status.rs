@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::{Entity, ModelContext, ModelHandle};
+use black_ui::r#async::SpawnedFutureHandle;
+use black_ui::{Entity, ModelContext, ModelHandle};
 
 use super::shell::ShellType;
 use super::{ModelEvent, ModelEventDispatcher};
@@ -11,7 +11,7 @@ use crate::terminal::model_events::AnsiHandlerEvent;
 /// The duration after a precmd/end prompt hook (depending on the shell type) to wait before
 /// assuming the shell's line editor is active again. If we receive a preexec hook in that time,
 /// we assume there are multiple queued typeahead commands and wait to request input.
-/// This prevents Warp sending an escape sequence to an arbitrary running program.
+/// This prevents Black sending an escape sequence to an arbitrary running program.
 ///
 /// To avoid flickering, this must be less than `BACKGROUND_OUTPUT_RENDER_DELAY_MS`,
 /// which is the delay before a background block is rendered.
@@ -113,7 +113,7 @@ impl LineEditorStatus {
         // For zsh, we use this heuristic -- 10ms after EndPrompt -- to approximate when the line
         // editor is active.
         let abort_handle = ctx.spawn_abortable(
-            async move { warpui::r#async::Timer::after(delay).await },
+            async move { black_ui::r#async::Timer::after(delay).await },
             |me, _, ctx| {
                 me.is_line_editor_active = true;
                 ctx.emit(LineEditorStatusEvent::Active);

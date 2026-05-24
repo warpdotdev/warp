@@ -14,9 +14,9 @@ use markdown_parser::{
 };
 use markup5ever::ns;
 use string_offset::CharOffset;
-use warpui::elements::{ListIndentLevel, ListNumbering};
-use warpui::text::point::Point;
-use warpui::{AppContext, ModelContext, ModelHandle};
+use black_ui::elements::{ListIndentLevel, ListNumbering};
+use black_ui::text::point::Point;
+use black_ui::{AppContext, ModelContext, ModelHandle};
 
 use super::buffer::{
     ActionWithSelectionDelta, Buffer, EditOrigin, EditResult, StyledBufferBlock,
@@ -34,7 +34,7 @@ use crate::content::version::BufferVersion;
 /// A Markdown format to serialize a [`Buffer`] into.
 #[derive(Clone, Copy)]
 pub enum MarkdownStyle<'a> {
-    /// The internal Markdown format used in Warp Drive. References are normalized, so the Markdown
+    /// The internal Markdown format used in Black Drive. References are normalized, so the Markdown
     /// only refers to other objects by their IDs, with no other data.
     Internal,
     /// A Markdown format suitable for external use. If an [`AppContext`] is set, it may be used to

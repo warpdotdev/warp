@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use warpui::elements::{Align, CacheOption, CornerRadius, Empty, Image, Radius, Text};
-use warpui::geometry::vector::vec2f;
-use warpui::{AppContext, Element, SizeConstraint};
+use black_ui::elements::{Align, CacheOption, CornerRadius, Empty, Image, Radius, Text};
+use black_ui::geometry::vector::vec2f;
+use black_ui::{AppContext, Element, SizeConstraint};
 
 use super::{RenderContext, RenderableBlock};
 use crate::editor::RunnableCommandModel;
@@ -43,7 +43,7 @@ impl RenderableBlock for RenderableMermaidDiagram {
         &self.viewport_item
     }
 
-    fn layout(&mut self, model: &RenderState, ctx: &mut warpui::LayoutContext, app: &AppContext) {
+    fn layout(&mut self, model: &RenderState, ctx: &mut black_ui::LayoutContext, app: &AppContext) {
         let content = model.content();
         let (asset_source, config) = extract_block!(
             self.viewport_item,
@@ -160,7 +160,7 @@ impl RenderableBlock for RenderableMermaidDiagram {
                 model.styles(),
             );
         }
-        ctx.paint.scene.start_layer(warpui::ClipBounds::ActiveLayer);
+        ctx.paint.scene.start_layer(black_ui::ClipBounds::ActiveLayer);
         let button_origin = content_rect.lower_right()
             - vec2f(
                 self.footer.size().expect("Footer should be laid out").x(),
@@ -170,7 +170,7 @@ impl RenderableBlock for RenderableMermaidDiagram {
         ctx.paint.scene.stop_layer();
     }
 
-    fn after_layout(&mut self, ctx: &mut warpui::AfterLayoutContext, app: &warpui::AppContext) {
+    fn after_layout(&mut self, ctx: &mut black_ui::AfterLayoutContext, app: &black_ui::AppContext) {
         if let Some(ref mut image_element) = self.image_element {
             image_element.after_layout(ctx, app);
         }
@@ -180,8 +180,8 @@ impl RenderableBlock for RenderableMermaidDiagram {
     fn dispatch_event(
         &mut self,
         _model: &RenderState,
-        event: &warpui::event::DispatchedEvent,
-        ctx: &mut warpui::EventContext,
+        event: &black_ui::event::DispatchedEvent,
+        ctx: &mut black_ui::EventContext,
         app: &AppContext,
     ) -> bool {
         self.footer.dispatch_event(event, ctx, app)

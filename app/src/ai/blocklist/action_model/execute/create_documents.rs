@@ -1,6 +1,6 @@
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
+use black_ui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::conversation::AIConversationId;
@@ -17,13 +17,13 @@ use crate::terminal::model::session::active_session::ActiveSession;
 
 pub struct CreateDocumentsExecutor {
     active_session: ModelHandle<ActiveSession>,
-    terminal_view_id: warpui::EntityId,
+    terminal_view_id: black_ui::EntityId,
 }
 
 impl CreateDocumentsExecutor {
     pub fn new(
         active_session: ModelHandle<ActiveSession>,
-        terminal_view_id: warpui::EntityId,
+        terminal_view_id: black_ui::EntityId,
     ) -> Self {
         Self {
             active_session,
@@ -112,7 +112,7 @@ impl CreateDocumentsExecutor {
                 // Add plan artifact to the conversation.
                 let artifact = Artifact::Plan {
                     document_uid: id.to_string(),
-                    notebook_uid: None, // Will be updated when synced to Warp Drive
+                    notebook_uid: None, // Will be updated when synced to Black Drive
                     title: Some(document.title.clone()),
                 };
                 let terminal_view_id = self.terminal_view_id;

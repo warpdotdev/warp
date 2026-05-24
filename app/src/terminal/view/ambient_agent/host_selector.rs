@@ -3,15 +3,15 @@ use std::sync::Arc;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::Fill;
+use black_ui::elements::{
     Border, ChildAnchor, ChildView, OffsetPositioning, ParentAnchor, ParentElement as _,
     ParentOffsetBounds, Stack,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
@@ -50,7 +50,7 @@ pub enum Host {
 impl Host {
     fn display_name(&self) -> &str {
         match self {
-            Host::Warp => "Warp",
+            Host::Warp => "Black",
             Host::SelfHosted { slug } => slug.as_str(),
         }
     }

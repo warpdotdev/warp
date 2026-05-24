@@ -1,16 +1,16 @@
 use itertools::Itertools;
-use warp_core::settings::Setting;
-use warp_core::ui::appearance::Appearance;
-use warpui::elements::{
+use black_core::settings::Setting;
+use black_core::ui::appearance::Appearance;
+use black_ui::elements::{
     Border, Container, CornerRadius, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::keymap::Keystroke;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ui_components::radio_buttons::{self, RadioButtonItem, RadioButtonStateHandle};
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::keymap::Keystroke;
+use black_ui::ui_components::button::ButtonVariant;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::ui_components::radio_buttons::{self, RadioButtonItem, RadioButtonStateHandle};
+use black_ui::{
     Element, Entity, ModelContext, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
@@ -207,7 +207,7 @@ impl SettingsImportView {
         &self,
         appearance: &Appearance,
         name: impl Into<std::borrow::Cow<'static, str>>,
-    ) -> Box<dyn warpui::Element> {
+    ) -> Box<dyn black_ui::Element> {
         let theme = appearance.theme();
         let font_color = theme.disabled_text_color(theme.background());
         let font_family = appearance.monospace_font_family();
@@ -227,8 +227,8 @@ impl SettingsImportView {
     fn render_import_button(
         &self,
         appearance: &Appearance,
-        app: &warpui::AppContext,
-    ) -> Box<dyn warpui::Element> {
+        app: &black_ui::AppContext,
+    ) -> Box<dyn black_ui::Element> {
         let model = ImportedConfigModel::as_ref(app);
         let button = if self
             .radio_button_state
@@ -272,7 +272,7 @@ impl SettingsImportView {
         .finish()
     }
 
-    fn render_reset_button(&self, appearance: &Appearance) -> Box<dyn warpui::Element> {
+    fn render_reset_button(&self, appearance: &Appearance) -> Box<dyn black_ui::Element> {
         appearance
             .ui_builder()
             .button(ButtonVariant::Secondary, self.skip_button_handle.clone())
@@ -288,7 +288,7 @@ impl SettingsImportView {
                 background: Some(appearance.theme().outline().into()),
                 ..Default::default()
             })
-            .with_centered_text_label("Reset to Warp defaults".to_owned())
+            .with_centered_text_label("Reset to Black defaults".to_owned())
             .build()
             .on_click(move |ctx, _, _| {
                 ctx.dispatch_typed_action(SettingsImportAction::ResetButtonClicked);
@@ -301,8 +301,8 @@ impl SettingsImportView {
         appearance: &Appearance,
         setting: &ToggleableSetting,
         idx: usize,
-        app: &warpui::AppContext,
-    ) -> Box<dyn warpui::Element> {
+        app: &black_ui::AppContext,
+    ) -> Box<dyn black_ui::Element> {
         let theme = appearance.theme();
         let font_family = appearance.monospace_font_family();
         let font_color = blended_colors::text_sub(theme, theme.background());
@@ -333,7 +333,7 @@ impl SettingsImportView {
                 )
                 .with_child(Shrinkable::new(1.0, description.finish()).finish())
                 .with_main_axis_size(MainAxisSize::Max)
-                .with_cross_axis_alignment(warpui::elements::CrossAxisAlignment::Center)
+                .with_cross_axis_alignment(black_ui::elements::CrossAxisAlignment::Center)
                 .finish(),
         )
         .finish()
@@ -346,8 +346,8 @@ impl SettingsImportView {
         is_selected: bool,
         hovered: bool,
         idx: usize,
-        app: &warpui::AppContext,
-    ) -> Box<dyn warpui::Element> {
+        app: &black_ui::AppContext,
+    ) -> Box<dyn black_ui::Element> {
         let theme = appearance.theme();
         let font_family = appearance.monospace_font_family();
         let font_color = theme.main_text_color(theme.background());
@@ -379,7 +379,7 @@ impl SettingsImportView {
         }
 
         let config_name_flex = Flex::row()
-            .with_cross_axis_alignment(warpui::elements::CrossAxisAlignment::Center)
+            .with_cross_axis_alignment(black_ui::elements::CrossAxisAlignment::Center)
             .with_children(config_name_text_elements)
             .finish();
 
@@ -451,7 +451,7 @@ impl SettingsImportView {
                 .with_opacity(appearance.theme().settings_import_config_hover_opacity());
 
                 let preference_flex = Flex::row()
-                    .with_cross_axis_alignment(warpui::elements::CrossAxisAlignment::Center)
+                    .with_cross_axis_alignment(black_ui::elements::CrossAxisAlignment::Center)
                     .with_children(preference_text_elements)
                     .finish();
                 Container::new(
@@ -463,7 +463,7 @@ impl SettingsImportView {
                                     .with_child(Shrinkable::new(3.0, config_name_flex).finish())
                                     .with_child(Shrinkable::new(1.0, preference_flex).finish())
                                     .with_cross_axis_alignment(
-                                        warpui::elements::CrossAxisAlignment::Center,
+                                        black_ui::elements::CrossAxisAlignment::Center,
                                     )
                                     .with_main_axis_size(MainAxisSize::Max)
                                     .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
@@ -506,7 +506,7 @@ impl SettingsImportView {
         appearance: &Appearance,
         settings: &[ToggleableSetting],
         idx: usize,
-        app: &warpui::AppContext,
+        app: &black_ui::AppContext,
     ) -> Box<dyn Element> {
         let mut iter = settings.iter();
         let mut column_holder = Flex::row().with_main_axis_size(MainAxisSize::Max);
@@ -737,7 +737,7 @@ impl SettingsImportView {
     }
 
     fn set_theme(
-        ctx: &mut warpui::ViewContext<Self>,
+        ctx: &mut black_ui::ViewContext<Self>,
         theme_type: ThemeType,
         terminal_name: &String,
     ) {
@@ -851,7 +851,7 @@ impl SettingsImportView {
         );
     }
 
-    pub(crate) fn interrupt_block(&mut self, ctx: &mut warpui::ViewContext<Self>) {
+    pub(crate) fn interrupt_block(&mut self, ctx: &mut black_ui::ViewContext<Self>) {
         self.state = State::Completed { imported_idx: None };
         ctx.notify();
     }
@@ -897,7 +897,7 @@ impl View for SettingsImportView {
         "SettingsImportView"
     }
 
-    fn render(&self, app: &warpui::AppContext) -> Box<dyn warpui::Element> {
+    fn render(&self, app: &black_ui::AppContext) -> Box<dyn black_ui::Element> {
         let appearance = Appearance::as_ref(app);
         let font_family = appearance.monospace_font_family();
         let font_size = appearance.monospace_font_size();
@@ -1059,7 +1059,7 @@ impl TypedActionView for SettingsImportView {
 
                 // Handle should_import within the model.
 
-                // set_preferences should not fail because it is writing directly to Warp's preferences.
+                // set_preferences should not fail because it is writing directly to Black's preferences.
                 self.set_preferences(ctx, terminal_type_and_profile);
 
                 // write_theme can fail because we write themes in a separate directory.

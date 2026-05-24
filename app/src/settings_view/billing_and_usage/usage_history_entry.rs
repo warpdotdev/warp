@@ -1,12 +1,12 @@
 use chrono::Local;
-use warp_core::ui::appearance::Appearance;
-use warp_graphql::queries::get_conversation_usage::ConversationUsage;
-use warpui::elements::{
+use black_core::ui::appearance::Appearance;
+use black_graphql::queries::get_conversation_usage::ConversationUsage;
+use black_ui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Hoverable,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
 };
-use warpui::platform::Cursor;
-use warpui::{AppContext, Element, View};
+use black_ui::platform::Cursor;
+use black_ui::{AppContext, Element, View};
 
 use crate::ai::blocklist::format_credits;
 use crate::ai::blocklist::usage::conversation_usage_view::{

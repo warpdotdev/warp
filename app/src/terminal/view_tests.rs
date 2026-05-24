@@ -9,11 +9,11 @@ use std::sync::Arc;
 use chrono::Local;
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::CLIAgentSessionState;
-use warp_cli::agent::Harness;
-use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
-use warpui::notification::UserNotification;
-use warpui::platform::WindowStyle;
-use warpui::{App, Presenter, ReadModel, WindowInvalidation};
+use black_cli::agent::Harness;
+use black_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
+use black_ui::notification::UserNotification;
+use black_ui::platform::WindowStyle;
+use black_ui::{App, Presenter, ReadModel, WindowInvalidation};
 
 use super::*;
 use crate::ai::agent::conversation::ConversationStatus;
@@ -525,7 +525,7 @@ fn unregister_cli_agent_session_restores_unlocked_input_config() {
 fn clear_buffer_action_in_fullscreen_agent_view_starts_new_conversation() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        FeatureFlag::AgentView.set_enabled(true);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
 
@@ -1089,8 +1089,8 @@ fn root_cloud_mode_pane_sets_root_cloud_mode_context_key() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         app.add_singleton_model(ImportedConfigModel::new);
-        FeatureFlag::AgentView.set_enabled(true);
-        FeatureFlag::CloudMode.set_enabled(true);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
 
         let terminal = add_window_with_cloud_mode_terminal(&mut app);
         let nested_terminal = add_window_with_cloud_mode_terminal(&mut app);
@@ -1148,8 +1148,8 @@ fn root_cloud_mode_pane_sets_root_cloud_mode_context_key() {
 fn set_input_mode_agent_does_not_enter_local_agent_from_root_cloud_mode_pane() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        FeatureFlag::AgentView.set_enabled(true);
-        FeatureFlag::CloudMode.set_enabled(true);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
 
         let terminal = add_window_with_cloud_mode_terminal(&mut app);
 
@@ -1922,7 +1922,7 @@ fn pending_cloud_mode_query_clears_when_streaming_exchange_becomes_renderable() 
 /// Test clearing of session flag state when terminal is cleared
 #[test]
 fn test_clear_session_flag_state() {
-    use warp_terminal::shell::ShellType;
+    use black_terminal::shell::ShellType;
 
     use crate::ai::blocklist::SerializedBlockListItem;
     use crate::terminal::model::block::SerializedBlock;
@@ -2373,7 +2373,7 @@ fn test_alt_screen_select_with_sgr_mouse() {
         rerender!(app, presenter, invalidation, size_info);
         app.update(enclose!((presenter) move |ctx| {
             ctx.simulate_window_event(
-                warpui::Event::LeftMouseDown {
+                black_ui::Event::LeftMouseDown {
                     position: start_position,
                     modifiers: Default::default(),
                     click_count: 1,
@@ -2386,7 +2386,7 @@ fn test_alt_screen_select_with_sgr_mouse() {
         rerender!(app, presenter, invalidation, size_info);
         app.update(enclose!((presenter) move |ctx| {
             ctx.simulate_window_event(
-                warpui::Event::LeftMouseDragged {
+                black_ui::Event::LeftMouseDragged {
                     position: end_position,
                     modifiers: Default::default(),
                 },
@@ -2397,7 +2397,7 @@ fn test_alt_screen_select_with_sgr_mouse() {
         rerender!(app, presenter, invalidation, size_info);
         app.update(enclose!((presenter) move |ctx| {
             ctx.simulate_window_event(
-                warpui::Event::LeftMouseUp {
+                black_ui::Event::LeftMouseUp {
                     position: end_position,
                     modifiers: Default::default(),
                 },
@@ -2419,7 +2419,7 @@ fn test_alt_screen_select_with_sgr_mouse() {
         rerender!(app, presenter, invalidation, size_info);
         app.update(enclose!((presenter) move |ctx| {
             ctx.simulate_window_event(
-                warpui::Event::LeftMouseDown {
+                black_ui::Event::LeftMouseDown {
                     position: start_position,
                     modifiers: ModifiersState {
                         shift: true,
@@ -2435,7 +2435,7 @@ fn test_alt_screen_select_with_sgr_mouse() {
         rerender!(app, presenter, invalidation, size_info);
         app.update(enclose!((presenter) move |ctx| {
             ctx.simulate_window_event(
-                warpui::Event::LeftMouseDragged {
+                black_ui::Event::LeftMouseDragged {
                     position: end_position,
                     modifiers: ModifiersState {
                         shift: true,
@@ -2449,7 +2449,7 @@ fn test_alt_screen_select_with_sgr_mouse() {
         rerender!(app, presenter, invalidation, size_info);
         app.update(enclose!((presenter) move |ctx| {
             ctx.simulate_window_event(
-                warpui::Event::LeftMouseUp {
+                black_ui::Event::LeftMouseUp {
                     position: end_position,
                     modifiers: ModifiersState {
                         shift: true,
@@ -3948,7 +3948,7 @@ fn test_bash_vim_banner_already_shown() {
                 .set_value(BannerState::Dismissed, ctx);
         });
 
-        // Ensure Warp's vim keybindings are off.
+        // Ensure Black's vim keybindings are off.
         AppEditorSettings::handle(&app).update(&mut app, |editor_settings, ctx| {
             let _ = editor_settings.vim_mode.set_value(false, ctx);
         });
@@ -4005,7 +4005,7 @@ fn test_bash_vim_banner_on() {
                 .set_value(BannerState::NotDismissed, ctx);
         });
 
-        // Ensure Warp's vim keybindings are off.
+        // Ensure Black's vim keybindings are off.
         AppEditorSettings::handle(&app).update(&mut app, |editor_settings, ctx| {
             let _ = editor_settings.vim_mode.set_value(false, ctx);
         });
@@ -4061,7 +4061,7 @@ fn test_bash_vim_banner_off() {
                 .set_value(BannerState::NotDismissed, ctx);
         });
 
-        // Ensure Warp's vim keybindings are on.
+        // Ensure Black's vim keybindings are on.
         AppEditorSettings::handle(&app).update(&mut app, |editor_settings, ctx| {
             let _ = editor_settings.vim_mode.set_value(true, ctx);
         });
@@ -4118,7 +4118,7 @@ fn test_zsh_vim_banner_on() {
                 .set_value(BannerState::NotDismissed, ctx);
         });
 
-        // Ensure Warp's vim keybindings are off.
+        // Ensure Black's vim keybindings are off.
         AppEditorSettings::handle(&app).update(&mut app, |editor_settings, ctx| {
             let _ = editor_settings.vim_mode.set_value(false, ctx);
         });
@@ -4174,7 +4174,7 @@ fn test_zsh_vim_banner_off() {
                 .set_value(BannerState::NotDismissed, ctx);
         });
 
-        // Ensure Warp's vim keybindings are on.
+        // Ensure Black's vim keybindings are on.
         AppEditorSettings::handle(&app).update(&mut app, |editor_settings, ctx| {
             let _ = editor_settings.vim_mode.set_value(true, ctx);
         });
@@ -4224,7 +4224,7 @@ fn test_fish_vim_banner_on() {
             view.set_focus_handle(focus_handle, ctx);
         });
 
-        // Ensure Warp's vim keybindings are off.
+        // Ensure Black's vim keybindings are off.
         AppEditorSettings::handle(&app).update(&mut app, |editor_settings, ctx| {
             let _ = editor_settings.vim_mode.set_value(false, ctx);
         });
@@ -4273,7 +4273,7 @@ fn test_fish_vim_banner_off() {
             view.set_focus_handle(focus_handle, ctx);
         });
 
-        // Ensure Warp's vim keybindings are on.
+        // Ensure Black's vim keybindings are on.
         AppEditorSettings::handle(&app).update(&mut app, |editor_settings, ctx| {
             let _ = editor_settings.vim_mode.set_value(true, ctx);
         });
@@ -4482,7 +4482,7 @@ fn test_prompt_context_menu_items_for_agent_toolbelt_flag() {
 fn agent_footer_updates_chip_groups_when_side_assignment_changes() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        FeatureFlag::AgentView.set_enabled(true);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
 
@@ -4663,7 +4663,7 @@ fn test_scroll_position_doesnt_change_when_block_finished() {
 fn inline_agent_view_exits_when_tagged_in_long_running_command_is_tagged_out() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        FeatureFlag::AgentView.set_enabled(true);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
 
@@ -4724,7 +4724,7 @@ fn inline_agent_view_exits_when_tagged_in_long_running_command_is_tagged_out() {
 fn inline_agent_view_persists_across_transfer_takeover_for_monitored_long_running_command() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        FeatureFlag::AgentView.set_enabled(true);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
 
@@ -4806,7 +4806,7 @@ fn inline_agent_view_persists_across_transfer_takeover_for_monitored_long_runnin
 fn use_agent_footer_renders_for_transfer_handoff_even_when_user_command_footer_setting_disabled() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        FeatureFlag::AgentView.set_enabled(true);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             let _ = settings
                 .should_render_use_agent_footer_for_user_commands
@@ -4957,7 +4957,7 @@ fn exiting_agent_view_removes_empty_conversations() {
 fn ctrl_c_exit_agent_view_requires_confirmation() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        FeatureFlag::AgentView.set_enabled(true);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
 
@@ -5005,7 +5005,7 @@ fn ctrl_c_exit_agent_view_requires_confirmation() {
 fn ctrl_c_buffer_clear_then_exit_requires_three_presses_in_agent_view() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        FeatureFlag::AgentView.set_enabled(true);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
 
@@ -5063,7 +5063,7 @@ fn ctrl_c_buffer_clear_then_exit_requires_three_presses_in_agent_view() {
 fn terminal_action_ctrl_c_exit_agent_view_requires_confirmation() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        FeatureFlag::AgentView.set_enabled(true);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
 
@@ -5206,7 +5206,7 @@ fn ctrl_g_closes_cli_agent_rich_input_when_editor_is_focused() {
             .dispatch_keystroke(
                 window_id,
                 &[terminal.id(), input_id, editor_id],
-                &warpui::keymap::Keystroke::parse("ctrl-g").expect("valid keystroke"),
+                &black_ui::keymap::Keystroke::parse("ctrl-g").expect("valid keystroke"),
                 false,
             )
             .expect("dispatch should succeed");
@@ -5251,7 +5251,7 @@ fn ctrl_g_closes_cli_agent_rich_input_from_terminal_context() {
             .dispatch_keystroke(
                 window_id,
                 &[terminal.id()],
-                &warpui::keymap::Keystroke::parse("ctrl-g").expect("valid keystroke"),
+                &black_ui::keymap::Keystroke::parse("ctrl-g").expect("valid keystroke"),
                 false,
             )
             .expect("dispatch should succeed");
@@ -5289,7 +5289,7 @@ fn ctrl_g_toggles_cli_agent_rich_input_from_terminal_context() {
         let (window_id, terminal) =
             open_cli_agent_rich_input_for_agent_with_window_id(&mut app, CLIAgent::OpenCode);
 
-        let keystroke = warpui::keymap::Keystroke::parse("ctrl-g").expect("valid keystroke");
+        let keystroke = black_ui::keymap::Keystroke::parse("ctrl-g").expect("valid keystroke");
 
         // First close: rich input is open → Ctrl-G should close.
         let handled = app
@@ -5455,7 +5455,7 @@ fn drag_drop_image_in_cli_agent_long_running_command_pastes_via_clipboard() {
         // file. Bytes don't have to be a valid PNG.
         let mut image_path = std::env::temp_dir();
         image_path.push(format!(
-            "warp-test-cli-agent-drop-{}.png",
+            "black-test-cli-agent-drop-{}.png",
             std::process::id()
         ));
         std::fs::write(&image_path, b"fake-png-bytes").expect("write tmp image");
@@ -6438,7 +6438,7 @@ fn linear_deeplink_populates_input_as_draft_when_not_in_agent_view() {
 
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        FeatureFlag::AgentView.set_enabled(true);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
 
@@ -6484,7 +6484,7 @@ fn linear_deeplink_does_not_auto_submit_when_already_in_agent_view() {
 
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        FeatureFlag::AgentView.set_enabled(true);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
 
@@ -6564,7 +6564,7 @@ fn linear_deeplink_via_default_entrypoint_does_not_auto_submit_in_fullscreen() {
 
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        FeatureFlag::AgentView.set_enabled(true);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
 

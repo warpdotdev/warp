@@ -13,10 +13,10 @@ use session_sharing_protocol::common::{
     InputReplicaId, ParticipantId, ParticipantInfo, ParticipantList, ParticipantPresenceUpdate,
     PresenceUpdate, Role, RoleRequestId, Selection,
 };
-use warpui::assets::asset_cache::{AssetCache, AssetState};
-use warpui::image_cache::ImageType;
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+use black_ui::assets::asset_cache::{AssetCache, AssetState};
+use black_ui::image_cache::ImageType;
+use black_ui::r#async::SpawnedFutureHandle;
+use black_ui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use crate::auth::UserUid;
 use crate::editor::{CursorColors, PeerSelectionData};

@@ -1,6 +1,6 @@
 // The color-mapping helpers (`compute_fg_rgb`, `compute_bg_rgb`, and
 // `get_override_color`) below are adapted from the alacritty_terminal crate
-// under the Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
+// under the Apache license; see: crates/black_terminal/src/model/LICENSE-ALACRITTY.
 
 use pathfinder_color::ColorU;
 
@@ -103,7 +103,7 @@ impl CellType {
         } else if self.is_url() || self.is_hovered_secret() {
             *URL_COLOR
         } else if matches!(obfuscate_mode, ObfuscateSecrets::Strikethrough) && is_unhovered_secret {
-            warpui::color::ColorU::new(128, 128, 128, 255)
+            black_ui::color::ColorU::new(128, 128, 128, 255)
         } else if self.is_default()
             || self.is_marked_text_char()
             || is_unhovered_secret

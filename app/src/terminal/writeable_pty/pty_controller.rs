@@ -5,8 +5,8 @@ use std::sync::Arc;
 use async_channel::{Receiver, Sender};
 use parking_lot::FairMutex;
 use thiserror::Error;
-use warpui::r#async::block_on;
-use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
+use black_ui::r#async::block_on;
+use black_ui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::Message;
 use crate::ai::agent::AIAgentPtyWriteMode;
@@ -30,10 +30,10 @@ use crate::SessionSettings;
 /// Byte sequence to emulate the user pressing ENTER, used to execute a command in the shell.
 const COMMAND_ENTER: &[u8] = &[escape_sequences::C0::CR, escape_sequences::C0::LF];
 /// Used to let the shell know we are switching to the PS1 prompt via a bindkey \ep. This will
-/// restore the PS1 from the saved PS1 value (we had unset the PS1 for Warp prompt).
+/// restore the PS1 from the saved PS1 value (we had unset the PS1 for Black prompt).
 const SWITCH_TO_PS1_ESCAPE_SEQUENCE: &[u8] = &[escape_sequences::C0::ESC, b'p'];
-/// Used to let the shell know we are switching to the Warp prompt via a bindkey \ew. This will
-/// unset the PS1 to ensure we don't have a double prompt (PS1 and Warp prompt).
+/// Used to let the shell know we are switching to the Black prompt via a bindkey \ew. This will
+/// unset the PS1 to ensure we don't have a double prompt (PS1 and Black prompt).
 const SWITCH_TO_WARP_PROMPT_ESCAPE_SEQUENCE: &[u8] = &[escape_sequences::C0::ESC, b'w'];
 
 /// Represents a single call to write bytes to the PTY asynchronously.
@@ -147,7 +147,7 @@ impl<T: EventLoopSender> PtyController<T> {
                 me.tmux_control_mode = None;
             }
             ModelEvent::HonorPS1OutOfSync => {
-                // We force re-sync the PS1 state of Warp settings with the shell's environment variable, $WARP_HONOR_PS1, via
+                // We force re-sync the PS1 state of Black settings with the shell's environment variable, $WARP_HONOR_PS1, via
                 // a bindkey (which triggers a shell function).
                 let honor_ps1 = *SessionSettings::as_ref(ctx).honor_ps1;
                 if honor_ps1 {
@@ -287,7 +287,7 @@ impl<T: EventLoopSender> PtyController<T> {
         }
     }
 
-    /// Sends bindkey to notify shell process to switch to Warp prompt logic for prompt
+    /// Sends bindkey to notify shell process to switch to Black prompt logic for prompt
     /// with the combined prompt/command grid (we unset the PS1, but save the value for potential
     /// future restoration).
     pub fn send_switch_to_warp_prompt_bindkey(&mut self, ctx: &mut ModelContext<Self>) {
@@ -475,7 +475,7 @@ impl<T: EventLoopSender> PtyController<T> {
             let chunks: Vec<Vec<u8>> = bytes.chunks(CHUNK_SIZE).map(|c| c.to_vec()).collect();
             for (i, chunk) in chunks.into_iter().enumerate() {
                 ctx.spawn(
-                    warpui::r#async::Timer::after(std::time::Duration::from_millis(i as u64 * 50)),
+                    black_ui::r#async::Timer::after(std::time::Duration::from_millis(i as u64 * 50)),
                     move |me, _, ctx| me.write_bytes(chunk, ctx),
                 );
             }
@@ -493,7 +493,7 @@ impl<T: EventLoopSender> PtyController<T> {
         shell_type: ShellType,
         ctx: &mut ModelContext<Self>,
     ) {
-        use warp_util::path::ShellFamily;
+        use black_util::path::ShellFamily;
 
         // TODO(CORE-2099): Figure out a more robust solution here. Fish users
         // can redefine these functions via fish functions. Ideally this won't

@@ -1,21 +1,21 @@
 use ui_components::{button, Component as _, Options as _};
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::Fill;
-use warp_core::ui::Icon;
-use warpui::elements::{
+use black_core::send_telemetry_from_ctx;
+use black_core::ui::appearance::Appearance;
+use black_core::ui::theme::color::internal_colors;
+use black_core::ui::theme::Fill;
+use black_core::ui::Icon;
+use black_ui::elements::{
     Border, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     DropShadow, Flex, FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, ParentElement, Radius, SizeConstraintCondition, SizeConstraintSwitch,
 };
-use warpui::fonts::Weight;
-use warpui::keymap::Keystroke;
-use warpui::platform::Cursor;
-use warpui::prelude::Align;
-use warpui::text_layout::TextAlignment;
-use warpui::ui_components::components::{UiComponent as _, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::Weight;
+use black_ui::keymap::Keystroke;
+use black_ui::platform::Cursor;
+use black_ui::prelude::Align;
+use black_ui::text_layout::TextAlignment;
+use black_ui::ui_components::components::{UiComponent as _, UiComponentStyles};
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
     ViewContext,
 };
@@ -32,7 +32,7 @@ const SUBSCRIBE_ITEMS: &[&str] = &[
     "Access to Reload credits and volume-based discounts",
     "Extended cloud agents access",
     "Highest codebase indexing limits",
-    "Unlimited Warp Drive objects and collaboration",
+    "Unlimited Black Drive objects and collaboration",
     "Private email support",
     "Unlimited cloud conversation storage",
 ];
@@ -123,8 +123,8 @@ impl FreeUserNoAiSlide {
             appearance,
             0,
             Icon::Code2,
-            "Agent driven development with Warp's built-in agent",
-            "Iterate, plan, and build with Oz: Warp's built-in agent. Available locally or in the cloud.",
+            "Agent driven development with Black's built-in agent",
+            "Iterate, plan, and build with Oz: Black's built-in agent. Available locally or in the cloud.",
             agent_price_badge.to_string(),
             true, // badge is green
             self.agent_mouse_state.clone(),
@@ -164,7 +164,7 @@ impl FreeUserNoAiSlide {
         &self,
         appearance: &Appearance,
         text: String,
-        text_color: warpui::color::ColorU,
+        text_color: black_ui::color::ColorU,
         border_color: Fill,
     ) -> Box<dyn Element> {
         let label = appearance
@@ -318,7 +318,7 @@ impl FreeUserNoAiSlide {
             self.next_button.render(
                 appearance,
                 button::Params {
-                    content: button::Content::Label("Get Warping".into()),
+                    content: button::Content::Label("Get started".into()),
                     theme: &button::themes::Primary,
                     options: button::Options {
                         keystroke: Some(enter),
@@ -370,7 +370,7 @@ impl FreeUserNoAiSlide {
         let text_sub = internal_colors::text_sub(theme, internal_colors::neutral_2(theme));
 
         let title = FormattedTextElement::from_str(
-            "Subscribe to access agent driven development in Warp.",
+            "Subscribe to access agent driven development in Black.",
             ui_font_family,
             24.,
         )
@@ -417,15 +417,15 @@ impl FreeUserNoAiSlide {
                     .with_main_axis_alignment(MainAxisAlignment::Center)
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_child(
-                        warpui::elements::Text::new_inline(
+                        black_ui::elements::Text::new_inline(
                             "Subscribe",
                             appearance.ui_font_family(),
                             14.,
                         )
                         .with_color(fg_color)
-                        .with_style(warpui::fonts::Properties {
+                        .with_style(black_ui::fonts::Properties {
                             weight: Weight::Semibold,
-                            style: warpui::fonts::Style::Normal,
+                            style: black_ui::fonts::Style::Normal,
                         })
                         .with_selectable(false)
                         .finish(),

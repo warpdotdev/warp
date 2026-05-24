@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 pub use glibc::{GlibcVersion, RemoteLibc};
-use warp_core::channel::{Channel, ChannelState};
+use black_core::channel::{Channel, ChannelState};
 pub const REMOTE_SERVER_ARTIFACT_VERSION_UNPINNED: &str = "unversioned";
 
 /// State machine for the remote server install → launch → initialize flow.
@@ -334,25 +334,24 @@ pub fn parse_uname_output(
 
 /// Returns the remote directory where the binary is installed, keyed by channel.
 ///
-/// - stable:      `~/.warp/remote-server`
-/// - preview:     `~/.warp-preview/remote-server`
-/// - dev:         `~/.warp-dev/remote-server`
-/// - local:       `~/.warp-local/remote-server`
-/// - integration: `~/.warp-dev/remote-server`
-/// - warp-oss:    `~/.warp-oss/remote-server`
+/// - stable:      `~/.black/remote-server`
+/// - preview:     `~/.black/remote-server`
+/// - dev:         `~/.black-dev/remote-server`
+/// - local:       `~/.black-local/remote-server`
+/// - integration: `~/.black-dev/remote-server`
+/// - black-oss:   `~/.black-oss/remote-server`
 pub fn remote_server_dir() -> String {
-    let warp_dir = match ChannelState::channel() {
-        Channel::Stable => ".warp",
-        Channel::Preview => ".warp-preview",
-        Channel::Dev | Channel::Integration => ".warp-dev",
-        Channel::Local => ".warp-local",
+    let black_dir = match ChannelState::channel() {
+        Channel::Stable | Channel::Preview => ".black",
+        Channel::Dev | Channel::Integration => ".black-dev",
+        Channel::Local => ".black-local",
         Channel::Oss => {
-            // TODO(alokedesai): need to figure out how remote server works with warp-oss
+            // TODO(alokedesai): need to figure out how remote server works with black-oss
             // For now, return what Dev returns.
-            ".warp-dev"
+            ".black-dev"
         }
     };
-    format!("~/{warp_dir}/remote-server")
+    format!("~/{black_dir}/remote-server")
 }
 
 /// Returns a short, deterministic directory name for a remote-server
@@ -575,7 +574,7 @@ pub fn install_script(staging_tarball_path: Option<&str>) -> String {
 /// Construct the download URL from the server root URL.
 ///
 /// For example, given `https://app.warp.dev`, returns
-/// `https://app.warp.dev/download/cli`.
+/// `https://app.blackdagger.io/download/cli`.
 fn download_url() -> String {
     let base = ChannelState::server_root_url();
     let base = base.trim_end_matches('/');

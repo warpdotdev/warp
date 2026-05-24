@@ -6,7 +6,7 @@ use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher;
 use uuid::Uuid;
-use warp_managed_secrets::ManagedSecretValue;
+use black_managed_secrets::ManagedSecretValue;
 
 use crate::ai::mcp::{TemplatableMCPServer, TemplateVariable};
 
@@ -97,7 +97,7 @@ impl TemplatableMCPServerInstallation {
         &self.variable_values
     }
 
-    /// Apply Warp-managed secrets to the installation's variable values.
+    /// Apply Black-managed secrets to the installation's variable values.
     ///
     /// Precedence for each template variable:
     /// 1. Explicit reference: if the current value contains `{{secret_name}}`

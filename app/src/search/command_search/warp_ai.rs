@@ -5,9 +5,9 @@ use async_trait::async_trait;
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use serde_json::json;
-use warp_core::ui::builder;
-use warpui::elements::{ConstrainedBox, Container, Text};
-use warpui::{AppContext, Element, SingletonEntity};
+use black_core::ui::builder;
+use black_ui::elements::{ConstrainedBox, Container, Text};
+use black_ui::{AppContext, Element, SingletonEntity};
 
 use super::workflows::{WorkflowIdentity, WorkflowSearchItem};
 use crate::ai::AIRequestUsageModel;
@@ -29,8 +29,8 @@ use crate::ui_components::icons::Icon as UIIcon;
 use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
 use crate::workflows::{AIWorkflowOrigin, WorkflowSource, WorkflowType};
 
-const OPEN_WARP_AI_ITEM_BODY_TEXT: &str = "Ask Warp AI for command suggestions";
-const TRANSLATE_WITH_WARP_AI_ITEM_BODY_TEXT: &str = "Translate into shell command using Warp AI";
+const OPEN_WARP_AI_ITEM_BODY_TEXT: &str = "Ask Black AI for command suggestions";
+const TRANSLATE_WITH_WARP_AI_ITEM_BODY_TEXT: &str = "Translate into shell command using Black AI";
 
 #[derive(Clone, Debug)]
 pub enum WarpAISearchItem {
@@ -58,7 +58,7 @@ impl SearchItem for WarpAISearchItem {
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        // Since the Warp AI logo color is hardcoded, let's find the best
+        // Since the Black AI logo color is hardcoded, let's find the best
         // contrasting color depending on the user's theme and the item's selected state.
         let command_search_background = appearance.theme().surface_1();
         let item_background_color = match highlight_state.container_background_fill(appearance) {
@@ -133,13 +133,13 @@ impl SearchItem for WarpAISearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Warp AI: {}", self.item_body_text())
+        format!("Black AI: {}", self.item_body_text())
     }
 }
 
-/// The Warp AI data source provides two different types of results:
+/// The Black AI data source provides two different types of results:
 /// - synchronous: the synchronous result provided by this data source is a
-///   single item that opens/translates using Warp AI when selected.
+///   single item that opens/translates using Black AI when selected.
 /// - asynchronous: the asynchronous results are AI generated workflows
 /// In most cases, the data source should be registered _twice_: once as a sync source
 /// and once as an async source. That way, the mixer will treat these as two separate

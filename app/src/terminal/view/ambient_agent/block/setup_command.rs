@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
-use warp_core::ui::appearance::Appearance;
-use warp_terminal::model::BlockId;
-use warpui::prelude::{Container, Empty, MouseStateHandle};
-use warpui::scene::{CornerRadius, Radius};
-use warpui::{
+use black_core::ui::appearance::Appearance;
+use black_terminal::model::BlockId;
+use black_ui::prelude::{Container, Empty, MouseStateHandle};
+use black_ui::scene::{CornerRadius, Radius};
+use black_ui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 

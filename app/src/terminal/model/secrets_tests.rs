@@ -4,10 +4,10 @@ use super::*;
 
 #[test]
 fn test_firebase_domain() {
-    let firebase_domain = "warp-server-staging.firebaseapp.com";
+    let firebase_domain = "black-server-staging.firebaseapp.com";
     assert_regex_match_found(regexes::FIREBASE_AUTH_DOMAIN, firebase_domain);
 
-    let bad_firebase_domain = "warp-server-staging_.firebaseapp.com";
+    let bad_firebase_domain = "black-server-staging_.firebaseapp.com";
     assert_regex_match_not_found(regexes::FIREBASE_AUTH_DOMAIN, bad_firebase_domain);
 }
 

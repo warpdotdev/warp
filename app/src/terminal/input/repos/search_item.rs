@@ -4,12 +4,12 @@ use std::path::{Path, PathBuf};
 
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
-use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
-use warp_core::ui::Icon;
-use warpui::elements::{ConstrainedBox, Container, Highlight, Text};
-use warpui::fonts::{Properties, Weight};
-use warpui::text_layout::ClipConfig;
-use warpui::{AppContext, Element, SingletonEntity};
+use black_core::ui::theme::{AnsiColorIdentifier, Fill};
+use black_core::ui::Icon;
+use black_ui::elements::{ConstrainedBox, Container, Highlight, Text};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::text_layout::ClipConfig;
+use black_ui::{AppContext, Element, SingletonEntity};
 
 use crate::appearance::Appearance;
 use crate::search::result_renderer::ItemHighlightState;

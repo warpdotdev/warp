@@ -10,14 +10,14 @@ use futures::stream::AbortHandle;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
-use warp_core::features::FeatureFlag;
-use warp_core::report_error;
-use warp_graphql::mcp_gallery_template::MCPGalleryTemplate;
-use warp_graphql::object_permissions::AccessLevel;
-use warp_graphql::scalars::time::ServerTimestamp;
-use warp_util::sync::Condition;
-use warpui::r#async::{FutureId, Timer};
-use warpui::{
+use black_core::features::FeatureFlag;
+use black_core::report_error;
+use black_graphql::mcp_gallery_template::MCPGalleryTemplate;
+use black_graphql::object_permissions::AccessLevel;
+use black_graphql::scalars::time::ServerTimestamp;
+use black_util::sync::Condition;
+use black_ui::r#async::{FutureId, Timer};
+use black_ui::{
     duration_with_jitter, AppContext, Entity, ModelContext, RequestState, RetryOption,
     SingletonEntity,
 };
@@ -2720,8 +2720,8 @@ impl UpdateManager {
         ctx: &mut ModelContext<Self>,
     ) where
         P: 'static + FnMut(Arc<dyn ObjectClient>) -> S,
-        S: warpui::r#async::Spawnable + Future<Output = anyhow::Result<R>>,
-        <S as Future>::Output: warpui::r#async::SpawnableOutput,
+        S: black_ui::r#async::Spawnable + Future<Output = anyhow::Result<R>>,
+        <S as Future>::Output: black_ui::r#async::SpawnableOutput,
         F: 'static + FnMut(R, &mut AppContext) -> Option<ServerPermissions>,
     {
         let object_client = self.object_client.clone();
@@ -2782,8 +2782,8 @@ impl UpdateManager {
         mut on_success: impl FnMut(&mut Self, M, &mut ModelContext<Self>) + 'static,
     ) where
         P: 'static + FnMut(Arc<dyn ObjectClient>) -> S,
-        S: warpui::r#async::Spawnable + Future<Output = anyhow::Result<M>>,
-        <S as Future>::Output: warpui::r#async::SpawnableOutput,
+        S: black_ui::r#async::Spawnable + Future<Output = anyhow::Result<M>>,
+        <S as Future>::Output: black_ui::r#async::SpawnableOutput,
     {
         let cloud_model = CloudModel::handle(ctx);
         let uid = server_id.uid();

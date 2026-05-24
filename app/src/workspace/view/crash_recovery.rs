@@ -1,5 +1,5 @@
-use warp_cli::RecoveryMechanism;
-use warpui::{AppContext, SingletonEntity as _, ViewContext};
+use black_cli::RecoveryMechanism;
+use black_ui::{AppContext, SingletonEntity as _, ViewContext};
 
 use super::{Workspace, WorkspaceBannerFields};
 use crate::crash_recovery::CrashRecovery;
@@ -36,7 +36,7 @@ pub fn banner_metadata(ctx: &AppContext) -> Option<WorkspaceBannerFields> {
         // We don't show any information to the user for the disable OpenGL / force Vulkan recovery
         // mechanisms. These set of crashes occur before there is a visible window, so any
         // information surfaced to the user would be unactionable noise that the user would see on
-        // every invocation of Warp.
+        // every invocation of Black.
         RecoveryMechanism::DisableOpenGL | RecoveryMechanism::ForceVulkan => None,
     }
 }

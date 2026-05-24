@@ -2,15 +2,15 @@
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{
+use black_core::ui::theme::Fill;
+use black_ui::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, DraggableState, Flex, Hoverable,
     MouseStateHandle, OffsetPositioning, ParentElement, ParentOffsetBounds, Stack, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::platform::Cursor;
-use warpui::ui_components::components::UiComponent;
-use warpui::{Action, Element};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::platform::Cursor;
+use black_ui::ui_components::components::UiComponent;
+use black_ui::{Action, Element};
 
 use super::context_chip::ContextChip;
 use super::display_chip::{chip_container, udi_font_size};
@@ -208,8 +208,8 @@ impl Renderer {
                 OffsetPositioning::offset_from_parent(
                     vec2f(0., -2.5 * font_size),
                     ParentOffsetBounds::Unbounded,
-                    warpui::elements::ParentAnchor::Center,
-                    warpui::elements::ChildAnchor::Center,
+                    black_ui::elements::ParentAnchor::Center,
+                    black_ui::elements::ChildAnchor::Center,
                 ),
             );
             stack.finish()

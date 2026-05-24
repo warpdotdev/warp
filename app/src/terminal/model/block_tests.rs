@@ -260,7 +260,7 @@ pub fn test_find() {
 
 #[test]
 pub fn test_long_running_block_bottom_padding() {
-    warpui::r#async::block_on(async {
+    black_ui::r#async::block_on(async {
         let mut block = TestBlockBuilder::new().build();
 
         block.precmd(Default::default());
@@ -279,7 +279,7 @@ pub fn test_long_running_block_bottom_padding() {
 
         // After the long running duration, the block should switch
         let duration = LONG_RUNNING_COMMAND_DURATION_MS + 1;
-        warpui::r#async::Timer::after(Duration::from_millis(duration)).await;
+        black_ui::r#async::Timer::after(Duration::from_millis(duration)).await;
 
         assert!(block.is_active_and_long_running());
         assert!(block.padding_bottom() == LONG_RUNNING_BOTTOM_PADDING_LINES.into_lines());
@@ -288,7 +288,7 @@ pub fn test_long_running_block_bottom_padding() {
 
 #[test]
 pub fn empty_pre_bootstrap_block_is_not_long_running() {
-    warpui::r#async::block_on(async {
+    black_ui::r#async::block_on(async {
         let mut block = TestBlockBuilder::new()
             .with_bootstrap_stage(BootstrapStage::ScriptExecution)
             .build();
@@ -296,7 +296,7 @@ pub fn empty_pre_bootstrap_block_is_not_long_running() {
         block.start();
 
         let duration = LONG_RUNNING_COMMAND_DURATION_MS + 1;
-        warpui::r#async::Timer::after(Duration::from_millis(duration)).await;
+        black_ui::r#async::Timer::after(Duration::from_millis(duration)).await;
 
         assert!(!block.is_active_and_long_running());
     });
@@ -304,7 +304,7 @@ pub fn empty_pre_bootstrap_block_is_not_long_running() {
 
 #[test]
 pub fn non_empty_pre_bootstrap_block_can_be_long_running() {
-    warpui::r#async::block_on(async {
+    black_ui::r#async::block_on(async {
         let mut block = TestBlockBuilder::new()
             .with_bootstrap_stage(BootstrapStage::ScriptExecution)
             .build();
@@ -313,7 +313,7 @@ pub fn non_empty_pre_bootstrap_block_can_be_long_running() {
         block.input('x');
 
         let duration = LONG_RUNNING_COMMAND_DURATION_MS + 1;
-        warpui::r#async::Timer::after(Duration::from_millis(duration)).await;
+        black_ui::r#async::Timer::after(Duration::from_millis(duration)).await;
 
         assert!(block.is_active_and_long_running());
     });
@@ -544,7 +544,7 @@ pub fn test_set_current_working_directory_updates_pwd_and_emits_cwd_event() {
     events_rx.close();
     let mut received_paths = Vec::new();
     let mut received_block_metadata_events = 0usize;
-    warpui::r#async::block_on(pin!(events_rx).for_each(|event| match event {
+    black_ui::r#async::block_on(pin!(events_rx).for_each(|event| match event {
         Event::BlockWorkingDirectoryUpdated(event) => {
             received_paths.push(
                 event
@@ -669,13 +669,13 @@ pub fn test_block_emits_block_completed_event_for_in_band_command() {
     block.start_for_in_band_command();
     block.precmd(Default::default());
     block.preexec(PreexecValue {
-        command: "warp_run_generator_command 1234 foo".to_owned(),
+        command: "black_run_generator_command 1234 foo".to_owned(),
     });
     block.finish(0);
 
     events_rx.close();
     let block_completed_event =
-        warpui::r#async::block_on(pin!(events_rx).find(|event| match event {
+        black_ui::r#async::block_on(pin!(events_rx).find(|event| match event {
             Event::BlockCompleted(event) => matches!(event.block_type, BlockType::InBandCommand),
             _ => false,
         }));
@@ -1299,10 +1299,10 @@ fn test_command_is_not_empty_combined_grid() {
     );
 }
 
-/// Regression test (CORE-1947): checks Warp prompt case for is_command_empty. Specifically,
+/// Regression test (CORE-1947): checks Black prompt case for is_command_empty. Specifically,
 /// even if the combined grid's content _exactly_ matches the prompt grid's content (which is used
 /// for PS1 preview), we should NOT consider the command to be empty. The underlying cursor check should
-/// be against (0, 0) in the combined grid, for the Warp prompt case, rather than checking against the
+/// be against (0, 0) in the combined grid, for the Black prompt case, rather than checking against the
 /// prompt grid (which we do in the PS1 active case).
 #[test]
 fn test_command_is_empty_warp_prompt() {
@@ -1329,7 +1329,7 @@ fn test_command_is_empty_warp_prompt() {
     let mut prompt_grid = mock_blockgrid("abcde");
     prompt_grid.finish();
 
-    // Note that we are indicating Warp prompt, not PS1 here!
+    // Note that we are indicating Black prompt, not PS1 here!
     let mut block = create_test_block_with_grids(
         block_index,
         prompt_and_command_grid,
@@ -1473,7 +1473,7 @@ fn test_top_level_command_with_aliases() {
 
 #[test]
 fn test_mark_end_of_prompt_with_some_rows_in_flat_storage() {
-    use warp_terminal::model::grid::Dimensions as _;
+    use black_terminal::model::grid::Dimensions as _;
 
     let mut block = TestBlockBuilder::new()
         // Set the number of visible rows to 1, so that the first row of the

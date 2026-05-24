@@ -1,4 +1,4 @@
-//! IPC service for calling JS functions registered by Warp plugins.
+//! IPC service for calling JS functions registered by Black plugins.
 //!
 //! This service is hosted by the plugin host process and used by the main app process to call
 //! plugin functions defined in JS.
@@ -16,7 +16,7 @@
 //! To serialize input/deserialize output, callers are expected to use `bincode`.
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use warp_js::{JsFunctionId, SerializedJsValue};
+use black_js::{JsFunctionId, SerializedJsValue};
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct CallJsFunctionRequest {

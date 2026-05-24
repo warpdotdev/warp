@@ -13,12 +13,12 @@ use simple_logger::manager::LogManager;
 use simple_logger::SimpleLogger;
 use tokio::io::AsyncBufReadExt as _;
 use uuid::Uuid;
-use warp_core::execution_mode::AppExecutionMode;
-use warp_core::features::FeatureFlag;
-use warp_core::safe_error;
-use warp_core::settings::Setting as _;
-use warpui::windowing::WindowManager;
-use warpui::{AppContext, ModelContext, SingletonEntity};
+use black_core::execution_mode::AppExecutionMode;
+use black_core::features::FeatureFlag;
+use black_core::safe_error;
+use black_core::settings::Setting as _;
+use black_ui::windowing::WindowManager;
+use black_ui::{AppContext, ModelContext, SingletonEntity};
 
 use super::oauth::{self, AuthContext, FileBasedPersistedCredentialsMap, PersistedCredentialsMap};
 use super::utils::{query_resources_for, query_tools_for};
@@ -160,7 +160,7 @@ fn error_to_user_message(error: &rmcp::RmcpError) -> String {
     }
 }
 
-/// An MCP server integration that Warp ships with bundled skills for.
+/// An MCP server integration that Black ships with bundled skills for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpIntegration {
     Figma,
@@ -787,7 +787,7 @@ impl TemplatableMCPServerManager {
             // (repo root for project-scoped configs, ~/.warp/ or ~ for globals). This
             // matches user expectations for repo-relative commands in `.mcp.json`.
             // Cloud-templated installations (lookup returns None) are unaffected and
-            // continue to inherit Warp's process cwd.
+            // continue to inherit Black's process cwd.
             if cli_server.cwd_parameter.is_none() {
                 if let Some(spawn_root) =
                     FileBasedMCPManager::as_ref(ctx).spawn_root_for_installation(installation_uuid)
@@ -1797,7 +1797,7 @@ async fn spawn_server(
                 if err.kind() == std::io::ErrorKind::NotFound {
                     let cwd_display = cwd_for_log
                         .as_deref()
-                        .unwrap_or("<inherited from Warp's process cwd>");
+                        .unwrap_or("<inherited from Black's process cwd>");
                     logger.log(format!(
                         "[error] MCP: Failed to spawn '{server_name}': command '{command_for_log}' \
                          not found (cwd: {cwd_display}). If your MCP server depends on a specific \
@@ -2086,8 +2086,8 @@ fn make_client_info() -> rmcp::model::ClientInfo {
     rmcp::model::ClientInfo::new(
         Default::default(),
         rmcp::model::Implementation::new(
-            warp_core::channel::ChannelState::app_id().to_string(),
-            warp_core::channel::ChannelState::app_version()
+            black_core::channel::ChannelState::app_id().to_string(),
+            black_core::channel::ChannelState::app_version()
                 .map(|v| v.to_string())
                 .unwrap_or_default(),
         ),

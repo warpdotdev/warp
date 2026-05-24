@@ -1,5 +1,5 @@
 // The code in this file is adapted from the alacritty_terminal crate under the
-// Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
+// Apache license; see: crates/black_terminal/src/model/LICENSE-ALACRITTY.
 
 //! TTY related functionality.
 use std::collections::HashMap;
@@ -21,9 +21,9 @@ use nix::pty::openpty;
 use nix::sys::termios::{self, InputFlags, SetArg};
 use serde::{Deserialize, Serialize};
 use signal_hook_mio::v1_0::Signals;
-use warp_core::channel::ChannelState;
-use warp_core::features::FeatureFlag;
-use warpui::{AppContext, SingletonEntity};
+use black_core::channel::ChannelState;
+use black_core::features::FeatureFlag;
+use black_ui::{AppContext, SingletonEntity};
 
 use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
 use super::spawner::{PtyHandle, PtySpawnInfo, PtySpawner};
@@ -257,7 +257,7 @@ fn build_host_shell_command(
 
     // Specify terminal name and capabilities.
     builder.env("TERM", "xterm-256color");
-    builder.env("TERM_PROGRAM", "WarpTerminal");
+    builder.env("TERM_PROGRAM", "BlackTerminal");
     // Advertise 24-bit color support.
     builder.env("COLORTERM", "truecolor");
 
@@ -272,11 +272,11 @@ fn build_host_shell_command(
         // plugins can do warp-specific version checks without worrying
         // that the version env var might be coming from a different terminal
         // (for ex., in the ssh case).
-        builder.env("WARP_CLIENT_VERSION", version);
+        builder.env("BLACK_CLIENT_VERSION", version);
     } else {
         // Local builds don't have GIT_RELEASE_TAG, so app_version() is None.
         // Use "local" so plugins can still distinguish this from a missing value.
-        builder.env("WARP_CLIENT_VERSION", "local");
+        builder.env("BLACK_CLIENT_VERSION", "local");
     }
 
     // Set the `SHELL` environment variable to match the path of the shell we are using.
@@ -291,9 +291,9 @@ fn build_host_shell_command(
 
     // Set whether or not we should utilize the SSH wrapper in this shell.
     if enable_ssh_wrapper {
-        builder.env("WARP_USE_SSH_WRAPPER", "1");
+        builder.env("BLACK_USE_SSH_WRAPPER", "1");
     } else {
-        builder.env("WARP_USE_SSH_WRAPPER", "0");
+        builder.env("BLACK_USE_SSH_WRAPPER", "0");
     }
 
     // For integration tests, put SSH control master sockets under the actual
@@ -304,32 +304,32 @@ fn build_host_shell_command(
 
     // We currently don't support bootstrapping recursive SSH sessions so we will only run the SSH
     // logic if this flag is set.
-    builder.env("WARP_IS_LOCAL_SHELL_SESSION", "1");
+    builder.env("BLACK_IS_LOCAL_SHELL_SESSION", "1");
 
     // Only advertise the protocol version when the HOA notifications feature is enabled.
-    // Without it, Warp can't render structured CLI agent notifications,
+    // Without it, Black can't render structured CLI agent notifications,
     // so the plugin should fall back to legacy notifications.
     if FeatureFlag::HOANotifications.is_enabled() {
         builder.env(
-            "WARP_CLI_AGENT_PROTOCOL_VERSION",
+            "BLACK_CLI_AGENT_PROTOCOL_VERSION",
             current_protocol_version().to_string(),
         );
     }
 
     if shell_debug_mode {
-        builder.env("WARP_SHELL_DEBUG_MODE", "1");
+        builder.env("BLACK_SHELL_DEBUG_MODE", "1");
     }
     if honor_ps1 {
-        builder.env("WARP_HONOR_PS1", "1");
+        builder.env("BLACK_HONOR_PS1", "1");
     } else {
-        builder.env("WARP_HONOR_PS1", "0");
+        builder.env("BLACK_HONOR_PS1", "0");
     }
 
     // Pass through any additional entries to add to PATH.
     let path_append = extra_path_entries()
         .map(|p| p.to_string_lossy().into_owned())
         .join(":");
-    builder.env("WARP_PATH_APPEND", path_append);
+    builder.env("BLACK_PATH_APPEND", path_append);
 
     if matches!(shell_starter.shell_type(), ShellType::Bash) {
         // Set initial very large values so bash imports the user's existing
@@ -338,8 +338,8 @@ fn build_host_shell_command(
         builder.env("HISTSIZE", BASH_HISTORY_SIZE_SENTINEL);
         // Set second environment variables that we can use to know whether
         // the user rcfiles set these variables or not.
-        builder.env("WARP_INITIAL_HISTFILESIZE", BASH_HISTORY_SIZE_SENTINEL);
-        builder.env("WARP_INITIAL_HISTSIZE", BASH_HISTORY_SIZE_SENTINEL);
+        builder.env("BLACK_INITIAL_HISTFILESIZE", BASH_HISTORY_SIZE_SENTINEL);
+        builder.env("BLACK_INITIAL_HISTSIZE", BASH_HISTORY_SIZE_SENTINEL);
     }
 
     // Pass the desired initial working directory as an environment variable
@@ -352,7 +352,7 @@ fn build_host_shell_command(
     // directory could be on a network filesystem; deferring the `cd` to
     // shell bootstrap avoids that.
     if let Some(start_dir) = start_dir {
-        builder.env("WARP_INITIAL_WORKING_DIR", start_dir);
+        builder.env("BLACK_INITIAL_WORKING_DIR", start_dir);
     }
 
     // Apply any caller-provided environment overrides last, so they win.
@@ -398,7 +398,7 @@ fn spawn_command_in_pty(
 
     // Detect isolation platform outside pre_exec, since detect() is not async-signal-safe.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    let is_isolated = warp_isolation_platform::detect().is_some();
+    let is_isolated = black_isolation_platform::detect().is_some();
 
     unsafe {
         let fdlimit = libc::sysconf(libc::_SC_OPEN_MAX) as i32;
@@ -468,7 +468,7 @@ fn spawn_command_in_pty(
             if is_isolated {
                 // If running in a sandbox on Linux, adjust the OOM score
                 // to make the child process more likely to be killed than the parent process
-                // in case of OOM. If the Warp process is killed while hosting an ambient
+                // in case of OOM. If the Black process is killed while hosting an ambient
                 // agent, its shared session will abruptly end with no user-visible error.
                 // Instead, we want to kill whatever process the agent spawned that's using
                 // lots of memory. This gives the agent a chance to gracefully fail.
@@ -766,45 +766,45 @@ fn build_docker_sandbox_command(
     builder.env("USER", pw.name);
     builder.env("HOME", &home_dir);
     builder.env("TERM", "xterm-256color");
-    builder.env("TERM_PROGRAM", "WarpTerminal");
+    builder.env("TERM_PROGRAM", "BlackTerminal");
     builder.env("COLORTERM", "truecolor");
     builder.env_remove("DESKTOP_STARTUP_ID");
     if let Some(version) = ChannelState::app_version() {
         builder.env("TERM_PROGRAM_VERSION", version);
-        builder.env("WARP_CLIENT_VERSION", version);
+        builder.env("BLACK_CLIENT_VERSION", version);
     } else {
-        builder.env("WARP_CLIENT_VERSION", "local");
+        builder.env("BLACK_CLIENT_VERSION", "local");
     }
     builder.env("SHELL", docker_starter.logical_shell_path());
     if let Some(window_id) = window_id {
         builder.env("WINDOWID", format!("{window_id}"));
     }
     builder.env(
-        "WARP_USE_SSH_WRAPPER",
+        "BLACK_USE_SSH_WRAPPER",
         if enable_ssh_wrapper { "1" } else { "0" },
     );
     builder.env("SSH_SOCKET_DIR", ssh_socket_dir());
-    builder.env("WARP_IS_LOCAL_SHELL_SESSION", "1");
+    builder.env("BLACK_IS_LOCAL_SHELL_SESSION", "1");
     if FeatureFlag::HOANotifications.is_enabled() {
         builder.env(
-            "WARP_CLI_AGENT_PROTOCOL_VERSION",
+            "BLACK_CLI_AGENT_PROTOCOL_VERSION",
             current_protocol_version().to_string(),
         );
     }
     if shell_debug_mode {
-        builder.env("WARP_SHELL_DEBUG_MODE", "1");
+        builder.env("BLACK_SHELL_DEBUG_MODE", "1");
     }
-    builder.env("WARP_HONOR_PS1", if honor_ps1 { "1" } else { "0" });
+    builder.env("BLACK_HONOR_PS1", if honor_ps1 { "1" } else { "0" });
     let path_append = extra_path_entries()
         .map(|p| p.to_string_lossy().into_owned())
         .join(":");
-    builder.env("WARP_PATH_APPEND", path_append);
+    builder.env("BLACK_PATH_APPEND", path_append);
     // Sandbox shell is always bash (per the container image convention),
     // matching the host-shell path's behavior for bash shells.
     builder.env("HISTFILESIZE", BASH_HISTORY_SIZE_SENTINEL);
     builder.env("HISTSIZE", BASH_HISTORY_SIZE_SENTINEL);
-    builder.env("WARP_INITIAL_HISTFILESIZE", BASH_HISTORY_SIZE_SENTINEL);
-    builder.env("WARP_INITIAL_HISTSIZE", BASH_HISTORY_SIZE_SENTINEL);
+    builder.env("BLACK_INITIAL_HISTFILESIZE", BASH_HISTORY_SIZE_SENTINEL);
+    builder.env("BLACK_INITIAL_HISTSIZE", BASH_HISTORY_SIZE_SENTINEL);
     // Intentionally do NOT set `WARP_INITIAL_WORKING_DIR` for sandboxes:
     // the container's init script cds into the sandbox home dir, not
     // the host's startup dir.
@@ -834,7 +834,7 @@ fn build_docker_sandbox_command(
 ///
 /// TODO(advait): Wire up cleanup on pane close. Today, closing a Docker
 /// sandbox pane leaves behind (1) the per-sandbox host init + workspace dirs
-/// under the Warp cache dir, and (2) the stopped `warp-sandbox-<id>`
+/// under the Black cache dir, and (2) the stopped `warp-sandbox-<id>`
 /// container. Both are per-sandbox so they don't clobber each other, but
 /// they accumulate over repeated sessions. The right hook is likely on the
 /// PTY/pane lifecycle (alongside `Pty::kill`) and should:
@@ -845,7 +845,7 @@ fn build_docker_sandbox_command(
 fn prepare_docker_sandbox(starter: &DockerSandboxShellStarter) -> Result<()> {
     // Build each per-sandbox subdirectory with mode 0700 so other local users
     // cannot traverse into them, which (combined with the parent living under
-    // the per-user Warp cache dir rather than `/tmp`) prevents the init
+    // the per-user Black cache dir rather than `/tmp`) prevents the init
     // script from being read or symlink-attacked by anyone other than the
     // Warp user. The file itself is left at the default mode so the
     // container's shell (which may run as a different uid than the host
@@ -907,11 +907,11 @@ mod tests {
             Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
         );
         assert_eq!(
-            env_value(&command, "WARP_INITIAL_HISTFILESIZE"),
+            env_value(&command, "BLACK_INITIAL_HISTFILESIZE"),
             Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
         );
         assert_eq!(
-            env_value(&command, "WARP_INITIAL_HISTSIZE"),
+            env_value(&command, "BLACK_INITIAL_HISTSIZE"),
             Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
         );
     }
@@ -930,8 +930,8 @@ mod tests {
 
         assert_eq!(env_value(&command, "HISTFILESIZE"), None);
         assert_eq!(env_value(&command, "HISTSIZE"), None);
-        assert_eq!(env_value(&command, "WARP_INITIAL_HISTFILESIZE"), None);
-        assert_eq!(env_value(&command, "WARP_INITIAL_HISTSIZE"), None);
+        assert_eq!(env_value(&command, "BLACK_INITIAL_HISTFILESIZE"), None);
+        assert_eq!(env_value(&command, "BLACK_INITIAL_HISTSIZE"), None);
     }
 
     #[test]
@@ -956,11 +956,11 @@ mod tests {
             Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
         );
         assert_eq!(
-            env_value(&command, "WARP_INITIAL_HISTFILESIZE"),
+            env_value(&command, "BLACK_INITIAL_HISTFILESIZE"),
             Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
         );
         assert_eq!(
-            env_value(&command, "WARP_INITIAL_HISTSIZE"),
+            env_value(&command, "BLACK_INITIAL_HISTSIZE"),
             Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
         );
     }

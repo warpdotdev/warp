@@ -1,18 +1,18 @@
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
-use warpui::elements::{
+use black_ui::elements::{
     AcceptedByDropTarget, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Draggable, DraggableState, DropShadow, Empty, Flex, Hoverable,
     MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
     ParentOffsetBounds, Radius, SavePosition, Shrinkable, SizeConstraintCondition,
     SizeConstraintSwitch, Stack,
 };
-use warpui::fonts::Weight;
-use warpui::platform::Cursor;
-use warpui::presenter::PositionCache;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::ui_components::text::Span;
-use warpui::{AppContext, Element, SingletonEntity, ViewHandle};
+use black_ui::fonts::Weight;
+use black_ui::platform::Cursor;
+use black_ui::presenter::PositionCache;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::ui_components::text::Span;
+use black_ui::{AppContext, Element, SingletonEntity, ViewHandle};
 
 use super::WarpDriveItemId;
 use crate::appearance::Appearance;
@@ -96,7 +96,7 @@ impl WarpDriveItemStyles {
                 .set_font_size(ITEM_FONT_SIZE)
                 .set_font_color(theme.foreground().into())
                 .set_background(
-                    warp_core::ui::theme::color::internal_colors::fg_overlay_4(theme).into(),
+                    black_core::ui::theme::color::internal_colors::fg_overlay_4(theme).into(),
                 )
                 .set_border_color(theme.accent().into()),
             hovered: UiComponentStyles::default()
@@ -104,7 +104,7 @@ impl WarpDriveItemStyles {
                 .set_font_size(ITEM_FONT_SIZE)
                 .set_font_color(blended_colors::text_main(theme, background))
                 .set_background(
-                    warp_core::ui::theme::color::internal_colors::fg_overlay_2(theme).into(),
+                    black_core::ui::theme::color::internal_colors::fg_overlay_2(theme).into(),
                 ),
         }
     }
@@ -701,7 +701,7 @@ impl<'a> WarpDriveRow<'a> {
     }
 }
 
-/// Generate a callback for calculating the Drag bounds within Warp Drive
+/// Generate a callback for calculating the Drag bounds within Black Drive
 fn drag_bounds_callback() -> impl Fn(&PositionCache, Vector2F) -> Option<RectF> {
     move |position_cache, window: Vector2F| {
         let drive_index = position_cache.get_position(WARP_DRIVE_POSITION_ID)?;

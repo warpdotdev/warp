@@ -74,7 +74,7 @@ fn local_to_cloud_initializes_remote_with_empty_environment() {
         panic!("expected Remote after toggle");
     };
     assert_eq!(environment_id, "");
-    assert_eq!(worker_host, "warp");
+    assert_eq!(worker_host, "black");
     assert!(!computer_use_enabled);
 }
 
@@ -84,7 +84,7 @@ fn cloud_to_local_drops_environment() {
         "oz",
         RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
-            worker_host: "warp".to_string(),
+            worker_host: "black".to_string(),
             computer_use_enabled: false,
         },
     ));
@@ -109,7 +109,7 @@ fn cloud_without_env_no_longer_disables_accept() {
         "oz",
         RunAgentsExecutionMode::Remote {
             environment_id: String::new(),
-            worker_host: "warp".to_string(),
+            worker_host: "black".to_string(),
             computer_use_enabled: false,
         },
     ));
@@ -126,7 +126,7 @@ fn cloud_with_opencode_disables_accept() {
         "opencode",
         RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
-            worker_host: "warp".to_string(),
+            worker_host: "black".to_string(),
             computer_use_enabled: false,
         },
     ));
@@ -181,7 +181,7 @@ fn cloud_with_env_and_non_opencode_harness_allows_accept() {
             harness,
             RunAgentsExecutionMode::Remote {
                 environment_id: "env-1".to_string(),
-                worker_host: "warp".to_string(),
+                worker_host: "black".to_string(),
                 computer_use_enabled: false,
             },
         ));
@@ -209,7 +209,7 @@ fn set_environment_id_updates_remote() {
         "oz",
         RunAgentsExecutionMode::Remote {
             environment_id: "old".to_string(),
-            worker_host: "warp".to_string(),
+            worker_host: "black".to_string(),
             computer_use_enabled: false,
         },
     ));
@@ -226,7 +226,7 @@ fn to_request_round_trips_request_fields() {
         "claude",
         RunAgentsExecutionMode::Remote {
             environment_id: "env-2".to_string(),
-            worker_host: "warp".to_string(),
+            worker_host: "black".to_string(),
             computer_use_enabled: true,
         },
         vec![
@@ -377,7 +377,7 @@ mod override_from_approved_config_tests {
             harness_type: harness.to_string(),
             execution_mode: OrchestrationExecutionMode::Remote {
                 environment_id: env.to_string(),
-                worker_host: "warp".to_string(),
+                worker_host: "black".to_string(),
             },
         }
     }
@@ -425,7 +425,7 @@ mod override_from_approved_config_tests {
             panic!("expected Remote after override");
         };
         assert_eq!(environment_id, "env-1");
-        assert_eq!(worker_host, "warp");
+        assert_eq!(worker_host, "black");
     }
 
     #[test]
@@ -434,7 +434,7 @@ mod override_from_approved_config_tests {
             "oz",
             RunAgentsExecutionMode::Remote {
                 environment_id: "env-1".to_string(),
-                worker_host: "warp".to_string(),
+                worker_host: "black".to_string(),
                 computer_use_enabled: true,
             },
         ));
@@ -453,7 +453,7 @@ mod override_from_approved_config_tests {
             "oz",
             RunAgentsExecutionMode::Remote {
                 environment_id: "old-env".to_string(),
-                worker_host: "warp".to_string(),
+                worker_host: "black".to_string(),
                 computer_use_enabled: true,
             },
         ));
@@ -515,7 +515,7 @@ fn local_to_cloud_idempotent_when_already_remote() {
         "oz",
         RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
-            worker_host: "warp".to_string(),
+            worker_host: "black".to_string(),
             computer_use_enabled: true,
         },
     ));

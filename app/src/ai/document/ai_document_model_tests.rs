@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use ai::diff_validation::DiffDelta;
 use chrono::Local;
-use warpui::App;
+use black_ui::App;
 
 use super::*;
 use crate::ai::agent::conversation::AIConversationId;

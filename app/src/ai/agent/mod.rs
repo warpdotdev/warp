@@ -34,8 +34,8 @@ use session_sharing_protocol::common::ParticipantId;
 use task::TaskId;
 pub use telemetry::AIIdentifiers;
 use uuid::Uuid;
-use warp_core::features::FeatureFlag;
-use warp_editor::render::model::LineCount;
+use black_core::features::FeatureFlag;
+use black_editor::render::model::LineCount;
 use warp_multi_agent_api::{diff_hunk as diff_hunk_api, AgentEvent, AgentType};
 
 pub use self::api::{MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError};
@@ -82,7 +82,7 @@ impl ServerOutputId {
 pub enum CancellationReason {
     /// The user explicitly cancelled without providing a follow-up.
     ManuallyCancelled,
-    /// Warp automatically cancelled the local run so it could continue in Cloud Mode.
+    /// Black automatically cancelled the local run so it could continue in Cloud Mode.
     AutomaticCloudHandoff,
 
     /// The user submitted a follow-up query during streaming which implicitly cancelled the current one.
@@ -693,9 +693,9 @@ impl Display for RenderableAIError {
                 }
             }
             Self::ServerOverloaded => {
-                write!(f, "Warp is currently overloaded. Please try again later.")
+                write!(f, "Black is currently overloaded. Please try again later.")
             }
-            Self::InternalWarpError => write!(f, "Internal Warp error."),
+            Self::InternalWarpError => write!(f, "Internal Black error."),
             Self::ContextWindowExceeded(message) => {
                 write!(f, "Context window exceeded: {message}")
             }

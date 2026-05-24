@@ -5,27 +5,27 @@ use std::path::PathBuf;
 
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Deserializer, Serialize};
-use warp_core::command::ExitCode;
+use black_core::command::ExitCode;
 
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::SessionId;
 
-/// Indicates that the following JSON-encoded message is hex-encoded for Warp's lifecycle hooks.
+/// Indicates that the following JSON-encoded message is hex-encoded for Black's lifecycle hooks.
 /// In DCS, it is used as the final char in the DCS start sequence.
 /// In OSC, it is used as the first parameter.
 pub(super) const HEX_ENCODED_JSON_MARKER: char = 'd';
 
-/// Indicates that the following JSON-encoded message is unencoded for Warp's lifecycle hooks.
+/// Indicates that the following JSON-encoded message is unencoded for Black's lifecycle hooks.
 /// In DCS, it is used as the final char in the DCS start sequence.
 /// In OSC, it is used as the first parameter.
 pub(super) const UNENCODED_JSON_MARKER: char = 'f';
 
-/// Indicates that the following message is a ANSI-C quoted message for receiving Warp's lifecycle
+/// Indicates that the following message is a ANSI-C quoted message for receiving Black's lifecycle
 /// hooks via key-value pairs.
 /// In OSC< it is used as the first parameter.
 pub(super) const UNENCODED_KV_MARKER: char = 'k';
 
-/// Enum representing all possible JSON payloads for Warp's DCS's.
+/// Enum representing all possible JSON payloads for Black's DCS's.
 #[derive(Serialize, Debug, Deserialize)]
 #[allow(clippy::upper_case_acronyms)]
 #[serde(tag = "hook")]
@@ -372,8 +372,8 @@ pub struct SystemDetails {
     pub writable_home: Option<bool>,
 }
 
-/// The reason that warpification was not available when the user tried
-/// to warpify.
+/// The reason that blackification was not available when the user tried
+/// to blackify.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all(serialize = "snake_case"))]
 pub enum WarpificationUnavailableReason {
@@ -460,7 +460,7 @@ pub struct PrecmdValue {
 impl PrecmdValue {
     /// Returns `true` if this PrecmdValue was emitted after the completion of an in-band command.
     ///
-    /// This relies on the assumption that the warp_precmd shell function (responsible for writing
+    /// This relies on the assumption that the black_precmd shell function (responsible for writing
     /// this to the PTY from the shell) does not populate `pwd` or `ps1` when the previous command
     /// was an in-band command; for all other cases these fields should always be populated.
     pub fn was_sent_after_in_band_command(&self) -> bool {
@@ -500,7 +500,7 @@ pub struct PreexecValue {
     pub command: String,
 }
 
-/// Received from the pty after the shell has finished executing Warp's
+/// Received from the pty after the shell has finished executing Black's
 /// bootstrap script.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct BootstrappedValue {
@@ -560,7 +560,7 @@ pub struct BootstrappedValue {
     pub rcfiles_end_time: Option<OrderedFloat<f64>>,
 
     /// Tags for known shell configurations/plugins, especially ones that are
-    /// incompatible with Warp.
+    /// incompatible with Black.
     #[serde(deserialize_with = "parse_shell_options_list_deserializer", default)]
     pub shell_plugins: Option<HashSet<String>>,
 
@@ -606,7 +606,7 @@ fn parse_float_from_string(s: String) -> Option<OrderedFloat<f64>> {
     s.parse::<f64>().map(|f| f.into()).ok()
 }
 
-/// Received from the pty when Warp's SSH wrapper is executed, prior to
+/// Received from the pty when Black's SSH wrapper is executed, prior to
 /// bootstrapping the SSH session.
 #[derive(Debug, Default, PartialEq, Eq, Deserialize, Serialize, Clone)]
 pub struct PreInteractiveSSHSessionValue {}
@@ -655,7 +655,7 @@ pub struct InitSubshellValue {
 }
 
 /// Emitted by a snippet included in the user's RC file, which signals a new session is being
-/// created; if the session is for a subshell, this triggers Warp's bootstrap process.
+/// created; if the session is for a subshell, this triggers Black's bootstrap process.
 /// Otherwise, it's ignored.
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SourcedRcFileForWarpValue {
@@ -666,8 +666,8 @@ pub struct SourcedRcFileForWarpValue {
 
 /// Received from the pty via a shell line editor hook, whether readline (bash),
 /// ZLE, or the fish [command line editor](https://fishshell.com/docs/current/interactive.html#command-line-editor).
-/// The binding is triggered when Warp writes the `ESC-i` escape sequence to the pty.
-/// Warp usually does this after a block completes, to collect any typeahead
+/// The binding is triggered when Black writes the `ESC-i` escape sequence to the pty.
+/// Black usually does this after a block completes, to collect any typeahead
 /// that the user entered while the block was running (see
 /// [`TerminalView::request_input_buffer`]).
 #[derive(Debug, Default, PartialEq, Eq, Clone, Deserialize, Serialize)]
@@ -680,7 +680,7 @@ pub struct InputBufferValue {
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct ClearValue {}
 
-/// Received from the pty when warp_finish_update is called at the end of an
+/// Received from the pty when black_finish_update is called at the end of an
 /// assisted auto-update.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct FinishUpdateValue {

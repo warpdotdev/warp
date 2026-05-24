@@ -1,6 +1,6 @@
-use warpui::elements::{CornerRadius, MouseStateHandle, Radius};
-use warpui::ui_components::button::Button;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use black_ui::elements::{CornerRadius, MouseStateHandle, Radius};
+use black_ui::ui_components::button::Button;
+use black_ui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 
 use super::icons::{Icon, ICON_DIMENSIONS};
 use super::{blended_colors, BORDER_RADIUS};

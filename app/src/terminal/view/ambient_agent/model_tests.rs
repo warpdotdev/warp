@@ -1,5 +1,5 @@
 use url::Url;
-use warpui::{App, EntityId};
+use black_ui::{App, EntityId};
 
 use super::*;
 use crate::ai::blocklist::handoff::HandoffLaunchAttachments;
@@ -46,7 +46,7 @@ fn pending_handoff_fresh_launch() -> PendingHandoff {
     }
 }
 
-fn add_model(app: &mut App) -> warpui::ModelHandle<AmbientAgentViewModel> {
+fn add_model(app: &mut App) -> black_ui::ModelHandle<AmbientAgentViewModel> {
     app.add_model(|ctx| AmbientAgentViewModel::new(EntityId::new(), ctx))
 }
 
@@ -95,7 +95,7 @@ fn github_auth_url_for_initial_run_includes_focus_cloud_mode_next() {
             };
             model.request = Some(retry_request("fix tests"));
             model.handle_needs_github_auth(
-                "https://example.com/oauth/connect/github?scheme=warpdev".to_string(),
+                "https://example.com/oauth/connect/github?scheme=blackdev".to_string(),
                 "auth required".to_string(),
                 ctx,
             );
@@ -111,7 +111,7 @@ fn github_auth_url_for_initial_run_includes_focus_cloud_mode_next() {
                 .map(|(_, value)| value.into_owned());
             assert_eq!(
                 next,
-                Some("warpdev://action/focus_cloud_mode?source=cloud_setup".to_string())
+                Some("blackdev://action/focus_cloud_mode?source=cloud_setup".to_string())
             );
         });
     });

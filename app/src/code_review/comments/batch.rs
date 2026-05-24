@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use warp_core::features::FeatureFlag;
-use warp_editor::render::model::LineCount;
-use warpui::{Entity, ModelContext};
+use black_core::features::FeatureFlag;
+use black_editor::render::model::LineCount;
+use black_ui::{Entity, ModelContext};
 
 use super::{
     AttachedReviewComment, AttachedReviewCommentTarget, CommentId, PendingImportedReviewComment,

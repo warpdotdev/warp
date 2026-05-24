@@ -1,19 +1,19 @@
 //! Integration tests for CTRL-D / EOT behaviour.
 
-use warp::integration_testing::step::new_step_with_default_assertions;
-use warp::integration_testing::terminal::util::current_shell_starter_and_version;
-use warp::integration_testing::terminal::{
+use black::integration_testing::step::new_step_with_default_assertions;
+use black::integration_testing::terminal::util::current_shell_starter_and_version;
+use black::integration_testing::terminal::{
     assert_active_block_command_for_single_terminal_in_tab, assert_bootstrapping_stage,
     assert_no_block_executing, assert_terminal_bootstrapped, execute_python_interpreter_in_tab,
     wait_until_bootstrapped_single_pane_for_tab, PYTHON_PROMPT_READY,
 };
-use warp::integration_testing::view_getters::assert_no_views_of_type;
-use warp::pane_group::PaneGroup;
-use warp::terminal::model::bootstrap::BootstrapStage;
-use warp::terminal::shell::ShellType;
-use warp::terminal::TerminalView;
-use warp::workspace::Workspace;
-use warpui::integration::TestStep;
+use black::integration_testing::view_getters::assert_no_views_of_type;
+use black::pane_group::PaneGroup;
+use black::terminal::model::bootstrap::BootstrapStage;
+use black::terminal::shell::ShellType;
+use black::terminal::TerminalView;
+use black::workspace::Workspace;
+use black_ui::integration::TestStep;
 
 use super::{new_builder, Builder};
 use crate::util::write_all_rc_files_for_test;
@@ -51,7 +51,7 @@ pub fn test_ctrl_d_handled_by_read_during_bootstrapping() -> Builder {
     new_builder()
         .set_should_run_test(|| {
             let (starter, _) = current_shell_starter_and_version();
-            // We need to fix https://github.com/warpdotdev/Warp/issues/1869 before
+            // We need to fix https://github.com/blackdagger/black/issues/1869 before
             // this test works on fish.
             !matches!(starter.shell_type(), ShellType::Fish)
         })

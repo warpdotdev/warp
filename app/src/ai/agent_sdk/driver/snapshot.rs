@@ -37,9 +37,9 @@ use futures::future::join_all;
 use tokio::fs::{self as tokio_fs, OpenOptions};
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::{mpsc, oneshot};
-use warp_core::report_error;
-use warpui::r#async::executor::Background;
-use warpui::r#async::FutureExt as _;
+use black_core::report_error;
+use black_ui::r#async::executor::Background;
+use black_ui::r#async::FutureExt as _;
 
 use crate::ai::agent_sdk::retry::with_bounded_retry;
 use crate::ai::ambient_agents::AmbientAgentTaskId;

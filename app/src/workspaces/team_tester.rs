@@ -1,4 +1,4 @@
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 #[derive(Clone)]
 pub struct TeamTesterStatus {}

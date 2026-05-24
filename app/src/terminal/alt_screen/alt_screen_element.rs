@@ -5,18 +5,18 @@ use num_traits::Float as _;
 use parking_lot::FairMutex;
 use pathfinder_geometry::vector::vec2f;
 use vec1::Vec1;
-use warp_core::features::FeatureFlag;
-use warp_util::user_input::UserInput;
-use warpui::elements::new_scrollable::{NewScrollableElement, ScrollableAxis};
-use warpui::elements::{Axis, Point as UiPoint, ScrollData, ScrollableElement};
-use warpui::event::{DispatchedEvent, InBoundsExt, KeyState, ModifiersState};
-use warpui::fonts::Properties;
-use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::Vector2F;
-use warpui::platform::keyboard::KeyCode;
-use warpui::text::SelectionType;
-use warpui::units::{IntoLines, IntoPixels, Lines, Pixels};
-use warpui::{
+use black_core::features::FeatureFlag;
+use black_util::user_input::UserInput;
+use black_ui::elements::new_scrollable::{NewScrollableElement, ScrollableAxis};
+use black_ui::elements::{Axis, Point as UiPoint, ScrollData, ScrollableElement};
+use black_ui::event::{DispatchedEvent, InBoundsExt, KeyState, ModifiersState};
+use black_ui::fonts::Properties;
+use black_ui::geometry::rect::RectF;
+use black_ui::geometry::vector::Vector2F;
+use black_ui::platform::keyboard::KeyCode;
+use black_ui::text::SelectionType;
+use black_ui::units::{IntoLines, IntoPixels, Lines, Pixels};
+use black_ui::{
     end_trace, record_trace_event, start_trace, AfterLayoutContext, AppContext, ClipBounds,
     Element, EntityId, Event, EventContext, LayoutContext, ModelHandle, PaintContext,
     SizeConstraint,
@@ -258,7 +258,7 @@ impl AltScreenElement {
         ctx.dispatch_typed_action(TerminalAction::Focus);
 
         // On mobile, request soft keyboard so users can input.
-        if warpui::platform::is_mobile_device() {
+        if black_ui::platform::is_mobile_device() {
             ctx.request_soft_keyboard();
         }
 

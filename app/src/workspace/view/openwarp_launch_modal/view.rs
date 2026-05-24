@@ -3,18 +3,18 @@ use markdown_parser::{
 };
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::theme::phenomenon::PhenomenonStyle;
-use warp_core::ui::theme::Fill;
-use warpui::assets::asset_cache::AssetSource;
-use warpui::elements::{
+use black_core::ui::theme::phenomenon::PhenomenonStyle;
+use black_core::ui::theme::Fill;
+use black_ui::assets::asset_cache::AssetSource;
+use black_ui::elements::{
     Align, CacheOption, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Expanded, Flex, FormattedTextElement, HighlightedHyperlink, Image,
     MainAxisSize, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
     Stack, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::keymap::FixedBinding;
-use warpui::{
+use black_ui::fonts::{Properties, Weight};
+use black_ui::keymap::FixedBinding;
+use black_ui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
@@ -46,7 +46,7 @@ const FEATURE_ITEMS: &[FeatureItem] = &[
     FeatureItem {
         icon: Icon::HeartHand,
         title: "Contribute",
-        description: "Warp's client code is now open source. Get started by using the /feedback skill to open an issue, and follow the contribution guidelines here.",
+        description: "Black's client code is now open source. Get started by using the /feedback skill to open an issue, and follow the contribution guidelines here.",
         inline_link: Some(InlineLink {
             text: "here",
             url: CONTRIBUTING_URL,
@@ -55,7 +55,7 @@ const FEATURE_ITEMS: &[FeatureItem] = &[
     FeatureItem {
         icon: Icon::Oz,
         title: "Open Automated Development",
-        description: "The Warp repo is managed by an agent-first workflow powered by Oz, our cloud agent orchestration platform.",
+        description: "The Black repo is managed by an agent-first workflow powered by Oz, our cloud agent orchestration platform.",
         inline_link: Some(InlineLink {
             text: "Oz",
             url: OZ_URL,
@@ -70,7 +70,7 @@ const FEATURE_ITEMS: &[FeatureItem] = &[
 ];
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
+    use black_ui::keymap::macros::*;
 
     app.register_fixed_bindings([FixedBinding::new(
         "escape",
@@ -212,7 +212,7 @@ impl OpenWarpLaunchModal {
     }
 
     fn render_title(appearance: &Appearance) -> Box<dyn Element> {
-        Text::new("Warp is now open-source", appearance.ui_font_family(), 20.)
+        Text::new("Black is now open-source", appearance.ui_font_family(), 20.)
             .with_color(PhenomenonStyle::modal_title_text())
             .with_style(Properties::default().weight(Weight::Semibold))
             .finish()
@@ -220,7 +220,7 @@ impl OpenWarpLaunchModal {
 
     fn render_description(appearance: &Appearance) -> Box<dyn Element> {
         Text::new(
-            "You, our community, can participate in building Warp using an agent-first workflow.",
+            "You, our community, can participate in building Black using an agent-first workflow.",
             appearance.ui_font_family(),
             14.,
         )
@@ -379,7 +379,7 @@ impl View for OpenWarpLaunchModal {
         "OpenWarpLaunchModal"
     }
 
-    fn on_focus(&mut self, _focus_ctx: &warpui::FocusContext, ctx: &mut ViewContext<Self>) {
+    fn on_focus(&mut self, _focus_ctx: &black_ui::FocusContext, ctx: &mut ViewContext<Self>) {
         ctx.focus_self();
     }
 

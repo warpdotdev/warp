@@ -1,0 +1,23 @@
+[Desktop Entry]
+# The version of the desktop entry spec this conforms to.
+Version=1.0
+
+Type=Application
+
+Name=BlackLocal
+GenericName=TerminalEmulator
+
+Exec=black-terminal-local %U
+StartupWMClass=io.blackdagger.BlackLocal
+
+Keywords=shell;prompt;command;commandline;cmd;
+
+Icon=io.blackdagger.BlackLocal
+
+Categories=System;TerminalEmulator;
+
+# Don't run this application within a terminal.
+Terminal=false
+
+# Register ourselves as the handler for blacklocal:// URLs.
+MimeType=x-scheme-handler/blacklocal;

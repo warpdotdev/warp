@@ -1,5 +1,5 @@
-use warpui::elements::MouseStateHandle;
-use warpui::{AppContext, Element};
+use black_ui::elements::MouseStateHandle;
+use black_ui::{AppContext, Element};
 
 use super::{WarpDriveItem, WarpDriveItemId};
 use crate::ai::mcp::CloudMCPServer;

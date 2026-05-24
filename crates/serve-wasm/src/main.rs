@@ -14,7 +14,7 @@ use tracing::Span;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-/// A small webserver to serve the Warp wasm bundle and assets for local development.
+/// A small webserver to serve the Black wasm bundle and assets for local development.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -38,7 +38,7 @@ async fn main() {
 
     let args = Args::parse();
 
-    println!("Serving Warp on http://localhost:{}", args.port);
+    println!("Serving Black on http://localhost:{}", args.port);
     serve(make_router(&args.directory), args.port).await
 }
 
@@ -87,7 +87,7 @@ fn make_router(build_directory: &Path) -> Router {
             "/assets/client/wasm",
             ServeDir::new(build_directory.join("wasm")),
         )
-        // This needs to be kept in sync with warp_util::path::hashed_asset_url.
+        // This needs to be kept in sync with black_util::path::hashed_asset_url.
         .nest_service(
             "/assets/client/static",
             ServeDir::new(build_directory.join("assets")),

@@ -1,4 +1,4 @@
-use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
+use black_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
 use super::classify_driver_error;
 use crate::ai::agent_sdk::driver::terminal::ShareSessionError;
@@ -46,8 +46,8 @@ fn not_logged_in_is_error_with_auth_required() {
         Some(PlatformErrorCode::AuthenticationRequired)
     );
     assert!(
-        update.message.contains("WARP_API_KEY"),
-        "message should mention WARP_API_KEY: {:?}",
+        update.message.contains("BLACK_API_KEY"),
+        "message should mention BLACK_API_KEY: {:?}",
         update.message
     );
 }

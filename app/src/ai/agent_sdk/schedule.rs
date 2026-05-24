@@ -2,15 +2,15 @@ use chrono::{DateTime, Utc};
 use comfy_table::Cell;
 use futures::future;
 use serde::Serialize;
-use warp_cli::agent::OutputFormat;
-use warp_cli::schedule::{
+use black_cli::agent::OutputFormat;
+use black_cli::schedule::{
     CreateScheduleArgs, DeleteScheduleArgs, GetScheduleArgs, PauseScheduleArgs, ScheduleCommand,
     ScheduleSubcommand, UnpauseScheduleArgs, UpdateScheduleArgs,
 };
-use warp_cli::GlobalOptions;
-use warp_graphql::queries::get_scheduled_agent_history::ScheduledAgentHistory;
-use warpui::platform::TerminationMode;
-use warpui::{AppContext, SingletonEntity};
+use black_cli::GlobalOptions;
+use black_graphql::queries::get_scheduled_agent_history::ScheduledAgentHistory;
+use black_ui::platform::TerminationMode;
+use black_ui::{AppContext, SingletonEntity};
 
 use super::common::{EnvironmentChoice, ResolveConfigurationError};
 use super::output::{self, TableFormat};

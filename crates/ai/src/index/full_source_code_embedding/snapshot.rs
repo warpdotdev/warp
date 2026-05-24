@@ -7,15 +7,15 @@ use chrono::Utc;
 #[cfg(feature = "local_fs")]
 use repo_metadata::Repository;
 #[cfg(feature = "local_fs")]
-use warpui::ModelHandle;
+use black_ui::ModelHandle;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use super::Error as CodebaseIndexError;
         use std::sync::Arc;
-        use warpui::ModelContext;
+        use black_ui::ModelContext;
         use anyhow::Context;
-        use warp_core::safe_info;
+        use black_core::safe_info;
         use super::{store_client::StoreClient, CodebaseIndex, EmbeddingConfig};
     }
 }
@@ -217,8 +217,8 @@ pub(super) fn snapshot_dir() -> Option<PathBuf> {
 
 #[cfg(feature = "local_fs")]
 fn default_snapshot_dir_path() -> PathBuf {
-    warp_core::paths::secure_state_dir()
-        .unwrap_or_else(warp_core::paths::state_dir)
+    black_core::paths::secure_state_dir()
+        .unwrap_or_else(black_core::paths::state_dir)
         .join(REPO_SNAPSHOT_SUBDIR_NAME)
 }
 /// Constructs a snapshot path given a base directory and the codebase index's root path.
@@ -237,12 +237,12 @@ mod tests;
 #[cfg(feature = "local_fs")]
 pub(super) fn migrate_snapshots_to_secure_dir_if_needed() -> anyhow::Result<()> {
     // Only perform migration if a secure state directory is available.
-    let Some(secure_base) = warp_core::paths::secure_state_dir() else {
+    let Some(secure_base) = black_core::paths::secure_state_dir() else {
         return Ok(());
     };
 
     let new_dir = secure_base.join(REPO_SNAPSHOT_SUBDIR_NAME);
-    let old_dir = warp_core::paths::state_dir().join(REPO_SNAPSHOT_SUBDIR_NAME);
+    let old_dir = black_core::paths::state_dir().join(REPO_SNAPSHOT_SUBDIR_NAME);
 
     if new_dir == old_dir {
         return Ok(());

@@ -3,8 +3,8 @@ use std::fs;
 use std::sync::Arc;
 
 use tempfile::TempDir;
-use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
+use black_cli::agent::Harness;
+use black_core::features::FeatureFlag;
 
 use super::{
     build_local_claude_child_command, build_local_codex_child_command,

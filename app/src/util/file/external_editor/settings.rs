@@ -121,7 +121,7 @@ define_settings_group!(EditorSettings, settings: [
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
-        toml_path: "agents.warp_agent.other.open_conversation_layout_preference",
+        toml_path: "agents.black_agent.other.open_conversation_layout_preference",
         description: "Whether to open agent conversations in a new tab or a split pane.",
     },
 ]);

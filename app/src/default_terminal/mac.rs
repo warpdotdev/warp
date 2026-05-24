@@ -6,7 +6,7 @@ use cocoa::base::{id, nil};
 use core_foundation::base::TCFType;
 use core_foundation::string::{CFString, CFStringRef};
 use objc::{class, msg_send, sel, sel_impl};
-use warp_core::channel::{Channel, ChannelState};
+use black_core::channel::{Channel, ChannelState};
 
 // Launch Services constants
 type LSRolesMask = u32;
@@ -62,7 +62,7 @@ pub fn is_warp_default_terminal() -> bool {
 }
 
 pub fn set_warp_as_default_terminal() -> Result<(), String> {
-    log::debug!("Setting Warp as default terminal");
+    log::debug!("Setting Black as default terminal");
 
     let bundle_id = get_warp_bundle_id().ok_or("No bundle ID".to_string())?;
 
@@ -92,7 +92,7 @@ fn set_default_terminal(bundle_id: &str) -> Result<(), String> {
     }
 }
 
-/// Gets Warp's bundle identifier. This may be `None` if not running as a bundle, i.e. through
+/// Gets Black's bundle identifier. This may be `None` if not running as a bundle, i.e. through
 /// `cargo run` without `cargo bundle`.
 fn get_warp_bundle_id() -> Option<String> {
     unsafe {

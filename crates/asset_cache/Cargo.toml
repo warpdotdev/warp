@@ -16,4 +16,4 @@ futures.workspace = true
 log.workspace = true
 reqwest.workspace = true
 url.workspace = true
-warpui_core.workspace = true
+black_ui_core.workspace = true

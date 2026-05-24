@@ -1,7 +1,7 @@
 //! This module is meant to be a single source of truth for information about the windows' "traffic
 //! light" buttons, the minimize, maximize, and close buttons in the corner of the window, so named
 //! b/c of their resemblance to traffic lights on MacOS. How (whether or not) these are rendered
-//! depends on the platform. The Warp app must use this information to avoid rendering UI elements
+//! depends on the platform. The Black app must use this information to avoid rendering UI elements
 //! underneath them.
 
 #[cfg(windows)]
@@ -13,7 +13,7 @@ mod linux_only {
 
     pub(super) use pathfinder_color::ColorU;
     pub(super) use pathfinder_geometry::vector::vec2f;
-    pub(super) use warpui::elements::{
+    pub(super) use black_ui::elements::{
         Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, Flex, Hoverable, Icon,
         OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Rect, Stack,
     };
@@ -28,8 +28,8 @@ use linux_only::*;
 mod windows_only {
     pub(super) use pathfinder_color::ColorU;
     pub(super) use pathfinder_geometry::vector::vec2f;
-    pub(super) use warp_core::ui::theme;
-    pub(super) use warpui::elements::{
+    pub(super) use black_core::ui::theme;
+    pub(super) use black_ui::elements::{
         Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, Hoverable,
         OffsetPositioning, ParentAnchor, ParentOffsetBounds, Radius, Rect, Stack,
     };
@@ -47,10 +47,10 @@ mod windows_only {
 }
 
 #[cfg(not(target_os = "windows"))]
-use warpui::elements::Empty;
-use warpui::elements::MouseStateHandle;
-use warpui::platform::FullscreenState;
-use warpui::{AppContext, Element, WindowId};
+use black_ui::elements::Empty;
+use black_ui::elements::MouseStateHandle;
+use black_ui::platform::FullscreenState;
+use black_ui::{AppContext, Element, WindowId};
 #[cfg(target_os = "windows")]
 use windows_only::*;
 
@@ -123,7 +123,7 @@ impl TrafficLightMouseStates {
     }
 }
 
-/// Data the Warp app needs to avoid rendering anything below the traffic lights.
+/// Data the Black app needs to avoid rendering anything below the traffic lights.
 #[derive(Clone, Debug)]
 pub struct TrafficLightData {
     width: f32,
@@ -139,7 +139,7 @@ impl TrafficLightData {
     /// Horizontal space needed for the traffic light buttons.
     ///
     /// Normally, we don't need to manually adjust any sizes based on zoom level as it is handled
-    /// by warpui. However, native traffic light buttons (e.g. on macOS) don't scale with zoom, so
+    /// by black_ui. However, native traffic light buttons (e.g. on macOS) don't scale with zoom, so
     /// we need to divide by the zoom factor to keep the padding constant.
     pub fn width(&self, zoom_factor: f32) -> f32 {
         if self.scales_with_zoom {

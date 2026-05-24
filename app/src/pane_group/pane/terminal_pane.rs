@@ -8,10 +8,10 @@ use base64::Engine as _;
 #[cfg(not(target_family = "wasm"))]
 use session_sharing_protocol::sharer::SessionSourceType;
 use url::Url;
-use warp_cli::agent::Harness;
-use warp_core::execution_mode::AppExecutionMode;
+use black_cli::agent::Harness;
+use black_core::execution_mode::AppExecutionMode;
 use warp_multi_agent_api as multi_agent_api;
-use warpui::{
+use black_ui::{
     AppContext, EntityId, ModelHandle, SingletonEntity, ViewContext, ViewHandle, WindowId,
 };
 
@@ -2106,7 +2106,7 @@ fn launch_remote_child(
     // Map the run-wide auth secret name into the harness-specific
     // config variant. For unsupported harnesses (Oz, OpenCode, Gemini,
     // Unknown), the secret is silently ignored — those harnesses either
-    // use Warp's built-in auth (Oz) or don't currently support managed
+    // use Black's built-in auth (Oz) or don't currently support managed
     // secrets via this flow.
     let harness_auth_secrets = auth_secret_name
         .as_ref()

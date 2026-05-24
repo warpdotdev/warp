@@ -1,4 +1,4 @@
-use warpui::ViewContext;
+use black_ui::ViewContext;
 
 use super::TerminalView;
 use crate::server::telemetry::InteractionSource;

@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use string_offset::CharOffset;
-use warpui::text::TextBuffer;
+use black_ui::text::TextBuffer;
 
 use crate::vim::WordType;
 use crate::word_iterator::CharacterKind;

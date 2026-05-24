@@ -1,11 +1,11 @@
-use warpui::elements::{
+use black_ui::elements::{
     Align, ConstrainedBox, Container, CrossAxisAlignment, Element, Flex, Hoverable, Icon,
     MouseState, MouseStateHandle, ParentElement, Shrinkable,
 };
-use warpui::fonts::Weight;
-use warpui::platform::Cursor;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{
+use black_ui::fonts::Weight;
+use black_ui::platform::Cursor;
+use black_ui::ui_components::components::{UiComponent, UiComponentStyles};
+use black_ui::{
     Action, AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, WindowId,
 };
@@ -38,7 +38,7 @@ impl FeatureSection {
         match self {
             FeatureSection::WhatsNew => "What's New?",
             FeatureSection::GettingStarted => "Getting Started",
-            FeatureSection::MaximizeWarp => "Maximize Warp",
+            FeatureSection::MaximizeWarp => "Maximize Black",
             FeatureSection::AdvancedSetup => "Advanced Setup",
         }
     }

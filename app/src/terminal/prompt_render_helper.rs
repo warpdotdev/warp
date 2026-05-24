@@ -2,15 +2,15 @@ use std::fmt;
 use std::num::NonZeroUsize;
 
 use settings::Setting as _;
-use warp_core::semantic_selection::SemanticSelection;
-use warpui::elements::{
+use black_core::semantic_selection::SemanticSelection;
+use black_ui::elements::{
     Container, DispatchEventResult, Element, EventHandler, SavePosition, SelectableArea,
     SelectionHandle, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::presenter::ChildView;
-use warpui::units::Pixels;
-use warpui::{AppContext, EntityId, ModelAsRef, ModelHandle, SingletonEntity, ViewHandle};
+use black_ui::fonts::{Properties, Weight};
+use black_ui::presenter::ChildView;
+use black_ui::units::Pixels;
+use black_ui::{AppContext, EntityId, ModelAsRef, ModelHandle, SingletonEntity, ViewHandle};
 
 use super::input::InputRenderStateModel;
 use super::model::block::Block;
@@ -61,7 +61,7 @@ pub fn should_render_ps1_prompt(terminal_model: &TerminalModel, app: &AppContext
     let session_settings = SessionSettings::as_ref(app);
 
     // In the context of session sharing, these values may differ from the local settings i.e.
-    // if the sharer is using PS1 and the viewer is not (using Warp prompt in non-SLP mode).
+    // if the sharer is using PS1 and the viewer is not (using Black prompt in non-SLP mode).
     // In this case, we still want to render the prompt on the same line (PS1 should ALWAYS be
     // rendered on the same line).
     // Note that the product behavior for session sharing is normally to respect the local settings
@@ -80,7 +80,7 @@ pub fn should_render_prompt_on_same_line(
 ) -> bool {
     // We render the prompt on the same line, in the input editor, if:
     // 1. The user is using a custom prompt (PS1)
-    // 2. The user has the same line prompt setting enabled for their Warp prompt.
+    // 2. The user has the same line prompt setting enabled for their Black prompt.
 
     // If universal developer input is enabled, ignore PS1 rendering logic
     if is_universal_developer_input {
@@ -251,12 +251,12 @@ impl PromptRenderHelper {
                     RemoteServerSetupState::Checking => "Starting shell...".to_string(),
                     RemoteServerSetupState::Installing {
                         progress_percent: Some(p),
-                    } => format!("Installing Warp SSH Extension... ({p}%)"),
+                    } => format!("Installing Black SSH Extension... ({p}%)"),
                     RemoteServerSetupState::Installing {
                         progress_percent: None,
-                    } => "Installing Warp SSH Extension...".to_string(),
+                    } => "Installing Black SSH Extension...".to_string(),
                     RemoteServerSetupState::Updating => {
-                        "Updating Warp SSH Extension...".to_string()
+                        "Updating Black SSH Extension...".to_string()
                     }
                     RemoteServerSetupState::Initializing => "Initializing...".to_string(),
                     RemoteServerSetupState::Ready => "Starting shell...".to_string(),

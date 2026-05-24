@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use chrono::{Duration, Utc};
-use warp_core::settings::Setting;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use black_core::settings::Setting;
+use black_ui::{Entity, ModelContext, SingletonEntity};
 
 use crate::ai::request_usage_model::{
     AIRequestUsageModel, AIRequestUsageModelEvent, BonusGrant, BonusGrantScope,
@@ -56,7 +56,7 @@ impl BonusGrantNotificationModel {
         let mut grants_to_persist_to_settings = Vec::new();
 
         for grant in bonus_grants {
-            // Only notify about Warp-granted credits (cost = 0), not user purchases
+            // Only notify about Black-granted credits (cost = 0), not user purchases
             if grant.cost_cents != 0 {
                 continue;
             }
