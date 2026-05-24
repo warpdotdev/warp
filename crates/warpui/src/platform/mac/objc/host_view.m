@@ -63,6 +63,23 @@ void warp_marked_text_cleared(WarpHostView *);
     // new in-progress text) in the same keystroke. Without this, the trailing
     // unmarkText in keyDownImpl would clobber that new marked text.
     BOOL imeTouchedMarkedTextDuringInterpret;
+
+    // The selectedRange of the most recent setMarkedText: call. Kept so that
+    // when a split-commit keystroke both commits previous text and starts a
+    // new marked composition, we can re-emit the new marked-text event after
+    // the commit (see keyDownImpl:).
+    NSRange lastMarkedSelectedRange;
+
+    // True if the IME asked us via doCommandBySelector: to delete characters
+    // (deleteBackward: / deleteForward:) during the current interpretKeyEvents:.
+    // This is how Korean IMEs ask us to remove a marked syllable on Backspace:
+    // they call insertText: to commit the syllable, then immediately
+    // doCommandBySelector(deleteBackward:) to cancel that commit — the net
+    // effect should be that the marked text just disappears. Without acting
+    // on this flag the commit accumulates as plain text and the marked
+    // syllable appears to require an extra Backspace press to actually go
+    // away.
+    BOOL imeRequestedDeleteDuringInterpret;
 }
 
 - (BOOL)acceptsFirstResponder {
@@ -166,6 +183,7 @@ void warp_marked_text_cleared(WarpHostView *);
     BOOL wasComposing = [self hasMarkedText];
     [textToInsert setString:@""];
     imeTouchedMarkedTextDuringInterpret = NO;
+    imeRequestedDeleteDuringInterpret = NO;
 
     // Interpret the key events here so we could check whether user is composing
     // text within the IME and pass the state down to the KeyDown events.
@@ -194,13 +212,46 @@ void warp_marked_text_cleared(WarpHostView *);
 
     // Dispatch TypedCharacter event after KeyDown has been dispatched.
     if ([textToInsert length] > 0 && !handled) {
+        // If the IME asked us to delete (via doCommandBySelector:
+        // deleteBackward:/deleteForward:) during the same interpretKeyEvents
+        // pass, the commit is the IME's way of materializing a marked
+        // composition just so it can immediately delete it (Korean IME's
+        // Backspace flow for a marked syllable). The net intent is "remove
+        // the marked text"; we honor it by suppressing the commit entirely
+        // and ending the IME state.
+        if (imeRequestedDeleteDuringInterpret) {
+            [self unmarkText];
+            return handled;
+        }
+        // In a split-commit (the IME committed text AND started a new
+        // composition in the same keystroke — e.g. typing 'ㅏ' after '간'
+        // produces commit '가' + new marked '나'), setMarkedText: has
+        // already placed the new composition as a selection in the input
+        // field's buffer. If we now insert the committed text, the input
+        // field's insert path (which replaces selection contents) would
+        // overwrite the new marked text and lose the next character.
+        // Workaround: temporarily clear the marked text, dispatch the
+        // commit, and re-apply the marked text afterwards so the input
+        // field's buffer ends up with `<commit><new marked>`.
+        BOOL hasNewMarked = imeTouchedMarkedTextDuringInterpret && [self hasMarkedText];
+        if (hasNewMarked) {
+            warp_marked_text_cleared(self);
+            warp_update_ime_state(self, NO);
+        }
         warp_handle_insert_text(self, (NSString *)textToInsert);
-        // Only clear marked text if the IME did not touch it during this
-        // interpretKeyEvents pass. Otherwise we'd either fire a redundant
-        // ClearMarkedText (if IME already cleared) or, worse, wipe the new
-        // marked text the IME just set in a split-commit (e.g. Japanese IME
-        // committing a phrase and queuing the next character as marked text).
-        if (!imeTouchedMarkedTextDuringInterpret) {
+        if (hasNewMarked) {
+            warp_marked_text_updated(self, markedText.string, lastMarkedSelectedRange);
+            warp_update_ime_state(self, YES);
+        } else {
+            // Commit-only flow (no new composition starting after this commit).
+            // End IME state explicitly even when the IME touched markedText
+            // during interpretKeyEvents — that touch can be the IME clearing
+            // its own marked text as part of the commit (e.g. Korean IME
+            // committing a syllable when Backspace removes its last jamo).
+            // Without this, the stale marked-text state would leak into the
+            // next keyDown and break Backspace, requiring an extra press.
+            // The hasNewMarked branch above is what protects newly-started
+            // marked text from being wiped — split-commit is safe.
             [self unmarkText];
         }
     }
@@ -416,8 +467,15 @@ void warp_marked_text_cleared(WarpHostView *);
     return (NSUInteger)0;
 }
 
-// This is a no-op as we will be handling control characters in KeyDown events.
+// Most control-character commands are handled via KeyDown dispatch directly,
+// but a few selectors that the IME calls during interpretKeyEvents: must be
+// tracked here so keyDownImpl: can adjust its commit behavior (see
+// imeRequestedDeleteDuringInterpret).
 - (void)doCommandBySelector:(SEL)selector {
+    if (interpretingKeyEvents &&
+        (selector == @selector(deleteBackward:) || selector == @selector(deleteForward:))) {
+        imeRequestedDeleteDuringInterpret = YES;
+    }
 }
 
 - (NSRect)firstRectForCharacterRange:(NSRange)range
@@ -488,6 +546,8 @@ void warp_marked_text_cleared(WarpHostView *);
     if (interpretingKeyEvents) {
         imeTouchedMarkedTextDuringInterpret = YES;
     }
+
+    lastMarkedSelectedRange = selectedRange;
 
     [markedText release];
     if ([string isKindOfClass:[NSAttributedString class]])
