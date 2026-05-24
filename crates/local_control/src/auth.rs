@@ -84,6 +84,14 @@ impl CredentialRequest {
         }
     }
 
+    /// Verifies whether the caller may claim its requested invocation context.
+    ///
+    /// External callers do not receive elevated trust from this proof and are
+    /// allowed only when the selected Warp instance enables outside-Warp
+    /// control. Inside-Warp callers must eventually present an app-issued,
+    /// session-bound `VerifiedWarpTerminal` proof; until that broker path lands,
+    /// this foundation branch rejects inside-Warp credential requests rather
+    /// than trusting a caller-declared label or spoofable environment variable.
     pub fn verify_execution_context_proof(&self) -> Result<(), ControlError> {
         match (&self.invocation_context, &self.execution_context_proof) {
             (InvocationContext::InsideWarp, _) => Err(ControlError::new(
@@ -118,7 +126,8 @@ impl ScopedCredential {
     }
 }
 
-/// Server-issued authorization grant for a single action.
+/// Authorization grant issued by the localhost server running inside Warp for a
+/// single action.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialGrant {
     pub credential_id: String,

@@ -2,6 +2,25 @@
 //!
 //! This module owns the in-process listener, discovery registration, credential
 //! broker endpoint, and request handoff from Axum into the WarpUI model graph.
+//!
+//! Authentication is split into two localhost endpoints. Clients first request a
+//! short-lived scoped credential from `/v1/control/credentials`; the localhost
+//! server running inside Warp checks the feature flag, requested invocation
+//! context, action metadata, execution-context proof, and Settings > Scripting
+//! permissions before minting a bearer token. The client then presents that
+//! bearer token to `/v1/control`, where the server looks up the in-memory grant,
+//! verifies it still matches the requested action, and only then hands the
+//! request to the main-thread `LocalControlBridge`.
+//!
+//! The Settings > Scripting gates used here are provisional foundation-branch
+//! authority. They are private and local-only, but private preferences are not
+//! equivalent to tamper-resistant secure storage; before outside-Warp control
+//! or broader grants ship, the authoritative enablement bits should move to
+//! protected storage where the platform supports it.
+//!
+//! This foundation branch intentionally keeps raw bearer tokens out of
+//! discovery records: discovery only exposes endpoint metadata and credential
+//! broker references when outside-Warp control is enabled.
 mod bridge;
 mod handlers;
 mod permissions;
@@ -31,14 +50,15 @@ use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
 pub use bridge::LocalControlBridge;
 use permissions::{ensure_action_allowed, ensure_feature_enabled};
 
-/// Shared state made available to Axum handlers for one local-control server.
+/// Shared state made available to Axum handlers for one localhost server
+/// running inside Warp.
 #[derive(Clone)]
 struct ControlServerState {
     bridge_spawner: ModelSpawner<LocalControlBridge>,
     instance_id: InstanceId,
     credentials: Arc<Mutex<HashMap<String, CredentialGrant>>>,
 }
-/// Process-local server that exposes Warp control actions over localhost.
+/// Process-local localhost server running inside Warp for control actions.
 pub struct LocalControlServer {
     _runtime: Option<tokio::runtime::Runtime>,
     control_endpoint: Option<ControlEndpoint>,

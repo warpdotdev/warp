@@ -1,4 +1,11 @@
 //! Private local settings that gate Warp control by invocation context and risk category.
+//!
+//! These settings are local-only and kept out of the user-visible settings file,
+//! but this foundation branch still stores them in the existing private
+//! preferences backend. Before outside-Warp control or broader grants ship,
+//! the authoritative enablement bits should move to protected storage where
+//! available, such as macOS Keychain or the platform equivalent, so external
+//! apps cannot enable local control by editing ordinary preferences.
 use settings::{macros::define_settings_group, SupportedPlatforms, SyncToCloud};
 
 /// Source context for a local-control request.

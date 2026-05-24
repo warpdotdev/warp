@@ -362,6 +362,7 @@ Warp should include a built-in Agent skill for `warpctrl`, analogous to the bund
 CLI documentation should be generated from the command catalog instead of maintained by hand in multiple places:
 - The typed action catalog is the source of truth for command names, selector flags, parameters, output formats, state/data category, required permission, authenticated-user requirement, support status, and examples.
 - `warpctrl help`, shell completions, markdown reference docs, the built-in Warp Agent skill, and the operator README should be generated or checked from that catalog so they cannot drift silently.
+- A later branch should add native Warp completions for `warpctrl` in addition to shell completions so Warp can suggest commands, flags, selectors, and action names directly in the input editor.
 - Generated documentation must distinguish implemented commands from planned catalog entries. A command may appear in specs as planned, but public operator docs must not imply it is usable until the selected app build advertises support for it.
 - CI or presubmit checks should fail when CLI parser/help output, generated reference docs, completions, or the built-in skill are stale relative to the command catalog.
 ## Action classification and permission model

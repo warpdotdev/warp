@@ -45,6 +45,11 @@ pub(crate) fn validate_tab_create_target(target: &TargetSelector) -> Result<(), 
     Ok(())
 }
 
+/// Validates action-specific params implemented by this branch stack layer.
+///
+/// This is intentionally narrow while `zach/warp-cli-core-foundation` is the
+/// bottom branch of the stack: later branches add their own params and expand
+/// this validation alongside the corresponding action handlers.
 pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result<(), ControlError> {
     if action.kind != ActionKind::TabCreate {
         return Ok(());
