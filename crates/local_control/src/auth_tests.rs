@@ -60,7 +60,7 @@ fn scoped_credential_carries_permission_and_authenticated_user_metadata() {
     let grant = CredentialGrant::new(
         InstanceId("inst_test".to_owned()),
         ActionKind::TabCreate,
-        InvocationContext::InsideWarp,
+        InvocationContext::OutsideWarp,
         Duration::minutes(5),
     );
     assert_eq!(grant.risk_tier, RiskTier::MutatingNonDestructive);
@@ -81,7 +81,7 @@ fn mismatched_permission_metadata_is_rejected() {
     let mut grant = CredentialGrant::new(
         InstanceId("inst_test".to_owned()),
         ActionKind::TabCreate,
-        InvocationContext::InsideWarp,
+        InvocationContext::OutsideWarp,
         Duration::minutes(5),
     );
     grant.permission_category = PermissionCategory::ReadMetadata;
@@ -97,6 +97,18 @@ fn credential_request_rejects_unverified_inside_warp_context() {
     let err = request
         .verify_execution_context_proof()
         .expect_err("missing proof is rejected");
+    assert_eq!(err.code, ErrorCode::ExecutionContextNotAllowed);
+}
+
+#[test]
+fn credential_request_rejects_placeholder_inside_warp_terminal_proof() {
+    let mut request = CredentialRequest::new(ActionKind::TabCreate, InvocationContext::InsideWarp);
+    request.execution_context_proof = Some(ExecutionContextProof::VerifiedWarpTerminal {
+        proof_id: "proof".to_owned(),
+    });
+    let err = request
+        .verify_execution_context_proof()
+        .expect_err("placeholder proof is rejected until broker support exists");
     assert_eq!(err.code, ErrorCode::ExecutionContextNotAllowed);
 }
 

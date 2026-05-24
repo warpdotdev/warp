@@ -59,10 +59,7 @@ fn tab_create_metadata_is_first_slice_logged_out_safe_mutation() {
     );
     assert_eq!(
         metadata.allowed_invocation_contexts,
-        vec![
-            InvocationContext::InsideWarp,
-            InvocationContext::OutsideWarp
-        ]
+        vec![InvocationContext::OutsideWarp]
     );
 }
 

@@ -7,10 +7,13 @@
 //! short-lived scoped credential from `/v1/control/credentials`; the localhost
 //! server running inside Warp checks the feature flag, requested invocation
 //! context, action metadata, execution-context proof, and Settings > Scripting
-//! permissions before minting a bearer token. The client then presents that
-//! bearer token to `/v1/control`, where the server looks up the in-memory grant,
-//! verifies it still matches the requested action, and only then hands the
-//! request to the main-thread `LocalControlBridge`.
+//! permissions before minting a bearer token. This foundation branch currently
+//! supports only outside-Warp credential requests; verified inside-Warp
+//! terminal credentials remain future work until the app-issued proof broker is
+//! implemented. The client then presents that bearer token to `/v1/control`,
+//! where the server looks up the in-memory grant, verifies it still matches the
+//! requested action, and only then hands the request to the main-thread
+//! `LocalControlBridge`.
 //!
 //! The Settings > Scripting gates used here are provisional foundation-branch
 //! authority. They are private and local-only, but private preferences are not
@@ -30,7 +33,6 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
-use crate::settings::LocalControlInvocationContext;
 use ::local_control::auth::{CredentialGrant, CredentialRequest, ScopedCredential};
 use ::local_control::{
     ActionKind, AuthToken, ControlEndpoint, ControlError, ControlResponse, ErrorCode,
@@ -186,8 +188,8 @@ fn discovery_record_for_settings(
     ctx: &ModelContext<LocalControlServer>,
     control_endpoint: ControlEndpoint,
 ) -> InstanceRecord {
-    let outside_warp_control_enabled = crate::settings::LocalControlSettings::as_ref(ctx)
-        .is_context_enabled(LocalControlInvocationContext::OutsideWarp);
+    let outside_warp_control_enabled =
+        crate::settings::LocalControlSettings::as_ref(ctx).outside_warp_control_enabled();
     let endpoint = outside_warp_control_enabled.then_some(control_endpoint);
     InstanceRecord::for_current_process(
         endpoint,

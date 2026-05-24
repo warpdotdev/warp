@@ -3,6 +3,8 @@
 The correct architecture is not a single shared localhost bearer token with client-side conventions. The CLI, app bridge, and protocol must treat security as a local app-enforced capability system: discovery finds compatible instances, secure storage protects raw credential material, broker-issued credentials identify the granted scopes, the running Warp app's local-control bridge enforces action categories before dispatch, and target resolution never silently retargets a request.
 The action-category model is primarily a safety and intent mechanism, not a hard security boundary against malicious same-user software. It lets a user, script, or agent intentionally request metadata-only, data-read, app-state mutation, metadata/configuration mutation, or underlying-data mutation access so it does not accidentally mutate state, expose sensitive content, or execute commands. It should not be described as strong access control against a process that can already run arbitrary commands as the user.
 `warpctrl` has two distinct authorization dimensions: local-control authority and Warp user authority. Local-control authority proves the request is allowed to control the local app. Warp user authority proves the selected Warp app has a real logged-in Warp user and the request is allowed to act on user-authenticated data such as Warp Drive objects, AI conversation traces, synced settings, or cloud-backed user state. Logged-out users should retain a smaller local-only control surface, but authenticated-user actions require a true logged-in Warp user in the selected app.
+## Current foundation status
+The current foundation implementation supports outside-Warp local-control requests only. Verified inside-Warp invocation is specified as future work because the app-issued terminal-session proof broker, proof injection path, and session registry do not exist yet. Until those pieces land, `InvocationContext::InsideWarp` requests must be rejected with `execution_context_not_allowed`, implemented action metadata must not advertise inside-Warp support, and Settings > Scripting must not expose inside-Warp enablement or permission toggles.
 ## Security goals
 - Allow trusted local users and approved automation to control a running Warp instance through a stable, scriptable interface.
 - Prevent unauthenticated localhost clients from invoking read or mutating control actions.
@@ -88,18 +90,21 @@ Compared with these systems, `warpctrl` should combine:
 - VS Code's preference for typed public commands and separate treatment of remote control.
 The resulting architecture should not claim to solve arbitrary same-user malicious-app isolation. Its real value is preventing web-origin and other-user access, preventing unauthenticated direct localhost calls, keeping raw credentials out of plaintext discovery, giving honest scripts and agents narrow safety grants, and routing high-risk operations through local Warp app validation and user/policy approval.
 ## Authoritative enablement model
+This section describes the long-term model. The current foundation branch implements only the outside-Warp half of this model and rejects inside-Warp requests until app-issued Warp-terminal proofs are implemented.
 Warp control has two top-level enablement states based on invocation context:
 - **Allow scripting from inside Warp:** controls `warpctrl` invocations from verified Warp-managed terminal sessions. This should default to on so commands run inside Warp can use local control subject to granular permissions.
 - **Allow scripting from outside Warp:** controls `warpctrl` invocations from external terminals, scripts, launch agents, IDEs, or other same-user processes. This must default to off.
 Both controls should live in a new top-level Settings pane page named **Scripting**. The Scripting page owns the user-facing controls for local scripting surfaces, including Warp control, and should explain the difference between commands run inside Warp and commands run from other apps.
 The visible UI settings are not enough by themselves. The authoritative enablement states must be stored in protected local storage that ordinary same-user apps cannot update by writing a plist, settings database row, registry key, JSON file, or synced cloud preference. This avoids turning outside-Warp control into a feature that any process can silently enable before invoking `warpctrl`.
+Current foundation implementation note: outside-Warp enablement and granular permission bits are represented in the typed `LocalControlSettings` group as private, local-only settings. Each implemented setting must use `private: true`, `SyncToCloud::Never`, an explicit private storage key, and no `toml_path`, so it is excluded from `settings.toml`, the generated settings schema, Settings Sync, Warp Drive, and user-editable or server-backed settings surfaces. This private-settings path is an interim storage boundary, not the final protected-storage requirement; before public shipment, these authoritative bits must move to platform protected storage where available.
 Enablement requirements:
 - The settings are local-only and must not sync through Settings Sync, Warp Drive, or server-backed user preferences.
+- The implemented foundation settings must remain private and absent from user-visible settings files, generated schemas, local-control settings read/write commands, and any allowlisted settings mutation catalog.
 - Only the running Warp app, through the Settings > Scripting UI, should be able to enable or disable the authoritative states.
 - `warpctrl`, shell scripts, config files, command-line flags, registry edits, defaults writes, and direct local-control protocol requests must not be able to enable either setting.
 - The in-Warp setting may default to enabled, but turning it off should prevent verified Warp-terminal invocations from receiving local-control grants.
 - The outside-Warp setting defaults to disabled and should require an intentional user gesture before enabling; the UI should explain that it allows scripts and automation from other apps to control Warp.
-- The Scripting page should expose granular local-control permission settings rather than a single all-powerful switch.
+- The Scripting page should expose granular local-control permission settings for implemented invocation contexts rather than a single all-powerful switch.
 - Each setting should be easy to disable from the same UI, and disabling either setting should revoke or invalidate active local-control credentials for that invocation context.
 - If enterprise or managed-device policy is added later, policy may force-disable either setting or allow an administrator-controlled default, but policy should be separate from user-editable local settings.
 Disabled-state behavior:
@@ -170,6 +175,7 @@ A valid credential for one instance or target must not imply authority over anot
 - Kernel, hypervisor, or administrator-level compromise.
 - Security semantics for remote URL control endpoints. Remote control requires a separate transport and identity design before it can ship.
 ## Architecture overview
+The full security model has eight layers. The current foundation branch implements the outside-Warp path and keeps the inside-Warp execution-context layer as a rejected future protocol concept until proof verification exists.
 The security model has eight layers:
 1. **Protected enablement:** Use protected local storage for separate inside-Warp and outside-Warp enablement states, with inside-Warp on by default and outside-Warp off by default.
 2. **Discovery:** Find compatible live Warp instances without granting broad authority.

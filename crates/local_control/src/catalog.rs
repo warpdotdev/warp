@@ -11,7 +11,11 @@ pub enum InvocationContext {
     OutsideWarp,
 }
 
-/// Proof that lets Warp distinguish trusted in-app terminals from external clients.
+/// Future proof shape for distinguishing verified Warp terminals from external clients.
+///
+/// `VerifiedWarpTerminal` is currently a protocol placeholder only. The
+/// foundation implementation rejects inside-Warp credential requests until the
+/// app-issued terminal-session proof broker is implemented.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ExecutionContextProof {
@@ -309,10 +313,7 @@ impl ActionKind {
                 Self::InstanceList | Self::AppPing | Self::AppVersion | Self::TabCreate => (
                     ActionImplementationStatus::Implemented,
                     false,
-                    vec![
-                        InvocationContext::InsideWarp,
-                        InvocationContext::OutsideWarp,
-                    ],
+                    vec![InvocationContext::OutsideWarp],
                 ),
                 _ => (ActionImplementationStatus::Stub, true, Vec::new()),
             };

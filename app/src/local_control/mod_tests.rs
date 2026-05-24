@@ -13,9 +13,6 @@ use super::{
     validate_tab_create_target,
 };
 use crate::settings::{
-    AllowInsideWarpAppStateMutations, AllowInsideWarpControl,
-    AllowInsideWarpMetadataConfigurationMutations, AllowInsideWarpMetadataReads,
-    AllowInsideWarpUnderlyingDataMutations, AllowInsideWarpUnderlyingDataReads,
     AllowOutsideWarpAppStateMutations, AllowOutsideWarpControl,
     AllowOutsideWarpMetadataConfigurationMutations, AllowOutsideWarpMetadataReads,
     AllowOutsideWarpUnderlyingDataMutations, AllowOutsideWarpUnderlyingDataReads,
@@ -23,41 +20,23 @@ use crate::settings::{
 };
 
 fn settings_with_values(
-    inside_enabled: bool,
     outside_enabled: bool,
-    inside_metadata_reads: bool,
     outside_metadata_reads: bool,
-    inside_app_state_mutations: bool,
     outside_app_state_mutations: bool,
 ) -> LocalControlSettings {
     LocalControlSettings {
-        allow_inside_warp_control: AllowInsideWarpControl::new(Some(inside_enabled)),
         allow_outside_warp_control: AllowOutsideWarpControl::new(Some(outside_enabled)),
-        allow_inside_warp_metadata_reads: AllowInsideWarpMetadataReads::new(Some(
-            inside_metadata_reads,
-        )),
         allow_outside_warp_metadata_reads: AllowOutsideWarpMetadataReads::new(Some(
             outside_metadata_reads,
-        )),
-        allow_inside_warp_underlying_data_reads: AllowInsideWarpUnderlyingDataReads::new(Some(
-            true,
         )),
         allow_outside_warp_underlying_data_reads: AllowOutsideWarpUnderlyingDataReads::new(Some(
             false,
         )),
-        allow_inside_warp_app_state_mutations: AllowInsideWarpAppStateMutations::new(Some(
-            inside_app_state_mutations,
-        )),
         allow_outside_warp_app_state_mutations: AllowOutsideWarpAppStateMutations::new(Some(
             outside_app_state_mutations,
         )),
-        allow_inside_warp_metadata_configuration_mutations:
-            AllowInsideWarpMetadataConfigurationMutations::new(Some(true)),
         allow_outside_warp_metadata_configuration_mutations:
             AllowOutsideWarpMetadataConfigurationMutations::new(Some(false)),
-        allow_inside_warp_underlying_data_mutations: AllowInsideWarpUnderlyingDataMutations::new(
-            Some(true),
-        ),
         allow_outside_warp_underlying_data_mutations: AllowOutsideWarpUnderlyingDataMutations::new(
             Some(false),
         ),
@@ -68,14 +47,7 @@ fn settings_with_outside_warp(
     outside_control: bool,
     outside_app_state_mutations: bool,
 ) -> LocalControlSettings {
-    settings_with_values(
-        true,
-        outside_control,
-        true,
-        false,
-        true,
-        outside_app_state_mutations,
-    )
+    settings_with_values(outside_control, false, outside_app_state_mutations)
 }
 
 #[test]
@@ -191,25 +163,38 @@ fn feature_flag_disabled_denies_local_control() {
 }
 
 #[test]
-fn disabled_context_denies_before_granular_permission() {
-    let settings = settings_with_values(false, true, true, true, true, true);
+fn disabled_outside_warp_denies_before_granular_permission() {
+    let settings = settings_with_values(false, true, true);
+
+    let err = ensure_settings_allow_action(
+        &settings,
+        InvocationContext::OutsideWarp,
+        ActionKind::TabCreate,
+    )
+    .expect_err("outside-Warp parent context is disabled");
+    assert_eq!(err.code, ErrorCode::LocalControlDisabled);
+}
+
+#[test]
+fn inside_warp_context_is_not_implemented() {
+    let settings = settings_with_values(true, true, true);
 
     let err = ensure_settings_allow_action(
         &settings,
         InvocationContext::InsideWarp,
         ActionKind::TabCreate,
     )
-    .expect_err("inside-Warp parent context is disabled");
-    assert_eq!(err.code, ErrorCode::LocalControlDisabled);
+    .expect_err("inside-Warp grants are not implemented");
+    assert_eq!(err.code, ErrorCode::ExecutionContextNotAllowed);
 }
 
 #[test]
 fn disabled_granular_permission_denies_with_insufficient_permissions() {
-    let settings = settings_with_values(true, true, true, true, false, true);
+    let settings = settings_with_values(true, true, false);
 
     let err = ensure_settings_allow_action(
         &settings,
-        InvocationContext::InsideWarp,
+        InvocationContext::OutsideWarp,
         ActionKind::TabCreate,
     )
     .expect_err("read-write permission is disabled");

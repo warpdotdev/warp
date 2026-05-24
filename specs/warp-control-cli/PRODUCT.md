@@ -177,6 +177,7 @@ Non-goals:
    - Focusing a window that has closed.
    - Setting a theme that is not available in that instance.
 33. The first `warpctrl` implementation slice should ship the smallest end-to-end vertical slice that proves:
+   - The current implementation supports outside-Warp local-control requests only; verified inside-Warp requests are specified for future work and rejected until the app-issued terminal proof broker exists.
    - Process discovery and target resolution work.
    - A standalone CLI binary can reach a running local Warp process without launching or initializing the GUI app.
    - `warpctrl tab create` creates a new terminal tab in the selected running instance.
@@ -346,7 +347,7 @@ These are underlying-data mutations because they can execute code, trigger exter
 The command surface must continue to exclude debug-only, crash-only, auth-token, heap-dump, and arbitrary internal dispatch actions even when those actions are available in command palette or keybinding registries. Examples that remain excluded are app crash/panic helpers, access-token copy helpers, heap profile dumps, debug reset actions, raw view-tree debugging, and broad internal action-by-string execution.
 ## Branch stacking and delivery model
 The Warp Control CLI work should ship as a raw-git branch stack so the combined specs/foundation slice, read-only expansion, and mutating expansion remain reviewable independently:
-- `zach/warp-cli-core-foundation` is the bottom review branch and targets `master`. It owns `specs/warp-control-cli/PRODUCT.md`, `TECH.md`, `SECURITY.md`, and supporting docs alongside the first implementation slice: shared protocol, discovery/auth scaffolding, Settings > Scripting, local-control bridge/server, standalone `warpctrl` binary, packaging hooks, and the smallest safe end-to-end action.
+- `zach/warp-cli-core-foundation` is the bottom review branch and targets `master`. It owns `specs/warp-control-cli/PRODUCT.md`, `TECH.md`, `SECURITY.md`, and supporting docs alongside the first implementation slice: shared protocol, discovery/auth scaffolding, outside-Warp Settings > Scripting gates, local-control bridge/server, standalone `warpctrl` binary, packaging hooks, and the smallest safe end-to-end action. Verified inside-Warp invocation is documented for future implementation but is not supported by this branch.
 - `zach/warp-cli-readonly-metadata` stacks on `zach/warp-cli-core-foundation` and implements structural metadata reads, including instance/app health, active-chain, windows, tabs, panes, sessions, and action metadata.
 - `zach/warp-cli-readonly-data-settings` stacks on `zach/warp-cli-readonly-metadata` and fills in underlying-data reads plus read-only settings/appearance/docs, including terminal block output, input-buffer reads, history reads, and allowlisted settings metadata.
 - `zach/warp-cli-mutating-layout` stacks on `zach/warp-cli-readonly-data-settings` and implements app/window/tab/pane layout mutations.
@@ -418,17 +419,17 @@ The CLI should expose a small auth/status flow for actions that require a logged
 - Raw Firebase, server, OAuth, or cloud API tokens are never exported to `warpctrl`, shell scripts, generated docs, logs, or JSON output.
 This login protocol applies only to actions whose allowlist entry requires a true logged-in Warp user. Logged-out-safe local actions continue to use local-control credentials without requiring Warp account login.
 ### Execution context policy
-`warpctrl` should distinguish verified invocations from inside Warp-managed terminal sessions from external invocations.
+`warpctrl` should eventually distinguish verified invocations from inside Warp-managed terminal sessions from external invocations. The current foundation branch supports external invocation only and must reject verified Warp-terminal claims until the proof broker is implemented.
 - **Verified Warp-terminal invocation:** a `warpctrl` process started inside a Warp-managed terminal session and able to present an app-issued execution-context proof. The top-level setting for this context should default to on. When the selected app has a logged-in Warp user, this context can receive authenticated-user grants if the user's Scripting permissions allow that grant.
 - **External invocation:** a `warpctrl` process started outside Warp's terminal, such as from another terminal app, launch agent, IDE, or background script. The top-level setting for this context must default to off. When disabled, external invocations receive no local-control credentials, including logged-out-safe metadata credentials.
 - The app must not trust a caller-declared label. Environment variables may help discover the context, but the broker must verify a session-bound capability or equivalent proof before issuing in-Warp-only grants.
 ### Settings surface
-Warp should add a new top-level Settings pane page named **Scripting**. This page should own settings for local scripting and automation surfaces, including Warp control. For Warp control, it should include two top-level toggles:
+Warp should add a new top-level Settings pane page named **Scripting**. This page should own settings for local scripting and automation surfaces, including Warp control. The current foundation branch should expose only outside-Warp Warp control settings. In the long-term model, once verified Warp-terminal invocation is implemented, Warp control should include two top-level toggles:
 - **Allow Warp control from inside Warp:** default on. Controls `warpctrl` invocations from verified Warp-managed terminal sessions.
 - **Allow Warp control from outside Warp:** default off. Controls `warpctrl` invocations from external terminals, scripts, IDEs, launch agents, and other same-user processes.
 The Scripting page should explain that inside-Warp control is scoped to commands launched from Warp-managed terminals, while outside-Warp control allows other local apps and scripts to talk to Warp's control plane. Disabling either top-level toggle should invalidate credentials for that invocation context.
 ### Granular local-control permissions
-The Scripting settings page should expose granular permissions beneath the inside-Warp and outside-Warp toggles. Recommended controls:
+In the long-term model, the Scripting settings page should expose granular permissions beneath the inside-Warp and outside-Warp toggles. The current foundation branch exposes only the outside-Warp subset. Recommended controls:
 - Allow metadata reads.
 - Allow underlying data reads.
 - Allow app-state mutations.
