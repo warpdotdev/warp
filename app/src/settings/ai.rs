@@ -1059,6 +1059,18 @@ define_settings_group!(AISettings, settings: [
         toml_path: "cloud_platform.third_party_api_keys.aws_bedrock_profile",
         description: "The AWS profile name to use for Bedrock credentials.",
     }
+    // AWS region to use for Bedrock API requests (e.g. us-east-1, us-west-2).
+    // If empty, the region is resolved from the AWS SDK default provider chain
+    // (AWS_REGION env var, ~/.aws/config, etc.).
+    aws_bedrock_region: AwsBedrockRegion {
+        type: String,
+        default: String::new(),
+        supported_platforms: SupportedPlatforms::DESKTOP,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "cloud_platform.third_party_api_keys.aws_bedrock_region",
+        description: "The AWS region for Bedrock requests (e.g. us-east-1). If empty, resolved from AWS config.",
+    }
     // Whether the AWS Bedrock login banner has been permanently dismissed.
     //
     // Not a user-visible setting - we model it as a setting so we can track state.

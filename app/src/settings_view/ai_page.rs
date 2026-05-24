@@ -7874,6 +7874,7 @@ impl SettingsWidget for ApiKeysWidget {
 struct AwsBedrockWidget {
     aws_auth_refresh_command_editor: ViewHandle<EditorView>,
     aws_auth_refresh_profile_editor: ViewHandle<EditorView>,
+    aws_region_editor: ViewHandle<EditorView>,
     credentials_enabled_toggle: SwitchStateHandle,
     auto_login_toggle: SwitchStateHandle,
     refresh_credentials_button: ViewHandle<ActionButton>,
@@ -7886,6 +7887,7 @@ impl AwsBedrockWidget {
 
         let aws_auth_refresh_command = ai_settings.aws_bedrock_auth_refresh_command.value().clone();
         let aws_auth_refresh_profile = ai_settings.aws_bedrock_profile.value().clone();
+        let aws_region = ai_settings.aws_bedrock_region.value().clone();
         let is_usage_enabled = is_any_ai_enabled
             && UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx);
 
@@ -7983,6 +7985,41 @@ impl AwsBedrockWidget {
             }
         });
 
+        let aws_region_editor = ctx.add_typed_action_view(move |ctx| {
+            let appearance = Appearance::as_ref(ctx);
+            let options = SingleLineEditorOptions {
+                is_password: false,
+                text: TextOptions {
+                    font_size_override: Some(appearance.ui_font_size()),
+                    font_family_override: Some(appearance.monospace_font_family()),
+                    text_colors_override: Some(TextColors {
+                        default_color: appearance.theme().active_ui_text_color(),
+                        disabled_color: appearance.theme().disabled_ui_text_color(),
+                        hint_color: appearance.theme().disabled_ui_text_color(),
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut editor = EditorView::single_line(options, ctx);
+            editor.set_placeholder_text("us-east-1", ctx);
+            editor.set_buffer_text(&aws_region, ctx);
+            editor
+        });
+        AISettingsPageView::update_editor_interaction_state(
+            aws_region_editor.clone(),
+            is_usage_enabled,
+            ctx,
+        );
+        ctx.subscribe_to_view(&aws_region_editor, |_, editor, event, ctx| {
+            if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
+                let value = editor.as_ref(ctx).buffer_text(ctx);
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let _ = settings.aws_bedrock_region.set_value(value, ctx);
+                });
+            }
+        });
+
         let refresh_credentials_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("Refresh", SecondaryTheme)
                 .with_icon(Icon::RefreshCw04)
@@ -7998,6 +8035,7 @@ impl AwsBedrockWidget {
         // Keep enablement in sync with the Global AI toggle.
         let aws_auth_refresh_command_editor_clone = aws_auth_refresh_command_editor.clone();
         let aws_auth_refresh_profile_editor_clone = aws_auth_refresh_profile_editor.clone();
+        let aws_region_editor_clone = aws_region_editor.clone();
         let refresh_credentials_button_clone = refresh_credentials_button.clone();
         ctx.subscribe_to_model(&AISettings::handle(ctx), move |_, _, event, ctx| {
             if matches!(
@@ -8019,6 +8057,11 @@ impl AwsBedrockWidget {
                     is_usage_enabled,
                     ctx,
                 );
+                AISettingsPageView::update_editor_interaction_state(
+                    aws_region_editor_clone.clone(),
+                    is_usage_enabled,
+                    ctx,
+                );
                 refresh_credentials_button_clone.update(ctx, |button, ctx| {
                     button.set_disabled(!is_usage_enabled, ctx);
                 });
@@ -8029,6 +8072,7 @@ impl AwsBedrockWidget {
 
         let aws_auth_refresh_command_editor_clone = aws_auth_refresh_command_editor.clone();
         let aws_auth_refresh_profile_editor_clone = aws_auth_refresh_profile_editor.clone();
+        let aws_region_editor_clone = aws_region_editor.clone();
         let refresh_credentials_button_clone = refresh_credentials_button.clone();
         ctx.subscribe_to_model(
             &UserWorkspaces::handle(ctx),
@@ -8050,6 +8094,11 @@ impl AwsBedrockWidget {
                         is_usage_enabled,
                         ctx,
                     );
+                    AISettingsPageView::update_editor_interaction_state(
+                        aws_region_editor_clone.clone(),
+                        is_usage_enabled,
+                        ctx,
+                    );
                     refresh_credentials_button_clone.update(ctx, |button, ctx| {
                         button.set_disabled(!is_usage_enabled, ctx);
                     });
@@ -8062,6 +8111,7 @@ impl AwsBedrockWidget {
         Self {
             aws_auth_refresh_command_editor,
             aws_auth_refresh_profile_editor,
+            aws_region_editor,
             credentials_enabled_toggle: SwitchStateHandle::default(),
             auto_login_toggle: SwitchStateHandle::default(),
             refresh_credentials_button,
@@ -8240,6 +8290,13 @@ impl AwsBedrockWidget {
             is_usage_enabled,
             app,
         ));
+        column.add_child(render_input(
+            appearance,
+            "AWS Region",
+            self.aws_region_editor.clone(),
+            is_usage_enabled,
+            app,
+        ));
 
         let auto_login_enabled = *AISettings::as_ref(app).aws_bedrock_auto_login.value();
 
@@ -8272,7 +8329,7 @@ impl SettingsWidget for AwsBedrockWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "aws bedrock amazon credentials login profile"
+        "aws bedrock amazon credentials login profile region"
     }
 
     fn should_render(&self, app: &AppContext) -> bool {

@@ -334,3 +334,41 @@ fn api_keys_for_request_none_for_custom_endpoints_only() {
     });
     assert!(mgr.api_keys_for_request(true, false).is_none());
 }
+
+#[test]
+fn api_keys_for_request_includes_aws_credentials_with_region() {
+    let mut mgr = make_manager(ApiKeys::default());
+    mgr.aws_credentials_state = AwsCredentialsState::Loaded {
+        credentials: AwsCredentials::new(
+            "AKID".to_string(),
+            "secret".to_string(),
+            Some("token".to_string()),
+            None,
+            "us-west-2".to_string(),
+        ),
+        loaded_at: std::time::SystemTime::now(),
+    };
+    let result = mgr.api_keys_for_request(false, true).unwrap();
+    let aws = result.aws_credentials.unwrap();
+    assert_eq!(aws.access_key, "AKID");
+    assert_eq!(aws.secret_key, "secret");
+    assert_eq!(aws.session_token, "token");
+    assert_eq!(aws.region, "us-west-2");
+}
+
+#[test]
+fn api_keys_for_request_aws_credentials_none_when_disabled() {
+    let mut mgr = make_manager(ApiKeys::default());
+    mgr.aws_credentials_state = AwsCredentialsState::Loaded {
+        credentials: AwsCredentials::new(
+            "AKID".to_string(),
+            "secret".to_string(),
+            None,
+            None,
+            "us-east-1".to_string(),
+        ),
+        loaded_at: std::time::SystemTime::now(),
+    };
+    // include_aws_bedrock_credentials = false and no OIDC strategy
+    assert!(mgr.api_keys_for_request(false, false).is_none());
+}

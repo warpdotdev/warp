@@ -12,6 +12,7 @@ pub struct AwsCredentials {
     secret_key: String,
     session_token: Option<String>,
     expires_at: Option<SystemTime>,
+    region: String,
 }
 
 impl AwsCredentials {
@@ -20,17 +21,23 @@ impl AwsCredentials {
         secret_key: String,
         session_token: Option<String>,
         expires_at: Option<SystemTime>,
+        region: String,
     ) -> Self {
         Self {
             access_key,
             secret_key,
             session_token,
             expires_at,
+            region,
         }
     }
 
     pub fn expires_at(&self) -> Option<SystemTime> {
         self.expires_at
+    }
+
+    pub fn region(&self) -> &str {
+        &self.region
     }
 }
 
@@ -54,7 +61,7 @@ impl From<AwsCredentials> for api::request::settings::api_keys::AwsCredentials {
             access_key: creds.access_key,
             secret_key: creds.secret_key,
             session_token: creds.session_token.unwrap_or_default(),
-            region: String::new(),
+            region: creds.region,
         }
     }
 }
@@ -67,6 +74,10 @@ fn format_status_timestamp(time: SystemTime) -> String {
         datetime.format("%b %-d at %-I:%M %p").to_string()
     }
 }
+
+#[cfg(test)]
+#[path = "aws_credentials_tests.rs"]
+mod tests;
 
 impl AwsCredentialsState {
     pub fn user_facing_components(&self) -> (String, String, Icon) {
@@ -91,18 +102,27 @@ impl AwsCredentialsState {
             Self::Loaded {
                 credentials,
                 loaded_at,
-            } => (
-                "Credentials loaded".to_string(),
-                match credentials.expires_at() {
+            } => {
+                let region_suffix = if credentials.region.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · Region: {}", credentials.region)
+                };
+                let detail = match credentials.expires_at() {
                     Some(expires_at) => format!(
-                        "Loaded at {}, expires {}",
+                        "Loaded at {}, expires {}{}",
                         format_status_timestamp(*loaded_at),
-                        format_status_timestamp(expires_at)
+                        format_status_timestamp(expires_at),
+                        region_suffix
                     ),
-                    None => format!("Loaded at {}", format_status_timestamp(*loaded_at)),
-                },
-                Icon::CheckCircleBroken,
-            ),
+                    None => format!(
+                        "Loaded at {}{}",
+                        format_status_timestamp(*loaded_at),
+                        region_suffix
+                    ),
+                };
+                ("Credentials loaded".to_string(), detail, Icon::CheckCircleBroken)
+            }
             Self::Failed { message } => (
                 "Unable to load credentials".to_string(),
                 message.clone(),
