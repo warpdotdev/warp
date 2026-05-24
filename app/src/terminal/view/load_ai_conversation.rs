@@ -291,7 +291,10 @@ impl TerminalView {
             RestorationDirState::NeedsCd { path } => {
                 let path_for_hint = path.clone();
                 let did_execute_cd = self.input.update(ctx, |input, ctx| {
-                    input.try_execute_command(&format!("cd \"{path}\""), ctx)
+                    input.try_execute_command(
+                        &format!("cd {}", shell_words::quote(&path)),
+                        ctx,
+                    )
                 });
                 if did_execute_cd {
                     self.on_next_block_completed(move |me, ctx| {

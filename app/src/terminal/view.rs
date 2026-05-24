@@ -13275,7 +13275,10 @@ impl TerminalView {
         }
 
         self.input.update(ctx, |input, ctx| {
-            input.try_execute_command(format!("cd \"{path}\"").as_str(), ctx);
+            input.try_execute_command(
+                &format!("cd {}", shell_words::quote(&path)),
+                ctx,
+            );
         });
 
         self.toggle_left_panel_file_tree(true, ctx);
