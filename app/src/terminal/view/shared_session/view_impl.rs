@@ -12,10 +12,10 @@ use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::ui::appearance::Appearance;
+use warpui::r#async::Timer;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::MouseStateHandle;
 use warpui::platform::Cursor;
-use warpui::r#async::Timer;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::UiComponent;
 use warpui::units::IntoLines;
@@ -23,11 +23,11 @@ use warpui::{AppContext, Element, ModelHandle, SingletonEntity, ViewContext};
 
 use super::adapter::{Adapter, Kind, Participant};
 use super::cloud_conversation_continuation::{
-    conversation_failed_before_task_creation, resolve_cloud_conversation_continuation_ui_state,
-    CloudConversationContinuationUiState, TombstoneCta,
+    CloudConversationContinuationUiState, TombstoneCta, conversation_failed_before_task_creation,
+    resolve_cloud_conversation_continuation_ui_state,
 };
-use super::sharer::inactivity_modal::InactivityModalEvent;
 use super::sharer::Sharer;
+use super::sharer::inactivity_modal::InactivityModalEvent;
 use super::viewer::Viewer;
 use super::{ConversationEndedTombstoneEvent, ConversationEndedTombstoneView};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
@@ -40,6 +40,7 @@ use crate::editor::{InteractionState, ReplicaId};
 use crate::menu::{Event as MenuEvent, MenuItem, MenuItemFields};
 use crate::server::telemetry::SharingDialogSource;
 use crate::settings::InputModeSettings;
+use crate::terminal::TerminalModel;
 use crate::terminal::block_list_viewport::ScrollPositionUpdate;
 use crate::terminal::model::blocks::BlockListPoint;
 use crate::terminal::model::index::Point;
@@ -57,17 +58,16 @@ use crate::terminal::shared_session::role_change_modal::{
 };
 use crate::terminal::shared_session::settings::SharedSessionSettings;
 use crate::terminal::shared_session::{
-    join_link, SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
-    SharedSessionStatus, COPY_LINK_TEXT,
+    COPY_LINK_TEXT, SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
+    SharedSessionStatus, join_link,
 };
 use crate::terminal::view::{
     ContextMenuAction, Event, InlineBannerItem, InlineBannerType, PendingUserQueryKind,
     RichContentInsertionPosition, SharedSessionBanners, SizeUpdateBuilder, TerminalAction,
     TerminalView,
 };
-use crate::terminal::TerminalModel;
 use crate::view_components::{DismissibleToast, ToastFlavor};
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 impl TerminalView {
     pub fn sharer_session_kind(&self) -> Option<&Kind> {
@@ -126,6 +126,16 @@ impl TerminalView {
                 || !FeatureFlag::HandoffCloudCloud.is_enabled()
                 || model.is_receiving_agent_conversation_replay()
             {
+                return None;
+            }
+            // A user-initiated share (e.g. `/remote-control` of a local
+            // conversation) carries a sidecar orchestrator `source_task_id`, but
+            // it is not a cloud conversation. The cloud-handoff continuation and
+            // tombstone UI must only apply to genuine cloud (ambient agent)
+            // conversations, so bail out for a session whose source is still set
+            // to a non-ambient kind. Sessions with no source (e.g. restored
+            // cloud-mode panes or finished viewers) fall through unchanged.
+            if model.shared_session_source().is_some() && !model.is_shared_ambient_agent_session() {
                 return None;
             }
             self.ambient_agent_task_id_for_details_panel_from_model(&model, ctx)

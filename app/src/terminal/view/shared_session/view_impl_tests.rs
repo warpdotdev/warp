@@ -9,11 +9,11 @@ use warpui::platform::WindowStyle;
 use warpui::{App, EntityId, TypedActionView, ViewHandle};
 
 use super::*;
+use crate::ai::agent::AIAgentInput;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversation, ConversationStatus, ServerAIConversationMetadata,
 };
-use crate::ai::agent::AIAgentInput;
 use crate::ai::agent_conversations_model::{
     AgentConversationsModel, AgentConversationsModelEvent, AgentRunDisplayStatus,
 };
@@ -27,17 +27,17 @@ use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
 use crate::context_chips::prompt_type::PromptType;
 use crate::editor::InteractionState;
 use crate::server::ids::ServerId;
-use crate::terminal::model::blocks::{ToTotalIndex as _, INLINE_BANNER_HEIGHT};
+use crate::terminal::TerminalView;
+use crate::terminal::model::blocks::{INLINE_BANNER_HEIGHT, ToTotalIndex as _};
+use crate::terminal::view::TerminalAction;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::terminal::view::ambient_agent::{
     HandoffSubmissionState, PendingHandoff, SnapshotUploadStatus,
 };
 use crate::terminal::view::shared_session::test_utils::terminal_view_for_viewer;
-use crate::terminal::view::TerminalAction;
-use crate::terminal::TerminalView;
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
-use crate::{assert_lines_approx_eq, FeatureFlag};
+use crate::{FeatureFlag, assert_lines_approx_eq};
 
 #[test]
 fn test_prompt_context_menu_items_shared_session_viewer_no_edit_prompt() {
@@ -82,8 +82,8 @@ fn test_prompt_context_menu_items_shared_session_viewer_no_edit_prompt() {
 }
 
 #[test]
-fn test_on_ambient_agent_execution_ended_enables_followup_input_for_editable_non_owner_finished_view(
-) {
+fn test_on_ambient_agent_execution_ended_enables_followup_input_for_editable_non_owner_finished_view()
+ {
     let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
     let _setup_v2_flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
 
@@ -477,8 +477,8 @@ fn test_on_session_share_ended_restores_size_after_viewer_driven_resize() {
 }
 
 #[test]
-fn test_on_session_share_ended_does_not_insert_tombstone_for_ambient_session_under_cloud_mode_setup_v2(
-) {
+fn test_on_session_share_ended_does_not_insert_tombstone_for_ambient_session_under_cloud_mode_setup_v2()
+ {
     let _flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
 
     App::test((), |mut app| async move {
@@ -1267,8 +1267,8 @@ fn test_on_session_share_ended_clears_frozen_followup_input_for_owned_ambient_se
 }
 
 #[test]
-fn test_on_session_share_ended_does_not_insert_tombstone_for_non_ambient_session_under_cloud_mode_setup_v2(
-) {
+fn test_on_session_share_ended_does_not_insert_tombstone_for_non_ambient_session_under_cloud_mode_setup_v2()
+ {
     let _flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
 
     App::test((), |mut app| async move {
@@ -1289,6 +1289,73 @@ fn test_on_session_share_ended_does_not_insert_tombstone_for_non_ambient_session
                 view.model.lock().block_list().block_heights().items().len();
             // Only shared session ended banner.
             assert_eq!(final_block_height_items, initial_block_height_items + 1);
+        });
+    });
+}
+
+/// Regression test for APP-4604. A `/remote-control` share of a local
+/// conversation is a `User` share that, post-QUALITY-726, carries a sidecar
+/// orchestrator `source_task_id`. Ending that share (e.g. when the session
+/// hits the 100MB limit) must not run the cloud-handoff continuation logic and
+/// must not insert a "conversation ended" tombstone that removes the input box,
+/// even when the resolved task would otherwise produce a tombstone.
+#[test]
+fn test_on_session_share_ended_keeps_input_for_user_share_with_source_task_id() {
+    let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
+    let _setup_v2_flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        let terminal = terminal_view_for_viewer(&mut app);
+        // A failing task owned by another user would resolve to a no-CTA
+        // tombstone for a genuine cloud (ambient) share.
+        let mut task = create_cloud_mode_task_for_user("another-user");
+        let task_id = task.task_id;
+        task.state = AmbientAgentTaskState::Failed;
+        task.status_message = Some(TaskStatusMessage {
+            message: "Environment setup failed: Failed to run setup command".to_string(),
+            error_code: Some(TaskStatusErrorCode::EnvironmentSetupFailed),
+        });
+
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            model.insert_task_for_test(task);
+        });
+        let initial_block_height_items = terminal.read(&app, |view, _| {
+            view.model.lock().block_list().block_heights().items().len()
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.input().update(ctx, |input, ctx| {
+                input.editor().update(ctx, |editor, ctx| {
+                    editor.set_interaction_state(InteractionState::Editable, ctx);
+                });
+            });
+            let mut model = view.model.lock();
+            // A `/remote-control` share: `User` source carrying the orchestrator
+            // task id on the sidecar.
+            model.set_shared_session_source(SharedSessionSource::user(Some(task_id.to_string())));
+            // Mimic the sharer cleanup path, which flips the status to
+            // `NotShared` before `on_session_share_ended` runs.
+            model.set_shared_session_status(SharedSessionStatus::NotShared);
+            drop(model);
+            view.on_session_share_ended(ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let final_block_height_items =
+                view.model.lock().block_list().block_heights().items().len();
+            // Only the shared session ended banner is inserted; no tombstone.
+            assert_eq!(final_block_height_items, initial_block_height_items + 1);
+            assert!(view.conversation_ended_tombstone_view_id.is_none());
+            assert_eq!(view.pending_cloud_followup_task_id, None);
+            // The local input box stays usable.
+            assert_eq!(
+                view.input()
+                    .as_ref(ctx)
+                    .editor()
+                    .as_ref(ctx)
+                    .interaction_state(ctx),
+                InteractionState::Editable
+            );
         });
     });
 }
