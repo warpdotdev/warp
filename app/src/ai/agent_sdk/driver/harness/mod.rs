@@ -10,16 +10,18 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use tempfile::NamedTempFile;
 use warp_cli::agent::Harness;
+use warp_localization::{LocaleId, replace_placeholders};
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::ambient_agents::{task::HarnessModelConfig, AmbientAgentTaskId};
+use crate::ai::ambient_agents::{AmbientAgentTaskId, task::HarnessModelConfig};
 use crate::ai::mcp::JSONMCPServer;
-use crate::server::server_api::harness_support::{upload_to_target, HarnessSupportClient};
+use crate::localization;
 use crate::server::server_api::ServerApi;
+use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to_target};
+use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::{CLIAgentSessionStatus, CLIAgentSessionsModel};
 use crate::terminal::model::block::{BlockId, SerializedBlock};
-use crate::terminal::CLIAgent;
 use crate::util::path::resolve_executable;
 use warp_cli::{
     OZ_CLI_ENV, OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV, SERVER_ROOT_URL_OVERRIDE_ENV,
@@ -48,6 +50,19 @@ use codex::CodexHarness;
 use codex_transcript::CodexResumeInfo;
 use gemini::GeminiHarness;
 pub(crate) use telemetry::ThirdPartyHarnessTelemetryEvent;
+
+fn default_text(key: &str) -> String {
+    localization::text_for_locale(LocaleId::EnUs, key)
+}
+
+fn default_text_with_args(key: &str, args: &[(&str, &str)]) -> String {
+    replace_placeholders(&default_text(key), args)
+        .expect("localized text template arguments must match the catalog")
+}
+
+fn default_text_with_path(key: &str, path: &Path) -> String {
+    default_text_with_args(key, &[("path", &path.display().to_string())])
+}
 
 /// Harness-agnostic payload describing how to resume an existing conversation.
 ///
@@ -110,8 +125,13 @@ pub(super) async fn fetch_transcript_envelope<E: serde::de::DeserializeOwned>(
         }
     })?;
     serde_json::from_slice(&bytes).map_err(|err| {
-        AgentDriverError::ConversationLoadFailed(format!(
-            "Failed to deserialize {harness_label} transcript for {conversation_id}: {err:#}"
+        AgentDriverError::ConversationLoadFailed(default_text_with_args(
+            "agent_sdk.driver.harness.error.deserialize_transcript",
+            &[
+                ("harness", harness_label),
+                ("conversation_id", &conversation_id.to_string()),
+                ("error", &format!("{err:#}")),
+            ],
         ))
     })
 }
@@ -273,10 +293,17 @@ pub(crate) fn validate_cli_installed(
     install_docs_url: Option<&str>,
 ) -> Result<(), AgentDriverError> {
     if resolve_executable(cli).is_none() {
-        let mut reason = format!("'{cli}' CLI not found on your machine.");
-        if let Some(url) = install_docs_url {
-            reason.push_str(&format!(" Install it first: {url}"));
-        }
+        let reason = if let Some(url) = install_docs_url {
+            default_text_with_args(
+                "agent_sdk.driver.harness.error.cli_not_found_install",
+                &[("cli", cli), ("url", url)],
+            )
+        } else {
+            default_text_with_args(
+                "agent_sdk.driver.harness.error.cli_not_found",
+                &[("cli", cli)],
+            )
+        };
         return Err(AgentDriverError::HarnessSetupFailed {
             harness: cli.into(),
             reason,
@@ -550,14 +577,16 @@ pub(super) fn write_temp_file(
         .suffix(suffix)
         .tempfile()
         .map_err(|e| {
-            AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
-                "Failed to create temp file '{prefix}': {e}"
-            ))
+            AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(default_text_with_args(
+                "agent_sdk.driver.harness.error.create_temp_file",
+                &[("prefix", prefix), ("error", &e.to_string())],
+            )))
         })?;
     file.write_all(content.as_bytes()).map_err(|e| {
-        AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
-            "Failed to write temp file '{prefix}': {e}"
-        ))
+        AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(default_text_with_args(
+            "agent_sdk.driver.harness.error.write_temp_file",
+            &[("prefix", prefix), ("error", &e.to_string())],
+        )))
     })?;
     Ok(file)
 }
@@ -573,12 +602,18 @@ pub(crate) async fn upload_block_snapshot(
         .get_block_snapshot_upload_target(&conversation_id)
         .await
         .with_context(|| {
-            format!("Unable to get block upload slot for conversation {conversation_id}")
+            default_text_with_args(
+                "agent_sdk.driver.harness.error.block_upload_slot",
+                &[("conversation_id", &conversation_id.to_string())],
+            )
         })?;
 
-    let body = block
-        .to_json()
-        .with_context(|| format!("Unable to serialize block for conversation {conversation_id}"))?;
+    let body = block.to_json().with_context(|| {
+        default_text_with_args(
+            "agent_sdk.driver.harness.error.serialize_block",
+            &[("conversation_id", &conversation_id.to_string())],
+        )
+    })?;
 
     upload_to_target(client.http_client(), &target, body).await
 }
@@ -597,7 +632,11 @@ pub(super) async fn upload_current_block_snapshot(
     let snapshot = foreground
         .spawn(move |_, ctx| td.as_ref(ctx).block_snapshot(&block_id, ctx))
         .await
-        .map_err(|_| anyhow::anyhow!("Agent driver dropped"))?;
+        .map_err(|_| {
+            anyhow::anyhow!(default_text(
+                "agent_sdk.driver.harness.error.driver_dropped"
+            ))
+        })?;
     match snapshot {
         Some(block) => upload_block_snapshot(client, conversation_id, block).await,
         None => {

@@ -1,8 +1,19 @@
 use anyhow::Context as _;
 use serde_json::{Map, Value};
 use warp_cli::mcp::MCPSpec;
+use warp_localization::{replace_placeholders, LocaleId};
 
 use crate::ai::mcp::TemplatableMCPServer;
+use crate::localization;
+
+fn text(key: &str) -> String {
+    localization::text_for_locale(LocaleId::EnUs, key)
+}
+
+fn text_with_args(key: &str, args: &[(&str, &str)]) -> String {
+    replace_placeholders(&text(key), args)
+        .expect("localized text template arguments must match the catalog")
+}
 
 /// Build the `mcp_servers` map to send to the public ambient-agent API.
 ///
@@ -41,7 +52,7 @@ pub(super) fn build_mcp_servers_from_specs(
                 let value = parse_json_with_optional_braces(&json_str)?;
 
                 let server_map = TemplatableMCPServer::find_template_map(value)
-                    .context("Failed to parse MCP server map")?;
+                    .context(text("agent_sdk.mcp_config.error.parse_server_map"))?;
 
                 for (name, config) in server_map {
                     insert_unique(&mut merged, name, config)?;
@@ -61,7 +72,10 @@ pub(super) fn build_mcp_servers_from_specs(
 
 fn insert_unique(map: &mut Map<String, Value>, name: String, config: Value) -> anyhow::Result<()> {
     if map.contains_key(&name) {
-        anyhow::bail!("Duplicate MCP server name '{name}' specified multiple times");
+        anyhow::bail!(text_with_args(
+            "agent_sdk.mcp_config.error.duplicate_server",
+            &[("name", &name)]
+        ));
     }
 
     map.insert(name, config);
@@ -77,14 +91,14 @@ fn parse_json_with_optional_braces(input: &str) -> anyhow::Result<Value> {
         format!("{{{json}}}")
     };
 
-    serde_json::from_str(&json).with_context(|| "Invalid MCP JSON".to_string())
+    serde_json::from_str(&json).with_context(|| text("agent_sdk.mcp_config.error.invalid_json"))
 }
 
 #[cfg(not(target_family = "wasm"))]
 fn normalize_mcp_json_for_single_server(input: &str) -> anyhow::Result<String> {
     crate::ai::mcp::parsing::normalize_mcp_json(input)
         .map_err(|e| anyhow::anyhow!(e))
-        .context("Failed to normalize MCP JSON")
+        .context(text("agent_sdk.mcp_config.error.normalize_json_failed"))
 }
 
 // The CLI + ambient-agent API isn’t used in WASM builds, but this module still needs to compile.
@@ -98,8 +112,8 @@ fn normalize_mcp_json_for_single_server(input: &str) -> anyhow::Result<String> {
         format!("{{{json}}}")
     };
 
-    let value: Value =
-        serde_json::from_str(&json_for_parsing).with_context(|| "Invalid MCP JSON".to_string())?;
+    let value: Value = serde_json::from_str(&json_for_parsing)
+        .with_context(|| text("agent_sdk.mcp_config.error.invalid_json"))?;
 
     let is_single_server = value.get("command").is_some() || value.get("url").is_some();
     if is_single_server {
@@ -122,7 +136,10 @@ pub(super) fn validate_mcp_servers(mcp_servers: &Map<String, Value>) -> anyhow::
 
 fn validate_server_config(server_name: &str, config: &Value) -> anyhow::Result<()> {
     let obj = config.as_object().ok_or_else(|| {
-        anyhow::anyhow!("MCP server '{server_name}' config must be a JSON object")
+        anyhow::anyhow!(text_with_args(
+            "agent_sdk.mcp_config.error.server_config_object",
+            &[("server_name", server_name)]
+        ))
     })?;
 
     let has_warp_id = obj.contains_key("warp_id");
@@ -131,52 +148,56 @@ fn validate_server_config(server_name: &str, config: &Value) -> anyhow::Result<(
 
     let kind_count = usize::from(has_warp_id) + usize::from(has_command) + usize::from(has_url);
     if kind_count != 1 {
-        anyhow::bail!(
-            "MCP server '{server_name}' must have exactly one of: 'warp_id', 'command', or 'url'"
-        );
+        anyhow::bail!(text_with_args(
+            "agent_sdk.mcp_config.error.exactly_one_source",
+            &[("server_name", server_name)]
+        ));
     }
 
     if has_warp_id {
-        let warp_id = obj.get("warp_id").and_then(Value::as_str).ok_or_else(|| {
-            anyhow::anyhow!("MCP server '{server_name}' field 'warp_id' must be a string")
-        })?;
+        let warp_id = obj
+            .get("warp_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!(field_error(server_name, "warp_id", "field_string")))?;
 
-        uuid::Uuid::parse_str(warp_id).with_context(|| {
-            format!("MCP server '{server_name}' field 'warp_id' must be a UUID")
-        })?;
+        uuid::Uuid::parse_str(warp_id)
+            .with_context(|| field_error(server_name, "warp_id", "field_uuid"))?;
     }
 
     if has_command {
-        let command = obj.get("command").and_then(Value::as_str).ok_or_else(|| {
-            anyhow::anyhow!("MCP server '{server_name}' field 'command' must be a string")
-        })?;
+        let command = obj
+            .get("command")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!(field_error(server_name, "command", "field_string")))?;
 
         if command.is_empty() {
-            anyhow::bail!("MCP server '{server_name}' field 'command' must be non-empty");
+            anyhow::bail!(field_error(server_name, "command", "field_non_empty"));
         }
 
         if let Some(args) = obj.get("args") {
-            let args = args.as_array().ok_or_else(|| {
-                anyhow::anyhow!("MCP server '{server_name}' field 'args' must be an array")
-            })?;
+            let args = args
+                .as_array()
+                .ok_or_else(|| anyhow::anyhow!(field_error(server_name, "args", "field_array")))?;
 
             for (idx, arg) in args.iter().enumerate() {
                 if !arg.is_string() {
-                    anyhow::bail!(
-                        "MCP server '{server_name}' field 'args[{idx}]' must be a string"
-                    );
+                    anyhow::bail!(text_with_args(
+                        "agent_sdk.mcp_config.error.args_string",
+                        &[("server_name", server_name), ("index", &idx.to_string())]
+                    ));
                 }
             }
         }
     }
 
     if has_url {
-        let url = obj.get("url").and_then(Value::as_str).ok_or_else(|| {
-            anyhow::anyhow!("MCP server '{server_name}' field 'url' must be a string")
-        })?;
+        let url = obj
+            .get("url")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!(field_error(server_name, "url", "field_string")))?;
 
         if url.is_empty() {
-            anyhow::bail!("MCP server '{server_name}' field 'url' must be non-empty");
+            anyhow::bail!(field_error(server_name, "url", "field_non_empty"));
         }
     }
 
@@ -195,17 +216,29 @@ fn validate_string_map_field(
         return Ok(());
     };
 
-    let map = value.as_object().ok_or_else(|| {
-        anyhow::anyhow!("MCP server '{server_name}' field '{field}' must be an object")
-    })?;
+    let map = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!(field_error(server_name, field, "field_object")))?;
 
     for (key, value) in map {
         if !value.is_string() {
-            anyhow::bail!("MCP server '{server_name}' field '{field}.{key}' must be a string");
+            anyhow::bail!(text_with_args(
+                "agent_sdk.mcp_config.error.nested_field_string",
+                &[
+                    ("server_name", server_name),
+                    ("field", field),
+                    ("key", key.as_str())
+                ]
+            ));
         }
     }
 
     Ok(())
+}
+
+fn field_error(server_name: &str, field: &str, error_key_suffix: &str) -> String {
+    let key = format!("agent_sdk.mcp_config.error.{error_key_suffix}");
+    text_with_args(&key, &[("server_name", server_name), ("field", field)])
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@ use std::{collections::HashMap, ffi::OsString, path::PathBuf};
 use crate::ai::cloud_environments::{AwsProviderConfig, GcpProviderConfig, ProvidersConfig};
 
 use super::{
-    aws::AwsCloudProvider, collect_env_vars, gcp::GcpCloudProvider, load_providers, CloudProvider,
+    CloudProvider, aws::AwsCloudProvider, collect_env_vars, gcp::GcpCloudProvider, load_providers,
 };
 
 #[test]
@@ -26,9 +26,11 @@ fn aws_provider_env_vars_before_setup() {
         vars.get(&OsString::from("AWS_WEB_IDENTITY_TOKEN_FILE"))
             .unwrap(),
     );
-    assert!(token_file
-        .extension()
-        .is_some_and(|extension| extension == "token"));
+    assert!(
+        token_file
+            .extension()
+            .is_some_and(|extension| extension == "token")
+    );
 }
 
 #[test]

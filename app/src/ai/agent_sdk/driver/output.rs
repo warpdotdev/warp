@@ -11,6 +11,7 @@ pub mod text {
     use itertools::Itertools;
 
     use crate::{
+        AIAgentActionResultType,
         ai::agent::{
             AIAgentActionType, AIAgentInput, AIAgentOutput, AIAgentOutputMessageType, AIAgentTodo,
             ArtifactCreatedData, CallMCPToolResult, FileGlobResult, FileGlobV2Result, GrepResult,
@@ -19,7 +20,6 @@ pub mod text {
             SuggestPromptResult, TodoOperation, UploadArtifactResult, WebFetchStatus,
             WebSearchStatus, WriteToLongRunningShellCommandResult,
         },
-        AIAgentActionResultType,
     };
 
     /// Format an agent input as a human-readable string. For action results, it's assumed that
@@ -565,6 +565,7 @@ pub mod text {
 
 pub mod json {
     use crate::{
+        AIAgentActionResultType,
         ai::agent::{
             AIAgentActionType, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
             AIAgentOutputMessageType, AIAgentTodo, ArtifactCreatedData, CallMCPToolResult,
@@ -573,7 +574,6 @@ pub mod json {
             SearchCodebaseResult, SubagentCall, TodoOperation, UploadArtifactResult,
             WriteToLongRunningShellCommandResult,
         },
-        AIAgentActionResultType,
     };
 
     use crate::ai::agent::comment::ReviewComment;

@@ -11,6 +11,18 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use warp_localization::{LocaleId, replace_placeholders};
+
+use crate::localization;
+
+fn text(key: &str) -> String {
+    localization::text_for_locale(LocaleId::EnUs, key)
+}
+
+fn text_with_args(key: &str, args: &[(&str, &str)]) -> String {
+    replace_placeholders(&text(key), args)
+        .expect("localized text template arguments must match the catalog")
+}
 
 /// Read a JSON file as `T`, or return `T::default()` if the file does not exist.
 ///
@@ -25,35 +37,46 @@ where
             return Ok(T::default());
         }
         Err(e) => {
-            return Err(
-                anyhow::Error::from(e).context(format!("Failed to read {}", path.display()))
-            );
+            return Err(anyhow::Error::from(e).context(text_with_args(
+                "agent_sdk.driver.harness.json_utils.error.read",
+                &[("path", &path.display().to_string())],
+            )));
         }
     };
-    serde_json::from_str(&content).with_context(|| format!("Failed to parse {}", path.display()))
+    serde_json::from_str(&content).with_context(|| {
+        text_with_args(
+            "agent_sdk.driver.harness.json_utils.error.parse",
+            &[("path", &path.display().to_string())],
+        )
+    })
 }
 
 /// Serialize `value` as pretty JSON and write it to `path`, creating parent
 /// directories as needed. `serialize_error` is used as the context for the
 /// serialization step so the caller-facing error is specific to the config
 /// file being written.
-pub(super) fn write_json_file<T>(
-    path: &Path,
-    value: &T,
-    serialize_error: &'static str,
-) -> Result<()>
+pub(super) fn write_json_file<T>(path: &Path, value: &T, serialize_error: String) -> Result<()>
 where
     T: Serialize,
 {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| {
+            text_with_args(
+                "agent_sdk.driver.harness.json_utils.error.create",
+                &[("path", &parent.display().to_string())],
+            )
+        })?;
     }
     std::fs::write(
         path,
         serde_json::to_vec_pretty(value).context(serialize_error)?,
     )
-    .with_context(|| format!("Failed to write {}", path.display()))
+    .with_context(|| {
+        text_with_args(
+            "agent_sdk.driver.harness.json_utils.error.write",
+            &[("path", &path.display().to_string())],
+        )
+    })
 }
 
 /// Serialize a slice of JSON values as a JSONL byte string (one value per line).

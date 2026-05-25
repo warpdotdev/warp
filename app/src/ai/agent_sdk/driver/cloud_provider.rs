@@ -1,22 +1,48 @@
-use std::{collections::HashMap, ffi::OsString, future::Future, pin::Pin};
+use std::{
+    collections::HashMap, error::Error as StdError, ffi::OsString, fmt, future::Future, pin::Pin,
+};
 
 use anyhow::Error;
+use warp_localization::{LocaleId, replace_placeholders};
 use warpui::ModelSpawner;
 
 use super::terminal::TerminalDriver;
 use crate::ai::cloud_environments::ProvidersConfig;
+use crate::localization;
 
 mod aws;
 mod gcp;
 
 pub(crate) type Result<T> = std::result::Result<T, CloudProviderSetupError>;
 
-#[derive(Debug, thiserror::Error)]
-#[error("{provider_name} setup failed")]
+fn text(key: &str) -> String {
+    localization::text_for_locale(LocaleId::EnUs, key)
+}
+
+fn text_with_args(key: &str, args: &[(&str, &str)]) -> String {
+    replace_placeholders(&text(key), args)
+        .expect("localized text template arguments must match the catalog")
+}
+
+#[derive(Debug)]
 pub(crate) struct CloudProviderSetupError {
     provider_name: &'static str,
-    #[source]
     source: Error,
+}
+
+impl fmt::Display for CloudProviderSetupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&text_with_args(
+            "agent_sdk.driver.cloud_provider.error.setup_failed",
+            &[("provider_name", self.provider_name)],
+        ))
+    }
+}
+
+impl StdError for CloudProviderSetupError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(self.source.as_ref())
+    }
 }
 
 impl CloudProviderSetupError {

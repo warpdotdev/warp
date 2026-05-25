@@ -1,8 +1,8 @@
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
 use super::classify_driver_error;
-use crate::ai::agent_sdk::driver::terminal::ShareSessionError;
 use crate::ai::agent_sdk::driver::AgentDriverError;
+use crate::ai::agent_sdk::driver::terminal::ShareSessionError;
 
 fn assert_state_and_code(
     error: AgentDriverError,

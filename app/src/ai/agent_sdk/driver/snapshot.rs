@@ -31,25 +31,40 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use command::r#async::Command;
 use command::Stdio;
+use command::r#async::Command;
 use futures::future::join_all;
 use tokio::fs::{self as tokio_fs, OpenOptions};
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::{mpsc, oneshot};
 use warp_core::report_error;
-use warpui::r#async::executor::Background;
+use warp_localization::{LocaleId, replace_placeholders};
 use warpui::r#async::FutureExt as _;
+use warpui::r#async::executor::Background;
 
 use crate::ai::agent_sdk::retry::with_bounded_retry;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::localization;
 use crate::server::server_api::ai::{
     AIClient, InitialSnapshotToken, SnapshotUploadFileInfo as AiSnapshotUploadFileInfo,
     UploadLocalHandoffSnapshotRequest,
 };
 use crate::server::server_api::harness_support::{
-    upload_to_target, HarnessSupportClient, SnapshotFileInfo, SnapshotUploadRequest, UploadTarget,
+    HarnessSupportClient, SnapshotFileInfo, SnapshotUploadRequest, UploadTarget, upload_to_target,
 };
+
+fn default_text(key: &str) -> String {
+    localization::text_for_locale(LocaleId::EnUs, key)
+}
+
+fn default_text_with_args(key: &str, args: &[(&str, &str)]) -> String {
+    replace_placeholders(&default_text(key), args)
+        .expect("localized text template arguments must match the catalog")
+}
+
+fn default_text_with_path(key: &str, path: &Path) -> String {
+    default_text_with_args(key, &[("path", &path.display().to_string())])
+}
 
 /// Default path of the declarations file when neither the env var override nor a task ID
 /// is available. Per-run files use `{DEFAULT_DECLARATIONS_DIR}/<id>/{DEFAULT_DECLARATIONS_FILENAME}`.
@@ -537,29 +552,45 @@ async fn path_is_under_existing_repo(path: &Path) -> bool {
 /// The serialized shape matches the schema the parser expects.
 async fn append_declaration_line(declarations_path: &Path, path: &str) -> Result<()> {
     if let Some(parent) = declarations_path.parent() {
-        tokio_fs::create_dir_all(parent)
-            .await
-            .with_context(|| format!("create_dir_all {}", parent.display()))?;
+        tokio_fs::create_dir_all(parent).await.with_context(|| {
+            default_text_with_path(
+                "agent_sdk.driver.snapshot.error.create_declarations_parent",
+                parent,
+            )
+        })?;
     }
     let mut line = serde_json::to_string(&FileDeclaration {
         version: DECLARATION_VERSION,
         kind: "file",
         path,
     })
-    .context("serialize file declaration")?;
+    .context(default_text(
+        "agent_sdk.driver.snapshot.error.serialize_file_declaration",
+    ))?;
     line.push('\n');
     let mut file = OpenOptions::new()
         .append(true)
         .create(true)
         .open(declarations_path)
         .await
-        .with_context(|| format!("open declarations file {}", declarations_path.display()))?;
-    file.write_all(line.as_bytes())
-        .await
-        .with_context(|| format!("write declarations file {}", declarations_path.display()))?;
-    file.flush()
-        .await
-        .with_context(|| format!("flush declarations file {}", declarations_path.display()))?;
+        .with_context(|| {
+            default_text_with_path(
+                "agent_sdk.driver.snapshot.error.open_declarations_file",
+                declarations_path,
+            )
+        })?;
+    file.write_all(line.as_bytes()).await.with_context(|| {
+        default_text_with_path(
+            "agent_sdk.driver.snapshot.error.write_declarations_file",
+            declarations_path,
+        )
+    })?;
+    file.flush().await.with_context(|| {
+        default_text_with_path(
+            "agent_sdk.driver.snapshot.error.flush_declarations_file",
+            declarations_path,
+        )
+    })?;
     Ok(())
 }
 
@@ -804,7 +835,9 @@ pub(crate) async fn upload_snapshot_for_handoff(
     let response = client
         .upload_local_handoff_snapshot(upload_request)
         .await
-        .context("failed to allocate initial snapshot token")?;
+        .context(default_text(
+            "agent_sdk.driver.snapshot.error.allocate_initial_token",
+        ))?;
     log::info!(
         "Initial snapshot token allocated; expires_at={}, uploads={}",
         response.expires_at,
@@ -994,7 +1027,9 @@ async fn upload_gathered_snapshot(
             Err(e) => {
                 // Pipeline-abort: route through report_error! so Sentry captures the structured
                 // error chain and on-call alerting can fire.
-                report_error!(e.context("Failed to get snapshot upload targets; skipping upload"));
+                report_error!(e.context(default_text(
+                    "agent_sdk.driver.snapshot.error.get_upload_targets_skipping"
+                )));
                 return None;
             }
         };
@@ -1048,8 +1083,9 @@ async fn upload_prepared_snapshot_files(
         Ok(b) => b,
         Err(e) => {
             // Pipeline-abort: route through report_error! so Sentry captures it.
-            report_error!(anyhow::Error::from(e)
-                .context("Failed to serialize snapshot manifest; skipping upload"));
+            report_error!(anyhow::Error::from(e).context(default_text(
+                "agent_sdk.driver.snapshot.error.serialize_manifest_skipping"
+            )));
             return None;
         }
     };
@@ -1501,11 +1537,7 @@ async fn git_output_string(repo_dir: &Path, args: &[&str]) -> Option<String> {
     let output = git_output_bytes(repo_dir, args, &[0]).await.ok()?;
     let value = String::from_utf8(output).ok()?;
     let value = value.trim().to_string();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
+    if value.is_empty() { None } else { Some(value) }
 }
 
 fn sanitize_filename_component(value: &str) -> String {
@@ -1612,7 +1644,14 @@ where
     let status_code = output.status.code().unwrap_or(-1);
     if !allowed_exit_codes.contains(&status_code) {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("git {:?} failed in {}: {stderr}", args, repo_dir.display());
+        anyhow::bail!(default_text_with_args(
+            "agent_sdk.driver.snapshot.error.git_failed",
+            &[
+                ("args", &format!("{args:?}")),
+                ("repo_dir", &repo_dir.display().to_string()),
+                ("stderr", stderr.as_ref()),
+            ],
+        ));
     }
     Ok(output.stdout)
 }

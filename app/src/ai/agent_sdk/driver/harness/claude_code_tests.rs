@@ -10,10 +10,10 @@ use warp_cli::{OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV};
 
 use super::*;
 use crate::ai::agent_events::{AgentMessageEventMetadata, MessageHydrator};
-use crate::ai::agent_sdk::driver::harness::claude_transcript::encode_cwd;
 use crate::ai::agent_sdk::driver::OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV;
-use crate::server::server_api::ai::{AIClient, MockAIClient, ReadAgentMessageResponse};
+use crate::ai::agent_sdk::driver::harness::claude_transcript::encode_cwd;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::{AIClient, MockAIClient, ReadAgentMessageResponse};
 
 fn sample_parent_bridge_message(
     sequence: i64,
@@ -680,16 +680,20 @@ fn prepare_claude_environment_config_without_config_dir_uses_home_global_config(
     prepare_claude_environment_config(&working_dir, &HashMap::new()).unwrap();
 
     assert!(home_dir.path().join(CLAUDE_JSON_FILE_NAME).exists());
-    assert!(home_dir
-        .path()
-        .join(".claude")
-        .join(CLAUDE_SETTINGS_FILE_NAME)
-        .exists());
-    assert!(!home_dir
-        .path()
-        .join(".claude")
-        .join(CLAUDE_JSON_FILE_NAME)
-        .exists());
+    assert!(
+        home_dir
+            .path()
+            .join(".claude")
+            .join(CLAUDE_SETTINGS_FILE_NAME)
+            .exists()
+    );
+    assert!(
+        !home_dir
+            .path()
+            .join(".claude")
+            .join(CLAUDE_JSON_FILE_NAME)
+            .exists()
+    );
 
     match old_home {
         Some(home) => std::env::set_var("HOME", home),
@@ -714,14 +718,18 @@ fn prepare_claude_environment_config_with_config_dir_uses_dir_global_config() {
     let working_dir = home_dir.path().join("workspace/project");
     prepare_claude_environment_config(&working_dir, &HashMap::new()).unwrap();
 
-    assert!(claude_config_dir
-        .path()
-        .join(CLAUDE_JSON_FILE_NAME)
-        .exists());
-    assert!(claude_config_dir
-        .path()
-        .join(CLAUDE_SETTINGS_FILE_NAME)
-        .exists());
+    assert!(
+        claude_config_dir
+            .path()
+            .join(CLAUDE_JSON_FILE_NAME)
+            .exists()
+    );
+    assert!(
+        claude_config_dir
+            .path()
+            .join(CLAUDE_SETTINGS_FILE_NAME)
+            .exists()
+    );
     assert!(!home_dir.path().join(CLAUDE_JSON_FILE_NAME).exists());
 
     match old_home {
@@ -828,14 +836,18 @@ fn prepare_local_wake_command_rehydrates_transcript_with_self_managed_listener()
         restored_envelope.entries,
         vec![serde_json::json!({"type": "assistant", "text": "done"})]
     );
-    assert!(claude_config_dir
-        .path()
-        .join(CLAUDE_JSON_FILE_NAME)
-        .exists());
-    assert!(claude_config_dir
-        .path()
-        .join(CLAUDE_SETTINGS_FILE_NAME)
-        .exists());
+    assert!(
+        claude_config_dir
+            .path()
+            .join(CLAUDE_JSON_FILE_NAME)
+            .exists()
+    );
+    assert!(
+        claude_config_dir
+            .path()
+            .join(CLAUDE_SETTINGS_FILE_NAME)
+            .exists()
+    );
 
     std::env::remove_var("HOME");
     std::env::remove_var("CLAUDE_CONFIG_DIR");

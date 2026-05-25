@@ -1,5 +1,7 @@
 use std::{
     collections::HashMap,
+    error::Error,
+    fmt,
     future::Future,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -16,25 +18,67 @@ use futures::{channel::oneshot, future::join_all};
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use warp_completer::completer::CommandExitStatus;
 use warp_core::{command::ExitCode, safe_info, safe_warn};
-use warpui::{r#async::FutureExt, ModelContext, ModelSpawner, SingletonEntity};
+use warp_localization::{LocaleId, replace_placeholders};
+use warpui::{ModelContext, ModelSpawner, SingletonEntity, r#async::FutureExt};
 
-use super::{terminal::TerminalDriver, AgentDriverError};
+use super::{AgentDriverError, terminal::TerminalDriver};
+use crate::localization;
 use warp_cli::agent::Harness;
 
 const CODEBASE_INDEX_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 
-#[derive(Debug, thiserror::Error)]
+fn text(key: &str) -> String {
+    localization::text_for_locale(LocaleId::EnUs, key)
+}
+
+fn text_with_args(key: &str, args: &[(&str, &str)]) -> String {
+    replace_placeholders(&text(key), args)
+        .expect("localized text template arguments must match the catalog")
+}
+
+#[derive(Debug)]
 pub enum PrepareEnvironmentError {
-    #[error("Invalid runtime state - please file a bug report.")]
     InvalidRuntimeState,
-    #[error("Failed to clone {repo_name}")]
     CloneRepo { repo_name: String },
-    #[error("Failed to run setup command: {command}")]
     SetupCommand { command: String },
-    #[error("Failed to change directory into {repo_name}")]
     ChangeDirectory { repo_name: String },
-    #[error("Terminal driver error while preparing environment: {source}")]
     TerminalDriver { source: AgentDriverError },
+}
+
+impl fmt::Display for PrepareEnvironmentError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            PrepareEnvironmentError::InvalidRuntimeState => {
+                text("agent_sdk.driver.environment.error.invalid_runtime_state")
+            }
+            PrepareEnvironmentError::CloneRepo { repo_name } => text_with_args(
+                "agent_sdk.driver.environment.error.clone_repo",
+                &[("repo_name", repo_name)],
+            ),
+            PrepareEnvironmentError::SetupCommand { command } => text_with_args(
+                "agent_sdk.driver.environment.error.setup_command",
+                &[("command", command)],
+            ),
+            PrepareEnvironmentError::ChangeDirectory { repo_name } => text_with_args(
+                "agent_sdk.driver.environment.error.change_directory",
+                &[("repo_name", repo_name)],
+            ),
+            PrepareEnvironmentError::TerminalDriver { source } => text_with_args(
+                "agent_sdk.driver.environment.error.terminal_driver",
+                &[("source", &source.to_string())],
+            ),
+        };
+        f.write_str(&message)
+    }
+}
+
+impl Error for PrepareEnvironmentError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            PrepareEnvironmentError::TerminalDriver { source } => Some(source),
+            _ => None,
+        }
+    }
 }
 
 /// Prepare a cloud agent environment within a terminal session. This will:

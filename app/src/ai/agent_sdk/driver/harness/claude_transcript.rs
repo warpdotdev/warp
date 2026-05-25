@@ -23,10 +23,25 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 use warp_core::safe_warn;
+use warp_localization::{LocaleId, replace_placeholders};
 
 use crate::ai::agent::conversation::AIConversationId;
+use crate::localization;
 
 use super::json_utils::entries_to_jsonl;
+
+fn text(key: &str) -> String {
+    localization::text_for_locale(LocaleId::EnUs, key)
+}
+
+fn text_with_args(key: &str, args: &[(&str, &str)]) -> String {
+    replace_placeholders(&text(key), args)
+        .expect("localized text template arguments must match the catalog")
+}
+
+fn text_with_path(key: &str, path: &Path) -> String {
+    text_with_args(key, &[("path", &path.display().to_string())])
+}
 
 /// JSON envelope sent to the server representing a complete Claude Code session.
 ///
@@ -87,7 +102,11 @@ pub(crate) fn claude_config_dir() -> Result<PathBuf> {
     }
     home_dir_for_claude_config()
         .map(|h| h.join(".claude"))
-        .ok_or_else(|| anyhow::anyhow!("could not determine home directory"))
+        .ok_or_else(|| {
+            anyhow::anyhow!(text(
+                "agent_sdk.driver.harness.transcript.error.home_directory"
+            ))
+        })
 }
 
 /// In tests on Windows, `dirs::home_dir()` ignores `HOME`, so we check it
@@ -129,9 +148,12 @@ pub(crate) fn read_envelope(
         .join(session_uuid.to_string())
         .join("subagents");
     if subagents_dir.is_dir() {
-        for entry in std::fs::read_dir(&subagents_dir)
-            .with_context(|| format!("Failed to read subagents dir {}", subagents_dir.display()))?
-        {
+        for entry in std::fs::read_dir(&subagents_dir).with_context(|| {
+            text_with_path(
+                "agent_sdk.driver.harness.transcript.error.read_subagents_dir",
+                &subagents_dir,
+            )
+        })? {
             let entry = entry?;
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
@@ -149,9 +171,12 @@ pub(crate) fn read_envelope(
     let todos_dir = config_root.join("todos");
     let todos_prefix = format!("{session_uuid}-agent-");
     if todos_dir.is_dir() {
-        for entry in std::fs::read_dir(&todos_dir)
-            .with_context(|| format!("Failed to read todos dir {}", todos_dir.display()))?
-        {
+        for entry in std::fs::read_dir(&todos_dir).with_context(|| {
+            text_with_path(
+                "agent_sdk.driver.harness.transcript.error.read_todos_dir",
+                &todos_dir,
+            )
+        })? {
             let entry = entry?;
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
@@ -168,9 +193,27 @@ pub(crate) fn read_envelope(
                     Ok(value) => {
                         todos.insert(stem.to_owned(), value);
                     }
-                    Err(e) => log::warn!("Failed to parse todos file {}: {e}", path.display()),
+                    Err(e) => log::warn!(
+                        "{}",
+                        text_with_args(
+                            "agent_sdk.driver.harness.transcript.error.parse_todos_file",
+                            &[
+                                ("path", &path.display().to_string()),
+                                ("error", &e.to_string())
+                            ],
+                        )
+                    ),
                 },
-                Err(e) => log::warn!("Failed to read todos file {}: {e}", path.display()),
+                Err(e) => log::warn!(
+                    "{}",
+                    text_with_args(
+                        "agent_sdk.driver.harness.transcript.error.read_todos_file",
+                        &[
+                            ("path", &path.display().to_string()),
+                            ("error", &e.to_string())
+                        ],
+                    )
+                ),
             }
         }
     }
@@ -198,37 +241,61 @@ pub(crate) fn write_envelope(
 ) -> Result<()> {
     let encoded = encode_cwd(&envelope.cwd);
     let projects_dir = config_root.join("projects").join(&encoded);
-    std::fs::create_dir_all(&projects_dir)
-        .with_context(|| format!("Failed to create {}", projects_dir.display()))?;
+    std::fs::create_dir_all(&projects_dir).with_context(|| {
+        text_with_path(
+            "agent_sdk.driver.harness.transcript.error.create_path",
+            &projects_dir,
+        )
+    })?;
 
     // Main session JSONL.
     let session_file = projects_dir.join(format!("{}.jsonl", envelope.uuid));
-    std::fs::write(&session_file, entries_to_jsonl(&envelope.entries)?)
-        .with_context(|| format!("Failed to write {}", session_file.display()))?;
+    std::fs::write(&session_file, entries_to_jsonl(&envelope.entries)?).with_context(|| {
+        text_with_path(
+            "agent_sdk.driver.harness.transcript.error.write_path",
+            &session_file,
+        )
+    })?;
 
     // Subagent JSONLs.
     if !envelope.subagents.is_empty() {
         let subagents_dir = projects_dir
             .join(envelope.uuid.to_string())
             .join("subagents");
-        std::fs::create_dir_all(&subagents_dir)
-            .with_context(|| format!("Failed to create {}", subagents_dir.display()))?;
+        std::fs::create_dir_all(&subagents_dir).with_context(|| {
+            text_with_path(
+                "agent_sdk.driver.harness.transcript.error.create_path",
+                &subagents_dir,
+            )
+        })?;
         for (stem, entries) in &envelope.subagents {
             let path = subagents_dir.join(format!("{stem}.jsonl"));
-            std::fs::write(&path, entries_to_jsonl(entries)?)
-                .with_context(|| format!("Failed to write {}", path.display()))?;
+            std::fs::write(&path, entries_to_jsonl(entries)?).with_context(|| {
+                text_with_path(
+                    "agent_sdk.driver.harness.transcript.error.write_path",
+                    &path,
+                )
+            })?;
         }
     }
 
     // Per-agent todo lists.
     if !envelope.todos.is_empty() {
         let todos_dir = config_root.join("todos");
-        std::fs::create_dir_all(&todos_dir)
-            .with_context(|| format!("Failed to create {}", todos_dir.display()))?;
+        std::fs::create_dir_all(&todos_dir).with_context(|| {
+            text_with_path(
+                "agent_sdk.driver.harness.transcript.error.create_path",
+                &todos_dir,
+            )
+        })?;
         for (stem, value) in &envelope.todos {
             let path = todos_dir.join(format!("{stem}.json"));
-            std::fs::write(&path, serde_json::to_vec(value)?)
-                .with_context(|| format!("Failed to write {}", path.display()))?;
+            std::fs::write(&path, serde_json::to_vec(value)?).with_context(|| {
+                text_with_path(
+                    "agent_sdk.driver.harness.transcript.error.write_path",
+                    &path,
+                )
+            })?;
         }
     }
 
@@ -278,9 +345,10 @@ pub(crate) fn write_session_index_entry(
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::Map::new(),
         Err(e) => {
-            return Err(
-                anyhow::Error::from(e).context(format!("Failed to read {}", index_path.display()))
-            );
+            return Err(anyhow::Error::from(e).context(text_with_path(
+                "agent_sdk.driver.harness.transcript.error.read_path",
+                &index_path,
+            )));
         }
     };
 
@@ -295,15 +363,25 @@ pub(crate) fn write_session_index_entry(
     index.insert(session_uuid.to_string(), entry);
 
     if let Some(parent) = index_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| {
+            text_with_path(
+                "agent_sdk.driver.harness.transcript.error.create_path",
+                parent,
+            )
+        })?;
     }
     std::fs::write(
         &index_path,
-        serde_json::to_vec_pretty(&Value::Object(index))
-            .context("Failed to serialize sessions-index.json")?,
+        serde_json::to_vec_pretty(&Value::Object(index)).context(text(
+            "agent_sdk.driver.harness.transcript.error.serialize_sessions_index",
+        ))?,
     )
-    .with_context(|| format!("Failed to write {}", index_path.display()))?;
+    .with_context(|| {
+        text_with_path(
+            "agent_sdk.driver.harness.transcript.error.write_path",
+            &index_path,
+        )
+    })?;
     Ok(())
 }
 
@@ -316,15 +394,18 @@ pub(crate) fn read_jsonl(path: &Path) -> Result<Vec<Value>> {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => {
-            return Err(
-                anyhow::Error::from(e).context(format!("Failed to open {}", path.display()))
-            );
+            return Err(anyhow::Error::from(e).context(text_with_path(
+                "agent_sdk.driver.harness.transcript.error.open_path",
+                path,
+            )));
         }
     };
     let reader = BufReader::new(file);
     let mut entries = Vec::new();
     for line in reader.lines() {
-        let line = line.with_context(|| format!("Failed to read line from {}", path.display()))?;
+        let line = line.with_context(|| {
+            text_with_path("agent_sdk.driver.harness.transcript.error.read_line", path)
+        })?;
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;

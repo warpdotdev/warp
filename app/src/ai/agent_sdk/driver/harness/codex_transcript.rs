@@ -17,10 +17,25 @@ use chrono::{DateTime, Datelike, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
+use warp_localization::{LocaleId, replace_placeholders};
 
 use super::json_utils::entries_to_jsonl;
 
 use crate::ai::agent::conversation::AIConversationId;
+use crate::localization;
+
+fn text(key: &str) -> String {
+    localization::text_for_locale(LocaleId::EnUs, key)
+}
+
+fn text_with_args(key: &str, args: &[(&str, &str)]) -> String {
+    replace_placeholders(&text(key), args)
+        .expect("localized text template arguments must match the catalog")
+}
+
+fn text_with_path(key: &str, path: &Path) -> String {
+    text_with_args(key, &[("path", &path.display().to_string())])
+}
 
 /// Env var codex honors to override `~/.codex` (see codex `core/src/config/mod.rs`).
 const CODEX_HOME_ENV: &str = "CODEX_HOME";
@@ -91,7 +106,11 @@ pub(crate) fn codex_sessions_root() -> anyhow::Result<PathBuf> {
         PathBuf::from(dir)
     } else {
         dirs::home_dir()
-            .ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(text(
+                    "agent_sdk.driver.harness.transcript.error.home_directory"
+                ))
+            })?
             .join(CODEX_HOME_DIRNAME)
     };
     Ok(home.join(CODEX_SESSIONS_SUBDIR))
@@ -175,8 +194,12 @@ pub(crate) fn write_envelope(
         .join(format!("{:04}", timestamp.year()))
         .join(format!("{:02}", timestamp.month()))
         .join(format!("{:02}", timestamp.day()));
-    fs::create_dir_all(&day_dir)
-        .with_context(|| format!("Failed to create {}", day_dir.display()))?;
+    fs::create_dir_all(&day_dir).with_context(|| {
+        text_with_path(
+            "agent_sdk.driver.harness.transcript.error.create_path",
+            &day_dir,
+        )
+    })?;
     // Codex's filename format: `[year]-[month]-[day]T[hour]-[minute]-[second]`
     // (codex `rollout/src/recorder.rs::precompute_log_file_info`).
     let date_str = timestamp.format("%Y-%m-%dT%H-%M-%S").to_string();
@@ -184,8 +207,12 @@ pub(crate) fn write_envelope(
         "rollout-{date_str}-{session_id}.jsonl",
         session_id = envelope.session_id
     ));
-    fs::write(&file_path, entries_to_jsonl(&envelope.entries)?)
-        .with_context(|| format!("Failed to write {}", file_path.display()))?;
+    fs::write(&file_path, entries_to_jsonl(&envelope.entries)?).with_context(|| {
+        text_with_path(
+            "agent_sdk.driver.harness.transcript.error.write_path",
+            &file_path,
+        )
+    })?;
     Ok(file_path)
 }
 

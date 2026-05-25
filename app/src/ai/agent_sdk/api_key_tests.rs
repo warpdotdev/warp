@@ -1,4 +1,5 @@
 use super::*;
+use warpui::App;
 
 fn key(name: &str, scope: &str, created_at: DateTime<Utc>) -> ApiKeyInfo {
     key_with_uid(name, name, scope, created_at)
@@ -52,55 +53,71 @@ fn sort_api_keys_sorts_by_created_at_descending() {
 
 #[test]
 fn resolve_api_key_identifier_prefers_uid_match() {
-    let created_at = Utc::now();
-    let keys = vec![
-        key_with_uid("target", "other-name", "Team", created_at),
-        key_with_uid("other-uid", "target", "Team", created_at),
-    ];
+    App::test((), |app| async move {
+        let created_at = Utc::now();
+        let keys = vec![
+            key_with_uid("target", "other-name", "Team", created_at),
+            key_with_uid("other-uid", "target", "Team", created_at),
+        ];
 
-    assert_eq!(
-        resolve_api_key_identifier(&keys, "target")
-            .unwrap()
-            .unwrap(),
-        keys[0].clone()
-    );
+        app.read(|ctx| {
+            assert_eq!(
+                resolve_api_key_identifier(&keys, "target", ctx)
+                    .unwrap()
+                    .unwrap(),
+                keys[0].clone()
+            );
+        });
+    });
 }
 
 #[test]
 fn resolve_api_key_identifier_falls_back_to_name_match() {
-    let created_at = Utc::now();
-    let keys = vec![key_with_uid("uid-1", "deploy-key", "Team", created_at)];
+    App::test((), |app| async move {
+        let created_at = Utc::now();
+        let keys = vec![key_with_uid("uid-1", "deploy-key", "Team", created_at)];
 
-    assert_eq!(
-        resolve_api_key_identifier(&keys, "deploy-key")
-            .unwrap()
-            .unwrap(),
-        keys[0].clone()
-    );
+        app.read(|ctx| {
+            assert_eq!(
+                resolve_api_key_identifier(&keys, "deploy-key", ctx)
+                    .unwrap()
+                    .unwrap(),
+                keys[0].clone()
+            );
+        });
+    });
 }
 
 #[test]
 fn resolve_api_key_identifier_errors_for_ambiguous_name_matches() {
-    let created_at = Utc::now();
-    let keys = vec![
-        key_with_uid("uid-1", "deploy-key", "Team", created_at),
-        key_with_uid("uid-2", "deploy-key", "Personal", created_at),
-    ];
-    let err = resolve_api_key_identifier(&keys, "deploy-key").unwrap_err();
+    App::test((), |app| async move {
+        let created_at = Utc::now();
+        let keys = vec![
+            key_with_uid("uid-1", "deploy-key", "Team", created_at),
+            key_with_uid("uid-2", "deploy-key", "Personal", created_at),
+        ];
 
-    assert_eq!(
-        err.to_string(),
-        "Multiple API keys match 'deploy-key'; specify the key by UID"
-    );
+        app.read(|ctx| {
+            let err = resolve_api_key_identifier(&keys, "deploy-key", ctx).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "Multiple API keys match 'deploy-key'; specify the key by UID"
+            );
+        });
+    });
 }
 
 #[test]
 fn resolve_api_key_identifier_errors_when_not_found() {
-    let created_at = Utc::now();
-    let keys = vec![key_with_uid("uid-1", "deploy-key", "Team", created_at)];
-    let err = resolve_api_key_identifier(&keys, "missing-key").unwrap_err();
+    App::test((), |app| async move {
+        let created_at = Utc::now();
+        let keys = vec![key_with_uid("uid-1", "deploy-key", "Team", created_at)];
 
-    assert_eq!(err.to_string(), "API key 'missing-key' not found");
+        app.read(|ctx| {
+            let err = resolve_api_key_identifier(&keys, "missing-key", ctx).unwrap_err();
+            assert_eq!(err.to_string(), "API key 'missing-key' not found");
+        });
+    });
 }
 
 #[test]

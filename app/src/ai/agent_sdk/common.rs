@@ -1,5 +1,6 @@
 //! Common utilities for agent SDK commands.
 
+use std::error::Error;
 use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
@@ -9,6 +10,7 @@ use futures::TryFutureExt;
 use inquire::{InquireError, Select};
 use warp_cli::agent::Harness;
 use warp_cli::environment::{EnvironmentCreateArgs, EnvironmentUpdateArgs};
+use warp_localization::{LocaleId, replace_placeholders};
 use warpui::r#async::FutureExt;
 use warpui::{AppContext, GetSingletonModelHandle, SingletonEntity as _, UpdateModel};
 
@@ -19,15 +21,33 @@ use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::auth::auth_state::AuthStateProvider;
 use crate::cloud_object::{CloudObject, Owner};
+use crate::localization;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
-use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::AIClient;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// How long to wait for workspace metadata to refresh.
 pub const WORKSPACE_METADATA_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn text(ctx: &AppContext, key: &str) -> String {
+    localization::text_for_app(ctx, key)
+}
+
+fn text_with_args(ctx: &AppContext, key: &str, args: &[(&str, &str)]) -> String {
+    localization::text_for_app_with_args(ctx, key, args)
+}
+
+fn default_text(key: &str) -> String {
+    localization::text_for_locale(LocaleId::EnUs, key)
+}
+
+fn default_text_with_args(key: &str, args: &[(&str, &str)]) -> String {
+    replace_placeholders(&default_text(key), args)
+        .expect("localized text template arguments must match the catalog")
+}
 
 pub fn validate_agent_mode_base_model_id(
     model_id: &str,
@@ -49,9 +69,11 @@ pub fn validate_agent_mode_base_model_id(
             .map(|id| id.to_string())
             .collect::<Vec<_>>()
             .join(", ");
-        Err(anyhow::anyhow!(
-            "Unknown model id '{model_id}'. Try one of: {suggestions}"
-        ))
+        Err(anyhow::anyhow!(text_with_args(
+            ctx,
+            "agent_sdk.common.error.unknown_model_id",
+            &[("model_id", model_id), ("suggestions", &suggestions)]
+        )))
     }
 }
 
@@ -59,16 +81,25 @@ pub(super) fn parse_ambient_task_id(
     run_id: &str,
     error_prefix: &str,
 ) -> anyhow::Result<AmbientAgentTaskId> {
-    run_id
-        .parse()
-        .map_err(|err| anyhow::anyhow!("{error_prefix} '{run_id}': {err}"))
+    run_id.parse::<AmbientAgentTaskId>().map_err(|err| {
+        let error = err.to_string();
+        anyhow::anyhow!(default_text_with_args(
+            "agent_sdk.common.error.invalid_ambient_task_id",
+            &[
+                ("prefix", error_prefix),
+                ("run_id", run_id),
+                ("error", &error)
+            ],
+        ))
+    })
 }
 
 pub(super) fn set_ambient_task_context_from_run_id(
     ctx: &AppContext,
     run_id: &str,
 ) -> anyhow::Result<AmbientAgentTaskId> {
-    let task_id = parse_ambient_task_id(run_id, "Invalid run ID")?;
+    let task_id =
+        parse_ambient_task_id(run_id, &text(ctx, "agent_sdk.common.error.invalid_run_id"))?;
     ServerApiProvider::handle(ctx)
         .as_ref(ctx)
         .get()
@@ -85,7 +116,7 @@ pub fn resolve_owner(team_flag: bool, user_flag: bool, ctx: &AppContext) -> anyh
     if team_flag {
         let team_id = UserWorkspaces::as_ref(ctx)
             .current_team_uid()
-            .ok_or_else(|| anyhow::anyhow!("User is not on a team"))?;
+            .ok_or_else(|| anyhow::anyhow!(text(ctx, "agent_sdk.common.error.user_not_on_team")))?;
         return Ok(Owner::Team { team_uid: team_id });
     }
 
@@ -93,7 +124,9 @@ pub fn resolve_owner(team_flag: bool, user_flag: bool, ctx: &AppContext) -> anyh
         let user_id = AuthStateProvider::as_ref(ctx)
             .get()
             .user_id()
-            .ok_or_else(|| anyhow::anyhow!("User should be logged in"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(text(ctx, "agent_sdk.common.error.user_not_logged_in"))
+            })?;
         return Ok(Owner::User { user_uid: user_id });
     }
 
@@ -106,7 +139,7 @@ pub fn resolve_owner(team_flag: bool, user_flag: bool, ctx: &AppContext) -> anyh
     let user_id = AuthStateProvider::as_ref(ctx)
         .get()
         .user_id()
-        .ok_or_else(|| anyhow::anyhow!("User should be logged in"))?;
+        .ok_or_else(|| anyhow::anyhow!(text(ctx, "agent_sdk.common.error.user_not_logged_in")))?;
     Ok(Owner::User { user_uid: user_id })
 }
 
@@ -120,6 +153,7 @@ pub fn refresh_workspace_metadata<C>(
 where
     C: GetSingletonModelHandle + UpdateModel,
 {
+    let timeout_message = default_text("agent_sdk.common.error.workspace_metadata_timeout");
     let refresh_future = TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
         manager
             .refresh_workspace_metadata(ctx)
@@ -129,7 +163,7 @@ where
     async move {
         let _ = refresh_future
             .await
-            .map_err(|_| anyhow::anyhow!("Timed out refreshing team metadata"))?;
+            .map_err(|_| anyhow::anyhow!(timeout_message))?;
         Ok(())
     }
 }
@@ -138,10 +172,11 @@ where
 pub fn refresh_warp_drive(
     ctx: &AppContext,
 ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static {
+    let timeout_message = text(ctx, "agent_sdk.common.error.warp_drive_sync_timeout");
     UpdateManager::as_ref(ctx)
         .initial_load_complete()
         .with_timeout(WARP_DRIVE_SYNC_TIMEOUT)
-        .map_err(|_| anyhow::anyhow!("Timed out waiting for Warp Drive to sync"))
+        .map_err(move |_| anyhow::anyhow!(timeout_message))
 }
 
 /// Fetch the conversation's server metadata and validate that its harness matches the caller's
@@ -164,8 +199,9 @@ pub(super) async fn fetch_and_validate_conversation_harness(
         .into_iter()
         .next()
         .ok_or_else(|| {
-            AgentDriverError::ConversationLoadFailed(format!(
-                "conversation {conversation_id} not found or not accessible"
+            AgentDriverError::ConversationLoadFailed(default_text_with_args(
+                "agent_sdk.common.error.conversation_not_found_or_not_accessible",
+                &[("conversation_id", conversation_id)],
             ))
         })?;
 
@@ -180,27 +216,57 @@ pub(super) async fn fetch_and_validate_conversation_harness(
     Ok(metadata)
 }
 
-/// Format an object owner for display in the CLI.
-pub fn format_owner(owner: &Owner) -> &'static str {
-    // TODO: For potentially-shared objects, consider looking up the particular user/team name.
-    match owner {
-        Owner::User { .. } => "Personal",
-        Owner::Team { .. } => "Team",
-    }
+pub fn format_owner_for_app(owner: &Owner, ctx: &AppContext) -> String {
+    let key = match owner {
+        Owner::User { .. } => "agent_sdk.common.owner.personal",
+        Owner::Team { .. } => "agent_sdk.common.owner.team",
+    };
+    text(ctx, key)
 }
 
 /// An error resolving an agent option, which we may have prompted the user for.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum ResolveConfigurationError {
     /// The user canceled the operation, and we should exit.
-    #[error("Operation canceled")]
     Canceled,
-    #[error("{id} is not a valid {kind} identifier")]
-    InvalidId { id: String, kind: &'static str },
-    #[error("{kind} {id} not found")]
-    ObjectNotFound { id: String, kind: &'static str },
-    #[error(transparent)]
+    InvalidId {
+        id: String,
+        kind: &'static str,
+    },
+    ObjectNotFound {
+        id: String,
+        kind: &'static str,
+    },
     Other(anyhow::Error),
+}
+
+impl fmt::Display for ResolveConfigurationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            ResolveConfigurationError::Canceled => {
+                default_text("agent_sdk.common.error.operation_canceled")
+            }
+            ResolveConfigurationError::InvalidId { id, kind } => default_text_with_args(
+                "agent_sdk.common.error.invalid_id",
+                &[("id", id), ("kind", kind)],
+            ),
+            ResolveConfigurationError::ObjectNotFound { id, kind } => default_text_with_args(
+                "agent_sdk.common.error.object_not_found",
+                &[("id", id), ("kind", kind)],
+            ),
+            ResolveConfigurationError::Other(err) => err.to_string(),
+        };
+        f.write_str(&message)
+    }
+}
+
+impl Error for ResolveConfigurationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            ResolveConfigurationError::Other(err) => Some(err.as_ref()),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -254,16 +320,17 @@ impl EnvironmentChoice {
             if options.len() == 1 {
                 let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
                 return Err(ResolveConfigurationError::Other(anyhow::anyhow!(
-                    "No environments are configured for this account.\n\
-You can create an environment with `{cli_name} environment create`.\n\
-Or, re-run this command with `--no-environment` to not use an environment.\n\
-Without an environment, the agent will not be able to access private repositories or create pull requests.",
+                    text_with_args(
+                        ctx,
+                        "agent_sdk.common.environment.none_configured",
+                        &[("cli_name", &cli_name)]
+                    )
                 )));
             }
 
-            let prompt = "Select an environment to run the agent in (or 'No environment'):";
+            let prompt = text(ctx, "agent_sdk.common.environment.select_prompt");
 
-            let choice = Select::new(prompt, options).prompt();
+            let choice = Select::new(&prompt, options).prompt();
 
             match choice {
                 Ok(choice) => Ok(choice),
@@ -271,7 +338,11 @@ Without an environment, the agent will not be able to access private repositorie
                     Err(ResolveConfigurationError::Canceled)
                 }
                 Err(err) => Err(ResolveConfigurationError::Other(anyhow::anyhow!(
-                    "Error selecting environment: {err}"
+                    text_with_args(
+                        ctx,
+                        "agent_sdk.common.environment.select_error",
+                        &[("error", &err.to_string())]
+                    )
                 ))),
             }
         }
@@ -330,21 +401,25 @@ impl fmt::Display for EnvironmentChoice {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_ambient_task_id;
+    use super::{default_text, parse_ambient_task_id};
 
     #[test]
     fn parse_ambient_task_id_accepts_valid_ids() {
+        let prefix = default_text("agent_sdk.common.error.invalid_run_id");
         let task_id =
-            parse_ambient_task_id("550e8400-e29b-41d4-a716-446655440000", "Invalid run ID")
-                .unwrap();
+            parse_ambient_task_id("550e8400-e29b-41d4-a716-446655440000", &prefix).unwrap();
 
         assert_eq!(task_id.to_string(), "550e8400-e29b-41d4-a716-446655440000");
     }
 
     #[test]
     fn parse_ambient_task_id_preserves_error_prefix() {
-        let err = parse_ambient_task_id("not-a-run-id", "Invalid run ID").unwrap_err();
+        let prefix = default_text("agent_sdk.common.error.invalid_run_id");
+        let err = parse_ambient_task_id("not-a-run-id", &prefix).unwrap_err();
 
-        assert!(err.to_string().contains("Invalid run ID 'not-a-run-id'"));
+        assert!(
+            err.to_string()
+                .contains(&format!("{prefix} 'not-a-run-id'"))
+        );
     }
 }

@@ -15,25 +15,26 @@ use warp_cli::agent::Harness;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::ambient_agents::{task::HarnessModelConfig, AmbientAgentTaskId};
+use crate::ai::ambient_agents::{AmbientAgentTaskId, task::HarnessModelConfig};
 use crate::ai::mcp::JSONTransportType;
-use crate::server::server_api::harness_support::{upload_to_target, HarnessSupportClient};
 use crate::server::server_api::ServerApi;
+use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to_target};
+use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::model::block::BlockId;
-use crate::terminal::CLIAgent;
 use warp_managed_secrets::ManagedSecretValue;
 
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::claude_transcript::read_jsonl;
 use super::codex_transcript::{
-    codex_sessions_root, find_session_file, parse_session_meta, write_envelope, CodexResumeInfo,
-    CodexTranscriptEnvelope,
+    CodexResumeInfo, CodexTranscriptEnvelope, codex_sessions_root, find_session_file,
+    parse_session_meta, write_envelope,
 };
 use super::json_utils::read_json_file_or_default;
 use super::{
-    write_temp_file, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness,
+    HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness, default_text,
+    default_text_with_args, default_text_with_path, write_temp_file,
 };
 
 pub(crate) struct CodexHarness;
@@ -230,14 +231,14 @@ impl CodexHarnessRunner {
                 envelope,
             }) => {
                 let sessions_root = codex_sessions_root().map_err(|e| {
-                    AgentDriverError::ConfigBuildFailed(
-                        e.context("Failed to resolve codex sessions root"),
-                    )
+                    AgentDriverError::ConfigBuildFailed(e.context(default_text(
+                        "agent_sdk.driver.harness.codex.error.resolve_sessions_root",
+                    )))
                 })?;
                 let path = write_envelope(&envelope, &sessions_root).map_err(|e| {
-                    AgentDriverError::ConfigBuildFailed(
-                        e.context("Failed to rehydrate codex transcript"),
-                    )
+                    AgentDriverError::ConfigBuildFailed(e.context(default_text(
+                        "agent_sdk.driver.harness.codex.error.rehydrate_transcript",
+                    )))
                 })?;
                 (Some(session_id), Some(conversation_id), Some(path))
             }
@@ -345,7 +346,12 @@ impl HarnessRunner for CodexHarnessRunner {
                 });
             })
             .await
-            .map_err(|_| anyhow::anyhow!("Agent driver dropped while sending /exit"))
+            .map_err(|_| {
+                anyhow::anyhow!(default_text_with_args(
+                    "agent_sdk.driver.harness.error.driver_dropped_sending_command",
+                    &[("command", CODEX_EXIT_COMMAND)],
+                ))
+            })
     }
 
     /// Capture the codex session ID from the `SessionStart` event picked up by the `CLIAgentSessionsModel`.
@@ -457,15 +463,24 @@ async fn upload_transcript(
         let entries = read_jsonl(&transcript_path)?;
         let metadata = parse_session_meta(entries.first()).unwrap_or_default();
         let envelope = CodexTranscriptEnvelope::new(session_id, metadata, entries);
-        serde_json::to_vec(&envelope).context("Failed to serialize codex transcript")
+        serde_json::to_vec(&envelope).context(default_text(
+            "agent_sdk.driver.harness.codex.error.serialize_transcript",
+        ))
     })
     .await
-    .context("read_envelope task panicked")??;
+    .context(default_text(
+        "agent_sdk.driver.harness.error.read_envelope_task_panicked",
+    ))??;
 
     let target = client
         .get_transcript_upload_target(&conversation_id)
         .await
-        .with_context(|| format!("Failed to get transcript upload target for {conversation_id}"))?;
+        .with_context(|| {
+            default_text_with_args(
+                "agent_sdk.driver.harness.error.transcript_upload_target",
+                &[("conversation_id", &conversation_id.to_string())],
+            )
+        })?;
     upload_to_target(client.http_client(), &target, body).await?;
     Ok(())
 }
@@ -536,14 +551,18 @@ fn codex_config_dir() -> Result<PathBuf> {
     }
     dirs::home_dir()
         .map(|home| home.join(CODEX_CONFIG_DIR))
-        .ok_or_else(|| anyhow::anyhow!("could not determine home directory"))
+        .ok_or_else(|| {
+            anyhow::anyhow!(default_text(
+                "agent_sdk.driver.harness.error.home_directory"
+            ))
+        })
 }
 
 fn write_codex_agents_override(codex_dir: &Path, system_prompt: &str) -> Result<()> {
     fs::create_dir_all(codex_dir).with_context(|| {
-        format!(
-            "Failed to create Codex config dir at {}",
-            codex_dir.display()
+        default_text_with_path(
+            "agent_sdk.driver.harness.codex.error.create_config_dir",
+            codex_dir,
         )
     })?;
 
@@ -551,9 +570,9 @@ fn write_codex_agents_override(codex_dir: &Path, system_prompt: &str) -> Result<
     // this for local runs we'll want to make sure we don't clobber any existing file overrides.
     let prompt_path = codex_dir.join(CODEX_AGENTS_OVERRIDE_FILE_NAME);
     fs::write(&prompt_path, system_prompt).with_context(|| {
-        format!(
-            "Failed to write Codex system prompt to {}",
-            prompt_path.display()
+        default_text_with_path(
+            "agent_sdk.driver.harness.codex.error.write_system_prompt",
+            &prompt_path,
         )
     })
 }
@@ -588,10 +607,13 @@ fn prepare_codex_auth(auth_path: &Path, api_key: &str) -> Result<()> {
 /// codex sets up this file itself.
 fn write_codex_auth_json(path: &Path, auth: &CodexAuthDotJson) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| {
+            default_text_with_path("agent_sdk.driver.harness.error.create_path", parent)
+        })?;
     }
-    let bytes = serde_json::to_vec_pretty(auth).context("Failed to serialize Codex auth.json")?;
+    let bytes = serde_json::to_vec_pretty(auth).context(default_text(
+        "agent_sdk.driver.harness.codex.error.serialize_auth_json",
+    ))?;
 
     #[cfg(unix)]
     {
@@ -604,14 +626,21 @@ fn write_codex_auth_json(path: &Path, auth: &CodexAuthDotJson) -> Result<()> {
             .truncate(true)
             .mode(0o600)
             .open(path)
-            .with_context(|| format!("Failed to open {} for writing", path.display()))?;
+            .with_context(|| {
+                default_text_with_path("agent_sdk.driver.harness.error.open_path_for_writing", path)
+            })?;
         file.set_permissions(fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("Failed to set permissions on {}", path.display()))?;
-        file.write_all(&bytes)
-            .with_context(|| format!("Failed to write {}", path.display()))?;
+            .with_context(|| {
+                default_text_with_path("agent_sdk.driver.harness.error.set_permissions", path)
+            })?;
+        file.write_all(&bytes).with_context(|| {
+            default_text_with_path("agent_sdk.driver.harness.error.write_path", path)
+        })?;
     }
     #[cfg(not(unix))]
-    fs::write(path, &bytes).with_context(|| format!("Failed to write {}", path.display()))?;
+    fs::write(path, &bytes).with_context(|| {
+        default_text_with_path("agent_sdk.driver.harness.error.write_path", path)
+    })?;
 
     Ok(())
 }
@@ -691,16 +720,16 @@ fn prepare_codex_config_toml(
         Ok(content) => content,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => {
-            return Err(anyhow::Error::from(e).context(format!(
-                "Failed to read Codex config.toml at {}",
-                config_toml_path.display()
+            return Err(anyhow::Error::from(e).context(default_text_with_path(
+                "agent_sdk.driver.harness.codex.error.read_config_toml",
+                config_toml_path,
             )));
         }
     };
     let mut doc: toml_edit::DocumentMut = existing.parse().with_context(|| {
-        format!(
-            "Failed to parse Codex config.toml at {}",
-            config_toml_path.display()
+        default_text_with_path(
+            "agent_sdk.driver.harness.codex.error.parse_config_toml",
+            config_toml_path,
         )
     })?;
 
@@ -713,9 +742,9 @@ fn prepare_codex_config_toml(
     set_codex_model_reasoning_effort(&mut doc, third_party_harness_model_config);
 
     let canonical = working_dir.canonicalize().with_context(|| {
-        format!(
-            "Failed to canonicalize Codex working dir at {}",
-            working_dir.display()
+        default_text_with_path(
+            "agent_sdk.driver.harness.codex.error.canonicalize_working_dir",
+            working_dir,
         )
     })?;
     let project_key = canonical.to_string_lossy().into_owned();
@@ -733,13 +762,16 @@ fn prepare_codex_config_toml(
 
     if let Some(parent) = config_toml_path.parent() {
         fs::create_dir_all(parent).with_context(|| {
-            format!("Failed to create Codex config dir at {}", parent.display())
+            default_text_with_path(
+                "agent_sdk.driver.harness.codex.error.create_config_dir",
+                parent,
+            )
         })?;
     }
     fs::write(config_toml_path, doc.to_string()).with_context(|| {
-        format!(
-            "Failed to write Codex config.toml at {}",
-            config_toml_path.display()
+        default_text_with_path(
+            "agent_sdk.driver.harness.codex.error.write_config_toml",
+            config_toml_path,
         )
     })
 }

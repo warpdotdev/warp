@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use super::{outputs_stalled, pattern_for_match, STALL_CONFIRMATION_BUDGET, STALL_POLL_INTERVAL};
+use super::{STALL_CONFIRMATION_BUDGET, STALL_POLL_INTERVAL, outputs_stalled, pattern_for_match};
 
 #[test]
 fn pattern_for_match_returns_originating_needle() {

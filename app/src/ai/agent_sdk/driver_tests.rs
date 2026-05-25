@@ -15,13 +15,13 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
-    build_secret_env_vars, AgentDriver, IdleTimeoutSender,
-    LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
-    OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
+    AgentDriver, IdleTimeoutSender, LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
+    LEGACY_OZ_PARENT_STATE_ROOT_ENV, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
+    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars,
 };
 use crate::ai::agent::{
-    task::TaskId, AIAgentActionResult, AIAgentActionResultType, AIAgentInput, AIAgentOutput,
-    AIAgentOutputMessage, ArtifactCreatedData, MessageId, UploadArtifactResult,
+    AIAgentActionResult, AIAgentActionResultType, AIAgentInput, AIAgentOutput,
+    AIAgentOutputMessage, ArtifactCreatedData, MessageId, UploadArtifactResult, task::TaskId,
 };
 use crate::ai::mcp::parsing::normalize_mcp_json;
 use crate::ai::{agent_sdk::task_env_vars, ambient_agents::AmbientAgentTaskId};
@@ -216,9 +216,11 @@ fn task_env_vars_include_parent_run_id_when_present() {
         )),
         Some(&OsString::from("1"))
     );
-    assert!(env_vars
-        .get(&OsString::from(OZ_CLI_ENV))
-        .is_some_and(|value| !value.is_empty()));
+    assert!(
+        env_vars
+            .get(&OsString::from(OZ_CLI_ENV))
+            .is_some_and(|value| !value.is_empty())
+    );
 
     let server_root_url = ChannelState::server_root_url().into_owned();
     if overrides_allowed && !server_root_url.is_empty() {
@@ -247,8 +249,10 @@ fn task_env_vars_include_parent_run_id_when_present() {
                 Some(&OsString::from(url.into_owned()))
             ),
             _ => {
-                assert!(!env_vars
-                    .contains_key(&OsString::from(SESSION_SHARING_SERVER_URL_OVERRIDE_ENV)))
+                assert!(
+                    !env_vars
+                        .contains_key(&OsString::from(SESSION_SHARING_SERVER_URL_OVERRIDE_ENV))
+                )
             }
         }
     } else {
