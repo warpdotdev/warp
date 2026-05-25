@@ -1,8 +1,6 @@
 use settings::Setting as _;
-use warpui::{
-    fonts::FamilyId, AddSingletonModel, AppContext, AssetProvider, Entity, ModelContext,
-    SingletonEntity,
-};
+use warpui::fonts::FamilyId;
+use warpui::{AddSingletonModel, AppContext, AssetProvider, Entity, ModelContext, SingletonEntity};
 
 #[cfg(target_os = "macos")]
 mod macos_app_icon {
@@ -17,21 +15,17 @@ mod macos_app_icon {
 
     pub use crate::settings::app_icon::{AppIcon, AppIconSettings, AppIconSettingsChangedEvent};
 }
+use anyhow::anyhow;
 #[cfg(target_os = "macos")]
 use macos_app_icon::*;
-
-use crate::{
-    settings::{
-        active_theme_kind, FontSettings, FontSettingsChangedEvent, MonospaceFontSize, Settings,
-        ThemeSettings,
-    },
-    themes::theme::{ThemeKind, WarpTheme},
-    ASSETS,
-};
-
-use anyhow::anyhow;
-
 pub use warp_core::ui::appearance::{Appearance, AppearanceEvent};
+
+use crate::settings::{
+    active_theme_kind, FontSettings, FontSettingsChangedEvent, MonospaceFontSize, Settings,
+    ThemeSettings,
+};
+use crate::themes::theme::{ThemeKind, WarpTheme};
+use crate::ASSETS;
 
 /// Manages the state of the app-wide Appearance settings, it is responsible
 /// for 1) listening to settings changes and update the underlying Appearance

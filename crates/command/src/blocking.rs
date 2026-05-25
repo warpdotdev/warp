@@ -66,6 +66,7 @@ impl Command {
     ///     .expect("sh command failed to start");
     /// ```
     pub fn new<S: AsRef<OsStr>>(program: S) -> Command {
+        let program = crate::wsl::translate_program_for_spawn(program.as_ref());
         #[cfg_attr(not(windows), expect(unused_mut))]
         let mut inner = std::process::Command::new(program);
 

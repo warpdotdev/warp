@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use crate::terminal::event::Event as TerminalEvent;
 use async_channel::Sender;
+
+use crate::terminal::event::Event as TerminalEvent;
 
 /// A wrapper struct that emits events which originate from the PTY event loop.
 /// Instead of passing individual senders, we can pass through this struct
@@ -78,7 +79,7 @@ impl ChannelEventListener {
 #[cfg(test)]
 mod testing;
 
-use crate::terminal::model::terminal_model::HandlerEvent;
-
 #[cfg(test)]
 pub use testing::*;
+
+use crate::terminal::model::terminal_model::HandlerEvent;

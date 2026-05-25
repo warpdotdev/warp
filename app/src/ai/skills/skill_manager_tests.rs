@@ -1,13 +1,20 @@
-use super::*;
-use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
-use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
-use repo_metadata::{repositories::DetectedRepositories, DirectoryWatcher, RepoMetadataModel};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+
+use ai::skills::{ParsedSkill, SkillProvider, SkillReference, SkillScope};
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::{DirectoryWatcher, RepoMetadataModel};
+use settings::Setting as _;
 use tempfile::TempDir;
 use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
+use warp_core::ui::icons::Icon;
 use warpui::App;
 use watcher::HomeDirectoryWatcher;
+
+use super::*;
+use crate::settings::AISettings;
+use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 
 // ============================================================================
 // Tests for get_skills_for_working_directory subdirectory scoping
@@ -71,6 +78,7 @@ fn get_skills_for_working_directory_scopes_subdirectory_skills() {
 
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
         let repo_handle = app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
@@ -193,6 +201,7 @@ fn get_skills_for_working_directory_name_collision_returns_both() {
 
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
         let repo_handle = app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
@@ -289,6 +298,7 @@ fn cloud_environment_skills_always_included() {
 
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
         let repo_handle = app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
@@ -471,6 +481,241 @@ fn test_build_bundled_skill_context() {
     );
 }
 
+fn make_bundled_skill(name: &str, activation: BundledSkillActivation) -> BundledSkill {
+    BundledSkill {
+        skill: ParsedSkill {
+            name: name.to_string(),
+            description: format!("{name} bundled skill"),
+            path: PathBuf::from(format!("/bundled/skills/{name}/SKILL.md")),
+            content: format!("# {name}"),
+            line_range: None,
+            provider: SkillProvider::Warp,
+            scope: SkillScope::Bundled,
+        },
+        activation,
+        icon: Icon::WarpLogoLight,
+    }
+}
+
+#[test]
+fn bundled_feedback_skill_is_enabled_by_default() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+        let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
+
+        handle.update(&mut app, |manager, _ctx| {
+            manager.bundled_skills.insert(
+                "feedback".to_string(),
+                make_bundled_skill("feedback", BundledSkillActivation::FeedbackSkillSetting),
+            );
+        });
+
+        let skills = handle.read(&app, |manager, ctx| {
+            manager.get_skills_for_working_directory(None, ctx)
+        });
+
+        assert!(skills.iter().any(|skill| matches!(
+            &skill.reference,
+            SkillReference::BundledSkillId(id) if id == "feedback"
+        )));
+    });
+}
+
+#[test]
+fn disabling_feedback_bundled_skill_hides_only_that_bundled_skill() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+        let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
+
+        handle.update(&mut app, |manager, _ctx| {
+            manager.bundled_skills.insert(
+                "feedback".to_string(),
+                make_bundled_skill("feedback", BundledSkillActivation::FeedbackSkillSetting),
+            );
+            manager.bundled_skills.insert(
+                "pr-comments".to_string(),
+                make_bundled_skill("pr-comments", BundledSkillActivation::Always),
+            );
+        });
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .feedback_bundled_skill_enabled
+                .load_value(false, true, ctx)
+                .expect("test setting update should succeed");
+        });
+
+        let skills = handle.read(&app, |manager, ctx| {
+            manager.get_skills_for_working_directory(None, ctx)
+        });
+
+        assert!(!skills.iter().any(|skill| matches!(
+            &skill.reference,
+            SkillReference::BundledSkillId(id) if id == "feedback"
+        )));
+        assert!(skills.iter().any(|skill| matches!(
+            &skill.reference,
+            SkillReference::BundledSkillId(id) if id == "pr-comments"
+        )));
+    });
+}
+
+#[test]
+fn disabling_feedback_bundled_skill_does_not_hide_user_feedback_skill() {
+    let temp = TempDir::new().unwrap();
+    let base = dunce::canonicalize(temp.path()).unwrap();
+    let repo = base.join("repo");
+    fs::create_dir_all(&repo).unwrap();
+
+    let user_skill_path = repo.join(".agents/skills/feedback/SKILL.md");
+    let user_skill = ParsedSkill {
+        name: "feedback".to_string(),
+        description: "User feedback skill".to_string(),
+        path: user_skill_path.clone(),
+        content: "# User feedback".to_string(),
+        line_range: None,
+        provider: SkillProvider::Agents,
+        scope: SkillScope::Project,
+    };
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        let repo_handle = app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+        let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
+
+        let canonical_repo =
+            warp_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo)
+                .unwrap();
+        repo_handle.update(&mut app, |repos, _ctx| {
+            repos.insert_test_repo_root(canonical_repo);
+        });
+
+        handle.update(&mut app, |manager, _ctx| {
+            manager
+                .directory_skills
+                .entry(repo.clone())
+                .or_default()
+                .insert(user_skill_path.clone());
+            manager.add_skill_for_testing(user_skill);
+            manager.bundled_skills.insert(
+                "feedback".to_string(),
+                make_bundled_skill("feedback", BundledSkillActivation::FeedbackSkillSetting),
+            );
+        });
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .feedback_bundled_skill_enabled
+                .load_value(false, true, ctx)
+                .expect("test setting update should succeed");
+        });
+
+        let skills = handle.read(&app, |manager, ctx| {
+            manager.get_skills_for_working_directory(Some(&repo), ctx)
+        });
+
+        assert!(skills.iter().any(|skill| {
+            skill.name == "feedback"
+                && matches!(&skill.reference, SkillReference::Path(path) if path == &user_skill_path)
+        }));
+        assert!(!skills.iter().any(|skill| matches!(
+            &skill.reference,
+            SkillReference::BundledSkillId(id) if id == "feedback"
+        )));
+    });
+}
+
+#[test]
+fn disabling_feedback_bundled_skill_blocks_active_reference_lookup_only_for_bundled_feedback() {
+    let user_skill_path = PathBuf::from("/repo/.agents/skills/feedback/SKILL.md");
+    let user_skill = ParsedSkill {
+        name: "feedback".to_string(),
+        description: "User feedback skill".to_string(),
+        path: user_skill_path.clone(),
+        content: "# User feedback".to_string(),
+        line_range: None,
+        provider: SkillProvider::Agents,
+        scope: SkillScope::Project,
+    };
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+        let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
+
+        handle.update(&mut app, |manager, _ctx| {
+            manager.add_skill_for_testing(user_skill);
+            manager.bundled_skills.insert(
+                "feedback".to_string(),
+                make_bundled_skill("feedback", BundledSkillActivation::FeedbackSkillSetting),
+            );
+            manager.bundled_skills.insert(
+                "pr-comments".to_string(),
+                make_bundled_skill("pr-comments", BundledSkillActivation::Always),
+            );
+        });
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .feedback_bundled_skill_enabled
+                .load_value(false, true, ctx)
+                .expect("test setting update should succeed");
+        });
+
+        let (
+            raw_feedback_bundled_reference_resolves,
+            active_feedback_bundled_reference_resolves,
+            active_pr_comments_bundled_reference_resolves,
+            active_user_feedback_path_reference_resolves,
+        ) = handle.read(&app, |manager, ctx| {
+            (
+                manager
+                    .skill_by_reference(&SkillReference::BundledSkillId("feedback".to_string()))
+                    .is_some(),
+                manager
+                    .active_skill_by_reference(
+                        &SkillReference::BundledSkillId("feedback".to_string()),
+                        ctx,
+                    )
+                    .is_some(),
+                manager
+                    .active_skill_by_reference(
+                        &SkillReference::BundledSkillId("pr-comments".to_string()),
+                        ctx,
+                    )
+                    .is_some(),
+                manager
+                    .active_skill_by_reference(&SkillReference::Path(user_skill_path), ctx)
+                    .is_some(),
+            )
+        });
+
+        assert!(raw_feedback_bundled_reference_resolves);
+        assert!(!active_feedback_bundled_reference_resolves);
+        assert!(active_pr_comments_bundled_reference_resolves);
+        assert!(active_user_feedback_path_reference_resolves);
+    });
+}
+
 // ============================================================================
 // Tests for best_supported_provider
 // ============================================================================
@@ -497,6 +742,7 @@ fn best_supported_provider_fast_path_returns_deduped_provider() {
     // When the deduped provider is already in the supported set, return it immediately.
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
         app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
@@ -522,6 +768,7 @@ fn best_supported_provider_remaps_to_supported_provider() {
     // When supported set is [Claude], should re-map to Claude.
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
         app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
@@ -552,6 +799,7 @@ fn best_supported_provider_falls_back_when_no_match() {
     // Should fall back to the original deduped provider (Agents).
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
         app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);

@@ -1,20 +1,23 @@
-use crate::search::item::IconLocation;
-use crate::search::mixer::{DataSourceRunError, SyncDataSource};
-use crate::search::result_renderer::ItemHighlightState;
-use crate::{appearance::Appearance, ui_components::icons::Icon};
+use std::any::Any;
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use enum_iterator::{all, Sequence};
 use lazy_static::lazy_static;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::any::Any;
-use std::{collections::HashSet, sync::Arc};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
 use warpui::{Action, AppContext, Element, Entity, ModelHandle};
 
-use super::mixer::{AsyncDataSource, BoxFuture};
-use super::{item::SearchItem, mixer::DataSourceRunErrorWrapper};
+use super::item::SearchItem;
+use super::mixer::{AsyncDataSource, BoxFuture, DataSourceRunErrorWrapper};
+use crate::appearance::Appearance;
+use crate::search::item::IconLocation;
+use crate::search::mixer::{DataSourceRunError, SyncDataSource};
+use crate::search::result_renderer::ItemHighlightState;
+use crate::ui_components::icons::Icon;
 
 lazy_static! {
     static ref HISTORY_FILTER_ATOM: FilterAtom = FilterAtom {
@@ -173,9 +176,6 @@ pub enum QueryFilter {
     /// Filter results for all conversations.
     Conversations,
 
-    /// Filter results for only historical conversations. Used in the "View All" palette on new tabs
-    HistoricalConversations,
-
     /// Filter results for launch configurations.
     LaunchConfigurations,
 
@@ -244,7 +244,6 @@ impl QueryFilter {
             QueryFilter::Sessions => "Search sessions",
             QueryFilter::Tabs => "Search tabs",
             QueryFilter::Conversations => "Search conversations",
-            QueryFilter::HistoricalConversations => "Search historical conversations",
             QueryFilter::LaunchConfigurations => "Search launch configurations",
             QueryFilter::Drive => "Search objects in drive",
             QueryFilter::EnvironmentVariables => "Search environment variables",
@@ -291,7 +290,6 @@ impl QueryFilter {
             QueryFilter::Repos => &REPOS_FILTER_ATOM,
             QueryFilter::DiffSets => &DIFFSETS_FILTER_ATOM,
             QueryFilter::StaticSlashCommands => &STATIC_SLASH_COMMANDS_FILTER_ATOM,
-            QueryFilter::HistoricalConversations => &NO_FILTER_ATOM,
             QueryFilter::Skills => &NO_FILTER_ATOM,
             QueryFilter::BaseModels => &NO_FILTER_ATOM,
             QueryFilter::FullTerminalUseModels => &NO_FILTER_ATOM,
@@ -324,7 +322,6 @@ impl QueryFilter {
             QueryFilter::Repos => "repos",
             QueryFilter::DiffSets => "diff sets",
             QueryFilter::StaticSlashCommands => "slash commands",
-            QueryFilter::HistoricalConversations => "historical conversations",
             QueryFilter::Skills => "skills",
             QueryFilter::BaseModels => "base models",
             QueryFilter::FullTerminalUseModels => "full terminal use models",
@@ -349,9 +346,7 @@ impl QueryFilter {
             QueryFilter::Actions => None,
             QueryFilter::Sessions => Some("bundled/svg/terminal-input.svg"),
             QueryFilter::Tabs => Some("bundled/svg/terminal-input.svg"),
-            QueryFilter::Conversations | QueryFilter::HistoricalConversations => {
-                Some("bundled/svg/conversation.svg")
-            }
+            QueryFilter::Conversations => Some("bundled/svg/conversation.svg"),
             QueryFilter::LaunchConfigurations => Some("bundled/svg/navigation.svg"),
             QueryFilter::Drive => Some("bundled/svg/warp-drive.svg"),
             QueryFilter::EnvironmentVariables => Some("bundled/svg/env-var-collection.svg"),

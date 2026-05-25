@@ -1,4 +1,5 @@
-use std::{result::Result as StdResult, sync::Arc};
+use std::result::Result as StdResult;
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use async_trait::async_trait;
@@ -12,13 +13,16 @@ use oauth2::TokenResponse;
 use thiserror::Error;
 use warp_core::errors::{AnyhowErrorExt, ErrorExt};
 use warp_graphql::client::Operation;
+use warp_graphql::mutations::create_anonymous_user::{
+    AnonymousUserType, CreateAnonymousUser, CreateAnonymousUserResult, CreateAnonymousUserVariables,
+};
 use warp_graphql::mutations::expire_api_key::{
     ExpireApiKey, ExpireApiKeyResult, ExpireApiKeyVariables,
 };
-use warp_graphql::queries::get_conversation_usage::{
-    ConversationUsage, GetConversationUsage, GetConversationUsageVariables, UserResult,
+use warp_graphql::mutations::generate_api_key::{
+    GenerateApiKey, GenerateApiKeyInput, GenerateApiKeyResult, GenerateApiKeyVariables,
 };
-
+use warp_graphql::mutations::mint_custom_token::{MintCustomTokenResult, MintCustomTokenVariables};
 use warp_graphql::mutations::set_user_is_onboarded::{
     SetUserIsOnboarded, SetUserIsOnboardedResult, SetUserIsOnboardedVariables,
 };
@@ -26,45 +30,45 @@ use warp_graphql::mutations::update_user_settings::{
     UpdateUserSettings, UpdateUserSettingsInput, UpdateUserSettingsResult,
     UpdateUserSettingsVariables,
 };
-use warp_graphql::mutations::{
-    create_anonymous_user::{
-        AnonymousUserType, CreateAnonymousUser, CreateAnonymousUserResult,
-        CreateAnonymousUserVariables,
-    },
-    generate_api_key::{
-        GenerateApiKey, GenerateApiKeyInput, GenerateApiKeyResult, GenerateApiKeyVariables,
-    },
-    mint_custom_token::{MintCustomTokenResult, MintCustomTokenVariables},
-};
 use warp_graphql::object_permissions::OwnerType;
 use warp_graphql::queries::api_keys::{
     ApiKeyProperties, ApiKeyPropertiesResult, ApiKeys, ApiKeysVariables,
+};
+use warp_graphql::queries::get_conversation_usage::{
+    ConversationUsage, GetConversationUsage, GetConversationUsageVariables, UserResult,
 };
 use warp_graphql::queries::get_user::{GetUser, GetUserVariables, UserOutput as GqlUserOutput};
 use warp_graphql::queries::get_user_settings::{GetUserSettings, GetUserSettingsVariables};
 use warpui::r#async::BoxFuture;
 
-use crate::auth::UserUid;
-use crate::server::graphql::{default_request_options, get_user_facing_error_message};
-use crate::server::ids::ApiKeyUid;
-use crate::server::server_api::register_error;
-use crate::server::server_api::EXPERIMENT_ID_HEADER;
-use crate::settings::PrivacySettingsSnapshot;
-use crate::{
-    auth::{
-        credentials::{AuthToken, Credentials, FirebaseToken, LoginToken, RefreshToken},
-        user::FirebaseAuthTokens,
-        user::User,
-    },
-    channel::ChannelState,
-    convert_to_server_experiment,
-    server::{
-        datetime_ext::DateTimeExt as _, experiments::ServerExperiment,
-        graphql::get_request_context, server_api::ServerApiEvent,
-    },
-};
-
 use super::ServerApi;
+use crate::auth::credentials::{AuthToken, Credentials, FirebaseToken, LoginToken, RefreshToken};
+use crate::auth::user::{FirebaseAuthTokens, User};
+use crate::auth::UserUid;
+use crate::channel::ChannelState;
+use crate::convert_to_server_experiment;
+use crate::server::datetime_ext::DateTimeExt as _;
+use crate::server::experiments::ServerExperiment;
+use crate::server::graphql::{
+    default_request_options, get_request_context, get_user_facing_error_message,
+};
+use crate::server::ids::ApiKeyUid;
+use crate::server::server_api::{register_error, ServerApiEvent, EXPERIMENT_ID_HEADER};
+use crate::settings::PrivacySettingsSnapshot;
+
+/// A named agent identity from the public API.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct AgentIdentity {
+    pub uid: String,
+    pub name: String,
+    pub available: bool,
+}
+
+/// Wrapper for the `GET /api/v1/agent/identities` response.
+#[derive(serde::Deserialize)]
+struct AgentIdentitiesResponse {
+    agents: Vec<AgentIdentity>,
+}
 
 /// Error messages returned from the Firebase REST API when attempting to convert a refresh token
 /// into an access token that indicate the user's token is in an errored state.
@@ -201,10 +205,14 @@ pub trait AuthClient: 'static + Send + Sync {
         &self,
         name: String,
         team_id: Option<cynic::Id>,
+        agent_uid: Option<cynic::Id>,
         expires_at: Option<warp_graphql::scalars::Time>,
     ) -> Result<GenerateApiKeyResult>;
 
     async fn expire_api_key(&self, key_uid: &ApiKeyUid) -> Result<ExpireApiKeyResult>;
+
+    /// Fetches the list of named agent identities for the user's team.
+    async fn list_agent_identities(&self) -> Result<Vec<AgentIdentity>>;
 
     /// Returns a cached ambient workload token, or issues a new one if not present or expired.
     ///
@@ -212,45 +220,19 @@ pub trait AuthClient: 'static + Send + Sync {
     async fn get_or_create_ambient_workload_token(&self) -> Result<Option<String>>;
 }
 
-#[cfg_attr(not(target_family = "wasm"), async_trait)]
-#[cfg_attr(target_family = "wasm", async_trait(?Send))]
-impl AuthClient for ServerApi {
-    async fn create_anonymous_user(
-        &self,
-        referral_code: Option<String>,
-        anonymous_user_type: AnonymousUserType,
-    ) -> Result<CreateAnonymousUserResult> {
-        let variables = CreateAnonymousUserVariables {
-            input: warp_graphql::mutations::create_anonymous_user::CreateAnonymousUserInput {
-                anonymous_user_type,
-                expiration_type: warp_graphql::mutations::create_anonymous_user::AnonymousUserExpirationType::NoExpiration,
-                referral_code,
-            },
-            request_context: get_request_context(),
-        };
-
-        let operation = CreateAnonymousUser::build(variables);
-        let response = operation
-            .send_request(self.client.clone(), default_request_options())
-            .await?;
-
-        Ok(response
-            .data
-            .ok_or_else(|| anyhow!("missing data in response"))?
-            .create_anonymous_user)
-    }
-
-    async fn get_or_refresh_access_token(&self) -> Result<AuthToken> {
+impl ServerApi {
+    pub(super) async fn access_token(&self) -> Result<AuthToken> {
         if cfg!(feature = "skip_login") {
             bail!("skip_login enabled; failing all authenticated requests");
         }
 
         let Some(credentials) = self.auth_state.credentials() else {
-            bail!("Attempted to retrieve access token when user is logged out");
+            bail!("missing authentication credentials");
         };
 
         match credentials {
             Credentials::ApiKey { key, .. } => Ok(AuthToken::ApiKey(key)),
+            Credentials::Bearer(token) => Ok(AuthToken::Bearer(token)),
             Credentials::Firebase(auth_tokens) => {
                 let expiration_time = auth_tokens.expiration_time;
 
@@ -283,6 +265,39 @@ impl AuthClient for ServerApi {
             #[cfg(any(test, feature = "integration_tests", feature = "skip_login"))]
             Credentials::Test => Ok(AuthToken::NoAuth),
         }
+    }
+}
+
+#[cfg_attr(not(target_family = "wasm"), async_trait)]
+#[cfg_attr(target_family = "wasm", async_trait(?Send))]
+impl AuthClient for ServerApi {
+    async fn create_anonymous_user(
+        &self,
+        referral_code: Option<String>,
+        anonymous_user_type: AnonymousUserType,
+    ) -> Result<CreateAnonymousUserResult> {
+        let variables = CreateAnonymousUserVariables {
+            input: warp_graphql::mutations::create_anonymous_user::CreateAnonymousUserInput {
+                anonymous_user_type,
+                expiration_type: warp_graphql::mutations::create_anonymous_user::AnonymousUserExpirationType::NoExpiration,
+                referral_code,
+            },
+            request_context: get_request_context(),
+        };
+
+        let operation = CreateAnonymousUser::build(variables);
+        let response = operation
+            .send_request(self.client.clone(), default_request_options())
+            .await?;
+
+        Ok(response
+            .data
+            .ok_or_else(|| anyhow!("missing data in response"))?
+            .create_anonymous_user)
+    }
+
+    async fn get_or_refresh_access_token(&self) -> Result<AuthToken> {
+        self.access_token().await
     }
 
     async fn fetch_user(
@@ -367,7 +382,7 @@ impl AuthClient for ServerApi {
                     auth_token: auth_token.map(ToOwned::to_owned),
                     headers: std::collections::HashMap::from([(
                         EXPERIMENT_ID_HEADER.to_string(),
-                        self.auth_state.anonymous_id(),
+                        self.anonymous_id(),
                     )]),
                     ..default_request_options()
                 },
@@ -606,12 +621,14 @@ impl AuthClient for ServerApi {
         &self,
         name: String,
         team_id: Option<cynic::Id>,
+        agent_uid: Option<cynic::Id>,
         expires_at: Option<warp_graphql::scalars::Time>,
     ) -> Result<GenerateApiKeyResult> {
         let variables = GenerateApiKeyVariables {
             input: GenerateApiKeyInput {
                 name,
                 team_id,
+                agent_uid,
                 expires_at,
             },
             request_context: get_request_context(),
@@ -620,6 +637,12 @@ impl AuthClient for ServerApi {
         let response = self.send_graphql_request(operation, None).await?;
         Ok(response.generate_api_key)
     }
+
+    async fn list_agent_identities(&self) -> Result<Vec<AgentIdentity>> {
+        let response: AgentIdentitiesResponse = self.get_public_api("agent/identities").await?;
+        Ok(response.agents)
+    }
+
     async fn expire_api_key(&self, key_uid: &ApiKeyUid) -> Result<ExpireApiKeyResult> {
         let variables = ExpireApiKeyVariables {
             key_uid: key_uid.into(),
@@ -785,6 +808,7 @@ impl From<GqlUserOutput> for UserProperties {
 
         let is_on_work_domain = user_properties.is_on_work_domain;
         let is_onboarded = user_properties.is_onboarded;
+        let global_skills = user_properties.global_skills;
         let api_key_owner_type = user_output.api_key_owner_type;
 
         let linked_at = user_properties
@@ -821,6 +845,7 @@ impl From<GqlUserOutput> for UserProperties {
             linked_at,
             personal_object_limits: personal_object_limits.and_then(|t| t.try_into().ok()),
             principal_type,
+            global_skills,
         };
 
         UserProperties {

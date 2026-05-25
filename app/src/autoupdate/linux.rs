@@ -8,10 +8,8 @@ use warp_core::channel::{Channel, ChannelState};
 use warp_terminal::shell::ShellType;
 use warpui::ViewContext;
 
+use super::{release_assets_directory_url, DownloadReady, ReadyForRelaunch};
 use crate::workspace::Workspace;
-
-use super::release_assets_directory_url;
-use super::{DownloadReady, ReadyForRelaunch};
 
 lazy_static::lazy_static! {
     /// Stores the path to the current executable.
@@ -164,14 +162,11 @@ mod package_manager {
     use markdown_parser::{
         FormattedText, FormattedTextFragment, FormattedTextHeader, FormattedTextLine,
     };
-    use warpui::{
-        elements::{Container, FormattedTextElement, HighlightedHyperlink},
-        Element, SingletonEntity as _,
-    };
-
-    use crate::appearance::Appearance;
+    use warpui::elements::{Container, FormattedTextElement, HighlightedHyperlink};
+    use warpui::{Element, SingletonEntity as _};
 
     use super::*;
+    use crate::appearance::Appearance;
 
     pub struct AutoupdateContextBlock {
         package_manager: PackageManager,
@@ -625,6 +620,23 @@ fn is_pacman_signing_key_installed() -> bool {
     let Ok(stdout) = std::str::from_utf8(&output.stdout) else {
         return false;
     };
+
+    // After parsing the pub: line, also check validity field (index 1 = validity)
+    let fields: Vec<&str> = stdout
+        .lines()
+        .find(|line| line.starts_with("pub:"))
+        .map(|line| line.split(':').collect())
+        .unwrap_or_default();
+
+    // Field index 1 = validity: 'f' (full), 'u' (ultimate) are valid;
+    // 'e' (expired), 'r' (revoked), '-', 'q' = invalid
+    let validity = fields
+        .get(1)
+        .and_then(|field| field.chars().next())
+        .unwrap_or('\0');
+    if !matches!(validity, 'f' | 'u') {
+        return false; // Force key reconfiguration
+    }
 
     // Parse the expiry timestamp from the pub: line (field 7, 1-indexed).
     let Some(expiry_field) = stdout

@@ -5,10 +5,34 @@ use std::sync::Arc;
 use fuzzy_match::match_indices_case_insensitive;
 use lazy_static::lazy_static;
 use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::vec2f;
+use settings::Setting;
 use siphasher::sip::SipHasher;
 use warp_core::features::FeatureFlag;
+use warp_core::ui::icons::Icon;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::Fill;
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::new_scrollable::{
+    NewScrollableElement, ScrollableAppearance, SingleAxisConfig,
+};
+use warpui::elements::{
+    Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Element, Empty, Expanded, Flex, Hoverable, List, ListState, MainAxisSize,
+    MouseStateHandle, NewScrollable, OffsetPositioning, Padding, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, Rect, ScrollStateHandle, ScrollbarWidth, Shrinkable,
+    SizeConstraintCondition, SizeConstraintSwitch, Stack, Text, Wrap,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::FixedBinding;
+use warpui::platform::Cursor;
 use warpui::scene::DropShadow;
 use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{
+    Action, AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle, WeakViewHandle,
+};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::{
@@ -35,7 +59,6 @@ use crate::ai::blocklist::format_credits;
 use crate::ai::conversation_details_panel::{
     ConversationDetailsData, ConversationDetailsPanel, ConversationDetailsPanelEvent,
 };
-use crate::ai::conversation_status_ui::render_status_element;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
 use crate::app_state::PersistedAgentManagementFilters;
@@ -48,7 +71,9 @@ use crate::editor::{
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::notebooks::NotebookId;
 use crate::settings::ai::AISettings;
+use crate::ui_components::agent_icon::agent_conversation_entry_icon_variant;
 use crate::ui_components::avatar::{Avatar, AvatarContent};
+use crate::ui_components::icon_with_status::render_icon_with_status;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, NakedTheme, PrimaryTheme, SecondaryTheme,
@@ -57,37 +82,13 @@ use crate::view_components::compactible_action_button::{
     CompactibleActionButton, MEDIUM_SIZE_SWITCH_THRESHOLD,
 };
 use crate::view_components::dropdown::{Dropdown, DropdownAction, DropdownStyle};
-use crate::view_components::DismissibleToast;
-use crate::view_components::FilterableDropdown;
+use crate::view_components::{DismissibleToast, FilterableDropdown};
 use crate::workflows::WorkflowType;
-use crate::workspace::{ForkedConversationDestination, ToastStack};
-use crate::workspace::{RestoreConversationLayout, WorkspaceAction};
+use crate::workspace::{
+    ForkedConversationDestination, RestoreConversationLayout, ToastStack, WorkspaceAction,
+};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{send_telemetry_from_ctx, AgentModeEntrypoint};
-use pathfinder_geometry::vector::vec2f;
-use settings::Setting;
-use warp_core::ui::icons::Icon;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::Fill;
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::new_scrollable::{
-    NewScrollableElement, ScrollableAppearance, SingleAxisConfig,
-};
-use warpui::elements::{
-    Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Element, Empty, Expanded, Flex, Hoverable, List, ListState, MainAxisSize,
-    MouseStateHandle, NewScrollable, OffsetPositioning, Padding, ParentAnchor, ParentElement,
-    ParentOffsetBounds, Radius, Rect, ScrollStateHandle, ScrollbarWidth, Shrinkable,
-    SizeConstraintCondition, SizeConstraintSwitch, Stack, Text, Wrap,
-};
-use warpui::fonts::{Properties, Weight};
-use warpui::platform::Cursor;
-use warpui::ui_components::components::UiComponent;
-use warpui::ui_components::components::UiComponentStyles;
-use warpui::{
-    keymap::FixedBinding, Action, AppContext, Entity, FocusContext, ModelHandle, SingletonEntity,
-    TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle,
-};
 
 lazy_static! {
     static ref HASHER: SipHasher = SipHasher::new_with_keys(0, 0);
@@ -105,8 +106,9 @@ const CARD_CONTENT_PADDING: f32 = 12.;
 const CARD_BORDER_RADIUS: f32 = 4.;
 const CARD_MARGIN_BOTTOM: f32 = 8.;
 
-const STATUS_ICON_SIZE: f32 = 12.;
 const BUTTON_SIZE: f32 = 20.;
+/// Total size of the agent icon-with-status component rendered in each card's header row.
+const CARD_AGENT_ICON_SIZE: f32 = 24.;
 const CREATOR_AVATAR_FONT_SIZE: f32 = 10.;
 
 const SESSION_EXPIRED_TEXT: &str = "Sessions expire after one week and cannot be opened.";
@@ -1719,8 +1721,13 @@ impl AgentManagementView {
 
         let title_text = Text::new_inline(entry.display.title.clone(), font_family, font_size)
             .with_color(theme.active_ui_text_color().into());
-        let status_icon =
-            render_status_element(&entry.display.status, STATUS_ICON_SIZE, appearance);
+        let status_icon = render_icon_with_status(
+            agent_conversation_entry_icon_variant(entry),
+            CARD_AGENT_ICON_SIZE,
+            0.,
+            theme,
+            internal_colors::fg_overlay_1(theme),
+        );
         let time_str = format_approx_duration_from_now_utc(entry.display.last_updated);
         let time_text = Text::new_inline(time_str, font_family, font_size)
             .with_color(theme.nonactive_ui_text_color().into());
@@ -1789,6 +1796,24 @@ impl AgentManagementView {
                     "Harness: {}",
                     availability.display_name_for(harness)
                 ));
+            }
+        }
+
+        if let Some(executor) = &entry.display.executor {
+            let same_as_creator =
+                executor.uid.is_some() && executor.uid == entry.display.creator.uid;
+            if !same_as_creator {
+                if let Some(name) = executor.name.as_deref().or(executor.uid.as_deref()) {
+                    let label = if executor
+                        .principal_type
+                        .is_some_and(|pt| pt.is_service_account())
+                    {
+                        "Agent"
+                    } else {
+                        "Executor"
+                    };
+                    metadata_parts.push(format!("{label}: {name}"));
+                }
             }
         }
 

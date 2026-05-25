@@ -1,3 +1,14 @@
+use std::sync::Arc;
+
+use ai::api_keys::ApiKeyManager;
+use chrono::{DateTime, Local, Utc};
+use instant::Instant;
+use serde::{Deserialize, Serialize};
+use warp_core::user_preferences::GetUserPreferences as _;
+pub use warp_graphql::billing::BonusGrantType;
+use warp_graphql::scalars::time::ServerTimestamp;
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
 use crate::auth::AuthStateProvider;
@@ -7,16 +18,6 @@ use crate::settings::AISettings;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::WorkspaceUid;
 use crate::BlocklistAIHistoryModel;
-use ai::api_keys::ApiKeyManager;
-use chrono::{DateTime, Utc};
-use instant::Instant;
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use warp_core::user_preferences::GetUserPreferences as _;
-use warp_graphql::scalars::time::ServerTimestamp;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
-
-pub use warp_graphql::billing::BonusGrantType;
 
 /// Threshold of ambient-only credits at which we surface upgrade/CTA UI.
 pub const AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD: i32 = 20;
@@ -375,8 +376,9 @@ impl AIRequestUsageModel {
     /// 2. user has overage enabled
     /// 3. user has bonus grants (either team grants or user grants)
     /// 4. user's team plan has pay-as-you-go enabled (enterprise only)
-    /// 5. user's team is on enterprise with bonus grants auto-reload enable (enterprise only)
-    /// 6. user has BYOK enabled and has provided at least one API key
+    /// 5. user's team has enterprise bonus grants auto-reload enabled (enterprise only)
+    /// 6. user's team has self-serve auto-reload enabled within its monthly spend limit
+    /// 7. user has BYOK enabled and has provided at least one API key
     /// Use this method as the starting point for AI availability checking.
     pub fn has_any_ai_remaining(&self, ctx: &AppContext) -> bool {
         let current_workspace = UserWorkspaces::as_ref(ctx).current_workspace();
@@ -393,13 +395,25 @@ impl AIRequestUsageModel {
 
         let is_payg_enabled = current_workspace
             .is_some_and(|w| w.billing_metadata.is_enterprise_pay_as_you_go_enabled());
-
         let is_enterprise_auto_reload_enabled = current_workspace
             .is_some_and(|w| w.billing_metadata.is_enterprise_auto_reload_enabled());
+        let is_self_serve_auto_reload_enabled = current_workspace.is_some_and(|workspace| {
+            workspace
+                .billing_metadata
+                .is_purchase_add_on_credits_policy_enabled()
+                && workspace
+                    .settings
+                    .addon_credits_settings
+                    .auto_reload_enabled
+                && PricingInfoModel::as_ref(ctx)
+                    .addon_credits_options()
+                    .and_then(|options| workspace.get_auto_reload_price_cents(options))
+                    .is_some_and(|price| !workspace.would_addon_purchase_reach_limit(price))
+        });
 
         // If you have provided your own API key,
         // it doesn't matter if you are out of warp-provided requests.
-        let has_byo_api_key = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled()
+        let has_byo_api_key = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx)
             && ApiKeyManager::as_ref(ctx).keys().has_any_key();
 
         has_base_plan_ai_requests
@@ -407,6 +421,7 @@ impl AIRequestUsageModel {
             || workspace_has_overages
             || is_payg_enabled
             || is_enterprise_auto_reload_enabled
+            || is_self_serve_auto_reload_enabled
             || has_byo_api_key
     }
 
@@ -453,6 +468,10 @@ impl AIRequestUsageModel {
 
     pub fn next_refresh_time(&self) -> DateTime<Utc> {
         self.request_limit_info.next_refresh_time.utc()
+    }
+
+    pub fn next_refresh_time_local(&self) -> DateTime<Local> {
+        self.next_refresh_time().with_timezone(&Local)
     }
 
     pub fn is_unlimited(&self) -> bool {
@@ -508,7 +527,7 @@ impl AIRequestUsageModel {
             .unwrap_or(0)
     }
 
-    fn total_user_interactive_bonus_credits_remaining(&self) -> i32 {
+    pub fn total_user_interactive_bonus_credits_remaining(&self) -> i32 {
         let now = Utc::now();
         self.bonus_grants
             .iter()

@@ -1,4 +1,5 @@
-use std::{fs, io, path::PathBuf};
+use std::path::PathBuf;
+use std::{fs, io};
 
 pub(super) const PLUGIN_ENTRYPOINT_JS_FILE_NAME: &str = "main.js";
 

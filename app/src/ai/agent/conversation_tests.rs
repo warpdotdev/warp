@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
+use warp_core::features::FeatureFlag;
+use warp_multi_agent_api as api;
+
 use super::{
     artifact_from_fork_proto, AIConversation, AIConversationAutoexecuteMode, AIConversationId,
 };
 use crate::ai::artifacts::Artifact;
 use crate::persistence::model::AgentConversationData;
-use warp_core::features::FeatureFlag;
-use warp_multi_agent_api as api;
 
 fn restored_conversation(conversation_data: Option<AgentConversationData>) -> AIConversation {
     AIConversation::new_restored(
@@ -154,6 +155,31 @@ fn child_conversation_detection_uses_parent_agent_id() {
 
     assert!(conversation.is_child_agent_conversation());
     assert_eq!(conversation.parent_conversation_id(), None);
+}
+
+#[test]
+fn restored_conversation_uses_persisted_optimistic_root_task() {
+    let conversation_data: AgentConversationData = serde_json::from_str(
+        r#"{"server_conversation_token":null,"root_task_is_optimistic":true}"#,
+    )
+    .unwrap();
+
+    let conversation = restored_conversation(Some(conversation_data));
+    let root_task = conversation
+        .get_root_task()
+        .expect("root task should exist");
+
+    assert_eq!(root_task.id().to_string(), "root-task");
+    assert!(root_task.is_root_task());
+    assert!(root_task.is_optimistic_root_task());
+    assert!(root_task.source().is_none());
+}
+
+#[test]
+fn cli_agent_transcript_vehicle_is_excluded_from_navigation() {
+    let conversation = AIConversation::new(false, true);
+
+    assert!(conversation.should_exclude_from_navigation());
 }
 
 #[test]

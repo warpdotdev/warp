@@ -1,14 +1,13 @@
 use settings::Setting;
-use warpui::{async_assert, integration::TestStep, windowing::WindowManager, SingletonEntity};
+use warpui::integration::TestStep;
+use warpui::windowing::WindowManager;
+use warpui::{async_assert, SingletonEntity};
 
-use crate::{
-    integration_testing::{
-        step::new_step_with_default_assertions, view_getters::theme_chooser_view,
-    },
-    settings_view::SettingsAction,
-    window_settings::WindowSettings,
-    workspace::{Workspace, WorkspaceAction},
-};
+use crate::integration_testing::step::new_step_with_default_assertions;
+use crate::integration_testing::view_getters::theme_chooser_view;
+use crate::settings_view::SettingsAction;
+use crate::window_settings::WindowSettings;
+use crate::workspace::{Workspace, WorkspaceAction};
 
 /// Builds a step that will toggle a setting by [`SettingsAction`]. This can
 /// only update settings with a corresponding action on the settings view.

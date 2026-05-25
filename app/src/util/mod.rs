@@ -9,8 +9,8 @@ pub mod image;
 pub(crate) mod link_detection;
 pub mod links;
 pub mod openable_file_type;
-#[cfg(feature = "local_tty")]
 pub mod path;
+pub mod repo_detection;
 pub mod time_format;
 pub mod tooltips;
 pub(crate) mod traffic_lights;
@@ -19,10 +19,11 @@ pub mod vm_detection;
 #[cfg(windows)]
 pub mod windows;
 
-use itertools::Itertools;
 use std::cmp::Ordering;
 use std::fmt;
 use std::ops::Range;
+
+use itertools::Itertools;
 
 pub fn merge_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
     let mut i = 1;

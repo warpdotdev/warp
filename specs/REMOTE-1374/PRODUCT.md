@@ -48,7 +48,7 @@ Filtering:
 - `--execution-location <LOC>` — Filter by where the run executed. Accepts `local`, `remote`.
 - `--creator <UID>` — Filter by creator UID (user or service account).
 - `--environment <ENV_ID>` — Filter by environment ID.
-- `--skill <SPEC>` — Filter by skill spec (e.g. `owner/repo:path/to/SKILL.md`).
+- `--skill <SKILL>` — Filter by skill (e.g. `owner/repo:path/to/SKILL.md`).
 - `--schedule <SCHEDULE_ID>` — Filter to runs created by a specific scheduled agent.
 - `--ancestor-run <RUN_ID>` — Filter to descendants of a specific run.
 - `--name <NAME>` — Filter by agent config name.

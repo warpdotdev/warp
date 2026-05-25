@@ -1,19 +1,15 @@
-use std::{
-    collections::{HashMap, HashSet},
-    fs,
-};
+use std::collections::{HashMap, HashSet};
+use std::fs;
 
-use crate::ai::skills::skill_manager::SkillWatcherEvent;
 use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
-use repo_metadata::{
-    repositories::DetectedRepositories, DirectoryWatcher, RepoMetadataModel, RepositoryUpdate,
-    TargetFile,
-};
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::{DirectoryWatcher, RepoMetadataModel, RepositoryUpdate, TargetFile};
 use tempfile::TempDir;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 
 use super::SkillWatcher;
+use crate::ai::skills::skill_manager::SkillWatcherEvent;
 
 /// Helper function for creating a single skill file
 fn create_skill_file(dir: &TempDir, name: &str, description: &str, content: &str) -> ParsedSkill {
@@ -69,6 +65,7 @@ fn test_handle_repository_update_single_skill_added() {
             moved: HashMap::new(),
             commit_updated: false,
             index_lock_detected: false,
+            remote_ref_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -105,6 +102,7 @@ fn test_handle_repository_update_skill_modified() {
             moved: HashMap::new(),
             commit_updated: false,
             index_lock_detected: false,
+            remote_ref_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -141,6 +139,7 @@ fn test_handle_repository_update_skill_deleted() {
             moved: HashMap::new(),
             commit_updated: false,
             index_lock_detected: false,
+            remote_ref_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -181,6 +180,7 @@ fn test_handle_repository_update_multiple_skills_deleted() {
             moved: HashMap::new(),
             commit_updated: false,
             index_lock_detected: false,
+            remote_ref_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -223,6 +223,7 @@ fn test_handle_repository_update_skill_moved() {
             )]),
             commit_updated: false,
             index_lock_detected: false,
+            remote_ref_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -290,6 +291,7 @@ fn test_handle_repository_update_non_skill_directory_added_queues_project_direct
             moved: HashMap::new(),
             commit_updated: false,
             index_lock_detected: false,
+            remote_ref_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -337,6 +339,7 @@ fn test_handle_repository_update_non_skill_file_modified_in_repo_does_not_queue_
             moved: HashMap::new(),
             commit_updated: false,
             index_lock_detected: false,
+            remote_ref_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -380,6 +383,7 @@ fn test_handle_repository_update_non_skill_file_added_does_not_queue_project_dir
             moved: HashMap::new(),
             commit_updated: false,
             index_lock_detected: false,
+            remote_ref_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {

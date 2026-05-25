@@ -1,21 +1,21 @@
-use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
+use std::collections::HashMap;
+use std::future::Future;
+use std::sync::Arc;
+use std::time::Duration;
 
 use vec1::vec1;
-
 use warp_core::features::FeatureFlag;
 use warp_graphql::managed_secrets::ManagedSecret;
+use warp_graphql::queries::task_secrets::ManagedSecretValue as GqlManagedSecretValue;
 use warpui::{Entity, SingletonEntity};
 
-use crate::{
-    ManagedSecretValue,
-    client::{
-        IdentityTokenOptions, ManagedSecretConfigs, ManagedSecretsClient, SecretOwner,
-        TaskIdentityToken,
-    },
-    envelope::UploadKey,
-    gcp::{self, GcpWorkloadIdentityFederationError, GcpWorkloadIdentityFederationToken},
+use crate::ManagedSecretValue;
+use crate::client::{
+    IdentityTokenOptions, ManagedSecretConfigs, ManagedSecretsClient, SecretOwner,
+    TaskIdentityToken,
 };
-use warp_graphql::queries::task_secrets::ManagedSecretValue as GqlManagedSecretValue;
+use crate::envelope::UploadKey;
+use crate::gcp::{self, GcpWorkloadIdentityFederationError, GcpWorkloadIdentityFederationToken};
 
 /// Singleton model for working with Warp-managed secrets.
 pub struct ManagedSecretManager {
@@ -194,6 +194,9 @@ impl ManagedSecretManager {
                             v.aws_bearer_token_bedrock,
                             v.aws_region,
                         )
+                    }
+                    GqlManagedSecretValue::ManagedSecretOpenAiApiKeyValue(v) => {
+                        ManagedSecretValue::openai_api_key(v.api_key, v.base_url)
                     }
                     GqlManagedSecretValue::Unknown => {
                         return Err(anyhow::anyhow!(

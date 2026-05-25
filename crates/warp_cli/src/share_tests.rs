@@ -1,6 +1,8 @@
-use super::*;
-use clap::builder::TypedValueParser;
 use std::ffi::OsStr;
+
+use clap::builder::TypedValueParser;
+
+use super::*;
 
 fn parse_share_request(value: &str) -> Result<ShareRequest, clap::Error> {
     let cmd = clap::Command::new("test");

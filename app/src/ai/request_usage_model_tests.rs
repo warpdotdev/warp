@@ -1,23 +1,22 @@
 use std::sync::Arc;
 
+use ai::api_keys::ApiKeyManager;
 use chrono::Duration;
+use warp_core::features::FeatureFlag;
+use warp_graphql::billing::{AddonCreditsOption, OveragesPricing, PricingInfo};
 use warpui::{App, ModelHandle};
 
+use super::*;
+use crate::auth::AuthStateProvider;
+use crate::pricing::PricingInfoModel;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::server_api::ServerApiProvider;
-use crate::workspaces::{
-    user_workspaces::UserWorkspaces,
-    workspace::{
-        AiOverages, ByoApiKeyPolicy, CustomerType, EnterpriseCreditsAutoReloadPolicy,
-        EnterprisePayAsYouGoPolicy, PurchaseAddOnCreditsPolicy, Workspace, WorkspaceUid,
-    },
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::{
+    AiOverages, ByoApiKeyPolicy, CustomerType, EnterpriseCreditsAutoReloadPolicy,
+    EnterprisePayAsYouGoPolicy, PurchaseAddOnCreditsPolicy, Workspace, WorkspaceUid,
 };
-
-use ai::api_keys::ApiKeyManager;
-use warp_core::features::FeatureFlag;
-
-use super::*;
 
 fn create_test_workspace() -> (WorkspaceUid, Workspace) {
     let server_id: crate::server::ids::ServerId = 1_i64.into();
@@ -38,14 +37,54 @@ fn add_user_workspaces_with_workspace(app: &mut App, workspace: Workspace) {
 }
 
 fn add_request_usage_model(app: &mut App) -> ModelHandle<AIRequestUsageModel> {
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    add_request_usage_model_without_auth(app)
+}
+
+fn add_request_usage_model_for_anonymous_users(app: &mut App) -> ModelHandle<AIRequestUsageModel> {
+    app.add_singleton_model(|_| AuthStateProvider::new_anonymous_for_test());
+    add_request_usage_model_without_auth(app)
+}
+
+fn add_request_usage_model_without_auth(app: &mut App) -> ModelHandle<AIRequestUsageModel> {
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
     app.update(|ctx| {
         warpui_extras::secure_storage::register_noop("test", ctx);
         ctx.add_singleton_model(ApiKeyManager::new);
     });
+    app.add_singleton_model(|_| PricingInfoModel::new());
     app.add_singleton_model(|ctx| {
         AIRequestUsageModel::new_for_test(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
     })
+}
+
+fn set_addon_credits_pricing_info(app: &mut App) {
+    PricingInfoModel::handle(app).update(app, |model, ctx| {
+        model.update_pricing_info(
+            PricingInfo {
+                plans: vec![],
+                overages: OveragesPricing {
+                    price_per_request_usd_cents: 1,
+                },
+                addon_credits_options: vec![AddonCreditsOption {
+                    credits: 1000,
+                    price_usd_cents: 1000,
+                }],
+            },
+            ctx,
+        );
+    });
+}
+
+fn enable_auto_reload(workspace: &mut Workspace) {
+    workspace
+        .settings
+        .addon_credits_settings
+        .auto_reload_enabled = true;
+    workspace
+        .settings
+        .addon_credits_settings
+        .selected_auto_reload_credit_denomination = Some(1000);
 }
 
 #[test]
@@ -432,6 +471,116 @@ fn test_has_any_ai_remaining_true_with_enterprise_auto_reload() {
 }
 
 #[test]
+fn test_has_any_ai_remaining_false_with_enterprise_auto_reload_policy_on_non_enterprise() {
+    App::test((), |mut app| async move {
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace
+            .billing_metadata
+            .tier
+            .enterprise_credits_auto_reload_policy =
+            Some(EnterpriseCreditsAutoReloadPolicy { enabled: true });
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                !model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be false when enterprise auto-reload policy is enabled for a non-enterprise workspace",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_has_any_ai_remaining_true_with_self_serve_auto_reload() {
+    App::test((), |mut app| async move {
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace
+            .billing_metadata
+            .tier
+            .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+        enable_auto_reload(&mut workspace);
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+        set_addon_credits_pricing_info(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be true when self-serve auto-reload is enabled",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_has_any_ai_remaining_true_with_self_serve_auto_reload_and_billing_v2_disabled() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::BillingAndUsagePageV2.override_enabled(false);
+
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace
+            .billing_metadata
+            .tier
+            .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+        enable_auto_reload(&mut workspace);
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+        set_addon_credits_pricing_info(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be true when self-serve auto-reload is enabled without Billing and Usage V2",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_has_any_ai_remaining_false_with_add_on_credits_policy_when_purchase_would_exceed_limit() {
+    App::test((), |mut app| async move {
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace
+            .billing_metadata
+            .tier
+            .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+        enable_auto_reload(&mut workspace);
+        workspace
+            .settings
+            .addon_credits_settings
+            .max_monthly_spend_cents = Some(1000);
+        workspace.bonus_grants_purchased_this_month.cents_spent = 500;
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+        set_addon_credits_pricing_info(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                !model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be false when add-on credit purchase would exceed the monthly spend limit",
+            );
+        });
+    });
+}
+
+#[test]
 fn test_has_any_ai_remaining_false_with_workspace_no_pricing_no_overages_no_credits() {
     App::test((), |mut app| async move {
         // Create a workspace with no tier pricing (default).
@@ -557,6 +706,37 @@ fn test_has_any_ai_remaining_true_with_byo_key_and_no_workspace() {
             assert!(
                 model.has_any_ai_remaining(ctx),
                 "expected has_any_ai_remaining to be true when user has a BYO key but no workspace",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_byo_api_key_disabled_for_anonymous_firebase_user() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::SoloUserByok.override_enabled(true);
+
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        let request_usage_model = add_request_usage_model_for_anonymous_users(&mut app);
+
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.set_openai_key(Some("test-key".to_string()), ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                !UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx),
+                "expected is_byo_api_key_enabled to be false for anonymous Firebase users even with SoloUserByok enabled",
+            );
+        });
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                !model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be false for anonymous Firebase user even with BYO key and SoloUserByok enabled",
             );
         });
     });

@@ -1,11 +1,13 @@
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 /// Opaque identifier for a remote host.
 ///
 /// Returned by the server in `InitializeResponse`. Used by
 /// `RemoteServerManager` and downstream features to deduplicate
 /// host-scoped models (e.g. `RepoMetadataModel`) across sessions.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct HostId(String);
 
 impl HostId {

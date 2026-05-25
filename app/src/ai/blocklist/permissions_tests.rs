@@ -1,45 +1,36 @@
 use std::path::PathBuf;
 
 use uuid::Uuid;
-
+use warp_core::execution_mode::ExecutionMode;
 use warp_util::path::EscapeChar;
 use warpui::{App, EntityId, ModelHandle};
 
-use warp_core::execution_mode::ExecutionMode;
-
+use super::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::permissions::{
+    CommandExecutionPermission, CommandExecutionPermissionDeniedReason, FileReadPermission,
+    FileReadPermissionAllowedReason, FileReadPermissionDeniedReason, FileWritePermission,
+    FileWritePermissionAllowedReason, FileWritePermissionDeniedReason,
+};
+use crate::ai::blocklist::CommandExecutionPermissionAllowedReason;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::execution_profiles::{ActionPermission, WriteToPtyPermission};
+use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::network::NetworkStatus;
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::sync_queue::SyncQueue;
+use crate::settings::{AgentModeCommandExecutionPredicate, PrivacySettings};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::test_util::settings::initialize_settings_for_tests_with_mode;
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::SandboxedAgentSettings;
 use crate::{
-    ai::{
-        agent::conversation::AIConversationId,
-        blocklist::{
-            permissions::{
-                CommandExecutionPermission, CommandExecutionPermissionDeniedReason,
-                FileReadPermission, FileReadPermissionAllowedReason,
-                FileReadPermissionDeniedReason, FileWritePermission,
-                FileWritePermissionAllowedReason, FileWritePermissionDeniedReason,
-            },
-            CommandExecutionPermissionAllowedReason,
-        },
-        execution_profiles::{
-            profiles::AIExecutionProfilesModel, ActionPermission, WriteToPtyPermission,
-        },
-        mcp::templatable_manager::TemplatableMCPServerManager,
-    },
-    auth::AuthStateProvider,
-    cloud_object::model::persistence::CloudModel,
-    network::NetworkStatus,
-    server::{cloud_objects::update_manager::UpdateManager, sync_queue::SyncQueue},
-    settings::{AgentModeCommandExecutionPredicate, PrivacySettings},
-    test_util::settings::initialize_settings_for_tests_with_mode,
-    workspaces::{
-        team_tester::TeamTesterStatus, user_workspaces::UserWorkspaces,
-        workspace::SandboxedAgentSettings,
-    },
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider, LaunchMode,
 };
-
-use super::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 
 struct PermissionsTestState {
     convo_id: AIConversationId,
@@ -91,7 +82,7 @@ fn initialize_permissions_test_with_mode(
     let user_workspaces = app.add_singleton_model(UserWorkspaces::default_mock);
 
     let conversation_id = history.update(app, |history_model, ctx| {
-        history_model.start_new_conversation(terminal_view_id, false, false, ctx)
+        history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
     });
 
     PermissionsTestState {

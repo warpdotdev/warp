@@ -1,9 +1,3 @@
-use crate::appearance::Appearance;
-use crate::drive::cloud_object_styling::warp_drive_icon_color;
-use crate::drive::DriveObjectType;
-use crate::search::FilterChipRenderer as CommonFilterChipRenderer;
-use crate::search::QueryFilter;
-use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
 use pathfinder_color::ColorU;
 use warpui::elements::{
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable, Icon,
@@ -11,6 +5,12 @@ use warpui::elements::{
 };
 use warpui::platform::Cursor;
 use warpui::{Element, EventContext};
+
+use crate::appearance::Appearance;
+use crate::drive::cloud_object_styling::warp_drive_icon_color;
+use crate::drive::DriveObjectType;
+use crate::search::{FilterChipRenderer as CommonFilterChipRenderer, QueryFilter};
+use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
 
 /// Trait to render filter chips for the command palette.
 pub trait FilterChipRenderer: crate::search::FilterChipRenderer {
@@ -119,7 +119,7 @@ impl FilterChipRenderer for QueryFilter {
                 .theme()
                 .main_text_color(appearance.theme().surface_2())
                 .into_solid(),
-            QueryFilter::Conversations | QueryFilter::HistoricalConversations => appearance
+            QueryFilter::Conversations => appearance
                 .theme()
                 .main_text_color(appearance.theme().surface_2())
                 .into_solid(),
@@ -147,8 +147,9 @@ impl FilterChipRenderer for QueryFilter {
 }
 
 mod styles {
-    use crate::themes::theme::{Blend, Fill, WarpTheme};
     use warpui::elements::{Border, MouseState};
+
+    use crate::themes::theme::{Blend, Fill, WarpTheme};
 
     /// Size of the border when the query filter is hovered.
     const HOVERED_BORDER_SIZE: f32 = 2.;

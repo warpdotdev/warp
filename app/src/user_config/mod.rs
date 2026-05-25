@@ -4,24 +4,22 @@ pub mod util;
 #[cfg_attr(target_family = "wasm", path = "wasm.rs")]
 mod imp;
 
-use crate::tab_configs::{TabConfig, TabConfigError};
-use crate::themes::theme::WarpThemeConfig;
-use crate::{
-    launch_configs::launch_config::LaunchConfig, themes::theme::ThemeKind,
-    workflows::workflow::Workflow,
-};
-use lazy_static::lazy_static;
 #[cfg(feature = "local_fs")]
 use std::path::Path;
 use std::path::PathBuf;
-use warp_core::ui::theme::WarpTheme;
-use warpui::{Entity, ModelContext, SingletonEntity};
 
-#[cfg(test)]
 pub(crate) use imp::load_tab_configs;
 #[cfg(feature = "local_fs")]
 pub use imp::load_workflows;
 pub use imp::{load_launch_configs, load_theme_configs};
+use lazy_static::lazy_static;
+use warp_core::ui::theme::WarpTheme;
+use warpui::{Entity, ModelContext, SingletonEntity};
+
+use crate::launch_configs::launch_config::LaunchConfig;
+use crate::tab_configs::{TabConfig, TabConfigError};
+use crate::themes::theme::{ThemeKind, WarpThemeConfig};
+use crate::workflows::workflow::Workflow;
 
 lazy_static! {
     pub static ref LAUNCH_CONFIG_COMMENT: String = format!(
@@ -189,7 +187,6 @@ pub fn launch_configs_dir() -> PathBuf {
 }
 
 /// Returns the path to the directory containing the user's tab configs.
-#[cfg_attr(target_family = "wasm", expect(dead_code))]
 pub fn tab_configs_dir() -> PathBuf {
     base_dir().join("tab_configs")
 }

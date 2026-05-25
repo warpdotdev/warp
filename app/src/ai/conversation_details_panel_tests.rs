@@ -7,12 +7,11 @@ use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, EntityId, SingletonEntity};
 
+use super::{ConversationDetailsData, PanelMode};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
-use crate::ai::ambient_agents::task::{AgentConfigSnapshot, HarnessConfig, TaskCreatorInfo};
+use crate::ai::ambient_agents::task::{AgentConfigSnapshot, HarnessConfig, TaskPrincipalInfo};
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
-
-use super::{ConversationDetailsData, CreditsInfo, PanelMode};
 
 fn create_test_task(task_id: &str) -> AmbientAgentTask {
     let now = Utc::now();
@@ -29,11 +28,12 @@ fn create_test_task(task_id: &str) -> AmbientAgentTask {
         source: None,
         session_id: None,
         session_link: None,
-        creator: Some(TaskCreatorInfo {
+        creator: Some(TaskPrincipalInfo {
             creator_type: "USER".to_string(),
             uid: "user-1".to_string(),
             display_name: Some("User 1".to_string()),
         }),
+        executor: None,
         conversation_id: None,
         request_usage: None,
         agent_config_snapshot: None,
@@ -129,11 +129,14 @@ fn test_from_task_includes_linked_directory_when_run_id_matches() {
                 artifacts_json: None,
                 parent_agent_id: None,
                 agent_name: None,
+                orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.to_string()),
                 autoexecute_override: None,
                 last_event_sequence: None,
+                pinned: false,
             },
         );
 
@@ -225,6 +228,29 @@ fn test_from_task_resolves_harness() {
 }
 
 #[test]
+fn test_from_task_populates_executor() {
+    App::test((), |mut app| async move {
+        let _history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let mut task = create_test_task("550e8400-e29b-41d4-a716-000000004030");
+        task.executor = Some(TaskPrincipalInfo {
+            creator_type: "service_account".to_string(),
+            uid: "agent-uid".to_string(),
+            display_name: Some("Deploy Agent".to_string()),
+        });
+
+        app.update(|ctx| {
+            let data = ConversationDetailsData::from_task(&task, None, None, ctx);
+            assert_eq!(
+                data.executor
+                    .as_ref()
+                    .map(|executor| executor.display_name.as_str()),
+                Some("Deploy Agent")
+            );
+        });
+    });
+}
+
+#[test]
 fn test_from_conversation_populates_local_conversation_fields() {
     // Locks in that `ConversationDetailsData::from_conversation` works on native
     // and surfaces the conversation-derived fields the conversation details panel
@@ -246,11 +272,14 @@ fn test_from_conversation_populates_local_conversation_fields() {
                 artifacts_json: None,
                 parent_agent_id: None,
                 agent_name: None,
+                orchestration_harness_type: None,
                 parent_conversation_id: None,
                 run_id: None,
                 autoexecute_override: None,
                 last_event_sequence: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
+                pinned: false,
             },
         );
 
@@ -288,10 +317,7 @@ fn test_from_conversation_populates_local_conversation_fields() {
 
             assert_eq!(data.title, "test query");
             assert_eq!(data.source_prompt.as_deref(), Some("test query"));
-            assert!(matches!(
-                data.credits,
-                Some(CreditsInfo::LocalConversation(_))
-            ));
+            assert!(data.credits.is_some());
         });
     });
 }
@@ -317,11 +343,14 @@ fn test_from_task_includes_linked_directory_when_server_token_matches() {
                 artifacts_json: None,
                 parent_agent_id: None,
                 agent_name: None,
+                orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: None,
                 autoexecute_override: None,
                 last_event_sequence: None,
+                pinned: false,
             },
         );
 

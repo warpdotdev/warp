@@ -1,24 +1,22 @@
-use serde::{Deserialize, Serialize};
 use std::fmt;
-use warp_server_client::cloud_object::Owner;
 
-use crate::{
-    auth::AuthStateProvider,
-    cloud_object::{
-        model::{
-            generic_string_model::{GenericStringModel, GenericStringObjectId, StringModel},
-            json_model::{JsonModel, JsonSerializer},
-            persistence::CloudModel,
-        },
-        GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision, ServerCloudObject,
-    },
-    server::{ids::SyncId, sync_queue::QueueItem},
-    workspaces::user_workspaces::UserWorkspaces,
-};
+use serde::{Deserialize, Serialize};
+use warp_server_client::cloud_object::Owner;
 use warpui::{AppContext, SingletonEntity as _};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::generic_string_model::{
+    GenericStringModel, GenericStringObjectId, StringModel,
+};
+use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
+use crate::cloud_object::{
+    GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType,
+    Revision,
+};
+use crate::server::sync_queue::QueueItem;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GithubRepo {
     /// Repository owner (e.g. "warpdotdev")
     pub owner: String,
@@ -110,23 +108,6 @@ pub type CloudAmbientAgentEnvironment =
 pub type CloudAmbientAgentEnvironmentModel =
     GenericStringModel<AmbientAgentEnvironment, JsonSerializer>;
 
-impl CloudAmbientAgentEnvironment {
-    pub fn get_all(app: &AppContext) -> Vec<CloudAmbientAgentEnvironment> {
-        CloudModel::as_ref(app)
-            .get_all_objects_of_type::<GenericStringObjectId, CloudAmbientAgentEnvironmentModel>()
-            .cloned()
-            .collect()
-    }
-
-    pub fn get_by_id<'a>(
-        sync_id: &'a SyncId,
-        app: &'a AppContext,
-    ) -> Option<&'a CloudAmbientAgentEnvironment> {
-        CloudModel::as_ref(app)
-            .get_object_of_type::<GenericStringObjectId, CloudAmbientAgentEnvironmentModel>(sync_id)
-    }
-}
-
 impl AmbientAgentEnvironment {
     pub fn new(
         name: String,
@@ -178,14 +159,6 @@ impl StringModel for AmbientAgentEnvironment {
     }
 
     fn uniqueness_key(&self) -> Option<GenericStringObjectUniqueKey> {
-        None
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::AmbientAgentEnvironment(server_environment) = server_cloud_object
-        {
-            return Some(server_environment.model.clone().string_model);
-        }
         None
     }
 

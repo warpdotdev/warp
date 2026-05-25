@@ -3,14 +3,12 @@
 #[cfg(not(target_family = "wasm"))]
 mod global_hotkey;
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::mem::ManuallyDrop;
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
-    thread::{self, panicking},
-};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
+use std::thread::{self, panicking};
 
 use anyhow::Result;
 use geometry::rect::RectF;
@@ -19,35 +17,27 @@ use parking_lot::Mutex;
 use serde::de::IntoDeserializer;
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 
-use crate::platform::MicrophoneAccessState;
-use crate::platform::{
-    file_picker::{
-        FilePickerCallback, FilePickerError, SaveFilePickerCallback, SaveFilePickerConfiguration,
-    },
-    Cursor, RequestNotificationPermissionsCallback, SendNotificationErrorCallback,
-};
-use crate::windowing::winit::app::CustomEvent::UpdateUIApp;
-use crate::windowing::WindowManager;
-use crate::Effect::Event;
-use crate::{
-    accessibility,
-    clipboard::{self, ClipboardContent, InMemoryClipboard},
-    geometry, keymap,
-    modals::{AlertDialog, ModalId},
-    notification, platform,
-    platform::file_picker::{FilePickerConfiguration, FileType},
-    windowing::{self, WindowCallbacks},
-    AppContext, ApplicationBundleInfo, Clipboard, DisplayId, DisplayIdx, WindowId,
-};
-use crate::{
-    notification::{NotificationSendError, RequestPermissionsOutcome},
-    platform::TerminationMode,
-};
-
-use super::{notifications, CustomEvent};
-
 #[cfg(not(target_family = "wasm"))]
 use self::global_hotkey::GlobalHotKeyHandler;
+use super::{notifications, CustomEvent};
+use crate::clipboard::{self, ClipboardContent, InMemoryClipboard};
+use crate::modals::{AlertDialog, ModalId};
+use crate::notification::{NotificationSendError, RequestPermissionsOutcome};
+use crate::platform::file_picker::{
+    FilePickerCallback, FilePickerConfiguration, FilePickerError, FileType, SaveFilePickerCallback,
+    SaveFilePickerConfiguration,
+};
+use crate::platform::{
+    Cursor, MicrophoneAccessState, RequestNotificationPermissionsCallback,
+    SendNotificationErrorCallback, TerminationMode,
+};
+use crate::windowing::winit::app::CustomEvent::UpdateUIApp;
+use crate::windowing::{self, WindowCallbacks, WindowManager};
+use crate::Effect::Event;
+use crate::{
+    accessibility, geometry, keymap, notification, platform, AppContext, ApplicationBundleInfo,
+    Clipboard, DisplayId, DisplayIdx, WindowId,
+};
 
 // No-op on WASM since the browser cannot provide this functionality.
 #[cfg(target_family = "wasm")]

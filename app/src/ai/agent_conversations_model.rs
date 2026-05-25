@@ -1,47 +1,25 @@
 #[allow(dead_code)]
 pub mod entry;
 
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+use clap::ValueEnum;
 pub use entry::{
     AgentConversationEntry, AgentConversationEntryId, AgentConversationNavigationSubject,
     AgentConversationProvenance,
 };
-
-use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
-use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::ambient_agents::{AgentSource, AmbientAgentTask, AmbientAgentTaskState};
-use crate::ai::artifacts::Artifact;
-use crate::ai::blocklist::{
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
-};
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
-use crate::ai::conversation_navigation::ConversationNavigationData;
-use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
-use crate::auth::AuthStateProvider;
-use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
-use crate::server::cloud_objects::update_manager::{UpdateManager, UpdateManagerEvent};
-use crate::server::ids::{ServerId, SyncId};
-use crate::server::retry_strategies::{
-    is_transient_http_error, OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL_RETRY_STRATEGY,
-};
-use crate::server::server_api::{ai::TaskListFilter, ServerApiProvider};
-use crate::settings::AISettings;
-use crate::ui_components::icons::Icon;
-use crate::workspace::{RestoreConversationLayout, WorkspaceAction};
-use chrono::{DateTime, Utc};
-use clap::ValueEnum;
 use futures::stream::AbortHandle;
 use instant::Instant;
 use itertools::Itertools;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::{HashMap, HashSet};
-use std::time::Duration;
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_core::report_error;
-use warp_core::ui::theme::{color::internal_colors, WarpTheme};
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::WarpTheme;
 use warpui::color::ColorU;
 use warpui::r#async::Timer;
 use warpui::windowing::{StateEvent, WindowManager};
@@ -50,7 +28,36 @@ use warpui::{
     SingletonEntity, WindowId,
 };
 
+use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::ambient_agents::{
+    AgentSource, AmbientAgentLiveSessionState, AmbientAgentTask, AmbientAgentTaskId,
+    AmbientAgentTaskState,
+};
+use crate::ai::artifacts::Artifact;
+use crate::ai::blocklist::{
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
+};
+use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::conversation_navigation::ConversationNavigationData;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::CloudObjectLookup as _;
+use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
+use crate::server::cloud_objects::update_manager::{UpdateManager, UpdateManagerEvent};
+use crate::server::ids::{ServerId, SyncId};
+use crate::server::retry_strategies::{
+    is_transient_http_error, OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL_RETRY_STRATEGY,
+};
+use crate::server::server_api::ai::TaskListFilter;
+use crate::server::server_api::ServerApiProvider;
+use crate::settings::AISettings;
+use crate::ui_components::icons::Icon;
+use crate::workspace::{RestoreConversationLayout, WorkspaceAction};
+
 const POLLING_INTERVAL: Duration = Duration::from_secs(30);
+const RTC_TASK_REFRESH_THROTTLE: Duration = Duration::from_secs(5);
 const INITIAL_TASK_AMOUNT: i32 = 100;
 
 /// How long to skip refetching a task that just failed with a transient error
@@ -77,10 +84,40 @@ enum TaskFetchState {
     /// The fetch returned a permanent (non-transient) HTTP error such as 401/403/404; remember
     /// when it failed so we can back off for [`PERMANENT_FETCH_FAILURE_COOLDOWN`] before
     /// retrying. We don't refuse forever in case permissions change mid-session.
-    PermanentlyFailedAt(Instant),
+    /// The `String` carries a human-readable description of the failure for display in the UI.
+    PermanentlyFailed { at: Instant, message: String },
     /// The retry chain just exhausted on a transient error; remember when it failed so we
     /// can back off for [`TRANSIENT_FETCH_FAILURE_COOLDOWN`] before retrying.
-    TransientlyFailedAt(Instant),
+    /// The `String` carries a human-readable description of the failure for display in the UI.
+    TransientlyFailed { at: Instant, message: String },
+}
+
+/// Tracks the cooldown window for RTC-triggered task-list refreshes. Pending events keep
+/// the earliest timestamp in the burst because `updated_after` is a lower bound; using the
+/// latest timestamp could skip tasks that changed earlier in the same window.
+#[derive(Default)]
+enum RtcTaskRefreshThrottleState {
+    #[default]
+    Idle,
+    CoolingDown {
+        pending_timestamp: Option<DateTime<Utc>>,
+        timer_abort_handle: AbortHandle,
+    },
+}
+
+fn record_earliest_rtc_task_refresh_timestamp(
+    pending_timestamp: &mut Option<DateTime<Utc>>,
+    timestamp: DateTime<Utc>,
+) {
+    match pending_timestamp {
+        Some(existing_timestamp) if timestamp < *existing_timestamp => {
+            *existing_timestamp = timestamp;
+        }
+        None => {
+            *pending_timestamp = Some(timestamp);
+        }
+        Some(_) => {}
+    }
 }
 
 /// Protected eviction: we'll always keep at least 200 personal tasks in the model.
@@ -491,6 +528,10 @@ pub struct AgentConversationsModel {
     /// the meaning of each variant. Tasks that have been successfully fetched live in `tasks`
     /// and are absent from this map.
     task_fetch_state: HashMap<AmbientAgentTaskId, TaskFetchState>,
+    rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState,
+    /// Earliest RTC timestamp received while no list surface was open.
+    /// On next `register_view_open`, triggers a single `fetch_tasks_updated_after`.
+    dirty_since: Option<DateTime<Utc>>,
 }
 
 pub enum AgentConversationsModelEvent {
@@ -537,6 +578,8 @@ impl AgentConversationsModel {
                 active_data_consumers_per_window: HashMap::new(),
                 has_finished_initial_load: true,
                 task_fetch_state: HashMap::new(),
+                rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
+                dirty_since: None,
             };
         }
 
@@ -574,6 +617,8 @@ impl AgentConversationsModel {
             active_data_consumers_per_window: HashMap::new(),
             has_finished_initial_load: false,
             task_fetch_state: HashMap::new(),
+            rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
+            dirty_since: None,
         };
 
         // Only sync local conversations if we're not in CLI mode. Server-side data
@@ -639,8 +684,87 @@ impl AgentConversationsModel {
         event: &UpdateManagerEvent,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let UpdateManagerEvent::AmbientTaskUpdated { timestamp } = event {
-            self.fetch_tasks_updated_after(*timestamp, ctx);
+        let UpdateManagerEvent::AmbientTaskUpdated { task_id, timestamp } = event else {
+            return;
+        };
+
+        let has_list_consumers = self
+            .active_data_consumers_per_window
+            .values()
+            .any(|views| !views.is_empty());
+        if has_list_consumers {
+            // (a) If management view or conversation list is open, throttled list-fetch.
+            self.handle_rtc_for_list_views(*timestamp, ctx);
+        } else {
+            let has_open_tab = ActiveAgentViewsModel::as_ref(ctx)
+                .get_terminal_view_id_for_ambient_task(*task_id)
+                .is_some();
+            if has_open_tab {
+                // (b) If this task has an open tab (any window), force a re-fetch.
+                self.async_fetch_task(task_id, ctx);
+            } else {
+                // (c) No list surface open: record earliest timestamp for flush on next view open.
+                record_earliest_rtc_task_refresh_timestamp(&mut self.dirty_since, *timestamp);
+            }
+        }
+    }
+
+    // Handle RTC invalidations for list views, respecting the refresh throttling.
+    fn handle_rtc_for_list_views(
+        &mut self,
+        timestamp: DateTime<Utc>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match std::mem::take(&mut self.rtc_task_refresh_throttle_state) {
+            RtcTaskRefreshThrottleState::Idle => {
+                self.fetch_tasks_updated_after(timestamp, ctx);
+                self.start_rtc_task_refresh_throttle_timer(ctx);
+            }
+            RtcTaskRefreshThrottleState::CoolingDown {
+                mut pending_timestamp,
+                timer_abort_handle,
+            } => {
+                record_earliest_rtc_task_refresh_timestamp(&mut pending_timestamp, timestamp);
+                self.rtc_task_refresh_throttle_state = RtcTaskRefreshThrottleState::CoolingDown {
+                    pending_timestamp,
+                    timer_abort_handle,
+                };
+            }
+        }
+    }
+
+    fn start_rtc_task_refresh_throttle_timer(&mut self, ctx: &mut ModelContext<Self>) {
+        let future_handle = ctx.spawn(
+            async move {
+                Timer::after(RTC_TASK_REFRESH_THROTTLE).await;
+            },
+            |model, _, ctx| {
+                let pending_timestamp =
+                    match std::mem::take(&mut model.rtc_task_refresh_throttle_state) {
+                        RtcTaskRefreshThrottleState::Idle => None,
+                        RtcTaskRefreshThrottleState::CoolingDown {
+                            pending_timestamp, ..
+                        } => pending_timestamp,
+                    };
+
+                if let Some(timestamp) = pending_timestamp {
+                    model.fetch_tasks_updated_after(timestamp, ctx);
+                    model.start_rtc_task_refresh_throttle_timer(ctx);
+                }
+            },
+        );
+        self.rtc_task_refresh_throttle_state = RtcTaskRefreshThrottleState::CoolingDown {
+            pending_timestamp: None,
+            timer_abort_handle: future_handle.abort_handle(),
+        };
+    }
+
+    fn abort_rtc_task_refresh_throttle(&mut self) {
+        if let RtcTaskRefreshThrottleState::CoolingDown {
+            timer_abort_handle, ..
+        } = std::mem::take(&mut self.rtc_task_refresh_throttle_state)
+        {
+            timer_abort_handle.abort();
         }
     }
 
@@ -654,6 +778,8 @@ impl AgentConversationsModel {
 
         // Subtract 1 second to give buffer for clock differences with server
         let updated_after = timestamp - chrono::Duration::seconds(1);
+        // Reset `dirty_since` now that we are doing a fetch.
+        self.dirty_since = None;
 
         ctx.spawn_with_retry_on_error(
             move || {
@@ -855,6 +981,11 @@ impl AgentConversationsModel {
             .or_default()
             .insert(view_id);
         self.update_polling_state(ctx);
+
+        // Flush dirty tasks accumulated while no list surface was open.
+        if let Some(dirty_since) = self.dirty_since.take() {
+            self.fetch_tasks_updated_after(dirty_since, ctx);
+        }
     }
 
     /// Called when a view that consumes this model's data becomes hidden.
@@ -1161,6 +1292,29 @@ impl AgentConversationsModel {
         let active_views_model = ActiveAgentViewsModel::as_ref(app);
 
         if let Some(task_id) = entry.identity.ambient_agent_task_id {
+            match self
+                .tasks
+                .get(&task_id)
+                .map(AmbientAgentTask::active_live_session_state)
+            {
+                Some(AmbientAgentLiveSessionState::Attachable { session_id }) => {
+                    return Some(WorkspaceAction::OpenOrAttachAmbientAgentConversation {
+                        session_id,
+                        task_id,
+                    });
+                }
+                Some(AmbientAgentLiveSessionState::ActiveUnattachable) => {
+                    return active_views_model
+                        .get_terminal_view_id_for_ambient_task(task_id)
+                        .map(
+                            |terminal_view_id| WorkspaceAction::FocusTerminalViewInWorkspace {
+                                terminal_view_id,
+                            },
+                        );
+                }
+                Some(AmbientAgentLiveSessionState::Inactive) | None => {}
+            }
+
             if let Some(terminal_view_id) =
                 active_views_model.get_terminal_view_id_for_ambient_task(task_id)
             {
@@ -1191,20 +1345,6 @@ impl AgentConversationsModel {
                         terminal_view_id,
                     });
                 }
-            }
-        }
-
-        if let Some(task_id) = entry.identity.ambient_agent_task_id {
-            if let Some(session_id) = self
-                .tasks
-                .get(&task_id)
-                .and_then(AmbientAgentTask::active_execution_session_id)
-                .and_then(entry::parse_session_id)
-            {
-                return Some(WorkspaceAction::OpenAmbientAgentSession {
-                    session_id,
-                    task_id,
-                });
             }
         }
 
@@ -1377,7 +1517,9 @@ impl AgentConversationsModel {
             | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
             | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. }
             | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
-            | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. } => {}
+            | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
+            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
+            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => {}
 
             BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. } => {
                 ctx.emit(AgentConversationsModelEvent::ConversationUpdated {
@@ -1390,6 +1532,19 @@ impl AgentConversationsModel {
     /// Get raw task data by task ID
     pub fn get_task_data(&self, task_id: &AmbientAgentTaskId) -> Option<AmbientAgentTask> {
         self.tasks.get(task_id).cloned()
+    }
+
+    /// Returns the error message when the most recent fetch for `task_id` ended in a
+    /// permanent or transient failure and the cooldown has not yet elapsed. The caller
+    /// can use this to display an error state in the details panel.
+    pub fn task_fetch_error(&self, task_id: &AmbientAgentTaskId) -> Option<&str> {
+        match self.task_fetch_state.get(task_id) {
+            Some(
+                TaskFetchState::PermanentlyFailed { message, .. }
+                | TaskFetchState::TransientlyFailed { message, .. },
+            ) => Some(message),
+            _ => None,
+        }
     }
 
     /// Get raw task data by task ID, fetching from server if not in memory.
@@ -1416,20 +1571,24 @@ impl AgentConversationsModel {
             return Some(task.clone());
         }
 
-        // Consult the per-task fetch state. The three variants are mutually exclusive: at most
-        // one applies to a given id.
+        self.async_fetch_task(task_id, ctx);
+        None
+    }
+
+    /// Consult fetch-state guards and spawn a fetch if allowed.
+    fn async_fetch_task(&mut self, task_id: &AmbientAgentTaskId, ctx: &mut ModelContext<Self>) {
         match self.task_fetch_state.get(task_id) {
-            Some(TaskFetchState::InFlight) => return None,
-            Some(TaskFetchState::PermanentlyFailedAt(failed_at)) => {
-                if failed_at.elapsed() < PERMANENT_FETCH_FAILURE_COOLDOWN {
-                    return None;
+            Some(TaskFetchState::InFlight) => return,
+            Some(TaskFetchState::PermanentlyFailed { at, .. }) => {
+                if at.elapsed() < PERMANENT_FETCH_FAILURE_COOLDOWN {
+                    return;
                 }
                 // Cooldown has elapsed; clear the entry and fall through to fetch again.
                 self.task_fetch_state.remove(task_id);
             }
-            Some(TaskFetchState::TransientlyFailedAt(failed_at)) => {
-                if failed_at.elapsed() < TRANSIENT_FETCH_FAILURE_COOLDOWN {
-                    return None;
+            Some(TaskFetchState::TransientlyFailed { at, .. }) => {
+                if at.elapsed() < TRANSIENT_FETCH_FAILURE_COOLDOWN {
+                    return;
                 }
                 self.task_fetch_state.remove(task_id);
             }
@@ -1438,11 +1597,11 @@ impl AgentConversationsModel {
 
         // Opportunistically purge other expired entries so the map doesn't grow unbounded.
         self.task_fetch_state.retain(|_, state| match state {
-            TaskFetchState::TransientlyFailedAt(failed_at) => {
-                failed_at.elapsed() < TRANSIENT_FETCH_FAILURE_COOLDOWN
+            TaskFetchState::TransientlyFailed { at, .. } => {
+                at.elapsed() < TRANSIENT_FETCH_FAILURE_COOLDOWN
             }
-            TaskFetchState::PermanentlyFailedAt(failed_at) => {
-                failed_at.elapsed() < PERMANENT_FETCH_FAILURE_COOLDOWN
+            TaskFetchState::PermanentlyFailed { at, .. } => {
+                at.elapsed() < PERMANENT_FETCH_FAILURE_COOLDOWN
             }
             TaskFetchState::InFlight => true,
         });
@@ -1472,21 +1631,23 @@ impl AgentConversationsModel {
                 }
                 RequestState::RequestFailed(e) => {
                     let now = Instant::now();
+                    let message = format!("{e}");
                     let new_state = if is_transient_http_error(&e) {
-                        TaskFetchState::TransientlyFailedAt(now)
+                        TaskFetchState::TransientlyFailed { at: now, message }
                     } else {
-                        TaskFetchState::PermanentlyFailedAt(now)
+                        TaskFetchState::PermanentlyFailed { at: now, message }
                     };
                     model.task_fetch_state.insert(task_id_clone, new_state);
                     report_error!(e);
+
+                    // On failure, this still emits an update event so that the details panel can re-render with the error message.
+                    ctx.emit(AgentConversationsModelEvent::TasksUpdated);
                 }
                 RequestState::RequestFailedRetryPending(_) => {
                     // Wait for a terminal outcome before updating dedup/backoff state.
                 }
             },
         );
-
-        None
     }
 
     /// Returns all (name, uid) pairs for creators of tasks in the model.
@@ -1710,8 +1871,10 @@ impl AgentConversationsModel {
         self.tasks.clear();
         self.conversations.clear();
         self.abort_existing_poll();
+        self.abort_rtc_task_refresh_throttle();
         self.active_data_consumers_per_window.clear();
         self.task_fetch_state.clear();
+        self.dirty_since = None;
         // Reset the initial load flag so that we can retry the initial sync with the new logged in user
         self.has_finished_initial_load = false;
     }

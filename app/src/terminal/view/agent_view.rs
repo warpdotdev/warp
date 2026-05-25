@@ -1,32 +1,32 @@
-use warp_core::{features::FeatureFlag, send_telemetry_from_ctx, ui::appearance::Appearance};
-use warpui::{keymap::Keystroke, EntityId, SingletonEntity, ViewContext};
+use warp_core::features::FeatureFlag;
+use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::appearance::Appearance;
+use warpui::keymap::Keystroke;
+use warpui::{EntityId, SingletonEntity, ViewContext};
 
-use crate::{
-    ai::{
-        agent::conversation::AIConversationId,
-        blocklist::{
-            agent_view::{
-                AgentViewEntryBlock, AgentViewEntryBlockEvent, AgentViewEntryBlockParams,
-                AgentViewEntryOrigin, AutoTriggerBehavior, DismissalStrategy, EnterAgentViewError,
-                EphemeralMessage, ENTER_OR_EXIT_CONFIRMATION_WINDOW,
-            },
-            history_model::CloudConversationData,
-            BlocklistAIHistoryModel,
-        },
-    },
-    global_resource_handles::GlobalResourceHandlesProvider,
-    persistence::ModelEvent,
-    server::telemetry::TelemetryAgentViewEntryOrigin,
-    terminal::{
-        input::message_bar::{Message, MessageItem},
-        model::rich_content::RichContentType,
-        view::{AgentViewEntryMetadata, RichContentInsertionPosition, RichContentMetadata},
-        TerminalView,
-    },
-    view_components::DismissibleToast,
-    workspace::ToastStack,
-    TelemetryEvent,
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::agent_view::{
+    AgentViewEntryBlock, AgentViewEntryBlockEvent, AgentViewEntryBlockParams, AgentViewEntryOrigin,
+    AutoTriggerBehavior, DismissalStrategy, EnterAgentViewError, EphemeralMessage,
+    ENTER_OR_EXIT_CONFIRMATION_WINDOW,
 };
+use crate::ai::blocklist::history_model::CloudConversationData;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::global_resource_handles::GlobalResourceHandlesProvider;
+use crate::persistence::ModelEvent;
+use crate::server::telemetry::TelemetryAgentViewEntryOrigin;
+use crate::terminal::input::message_bar::{Message, MessageItem};
+use crate::terminal::model::rich_content::RichContentType;
+use crate::terminal::view::load_ai_conversation::{
+    RestoreConversationEntryBehavior, RestoredAIConversation,
+};
+use crate::terminal::view::{
+    AgentViewEntryMetadata, RichContentInsertionPosition, RichContentMetadata,
+};
+use crate::terminal::TerminalView;
+use crate::view_components::DismissibleToast;
+use crate::workspace::ToastStack;
+use crate::TelemetryEvent;
 
 pub const ENTER_AGAIN_TO_SEND_MESSAGE_ID: &str = "enter_again_to_send";
 
@@ -85,6 +85,41 @@ impl TerminalView {
         self.redetermine_global_focus(ctx);
     }
 
+    // Enters the agent view for a restored CLI agent transcript, setting the title using the
+    // restored CLI conversation metadata if we have it.
+    pub(crate) fn enter_agent_view_for_restored_cli_agent(
+        &mut self,
+        fallback_title: String,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<AIConversationId> {
+        let origin = AgentViewEntryOrigin::ThirdPartyCloudAgent;
+
+        match self.try_enter_agent_view(None, origin, None, ctx) {
+            Ok(conversation_id) => {
+                let title = fallback_title.trim();
+                if !title.is_empty() {
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                        if let Some(conversation) = history.conversation_mut(&conversation_id) {
+                            conversation.set_fallback_display_title(title.to_owned());
+                        }
+                    });
+                }
+                self.redetermine_global_focus(ctx);
+                Some(conversation_id)
+            }
+            Err(e) => {
+                log::error!(
+                    "Failed to enter agent view for restored CLI agent from origin {:?}: {:?}",
+                    origin,
+                    e
+                );
+                self.show_error_toast(e.to_string(), ctx);
+                self.redetermine_global_focus(ctx);
+                None
+            }
+        }
+    }
+
     pub fn enter_agent_view_for_conversation(
         &mut self,
         initial_prompt: Option<String>,
@@ -92,14 +127,18 @@ impl TerminalView {
         conversation_id: AIConversationId,
         ctx: &mut ViewContext<Self>,
     ) {
-        let history_model = BlocklistAIHistoryModel::handle(ctx).as_ref(ctx);
+        let history_model = BlocklistAIHistoryModel::handle(ctx);
+        let (in_memory_conversation, is_live) = {
+            let history_model_ref = history_model.as_ref(ctx);
+            let in_memory_conversation = history_model_ref.conversation(&conversation_id).cloned();
+            let is_live = in_memory_conversation.is_some()
+                && history_model_ref
+                    .all_live_conversations_for_terminal_view(self.view_id)
+                    .any(|conversation| conversation.id() == conversation_id);
+            (in_memory_conversation, is_live)
+        };
 
-        let is_conversation_in_memory = history_model.conversation(&conversation_id).is_some();
-        let is_live = history_model
-            .all_live_conversations_for_terminal_view(self.view_id)
-            .any(|conversation| conversation.id() == conversation_id);
-
-        if is_conversation_in_memory && is_live {
+        if is_live {
             if let Err(e) = self.try_enter_agent_view(
                 initial_prompt.clone(),
                 origin,
@@ -114,9 +153,32 @@ impl TerminalView {
                 );
                 self.show_error_toast(e.to_string(), ctx);
             }
+        } else if let Some(conversation) = in_memory_conversation {
+            self.restore_conversation_after_view_creation(
+                RestoredAIConversation::new(conversation),
+                false,
+                RestoreConversationEntryBehavior::PreserveAgentViewState,
+                ctx,
+            );
+            if let Err(e) = self.try_enter_agent_view(
+                initial_prompt.clone(),
+                origin,
+                Some(conversation_id),
+                ctx,
+            ) {
+                log::error!(
+                    "Failed to enter agent view for restored in-memory conversation ({:?}) from origin {:?}: {:?}",
+                    conversation_id,
+                    origin,
+                    e
+                );
+                self.show_error_toast(e.to_string(), ctx);
+            }
         } else {
             let conversation_id_copy = conversation_id;
-            let future = history_model.load_conversation_data(conversation_id_copy, ctx);
+            let future = history_model
+                .as_ref(ctx)
+                .load_conversation_data(conversation_id_copy, ctx);
             ctx.spawn(future, move |me, conversation, ctx| {
                 let Some(conversation) = conversation else {
                     me.show_error_toast(
@@ -153,6 +215,7 @@ impl TerminalView {
                 me.restore_conversation_and_directory_context(
                     conversation,
                     false,
+                    RestoreConversationEntryBehavior::PreserveAgentViewState,
                     on_restored,
                     ctx,
                 );
@@ -318,6 +381,19 @@ impl TerminalView {
                     *conversation_id,
                     ctx,
                 ),
+            AgentViewEntryBlockEvent::OpenConversationContextMenu {
+                conversation_id,
+                agent_view_entry_block_id,
+                position,
+            } => me.open_agent_view_entry_context_menu(
+                *conversation_id,
+                *agent_view_entry_block_id,
+                *position,
+                ctx,
+            ),
+            AgentViewEntryBlockEvent::ForkConversation { conversation_id } => {
+                me.fork_ai_conversation(*conversation_id, None, ctx);
+            }
         });
         self.insert_rich_content(
             Some(RichContentType::EnterAgentView),

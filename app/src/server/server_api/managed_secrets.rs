@@ -3,11 +3,27 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use cynic::{MutationBuilder, QueryBuilder};
+use warp_graphql::managed_secrets::{ManagedSecret, ManagedSecretType};
+use warp_graphql::mutations::create_managed_secret::{
+    CreateManagedSecret, CreateManagedSecretInput, CreateManagedSecretResult,
+    CreateManagedSecretVariables,
+};
+use warp_graphql::mutations::delete_managed_secret::{
+    DeleteManagedSecret, DeleteManagedSecretInput, DeleteManagedSecretResult,
+    DeleteManagedSecretVariables,
+};
 use warp_graphql::mutations::issue_task_identity_token::{
     IssueTaskIdentityToken, IssueTaskIdentityTokenInput, IssueTaskIdentityTokenResult,
     IssueTaskIdentityTokenVariables,
 };
-use warp_graphql::object_permissions::OwnerType;
+use warp_graphql::mutations::update_managed_secret::{
+    UpdateManagedSecret, UpdateManagedSecretInput, UpdateManagedSecretResult,
+    UpdateManagedSecretVariables,
+};
+use warp_graphql::object_permissions::{Owner, OwnerType};
+use warp_graphql::queries::list_harness_auth_secrets::{
+    ListHarnessAuthSecrets, ListHarnessAuthSecretsInput, ListHarnessAuthSecretsVariables,
+};
 use warp_graphql::queries::list_managed_secrets::{
     ListManagedSecrets, ListManagedSecretsVariables, ManagedSecretsInput, ManagedSecretsResult,
 };
@@ -17,30 +33,11 @@ use warp_graphql::queries::managed_secret_config::{
 use warp_graphql::queries::task_secrets::{
     ManagedSecretValue, TaskSecrets, TaskSecretsInput, TaskSecretsResult, TaskSecretsVariables,
 };
-use warp_graphql::{
-    managed_secrets::{ManagedSecret, ManagedSecretType},
-    mutations::{
-        create_managed_secret::{
-            CreateManagedSecret, CreateManagedSecretInput, CreateManagedSecretResult,
-            CreateManagedSecretVariables,
-        },
-        delete_managed_secret::{
-            DeleteManagedSecret, DeleteManagedSecretInput, DeleteManagedSecretResult,
-            DeleteManagedSecretVariables,
-        },
-        update_managed_secret::{
-            UpdateManagedSecret, UpdateManagedSecretInput, UpdateManagedSecretResult,
-            UpdateManagedSecretVariables,
-        },
-    },
-    object_permissions::Owner,
-};
+pub use warp_managed_secrets::client::{ManagedSecretConfigs, ManagedSecretsClient};
 use warp_managed_secrets::client::{SecretOwner, TaskIdentityToken};
 
 use super::ServerApi;
 use crate::server::graphql::{get_request_context, get_user_facing_error_message};
-
-pub use warp_managed_secrets::client::{ManagedSecretConfigs, ManagedSecretsClient};
 
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
@@ -198,6 +195,37 @@ impl ManagedSecretsClient for ServerApi {
             }
             UpdateManagedSecretResult::Unknown => {
                 Err(anyhow!("Unknown error while updating managed secret"))
+            }
+        }
+    }
+
+    async fn list_harness_auth_secrets(
+        &self,
+        harness: warp_graphql::ai::AgentHarness,
+    ) -> Result<Vec<ManagedSecret>> {
+        let Some(harness_input) = Option::<
+            warp_graphql::queries::list_harness_auth_secrets::AgentHarnessInput,
+        >::from(harness) else {
+            return Ok(vec![]);
+        };
+        let variables = ListHarnessAuthSecretsVariables {
+            input: ListHarnessAuthSecretsInput {
+                harness: harness_input,
+            },
+            request_context: get_request_context(),
+        };
+        let operation = ListHarnessAuthSecrets::build(variables);
+        let response = self.send_graphql_request(operation, None).await?;
+
+        match response.harness_auth_secrets {
+            warp_graphql::queries::list_harness_auth_secrets::HarnessAuthSecretsResult::HarnessAuthSecretsOutput(output) => {
+                Ok(output.managed_secrets)
+            }
+            warp_graphql::queries::list_harness_auth_secrets::HarnessAuthSecretsResult::UserFacingError(error) => {
+                Err(anyhow!(get_user_facing_error_message(error)))
+            }
+            warp_graphql::queries::list_harness_auth_secrets::HarnessAuthSecretsResult::Unknown => {
+                Err(anyhow!("Unknown error while listing harness auth secrets"))
             }
         }
     }

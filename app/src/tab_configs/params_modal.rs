@@ -1,38 +1,36 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
 use warp_editor::editor::NavigationKey;
+use warpui::elements::{
+    Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, Padding, ParentElement, Radius, SavePosition, ScrollTarget,
+    ScrollToPositionMode, ScrollbarWidth, Shrinkable, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::macros::*;
+use warpui::keymap::{FixedBinding, Keystroke};
+use warpui::platform::Cursor;
+use warpui::ui_components::components::UiComponent;
 use warpui::{
-    elements::{
-        Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
-        CornerRadius, CrossAxisAlignment, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-        MouseStateHandle, Padding, ParentElement, Radius, SavePosition, ScrollTarget,
-        ScrollToPositionMode, ScrollbarWidth, Shrinkable, Text,
-    },
-    fonts::{Properties, Weight},
-    keymap::{macros::*, FixedBinding, Keystroke},
-    platform::Cursor,
-    ui_components::components::UiComponent,
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
-use crate::{
-    appearance::Appearance,
-    editor::{
-        EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
-        TextOptions,
-    },
-    modal::ModalAction,
-    tab_configs::{
-        branch_picker::BranchPicker,
-        repo_picker::{RepoPicker, RepoPickerEvent},
-        PickerStyle, TabConfig, TabConfigParam, TabConfigParamType,
-    },
-    view_components::action_button::{
-        ActionButton, DisabledTheme, KeystrokeSource, NakedTheme, PrimaryTheme,
-    },
+use crate::appearance::Appearance;
+use crate::editor::{
+    EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
+    TextOptions,
+};
+use crate::modal::ModalAction;
+use crate::tab_configs::branch_picker::BranchPicker;
+use crate::tab_configs::repo_picker::{RepoPicker, RepoPickerEvent};
+use crate::tab_configs::{PickerStyle, TabConfig, TabConfigParam, TabConfigParamType};
+use crate::view_components::action_button::{
+    ActionButton, DisabledTheme, KeystrokeSource, NakedTheme, PrimaryTheme,
 };
 
 pub fn init(app: &mut AppContext) {

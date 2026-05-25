@@ -3,23 +3,19 @@ pub mod phenomenon;
 
 use std::path::PathBuf;
 
-use crate::paths::themes_dir;
-
-use super::color::{
-    blend::Blend,
-    coloru_with_opacity,
-    contrast::{pick_best_foreground_color, MinimumAllowedContrast},
-    hex_color, mid_coloru, ContrastingColor, Opacity, OPAQUE,
-};
-
-// Import relative_luminance from contrast module for brightness calculation
-use crate::ui::color::contrast::relative_luminance;
-
-use self::color::CustomDetails;
-
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
-use warpui::{assets::asset_cache::AssetSource, color::ColorU, geometry::vector::vec2f};
+use warpui::assets::asset_cache::AssetSource;
+use warpui::color::ColorU;
+use warpui::geometry::vector::vec2f;
+
+use self::color::CustomDetails;
+use super::color::blend::Blend;
+use super::color::contrast::{pick_best_foreground_color, MinimumAllowedContrast};
+use super::color::{coloru_with_opacity, hex_color, mid_coloru, ContrastingColor, Opacity, OPAQUE};
+use crate::paths::themes_dir;
+// Import relative_luminance from contrast module for brightness calculation
+use crate::ui::color::contrast::relative_luminance;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Image {

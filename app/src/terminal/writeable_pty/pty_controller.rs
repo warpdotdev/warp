@@ -1,4 +1,6 @@
-use std::{borrow::Cow, collections::VecDeque, sync::Arc};
+use std::borrow::Cow;
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 use async_channel::{Receiver, Sender};
 use parking_lot::FairMutex;
@@ -6,28 +8,24 @@ use thiserror::Error;
 use warpui::r#async::block_on;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
+use super::Message;
 use crate::ai::agent::AIAgentPtyWriteMode;
 use crate::terminal::input::CommandExecutionSource;
+use crate::terminal::line_editor_status::{LineEditorStatus, LineEditorStatusEvent};
+use crate::terminal::model::ansi::Handler;
 use crate::terminal::model::completions::ShellCompletion;
+use crate::terminal::model::escape_sequences;
 use crate::terminal::model::session::{
-    ExecutorCommandEvent, InBandCommandCancelledEvent, Sessions,
+    ExecutorCommandEvent, InBandCommandCancelledEvent, SessionInfo, Sessions,
 };
 use crate::terminal::model::tmux::commands::TmuxCommand;
-use crate::terminal::model_events::AnsiHandlerEvent;
+use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher};
+use crate::terminal::shell::ShellType;
 use crate::terminal::view::LINEFEED_REGEX;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::writeable_pty::bootstrap_file::{permanent_bootstrap_file, TempBootstrapFile};
-use crate::terminal::{
-    bootstrap,
-    line_editor_status::{LineEditorStatus, LineEditorStatusEvent},
-    model::{ansi::Handler, escape_sequences, session::SessionInfo},
-    model_events::{ModelEvent, ModelEventDispatcher},
-    shell::ShellType,
-    SizeUpdate, TerminalModel,
-};
+use crate::terminal::{bootstrap, SizeUpdate, TerminalModel};
 use crate::SessionSettings;
-
-use super::Message;
 
 /// Byte sequence to emulate the user pressing ENTER, used to execute a command in the shell.
 const COMMAND_ENTER: &[u8] = &[escape_sequences::C0::CR, escape_sequences::C0::LF];
@@ -467,6 +465,19 @@ impl<T: EventLoopSender> PtyController<T> {
                 self.write_bytes(bootstrap, ctx);
                 self.write_bytes(escape_sequences::BRACKETED_PASTE_END, ctx);
                 self.write_terminating_bootstrap_bytes(ctx);
+            }
+        } else if bootstrap::is_container_subshell(pending_session_info) {
+            // Write in 4KB chunks with 50ms delays to avoid overwhelming
+            // PTY buffers in container exec sessions (podman/docker exec -it),
+            // where the double-PTY proxy drops data for large writes.
+            const CHUNK_SIZE: usize = 4096;
+            let bytes: Vec<u8> = bootstrap.into_owned();
+            let chunks: Vec<Vec<u8>> = bytes.chunks(CHUNK_SIZE).map(|c| c.to_vec()).collect();
+            for (i, chunk) in chunks.into_iter().enumerate() {
+                ctx.spawn(
+                    warpui::r#async::Timer::after(std::time::Duration::from_millis(i as u64 * 50)),
+                    move |me, _, ctx| me.write_bytes(chunk, ctx),
+                );
             }
         } else {
             self.write_bytes(bootstrap, ctx);

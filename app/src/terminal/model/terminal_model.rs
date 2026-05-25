@@ -1,36 +1,41 @@
-use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::blocklist::SerializedBlockListItem;
-use crate::terminal::available_shells::AvailableShell;
-use crate::terminal::block_list_element::GridType;
-use crate::terminal::event::{
-    BootstrappedEvent, Event, ExecutedExecutorCommandEvent, InitSshEvent, InitSubshellEvent,
-    SourcedRcFileInSubshellEvent, SshLoginStatus, TerminalMode,
-};
-use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::model::ansi;
-use crate::terminal::model::bootstrap::BootstrapStage;
-use crate::terminal::model::completions::{
-    ShellCompletion, ShellCompletionUpdate, ShellData as CompletionsShellData,
-};
-use crate::terminal::model::escape_sequences::ModeProvider;
-use crate::terminal::model::index::VisibleRow;
-use crate::terminal::model::iterm_image::{ITermImage, ITermImageMetadata};
-use crate::terminal::shared_session::{ai_agent::encode_agent_response_event, SharedSessionStatus};
-use crate::terminal::ssh::util::{InteractiveSshCommand, SshLoginState};
-use crate::terminal::{block_filter::BlockFilterQuery, model::ansi::Handler};
-use crate::terminal::{color, ssh, BlockPadding, ShellHost, SizeUpdate, SizeUpdateReason};
-use crate::terminal::{ShellLaunchData, ShellLaunchState};
-use crate::util::AsciiDebug;
+use std::cmp::{max, min};
+use std::collections::HashMap;
+use std::num::ParseIntError;
+use std::ops::{Range, RangeInclusive};
+use std::path::PathBuf;
+use std::str::FromStr;
+use std::sync::Arc;
 
-pub use crate::terminal::history::HistoryEntry;
+use async_channel::Sender;
+use base64::Engine;
+use hex::FromHexError;
+use instant::Instant;
+use itertools::{Either, Itertools};
+use serde::Serialize;
+use session_sharing_protocol::common::{
+    AICommandMetadata, OrderedTerminalEventType, ParticipantId,
+};
+use session_sharing_protocol::sharer::SessionSourceType;
+use warp_core::features::FeatureFlag;
+use warp_core::report_error;
+use warp_core::semantic_selection::SemanticSelection;
+pub use warp_terminal::model::BlockIndex;
+use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use warpui::assets::asset_cache::Asset;
+use warpui::image_cache::ImageType;
+use warpui::r#async::executor::Background;
+#[cfg(not(target_family = "wasm"))]
+use warpui::util::save_as_file;
+use warpui::AppContext;
 
+use super::super::{AltScreen, BlockList};
 use super::ansi::{
-    FinishUpdateValue, InputBufferValue, Mode, PendingHook, TmuxInstallFailedInfo,
-    WarpificationUnavailableReason,
+    BootstrappedValue, FinishUpdateValue, InputBufferValue, Mode, PendingHook,
+    TmuxInstallFailedInfo, WarpificationUnavailableReason,
 };
 use super::block::{
-    AgentInteractionMetadata, Block, BlockId, BlockMetadata, BlockSize, BlocklistEnvVarMetadata,
-    SerializedBlock,
+    AgentInteractionMetadata, Block, BlockId, BlockMetadata, BlockSize, BlockState,
+    BlocklistEnvVarMetadata, SerializedBlock,
 };
 use super::blockgrid::BlockGrid;
 use super::grid::grid_handler::{
@@ -46,50 +51,43 @@ use super::secrets::{RespectObfuscatedSecrets, SecretAndHandle};
 use super::selection::ScrollDelta;
 use super::session::{BootstrapSessionType, InBandCommandOutputReceiver, SessionId};
 use super::tmux::commands::TmuxCommand;
-use super::{
-    super::{AltScreen, BlockList},
-    ansi::BootstrappedValue,
-};
 use super::{tmux, Secret, SecretHandle};
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::SerializedBlockListItem;
+use crate::terminal::available_shells::AvailableShell;
+use crate::terminal::block_filter::BlockFilterQuery;
+use crate::terminal::block_list_element::GridType;
+use crate::terminal::event::{
+    BootstrappedEvent, Event, ExecutedExecutorCommandEvent, InitSshEvent, InitSubshellEvent,
+    SourcedRcFileInSubshellEvent, SshLoginStatus, TerminalMode,
+};
+use crate::terminal::event_listener::ChannelEventListener;
+pub use crate::terminal::history::HistoryEntry;
+use crate::terminal::model::ansi;
 use crate::terminal::model::ansi::{
-    ClearValue, CommandFinishedValue, ExitShellValue, InitShellValue, InitSshValue,
+    ClearValue, CommandFinishedValue, ExitShellValue, Handler, InitShellValue, InitSshValue,
     InitSubshellValue, PreInteractiveSSHSessionValue, PrecmdValue, PreexecValue, SSHValue,
     SourcedRcFileForWarpValue,
 };
-use crate::terminal::model::grid::IndexRegion;
-use crate::terminal::model::session::SessionInfo;
-use crate::terminal::shell::{ShellName, ShellType};
-
-use crate::terminal::model::secrets::ObfuscateSecrets;
-use session_sharing_protocol::sharer::SessionSourceType;
-use warp_core::report_error;
-#[cfg(not(target_family = "wasm"))]
-use warpui::util::save_as_file;
-
-use async_channel::Sender;
-use base64::Engine;
-use hex::FromHexError;
-use instant::Instant;
-use itertools::{Either, Itertools};
-use serde::Serialize;
-use session_sharing_protocol::common::{
-    AICommandMetadata, OrderedTerminalEventType, ParticipantId,
+use crate::terminal::model::bootstrap::BootstrapStage;
+use crate::terminal::model::completions::{
+    ShellCompletion, ShellCompletionUpdate, ShellData as CompletionsShellData,
 };
-use std::cmp::{max, min};
-use std::collections::HashMap;
-use std::num::ParseIntError;
-use std::ops::{Range, RangeInclusive};
-use std::path::PathBuf;
-use std::str::FromStr;
-use std::sync::Arc;
-use warp_core::features::FeatureFlag;
-use warp_core::semantic_selection::SemanticSelection;
-pub use warp_terminal::model::BlockIndex;
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
-use warpui::assets::asset_cache::Asset;
-use warpui::image_cache::ImageType;
-use warpui::r#async::executor::Background;
-use warpui::AppContext;
+use crate::terminal::model::escape_sequences::ModeProvider;
+use crate::terminal::model::grid::IndexRegion;
+use crate::terminal::model::index::VisibleRow;
+use crate::terminal::model::iterm_image::{ITermImage, ITermImageMetadata};
+use crate::terminal::model::secrets::ObfuscateSecrets;
+use crate::terminal::model::session::SessionInfo;
+use crate::terminal::shared_session::ai_agent::encode_agent_response_event;
+use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
+use crate::terminal::shell::{ShellName, ShellType};
+use crate::terminal::ssh::util::{InteractiveSshCommand, SshLoginState};
+use crate::terminal::{
+    color, ssh, BlockPadding, ShellHost, ShellLaunchData, ShellLaunchState, SizeUpdate,
+    SizeUpdateReason,
+};
+use crate::util::AsciiDebug;
 
 /// Max size of the window title stack.
 const TITLE_STACK_MAX_DEPTH: usize = 4096;
@@ -565,9 +563,9 @@ pub struct TerminalModel {
 
     shared_session_status: SharedSessionStatus,
 
-    /// The source type of the shared session (if this is a shared session).
-    /// If it is not a shared session, this will be `None`.
-    shared_session_source_type: Option<SessionSourceType>,
+    /// `SessionSourceType` paired with `source_task_id`, or `None` when
+    /// this is not a shared session.
+    shared_session_source: Option<SharedSessionSource>,
 
     /// Whether this terminal model was created as a cloud mode dummy session
     /// (no local shell process, deferred shared-session viewer backing).
@@ -1155,7 +1153,7 @@ impl TerminalModel {
             shell_launch_state: shell_state,
             obfuscate_secrets,
             shared_session_status,
-            shared_session_source_type: None,
+            shared_session_source: None,
             is_dummy_cloud_mode_session,
             conversation_transcript_viewer_status: None,
             ordered_terminal_events_for_shared_session_tx: None,
@@ -1222,22 +1220,29 @@ impl TerminalModel {
         is_inverted: bool,
         obfuscate_secrets: ObfuscateSecrets,
     ) -> Self {
-        let mut me = Self::new_for_shared_session_viewer_internal(
+        Self::new_internal(
+            None,
             sizes,
             colors,
             event_proxy,
             background_executor,
+            false,
+            false,
             show_memory_stats,
             honor_ps1,
             is_inverted,
             obfuscate_secrets,
+            false,
+            None,
+            // TODO: use the same shell type as the sharer
+            ShellLaunchState::ShellSpawned {
+                available_shell: None,
+                display_name: ShellName::blank(),
+                shell_type: ShellType::Zsh,
+            },
+            SharedSessionStatus::ViewPending,
             true,
-        );
-        if FeatureFlag::CloudModeSetupV2.is_enabled() {
-            me.block_list_mut()
-                .set_is_executing_oz_environment_startup_commands(true);
-        }
-        me
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1250,7 +1255,6 @@ impl TerminalModel {
         honor_ps1: bool,
         is_inverted: bool,
         obfuscate_secrets: ObfuscateSecrets,
-        is_dummy_cloud_mode_session: bool,
     ) -> Self {
         Self::new_internal(
             None,
@@ -1273,7 +1277,7 @@ impl TerminalModel {
                 shell_type: ShellType::Zsh,
             },
             SharedSessionStatus::ViewPending,
-            is_dummy_cloud_mode_session,
+            false,
         )
     }
 
@@ -1298,7 +1302,6 @@ impl TerminalModel {
             honor_ps1,
             is_inverted,
             obfuscate_secrets,
-            false,
         )
     }
 
@@ -1418,43 +1421,52 @@ impl TerminalModel {
         self.is_receiving_agent_conversation_replay = value;
     }
 
-    pub fn set_shared_session_source_type(
-        &mut self,
-        set_shared_session_source_type: SessionSourceType,
-    ) {
-        self.shared_session_source_type = Some(set_shared_session_source_type);
+    pub fn set_shared_session_source(&mut self, source: SharedSessionSource) {
+        self.shared_session_source = Some(source);
+    }
+
+    pub fn shared_session_source(&self) -> Option<&SharedSessionSource> {
+        self.shared_session_source.as_ref()
     }
 
     pub fn shared_session_source_type(&self) -> Option<SessionSourceType> {
-        self.shared_session_source_type.clone()
+        self.shared_session_source
+            .as_ref()
+            .map(|s| s.source_type.clone())
+    }
+
+    pub fn set_shared_session_source_task_id(&mut self, task_id: Option<String>) {
+        if let Some(source) = self.shared_session_source.as_mut() {
+            source.source_task_id = task_id;
+        }
     }
 
     pub fn is_dummy_cloud_mode_session(&self) -> bool {
         self.is_dummy_cloud_mode_session
     }
 
+    #[cfg(test)]
+    pub fn set_is_dummy_cloud_mode_session(&mut self, value: bool) {
+        self.is_dummy_cloud_mode_session = value;
+    }
+
     pub fn is_shared_ambient_agent_session(&self) -> bool {
         matches!(
-            self.shared_session_source_type,
+            self.shared_session_source.as_ref().map(|s| &s.source_type),
             Some(SessionSourceType::AmbientAgent { .. })
         )
     }
 
     pub fn ambient_agent_task_id(&self) -> Option<AmbientAgentTaskId> {
-        // Check if we're viewing an ambient agent conversation transcript
         if let Some(ConversationTranscriptViewerStatus::ViewingAmbientConversation(task_id)) =
             &self.conversation_transcript_viewer_status
         {
             return Some(*task_id);
         }
-
-        // Otherwise, check if we're in a shared ambient agent session
-        if let Some(SessionSourceType::AmbientAgent { task_id }) = &self.shared_session_source_type
-        {
-            task_id.as_deref().and_then(|s| s.parse().ok())
-        } else {
-            None
-        }
+        self.shared_session_source
+            .as_ref()
+            .and_then(|s| s.orchestrator_task_id())
+            .and_then(|s| s.parse().ok())
     }
 
     /// Loads the provided scrollback into the model.
@@ -2143,7 +2155,10 @@ impl TerminalModel {
     fn restored_block_commands(&self) -> Vec<HistoryEntry> {
         let mut commands = Vec::new();
         for block in self.block_list.blocks() {
-            if block.is_restored() && !block.is_background() {
+            if block.is_restored()
+                && !block.is_background()
+                && block.state() != BlockState::DoneWithNoExecution
+            {
                 let entry = HistoryEntry::for_restored_block(block.command_to_string(), block);
                 commands.push(entry);
             }
@@ -2810,6 +2825,25 @@ impl ansi::Handler for TerminalModel {
                 CommandType::Bootstrap
             },
         });
+    }
+
+    fn set_current_working_directory(&mut self, path: String) {
+        // OSC 7 is honor-system: the parser only accepts payloads whose host
+        // matches our local hostname, but a legacy SSH session streams the
+        // remote shell's bytes through this same Performer, so a remote box
+        // with a coincident hostname could still slip through. Drop the
+        // update entirely while we know we're inside an SSH-launching block.
+        if self.is_ssh_block() || self.is_warpified_ssh() {
+            log::debug!("Ignoring OSC 7 CWD update inside SSH session: {path:?}");
+            return;
+        }
+        // Always route OSC 7 to the block list, not through `delegate!` —
+        // the alt-screen handler has no `set_current_working_directory`
+        // override, so a TUI program running on the alt screen (vim, htop,
+        // etc.) would silently swallow updates emitted by tools it
+        // launches. The shell's CWD belongs on the block list regardless
+        // of what's currently rendered on screen.
+        self.block_list.set_current_working_directory(path);
     }
 
     fn precmd(&mut self, data: PrecmdValue) {

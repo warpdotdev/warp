@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
+use warp_editor::content::buffer::Buffer;
 use warp_util::file::FileId;
-use warpui::{ModelContext, SingletonEntity};
+use warpui::{ModelContext, ModelHandle, SingletonEntity};
 
 use super::server_model::{ConnectionId, ServerModel};
 use crate::code::global_buffer_model::GlobalBufferModel;
@@ -16,6 +17,15 @@ pub enum PendingBufferRequestKind {
     ResolveConflict,
 }
 
+/// An in-flight buffer request awaiting a `GlobalBufferModelEvent` to
+/// correlate it back to the originating connection.
+#[derive(Clone, Debug)]
+pub struct PendingBufferRequest {
+    pub request_id: RequestId,
+    pub connection_id: ConnectionId,
+    pub kind: PendingBufferRequestKind,
+}
+
 /// Bridges the ServerModel's per-connection state with the GlobalBufferModel's
 /// tracked buffers. Manages:
 /// - Wire path → FileId mappings for open server-local buffers
@@ -24,6 +34,11 @@ pub enum PendingBufferRequestKind {
 pub struct ServerBufferTracker {
     /// Maps wire path strings to `FileId` for open server-local buffers.
     open_buffers: HashMap<String, FileId>,
+    /// Strong references to buffer models, keyed by `FileId`.
+    /// Prevents the `Buffer` model from being deallocated while the
+    /// server is tracking it (the `GlobalBufferModel` only holds a
+    /// `WeakModelHandle`).
+    buffer_handles: HashMap<FileId, ModelHandle<Buffer>>,
     /// Tracks which connections have each buffer open.
     /// File-watcher pushes go to all connections in the set.
     buffer_connections: HashMap<FileId, HashSet<ConnectionId>>,
@@ -31,13 +46,14 @@ pub struct ServerBufferTracker {
     /// `GlobalBufferModelEvent`s can be correlated back to the originating
     /// request and connection. Uses a `Vec` to support concurrent requests
     /// for the same buffer from different connections.
-    pending_requests: HashMap<FileId, Vec<(RequestId, ConnectionId, PendingBufferRequestKind)>>,
+    pending_requests: HashMap<FileId, Vec<PendingBufferRequest>>,
 }
 
 impl ServerBufferTracker {
     pub fn new() -> Self {
         Self {
             open_buffers: HashMap::new(),
+            buffer_handles: HashMap::new(),
             buffer_connections: HashMap::new(),
             pending_requests: HashMap::new(),
         }
@@ -45,9 +61,16 @@ impl ServerBufferTracker {
 
     // ── Path ↔ FileId mapping ─────────────────────────────────────
 
-    /// Register a wire path → FileId mapping.
-    pub fn track_open_buffer(&mut self, path: String, file_id: FileId) {
+    /// Register a wire path → FileId mapping and retain a strong handle
+    /// to the buffer model so it stays alive while tracked.
+    pub fn track_open_buffer(
+        &mut self,
+        path: String,
+        file_id: FileId,
+        buffer: ModelHandle<Buffer>,
+    ) {
         self.open_buffers.insert(path, file_id);
+        self.buffer_handles.insert(file_id, buffer);
     }
 
     /// Look up a FileId by its wire path.
@@ -104,6 +127,7 @@ impl ServerBufferTracker {
 
         for &file_id in &orphaned {
             self.buffer_connections.remove(&file_id);
+            self.buffer_handles.remove(&file_id);
             self.open_buffers.retain(|_, id| *id != file_id);
             GlobalBufferModel::handle(ctx).update(ctx, |gbm, ctx| gbm.remove(file_id, ctx));
         }
@@ -132,6 +156,7 @@ impl ServerBufferTracker {
 
         // No connections remain — deallocate.
         self.buffer_connections.remove(&file_id);
+        self.buffer_handles.remove(&file_id);
         self.open_buffers.remove(path);
         GlobalBufferModel::handle(ctx).update(ctx, |gbm, ctx| gbm.remove(file_id, ctx));
     }
@@ -149,7 +174,28 @@ impl ServerBufferTracker {
         self.pending_requests
             .entry(file_id)
             .or_default()
-            .push((request_id, conn_id, kind));
+            .push(PendingBufferRequest {
+                request_id,
+                connection_id: conn_id,
+                kind,
+            });
+    }
+
+    /// Returns the connection IDs that have pending `OpenBuffer` requests
+    /// for the given FileId, without consuming them. Used by the
+    /// `ServerLocalBufferUpdated` handler to exclude connections that will
+    /// receive content via `OpenBufferResponse` instead of the broadcast push.
+    pub fn pending_connections_for_open_buffer(&self, file_id: &FileId) -> HashSet<ConnectionId> {
+        self.pending_requests
+            .get(file_id)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter(|req| matches!(req.kind, PendingBufferRequestKind::OpenBuffer))
+                    .map(|req| req.connection_id)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Retrieve and remove pending requests that match `kind` for the given
@@ -158,14 +204,14 @@ impl ServerBufferTracker {
         &mut self,
         file_id: &FileId,
         kind: PendingBufferRequestKind,
-    ) -> Vec<(RequestId, ConnectionId)> {
+    ) -> Vec<PendingBufferRequest> {
         let Some(entries) = self.pending_requests.get_mut(file_id) else {
             return Vec::new();
         };
         let mut matched = Vec::new();
-        entries.retain(|(req, conn, k)| {
-            if std::mem::discriminant(k) == std::mem::discriminant(&kind) {
-                matched.push((req.clone(), conn.to_owned()));
+        entries.retain(|req| {
+            if std::mem::discriminant(&req.kind) == std::mem::discriminant(&kind) {
+                matched.push(req.clone());
                 false // remove from the vec
             } else {
                 true // keep

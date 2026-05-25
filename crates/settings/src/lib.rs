@@ -4,20 +4,19 @@ pub mod manager;
 pub mod schema;
 
 // Re-export commonly used types and traits
-pub use macros::SettingSection;
-pub use manager::SettingsManager;
+use std::fmt::Debug;
+use std::ops::Deref;
 
 // Re-export crates used by macro expansions in downstream crates.
 #[doc(hidden)]
 pub use inventory as _inventory;
+pub use macros::SettingSection;
+pub use manager::SettingsManager;
 #[doc(hidden)]
 pub use schemars as _schemars;
 #[doc(hidden)]
 pub use settings_value as _settings_value;
 pub use settings_value::SettingsValue;
-
-use std::fmt::Debug;
-use std::ops::Deref;
 
 /// Extracts the storage key (last segment after the final `.`) from a toml_path.
 ///
@@ -58,7 +57,8 @@ pub const fn toml_path_hierarchy(path: &str) -> Option<&str> {
 }
 
 use anyhow::{Context, Result};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use warp_features::FeatureFlag;
 use warpui::{AppContext, Entity, ModelContext};
 use warpui_extras::user_preferences::UserPreferences;

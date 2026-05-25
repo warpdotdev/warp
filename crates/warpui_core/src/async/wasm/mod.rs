@@ -1,18 +1,15 @@
 pub mod executor;
 
-use std::{
-    pin::Pin,
-    task::{Context, Poll},
-};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use futures::Future;
 pub use futures_lite::future::block_on;
 use futures_lite::FutureExt;
-use gloo::timers::future::TimeoutFuture;
-use instant::Instant;
-
 // There is no such thing as a background thread in wasm, so all futures are local.
 pub use futures_util::future::LocalBoxFuture as BoxFuture;
+use gloo::timers::future::TimeoutFuture;
+use instant::Instant;
 
 // Define a trait that is implemented by all types to allow us to not
 // place any restrictions on SpawnableOutput.

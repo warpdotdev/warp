@@ -7,6 +7,8 @@ syntax = "proto3";
 
 package remote_server;
 
+import "diff_state.proto";
+
 // ── Top-level envelopes ───────────────────────────────────────────
 
 // Top-level envelope for all client → server messages.
@@ -29,6 +31,15 @@ message ClientMessage {
     CloseBuffer close_buffer = 15;
     SaveBuffer save_buffer = 16;
     ResolveConflict resolve_conflict = 17;
+    GetDiffState get_diff_state = 18;
+    UnsubscribeDiffState unsubscribe_diff_state = 19;
+    DiscardFilesRequest discard_files = 20;
+    IndexCodebase index_codebase = 21;
+    DropCodebaseIndex drop_codebase_index = 22;
+    GetFragmentMetadataFromHash get_fragment_metadata_from_hash = 23;
+    GetBranches get_branches = 24;
+    ResyncCodebase resync_codebase = 25;
+    UploadHandoffSnapshot upload_handoff_snapshot = 26;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -53,6 +64,15 @@ message ServerMessage {
     BufferUpdatedPush buffer_updated = 15;
     SaveBufferResponse save_buffer_response = 16;
     ResolveConflictResponse resolve_conflict_response = 17;
+    GetDiffStateResponse get_diff_state_response = 18;
+    DiffStateSnapshot diff_state_snapshot = 19;
+    DiffStateMetadataUpdate diff_state_metadata_update = 20;
+    DiffStateFileDelta diff_state_file_delta = 21;
+    DiscardFilesResponse discard_files_response = 22;
+    BufferConflictDetected buffer_conflict_detected = 23;
+    GetFragmentMetadataFromHashResponse get_fragment_metadata_from_hash_response = 24;
+    GetBranchesResponse get_branches_response = 25;
+    UploadHandoffSnapshotResponse upload_handoff_snapshot_response = 26;
   }
 }
 
@@ -68,6 +88,8 @@ message Initialize {
   string user_email = 3;
   // Whether the user has enabled crash reporting in their privacy settings.
   bool crash_reporting_enabled = 4;
+  // Client-resolved codebase index limits for parity with local indexing.
+  optional CodebaseIndexLimits codebase_index_limits = 5;
 }
 
 // Sent by the client when its bearer credential rotates after initialization.
@@ -83,6 +105,14 @@ message Authenticate {
 // This is a notification (fire-and-forget) — the server does not send a response.
 message UpdatePreferences {
   bool crash_reporting_enabled = 1;
+  optional CodebaseIndexLimits codebase_index_limits = 2;
+}
+
+message CodebaseIndexLimits {
+  // Empty means unlimited.
+  optional uint64 max_indices_allowed = 1;
+  uint64 max_files_per_repo = 2;
+  uint64 embedding_generation_batch_size = 3;
 }
 
 // Sent by the client to cancel an in-progress request.
@@ -318,16 +348,89 @@ message FileContextProto {
 
 // ── Remote codebase indexing status ───────────────────────────────
 
+message IndexCodebase {
+  string repo_path = 1;
+  string auth_token = 2;
+}
+message ResyncCodebase {
+  string repo_path = 1;
+  string auth_token = 2;
+  CodebaseResyncMode mode = 3;
+}
+enum CodebaseResyncMode {
+  CODEBASE_RESYNC_MODE_FULL = 0;
+  CODEBASE_RESYNC_MODE_INCREMENTAL = 1;
+}
+
+message DropCodebaseIndex {
+  string repo_path = 1;
+  string auth_token = 2;
+}
+message GetFragmentMetadataFromHash {
+  string repo_path = 1;
+  string root_hash = 2;
+  repeated string content_hashes = 3;
+}
+
+message FragmentMetadata {
+  string content_hash = 1;
+  string path = 2;
+  uint32 start_line = 3;
+  uint32 end_line = 4;
+  uint64 byte_start = 5;
+  uint64 byte_end = 6;
+}
+
+message MissingFragmentMetadata {
+  string content_hash = 1;
+  FileOperationError error = 2;
+}
+enum FragmentMetadataLookupErrorCode {
+  FRAGMENT_METADATA_LOOKUP_ERROR_CODE_UNSPECIFIED = 0;
+  REMOTE_CODEBASE_INDEXING_NOT_ENABLED = 1;
+  INVALID_REPO_PATH = 2;
+  INVALID_ROOT_HASH = 3;
+  INDEX_NOT_FOUND = 4;
+  INDEX_NOT_SYNCED = 5;
+  ROOT_HASH_MISMATCH = 6;
+}
+
+message FragmentMetadataLookupError {
+  FragmentMetadataLookupErrorCode code = 1;
+  string message = 2;
+  optional string current_root_hash = 3;
+}
+message GetFragmentMetadataFromHashSuccess {
+  repeated FragmentMetadata fragments = 1;
+  repeated MissingFragmentMetadata missing_hashes = 2;
+}
+
+message GetFragmentMetadataFromHashResponse {
+  oneof result {
+    GetFragmentMetadataFromHashSuccess success = 1;
+    FragmentMetadataLookupError error = 2;
+  }
+}
+
 enum CodebaseIndexStatusState {
   CODEBASE_INDEX_STATUS_STATE_UNSPECIFIED = 0;
   CODEBASE_INDEX_STATUS_STATE_NOT_ENABLED = 1;
   CODEBASE_INDEX_STATUS_STATE_UNAVAILABLE = 2;
+  CODEBASE_INDEX_STATUS_STATE_DISABLED = 3;
+  CODEBASE_INDEX_STATUS_STATE_QUEUED = 4;
+  CODEBASE_INDEX_STATUS_STATE_INDEXING = 5;
+  CODEBASE_INDEX_STATUS_STATE_READY = 6;
+  CODEBASE_INDEX_STATUS_STATE_STALE = 7;
+  CODEBASE_INDEX_STATUS_STATE_FAILED = 8;
 }
-
 message CodebaseIndexStatus {
   string repo_path = 1;
   CodebaseIndexStatusState state = 2;
   optional uint64 last_updated_epoch_millis = 3;
+  optional uint64 progress_completed = 4;
+  optional uint64 progress_total = 5;
+  optional string failure_message = 6;
+  optional string root_hash = 7;
 }
 
 message CodebaseIndexStatusesSnapshot {
@@ -361,10 +464,22 @@ message RepoMetadataUpdatePush {
 // The server reads the file, starts watching it, and returns the content.
 message OpenBuffer {
   string path = 1;
+  // When true, the server discards any in-memory buffer state and re-reads
+  // the file from disk. Used by the client to resolve conflicts ("accept
+  // server" / discard local edits). Other connections that have the buffer
+  // open receive a BufferUpdatedPush with the fresh content.
+  bool force_reload = 2;
 }
 
 // Server → client: response to OpenBuffer with the initial file content.
 message OpenBufferResponse {
+  oneof result {
+    OpenBufferSuccess success = 1;
+    FileOperationError error = 2;
+  }
+}
+
+message OpenBufferSuccess {
   string content = 1;
   uint64 server_version = 2;
 }
@@ -397,6 +512,21 @@ message BufferUpdatedPush {
   uint64 new_server_version = 2;
   uint64 expected_client_version = 3;
   repeated TextEdit edits = 4;
+}
+
+// Client → server: request the daemon gather a handoff snapshot and upload it.
+// All paths must be absolute paths on the remote host's filesystem.
+message UploadHandoffSnapshot {
+  // Absolute paths the agent touched (file edits, working directories).
+  // Non-absolute or empty entries are rejected by the daemon.
+  repeated string paths = 1;
+}
+
+// Daemon → client: result of the handoff snapshot upload.
+message UploadHandoffSnapshotResponse {
+  optional string initial_snapshot_token = 1;
+  bool success = 2;
+  optional string error = 3;
 }
 
 // Client → server: close a buffer (stop watching).
@@ -440,3 +570,11 @@ message ResolveConflictResponse {
 }
 
 message ResolveConflictSuccess {}
+
+// Server → client push: the file changed on disk while the client had
+// unsaved edits. The server does NOT apply the disk change to its buffer;
+// the client should show a conflict resolution banner.
+message BufferConflictDetected {
+  string path = 1;
+}
+

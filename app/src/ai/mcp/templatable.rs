@@ -5,21 +5,19 @@ use handlebars::get_arguments;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_core::ui::appearance::Appearance;
-use warpui::{AppContext, SingletonEntity as _};
 
-use crate::{
-    cloud_object::{
-        model::{
-            generic_string_model::{GenericStringModel, GenericStringObjectId, StringModel},
-            json_model::{JsonModel, JsonSerializer},
-            persistence::CloudModel,
-        },
-        GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision, ServerCloudObject, UniquePer,
-    },
-    drive::items::WarpDriveItem,
-    server::{datetime_ext::DateTimeExt, ids::SyncId, sync_queue::QueueItem},
+use crate::cloud_object::model::generic_string_model::{
+    GenericStringModel, GenericStringObjectId, StringModel,
 };
+use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
+use crate::cloud_object::{
+    CloudObjectUuid, GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
+    JsonObjectType, Revision, UniquePer,
+};
+use crate::drive::items::WarpDriveItem;
+use crate::server::datetime_ext::DateTimeExt;
+use crate::server::ids::SyncId;
+use crate::server::sync_queue::QueueItem;
 
 const UNIQUENESS_KEY_PREFIX: &str = "templatable_mcp_server";
 
@@ -205,29 +203,9 @@ pub type CloudTemplatableMCPServer =
     GenericCloudObject<GenericStringObjectId, CloudTemplatableMCPServerModel>;
 pub type CloudTemplatableMCPServerModel = GenericStringModel<TemplatableMCPServer, JsonSerializer>;
 
-impl CloudTemplatableMCPServer {
-    pub fn get_all(app: &AppContext) -> Vec<CloudTemplatableMCPServer> {
-        CloudModel::as_ref(app)
-            .get_all_objects_of_type::<GenericStringObjectId, CloudTemplatableMCPServerModel>()
-            .cloned()
-            .collect()
-    }
-
-    pub fn get_by_id<'a>(
-        sync_id: &'a SyncId,
-        app: &'a AppContext,
-    ) -> Option<&'a CloudTemplatableMCPServer> {
-        CloudModel::as_ref(app)
-            .get_object_of_type::<GenericStringObjectId, CloudTemplatableMCPServerModel>(sync_id)
-    }
-
-    pub fn get_by_uuid<'a>(
-        uuid: &'a uuid::Uuid,
-        app: &'a AppContext,
-    ) -> Option<&'a CloudTemplatableMCPServer> {
-        CloudModel::as_ref(app)
-            .get_all_objects_of_type::<GenericStringObjectId, CloudTemplatableMCPServerModel>()
-            .find(|server| server.model().string_model.uuid == *uuid)
+impl CloudObjectUuid for TemplatableMCPServer {
+    fn uuid(&self) -> uuid::Uuid {
+        self.uuid
     }
 }
 
@@ -268,15 +246,6 @@ impl StringModel for TemplatableMCPServer {
             id: object.id,
             revision: revision_ts.or_else(|| object.metadata.revision.clone()),
         }
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::TemplatableMCPServer(server_templatable_mcp_server) =
-            server_cloud_object
-        {
-            return Some(server_templatable_mcp_server.model.clone().string_model);
-        }
-        None
     }
 
     fn uniqueness_key(&self) -> Option<GenericStringObjectUniqueKey> {

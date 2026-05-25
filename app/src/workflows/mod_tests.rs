@@ -1,8 +1,7 @@
 use warpui::App;
 
-use crate::server::ids::SyncId;
-
 use super::workflow::{Argument, Workflow};
+use crate::server::ids::SyncId;
 
 #[test]
 fn test_serialize_cloud_workflow() {

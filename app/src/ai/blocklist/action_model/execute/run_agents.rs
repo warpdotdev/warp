@@ -10,9 +10,14 @@ use ai::agent::action_result::{
     RunAgentsAgentOutcome, RunAgentsAgentOutcomeKind, RunAgentsLaunchedExecutionMode,
     RunAgentsResult,
 };
+use ai::agent::orchestration_config::OrchestrationConfig;
 use ai::skills::SkillReference;
-use futures::{future::BoxFuture, FutureExt};
-use warpui::{Entity, ModelContext, ModelHandle};
+use futures::future::BoxFuture;
+use futures::FutureExt;
+use settings::Setting;
+use warp_cli::agent::Harness;
+use warp_core::execution_mode::AppExecutionMode;
+use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::start_agent::{StartAgentExecutor, StartAgentOutcome};
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
@@ -21,8 +26,11 @@ use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
     StartAgentExecutionMode,
 };
-use crate::ai::blocklist::BlocklistAIHistoryModel;
-use warpui::SingletonEntity;
+use crate::ai::auth_secret_types::auth_secret_types_for_harness;
+use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationEditState;
+use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
+use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::local_child_harnesses::local_child_harness_disabled_message;
 
 /// Per-child spawn timeout. If a child agent doesn't report back within
 /// this window (e.g. binary not found, server error), the slot is failed
@@ -42,6 +50,7 @@ struct PendingRunAgents;
 pub struct RunAgentsExecutor {
     pending: HashMap<AIAgentActionId, PendingRunAgents>,
     start_agent_executor: ModelHandle<StartAgentExecutor>,
+    terminal_view_id: EntityId,
 }
 
 /// Lifecycle events for in-flight dispatches.
@@ -60,10 +69,14 @@ impl Entity for RunAgentsExecutor {
 }
 
 impl RunAgentsExecutor {
-    pub fn new(start_agent_executor: ModelHandle<StartAgentExecutor>) -> Self {
+    pub fn new(
+        start_agent_executor: ModelHandle<StartAgentExecutor>,
+        terminal_view_id: EntityId,
+    ) -> Self {
         Self {
             pending: HashMap::new(),
             start_agent_executor,
+            terminal_view_id,
         }
     }
 
@@ -71,10 +84,10 @@ impl RunAgentsExecutor {
         self.pending.contains_key(action_id)
     }
 
-    /// Fans out per-child dispatches and returns a receiver for the
-    /// aggregate `RunAgentsResult`. Validation failures short-circuit
-    /// synchronously.
-    pub fn dispatch_run_agents(
+    /// Fans out a prepared request into per-child dispatches and returns a
+    /// receiver for the aggregate `RunAgentsResult`. Validation failures
+    /// short-circuit synchronously.
+    fn dispatch_prepared_run_agents(
         &mut self,
         action_id: AIAgentActionId,
         request: RunAgentsRequest,
@@ -115,6 +128,7 @@ impl RunAgentsExecutor {
             skills,
             agent_run_configs,
             base_prompt,
+            harness_auth_secret_name,
             ..
         } = request;
 
@@ -126,6 +140,7 @@ impl RunAgentsExecutor {
                 &harness_type,
                 &model_id,
                 &skills,
+                harness_auth_secret_name.as_deref(),
                 cfg,
             ) {
                 Ok(mode) => mode,
@@ -253,10 +268,24 @@ impl RunAgentsExecutor {
         let AIAgentActionType::RunAgents(request) = action else {
             return ActionExecution::InvalidAction;
         };
-        let request = request.clone();
+        let mut request = request.clone();
         let action_id = id.clone();
         let parent_conversation_id = input.conversation_id;
-        let receiver = self.dispatch_run_agents(action_id, request, parent_conversation_id, ctx);
+        if let Some(reason) = prepare_request_for_execution(
+            &mut request,
+            parent_conversation_id,
+            self.terminal_view_id,
+            ctx,
+        ) {
+            return ActionExecution::Sync(AIAgentActionResultType::RunAgents(
+                RunAgentsResult::Denied {
+                    reason: reason.to_string(),
+                },
+            ));
+        }
+
+        let receiver =
+            self.dispatch_prepared_run_agents(action_id, request, parent_conversation_id, ctx);
 
         ActionExecution::new_async(
             async move { receiver.recv().await },
@@ -269,11 +298,19 @@ impl RunAgentsExecutor {
 
     pub(super) fn should_autoexecute(
         &self,
-        _input: ExecuteActionInput,
-        _ctx: &mut ModelContext<Self>,
+        input: ExecuteActionInput,
+        ctx: &mut ModelContext<Self>,
     ) -> bool {
-        // Confirmation card always required.
-        false
+        let AIAgentActionType::RunAgents(request) = &input.action.action else {
+            return false;
+        };
+        if AppExecutionMode::as_ref(ctx).is_autonomous() {
+            return true;
+        }
+        approved_orchestration_config_can_autoexecute(request, input.conversation_id, ctx)
+            || BlocklistAIPermissions::as_ref(ctx)
+                .get_run_agents_setting(ctx, Some(self.terminal_view_id))
+                .is_always_allow()
     }
 
     pub(super) fn preprocess_action(
@@ -285,9 +322,152 @@ impl RunAgentsExecutor {
     }
 }
 
+#[cfg(test)]
+#[path = "run_agents_tests.rs"]
+mod tests;
+
 enum ChildSlot {
     Failed(String),
     Pending(async_channel::Receiver<StartAgentOutcome>),
+}
+
+fn approved_orchestration_config_can_autoexecute(
+    request: &RunAgentsRequest,
+    parent_conversation_id: AIConversationId,
+    ctx: &ModelContext<RunAgentsExecutor>,
+) -> bool {
+    let mut resolved_request = request.clone();
+    resolve_request_from_approved_config(&mut resolved_request, parent_conversation_id, ctx)
+        .is_some_and(|status| status.is_approved())
+        && can_execute_with_auth_secret(&resolved_request, ctx)
+}
+
+fn resolve_request_from_approved_config(
+    request: &mut RunAgentsRequest,
+    parent_conversation_id: AIConversationId,
+    ctx: &ModelContext<RunAgentsExecutor>,
+) -> Option<ai::agent::orchestration_config::OrchestrationConfigStatus> {
+    let conversation =
+        BlocklistAIHistoryModel::as_ref(ctx).conversation(&parent_conversation_id)?;
+    let (config, status) = conversation.orchestration_config_for_plan(&request.plan_id)?;
+    if status.is_approved() {
+        resolve_request_from_config(request, config);
+    }
+    Some(status)
+}
+
+/// Normalizes the request and returns a denial reason when launch is blocked.
+///
+/// Autonomous agents always run: their calls may still inherit approved plan
+/// config fields and default auth secrets, but they bypass interactive policy
+/// denials because they cannot present a confirmation card.
+fn prepare_request_for_execution(
+    request: &mut RunAgentsRequest,
+    parent_conversation_id: AIConversationId,
+    terminal_view_id: EntityId,
+    ctx: &ModelContext<RunAgentsExecutor>,
+) -> Option<&'static str> {
+    let status = resolve_request_from_approved_config(request, parent_conversation_id, ctx);
+    populate_default_auth_secret_for_execution(request, ctx);
+
+    if AppExecutionMode::as_ref(ctx).is_autonomous() {
+        return None;
+    }
+
+    if status.is_some_and(|status| status.is_disapproved()) {
+        return Some("Orchestration config was disapproved");
+    }
+
+    if BlocklistAIPermissions::as_ref(ctx)
+        .get_run_agents_setting(ctx, Some(terminal_view_id))
+        .is_never_allow()
+    {
+        return Some("Running child agents is disabled by the active execution profile.");
+    }
+
+    if !can_execute_with_auth_secret(request, ctx) {
+        return Some(
+            "Cloud child agents using this harness require an API key before they can run.",
+        );
+    }
+
+    None
+}
+
+fn requires_default_auth_secret_for_execution(request: &RunAgentsRequest) -> bool {
+    if !request.execution_mode.is_remote() {
+        return false;
+    }
+    let Some(harness) = Harness::parse_orchestration_harness(&request.harness_type) else {
+        return false;
+    };
+    harness != Harness::Oz && !auth_secret_types_for_harness(harness).is_empty()
+}
+
+fn can_execute_with_auth_secret(
+    request: &RunAgentsRequest,
+    ctx: &ModelContext<RunAgentsExecutor>,
+) -> bool {
+    if !requires_default_auth_secret_for_execution(request) {
+        return true;
+    }
+    if request
+        .harness_auth_secret_name
+        .as_deref()
+        .is_some_and(|name| !name.trim().is_empty())
+    {
+        return true;
+    }
+    default_auth_secret_name_for_harness(&request.harness_type, ctx).is_some()
+}
+
+fn default_auth_secret_name_for_harness(
+    harness_type: &str,
+    ctx: &ModelContext<RunAgentsExecutor>,
+) -> Option<String> {
+    let harness = Harness::parse_orchestration_harness(harness_type)?;
+    if harness == Harness::Oz {
+        return None;
+    }
+    CloudAgentSettings::as_ref(ctx)
+        .last_selected_auth_secret
+        .value()
+        .get(harness.config_name())
+        .cloned()
+        .filter(|name| !name.trim().is_empty())
+}
+
+fn populate_default_auth_secret_for_execution(
+    request: &mut RunAgentsRequest,
+    ctx: &ModelContext<RunAgentsExecutor>,
+) {
+    if !requires_default_auth_secret_for_execution(request)
+        || request
+            .harness_auth_secret_name
+            .as_deref()
+            .is_some_and(|name| !name.trim().is_empty())
+    {
+        return;
+    }
+    request.harness_auth_secret_name =
+        default_auth_secret_name_for_harness(&request.harness_type, ctx);
+}
+
+/// Unconditionally overrides run-wide fields on a `RunAgentsRequest`
+/// from the approved orchestration config, delegating to
+/// `OrchestrationEditState::override_from_approved_config`.
+fn resolve_request_from_config(request: &mut RunAgentsRequest, config: &OrchestrationConfig) {
+    // The approved plan config is the source of truth for these run-wide fields,
+    // so callers pass a mutable request and continue with the normalized value.
+    let mut edit_state = OrchestrationEditState::from_run_agents_fields(
+        &request.model_id,
+        &request.harness_type,
+        &request.execution_mode,
+    );
+    edit_state.override_from_approved_config(config);
+    request.model_id = edit_state.model_id;
+    request.harness_type = edit_state.harness_type;
+    request.execution_mode = edit_state.execution_mode;
 }
 
 /// Defence-in-depth validation; mirrors the card view's
@@ -295,6 +475,13 @@ enum ChildSlot {
 fn validate_request(request: &RunAgentsRequest) -> Result<(), String> {
     if request.agent_run_configs.is_empty() {
         return Err("orchestrate: empty agent_run_configs".to_string());
+    }
+    if matches!(request.execution_mode, RunAgentsExecutionMode::Local) {
+        if let Some(harness) = Harness::parse_local_child_harness(&request.harness_type) {
+            if let Some(message) = local_child_harness_disabled_message(harness) {
+                return Err(message.to_string());
+            }
+        }
     }
     if matches!(
         request.execution_mode,
@@ -322,11 +509,16 @@ pub fn compose_run_agents_child_prompt(base_prompt: &str, per_agent_prompt: &str
 /// Translates run-wide config into a per-child
 /// [`StartAgentExecutionMode`]. Returns `Err` for rejected
 /// combinations (e.g. OpenCode+Remote).
+///
+/// `run_auth_secret_name` is the managed-secret name the orchestration UI
+/// resolved for the run-wide harness; only Remote mode currently consumes
+/// it (Local children inherit auth from the user's shell environment).
 pub fn run_agents_to_start_agent_mode(
     run_execution_mode: &RunAgentsExecutionMode,
     run_harness_type: &str,
     run_model_id: &str,
     run_skills: &[SkillReference],
+    run_auth_secret_name: Option<&str>,
     cfg: &RunAgentsAgentRunConfig,
 ) -> Result<StartAgentExecutionMode, String> {
     match run_execution_mode {
@@ -341,6 +533,11 @@ pub fn run_agents_to_start_agent_mode(
                     model_id,
                 })
             } else {
+                if let Some(harness) = Harness::parse_local_child_harness(trimmed) {
+                    if let Some(message) = local_child_harness_disabled_message(harness) {
+                        return Err(message.to_string());
+                    }
+                }
                 Ok(StartAgentExecutionMode::Local {
                     harness_type: Some(trimmed.to_string()),
                     model_id,
@@ -366,6 +563,9 @@ pub fn run_agents_to_start_agent_mode(
                 worker_host: worker_host.clone(),
                 harness_type: run_harness_type.to_string(),
                 title: cfg.title.clone(),
+                auth_secret_name: run_auth_secret_name
+                    .map(str::to_string)
+                    .filter(|s| !s.trim().is_empty()),
             })
         }
     }

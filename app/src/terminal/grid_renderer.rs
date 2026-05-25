@@ -1,25 +1,13 @@
 mod cell_glyph_cache;
 mod cell_type;
 
-use crate::terminal::grid_size_util::calculate_grid_baseline_position;
-use crate::terminal::model::ansi::{Color, CursorShape, CursorStyle};
-use crate::terminal::model::cell::{Cell, Flags};
-use crate::terminal::{color, SizeInfo};
-
-use crate::terminal::model::grid::Dimensions;
-use crate::terminal::model::index::Point;
-use crate::terminal::model::selection::SelectionPoint;
-use crate::terminal::model::{ObfuscateSecrets, SecretHandle};
-
-use crate::themes::theme::WarpTheme;
-use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
-
 use core::mem;
+use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::ops::{Range, RangeInclusive};
+
 use lazy_static::lazy_static;
 use num_traits::Float as _;
-use std::cmp::Ordering;
-use std::ops::Range;
-use std::{collections::HashMap, ops::RangeInclusive};
 use unicode_width::UnicodeWidthChar;
 use warp_core::features::FeatureFlag;
 use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
@@ -36,7 +24,6 @@ use warpui::{AppContext, Element, EntityId, PaintContext, Scene, SingletonEntity
 
 pub use self::cell_glyph_cache::CellGlyphCache;
 use self::cell_type::{CellType, IsFocused, Secret};
-
 use super::block_filter::{BLOCK_FILTER_DOTTED_LINE_DASH, BLOCK_FILTER_DOTTED_LINE_WIDTH};
 use super::blockgrid_renderer::GridRenderParams;
 use super::model::char_or_str::CharOrStr;
@@ -45,6 +32,16 @@ use super::model::grid::RespectDisplayedOutput;
 use super::model::image_map::{ImagePlacementData, StoredImageMetadata};
 use super::model::terminal_model::RangeInModel;
 use crate::settings::EnforceMinimumContrast;
+use crate::terminal::grid_size_util::calculate_grid_baseline_position;
+use crate::terminal::model::ansi::{Color, CursorShape, CursorStyle};
+use crate::terminal::model::cell::{Cell, Flags};
+use crate::terminal::model::grid::Dimensions;
+use crate::terminal::model::index::Point;
+use crate::terminal::model::selection::SelectionPoint;
+use crate::terminal::model::{ObfuscateSecrets, SecretHandle};
+use crate::terminal::{color, SizeInfo};
+use crate::themes::theme::WarpTheme;
+use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
 
 // The scale factor of the cursor relative to the cursor width.
 const CURSOR_THICKNESS_SCALE_FACTOR: f32 = 0.15;
@@ -1134,6 +1131,15 @@ fn render_grid_with_ligatures<'a>(
             None => {
                 // If there are no non-empty cells in the entire row, we can skip it entirely
                 if marked_text.peek().is_none() {
+                    if let Some(sampler) = bg_color_sampler.as_deref_mut() {
+                        // Empty ligature-rendered rows still represent the terminal's default
+                        // background. Keep them in the sampler so transient colored rows, such as
+                        // tmux's status line during startup, do not dominate the inferred
+                        // background used by surrounding UI.
+                        for _ in 0..grid.columns() {
+                            sampler.sample(ColorU::transparent_black());
+                        }
+                    }
                     continue;
                 }
                 grid.columns() - 1

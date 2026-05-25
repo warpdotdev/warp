@@ -1,11 +1,11 @@
-use std::{collections::VecDeque, time::Duration};
+use std::collections::VecDeque;
+use std::time::Duration;
 
 use instant::Instant;
 use warp_util::content_version::ContentVersion;
 
-use crate::render::model::RenderedSelectionSet;
-
 use super::core::{CoreEditorAction, ReplacementRange};
+use crate::render::model::RenderedSelectionSet;
 
 /// Threshold to separate two non-atomic undo items.
 const UNDO_REDO_TIMER: Duration = Duration::from_millis(500);

@@ -3,11 +3,11 @@ use std::collections::HashMap;
 use itertools::Itertools;
 use pathfinder_color::ColorU;
 
+use crate::elements::{
+    Align, Container, Fill, Hoverable, MouseStateHandle, ScrollStateHandle, Scrollable,
+    ScrollableElement, ScrollbarWidth, Text, UniformList, UniformListState,
+};
 use crate::{
-    elements::{
-        Align, Container, Fill, Hoverable, MouseStateHandle, ScrollStateHandle, Scrollable,
-        ScrollableElement, ScrollbarWidth, Text, UniformList, UniformListState,
-    },
     AppContext, Element, Entity, EntityId, TypedActionView, View, ViewContext, WeakViewHandle,
     WindowId,
 };

@@ -1,93 +1,87 @@
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::mcp::templatable::{CloudTemplatableMCPServerModel, TemplatableMCPServer};
-use crate::{
-    ai::{
-        agent::conversation::AIConversationId,
-        ambient_agents::scheduled::{CloudScheduledAmbientAgentModel, ScheduledAmbientAgent},
-        blocklist::BlocklistAIHistoryModel,
-        cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel},
-        execution_profiles::{
-            profiles::AIExecutionProfilesModel, AIExecutionProfile, CloudAIExecutionProfileModel,
-        },
-        facts::{AIFact, CloudAIFactModel},
-    },
-    auth::{auth_manager::AuthManager, AuthStateProvider},
-    cloud_object::{
-        model::{
-            actions::{ObjectAction, ObjectActionHistory, ObjectActionType, ObjectActions},
-            generic_string_model::{
-                GenericStringModel, GenericStringObjectId, Serializer, StringModel,
-            },
-            persistence::{CloudModel, CloudModelEvent, UpdateSource},
-            view::{CloudViewModel, Editor, EditorState},
-        },
-        CloudLinkSharing, CloudModelType, CloudObject, CloudObjectEventEntrypoint,
-        CloudObjectLocation, CloudObjectSyncStatus, CreateCloudObjectResult, CreateObjectRequest,
-        GenericCloudObject, GenericServerObject, GenericStringObjectFormat, JsonObjectType,
-        NumInFlightRequests, ObjectDeleteResult, ObjectIdType, ObjectMetadataUpdateResult,
-        ObjectPermissionsUpdateData, ObjectType, Owner, Revision, RevisionAndLastEditor,
-        ServerAIExecutionProfile, ServerAIFact, ServerAmbientAgentEnvironment,
-        ServerCloudAgentConfig, ServerCloudObject, ServerEnvVarCollection, ServerFolder,
-        ServerMCPServer, ServerMetadata, ServerNotebook, ServerObject, ServerPermissions,
-        ServerPreference, ServerScheduledAmbientAgent, ServerTemplatableMCPServer, ServerWorkflow,
-        ServerWorkflowEnum, Space, UpdateCloudObjectResult,
-    },
-    drive::{
-        folders::{CloudFolderModel, FolderId},
-        sharing::SharingAccessLevel,
-        CloudObjectTypeAndId,
-    },
-    env_vars::{CloudEnvVarCollectionModel, EnvVarCollection},
-    network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind},
-    notebooks::{CloudNotebookModel, NotebookId},
-    persistence::ModelEvent,
-    server::{
-        ids::{
-            parse_sqlite_id_to_uid, ClientId, HashableId, HashedSqliteId, ObjectUid, ServerId,
-            SyncId, ToServerId,
-        },
-        retry_strategies::{
-            OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL, PERIODIC_POLL_RETRY_STRATEGY,
-        },
-        server_api::object::{GuestIdentifier, ObjectClient},
-        sync_queue::{
-            CreationFailureReason, GenericStringObjectToCreate, QueueItem, SyncQueue,
-            SyncQueueEvent,
-        },
-    },
-    settings::cloud_preferences::Preference,
-    workflows::{
-        workflow::Workflow,
-        workflow_enum::{CloudWorkflowEnum, CloudWorkflowEnumModel, WorkflowEnum},
-        CloudWorkflowModel, WorkflowId,
-    },
-    workspaces::{
-        team_tester::{TeamTesterStatus, TeamTesterStatusEvent},
-        update_manager::TeamUpdateManager,
-        user_profiles::{UserProfileWithUID, UserProfiles},
-        user_workspaces::UserWorkspaces,
-    },
-};
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use futures::channel::oneshot::{self, Receiver};
 use futures::stream::AbortHandle;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
-use std::future::Future;
-use std::sync::{mpsc::SyncSender, Arc};
-use std::time::Duration;
 use warp_core::features::FeatureFlag;
+use warp_core::report_error;
 use warp_graphql::mcp_gallery_template::MCPGalleryTemplate;
 use warp_graphql::object_permissions::AccessLevel;
 use warp_graphql::scalars::time::ServerTimestamp;
 use warp_util::sync::Condition;
 use warpui::r#async::{FutureId, Timer};
-use warpui::{duration_with_jitter, AppContext};
-use warpui::{Entity, ModelContext, RequestState, RetryOption, SingletonEntity};
+use warpui::{
+    duration_with_jitter, AppContext, Entity, ModelContext, RequestState, RetryOption,
+    SingletonEntity,
+};
 
 use super::listener::ObjectUpdateMessage;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::ambient_agents::scheduled::{
+    CloudScheduledAmbientAgentModel, ScheduledAmbientAgent,
+};
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel};
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::execution_profiles::{AIExecutionProfile, CloudAIExecutionProfileModel};
+use crate::ai::facts::{AIFact, CloudAIFactModel};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::mcp::templatable::{CloudTemplatableMCPServerModel, TemplatableMCPServer};
+use crate::auth::auth_manager::AuthManager;
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::actions::{
+    ObjectAction, ObjectActionHistory, ObjectActionType, ObjectActions,
+};
+use crate::cloud_object::model::generic_string_model::{
+    GenericStringModel, GenericStringObjectId, Serializer, StringModel,
+};
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent, UpdateSource};
+use crate::cloud_object::model::view::{CloudViewModel, Editor, EditorState};
+use crate::cloud_object::{
+    CloudLinkSharing, CloudModelType, CloudObject, CloudObjectEventEntrypoint, CloudObjectLocation,
+    CloudObjectSyncStatus, CreateCloudObjectResult, CreateObjectRequest, GenericCloudObject,
+    GenericServerObject, GenericStringObjectFormat, JsonObjectType, NumInFlightRequests,
+    ObjectDeleteResult, ObjectIdType, ObjectMetadataUpdateResult, ObjectPermissionsUpdateData,
+    ObjectType, Owner, Revision, RevisionAndLastEditor, ServerAIExecutionProfile, ServerAIFact,
+    ServerAmbientAgentEnvironment, ServerCloudAgentConfig, ServerCloudObject,
+    ServerEnvVarCollection, ServerFolder, ServerMCPServer, ServerMetadata, ServerNotebook,
+    ServerObject, ServerPermissions, ServerPreference, ServerScheduledAmbientAgent,
+    ServerTemplatableMCPServer, ServerWorkflow, ServerWorkflowEnum, Space, UpdateCloudObjectResult,
+};
+use crate::drive::folders::{CloudFolderModel, FolderId};
+use crate::drive::sharing::SharingAccessLevel;
+use crate::drive::CloudObjectTypeAndId;
+use crate::env_vars::{CloudEnvVarCollectionModel, EnvVarCollection};
+use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
+use crate::notebooks::{CloudNotebookModel, NotebookId};
+use crate::persistence::ModelEvent;
+use crate::server::ids::{
+    parse_sqlite_id_to_uid, ClientId, HashableId, HashedSqliteId, ObjectUid, ServerId, SyncId,
+    ToServerId,
+};
+use crate::server::retry_strategies::{
+    OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL, PERIODIC_POLL_RETRY_STRATEGY,
+};
+use crate::server::server_api::object::{GuestIdentifier, ObjectClient};
+use crate::server::sync_queue::{
+    CreationFailureReason, GenericStringObjectToCreate, QueueItem, SyncQueue, SyncQueueEvent,
+};
+use crate::settings::cloud_preferences::Preference;
+use crate::workflows::workflow::Workflow;
+use crate::workflows::workflow_enum::{CloudWorkflowEnum, CloudWorkflowEnumModel, WorkflowEnum};
+use crate::workflows::{CloudWorkflowModel, WorkflowId};
+use crate::workspaces::team_tester::{TeamTesterStatus, TeamTesterStatusEvent};
+use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 lazy_static! {
     /// For online-only operations, we want to quickly determine if the operation can succeed,
@@ -135,10 +129,19 @@ pub struct ObjectOperationResult {
 
 #[derive(Debug)]
 pub enum UpdateManagerEvent {
-    ObjectOperationComplete { result: ObjectOperationResult },
-    CloudPreferencesUpdated { updated: Vec<Preference> },
-    MCPGalleryUpdated { templates: Vec<MCPGalleryTemplate> },
-    AmbientTaskUpdated { timestamp: DateTime<Utc> },
+    ObjectOperationComplete {
+        result: ObjectOperationResult,
+    },
+    CloudPreferencesUpdated {
+        updated: Vec<Preference>,
+    },
+    MCPGalleryUpdated {
+        templates: Vec<MCPGalleryTemplate>,
+    },
+    AmbientTaskUpdated {
+        task_id: AmbientAgentTaskId,
+        timestamp: DateTime<Utc>,
+    },
 }
 
 /// An enum for choosing the behavior of the fetch_single_cloud_object function.
@@ -1118,11 +1121,20 @@ impl UpdateManager {
 
     fn handle_ambient_task_changed(
         &mut self,
-        _task_id: String,
+        task_id: String,
         timestamp: DateTime<Utc>,
         ctx: &mut ModelContext<UpdateManager>,
     ) {
-        ctx.emit(UpdateManagerEvent::AmbientTaskUpdated { timestamp });
+        let task_id = match task_id.parse::<AmbientAgentTaskId>() {
+            Ok(task_id) => task_id,
+            Err(err) => {
+                report_error!(anyhow::Error::from(err).context(format!(
+                    "AmbientTaskUpdated has unparseable task_id: {task_id}"
+                )));
+                return;
+            }
+        };
+        ctx.emit(UpdateManagerEvent::AmbientTaskUpdated { task_id, timestamp });
     }
 
     /// Fetches environment "last used" timestamps from the server and merges them
@@ -1178,7 +1190,12 @@ impl UpdateManager {
                 )
             });
 
-        GenericCloudObject::<K, M>::bulk_upsert_event(&objects_without_pending_changes)
+        M::bulk_upsert_event(
+            objects_without_pending_changes
+                .iter()
+                .map(|object| object.upsert_params(object.object_type()))
+                .collect(),
+        )
     }
 
     /// Generic handler deleting all objects of a given model type from the server (e.g. all updated/deleted notebooks or workflows).
@@ -3217,6 +3234,25 @@ impl UpdateManager {
     }
 
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn create_ambient_agent_environment_online(
+        &mut self,
+        ambient_agent_environment: AmbientAgentEnvironment,
+        client_id: ClientId,
+        owner: Owner,
+        ctx: &mut ModelContext<Self>,
+    ) -> impl Future<Output = anyhow::Result<ServerId>> {
+        self.create_object_online(
+            CloudAmbientAgentEnvironmentModel::new(ambient_agent_environment),
+            owner,
+            client_id,
+            Default::default(),
+            false,
+            None,
+            ctx,
+        )
+    }
+
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn create_scheduled_ambient_agent_online(
         &mut self,
         scheduled_ambient_agent: ScheduledAmbientAgent,
@@ -3571,7 +3607,10 @@ impl UpdateManager {
 
         // Update sqlite with a single bulk request
         self.save_to_db(vec![GenericStringModel::<T, S>::bulk_upsert_event(
-            &objects,
+            objects
+                .iter()
+                .map(|object| object.upsert_params(object.object_type()))
+                .collect(),
         )]);
 
         // Populate sync queue with a single bulk request

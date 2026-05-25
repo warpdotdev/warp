@@ -231,7 +231,7 @@ integration_tests! {
     test_close_notebook_tab,
     test_open_in_warp_banner,
     test_close_notebook_window,
-    test_backspace_inside_rendered_mermaid_block_is_atomic,
+    test_backspace_inside_raw_mermaid_block_edits_text_without_removing_block,
 
     test_open_workflow_in_pane,
     test_create_personal_workflow_pane_from_command_palette,

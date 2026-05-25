@@ -1,16 +1,6 @@
-use std::path::PathBuf;
-
 use warp_util::content_version::ContentVersion;
-use warp_util::remote_path::RemotePath;
-
-/// Uniquely identifies where a buffer's content lives.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum BufferLocation {
-    /// File on the local filesystem.
-    Local(PathBuf),
-    /// File on a remote host, identified by host + path.
-    Remote(RemotePath),
-}
+// Re-export from warp_util so existing app-level imports continue to work.
+pub use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 /// Tracks sync state between client and server for a single remote buffer.
 ///

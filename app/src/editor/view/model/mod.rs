@@ -2,68 +2,50 @@ mod buffer;
 mod display_map;
 mod selections;
 
-use self::buffer::Peer;
+use std::cmp::{self};
+use std::collections::{HashMap, HashSet};
+use std::mem;
+use std::ops::Range;
+use std::rc::Rc;
 
-pub use {
-    buffer::{
-        Anchor, AnchorBias, Chars, EditOrigin, Operation as CrdtOperation, PeerSelectionData,
-        ReplicaId, SubwordBoundaries, TextRun, TextStyleOperation, ToBufferOffset, ToCharOffset,
-        ToPoint,
-    },
-    display_map::{Bias, DisplayMap, DisplayPoint, MovementResult, ToDisplayPoint},
-    selections::{
-        DrawableSelection, LocalDrawableSelectionData, LocalPendingSelection, LocalSelection,
-        LocalSelections, MarkedTextState, RemoteDrawableSelectionData, SelectAction, Selection,
-        SelectionMode,
-    },
+pub use buffer::{
+    Anchor, AnchorBias, Chars, EditOrigin, Operation as CrdtOperation, PeerSelectionData,
+    ReplicaId, SubwordBoundaries, TextRun, TextStyleOperation, ToBufferOffset, ToCharOffset,
+    ToPoint,
 };
-
-use std::{
-    cmp::{self},
-    collections::{HashMap, HashSet},
-    mem,
-    ops::Range,
-    rc::Rc,
-};
-
+use buffer::{Buffer, Text};
+pub use display_map::{Bias, DisplayMap, DisplayPoint, MovementResult, ToDisplayPoint};
+use itertools::FoldWhile::{Continue, Done};
+use itertools::Itertools;
+use lazy_static::lazy_static;
 use num_traits::SaturatingSub;
+pub use selections::{
+    DrawableSelection, LocalDrawableSelectionData, LocalPendingSelection, LocalSelection,
+    LocalSelections, MarkedTextState, RemoteDrawableSelectionData, SelectAction, Selection,
+    SelectionMode,
+};
 use string_offset::{ByteOffset, CharOffset};
 use vec1::{vec1, Vec1};
-use warpui::{
-    accessibility::{AccessibilityContent, WarpA11yRole},
-    text_layout::TextStyle,
-    AppContext, Entity, ModelAsRef, ModelContext, ModelHandle,
-};
-use warpui::{
-    text::{point::Point, word_boundaries::WordBoundariesPolicy, TextBuffer},
-    SingletonEntity,
-};
-
-use crate::{editor::RangeExt, vim_registers::VimRegisters};
-
-use vim::{
-    find_next_paragraph_end, find_previous_paragraph_start,
-    vim::{
-        BracketChar, CharacterMotion, Direction, FindCharMotion, FirstNonWhitespaceMotion,
-        LineMotion, MotionType, TextObjectInclusion, TextObjectType, VimOperator, WordBound,
-        WordMotion,
-    },
-    vim_a_paragraph, vim_inner_paragraph,
+use vim::vim::{
+    BracketChar, CharacterMotion, Direction, FindCharMotion, FirstNonWhitespaceMotion, LineMotion,
+    MotionType, TextObjectInclusion, TextObjectType, VimOperator, WordBound, WordMotion,
 };
 use vim::{
-    vim_a_block, vim_a_quote, vim_a_word, vim_find_char_on_line, vim_find_matching_bracket,
-    vim_inner_block, vim_inner_quote, vim_inner_word, vim_word_iterator_from_offset,
+    find_next_paragraph_end, find_previous_paragraph_start, vim_a_block, vim_a_paragraph,
+    vim_a_quote, vim_a_word, vim_find_char_on_line, vim_find_matching_bracket, vim_inner_block,
+    vim_inner_paragraph, vim_inner_quote, vim_inner_word, vim_word_iterator_from_offset,
 };
+use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
+use warpui::text::point::Point;
+use warpui::text::word_boundaries::WordBoundariesPolicy;
+use warpui::text::TextBuffer;
+use warpui::text_layout::TextStyle;
+use warpui::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity};
 
-use buffer::{Buffer, Text};
-
+use self::buffer::Peer;
 use super::{movement, PlainTextEditorViewAction, SelectionInsertion, ValidInputType};
-
-use itertools::{
-    FoldWhile::{Continue, Done},
-    Itertools,
-};
-use lazy_static::lazy_static;
+use crate::editor::RangeExt;
+use crate::vim_registers::VimRegisters;
 
 lazy_static! {
     static ref AUTOCOMPLETE_SYMBOLS: HashMap<&'static str, &'static str> = HashMap::from([

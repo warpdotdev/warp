@@ -1,7 +1,5 @@
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Duration, Utc};
@@ -11,18 +9,17 @@ use warp_core::channel::{Channel, ChannelState};
 use warp_graphql::object_permissions::OwnerType;
 use warpui::{AppContext, Entity, SingletonEntity};
 
-use crate::{
-    cloud_object::{GenericStringObjectFormat, JsonObjectType, ObjectType},
-    report_error,
+use super::anonymous_id::get_or_create_anonymous_id;
+use super::auth_manager::user_persistence::PersistedUser;
+use super::credentials::Credentials;
+#[cfg(any(not(target_family = "wasm"), test))]
+use super::user::UserMetadata;
+use super::user::{
+    AnonymousUserType, FirebaseAuthTokens, PersonalObjectLimits, PrincipalType, User,
 };
-
-use super::{
-    anonymous_id::get_or_create_anonymous_id,
-    auth_manager::user_persistence::PersistedUser,
-    credentials::Credentials,
-    user::{AnonymousUserType, FirebaseAuthTokens, PersonalObjectLimits, PrincipalType, User},
-    UserUid, API_KEY_PREFIX,
-};
+use super::{UserUid, API_KEY_PREFIX};
+use crate::cloud_object::{GenericStringObjectFormat, JsonObjectType, ObjectType};
+use crate::report_error;
 
 const ANONYMOUS_USER_NOTIFICATION_BLOCK_TIMER: Duration = Duration::days(7);
 
@@ -67,6 +64,29 @@ impl AuthState {
     pub fn new_for_test() -> Self {
         Self {
             user: RwLock::new(Some(User::test())),
+            anonymous_id: Uuid::new_v4(),
+            needs_reauth: AtomicBool::new(false),
+            credentials: RwLock::new(Some(Credentials::Test)),
+        }
+    }
+    #[cfg(test)]
+    pub fn new_logged_out_for_test() -> Self {
+        Self {
+            user: RwLock::new(None),
+            anonymous_id: Uuid::new_v4(),
+            needs_reauth: AtomicBool::new(false),
+            credentials: RwLock::new(None),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn new_anonymous_for_test() -> Self {
+        use super::user::AnonymousUserType;
+        Self {
+            user: RwLock::new(Some(User {
+                anonymous_user_type: Some(AnonymousUserType::NativeClientAnonymousUserFeatureGated),
+                ..User::test()
+            })),
             anonymous_id: Uuid::new_v4(),
             needs_reauth: AtomicBool::new(false),
             credentials: RwLock::new(Some(Credentials::Test)),
@@ -167,6 +187,7 @@ impl AuthState {
             (None, None) => PersistAction::Remove,
             // Do not persist if using API keys, session cookies, or test credentials.
             (Some(_), Some(Credentials::ApiKey { .. })) => PersistAction::DoNothing,
+            (Some(_), Some(Credentials::Bearer(_))) => PersistAction::DoNothing,
             (Some(_), Some(Credentials::SessionCookie)) => PersistAction::DoNothing,
             #[cfg(any(test, feature = "integration_tests", feature = "skip_login"))]
             (Some(_), Some(Credentials::Test)) => PersistAction::DoNothing,
@@ -188,6 +209,7 @@ impl AuthState {
             linked_at: persisted.linked_at,
             personal_object_limits: persisted.personal_object_limits,
             principal_type: PrincipalType::default(),
+            global_skills: Vec::new(),
         };
         *self.user.write() = Some(user);
 
@@ -213,6 +235,63 @@ impl AuthState {
     /// Sets the credentials. Should only be called within the auth module.
     pub(super) fn set_credentials(&self, credentials: Option<Credentials>) {
         *self.credentials.write() = credentials;
+    }
+    /// Applies auth data received by the remote server daemon handshake.
+    ///
+    /// Empty values are authoritative: an empty token clears bearer credentials, and an empty user
+    /// ID clears the daemon user identity.
+    #[cfg(any(not(target_family = "wasm"), test))]
+    pub(crate) fn apply_remote_server_auth_context(
+        &self,
+        auth_token: String,
+        user_id: String,
+        user_email: String,
+    ) {
+        self.set_remote_server_bearer_token(auth_token);
+        self.set_remote_server_user(user_id, user_email);
+    }
+
+    #[cfg(any(not(target_family = "wasm"), test))]
+    pub(crate) fn set_remote_server_bearer_token(&self, auth_token: String) {
+        if auth_token.is_empty() {
+            self.set_credentials(None);
+            return;
+        }
+        self.set_credentials(Some(Credentials::Bearer(auth_token)));
+    }
+
+    #[cfg(any(not(target_family = "wasm"), test))]
+    fn set_remote_server_user(&self, user_id: String, user_email: String) {
+        let mut user = self.user.write();
+        if user_id.is_empty() {
+            *user = None;
+            return;
+        }
+
+        match user.as_mut() {
+            Some(user) => {
+                user.local_id = UserUid::new(&user_id);
+                user.metadata.email = user_email;
+            }
+            None => {
+                *user = Some(User {
+                    local_id: UserUid::new(&user_id),
+                    metadata: UserMetadata {
+                        email: user_email,
+                        display_name: None,
+                        photo_url: None,
+                    },
+                    is_onboarded: false,
+                    needs_sso_link: false,
+                    anonymous_user_type: None,
+                    is_on_work_domain: false,
+                    linked_at: None,
+                    personal_object_limits: None,
+                    principal_type: PrincipalType::default(),
+                    global_skills: Vec::new(),
+                });
+            }
+        }
     }
 
     /// Updates the Firebase auth tokens within the current credentials.
@@ -460,6 +539,15 @@ impl AuthState {
         matches!(self.principal_type(), Some(PrincipalType::ServiceAccount))
     }
 
+    /// Returns the cached global skill specs for the current user.
+    pub fn global_skills(&self) -> Vec<String> {
+        self.user
+            .read()
+            .as_ref()
+            .map(|user| user.global_skills.clone())
+            .unwrap_or_default()
+    }
+
     /// Returns the owner type of the currently-authenticated API key.
     pub fn api_key_owner_type(&self) -> Option<OwnerType> {
         self.credentials.read().as_ref()?.api_key_owner_type()
@@ -497,12 +585,14 @@ impl AuthStateProvider {
     #[cfg(test)]
     pub fn new_logged_out_for_test() -> Self {
         Self {
-            auth_state: Arc::new(AuthState {
-                user: RwLock::new(None),
-                anonymous_id: Uuid::new_v4(),
-                needs_reauth: AtomicBool::new(false),
-                credentials: RwLock::new(None),
-            }),
+            auth_state: Arc::new(AuthState::new_logged_out_for_test()),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn new_anonymous_for_test() -> Self {
+        Self {
+            auth_state: Arc::new(AuthState::new_anonymous_for_test()),
         }
     }
 

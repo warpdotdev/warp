@@ -1,53 +1,46 @@
-use std::{
-    any::Any,
-    collections::{HashMap, VecDeque},
-    sync::Arc,
-    time::Duration,
-};
+use std::any::Any;
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use itertools::Itertools;
 use parking_lot::Mutex;
+#[cfg(feature = "local_fs")]
+use repo_metadata::DirectoryWatcher;
 use settings::Setting as _;
+use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_core::command::ExitCode;
 use warpui::{App, SingletonEntity};
 use warpui_extras::user_preferences;
 
+use super::{ChipUpdateStatus, CurrentPrompt, PromptContext};
+use crate::auth::auth_manager::AuthManager;
+use crate::auth::AuthStateProvider;
 #[cfg(feature = "local_fs")]
 use crate::code_review::diff_state::DiffStats;
 #[cfg(feature = "local_fs")]
 use crate::code_review::git_status_update::{GitRepoStatusModel, GitStatusMetadata};
+use crate::context_chips::context_chip::{ChipFingerprintInput, Environment};
+use crate::context_chips::prompt::Prompt;
+use crate::context_chips::{
+    ChipAvailability, ChipDisabledReason, ChipRuntimeCapabilities, ContextChipKind,
+};
+use crate::features::FeatureFlag;
+use crate::menu::MenuItem;
+use crate::server::server_api::ServerApiProvider;
+use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::settings::WarpPromptSeparator;
 #[cfg(windows)]
 use crate::system::SystemInfo;
-use crate::{
-    auth::{auth_manager::AuthManager, AuthStateProvider},
-    context_chips::{
-        context_chip::{ChipFingerprintInput, Environment},
-        prompt::Prompt,
-        ChipAvailability, ChipDisabledReason, ChipRuntimeCapabilities, ContextChipKind,
-    },
-    features::FeatureFlag,
-    menu::MenuItem,
-    server::{
-        server_api::ServerApiProvider, telemetry::context_provider::AppTelemetryContextProvider,
-    },
-    settings::WarpPromptSeparator,
-    terminal::{
-        model::{
-            block::BlockMetadata,
-            session::{CommandExecutor, ExecuteCommandOptions, SessionId, SessionInfo, Sessions},
-        },
-        session_settings::{GithubPrPromptChipDefaultValidation, SessionSettings},
-        shell::Shell,
-        view::PromptPosition,
-        History,
-    },
+use crate::terminal::model::block::BlockMetadata;
+use crate::terminal::model::session::{
+    CommandExecutor, ExecuteCommandOptions, SessionId, SessionInfo, Sessions,
 };
-#[cfg(feature = "local_fs")]
-use repo_metadata::DirectoryWatcher;
-use warp_completer::completer::{CommandExitStatus, CommandOutput};
-
-use super::{ChipUpdateStatus, CurrentPrompt, PromptContext};
+use crate::terminal::session_settings::{GithubPrPromptChipDefaultValidation, SessionSettings};
+use crate::terminal::shell::Shell;
+use crate::terminal::view::PromptPosition;
+use crate::terminal::History;
 
 #[test]
 fn test_context_menu_items() {
@@ -964,11 +957,17 @@ fn test_github_pr_chip_transient_failure_retries_with_same_fingerprint() {
                     .to_chip()
                     .expect("expected github pr chip");
                 let generator = chip.generator().clone();
+                // Pass `allow_fingerprint_skip = true` to exercise the same
+                // path the periodic timer uses. The previous attempt left the
+                // chip in `Error` state with the fingerprint already recorded;
+                // without status-aware skip handling, this call would short-
+                // circuit as `Cached` and the transient failure would become
+                // sticky.
                 current_prompt.fetch_chip_value_once(
                     &ContextChipKind::GithubPullRequest,
                     &generator,
                     None,
-                    false,
+                    true,
                     ctx,
                 );
                 current_prompt.await_generators(ctx)

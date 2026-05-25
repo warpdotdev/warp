@@ -1,9 +1,7 @@
 use std::slice;
 
-use cocoa::{
-    base::{id, nil, BOOL},
-    foundation::{NSArray, NSString, NSUInteger},
-};
+use cocoa::base::{id, nil, BOOL};
+use cocoa::foundation::{NSArray, NSString, NSUInteger};
 use objc::{msg_send, sel, sel_impl};
 use warpui_core::keymap::Keystroke;
 use warpui_core::platform::keyboard::{KeyCode, NativeKeyCode, PhysicalKey};

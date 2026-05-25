@@ -1,5 +1,10 @@
 use std::collections::HashSet;
 
+use chrono::Local;
+use prost_types::FieldMask;
+use warp_multi_agent_api as api;
+
+use super::{ExtractMessagesError, Task};
 use crate::ai::agent::{
     AIAgentActionType, AIAgentExchange, AIAgentOutput, AIAgentOutputMessageType,
     AIAgentOutputStatus, MessageId, Shared,
@@ -8,11 +13,6 @@ use crate::ai::llms::LLMId;
 use crate::test_util::ai_agent_tasks::{
     create_api_subtask, create_api_task, create_message, create_subagent_tool_call_message,
 };
-use chrono::Local;
-use prost_types::FieldMask;
-use warp_multi_agent_api as api;
-
-use super::{ExtractMessagesError, Task};
 
 /// Creates a Task backed by server data from the given api::Task.
 fn create_server_task(api_task: api::Task) -> Task {
@@ -375,6 +375,20 @@ fn test_splice_messages_optimistic_task_not_initialized() {
         result,
         Err(ExtractMessagesError::TaskNotInitialized)
     ));
+}
+
+#[test]
+fn test_restored_optimistic_root_can_upgrade_to_server_created_task() {
+    let task =
+        Task::new_restored_optimistic_root("optimistic-root".to_string(), std::iter::empty());
+
+    let task = task
+        .into_server_created_task(create_api_task("server-root", vec![]), None, None, None)
+        .expect("restored optimistic root should upgrade");
+
+    assert_eq!(task.id().to_string(), "server-root");
+    assert!(!task.is_optimistic_root_task());
+    assert!(task.source().is_some());
 }
 
 #[test]

@@ -1,9 +1,10 @@
+use crate::error::UserFacingError;
+use crate::generic_string_object::GenericStringObject;
+use crate::object::ObjectUpdateSuccess;
+use crate::request_context::RequestContext;
+use crate::response_context::ResponseContext;
 use crate::scalars::Time;
-use crate::{
-    error::UserFacingError, generic_string_object::GenericStringObject,
-    object::ObjectUpdateSuccess, request_context::RequestContext,
-    response_context::ResponseContext, schema,
-};
+use crate::schema;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct UpdateGenericStringObjectVariables {

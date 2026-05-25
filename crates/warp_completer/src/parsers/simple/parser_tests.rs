@@ -2,11 +2,10 @@ use std::collections::HashSet;
 
 use warp_util::path::EscapeChar;
 
-use crate::parsers::simple::{decompose_command, top_level_command};
-
 use super::super::lexer::Lexer;
 use super::super::{Command, Part};
 use super::*;
+use crate::parsers::simple::{decompose_command, top_level_command};
 
 #[test]
 fn test_parse_open_subshell() {

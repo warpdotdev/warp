@@ -1,86 +1,70 @@
+use std::borrow::Cow;
+use std::boxed::Box;
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::sync::Arc;
+
+use pathfinder_color::ColorU;
+#[cfg(not(target_family = "wasm"))]
+use settings::Setting as _;
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::color::contrast::{
+    foreground_color_with_minimum_contrast, MinimumAllowedContrast,
+};
+use warp_core::ui::color::{coloru_with_opacity, Opacity, Rgb};
+use warp_core::ui::theme;
+use warp_core::ui::theme::color::internal_colors;
+use warpui::elements::{
+    ChildView, Clipped, Container, CornerRadius, CrossAxisAlignment, Fill, Flex, MainAxisAlignment,
+    MainAxisSize, ParentElement, Radius, Rect, Shrinkable, SizeConstraintCondition,
+    SizeConstraintSwitch,
+};
+use warpui::ui_components::components::UiComponentStyles;
+use warpui::ui_components::segmented_control::{
+    RenderableOptionConfig, SegmentedControl, SegmentedControlEvent, TooltipConfig,
+};
+use warpui::{
+    AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity as _, TypedActionView,
+    View, ViewAsRef, ViewContext, ViewHandle,
+};
+
+use crate::ai::blocklist::block::cli_controller::CLISubagentController;
+use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
+use crate::ai::blocklist::prompt::PromptIconButtonTheme;
+use crate::ai::blocklist::{
+    BlocklistAIHistoryEvent, BlocklistAIInputModel, InputConfig, InputType,
+};
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::llms::LLMPreferences;
+use crate::ai::AIRequestUsageModel;
+use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::network::NetworkStatus;
 #[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::view::AIContextMenu;
 #[cfg(not(target_family = "wasm"))]
 use crate::settings::InputSettings;
-use crate::{
-    ai::{blocklist::block::cli_controller::CLISubagentController, llms::LLMPreferences},
-    cloud_object::model::generic_string_model::StringModel,
-    settings::AISettingsChangedEvent,
-    terminal::profile_model_selector::{
-        calculate_max_profile_name_width, calculate_scaled_font_size,
-    },
-    terminal::view::ambient_agent::AmbientAgentViewModel,
-};
-use pathfinder_color::ColorU;
-#[cfg(not(target_family = "wasm"))]
-use settings::Setting as _;
-use std::borrow::Cow;
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
-use warpui::{
-    elements::{
-        ChildView, Clipped, Container, CornerRadius, CrossAxisAlignment, Fill, Flex,
-        MainAxisAlignment, MainAxisSize, ParentElement, Radius, Rect, Shrinkable,
-        SizeConstraintCondition, SizeConstraintSwitch,
-    },
-    ui_components::{components::UiComponentStyles, segmented_control::RenderableOptionConfig},
-    AppContext, Element, Entity, EntityId, SingletonEntity as _, TypedActionView, View, ViewAsRef,
-    ViewContext, ViewHandle,
-};
-
-use warp_core::ui::{
-    color::{
-        coloru_with_opacity,
-        contrast::{foreground_color_with_minimum_contrast, MinimumAllowedContrast},
-        Opacity, Rgb,
-    },
-    theme,
-};
-
-use std::boxed::Box;
-use warpui::{
-    ui_components::segmented_control::{SegmentedControl, SegmentedControlEvent},
-    ModelHandle,
-};
-
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-
-use crate::ai::blocklist::prompt::PromptIconButtonTheme;
-use crate::ai::blocklist::BlocklistAIHistoryEvent;
-
+use crate::settings::{AISettings, AISettingsChangedEvent};
+use crate::settings_view::SettingsSection;
+use crate::terminal::input::MenuPositioningProvider;
+use crate::terminal::keys::TerminalKeybindings;
+use crate::terminal::model::block::BlockMetadata;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::model::session::SessionType;
-use crate::{
-    ai::{
-        blocklist::{
-            prompt::prompt_alert::{PromptAlertEvent, PromptAlertView},
-            BlocklistAIInputModel, InputConfig, InputType,
-        },
-        execution_profiles::profiles::AIExecutionProfilesModel,
-        AIRequestUsageModel,
-    },
-    network::NetworkStatus,
-    settings::AISettings,
-    settings_view::SettingsSection,
-    terminal::{
-        input::MenuPositioningProvider,
-        keys::TerminalKeybindings,
-        model::{block::BlockMetadata, session::Sessions},
-        profile_model_selector::{ProfileModelSelector, ProfileModelSelectorEvent},
-        session_settings::{SessionSettings, SessionSettingsChangedEvent},
-        shared_session::permissions_manager::SessionPermissionsManager,
-    },
-    ui_components::icons::Icon,
-    view_components::action_button::{
-        ActionButton, ActionButtonTheme, ButtonSize, NakedTheme, TooltipAlignment,
-    },
-    workspaces::user_workspaces::UserWorkspaces,
-    BlocklistAIHistoryModel,
+use crate::terminal::model::session::Sessions;
+use crate::terminal::profile_model_selector::{
+    calculate_max_profile_name_width, calculate_scaled_font_size, ProfileModelSelector,
+    ProfileModelSelectorEvent,
 };
-use warp_core::features::FeatureFlag;
-use warpui::ui_components::segmented_control::{LabelConfig, TooltipConfig};
+use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
+use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
+use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{
+    ActionButton, ActionButtonTheme, ButtonSize, NakedTheme, TooltipAlignment,
+};
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::BlocklistAIHistoryModel;
 
 pub enum AtContextMenuDisabledReason {
     #[cfg(target_family = "wasm")]
@@ -88,7 +72,7 @@ pub enum AtContextMenuDisabledReason {
     #[cfg(not(target_family = "wasm"))]
     NoObjectsAvailable,
     #[cfg(not(target_family = "wasm"))]
-    SshSession,
+    SshWithoutRemoteServer,
     #[cfg(not(target_family = "wasm"))]
     Subshell,
     #[cfg(not(target_family = "wasm"))]
@@ -103,7 +87,9 @@ impl AtContextMenuDisabledReason {
                 "No available objects in the current context.".to_string()
             }
             #[cfg(not(target_family = "wasm"))]
-            AtContextMenuDisabledReason::SshSession => "Not supported in SSH sessions".to_string(),
+            AtContextMenuDisabledReason::SshWithoutRemoteServer => {
+                "Not supported in SSH sessions without remote server".to_string()
+            }
             #[cfg(not(target_family = "wasm"))]
             AtContextMenuDisabledReason::Subshell => "Not supported in subshells".to_string(),
             #[cfg(target_family = "wasm")]
@@ -133,14 +119,32 @@ impl AtContextMenuDisabledReason {
         ctx: &AppContext,
     ) -> Option<AtContextMenuDisabledReason> {
         // Derive session information from block metadata and sessions
-        let (is_ssh_session, is_subshell) = active_block_metadata
+        let (is_ssh_without_remote_server, is_subshell) = active_block_metadata
             .and_then(|metadata| metadata.session_id())
             .and_then(|session_id| sessions.get(session_id))
             .map(|session| {
-                let is_ssh_session = session.is_legacy_ssh_session()
-                    || matches!(session.session_type(), SessionType::WarpifiedRemote { .. });
+                let session_type = session.session_type();
+                let has_connected_remote_server = matches!(
+                    session_type,
+                    SessionType::WarpifiedRemote { host_id: Some(_) }
+                );
+                // The @ menu requires repo metadata which is only available for:
+                // - Local sessions
+                // - WarpifiedRemote sessions with a connected remote server (host_id is Some)
+                //
+                // Block when:
+                // - Legacy SSH without a remote server upgrade
+                // - WarpifiedRemote still connecting (host_id is None)
+                //
+                // Note: is_legacy_ssh_session() is set at bootstrap time and stays true
+                // even after the session transitions to WarpifiedRemote with a host_id.
+                // So we must check has_connected_remote_server first to avoid
+                // incorrectly blocking upgraded sessions.
+                let is_ssh_without_remote_server = !has_connected_remote_server
+                    && (session.is_legacy_ssh_session()
+                        || matches!(session_type, SessionType::WarpifiedRemote { host_id: None }));
                 let is_subshell = session.subshell_info().is_some();
-                (is_ssh_session, is_subshell)
+                (is_ssh_without_remote_server, is_subshell)
             })
             .unwrap_or((false, false));
 
@@ -153,8 +157,8 @@ impl AtContextMenuDisabledReason {
             return Some(AtContextMenuDisabledReason::DisabledInTerminalMode);
         }
 
-        if is_ssh_session {
-            return Some(AtContextMenuDisabledReason::SshSession);
+        if is_ssh_without_remote_server {
+            return Some(AtContextMenuDisabledReason::SshWithoutRemoteServer);
         }
         if is_subshell {
             return Some(AtContextMenuDisabledReason::Subshell);
@@ -923,11 +927,7 @@ fn segmented_control_styles(app: &AppContext) -> UiComponentStyles {
     let base_font_size = 10.0; // Start with smaller font
     let scaled_ui_font_size = base_font_size * appearance.monospace_ui_scalar();
 
-    let background = if FeatureFlag::NldImprovements.is_enabled() {
-        Some(internal_colors::fg_overlay_1(theme).into())
-    } else {
-        None
-    };
+    let background = Some(internal_colors::fg_overlay_1(theme).into());
 
     UiComponentStyles {
         width: Some(button_size), // Match InputPrompt button height for square buttons
@@ -943,140 +943,6 @@ fn segmented_control_styles(app: &AppContext) -> UiComponentStyles {
 }
 
 fn build_renderable_option_config(
-    option: InputToggleMode,
-    is_selected: bool,
-    input_model: &ModelHandle<BlocklistAIInputModel>,
-    ui_state: &CachedUIState,
-    app: &AppContext,
-) -> Option<RenderableOptionConfig> {
-    if FeatureFlag::NldImprovements.is_enabled() {
-        return build_new_renderable_option_config(option, is_selected, input_model, ui_state, app);
-    }
-
-    let appearance = Appearance::as_ref(app);
-    let theme = appearance.theme();
-    let background = if is_selected {
-        theme.surface_overlay_2()
-    } else {
-        theme::Fill::Solid(ColorU::from_u32(0x00000000))
-    };
-    let terminal_keybindings = TerminalKeybindings::as_ref(app);
-    let mut config = match option {
-        InputToggleMode::Terminal => RenderableOptionConfig {
-            icon_path: Icon::Terminal.into(),
-            icon_color: if is_selected {
-                theme.terminal_colors().normal.blue.into()
-            } else {
-                theme.sub_text_color(theme.surface_1()).into_solid()
-            },
-            label: None,
-            tooltip: Some(tooltip_config(
-                "Terminal",
-                Some(terminal_mode_tooltip_subtext(terminal_keybindings)),
-                app,
-            )),
-            background: background.into(),
-        },
-        InputToggleMode::AgentMode => RenderableOptionConfig {
-            icon_path: Icon::AgentMode.into(),
-            icon_color: if is_selected {
-                theme.terminal_colors().normal.yellow.into()
-            } else {
-                theme.sub_text_color(theme.surface_1()).into_solid()
-            },
-            label: None,
-            tooltip: Some(tooltip_config(
-                "Agent Mode",
-                Some(agent_mode_tooltip_subtext(terminal_keybindings)),
-                app,
-            )),
-            background: background.into(),
-        },
-        InputToggleMode::AutoDetection => RenderableOptionConfig {
-            icon_path: if input_model.as_ref(app).is_input_type_locked() {
-                Icon::LightbulbFilled.into()
-            } else {
-                Icon::Lightbulb.into()
-            },
-            label: Some(LabelConfig {
-                label: if !input_model.as_ref(app).is_input_type_locked() && ui_state.is_input_empty
-                {
-                    "Auto".into()
-                } else if input_model.as_ref(app).is_ai_input_enabled() {
-                    "Agent".into()
-                } else {
-                    "Shell".into()
-                },
-                width_override: Some(30.),
-                color: if ui_state.is_input_empty {
-                    theme.main_text_color(theme.background()).into_solid()
-                } else if input_model.as_ref(app).is_ai_input_enabled() {
-                    theme.terminal_colors().normal.yellow.into()
-                } else {
-                    theme.terminal_colors().normal.blue.into()
-                },
-            }),
-            icon_color: if is_selected {
-                if !input_model.as_ref(app).is_input_type_locked() && ui_state.is_input_empty {
-                    theme.main_text_color(theme.surface_1()).into_solid()
-                } else if input_model.as_ref(app).is_ai_input_enabled() {
-                    theme.terminal_colors().normal.yellow.into()
-                } else {
-                    theme.terminal_colors().normal.blue.into()
-                }
-            } else {
-                theme.sub_text_color(theme.surface_1()).into_solid()
-            },
-            tooltip: Some(tooltip_config("Auto Detection", Some("ESC"), app)),
-            background: background.into(),
-        },
-    };
-
-    if ui_state.is_button_bar_blurred() {
-        config.background = Fill::Solid(coloru_with_opacity(
-            config.background.start_color(),
-            BLURRED_OPACITY,
-        ));
-        config.icon_color = coloru_with_opacity(config.icon_color, BLURRED_OPACITY);
-
-        if let Some(tooltip_config) = config.tooltip.as_mut() {
-            tooltip_config.background_color =
-                coloru_with_opacity(tooltip_config.background_color, BLURRED_OPACITY);
-            tooltip_config.text_color = foreground_color_with_minimum_contrast(
-                tooltip_config.text_color,
-                Rgb::from(tooltip_config.background_color),
-                MinimumAllowedContrast::Text,
-            );
-            tooltip_config.border_color =
-                coloru_with_opacity(tooltip_config.background_color, BLURRED_OPACITY);
-        }
-    }
-
-    Some(config)
-}
-
-const AGENT_MODE_TOOLTIP_PREFIX: &str = "* + space";
-const TERMINAL_MODE_TOOLTIP_PREFIX: &str = "! + space";
-
-fn agent_mode_tooltip_subtext(terminal_keybindings: &TerminalKeybindings) -> String {
-    let keybinding = terminal_keybindings.set_input_mode_agent_keybinding();
-    let Some(keybinding) = keybinding else {
-        return AGENT_MODE_TOOLTIP_PREFIX.into();
-    };
-
-    format!("{keybinding} or {AGENT_MODE_TOOLTIP_PREFIX}")
-}
-
-fn terminal_mode_tooltip_subtext(terminal_keybindings: &TerminalKeybindings) -> String {
-    let keybinding = terminal_keybindings.set_input_mode_terminal_keybinding();
-    let Some(keybinding) = keybinding else {
-        return TERMINAL_MODE_TOOLTIP_PREFIX.into();
-    };
-
-    format!("{keybinding} or {TERMINAL_MODE_TOOLTIP_PREFIX}")
-}
-
-fn build_new_renderable_option_config(
     option: InputToggleMode,
     is_selected: bool,
     input_model: &ModelHandle<BlocklistAIInputModel>,
@@ -1171,6 +1037,27 @@ fn build_new_renderable_option_config(
     }
 
     Some(config)
+}
+
+const AGENT_MODE_TOOLTIP_PREFIX: &str = "* + space";
+const TERMINAL_MODE_TOOLTIP_PREFIX: &str = "! + space";
+
+fn agent_mode_tooltip_subtext(terminal_keybindings: &TerminalKeybindings) -> String {
+    let keybinding = terminal_keybindings.set_input_mode_agent_keybinding();
+    let Some(keybinding) = keybinding else {
+        return AGENT_MODE_TOOLTIP_PREFIX.into();
+    };
+
+    format!("{keybinding} or {AGENT_MODE_TOOLTIP_PREFIX}")
+}
+
+fn terminal_mode_tooltip_subtext(terminal_keybindings: &TerminalKeybindings) -> String {
+    let keybinding = terminal_keybindings.set_input_mode_terminal_keybinding();
+    let Some(keybinding) = keybinding else {
+        return TERMINAL_MODE_TOOLTIP_PREFIX.into();
+    };
+
+    format!("{keybinding} or {TERMINAL_MODE_TOOLTIP_PREFIX}")
 }
 
 fn tooltip_config(

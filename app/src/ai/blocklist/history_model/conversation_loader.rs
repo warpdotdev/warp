@@ -11,6 +11,10 @@ use persistence::model::AgentConversationRecord;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity};
 
+use super::{
+    agent_id_key_from_persisted_data, AIConversationMetadata, BlocklistAIHistoryModel,
+    MAX_HISTORICAL_CONVERSATIONS,
+};
 use crate::ai::agent::api::convert_conversation::{
     convert_conversation_data_to_ai_conversation, RestorationMode,
 };
@@ -19,15 +23,12 @@ use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversation, AIConversationId, ServerAIConversationMetadata,
 };
 use crate::ai::agent::task::Task;
+#[cfg(feature = "local_fs")]
+use crate::persistence::agent::read_agent_conversation_by_id;
 use crate::persistence::model::{AgentConversation, AgentConversationData};
 use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::SerializedBlock;
-
-#[cfg(feature = "local_fs")]
-use crate::persistence::agent::read_agent_conversation_by_id;
-
-use super::{AIConversationMetadata, BlocklistAIHistoryModel, MAX_HISTORICAL_CONVERSATIONS};
 
 /// A conversation transcript from a CLI agent harness (e.g. Claude Code).
 #[derive(Debug, Clone)]
@@ -137,7 +138,9 @@ pub async fn load_conversation_from_server(
                 }
                 AIAgentHarness::ClaudeCode | AIAgentHarness::Gemini | AIAgentHarness::Codex => {
                     if !FeatureFlag::AgentHarness.is_enabled() {
-                        log::warn!("Ignoring non-Oz conversation {conversation_id}: AgentHarness flag is disabled");
+                        log::warn!(
+                            "Ignoring non-Oz conversation {conversation_id}: AgentHarness flag is disabled"
+                        );
                         return None;
                     }
                     // Fetch snapshot data for third-party harness conversations.
@@ -189,6 +192,22 @@ where
         } else {
             f.boxed()
         }
+    }
+}
+
+impl AIConversationMetadata {
+    fn merge(&mut self, other: AIConversationMetadata) -> &mut Self {
+        self.has_local_data |= other.has_local_data;
+        if self.initial_query.is_empty() {
+            self.initial_query = other.initial_query;
+        }
+        if self.initial_working_directory.is_none() {
+            self.initial_working_directory = other.initial_working_directory;
+        }
+        if self.artifacts.is_empty() {
+            self.artifacts = other.artifacts;
+        }
+        self
     }
 }
 
@@ -260,12 +279,17 @@ impl BlocklistAIHistoryModel {
     /// Note: This does NOT insert the conversation into memory. Callers are responsible
     /// for inserting the loaded conversation if needed.
     pub fn load_conversation_by_server_token(
-        &self,
+        &mut self,
         server_token: &ServerConversationToken,
         ctx: &AppContext,
     ) -> warpui::r#async::BoxFuture<'static, Option<CloudConversationData>> {
-        // Fast path: token is known locally.
-        if let Some(conversation_id) = self.find_conversation_id_by_server_token(server_token) {
+        let conversation_id =
+            self.get_or_set_canonical_conversation_id_for_server_token(server_token);
+        if self.conversations_by_id.contains_key(&conversation_id)
+            || self
+                .all_conversations_metadata
+                .contains_key(&conversation_id)
+        {
             return self.load_conversation_data(conversation_id, ctx);
         }
 
@@ -278,10 +302,8 @@ impl BlocklistAIHistoryModel {
             server_token.as_str()
         );
         let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
-        // Ephemeral ID — this conversation is not inserted into the history model.
-        let fallback_id = AIConversationId::new();
         box_future(load_conversation_from_server(
-            fallback_id,
+            conversation_id,
             server_token.clone(),
             server_api,
         ))
@@ -347,28 +369,16 @@ impl BlocklistAIHistoryModel {
         let mut new_cloud_count = 0;
         let mut restored_conversations_updated = 0;
 
-        // Build a map from server_conversation_token to conversation_id
-        let mut token_to_conv_id: HashMap<String, AIConversationId> = HashMap::new();
-        for (conv_id, meta) in self.all_conversations_metadata.iter() {
-            if let Some(token) = &meta.server_conversation_token {
-                token_to_conv_id.insert(token.as_str().to_string(), *conv_id);
-            }
-        }
-
-        // Build a map from server_conversation_token to conversation_id for restored conversations,
-        // and collect tokens belonging to child agent conversations so we can skip them.
-        let mut token_to_restored_conv_id: HashMap<String, AIConversationId> = HashMap::new();
+        // Collect tokens belonging to child agent conversations so we can skip them.
         let mut child_conversation_tokens: HashSet<String> = HashSet::new();
-        for (conv_id, conv) in self.conversations_by_id.iter() {
+        for conv in self.conversations_by_id.values() {
             if let Some(token) = conv.server_conversation_token() {
-                token_to_restored_conv_id.insert(token.as_str().to_string(), *conv_id);
                 if conv.is_child_agent_conversation() {
                     child_conversation_tokens.insert(token.as_str().to_string());
                 }
             }
         }
 
-        // Now iterate through cloud metadata once, using the map for O(1) lookups
         for server_meta in cloud_metadata_list {
             let server_token = server_meta.server_conversation_token.clone();
             let server_token_str = server_token.as_str();
@@ -378,46 +388,69 @@ impl BlocklistAIHistoryModel {
             if child_conversation_tokens.contains(server_token_str) {
                 continue;
             }
+            let had_metadata_entry = self
+                .all_conversations_metadata
+                .values()
+                .any(|metadata| metadata.server_conversation_token.as_ref() == Some(&server_token));
+            let canonical_conversation_id =
+                self.get_or_set_canonical_conversation_id_for_server_token(&server_token);
 
-            // Update any already-restored conversations that match by server token
-            if let Some(conv_id) = token_to_restored_conv_id.get(server_token_str) {
-                if let Some(conversation) = self.conversations_by_id.get_mut(conv_id) {
-                    if conversation.server_metadata().is_none() {
-                        conversation.set_server_metadata(server_meta.clone());
-                        restored_conversations_updated += 1;
-                        log::debug!(
-                            "Updated server metadata for restored conversation {conv_id} with token {server_token_str}"
-                        );
-                    }
-                }
+            if let Some(conversation) = self.conversations_by_id.get_mut(&canonical_conversation_id)
+            {
+                conversation.set_server_metadata(server_meta.clone());
+                restored_conversations_updated += 1;
+                log::debug!(
+                    "Updated server metadata for restored conversation {canonical_conversation_id} with token {server_token_str}"
+                );
             }
 
-            if let Some(conv_id) = token_to_conv_id.get(server_token_str) {
-                // Found a match by token - update this entry with server metadata
-                let conversation_id = *conv_id;
-                let metadata =
-                    AIConversationMetadata::from_server_metadata(conversation_id, server_meta);
-                self.server_token_to_conversation_id
-                    .insert(server_token.clone(), conversation_id);
-                self.all_conversations_metadata
-                    .insert(conversation_id, metadata);
+            let stale_metadata: Vec<(AIConversationId, AIConversationMetadata)> = self
+                .all_conversations_metadata
+                .iter()
+                .filter_map(|(conversation_id, metadata)| {
+                    (*conversation_id != canonical_conversation_id
+                        && metadata.server_conversation_token.as_ref() == Some(&server_token))
+                    .then_some((*conversation_id, metadata.clone()))
+                })
+                .collect();
+            for (stale_metadata_id, _) in &stale_metadata {
+                self.all_conversations_metadata.remove(stale_metadata_id);
+            }
+
+            let existing_metadata = self
+                .all_conversations_metadata
+                .get(&canonical_conversation_id)
+                .cloned();
+            let local_metadata = self
+                .conversations_by_id
+                .get(&canonical_conversation_id)
+                .map(AIConversationMetadata::from);
+            let mut metadata = AIConversationMetadata::from_server_metadata(
+                canonical_conversation_id,
+                server_meta,
+            );
+            for local_metadata in existing_metadata
+                .into_iter()
+                .chain(stale_metadata.into_iter().map(|(_, metadata)| metadata))
+                .chain(local_metadata)
+            {
+                metadata.merge(local_metadata);
+            }
+
+            self.server_token_to_conversation_id
+                .insert(server_token.clone(), canonical_conversation_id);
+            self.all_conversations_metadata
+                .insert(canonical_conversation_id, metadata);
+
+            if had_metadata_entry {
                 local_matched_with_server_count += 1;
                 log::debug!(
-                    "Matched local conversation {conversation_id} with server token {server_token_str}"
+                    "Matched local conversation {canonical_conversation_id} with server token {server_token_str}"
                 );
             } else {
-                // This is a new cloud-only conversation
-                // We need to create a local AIConversationId for it
-                let conversation_id = AIConversationId::new();
-                let metadata =
-                    AIConversationMetadata::from_server_metadata(conversation_id, server_meta);
-                self.server_token_to_conversation_id
-                    .insert(server_token.clone(), conversation_id);
-                self.all_conversations_metadata
-                    .insert(conversation_id, metadata);
                 new_cloud_count += 1;
                 log::debug!(
-                    "Added new cloud-only conversation with local ID {conversation_id} and server token {server_token_str}"
+                    "Added new cloud-only conversation with local ID {canonical_conversation_id} and server token {server_token_str}"
                 );
             }
         }
@@ -437,17 +470,20 @@ impl BlocklistAIHistoryModel {
         &mut self,
         conversations: &[AgentConversation],
     ) {
-        let conversations = conversations
+        struct HistoricalConversationRow<'a> {
+            agent_conversation: &'a AgentConversation,
+            conversation_id: AIConversationId,
+            conversation_data: Option<AgentConversationData>,
+        }
+
+        let historical_rows: Vec<_> = conversations
             .iter()
             .sorted_by_key(|c| c.conversation.last_modified_at)
-            .rev();
-
-        let collected: HashMap<AIConversationId, AIConversationMetadata> = conversations
+            .rev()
             .take(MAX_HISTORICAL_CONVERSATIONS)
-            .filter_map(|agent_conv| {
-                // Try to convert the conversation ID
+            .filter_map(|agent_conversation| {
                 let conversation_id = match AIConversationId::try_from(
-                    agent_conv.conversation.conversation_id.clone(),
+                    agent_conversation.conversation.conversation_id.clone(),
                 ) {
                     Ok(id) => id,
                     Err(e) => {
@@ -456,29 +492,53 @@ impl BlocklistAIHistoryModel {
                     }
                 };
 
-                if !agent_conv.is_restorable() {
+                if !agent_conversation.is_restorable() {
                     return None;
                 }
+
+                let conversation_data = serde_json::from_str::<AgentConversationData>(
+                    &agent_conversation.conversation.conversation_data,
+                )
+                .ok();
+
+                if let Some(data) = conversation_data.as_ref() {
+                    if let Some(agent_id) = agent_id_key_from_persisted_data(data) {
+                        self.agent_id_to_conversation_id
+                            .insert(agent_id.to_owned(), conversation_id);
+                    }
+                    if let Some(token) = data.server_conversation_token.as_ref() {
+                        self.server_token_to_conversation_id
+                            .insert(ServerConversationToken::new(token.clone()), conversation_id);
+                    }
+                }
+
+                Some(HistoricalConversationRow {
+                    agent_conversation,
+                    conversation_id,
+                    conversation_data,
+                })
+            })
+            .collect();
+
+        let collected: HashMap<AIConversationId, AIConversationMetadata> = historical_rows
+            .into_iter()
+            .filter_map(|row| {
+                let HistoricalConversationRow {
+                    agent_conversation,
+                    conversation_id,
+                    conversation_data,
+                } = row;
 
                 // Child agent conversations are managed by their parent's
                 // status card and should not appear in navigation/history.
                 // Record the parent→child mapping before filtering so that
                 // create_missing_child_agent_panes can discover children
                 // before they are loaded into conversations_by_id.
-                let conversation_data = serde_json::from_str::<AgentConversationData>(
-                    &agent_conv.conversation.conversation_data,
-                )
-                .ok();
-                if let Some(parent_id_str) = conversation_data
+                if let Some(parent_id) = conversation_data
                     .as_ref()
-                    .and_then(|data| data.parent_conversation_id.as_deref())
+                    .and_then(|data| self.resolved_parent_conversation_id_from_persisted_data(data))
                 {
-                    if let Ok(parent_id) = AIConversationId::try_from(parent_id_str.to_string()) {
-                        self.children_by_parent
-                            .entry(parent_id)
-                            .or_default()
-                            .push(conversation_id);
-                    }
+                    self.index_child_conversation(conversation_id, parent_id);
                     return None;
                 }
 
@@ -487,14 +547,17 @@ impl BlocklistAIHistoryModel {
                 // so we don't want to list them as historical conversations.
                 let mut has_user_query = false;
                 let mut has_autocodediff = false;
-                for task in &agent_conv.tasks {
+                for task in &agent_conversation.tasks {
                     for message in &task.messages {
                         match &message.message {
                             Some(warp_multi_agent_api::message::Message::UserQuery(_)) => {
                                 has_user_query = true;
                             }
                             Some(warp_multi_agent_api::message::Message::SystemQuery(sys)) => {
-                                if let Some(warp_multi_agent_api::message::system_query::Type::AutoCodeDiff(_)) = &sys.r#type {
+                                if let Some(
+                                    warp_multi_agent_api::message::system_query::Type::AutoCodeDiff(_),
+                                ) = &sys.r#type
+                                {
                                     has_autocodediff = true;
                                 }
                             }
@@ -506,33 +569,40 @@ impl BlocklistAIHistoryModel {
                     return None;
                 }
 
-                let root_task = agent_conv.tasks.iter().find(|task| {
-                    task.dependencies.is_none()
-                });
+                let root_task = agent_conversation
+                    .tasks
+                    .iter()
+                    .find(|task| task.dependencies.is_none());
 
-                let initial_query = root_task.map(|task| {
-                    // find the first task with a user query
-                    // (or in the case of a passive code diff, the summary of the diff)
-                    task.messages.iter().find_map(|msg| {
-                        match &msg.message {
-                            Some(warp_multi_agent_api::message::Message::UserQuery(user_query)) => {
-                                Some(user_query.query.clone())
-                            }
-                            Some(warp_multi_agent_api::message::Message::ToolCall(tool_call))  => {
-                                let Some(tool) = &tool_call.tool else {
-                                    return None;
-                                };
+                let initial_query = root_task
+                    .map(|task| {
+                        // find the first task with a user query
+                        // (or in the case of a passive code diff, the summary of the diff)
+                        task.messages
+                            .iter()
+                            .find_map(|msg| match &msg.message {
+                                Some(warp_multi_agent_api::message::Message::UserQuery(
+                                    user_query,
+                                )) => Some(user_query.query.clone()),
+                                Some(warp_multi_agent_api::message::Message::ToolCall(
+                                    tool_call,
+                                )) => {
+                                    let Some(tool) = &tool_call.tool else {
+                                        return None;
+                                    };
 
-                                if let warp_multi_agent_api::message::tool_call::Tool::ApplyFileDiffs(diff_suggestion) = tool {
-                                    Some(diff_suggestion.summary.clone())
-                                } else {
-                                    None
+                                    if let warp_multi_agent_api::message::tool_call::Tool::ApplyFileDiffs(diff_suggestion) = tool
+                                    {
+                                        Some(diff_suggestion.summary.clone())
+                                    } else {
+                                        None
+                                    }
                                 }
-                            }
-                            _ => None,
-                        }
-                    }).unwrap_or_default()
-                }).unwrap_or_default();
+                                _ => None,
+                            })
+                            .unwrap_or_default()
+                    })
+                    .unwrap_or_default();
 
                 if initial_query.is_empty() {
                     log::warn!(
@@ -550,7 +620,10 @@ impl BlocklistAIHistoryModel {
 
                 // Extract working directory from the first UserQuery message in the tasks
                 // TODO: search tasks in correct order once we've implemented task ordering.
-                let initial_working_directory = agent_conv.tasks.iter().find_map(Task::api_task_initial_working_directory);
+                let initial_working_directory = agent_conversation
+                    .tasks
+                    .iter()
+                    .find_map(Task::api_task_initial_working_directory);
                 let credits_spent = conversation_data
                     .as_ref()
                     .and_then(|data| data.conversation_usage_metadata.as_ref())
@@ -561,35 +634,30 @@ impl BlocklistAIHistoryModel {
                     .and_then(|json| serde_json::from_str(json).ok())
                     .unwrap_or_default();
                 let server_conversation_token = conversation_data
-                    .and_then(|data| data.server_conversation_token)
-                    .map(ServerConversationToken::new);
+                    .as_ref()
+                    .and_then(|data| data.server_conversation_token.as_ref())
+                    .map(|token| ServerConversationToken::new(token.clone()));
 
-                Some((conversation_id, AIConversationMetadata {
-                    id: conversation_id,
-                    title,
-                    initial_query,
-                    last_modified_at: agent_conv.conversation.last_modified_at,
-                    initial_working_directory,
-                    credits_spent,
-                    // If we have a server token, the conversation was synced to cloud
-                    has_cloud_data: server_conversation_token.is_some(),
-                    server_conversation_token,
-                    has_local_data: true,
-                    artifacts,
-                    // Only populated when loading from server, not from local DB
-                    server_conversation_metadata: None,
-                }))
+                Some((
+                    conversation_id,
+                    AIConversationMetadata {
+                        id: conversation_id,
+                        title,
+                        initial_query,
+                        last_modified_at: agent_conversation.conversation.last_modified_at,
+                        initial_working_directory,
+                        credits_spent,
+                        // If we have a server token, the conversation was synced to cloud
+                        has_cloud_data: server_conversation_token.is_some(),
+                        server_conversation_token,
+                        has_local_data: true,
+                        artifacts,
+                        // Only populated when loading from server, not from local DB
+                        server_conversation_metadata: None,
+                    },
+                ))
             })
             .collect();
-
-        // Populate the token → conversation reverse index alongside the
-        // forward metadata map.
-        for (conversation_id, metadata) in &collected {
-            if let Some(token) = &metadata.server_conversation_token {
-                self.server_token_to_conversation_id
-                    .insert(token.clone(), *conversation_id);
-            }
-        }
         self.all_conversations_metadata = collected;
     }
 }

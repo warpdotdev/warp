@@ -3,126 +3,118 @@ pub mod editor;
 mod environment_selector;
 pub mod toolbar_item;
 
-use crate::{
-    ai::{
-        blocklist::{
-            history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel},
-            prompt::prompt_alert::{PromptAlertEvent, PromptAlertView},
-            usage::icon_for_context_window_usage,
-            BlocklistAIInputModel,
-        },
-        execution_profiles::profiles::AIExecutionProfilesModel,
-        harness_availability::HarnessAvailabilityModel,
-        AIRequestUsageModel,
-    },
-    appearance::Appearance,
-    auth::{AuthManager, AuthStateProvider},
-    completer::SessionContext,
-    context_chips::{
-        self,
-        display_chip::{DisplayChip, DisplayChipConfig},
-        prompt_type::PromptType,
-        ContextChipKind,
-    },
-    features::FeatureFlag,
-    network::NetworkStatus,
-    send_telemetry_from_ctx,
-    server::telemetry::{PluginChipTelemetryKind, TelemetryEvent},
-    settings::{AISettings, AISettingsChangedEvent},
-    settings_view::SettingsSection,
-    terminal::{
-        cli_agent_sessions::{
-            listener::agent_supports_rich_status, CLIAgentInputState, CLIAgentSessionsModel,
-            CLIAgentSessionsModelEvent,
-        },
-        input::{models::InlineModelSelectorTab, MenuPositioningProvider},
-        model_events::ModelEvent,
-        profile_model_selector::{ProfileModelSelector, ProfileModelSelectorEvent},
-        session_settings::{SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection},
-        shared_session::SharedSessionStatus,
-        view::ambient_agent::{AmbientAgentViewModel, ModelSelector, ModelSelectorEvent},
-        view::init::OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING,
-        view::TerminalAction,
-        CLIAgent, TerminalModel,
-    },
-    ui_components::icons::Icon,
-    view_components::{
-        action_button::{
-            ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, KeystrokeSource, NakedTheme,
-            TooltipAlignment,
-        },
-        DismissibleToast,
-    },
-    workspace::{view::TOGGLE_PROJECT_EXPLORER_BINDING_NAME, ToastStack},
-    workspaces::user_workspaces::UserWorkspaces,
-};
-use toolbar_item::AgentToolbarItemKind;
-use warp_cli::agent::Harness;
-
-use std::sync::Arc;
-
-#[cfg(feature = "voice_input")]
-use crate::server::server_api::TranscribeError;
-#[cfg(not(target_family = "wasm"))]
-use crate::terminal::local_shell::LocalShellState;
-#[cfg(not(target_family = "wasm"))]
-use crate::terminal::ShellLaunchData;
-use ai::document::{AIDocumentId, AIDocumentVersion};
-use parking_lot::FairMutex;
-use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
-use settings::Setting;
-use settings::ToggleableSetting;
 #[cfg(not(target_family = "wasm"))]
 use std::env;
 #[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
+use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
+
+use ai::document::{AIDocumentId, AIDocumentVersion};
+use parking_lot::FairMutex;
+use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use settings::{Setting, ToggleableSetting};
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs;
+use toolbar_item::AgentToolbarItemKind;
 #[cfg(feature = "voice_input")]
 use voice_input::{StartListeningError, VoiceSessionResult};
-
-use warp_core::{
-    context_flag::ContextFlag,
-    report_if_error,
-    ui::{
-        color::{blend::Blend, contrast::MinimumAllowedContrast, ContrastingColor},
-        theme::{color::internal_colors, AnsiColorIdentifier, Fill},
-    },
+use warp_cli::agent::Harness;
+use warp_core::context_flag::ContextFlag;
+use warp_core::report_if_error;
+use warp_core::ui::color::blend::Blend;
+use warp_core::ui::color::contrast::MinimumAllowedContrast;
+use warp_core::ui::color::ContrastingColor;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Expanded, Flex,
+    MainAxisAlignment, MainAxisSize, OffsetPositioning, ParentElement, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, Shrinkable, Stack, Text, Wrap, WrapFill,
+    WrapFillEntireRun, DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
 #[cfg(feature = "voice_input")]
 use warpui::r#async::SpawnedFutureHandle;
+#[cfg(not(target_family = "wasm"))]
+use warpui::r#async::Timer;
 use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Expanded, Flex,
-        MainAxisAlignment, MainAxisSize, OffsetPositioning, ParentElement, PositionedElementAnchor,
-        PositionedElementOffsetBounds, Radius, Shrinkable, Stack, Text, Wrap, WrapFill,
-        WrapFillEntireRun, DEFAULT_UI_LINE_HEIGHT_RATIO,
-    },
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
 #[cfg(feature = "local_fs")]
 pub(crate) use self::environment_selector::sort_environments_by_recency;
-#[cfg(not(target_family = "wasm"))]
-use warpui::r#async::Timer;
-
-pub(crate) use self::environment_selector::{EnvironmentSelector, EnvironmentSelectorEvent};
+pub(crate) use self::environment_selector::{
+    EnvironmentSelector, EnvironmentSelectorEvent, EnvironmentSelectorTarget,
+};
+use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
+use crate::ai::blocklist::usage::icon_for_context_window_usage;
+use crate::ai::blocklist::BlocklistAIInputModel;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::harness_availability::HarnessAvailabilityModel;
+use crate::ai::AIRequestUsageModel;
+use crate::appearance::Appearance;
+use crate::auth::{AuthManager, AuthStateProvider};
+use crate::completer::SessionContext;
+use crate::context_chips::display_chip::{DisplayChip, DisplayChipConfig};
+use crate::context_chips::prompt_type::PromptType;
+use crate::context_chips::{self, ContextChipKind};
+use crate::features::FeatureFlag;
+use crate::network::NetworkStatus;
+use crate::send_telemetry_from_ctx;
+#[cfg(feature = "voice_input")]
+use crate::server::server_api::TranscribeError;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::telemetry::PluginChipTelemetryAction;
+use crate::server::telemetry::{PluginChipTelemetryKind, TelemetryEvent};
+use crate::settings::{
+    AISettings, AISettingsChangedEvent, PrivacySettings, PrivacySettingsChangedEvent,
+};
+use crate::settings_view::SettingsSection;
+use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{
     compare_versions, plugin_manager_for, plugin_manager_for_with_shell, CliAgentPluginManager,
     PluginInstallError, PluginModalKind,
 };
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
+};
+use crate::terminal::input::models::InlineModelSelectorTab;
+use crate::terminal::input::{HandoffComposeState, MenuPositioningProvider};
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::local_shell::LocalShellState;
+use crate::terminal::model_events::ModelEvent;
+use crate::terminal::profile_model_selector::{ProfileModelSelector, ProfileModelSelectorEvent};
+use crate::terminal::session_settings::{
+    SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection,
+};
+use crate::terminal::shared_session::SharedSessionStatus;
+use crate::terminal::view::ambient_agent::{
+    AmbientAgentViewModel, ModelSelector, ModelSelectorEvent,
+};
+use crate::terminal::view::init::OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING;
+use crate::terminal::view::TerminalAction;
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::ShellLaunchData;
+use crate::terminal::{CLIAgent, TerminalModel};
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{
+    ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, KeystrokeSource, NakedTheme,
+    TooltipAlignment,
+};
+use crate::view_components::DismissibleToast;
 #[cfg(not(target_family = "wasm"))]
 use crate::view_components::ToastLink;
+use crate::workspace::view::TOGGLE_PROJECT_EXPLORER_BINDING_NAME;
+use crate::workspace::ToastStack;
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::WorkspaceAction;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const ENABLE_NLD_TOOLTIP: &str = "Enable terminal command autodetection";
 const DISABLE_NLD_TOOLTIP: &str = "Disable terminal command autodetection";
@@ -198,8 +190,10 @@ pub struct AgentInputFooter {
     model_selector: ViewHandle<ProfileModelSelector>,
     ftu_callout_close_button: ViewHandle<ActionButton>,
     environment_selector: Option<ViewHandle<EnvironmentSelector>>,
+    handoff_environment_selector: ViewHandle<EnvironmentSelector>,
     prompt_alert: ViewHandle<PromptAlertView>,
     ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
+    handoff_compose_state: ModelHandle<HandoffComposeState>,
     left_display_chips: Vec<ViewHandle<DisplayChip>>,
     right_display_chips: Vec<ViewHandle<DisplayChip>>,
     // Separate set of display chips for the CLI agent footer.
@@ -250,6 +244,7 @@ impl AgentInputFooter {
         ai_input_model: ModelHandle<BlocklistAIInputModel>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
         ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
+        handoff_compose_state: ModelHandle<HandoffComposeState>,
         prompt: ModelHandle<PromptType>,
         display_chip_config: DisplayChipConfig,
         ctx: &mut ViewContext<Self>,
@@ -361,7 +356,7 @@ impl AgentInputFooter {
         let handoff_to_cloud_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::UploadCloud)
-                .with_tooltip("Hand off to cloud")
+                .with_tooltip("Hand off to cloud (or type &)")
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
@@ -625,11 +620,19 @@ impl AgentInputFooter {
                     ctx.add_typed_action_view(|ctx| {
                         EnvironmentSelector::new(
                             menu_positioning_provider.clone(),
-                            ambient_agent_view_model.clone(),
+                            EnvironmentSelectorTarget::CloudPane(ambient_agent_view_model.clone()),
                             ctx,
                         )
                     })
                 });
+
+        let handoff_environment_selector = ctx.add_typed_action_view(|ctx| {
+            EnvironmentSelector::new(
+                menu_positioning_provider.clone(),
+                EnvironmentSelectorTarget::Handoff(handoff_compose_state.clone()),
+                ctx,
+            )
+        });
 
         if let Some(environment_selector) = environment_selector.as_ref() {
             ctx.subscribe_to_view(environment_selector, |_, _, event, ctx| match event {
@@ -645,11 +648,39 @@ impl AgentInputFooter {
             });
         }
 
+        ctx.subscribe_to_view(
+            &handoff_environment_selector,
+            |_, _, event, ctx| match event {
+                EnvironmentSelectorEvent::MenuVisibilityChanged { open } => {
+                    ctx.emit(AgentInputFooterEvent::ToggledChipMenu { open: *open });
+                    if !*open {
+                        ctx.emit(AgentInputFooterEvent::EnvironmentSelectorClosed);
+                    }
+                }
+                EnvironmentSelectorEvent::OpenEnvironmentManagementPane => {
+                    ctx.emit(AgentInputFooterEvent::OpenEnvironmentManagementPane);
+                }
+            },
+        );
+
         if let Some(ambient_agent_view_model) = ambient_agent_view_model.as_ref() {
             ctx.subscribe_to_model(ambient_agent_view_model, |_, _, _, ctx| {
                 ctx.notify();
             });
         }
+
+        ctx.subscribe_to_model(
+            &handoff_compose_state,
+            |me, handoff_compose_state, _, ctx| {
+                if !handoff_compose_state.as_ref(ctx).is_active() {
+                    me.handoff_environment_selector
+                        .update(ctx, |selector, ctx| {
+                            selector.set_menu_visibility(false, ctx)
+                        });
+                }
+                ctx.notify();
+            },
+        );
 
         let prompt_alert = ctx.add_typed_action_view(PromptAlertView::new);
         ctx.subscribe_to_view(&prompt_alert, |_, _, event, ctx| {
@@ -666,7 +697,19 @@ impl AgentInputFooter {
             ctx.notify()
         });
         ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
-            if let AISettingsChangedEvent::AIAutoDetectionEnabled { .. } = event {
+            if matches!(
+                event,
+                AISettingsChangedEvent::AIAutoDetectionEnabled { .. }
+                    | AISettingsChangedEvent::ShouldForceDisableCloudHandoff { .. }
+            ) {
+                ctx.notify()
+            }
+        });
+        ctx.subscribe_to_model(&PrivacySettings::handle(ctx), |_, _, event, ctx| {
+            if matches!(
+                event,
+                PrivacySettingsChangedEvent::UpdateIsCloudConversationStorageEnabled { .. }
+            ) {
                 ctx.notify()
             }
         });
@@ -788,8 +831,10 @@ impl AgentInputFooter {
             context_window_button,
             model_selector: profile_model_selector_full,
             environment_selector,
+            handoff_environment_selector,
             prompt_alert,
             terminal_model,
+            handoff_compose_state,
             render_ftu_callout: false,
             left_display_chips: vec![],
             right_display_chips: vec![],
@@ -1361,6 +1406,15 @@ impl AgentInputFooter {
             return None;
         }
 
+        // Hide ShareSession for shared ambient (cloud) agent sessions —
+        // it doesn't make sense to offer remote-control when already
+        // viewing a cloud agent's shared session.
+        if matches!(item, AgentToolbarItemKind::ShareSession)
+            && self.terminal_model.lock().is_shared_ambient_agent_session()
+        {
+            return None;
+        }
+
         match item {
             AgentToolbarItemKind::ContextChip(chip_kind) => {
                 self.cli_display_chip(chip_kind.clone(), app)
@@ -1531,8 +1585,10 @@ impl AgentInputFooter {
             .environment_selector
             .as_ref()
             .is_some_and(|selector| selector.as_ref(app).is_menu_open());
+        let has_open_handoff_env_selector =
+            self.handoff_environment_selector.as_ref(app).is_menu_open();
 
-        has_open_display_chip || has_open_env_selector
+        has_open_display_chip || has_open_env_selector || has_open_handoff_env_selector
     }
 
     pub fn is_model_selector_open(&self, app: &AppContext) -> bool {
@@ -1916,6 +1972,7 @@ impl AgentInputFooter {
         &self,
         item: &AgentToolbarItemKind,
         shared_status: &SharedSessionStatus,
+        is_cloud_context: bool,
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let is_cloud_mode = FeatureFlag::CloudModeImageContext.is_enabled()
@@ -1930,6 +1987,13 @@ impl AgentInputFooter {
         {
             return None;
         }
+
+        if self.handoff_compose_state.as_ref(app).is_active()
+            && !item.is_available_during_handoff_compose()
+        {
+            return None;
+        }
+
         match item {
             AgentToolbarItemKind::ContextChip(chip_kind) => {
                 let chips = match SessionSettings::as_ref(app)
@@ -1988,14 +2052,13 @@ impl AgentInputFooter {
                 .is_enabled()
                 .then(|| ChildView::new(&self.fast_forward_button).finish()),
             AgentToolbarItemKind::HandoffToCloud => {
-                if !AgentToolbarItemKind::handoff_to_cloud_available() {
+                if !AISettings::as_ref(app)
+                    .is_cloud_handoff_enabled_for_terminal_view(self.terminal_view_id, app)
+                    || is_cloud_context
+                {
                     return None;
                 }
-                // Render the chip when the native/local handoff surface is available.
-                // Per-conversation eligibility (synced server token, non-empty
-                // history) is enforced by `Workspace::start_local_to_cloud_handoff`,
-                // which surfaces an error toast and does not open a pane when
-                // the active conversation isn't handoff-able.
+
                 Some(ChildView::new(&self.handoff_to_cloud_button).finish())
             }
             // Handled by the available_in() guard above; included for exhaustiveness.
@@ -2075,13 +2138,22 @@ impl View for AgentInputFooter {
                 left_buttons =
                     left_buttons.with_child(ChildView::new(environment_selector).finish());
             }
+        } else if self.handoff_compose_state.as_ref(app).is_active() {
+            left_buttons = left_buttons
+                .with_child(ChildView::new(&self.handoff_environment_selector).finish());
         }
 
         let terminal_model = self.terminal_model.lock();
         let shared_status = terminal_model.shared_session_status();
+        let is_cloud_context = super::is_in_cloud_context(
+            terminal_model.block_list().agent_view_state(),
+            &terminal_model,
+        );
 
         for item in &left_items {
-            if let Some(element) = self.render_toolbar_item(item, shared_status, app) {
+            if let Some(element) =
+                self.render_toolbar_item(item, shared_status, is_cloud_context, app)
+            {
                 left_buttons.add_child(element);
             }
         }
@@ -2102,7 +2174,9 @@ impl View for AgentInputFooter {
             );
         } else {
             for item in &right_items {
-                if let Some(element) = self.render_toolbar_item(item, shared_status, app) {
+                if let Some(element) =
+                    self.render_toolbar_item(item, shared_status, is_cloud_context, app)
+                {
                     right_buttons.add_child(element);
                 }
             }
@@ -2461,10 +2535,11 @@ impl TypedActionView for AgentInputFooter {
                 });
             }
             AgentInputFooterAction::OpenHandoffPane => {
-                if AgentToolbarItemKind::handoff_to_cloud_available() {
-                    ctx.emit(AgentInputFooterEvent::OpenHandoffPane {
-                        initial_prompt: None,
-                    });
+                if FeatureFlag::OzHandoff.is_enabled()
+                    && FeatureFlag::HandoffLocalCloud.is_enabled()
+                    && cfg!(all(feature = "local_fs", not(target_family = "wasm")))
+                {
+                    ctx.emit(AgentInputFooterEvent::OpenHandoffPane);
                 }
             }
             AgentInputFooterAction::ShowContextMenu { position } => {
@@ -2514,10 +2589,8 @@ pub enum AgentInputFooterEvent {
     #[cfg(not(target_family = "wasm"))]
     OpenPluginInstructionsPane(CLIAgent, PluginModalKind),
     /// Local-to-cloud handoff chip clicked. The terminal `Input` subscriber
-    /// forwards this to `WorkspaceAction::OpenLocalToCloudHandoffPane`.
-    OpenHandoffPane {
-        initial_prompt: Option<String>,
-    },
+    /// activates `&` handoff-compose mode on the local input.
+    OpenHandoffPane,
 }
 
 impl Entity for AgentInputFooter {

@@ -1,10 +1,9 @@
-use warpui::{Entity, SingletonEntity};
-
 #[cfg(feature = "local_fs")]
 use std::path::{Path, PathBuf};
+
 #[cfg(feature = "local_fs")]
 use warpui::ModelContext;
-
+use warpui::{Entity, SingletonEntity};
 #[cfg(feature = "local_fs")]
 use {
     crate::throttle::throttle,
@@ -89,7 +88,7 @@ impl GitStatusUpdateModel {
 
         // Create a new sub-model.
         let Some(repository_model) =
-            DetectedRepositories::as_ref(ctx).get_watched_repo_for_path(repo_path, ctx)
+            DetectedRepositories::as_ref(ctx).get_local_watched_repo_for_path(repo_path, ctx)
         else {
             anyhow::bail!(
                 "No watched repository found for path: {}",
@@ -260,7 +259,7 @@ impl GitRepoStatusModel {
         if update.is_empty() {
             return false;
         }
-        if update.commit_updated || update.index_lock_detected {
+        if update.commit_updated || update.index_lock_detected || update.remote_ref_updated {
             return true;
         }
         // Check if any non-ignored file was touched.

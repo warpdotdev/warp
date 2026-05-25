@@ -1,33 +1,31 @@
 mod convert;
 
-use std::{fmt::Display, ops::Range, path::PathBuf, time::Duration};
+use std::fmt::Display;
+use std::ops::Range;
+use std::path::PathBuf;
+use std::time::Duration;
 
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumDiscriminants;
 use uuid::Uuid;
+pub use warp_multi_agent_api::LifecycleEventType;
 use warp_terminal::model::BlockId;
 
-use crate::{
-    agent::{
-        action_result::{
-            AIAgentActionResultType, AskUserQuestionResult, CallMCPToolResult,
-            CreateDocumentsResult, EditDocumentsResult, FetchConversationResult, FileGlobResult,
-            FileGlobV2Result, GrepResult, InsertReviewCommentsResult, ReadDocumentsResult,
-            ReadFilesResult, ReadMCPResourceResult, ReadShellCommandOutputResult, ReadSkillResult,
-            RequestCommandOutputResult, RequestComputerUseResult, RequestFileEditsResult,
-            RunAgentsResult, SearchCodebaseResult, SendMessageToAgentResult, StartAgentResult,
-            StartAgentVersion, SuggestNewConversationResult, SuggestPromptResult,
-            TransferShellCommandControlToUserResult, UploadArtifactResult, UseComputerResult,
-            WriteToLongRunningShellCommandResult,
-        },
-        AIAgentCitation, FileLocations,
-    },
-    diff_validation::ParsedDiff,
-    document::AIDocumentId,
-    skills::SkillReference,
+use crate::agent::action_result::{
+    AIAgentActionResultType, AskUserQuestionResult, CallMCPToolResult, CreateDocumentsResult,
+    EditDocumentsResult, FetchConversationResult, FileGlobResult, FileGlobV2Result, GrepResult,
+    InsertReviewCommentsResult, ReadDocumentsResult, ReadFilesResult, ReadMCPResourceResult,
+    ReadShellCommandOutputResult, ReadSkillResult, RequestCommandOutputResult,
+    RequestComputerUseResult, RequestFileEditsResult, RunAgentsResult, SearchCodebaseResult,
+    SendMessageToAgentResult, StartAgentResult, StartAgentVersion, SuggestNewConversationResult,
+    SuggestPromptResult, TransferShellCommandControlToUserResult, UploadArtifactResult,
+    UseComputerResult, WriteToLongRunningShellCommandResult,
 };
-pub use warp_multi_agent_api::LifecycleEventType;
+use crate::agent::{AIAgentCitation, FileLocations};
+use crate::diff_validation::ParsedDiff;
+use crate::document::AIDocumentId;
+use crate::skills::SkillReference;
 
 #[derive(Debug, Clone, Eq, PartialEq, EnumDiscriminants)]
 pub enum AIAgentActionType {
@@ -48,7 +46,7 @@ pub enum AIAgentActionType {
         /// result instead.
         wait_until_completion: bool,
 
-        /// [`Some(true)`] iff the LLM thinks that the `command` might invoke pager.
+        /// [`Some(true)`] iff the LLM thinks that the `command` might invoke a pager.
         uses_pager: Option<bool>,
 
         /// The AI's rationale for requesting a command.
@@ -192,6 +190,9 @@ pub struct RunAgentsRequest {
     pub harness_type: String,
     pub execution_mode: RunAgentsExecutionMode,
     pub agent_run_configs: Vec<RunAgentsAgentRunConfig>,
+    pub plan_id: String,
+    /// Resolved client-side at dispatch time; not serialized to the wire.
+    pub harness_auth_secret_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -237,6 +238,11 @@ pub enum StartAgentExecutionMode {
         worker_host: String,
         harness_type: String,
         title: String,
+        /// Name of a managed secret to forward as the authentication
+        /// credential for the remote child when running a non-Oz harness.
+        /// `None` means no client-side secret was selected — the remote
+        /// environment falls back to its own ambient credentials.
+        auth_secret_name: Option<String>,
     },
 }
 
@@ -266,6 +272,7 @@ impl StartAgentExecutionMode {
             worker_host: String::new(),
             harness_type: String::new(),
             title: String::new(),
+            auth_secret_name: None,
         }
     }
 }

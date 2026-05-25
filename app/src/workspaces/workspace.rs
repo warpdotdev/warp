@@ -1,15 +1,23 @@
+use std::cmp::Ordering;
+use std::path::PathBuf;
+
+use chrono::Utc;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use warp_graphql::billing::{AddonCreditAutoReloadStatus, ServiceAgreement, ServiceAgreementType};
+pub use warp_graphql::billing::{
+    AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
+    AiCreditsUsageSource,
+};
+
+use super::team::{MembershipRole, Team};
 use crate::ai::execution_profiles::{
     ActionPermission, ComputerUsePermission, WriteToPtyPermission,
 };
 use crate::ai::llms::LLMModelHost;
-use crate::{auth::UserUid, server::ids::ServerId, settings::AgentModeCommandExecutionPredicate};
-use chrono::Utc;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use std::{cmp::Ordering, path::PathBuf};
-use warp_graphql::billing::{AddonCreditAutoReloadStatus, ServiceAgreement, ServiceAgreementType};
-
-use super::team::{MembershipRole, Team};
+use crate::auth::UserUid;
+use crate::server::ids::ServerId;
+use crate::settings::AgentModeCommandExecutionPredicate;
 
 #[derive(Clone, Copy, Hash, Debug, PartialEq, Eq)]
 pub struct WorkspaceUid(ServerId);
@@ -37,6 +45,7 @@ pub struct Workspace {
     pub teams: Vec<Team>,
     pub billing_metadata: BillingMetadata,
     pub bonus_grants_purchased_this_month: BonusGrantsPurchased,
+    pub billing_cycle_usage: Option<BillingCycleUsageData>,
     pub has_billing_history: bool,
     pub settings: WorkspaceSettings,
     pub invite_code: Option<WorkspaceInviteCode>,
@@ -65,6 +74,7 @@ impl Workspace {
             teams: teams.unwrap_or_default(),
             billing_metadata,
             bonus_grants_purchased_this_month: Default::default(),
+            billing_cycle_usage: None,
             has_billing_history: false,
             settings: Default::default(), // TODO: persistence wrapper instead of default
             invite_code: Default::default(),
@@ -83,6 +93,20 @@ impl Workspace {
     pub fn is_workspace_admin(&self, user_email: &str) -> bool {
         self.get_member_by_email(user_email)
             .is_some_and(|member| member.role.is_admin_or_owner())
+    }
+
+    pub fn resolve_usage_visibility(&self, is_admin: bool) -> UsageVisibility {
+        let Some(policy) = self.billing_metadata.tier.usage_visibility_policy else {
+            return UsageVisibility::default();
+        };
+        UsageVisibility {
+            granularity: if is_admin {
+                policy.admin_granularity
+            } else {
+                UsageVisibilityGranularity::OwnOnly
+            },
+            max_prior_cycles: policy.max_prior_cycles,
+        }
     }
 
     pub fn can_be_deleted(&self, current_user_email: &str) -> bool {
@@ -384,6 +408,48 @@ pub struct InstanceShape {
     pub memory_gb: i32,
 }
 
+/// Granularity at which a viewer can see AI usage across their team.
+/// Non-admins always collapse to `OwnOnly` regardless of tier.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UsageVisibilityGranularity {
+    #[default]
+    OwnOnly,
+    TeamAggregate,
+    PerUserTotals,
+    FullBreakdown,
+}
+
+/// Number of prior billing cycles a viewer can scroll back through, in
+/// addition to the always-visible current cycle. Plan-wide; applies to
+/// admins and non-admins alike.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MaxPriorCycles {
+    #[default]
+    None,
+    /// Current cycle plus `n` prior cycles (`n >= 1`).
+    Limited(u32),
+    Unlimited,
+}
+
+/// Rust representation of the `UsageVisibilityPolicy` tier policy from the
+/// GraphQL schema.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+pub struct UsageVisibilityPolicy {
+    pub admin_granularity: UsageVisibilityGranularity,
+    pub max_prior_cycles: MaxPriorCycles,
+}
+
+/// Effective per-viewer visibility, after combining the tier's
+/// `UsageVisibilityPolicy` with the viewer's admin status. Non-admins always
+/// collapse to `granularity == OwnOnly`; `max_prior_cycles` is plan-wide and
+/// applies to admins and non-admins alike. Built by
+/// [`Workspace::resolve_usage_visibility`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UsageVisibility {
+    pub granularity: UsageVisibilityGranularity,
+    pub max_prior_cycles: MaxPriorCycles,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub enum HostEnablementSetting {
     Enforce,
@@ -413,6 +479,7 @@ pub struct Tier {
     pub enterprise_credits_auto_reload_policy: Option<EnterpriseCreditsAutoReloadPolicy>,
     pub multi_admin_policy: Option<MultiAdminPolicy>,
     pub ambient_agents_policy: Option<AmbientAgentsPolicy>,
+    pub usage_visibility_policy: Option<UsageVisibilityPolicy>,
 }
 
 /// This struct is the rust representation of `BillingMetadata` from the GraphQL Schema.
@@ -439,6 +506,53 @@ pub struct AiOverages {
     pub current_monthly_request_cost_cents: i32,
     pub current_monthly_requests_used: i32,
     pub current_period_end: chrono::DateTime<chrono::Utc>,
+}
+
+/// A single redacted usage entry from `Workspace.billingCycleUsageHistory`.
+///
+/// The shape of this entry depends on the viewer's resolved `UsageVisibility`:
+/// * `OwnOnly` viewers receive only their own entries with real `cost_type` /
+///   `usage_bucket` / `usage_source` values.
+/// * `TeamAggregate` viewers receive exactly one synthetic `TEAM` row per cycle
+///   carrying `Aggregate` sentinels for all three categorical fields.
+/// * `PerUserTotals` viewers receive one row per user / service account per
+///   cycle, also with `Aggregate` sentinels on the categorical fields.
+/// * `FullBreakdown` viewers receive every real row, one per
+///   `(subject, cost_type, bucket, source)` tuple. Categorical fields always
+///   carry real values — the server does **not** synthesize an aggregate team
+///   total at this granularity. Compute team-wide sums client-side if needed.
+#[derive(Clone, Debug)]
+pub struct BillingCycleUsageEntry {
+    pub subject_type: AiCreditsUsageAndCostSubjectType,
+    pub subject_uid: Option<String>,
+    pub subject_display_name: Option<String>,
+    pub cost_type: AiCreditsUsageAndCostType,
+    pub usage_bucket: AiCreditsUsageBucket,
+    pub usage_source: AiCreditsUsageSource,
+    pub credits_used: i32,
+    pub cost_cents: i32,
+}
+
+/// Per-cycle bucket of redacted usage entries with explicit period bounds.
+/// `period_end` is exclusive (e.g. a summary covering May 2026 has
+/// `period_end = 2026-06-01T00:00:00Z`).
+#[derive(Clone, Debug)]
+pub struct BillingCycleUsageSummary {
+    pub period_start: chrono::DateTime<chrono::Utc>,
+    pub period_end: chrono::DateTime<chrono::Utc>,
+    pub entries: Vec<BillingCycleUsageEntry>,
+}
+
+/// The full per-cycle usage history for a workspace, as redacted by the
+/// server's `USAGE_VISIBILITY` policy. `current_period_start` /
+/// `current_period_end` mark the cycle that's currently active; older
+/// summaries cover prior cycles and the number of them retained is governed
+/// by the policy's `max_prior_cycles`.
+#[derive(Clone, Debug)]
+pub struct BillingCycleUsageData {
+    pub current_period_start: chrono::DateTime<chrono::Utc>,
+    pub current_period_end: chrono::DateTime<chrono::Utc>,
+    pub summaries: Vec<BillingCycleUsageSummary>,
 }
 
 impl BillingMetadata {
@@ -529,6 +643,22 @@ impl BillingMetadata {
 
     pub fn is_on_build_business_plan(&self) -> bool {
         self.customer_type == CustomerType::Business
+            && matches!(
+                self.service_agreements.first().map(|sa| &sa.type_),
+                Some(ServiceAgreementType::SelfServe)
+            )
+    }
+
+    pub fn is_on_legacy_business_plan(&self) -> bool {
+        self.customer_type == CustomerType::Business && !self.is_on_build_business_plan()
+    }
+
+    pub fn is_enterprise_plan(&self) -> bool {
+        self.customer_type == CustomerType::Enterprise
+    }
+
+    pub fn is_free_plan(&self) -> bool {
+        self.customer_type == CustomerType::Free
     }
 
     pub fn is_on_legacy_paid_plan(&self) -> bool {
@@ -537,14 +667,7 @@ impl BillingMetadata {
             | CustomerType::Turbo
             | CustomerType::Lightspeed
             | CustomerType::SelfServe => true,
-            CustomerType::Business => {
-                // Legacy Business has a non-SelfServe service agreement type;
-                // Build Business uses SelfServe. See gql_convert.rs for context.
-                !matches!(
-                    self.service_agreements.first().map(|sa| &sa.type_),
-                    Some(ServiceAgreementType::SelfServe)
-                )
-            }
+            CustomerType::Business => self.is_on_legacy_business_plan(),
             CustomerType::Free
             | CustomerType::Legacy
             | CustomerType::Enterprise
@@ -608,7 +731,17 @@ impl BillingMetadata {
                 .enterprise_credits_auto_reload_policy
                 .is_some_and(|policy| policy.enabled)
     }
+
+    pub fn is_purchase_add_on_credits_policy_enabled(&self) -> bool {
+        self.tier
+            .purchase_add_on_credits_policy
+            .is_some_and(|policy| policy.enabled)
+    }
 }
+
+#[cfg(test)]
+#[path = "workspace_tests.rs"]
+mod tests;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LlmHostSettings {

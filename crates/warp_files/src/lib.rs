@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 /// A model for operating on files.
 ///
 /// Allows opening and saving files in a single, central model.  Subscribers can watch for content
@@ -6,34 +6,26 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::io;
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime};
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
-
-use remote_server::client::RemoteServerClient;
-use remote_server::manager::RemoteServerManager;
-use warp_core::HostId;
-use warp_util::standardized_path::StandardizedPath;
-
-use futures::io::{AsyncBufReadExt, BufReader};
-use futures::StreamExt;
 
 use async_channel::Sender;
+use futures::io::{AsyncBufReadExt, BufReader};
+use futures::StreamExt;
 use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
-use repo_metadata::{
-    repositories::DetectedRepositories,
-    repository::{RepositorySubscriber, SubscriberId},
-    CanonicalizedPath, Repository, RepositoryUpdate,
-};
+use remote_server::client::RemoteServerClient;
+use remote_server::manager::RemoteServerManager;
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::repository::{RepositorySubscriber, SubscriberId};
+use repo_metadata::{CanonicalizedPath, Repository, RepositoryUpdate};
+use warp_core::HostId;
 use warp_util::content_version::ContentVersion;
-use warp_util::file::FileSaveError;
-use warp_util::file::{FileId, FileLoadError};
-use warpui::ModelHandle;
-use warpui::{r#async::SpawnedFutureHandle, AppContext, Entity, ModelContext, SingletonEntity};
+use warp_util::file::{FileId, FileLoadError, FileSaveError};
+use warp_util::standardized_path::StandardizedPath;
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
 
 pub mod text_file_reader;
@@ -429,13 +421,22 @@ impl FileModel {
                     let version = ContentVersion::new();
                     me.set_version(file_id, version);
 
-                    // Only register individual watcher if not using repo subscription
+                    // Only register individual watcher if not using repo subscription.
+                    // Watch the parent directory (NonRecursive) instead of the file
+                    // itself so the watch survives editors that use a
+                    // delete+create/rename pattern (vim, sed -i, etc.). Watching
+                    // the file directly would lose the inotify watch when the
+                    // original inode is deleted.
                     if use_individual_watcher {
+                        let watch_path = file_path_clone
+                            .parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or_else(|| file_path_clone.clone());
                         me.watcher.update(ctx, |watcher, _ctx| {
                             std::mem::drop(watcher.register_path(
-                                &file_path_clone,
+                                &watch_path,
                                 WatchFilter::accept_all(),
-                                RecursiveMode::Recursive,
+                                RecursiveMode::NonRecursive,
                             ));
                         });
                     }
@@ -638,9 +639,28 @@ impl FileModel {
                 if !path_still_used {
                     match watcher_type {
                         WatcherType::Individual => {
-                            self.watcher.update(ctx, |watcher, _ctx| {
-                                std::mem::drop(watcher.unregister_path(path.as_path()));
-                            });
+                            // Unwatch the parent directory (matching the register
+                            // in open() which watches the parent, not the file).
+                            // Only unregister if no other individually-watched
+                            // files share the same parent directory.
+                            let watch_path = path
+                                .parent()
+                                .map(|p| p.to_path_buf())
+                                .unwrap_or_else(|| path.clone());
+                            let other_files_share_parent =
+                                self.file_state.local_values().any(|f| {
+                                    f.watcher_type == WatcherType::Individual
+                                        && f.path
+                                            .as_deref()
+                                            .and_then(|p| p.parent())
+                                            .map(|p| p == watch_path)
+                                            .unwrap_or(false)
+                                });
+                            if !other_files_share_parent {
+                                self.watcher.update(ctx, |watcher, _ctx| {
+                                    std::mem::drop(watcher.unregister_path(&watch_path));
+                                });
+                            }
                         }
                         WatcherType::Repository => {
                             if let Some((repo_root, unused_repo)) =
@@ -928,7 +948,7 @@ impl FileModel {
 
         // Try to find a repository for this path
         let repository =
-            DetectedRepositories::as_ref(ctx).get_watched_repo_for_path(file_path, ctx)?;
+            DetectedRepositories::as_ref(ctx).get_local_watched_repo_for_path(file_path, ctx)?;
 
         let repo_root = repository.as_ref(ctx).root_dir().to_local_path_lossy();
 

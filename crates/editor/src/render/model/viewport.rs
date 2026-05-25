@@ -1,21 +1,17 @@
 use float_cmp::ApproxEq;
-use sum_tree::{SeekBias, SumTree};
-use warpui::{
-    SizeConstraint,
-    geometry::{
-        rect::RectF,
-        vector::{Vector2F, vec2f},
-    },
-    units::{IntoPixels, Pixels},
-};
-
-use crate::render::element::RenderContext;
 use string_offset::CharOffset;
+use sum_tree::{SeekBias, SumTree};
+use warpui::SizeConstraint;
+use warpui::geometry::rect::RectF;
+use warpui::geometry::vector::{Vector2F, vec2f};
+use warpui::units::{IntoPixels, Pixels};
 
+use super::positioned::PositionedCursor;
 use super::{
     AUTO_SCROLL_MARGIN, BlockItem, BlockSpacing, Height, HitTestOptions, LayoutSummary, Location,
-    RenderState, UNIT_MARGIN, bounds, positioned::PositionedCursor,
+    RenderState, UNIT_MARGIN, bounds,
 };
+use crate::render::element::RenderContext;
 
 /// For horizontal autoscrolling, it is very easy to "stuck" on a character if it is aligned exactly on the viewport boundary.
 /// To help make scrolling more smooth, add a small margin here to overcome these boundaries.

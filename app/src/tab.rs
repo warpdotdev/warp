@@ -1,40 +1,10 @@
-use crate::ai::agent::conversation::ConversationStatus;
-use crate::ai::conversation_status_ui::{render_status_element, STATUS_ELEMENT_PADDING};
-use crate::appearance::Appearance;
-/// Tab module contains structures related to Tabs (such as TabData or TabComponent) that simplify
-/// the rendering and management of tabs in general.
-use crate::editor::EditorView;
-use crate::features::FeatureFlag;
-use crate::launch_configs::launch_config::LaunchConfig;
-use crate::menu::{MenuAction, MenuItem, MenuItemFields};
-use crate::pane_group::{PaneGroup, PaneId};
-use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
-use settings::Setting as _;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::shell_indicator::ShellIndicatorType;
-use crate::terminal::shared_session::render_util::shared_session_indicator_color;
-use crate::terminal::view::TerminalViewState;
-use crate::themes::theme::{AnsiColorIdentifier, Fill as ThemeFill, VerticalGradient};
-use crate::ui_components::buttons::icon_button;
-use crate::ui_components::color_dot::{render_color_dot, TAB_COLOR_OPTIONS};
-use crate::ui_components::icons::{Icon, ICON_DIMENSIONS};
-use crate::util::color::{coloru_with_opacity, Opacity};
-use crate::util::truncation::truncate_from_end;
-
-use crate::window_settings::WindowSettings;
-use crate::workspace::sync_inputs::SyncedInputState;
-use crate::workspace::tab_settings::{
-    TabCloseButtonPosition, TabSettings, VerticalTabsDisplayGranularity,
-};
-use crate::workspace::{
-    PaneViewLocator, TabBarDropTargetData, TabBarLocation, TabContextMenuAnchor, WorkspaceAction,
-};
-use crate::BlocklistAIHistoryModel;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use serde::{Deserialize, Serialize};
+use settings::Setting as _;
 use warp_core::context_flag::ContextFlag;
 use warp_core::ui::builder::UiBuilder;
 use warp_core::ui::theme::color::internal_colors;
@@ -52,6 +22,35 @@ use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::text_input::TextInput;
 use warpui::{AppContext, SingletonEntity, ViewHandle};
+
+use crate::ai::agent::conversation::ConversationStatus;
+use crate::ai::conversation_status_ui::{render_status_element, STATUS_ELEMENT_PADDING};
+use crate::appearance::Appearance;
+/// Tab module contains structures related to Tabs (such as TabData or TabComponent) that simplify
+/// the rendering and management of tabs in general.
+use crate::editor::EditorView;
+use crate::features::FeatureFlag;
+use crate::launch_configs::launch_config::LaunchConfig;
+use crate::menu::{MenuAction, MenuItem, MenuItemFields};
+use crate::pane_group::{PaneGroup, PaneId};
+use crate::shell_indicator::ShellIndicatorType;
+use crate::terminal::shared_session::render_util::shared_session_indicator_color;
+use crate::terminal::view::TerminalViewState;
+use crate::themes::theme::{AnsiColorIdentifier, Fill as ThemeFill, VerticalGradient};
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::color_dot::{render_color_dot, TAB_COLOR_OPTIONS};
+use crate::ui_components::icons::{Icon, ICON_DIMENSIONS};
+use crate::util::color::{coloru_with_opacity, Opacity};
+use crate::util::truncation::truncate_from_end;
+use crate::window_settings::WindowSettings;
+use crate::workspace::sync_inputs::SyncedInputState;
+use crate::workspace::tab_settings::{
+    TabCloseButtonPosition, TabSettings, VerticalTabsDisplayGranularity,
+};
+use crate::workspace::{
+    PaneViewLocator, TabBarDropTargetData, TabBarLocation, TabContextMenuAnchor, WorkspaceAction,
+};
+use crate::BlocklistAIHistoryModel;
 
 pub const TAB_BAR_BORDER_HEIGHT: f32 = 1.0;
 const TAB_INDICATOR_HEIGHT: f32 = 14.0;
@@ -790,14 +789,19 @@ impl<'a> TabComponent<'a> {
         let active_pane_is_ambient_agent_session = tab
             .pane_group
             .as_ref(ctx)
-            .active_session_terminal_model(ctx)
-            .map(|model| {
-                let model = model.lock();
-                model.is_shared_ambient_agent_session()
-                    || matches!(
-                        model.conversation_transcript_viewer_status(),
-                        Some(ConversationTranscriptViewerStatus::ViewingAmbientConversation(_))
-                    )
+            .active_session_view(ctx)
+            .map(|view| {
+                let view = view.as_ref(ctx);
+                view.is_ambient_agent_session(ctx) || {
+                    let model = view.model.lock();
+                    model.is_shared_ambient_agent_session()
+                        || matches!(
+                            model.conversation_transcript_viewer_status(),
+                            Some(
+                                crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus::ViewingAmbientConversation(_)
+                            )
+                        )
+                }
             })
             .unwrap_or(false);
         let active_pane_has_unsaved_code_changes = tab

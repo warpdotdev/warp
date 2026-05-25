@@ -1,25 +1,28 @@
-use std::{
-    collections::HashMap,
-    future::Future,
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::collections::HashMap;
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use crate::ai::cloud_environments::{AmbientAgentEnvironment, GithubRepo};
-use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
-use crate::terminal::shell::ShellType;
 use ai::index::full_source_code_embedding::manager::{
     CodebaseIndexManager, CodebaseIndexManagerEvent,
 };
-use futures::{channel::oneshot, future::join_all};
+use futures::channel::oneshot;
+use futures::future::join_all;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
-use warp_completer::completer::CommandExitStatus;
-use warp_core::{command::ExitCode, safe_info, safe_warn};
-use warpui::{r#async::FutureExt, ModelContext, ModelSpawner, SingletonEntity};
-
-use super::{terminal::TerminalDriver, AgentDriverError};
 use warp_cli::agent::Harness;
+use warp_completer::completer::CommandExitStatus;
+use warp_core::command::ExitCode;
+use warp_core::{safe_info, safe_warn};
+use warpui::r#async::FutureExt;
+use warpui::{ModelContext, ModelSpawner, SingletonEntity};
+
+use super::terminal::TerminalDriver;
+use super::AgentDriverError;
+use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
+use crate::ai::cloud_environments::{AmbientAgentEnvironment, GithubRepo};
+use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
+use crate::terminal::shell::ShellType;
 
 const CODEBASE_INDEX_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -54,6 +57,7 @@ pub fn prepare_environment(
     working_dir: PathBuf,
     is_sandbox: bool,
     harness: Harness,
+    setup_events: SetupClientEventReporter,
     ctx: &mut ModelContext<TerminalDriver>,
 ) -> impl Future<Output = Result<(), PrepareEnvironmentError>> {
     let spawner = ctx.spawner();
@@ -82,10 +86,11 @@ pub fn prepare_environment(
             setup_commands,
             should_index_codebase,
             Arc::clone(&repo_channels),
+            setup_events,
         )
         .await;
 
-        if should_subscribe_to_index_updates {
+        if should_subscribe_to_index_updates && result.is_err() {
             let _ = spawner
                 .spawn(|_, ctx| {
                     ctx.unsubscribe_from_model(&CodebaseIndexManager::handle(ctx));
@@ -97,6 +102,7 @@ pub fn prepare_environment(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn prepare_environment_impl(
     spawner: &ModelSpawner<TerminalDriver>,
     working_dir: &Path,
@@ -105,6 +111,7 @@ async fn prepare_environment_impl(
     setup_commands: Vec<String>,
     should_index_codebase: bool,
     repo_channels: Arc<Mutex<HashMap<PathBuf, oneshot::Sender<()>>>>,
+    setup_events: SetupClientEventReporter,
 ) -> Result<(), PrepareEnvironmentError> {
     let working_dir_string = working_dir.to_string_lossy().to_string();
 
@@ -120,170 +127,89 @@ async fn prepare_environment_impl(
     }
     let mut codebase_context_receivers = Vec::new();
 
-    for repo in github_repos {
-        let repo_name = format!("{}/{}", repo.owner, repo.repo);
-        let repo_url = format!("https://github.com/{repo_name}.git");
-        // We do a partial clone here to speed up environment setup time.
-        let command = format!("git clone --filter=tree:0 {repo_url}");
-
-        let repo_dir = working_dir.join(&repo.repo);
-        // Always ask the session whether the repo dir already exists, rather
-        // than stat'ing from the host. The session knows about sandbox-only
-        // paths, and this goes through the silent executor so `test -d` is
-        // not added to the user-visible blocklist. Pass the absolute path
-        // explicitly so the probe doesn't rely on the session's CWD.
-        let dir_exists = terminal_directory_exists(&repo_dir.to_string_lossy(), spawner).await?;
-
-        if dir_exists {
-            safe_warn!(
-                safe: ("We already have a directory with the same repository name in the terminal working directory, skipping clone..."),
-                full: (
-                "We already have a directory with the name {} in the terminal working directory, skipping clone...",
-                repo.repo)
-            );
-        } else {
-            safe_info!(
-                safe: ("Cloning repository via terminal"),
-                full: ("Cloning repository via terminal: {repo_name}")
-            );
-
-            let exit_code = execute_command(command, spawner).await?;
-            if exit_code != 0.into() {
-                return Err(PrepareEnvironmentError::CloneRepo {
-                    repo_name: repo_name.clone(),
-                });
-            }
-
-            safe_info!(
-                safe: ("Successfully cloned repository"),
-                full: ("Successfully cloned: {repo_name}")
-            );
-        }
-
-        // Register the repo with DetectedRepositories so that the skill watcher
-        // and other repo-aware subsystems can discover it before the first query.
-        //
-        // TODO(advait): When the remote code server lands for Docker sandboxes,
-        // sandbox-only working directories will be reachable from the host and
-        // we should register + index them here too (likely via a remote-aware
-        // path instead of `detect_possible_git_repo`/`index_directory`, which
-        // both assume a local filesystem). For now, skip so we don't try to
-        // stat paths that only exist inside the sandbox.
-        if is_sandbox {
-            safe_info!(
-                safe: ("Skipping local repo detection for sandbox-only working directory"),
-                full: (
-                    "Skipping local repo detection and indexing for sandbox-only working directory {}",
-                    working_dir.display()
-                )
-            );
-        } else {
-            let repo_dir_str = repo_dir.to_string_lossy().to_string();
-            let detect_future = spawner
-                .spawn(move |_, ctx| {
-                    DetectedRepositories::handle(ctx).update(ctx, |repos, ctx| {
-                        repos.detect_possible_git_repo(
-                            &repo_dir_str,
-                            RepoDetectionSource::CloudEnvironmentPrep,
-                            ctx,
+    if !github_repos.is_empty() {
+        setup_events
+            .record_result(SetupStep::EnvironmentRepoClone, async {
+                for repo in github_repos {
+                    ensure_repo_cloned(repo, working_dir, is_sandbox, spawner).await?;
+                    if !is_sandbox && should_index_codebase {
+                        let receiver = index_repo_codebase(
+                            &repo.repo,
+                            working_dir,
+                            Arc::clone(&repo_channels),
+                            spawner,
                         )
-                    })
-                })
-                .await
-                .map_err(|_| PrepareEnvironmentError::InvalidRuntimeState)?;
-            // Await detection so the repo is registered in DirectoryWatcher
-            // before the agent's first query.
-            if detect_future.await.is_none() {
-                safe_warn!(
-                    safe: ("Repository detection returned no path"),
-                    full: ("Repository detection returned no path for {}", repo_dir.display())
-                );
-            }
-
-            if should_index_codebase {
-                let receiver = index_repo_codebase(
-                    &repo.repo,
-                    working_dir,
-                    Arc::clone(&repo_channels),
-                    spawner,
-                )
-                .await?;
-                if let Some(receiver) = receiver {
-                    codebase_context_receivers.push(receiver);
+                        .await?;
+                        if let Some(receiver) = receiver {
+                            codebase_context_receivers.push(receiver);
+                        }
+                    }
                 }
-            }
+                Ok::<(), PrepareEnvironmentError>(())
+            })
+            .await?;
+
+        if should_index_codebase {
+            record_codebase_indexing(
+                setup_events.clone(),
+                spawner.clone(),
+                codebase_context_receivers,
+            );
         }
     }
 
     let has_setup_commands = !setup_commands.is_empty();
     if has_setup_commands {
-        // Set CI=true so setup commands run in a CI-like environment. This should help us run
-        // non-interactive versions of setup commands, as many command line tools recognize the CI
-        // environment variable.
-        execute_command("export CI=true".to_string(), spawner).await?;
+        setup_events
+            .record_result(SetupStep::EnvironmentSetupCommands, async {
+                // Set CI=true so setup commands run in a CI-like environment. This should help us run
+                // non-interactive versions of setup commands, as many command line tools recognize the CI
+                // environment variable.
+                execute_command("export CI=true".to_string(), spawner).await?;
+
+                for command in setup_commands {
+                    let command_for_error = command.clone();
+                    safe_info!(
+                        safe: ("Running setup command"),
+                        full: ("Running setup command: {command}")
+                    );
+
+                    let exit_code = execute_command(command, spawner).await?;
+                    if exit_code != 0.into() {
+                        return Err(PrepareEnvironmentError::SetupCommand {
+                            command: command_for_error,
+                        });
+                    }
+
+                    let working_dir_string = working_dir.to_string_lossy().to_string();
+                    if let Err(error) = cd_in_terminal(working_dir_string, spawner).await {
+                        log::warn!(
+                            "Failed to reset working directory after setup command: {error}"
+                        );
+                    }
+
+                    safe_info!(
+                        safe: ("Successfully completed setup command"),
+                        full: ("Successfully completed setup command: {command_for_error}")
+                    );
+                }
+
+                // Unset CI after setup commands complete so the agent session
+                // does not run with CI=true.
+                execute_command("unset CI".to_string(), spawner).await?;
+                Ok::<(), PrepareEnvironmentError>(())
+            })
+            .await?;
+    } else if should_index_codebase && github_repos.is_empty() {
+        let _ = spawner
+            .spawn(|_, ctx| {
+                ctx.unsubscribe_from_model(&CodebaseIndexManager::handle(ctx));
+            })
+            .await;
     }
 
-    for command in setup_commands {
-        let command_for_error = command.clone();
-        safe_info!(
-            safe: ("Running setup command"),
-            full: ("Running setup command: {command}")
-        );
-
-        let exit_code = execute_command(command, spawner).await?;
-        if exit_code != 0.into() {
-            return Err(PrepareEnvironmentError::SetupCommand {
-                command: command_for_error,
-            });
-        }
-
-        let working_dir_string = working_dir.to_string_lossy().to_string();
-        if let Err(error) = cd_in_terminal(working_dir_string, spawner).await {
-            log::warn!("Failed to reset working directory after setup command: {error}");
-        }
-
-        safe_info!(
-            safe: ("Successfully completed setup command"),
-            full: ("Successfully completed setup command: {command_for_error}")
-        );
-    }
-
-    if has_setup_commands {
-        // Unset CI after setup commands complete so the agent session
-        // does not run with CI=true.
-        execute_command("unset CI".to_string(), spawner).await?;
-    }
-
-    if !github_repos.is_empty() {
-        // Wait for codebase indexing for all repositories after running setup commands.
-        // We skip this if running in Docker sandboxes since they don't have a cache volume.
-        // We also skip this in Namespace to reduce startup time.
-        #[cfg(not(target_family = "wasm"))]
-        let should_wait_for_indexing = !matches!(
-            warp_isolation_platform::detect(),
-            Some(
-                warp_isolation_platform::IsolationPlatformType::DockerSandbox
-                    | warp_isolation_platform::IsolationPlatformType::Namespace
-            )
-        );
-        #[cfg(target_family = "wasm")]
-        let should_wait_for_indexing = true;
-
-        if should_wait_for_indexing {
-            let repos_indexed = join_all(codebase_context_receivers);
-            if repos_indexed
-                .with_timeout(CODEBASE_INDEX_SYNC_TIMEOUT)
-                .await
-                .is_err()
-            {
-                log::warn!(
-                    "Timed out waiting for codebase index sync; continuing without guaranteed codebase context",
-                );
-            }
-        } else {
-            drop(codebase_context_receivers);
-            log::info!("Not waiting for codebase index sync");
-        }
+    if should_index_codebase && github_repos.is_empty() {
+        log::info!("No repositories to index for codebase context");
     }
 
     // If there's only one repo in the environment, start the agent in that repo.
@@ -302,6 +228,157 @@ async fn prepare_environment_impl(
     Ok(())
 }
 
+fn record_codebase_indexing(
+    setup_events: SetupClientEventReporter,
+    spawner: ModelSpawner<TerminalDriver>,
+    codebase_context_receivers: Vec<oneshot::Receiver<()>>,
+) {
+    if codebase_context_receivers.is_empty() {
+        setup_events.record_value_detached(SetupStep::EnvironmentCodebaseIndexing, async move {
+            let _ = spawner
+                .spawn(|_, ctx| {
+                    ctx.unsubscribe_from_model(&CodebaseIndexManager::handle(ctx));
+                })
+                .await;
+        });
+        return;
+    }
+
+    setup_events.record_value_detached(SetupStep::EnvironmentCodebaseIndexing, async move {
+        let repos_indexed = join_all(codebase_context_receivers);
+        if repos_indexed
+            .with_timeout(CODEBASE_INDEX_SYNC_TIMEOUT)
+            .await
+            .is_err()
+        {
+            log::warn!(
+                "Timed out waiting for codebase index sync; continuing without guaranteed codebase context",
+            );
+        }
+        let _ = spawner
+            .spawn(|_, ctx| {
+                ctx.unsubscribe_from_model(&CodebaseIndexManager::handle(ctx));
+            })
+            .await;
+    });
+}
+
+/// Clone a GitHub repository to `{working_dir}/{repo.repo}` if it does not already exist.
+/// This only performs the clone -- it does NOT register the repo with `DetectedRepositories`.
+pub(super) async fn clone_repo(
+    repo: &GithubRepo,
+    working_dir: &Path,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<(), PrepareEnvironmentError> {
+    let repo_name = format!("{}/{}", repo.owner, repo.repo);
+    let repo_url = format!("https://github.com/{repo_name}.git");
+    // Get the session's shell type for proper escaping, falling back to Bash
+    // when the session is not yet bootstrapped or the spawn fails.
+    let shell_type = spawner
+        .spawn(|driver, ctx| {
+            driver
+                .active_session_shell_type(ctx)
+                .unwrap_or(ShellType::Bash)
+        })
+        .await
+        .unwrap_or(ShellType::Bash);
+    let escaped_url = shell_escape_single_quotes(&repo_url, shell_type);
+    // We do a partial clone here to speed up environment setup time.
+    let command = format!("git clone --filter=tree:0 '{escaped_url}'");
+
+    let repo_dir = working_dir.join(&repo.repo);
+    // Always ask the session whether the repo dir already exists, rather
+    // than stat'ing from the host. The session knows about sandbox-only
+    // paths, and this goes through the silent executor so `test -d` is
+    // not added to the user-visible blocklist. Pass the absolute path
+    // explicitly so the probe doesn't rely on the session's CWD.
+    let dir_exists = terminal_directory_exists(&repo_dir.to_string_lossy(), spawner).await?;
+
+    if dir_exists {
+        safe_warn!(
+            safe: ("We already have a directory with the same repository name in the terminal working directory, skipping clone..."),
+            full: (
+            "We already have a directory with the name {} in the terminal working directory, skipping clone...",
+            repo.repo)
+        );
+    } else {
+        safe_info!(
+            safe: ("Cloning repository via terminal"),
+            full: ("Cloning repository via terminal: {repo_name}")
+        );
+
+        let exit_code = execute_command(command, spawner).await?;
+        if exit_code != 0.into() {
+            return Err(PrepareEnvironmentError::CloneRepo {
+                repo_name: repo_name.clone(),
+            });
+        }
+
+        safe_info!(
+            safe: ("Successfully cloned repository"),
+            full: ("Successfully cloned: {repo_name}")
+        );
+    }
+
+    Ok(())
+}
+
+/// Clone a GitHub repository and register it with `DetectedRepositories` so that
+/// the skill watcher and other repo-aware subsystems can discover it.
+pub(super) async fn ensure_repo_cloned(
+    repo: &GithubRepo,
+    working_dir: &Path,
+    is_sandbox: bool,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<(), PrepareEnvironmentError> {
+    clone_repo(repo, working_dir, spawner).await?;
+
+    let repo_dir = working_dir.join(&repo.repo);
+
+    // Register the repo with DetectedRepositories so that the skill watcher
+    // and other repo-aware subsystems can discover it before the first query.
+    //
+    // TODO(advait): When the remote code server lands for Docker sandboxes,
+    // sandbox-only working directories will be reachable from the host and
+    // we should register + index them here too (likely via a remote-aware
+    // path instead of `detect_possible_local_git_repo`/`index_directory`, which
+    // both assume a local filesystem). For now, skip so we don't try to
+    // stat paths that only exist inside the sandbox.
+    if is_sandbox {
+        safe_info!(
+            safe: ("Skipping local repo detection for sandbox-only working directory"),
+            full: (
+                "Skipping local repo detection and indexing for sandbox-only working directory {}",
+                working_dir.display()
+            )
+        );
+    } else {
+        let repo_dir_str = repo_dir.to_string_lossy().to_string();
+        let detect_future = spawner
+            .spawn(move |_, ctx| {
+                DetectedRepositories::handle(ctx).update(ctx, |repos, ctx| {
+                    repos.detect_possible_local_git_repo(
+                        &repo_dir_str,
+                        RepoDetectionSource::CloudEnvironmentPrep,
+                        ctx,
+                    )
+                })
+            })
+            .await
+            .map_err(|_| PrepareEnvironmentError::InvalidRuntimeState)?;
+        // Await detection so the repo is registered in DirectoryWatcher
+        // before the agent's first query.
+        if detect_future.await.is_none() {
+            safe_warn!(
+                safe: ("Repository detection returned no path"),
+                full: ("Repository detection returned no path for {}", repo_dir.display())
+            );
+        }
+    }
+
+    Ok(())
+}
+
 async fn subscribe_to_codebase_index_events(
     spawner: &ModelSpawner<TerminalDriver>,
     repo_channels: Arc<Mutex<HashMap<PathBuf, oneshot::Sender<()>>>>,
@@ -312,7 +389,10 @@ async fn subscribe_to_codebase_index_events(
             ctx.subscribe_to_model(
                 &CodebaseIndexManager::handle(ctx),
                 move |_, event, ctx| {
-                    if !matches!(event, CodebaseIndexManagerEvent::SyncStateUpdated) {
+                    if !matches!(
+                        event,
+                        CodebaseIndexManagerEvent::SyncStateUpdated { .. }
+                    ) {
                         return;
                     }
 

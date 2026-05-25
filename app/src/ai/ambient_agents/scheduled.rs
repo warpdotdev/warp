@@ -1,34 +1,30 @@
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::future::Future;
 
-use super::AgentConfigSnapshot;
-
-use crate::{
-    cloud_object::{
-        model::{
-            generic_string_model::{GenericStringModel, GenericStringObjectId, StringModel},
-            json_model::{JsonModel, JsonSerializer},
-            persistence::CloudModel,
-        },
-        GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Owner, Revision, ServerCloudObject,
-    },
-    drive::CloudObjectTypeAndId,
-    server::{
-        cloud_objects::update_manager::{
-            ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
-        },
-        ids::{ClientId, SyncId},
-        server_api::ServerApiProvider,
-        sync_queue::QueueItem,
-    },
-};
 use futures::channel::oneshot;
 use futures::FutureExt;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use warp_graphql::queries::get_scheduled_agent_history::ScheduledAgentHistory;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+
+use super::AgentConfigSnapshot;
+use crate::cloud_object::model::generic_string_model::{
+    GenericStringModel, GenericStringObjectId, StringModel,
+};
+use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{
+    CloudObjectLookup as _, GenericCloudObject, GenericStringObjectFormat,
+    GenericStringObjectUniqueKey, JsonObjectType, Owner, Revision,
+};
+use crate::drive::CloudObjectTypeAndId;
+use crate::server::cloud_objects::update_manager::{
+    ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
+};
+use crate::server::ids::{ClientId, SyncId};
+use crate::server::server_api::ServerApiProvider;
+use crate::server::sync_queue::QueueItem;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 /// A ScheduledAmbientAgent represents configuration for ambient agents that run on a cron schedule.
@@ -57,23 +53,6 @@ pub type CloudScheduledAmbientAgent =
     GenericCloudObject<GenericStringObjectId, CloudScheduledAmbientAgentModel>;
 pub type CloudScheduledAmbientAgentModel =
     GenericStringModel<ScheduledAmbientAgent, JsonSerializer>;
-
-impl CloudScheduledAmbientAgent {
-    pub fn get_all(app: &AppContext) -> Vec<CloudScheduledAmbientAgent> {
-        CloudModel::as_ref(app)
-            .get_all_objects_of_type::<GenericStringObjectId, CloudScheduledAmbientAgentModel>()
-            .cloned()
-            .collect()
-    }
-
-    pub fn get_by_id<'a>(
-        sync_id: &'a SyncId,
-        app: &'a AppContext,
-    ) -> Option<&'a CloudScheduledAmbientAgent> {
-        CloudModel::as_ref(app)
-            .get_object_of_type::<GenericStringObjectId, CloudScheduledAmbientAgentModel>(sync_id)
-    }
-}
 
 impl ScheduledAmbientAgent {
     pub fn new(name: String, cron_schedule: String, enabled: bool, prompt: String) -> Self {
@@ -120,15 +99,6 @@ impl StringModel for ScheduledAmbientAgent {
     }
 
     fn uniqueness_key(&self) -> Option<GenericStringObjectUniqueKey> {
-        None
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::ScheduledAmbientAgent(server_scheduled_agent) =
-            server_cloud_object
-        {
-            return Some(server_scheduled_agent.model.clone().string_model);
-        }
         None
     }
 

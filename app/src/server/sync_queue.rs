@@ -1,51 +1,49 @@
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use http::StatusCode;
-use std::borrow::Cow;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-    time::Duration,
-};
-use warp_graphql::scalars::time::ServerTimestamp;
-use warpui::{r#async::FutureId, Entity, ModelContext, RequestState, RetryOption, SingletonEntity};
-
 use lazy_static::lazy_static;
 use uuid::Uuid;
+use warp_graphql::scalars::time::ServerTimestamp;
+// Re-exported from warp_server_client.
+pub use warp_server_client::cloud_object::SerializedModel;
+use warpui::r#async::FutureId;
+use warpui::{Entity, ModelContext, RequestState, RetryOption, SingletonEntity};
 
-use super::{
-    graphql::GraphQLError,
-    ids::{ClientId, HashableId, ObjectUid, ServerId, SyncId, ToServerId},
-    server_api::{auth::UserAuthenticationError, object::ObjectClient},
-};
-
+use super::graphql::GraphQLError;
+use super::ids::{ClientId, HashableId, ObjectUid, ServerId, SyncId, ToServerId};
+use super::server_api::auth::UserAuthenticationError;
+use super::server_api::object::ObjectClient;
+use crate::ai::ambient_agents::scheduled::CloudScheduledAmbientAgentModel;
+use crate::ai::cloud_agent_config::CloudAgentConfigModel;
+use crate::ai::cloud_environments::CloudAmbientAgentEnvironmentModel;
+use crate::ai::execution_profiles::CloudAIExecutionProfileModel;
+use crate::ai::facts::CloudAIFactModel;
 use crate::ai::mcp::templatable::CloudTemplatableMCPServerModel;
-use crate::server::cloud_objects::update_manager::InitiatedBy;
-use crate::{
-    ai::cloud_agent_config::CloudAgentConfigModel,
-    ai::cloud_environments::CloudAmbientAgentEnvironmentModel,
-    ai::{
-        ambient_agents::scheduled::CloudScheduledAmbientAgentModel,
-        execution_profiles::CloudAIExecutionProfileModel, facts::CloudAIFactModel,
-        mcp::CloudMCPServerModel,
-    },
-    cloud_object::{
-        model::{
-            actions::{ObjectAction, ObjectActionHistory, ObjectActionSubtype, ObjectActionType},
-            generic_string_model::GenericStringObjectId,
-        },
-        BulkCreateCloudObjectResult, BulkCreateGenericStringObjectsRequest, CloudModelType,
-        CloudObject, CloudObjectEventEntrypoint, CreateCloudObjectResult, CreateObjectRequest,
-        GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, ObjectType, Owner, Revision, RevisionAndLastEditor, ServerCloudObject,
-        ServerCreationInfo, UpdateCloudObjectResult,
-    },
-    drive::{folders::CloudFolderModel, CloudObjectTypeAndId},
-    env_vars::CloudEnvVarCollectionModel,
-    notebooks::CloudNotebookModel,
-    settings::cloud_preferences::CloudPreferenceModel,
-    workflows::{workflow_enum::CloudWorkflowEnumModel, CloudWorkflowModel},
+use crate::ai::mcp::CloudMCPServerModel;
+use crate::cloud_object::model::actions::{
+    ObjectAction, ObjectActionHistory, ObjectActionSubtype, ObjectActionType,
 };
+use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
+use crate::cloud_object::{
+    BulkCreateCloudObjectResult, BulkCreateGenericStringObjectsRequest, CloudModelType,
+    CloudObject, CloudObjectEventEntrypoint, CreateCloudObjectResult, CreateObjectRequest,
+    GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType,
+    ObjectType, Owner, Revision, RevisionAndLastEditor, ServerCloudObject, ServerCreationInfo,
+    UpdateCloudObjectResult,
+};
+use crate::drive::folders::CloudFolderModel;
+use crate::drive::CloudObjectTypeAndId;
+use crate::env_vars::CloudEnvVarCollectionModel;
+use crate::notebooks::CloudNotebookModel;
+use crate::server::cloud_objects::update_manager::InitiatedBy;
+use crate::settings::cloud_preferences::CloudPreferenceModel;
+use crate::workflows::workflow_enum::CloudWorkflowEnumModel;
+use crate::workflows::CloudWorkflowModel;
 
 lazy_static! {
     static ref DEFAULT_RETRY_OPTION: RetryOption =
@@ -89,30 +87,6 @@ enum UpdateResponseType {
     /// The update was rejected because the update was not sent from the current revision in
     /// storage. The object and revision in storage are returned.
     Rejected { object: Box<ServerCloudObject> },
-}
-
-// A newtype for a serialized model that wraps a plain string.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SerializedModel(String);
-
-impl SerializedModel {
-    pub fn new(s: String) -> Self {
-        Self(s)
-    }
-
-    pub fn model_as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn take(self) -> String {
-        self.0
-    }
-}
-
-impl From<String> for SerializedModel {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -911,7 +885,7 @@ impl SyncQueue {
                 } => {
                     let serialized_model = serialized_model
                         .as_ref()
-                        .map(|data| SerializedModel(data.model_as_str().to_owned()));
+                        .map(|data| SerializedModel::new(data.model_as_str().to_owned()));
 
                     self.create_object(
                         object_type,
@@ -962,7 +936,7 @@ impl SyncQueue {
                                     BulkCreateGenericStringObjectsRequest {
                                         id: data.id,
                                         format: data.format,
-                                        serialized_model: SerializedModel(
+                                        serialized_model: SerializedModel::new(
                                             data.serialized_model
                                                 .as_ref()
                                                 .model_as_str()
