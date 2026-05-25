@@ -32,7 +32,6 @@ use thiserror::Error;
 
 use crate::model::{grid::CellType, Point};
 
-use super::grapheme::Grapheme;
 
 #[derive(Debug, Clone, GetSize)]
 /// A structure to help index into a grid's content by (soft-wrapped) row.
@@ -414,7 +413,14 @@ impl Index {
         index
     }
 
-    /// BASELINE: Original rebuild algorithm for benchmarking comparison.
+    /// BASELINE: Simple, obviously-correct rebuild algorithm used as the
+    /// reference implementation in differential tests.
+    ///
+    /// Iterates over each source row's grapheme runs in order and feeds them
+    /// into [`EntryBuilder::process_graphemes_batch`] one run at a time.  This
+    /// naturally handles soft-wrapping at the new column width without any of
+    /// the arithmetic fast-paths found in [`Self::rebuild`], making it easy to
+    /// audit for correctness.
     #[cfg(test)]
     pub fn rebuild_baseline(old_index: &Index, columns: usize) -> Self {
         let mut index = Self::new(columns, Some(old_index.len()));
@@ -427,18 +433,13 @@ impl Index {
 
         let mut entry_builder = EntryBuilder::new();
 
-        for row_idx in 0..old_index.len() {
-            if let Some(grapheme_infos) = old_index.grapheme_infos_for_row(row_idx) {
-                for info in grapheme_infos {
-                    entry_builder.process_grapheme_info(info, &mut index);
-                }
+        for (entry, runs) in old_index.entries_with_runs() {
+            for run in runs {
+                entry_builder.process_graphemes_batch(run.info, run.count.get(), &mut index);
             }
-            if old_index
-                .get_entry(row_idx)
-                .expect("row should have an entry")
-                .has_trailing_newline
-            {
-                entry_builder.process_grapheme(&Grapheme::NEWLINE, &mut index);
+            if entry.has_trailing_newline {
+                entry_builder.add_trailing_newline();
+                entry_builder.flush_to_index(&mut index);
             }
         }
 

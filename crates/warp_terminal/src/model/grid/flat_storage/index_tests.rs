@@ -428,7 +428,7 @@ mod property_tests {
                 if cells_used + info.cell_width as usize > cols {
                     break;
                 }
-                eb.process_grapheme_info(info, &mut index);
+                eb.process_grapheme_info_unchecked(info);
                 cells_used += info.cell_width as usize;
             }
             if rng.next() % 4 != 0 {
@@ -573,7 +573,7 @@ mod differential_tests {
                 if cells_used + info.cell_width as usize > cols {
                     break;
                 }
-                eb.process_grapheme_info(info, &mut index);
+                eb.process_grapheme_info_unchecked(info);
                 cells_used += info.cell_width as usize;
             }
             if rng.next() % 4 != 0 {
@@ -733,7 +733,7 @@ mod differential_tests {
             for _ in 0..rows {
                 let mut eb = index.start_row();
                 for _ in 0..cols {
-                    eb.process_grapheme_info(ascii_info, &mut index);
+                    eb.process_grapheme_info_unchecked(ascii_info);
                 }
                 // No trailing newline — fully softwrapped
                 eb.append_to_index(&mut index);
@@ -777,7 +777,7 @@ mod differential_tests {
                     0 => {
                         // Full ASCII row
                         while cells < cols {
-                            eb.process_grapheme_info(ascii_info, &mut index);
+                            eb.process_grapheme_info_unchecked(ascii_info);
                             cells += 1;
                         }
                     }
@@ -785,14 +785,14 @@ mod differential_tests {
                         // Partial row (half full)
                         let target = cols / 2;
                         while cells < target {
-                            eb.process_grapheme_info(ascii_info, &mut index);
+                            eb.process_grapheme_info_unchecked(ascii_info);
                             cells += 1;
                         }
                     }
                     2 => {
                         // Wide char row
                         while cells + 2 <= cols {
-                            eb.process_grapheme_info(wide_info, &mut index);
+                            eb.process_grapheme_info_unchecked(wide_info);
                             cells += 2;
                         }
                     }
@@ -800,10 +800,10 @@ mod differential_tests {
                         // Mixed row
                         while cells < cols {
                             if rng.next() % 3 == 0 && cells + 2 <= cols {
-                                eb.process_grapheme_info(wide_info, &mut index);
+                                eb.process_grapheme_info_unchecked(wide_info);
                                 cells += 2;
                             } else {
-                                eb.process_grapheme_info(ascii_info, &mut index);
+                                eb.process_grapheme_info_unchecked(ascii_info);
                                 cells += 1;
                             }
                         }
