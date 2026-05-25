@@ -75,6 +75,25 @@ foreign-types = "0.5.0"
 libc.workspace = true
 metal = "0.33.0"
 objc.workspace = true
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = [
+    "NSAlert",
+    "NSApplication",
+    "NSCell",
+    "NSEvent",
+    "NSMenu",
+    "NSMenuItem",
+    "NSPasteboard",
+    "NSResponder",
+] }
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSData",
+    "NSGeometry",
+    "NSString",
+    "NSValue",
+    "objc2-core-foundation",
+] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 rand.workspace = true
