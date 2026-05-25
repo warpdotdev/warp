@@ -37,8 +37,13 @@ impl UserDefaultsPreferencesStorage {
         if let Some(suite_name) = &suite_name {
             let suite_name = NSString::from_str(suite_name);
 
-            NSUserDefaults::initWithSuiteName(NSUserDefaults::alloc(), Some(&suite_name))
-                .expect("initWithSuiteName: returns a valid instance for a non-reserved suite name")
+            // `initWithSuiteName:` only returns nil when the suite name is a reserved domain
+            // (NSGlobalDomain/NSArgumentDomain/NSRegistrationDomain) or the app's own bundle
+            // identifier; our `{app_id}-{profile}` suite name is never either of those, so this
+            // is unreachable in practice.
+            NSUserDefaults::initWithSuiteName(NSUserDefaults::alloc(), Some(&suite_name)).expect(
+                "initWithSuiteName: only returns nil for a reserved domain or the app's own bundle id",
+            )
         } else {
             NSUserDefaults::standardUserDefaults()
         }
