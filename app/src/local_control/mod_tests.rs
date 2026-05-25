@@ -16,7 +16,8 @@ use super::{
     action_metadata_for_name, appearance_state_result, capabilities, ensure_feature_enabled,
     ensure_settings_allow_action, outside_warp_action_enabled_for_settings, rejected_setting_key,
     require_active_window_id, setting_get_result, setting_list_result, theme_list_result,
-    validate_action_params, validate_tab_create_target, LocalControlBridge,
+    validate_action_params, validate_app_focus_target_test, validate_tab_create_target,
+    validate_window_create_target_test, LocalControlBridge,
 };
 use crate::settings::{
     AllowOutsideWarpAppStateMutations, AllowOutsideWarpControl,
@@ -171,7 +172,7 @@ fn tab_create_rejects_unsupported_selector_forms() {
 }
 
 #[test]
-fn capabilities_advertises_core_and_metadata_slice_actions() {
+fn capabilities_advertises_core_metadata_and_layout_mutation_actions() {
     assert_eq!(
         capabilities(),
         vec![
@@ -182,7 +183,20 @@ fn capabilities_advertises_core_and_metadata_slice_actions() {
             ActionKind::AppActive,
             ActionKind::ActionList,
             ActionKind::ActionGet,
+            ActionKind::AppFocus,
+            ActionKind::AppSettingsOpen,
+            ActionKind::AppCommandPaletteOpen,
+            ActionKind::AppCommandSearchOpen,
+            ActionKind::AppWarpDriveOpen,
+            ActionKind::AppWarpDriveToggle,
+            ActionKind::AppResourceCenterToggle,
+            ActionKind::AppAiAssistantToggle,
+            ActionKind::AppCodeReviewToggle,
+            ActionKind::AppVerticalTabsToggle,
             ActionKind::WindowList,
+            ActionKind::WindowCreate,
+            ActionKind::WindowFocus,
+            ActionKind::WindowClose,
             ActionKind::TabList,
             ActionKind::TabCreate,
             ActionKind::PaneList,
@@ -501,14 +515,172 @@ fn action_get_rejects_unallowlisted_action_names() {
 }
 
 #[test]
-fn action_metadata_lookup_reports_stub_status_for_allowlisted_future_actions() {
+fn action_metadata_lookup_reports_implemented_status_for_window_create() {
     let metadata = action_metadata_for_name("window.create").expect("allowlisted action");
 
     assert_eq!(metadata.kind, ActionKind::WindowCreate);
     assert_eq!(
         metadata.implementation_status,
+        ::local_control::ActionImplementationStatus::Implemented
+    );
+}
+
+#[test]
+fn action_metadata_lookup_reports_stub_status_for_non_implemented_future_actions() {
+    let metadata = action_metadata_for_name("tab.close").expect("allowlisted action");
+
+    assert_eq!(metadata.kind, ActionKind::TabClose);
+    assert_eq!(
+        metadata.implementation_status,
         ::local_control::ActionImplementationStatus::Stub
     );
+}
+
+#[test]
+fn app_focus_target_rejects_any_sub_selectors() {
+    validate_app_focus_target_test(&TargetSelector::default())
+        .expect("default target is accepted for app.focus");
+
+    let err = validate_app_focus_target_test(&TargetSelector {
+        window: Some(WindowTarget::Active),
+        ..TargetSelector::default()
+    })
+    .expect_err("window selector is rejected for app.focus");
+    assert_eq!(err.code, ErrorCode::InvalidSelector);
+
+    let err = validate_app_focus_target_test(&TargetSelector {
+        tab: Some(TabTarget::Active),
+        ..TargetSelector::default()
+    })
+    .expect_err("tab selector is rejected for app.focus");
+    assert_eq!(err.code, ErrorCode::InvalidSelector);
+
+    let err = validate_app_focus_target_test(&TargetSelector {
+        session: Some(SessionTarget::Active),
+        ..TargetSelector::default()
+    })
+    .expect_err("session selector is rejected for app.focus");
+    assert_eq!(err.code, ErrorCode::InvalidSelector);
+}
+
+#[test]
+fn window_create_target_rejects_any_sub_selectors() {
+    use ::local_control::protocol::WindowCreateParams;
+
+    let params = WindowCreateParams::default();
+
+    validate_window_create_target_test(&TargetSelector::default(), &params)
+        .expect("default target is accepted for window.create");
+
+    let err = validate_window_create_target_test(
+        &TargetSelector {
+            window: Some(WindowTarget::Active),
+            ..TargetSelector::default()
+        },
+        &params,
+    )
+    .expect_err("window selector is rejected for window.create");
+    assert_eq!(err.code, ErrorCode::InvalidSelector);
+
+    let err = validate_window_create_target_test(
+        &TargetSelector {
+            tab: Some(TabTarget::Active),
+            ..TargetSelector::default()
+        },
+        &params,
+    )
+    .expect_err("tab selector is rejected for window.create");
+    assert_eq!(err.code, ErrorCode::InvalidSelector);
+}
+
+#[test]
+fn window_create_target_rejects_profile_param() {
+    use ::local_control::protocol::WindowCreateParams;
+
+    let params_with_profile = WindowCreateParams {
+        profile: Some("zsh".to_owned()),
+    };
+    let err = validate_window_create_target_test(&TargetSelector::default(), &params_with_profile)
+        .expect_err("profile param is not yet supported");
+    assert_eq!(err.code, ErrorCode::UnsupportedAction);
+}
+
+#[test]
+fn layout_mutation_actions_require_app_state_mutation_permission() {
+    let mutation_settings = settings_with_outside_warp(true, true);
+    let no_mutation_settings = settings_with_outside_warp(true, false);
+
+    for action in [
+        ActionKind::AppFocus,
+        ActionKind::AppSettingsOpen,
+        ActionKind::AppCommandPaletteOpen,
+        ActionKind::AppWarpDriveOpen,
+        ActionKind::AppWarpDriveToggle,
+        ActionKind::WindowCreate,
+        ActionKind::WindowFocus,
+        ActionKind::WindowClose,
+    ] {
+        assert_eq!(
+            action.metadata().permission_category,
+            PermissionCategory::MutateAppState
+        );
+        ensure_settings_allow_action(&mutation_settings, InvocationContext::OutsideWarp, action)
+            .expect("app-state mutation permission allows layout mutation action");
+        let err = ensure_settings_allow_action(
+            &no_mutation_settings,
+            InvocationContext::OutsideWarp,
+            action,
+        )
+        .expect_err("layout mutation action is denied without app-state mutation permission");
+        assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+    }
+}
+
+#[test]
+fn window_surface_mutation_params_accept_valid_json() {
+    validate_action_params(&Action {
+        kind: ActionKind::AppFocus,
+        params: serde_json::json!({}),
+    })
+    .expect("app.focus accepts empty params");
+
+    let err = validate_action_params(&Action {
+        kind: ActionKind::AppFocus,
+        params: serde_json::json!({ "unexpected": true }),
+    })
+    .expect_err("app.focus rejects unknown params");
+    assert_eq!(err.code, ErrorCode::InvalidParams);
+
+    validate_action_params(&Action {
+        kind: ActionKind::WindowCreate,
+        params: serde_json::json!({}),
+    })
+    .expect("window.create accepts empty params");
+
+    validate_action_params(&Action {
+        kind: ActionKind::WindowClose,
+        params: serde_json::json!({ "force": true }),
+    })
+    .expect("window.close accepts force param");
+
+    validate_action_params(&Action {
+        kind: ActionKind::AppSettingsOpen,
+        params: serde_json::json!({ "page": "features" }),
+    })
+    .expect("app.settings.open accepts page param");
+
+    validate_action_params(&Action {
+        kind: ActionKind::AppCommandPaletteOpen,
+        params: serde_json::json!({ "query": "theme" }),
+    })
+    .expect("app.command_palette.open accepts query param");
+
+    let err = validate_action_params(&Action {
+        kind: ActionKind::AppWarpDriveOpen,
+        params: serde_json::json!({ "unknown_field": true }),
+    })
+    .expect_err("app.warp_drive.open rejects unknown params");
+    assert_eq!(err.code, ErrorCode::InvalidParams);
 }
 
 #[test]

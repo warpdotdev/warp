@@ -147,7 +147,7 @@ pub enum InstanceCommand {
     List,
 }
 
-/// Commands that inspect the selected Warp app instance.
+/// Commands that inspect and control the selected Warp app instance.
 #[derive(Debug, Clone, Subcommand)]
 pub enum AppCommand {
     /// Check that the selected local Warp app responds.
@@ -161,6 +161,36 @@ pub enum AppCommand {
 
     /// Print app and protocol metadata.
     Inspect(TargetArgs),
+
+    /// Focus the selected Warp app instance.
+    Focus(TargetArgs),
+
+    /// Open the Settings surface.
+    SettingsOpen(AppSurfaceArgs),
+
+    /// Open the Command Palette.
+    CommandPaletteOpen(AppSurfaceArgs),
+
+    /// Open command search.
+    CommandSearchOpen(AppSurfaceArgs),
+
+    /// Open Warp Drive.
+    WarpDriveOpen(AppSurfaceArgs),
+
+    /// Toggle Warp Drive.
+    WarpDriveToggle(AppSurfaceArgs),
+
+    /// Toggle the resource center.
+    ResourceCenterToggle(AppSurfaceArgs),
+
+    /// Toggle the AI assistant surface.
+    AiAssistantToggle(AppSurfaceArgs),
+
+    /// Toggle the code review surface.
+    CodeReviewToggle(AppSurfaceArgs),
+
+    /// Toggle the vertical tabs panel.
+    VerticalTabsToggle(AppSurfaceArgs),
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -176,6 +206,15 @@ pub enum ActionCommand {
 pub enum WindowCommand {
     /// List windows in the selected local Warp app.
     List(TargetArgs),
+
+    /// Create a new Warp window.
+    Create(WindowCreateArgs),
+
+    /// Focus a Warp window.
+    Focus(TargetArgs),
+
+    /// Close a Warp window.
+    Close(WindowCloseArgs),
 }
 
 /// Commands that control tabs in the selected Warp app instance.
@@ -293,6 +332,43 @@ pub struct SettingGetArgs {
 
     /// Allowlisted setting key.
     pub key: String,
+}
+
+/// Common arguments for app surface open/toggle commands.
+#[derive(Debug, Clone, Args, Default)]
+pub struct AppSurfaceArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    /// Optional search or pre-fill query.
+    #[arg(long = "query")]
+    pub query: Option<String>,
+
+    /// Optional settings page name (only for app settings.open).
+    #[arg(long = "page")]
+    pub page: Option<String>,
+}
+
+/// Arguments for window create.
+#[derive(Debug, Clone, Args)]
+pub struct WindowCreateArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    /// Launch profile name (not yet supported).
+    #[arg(long = "profile")]
+    pub profile: Option<String>,
+}
+
+/// Arguments for window close.
+#[derive(Debug, Clone, Args)]
+pub struct WindowCloseArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    /// Force close without prompting.
+    #[arg(long = "force")]
+    pub force: bool,
 }
 
 pub fn run(args: ControlArgs) -> ExitCode {

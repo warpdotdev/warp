@@ -356,7 +356,20 @@ impl ActionKind {
             | Self::ThemeList
             | Self::AppearanceGet
             | Self::SettingGet
-            | Self::SettingList => ActionImplementationStatus::Implemented,
+            | Self::SettingList
+            | Self::AppFocus
+            | Self::AppSettingsOpen
+            | Self::AppCommandPaletteOpen
+            | Self::AppCommandSearchOpen
+            | Self::AppWarpDriveOpen
+            | Self::AppWarpDriveToggle
+            | Self::AppResourceCenterToggle
+            | Self::AppAiAssistantToggle
+            | Self::AppCodeReviewToggle
+            | Self::AppVerticalTabsToggle
+            | Self::WindowCreate
+            | Self::WindowFocus
+            | Self::WindowClose => ActionImplementationStatus::Implemented,
             _ => ActionImplementationStatus::Stub,
         };
         let requires_authenticated_user = self.default_requires_authenticated_user();

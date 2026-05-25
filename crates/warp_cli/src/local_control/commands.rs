@@ -1,7 +1,8 @@
 //! Implementations for user-facing `warpctrl` command groups.
 use local_control::protocol::{
-    Action, ActionGetParams, ActionKind, ActionMetadata, ControlError, EmptyParams, ErrorCode,
-    RequestEnvelope,
+    Action, ActionGetParams, ActionKind, ActionMetadata, AppFocusParams, AppSurfaceParams,
+    ControlError, EmptyParams, ErrorCode, RequestEnvelope, WindowCloseParams, WindowCreateParams,
+    WindowFocusParams,
 };
 use local_control::selection::select_instance;
 use serde::Serialize;
@@ -11,9 +12,9 @@ use crate::agent::OutputFormat;
 use crate::local_control::output::{write_json, write_json_line};
 use crate::local_control::selectors::instance_selector;
 use crate::local_control::{
-    ActionCommand, AppCommand, AppearanceCommand, BlockCommand, HistoryCommand, InputCommand,
-    InstanceCommand, PaneCommand, SessionCommand, SettingCommand, TabCommand, TargetArgs,
-    ThemeCommand, WindowCommand,
+    ActionCommand, AppCommand, AppSurfaceArgs, AppearanceCommand, BlockCommand, HistoryCommand,
+    InputCommand, InstanceCommand, PaneCommand, SessionCommand, SettingCommand, TabCommand,
+    TargetArgs, ThemeCommand, WindowCommand,
 };
 
 /// Display-oriented projection of a discoverable Warp instance.
@@ -104,7 +105,56 @@ pub(super) fn run_app_command(
             local_control::AppInspectParams::default(),
             output_format,
         ),
+        AppCommand::Focus(args) => run_action_with_params(
+            args,
+            ActionKind::AppFocus,
+            AppFocusParams::default(),
+            output_format,
+        ),
+        AppCommand::SettingsOpen(args) => {
+            run_app_surface_command(args, ActionKind::AppSettingsOpen, output_format)
+        }
+        AppCommand::CommandPaletteOpen(args) => {
+            run_app_surface_command(args, ActionKind::AppCommandPaletteOpen, output_format)
+        }
+        AppCommand::CommandSearchOpen(args) => {
+            run_app_surface_command(args, ActionKind::AppCommandSearchOpen, output_format)
+        }
+        AppCommand::WarpDriveOpen(args) => {
+            run_app_surface_command(args, ActionKind::AppWarpDriveOpen, output_format)
+        }
+        AppCommand::WarpDriveToggle(args) => {
+            run_app_surface_command(args, ActionKind::AppWarpDriveToggle, output_format)
+        }
+        AppCommand::ResourceCenterToggle(args) => {
+            run_app_surface_command(args, ActionKind::AppResourceCenterToggle, output_format)
+        }
+        AppCommand::AiAssistantToggle(args) => {
+            run_app_surface_command(args, ActionKind::AppAiAssistantToggle, output_format)
+        }
+        AppCommand::CodeReviewToggle(args) => {
+            run_app_surface_command(args, ActionKind::AppCodeReviewToggle, output_format)
+        }
+        AppCommand::VerticalTabsToggle(args) => {
+            run_app_surface_command(args, ActionKind::AppVerticalTabsToggle, output_format)
+        }
     }
+}
+
+fn run_app_surface_command(
+    args: AppSurfaceArgs,
+    action: ActionKind,
+    output_format: OutputFormat,
+) -> Result<(), ControlError> {
+    run_action_with_params(
+        args.target,
+        action,
+        AppSurfaceParams {
+            query: args.query,
+            page: args.page,
+        },
+        output_format,
+    )
 }
 
 pub(super) fn run_action_command(
@@ -137,6 +187,26 @@ pub(super) fn run_window_command(
         WindowCommand::List(args) => {
             run_action_with_params(args, ActionKind::WindowList, EmptyParams {}, output_format)
         }
+        WindowCommand::Create(args) => run_action_with_params(
+            args.target,
+            ActionKind::WindowCreate,
+            WindowCreateParams {
+                profile: args.profile,
+            },
+            output_format,
+        ),
+        WindowCommand::Focus(args) => run_action_with_params(
+            args,
+            ActionKind::WindowFocus,
+            WindowFocusParams::default(),
+            output_format,
+        ),
+        WindowCommand::Close(args) => run_action_with_params(
+            args.target,
+            ActionKind::WindowClose,
+            WindowCloseParams { force: args.force },
+            output_format,
+        ),
     }
 }
 pub(super) fn run_tab_command(

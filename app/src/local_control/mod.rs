@@ -419,6 +419,10 @@ async fn handle_control_request(
 }
 
 #[cfg(test)]
+pub(crate) use handlers::layout::{
+    validate_app_focus_target_test, validate_window_create_target_test,
+};
+#[cfg(test)]
 pub(crate) use handlers::metadata::action_metadata_for_name;
 #[cfg(test)]
 pub(crate) use handlers::settings_surfaces::{

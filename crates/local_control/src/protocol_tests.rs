@@ -288,8 +288,8 @@ fn default_permissions_preserve_security_categories() {
 }
 
 #[test]
-fn non_first_slice_actions_are_catalog_stubs() {
-    let metadata = ActionKind::WindowCreate.metadata();
+fn non_implemented_actions_are_catalog_stubs() {
+    let metadata = ActionKind::TabClose.metadata();
     assert_eq!(
         metadata.implementation_status,
         ActionImplementationStatus::Stub
@@ -299,4 +299,36 @@ fn non_first_slice_actions_are_catalog_stubs() {
             .allowed_invocation_contexts
             .contains(&InvocationContext::OutsideWarp)
     );
+}
+
+#[test]
+fn window_create_focus_close_and_surface_actions_are_implemented() {
+    for action in [
+        ActionKind::AppFocus,
+        ActionKind::AppSettingsOpen,
+        ActionKind::AppWarpDriveToggle,
+        ActionKind::WindowCreate,
+        ActionKind::WindowFocus,
+        ActionKind::WindowClose,
+    ] {
+        let metadata = action.metadata();
+        assert_eq!(
+            metadata.implementation_status,
+            ActionImplementationStatus::Implemented,
+            "{} should be implemented",
+            action.as_str()
+        );
+        assert_eq!(
+            metadata.allowed_invocation_contexts,
+            vec![InvocationContext::OutsideWarp],
+            "{} should allow OutsideWarp",
+            action.as_str()
+        );
+        assert_eq!(
+            metadata.permission_category,
+            PermissionCategory::MutateAppState,
+            "{} should require MutateAppState permission",
+            action.as_str()
+        );
+    }
 }

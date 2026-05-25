@@ -3,6 +3,7 @@
 //! The bridge validates protocol version, selectors, credentials, and settings
 //! before routing each supported action to an app-side handler.
 use ::local_control::auth::CredentialGrant;
+use ::local_control::protocol::{AppSurfaceParams, WindowCloseParams, WindowCreateParams};
 use ::local_control::{
     ActionKind, ControlError, ErrorCode, InstanceId, RequestEnvelope, ResponseEnvelope,
     PROTOCOL_VERSION,
@@ -288,6 +289,87 @@ impl LocalControlBridge {
                     .params_as()
                     .and_then(|params| data::list_history(&request.target, params, ctx))
                 {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::AppFocus => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match layout::focus_app(&request.target, ctx) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::WindowCreate => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as::<WindowCreateParams>()
+                    .and_then(|params| layout::create_window(&request.target, params, ctx))
+                {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::WindowFocus => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match layout::focus_window(&request.target, ctx) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::WindowClose => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as::<WindowCloseParams>()
+                    .and_then(|params| layout::close_window(&request.target, params, ctx))
+                {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::AppSettingsOpen
+            | ActionKind::AppCommandPaletteOpen
+            | ActionKind::AppCommandSearchOpen
+            | ActionKind::AppWarpDriveOpen
+            | ActionKind::AppWarpDriveToggle
+            | ActionKind::AppResourceCenterToggle
+            | ActionKind::AppAiAssistantToggle
+            | ActionKind::AppCodeReviewToggle
+            | ActionKind::AppVerticalTabsToggle => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as::<AppSurfaceParams>()
+                    .and_then(|params| {
+                        layout::open_or_toggle_surface(
+                            request.action.kind,
+                            &request.target,
+                            params,
+                            ctx,
+                        )
+                    }) {
                     Ok(data) => ResponseEnvelope::ok(request.request_id, data),
                     Err(error) => ResponseEnvelope::error(request.request_id, error),
                 }

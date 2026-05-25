@@ -1,8 +1,9 @@
 //! Target and parameter validation for the first local-control action slice.
 use crate::local_control::handlers::metadata::action_metadata_for_name;
 use ::local_control::protocol::{
-    ActionGetParams, BlockGetParams, BlockListParams, HistoryListParams, PaneTarget, SessionTarget,
-    SettingGetParams, TabTarget, TargetSelector, WindowTarget,
+    ActionGetParams, AppFocusParams, AppSurfaceParams, BlockGetParams, BlockListParams,
+    HistoryListParams, PaneTarget, SessionTarget, SettingGetParams, TabTarget, TargetSelector,
+    WindowCloseParams, WindowCreateParams, WindowFocusParams, WindowTarget,
 };
 use ::local_control::{ActionKind, ControlError, ErrorCode};
 use warpui::ModelContext;
@@ -99,6 +100,19 @@ pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result
             Ok(())
         }),
         ActionKind::HistoryList => action.params_as::<HistoryListParams>().map(|_| ()),
+        ActionKind::AppFocus => action.params_as::<AppFocusParams>().map(|_| ()),
+        ActionKind::WindowCreate => action.params_as::<WindowCreateParams>().map(|_| ()),
+        ActionKind::WindowFocus => action.params_as::<WindowFocusParams>().map(|_| ()),
+        ActionKind::WindowClose => action.params_as::<WindowCloseParams>().map(|_| ()),
+        ActionKind::AppSettingsOpen
+        | ActionKind::AppCommandPaletteOpen
+        | ActionKind::AppCommandSearchOpen
+        | ActionKind::AppWarpDriveOpen
+        | ActionKind::AppWarpDriveToggle
+        | ActionKind::AppResourceCenterToggle
+        | ActionKind::AppAiAssistantToggle
+        | ActionKind::AppCodeReviewToggle
+        | ActionKind::AppVerticalTabsToggle => action.params_as::<AppSurfaceParams>().map(|_| ()),
         _ => Ok(()),
     }
 }

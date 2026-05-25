@@ -187,6 +187,111 @@ fn rejects_non_metadata_and_future_catalog_commands_not_in_this_shard() {
 }
 
 #[test]
+fn parses_app_focus_command() {
+    let args = ControlArgs::try_parse_from(["warpctrl", "app", "focus"]).expect("app focus parses");
+    assert!(matches!(
+        args.command,
+        ControlCommand::App(AppCommand::Focus(_))
+    ));
+}
+
+#[test]
+fn parses_app_surface_commands() {
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "app", "settings-open"])
+            .expect("app settings-open parses")
+            .command,
+        ControlCommand::App(AppCommand::SettingsOpen(_))
+    ));
+
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "app", "command-palette-open"])
+            .expect("app command-palette-open parses")
+            .command,
+        ControlCommand::App(AppCommand::CommandPaletteOpen(_))
+    ));
+
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "app", "warp-drive-toggle"])
+            .expect("app warp-drive-toggle parses")
+            .command,
+        ControlCommand::App(AppCommand::WarpDriveToggle(_))
+    ));
+
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "app", "vertical-tabs-toggle"])
+            .expect("app vertical-tabs-toggle parses")
+            .command,
+        ControlCommand::App(AppCommand::VerticalTabsToggle(_))
+    ));
+}
+
+#[test]
+fn parses_app_settings_open_with_page_and_query() {
+    let args = ControlArgs::try_parse_from([
+        "warpctrl",
+        "app",
+        "settings-open",
+        "--page",
+        "features",
+        "--query",
+        "theme",
+    ])
+    .expect("app settings-open with args parses");
+    let ControlCommand::App(AppCommand::SettingsOpen(surface_args)) = args.command else {
+        panic!("expected app settings-open command");
+    };
+    assert_eq!(surface_args.page.as_deref(), Some("features"));
+    assert_eq!(surface_args.query.as_deref(), Some("theme"));
+}
+
+#[test]
+fn parses_window_mutation_commands() {
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "window", "create"])
+            .expect("window create parses")
+            .command,
+        ControlCommand::Window(WindowCommand::Create(_))
+    ));
+
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "window", "focus"])
+            .expect("window focus parses")
+            .command,
+        ControlCommand::Window(WindowCommand::Focus(_))
+    ));
+
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "window", "close"])
+            .expect("window close parses")
+            .command,
+        ControlCommand::Window(WindowCommand::Close(_))
+    ));
+}
+
+#[test]
+fn parses_window_close_force_flag() {
+    let args = ControlArgs::try_parse_from(["warpctrl", "window", "close", "--force"])
+        .expect("window close --force parses");
+    let ControlCommand::Window(WindowCommand::Close(close_args)) = args.command else {
+        panic!("expected window close command");
+    };
+    assert!(close_args.force);
+}
+
+#[test]
+fn parses_window_create_with_instance_flag() {
+    let args =
+        ControlArgs::try_parse_from(["warpctrl", "window", "create", "--instance", "inst_abc"])
+            .expect("window create with instance parses");
+    let ControlCommand::Window(WindowCommand::Create(create_args)) = args.command else {
+        panic!("expected window create command");
+    };
+    assert_eq!(create_args.target.instance.as_deref(), Some("inst_abc"));
+    assert!(create_args.profile.is_none());
+}
+
+#[test]
 fn generated_bash_completions_include_metadata_commands() {
     let completions =
         generate_completion_string(Shell::Bash).expect("bash completions render to UTF-8");
