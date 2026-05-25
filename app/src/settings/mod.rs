@@ -18,6 +18,7 @@ mod init;
 pub mod initializer;
 mod input;
 mod input_mode;
+mod language_servers;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod linux;
 mod local_control;
@@ -53,6 +54,7 @@ pub use gpu::*;
 pub use init::*;
 pub use input::*;
 pub use input_mode::*;
+pub use language_servers::*;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub use linux::*;
 pub use local_control::*;

@@ -209,6 +209,7 @@ pub struct WorkspaceLanguageServer {
     pub workspace_id: i32,
     pub language_server_name: String,
     pub enabled: String,
+    pub kind: String,
 }
 
 #[derive(Clone, Insertable, AsChangeset)]
@@ -217,6 +218,7 @@ pub struct NewWorkspaceLanguageServer {
     pub workspace_id: i32,
     pub language_server_name: String,
     pub enabled: String,
+    pub kind: String,
 }
 
 #[derive(Default, Clone, Debug, Insertable, Queryable, AsChangeset)]

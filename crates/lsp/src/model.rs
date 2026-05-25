@@ -30,7 +30,7 @@ use crate::types::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{spawn_lsp_service, LspServiceInitializationResult};
-use crate::{LspServerConfig, LspServerLogLevel, LspService};
+use crate::{LspServerConfigKind, LspServerLogLevel, LspService};
 
 static NEXT_LANGUAGE_SERVER_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -97,7 +97,7 @@ impl LspState {
 pub struct LspServerModel {
     id: LanguageServerId,
     server_state: LspState,
-    config: LspServerConfig,
+    config: LspServerConfigKind,
     // This tracks all in-progress background tasks from the server.
     // Tasks are keyed by their progress token and removed when they finish.
     in_progress_tasks: HashMap<String, BackgroundTaskInfo>,
@@ -167,7 +167,7 @@ fn should_accept_publish_diagnostics_version(existing: Option<i32>, incoming: Op
 }
 
 impl LspServerModel {
-    pub(crate) fn new(config: LspServerConfig) -> Self {
+    pub(crate) fn new(config: LspServerConfigKind) -> Self {
         Self {
             id: LanguageServerId::new(),
             server_state: LspState::Stopped {
@@ -190,8 +190,20 @@ impl LspServerModel {
         self.id
     }
 
-    pub fn server_type(&self) -> LSPServerType {
-        self.config.server_type()
+    /// Returns the built-in `LSPServerType` for this server, or `None`
+    /// when the server is a user-defined custom (which has no
+    /// `LSPServerType` — use [`Self::key`] for kind-agnostic identity).
+    pub fn server_type(&self) -> Option<LSPServerType> {
+        match &self.config {
+            LspServerConfigKind::BuiltIn(c) => Some(c.server_type()),
+            LspServerConfigKind::Custom(_) => None,
+        }
+    }
+
+    /// Returns the uniform identity for this server across both kinds.
+    /// Manager duplicate detection and the `ServerRemoved` event use this.
+    pub fn key(&self) -> crate::ServerKey {
+        self.config.key()
     }
 
     pub fn server_name(&self) -> String {
@@ -227,7 +239,34 @@ impl LspServerModel {
     }
 
     pub fn supports_language(&self, lang: &LanguageId) -> bool {
-        self.config.languages().contains(lang)
+        // Built-in servers express support via the `LanguageId` enum.
+        // Customs use the filetype-glob matcher; callers asking the
+        // language-based question should generally use `supports_path`
+        // instead so customs are considered.
+        match &self.config {
+            LspServerConfigKind::BuiltIn(c) => c.languages().contains(lang),
+            LspServerConfigKind::Custom(_) => false,
+        }
+    }
+
+    /// Returns `true` if this server claims responsibility for `path`.
+    /// Built-ins map `path` → `LanguageId` and check the language; customs
+    /// run the descriptor's compiled filetype matchers against the basename.
+    pub fn supports_path(&self, path: &Path) -> bool {
+        match &self.config {
+            LspServerConfigKind::BuiltIn(c) => LanguageId::from_path(path)
+                .map(|id| c.languages().contains(&id))
+                .unwrap_or(false),
+            LspServerConfigKind::Custom(c) => {
+                let Some(basename) = path.file_name().and_then(|s| s.to_str()) else {
+                    return false;
+                };
+                c.descriptor()
+                    .filetypes
+                    .iter()
+                    .any(|pattern| pattern.is_match(basename))
+            }
+        }
     }
 
     /// Returns the initial workspace path for this server.
@@ -742,3 +781,7 @@ impl Drop for LspServerModel {
         self.terminate();
     }
 }
+
+#[cfg(test)]
+#[path = "model_tests.rs"]
+mod tests;

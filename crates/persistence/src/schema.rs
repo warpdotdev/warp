@@ -476,6 +476,7 @@ diesel::table! {
         workspace_id -> Integer,
         language_server_name -> Text,
         enabled -> Text,
+        kind -> Text,
     }
 }
 

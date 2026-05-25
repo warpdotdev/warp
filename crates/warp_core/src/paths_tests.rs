@@ -131,6 +131,24 @@ fn test_project_path_for_warp_dev_app_id() {
 }
 
 #[test]
+fn lsp_server_cache_dir_namespaces_by_name() {
+    // Platform-specific cache_dir() is tested elsewhere; here we only verify
+    // that lsp_server_cache_dir appends "lsp/<name>" to whatever it returns.
+    let dir = lsp_server_cache_dir("rust-analyzer").expect("valid name");
+    assert_eq!(dir, cache_dir().join("lsp").join("rust-analyzer"));
+}
+
+#[test]
+fn lsp_server_cache_dir_rejects_unsafe_names() {
+    assert_eq!(lsp_server_cache_dir(""), None);
+    assert_eq!(lsp_server_cache_dir("."), None);
+    assert_eq!(lsp_server_cache_dir(".."), None);
+    assert_eq!(lsp_server_cache_dir("foo/bar"), None);
+    assert_eq!(lsp_server_cache_dir("foo\\bar"), None);
+    assert_eq!(lsp_server_cache_dir("foo\0bar"), None);
+}
+
+#[test]
 fn test_project_path_for_oss_app_id() {
     let project_dirs = project_dirs_for_app_id(AppId::new("dev", "warp", "WarpOss"), None)
         .expect("should be able to compute project dirs");
