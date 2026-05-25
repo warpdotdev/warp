@@ -1,4 +1,5 @@
 //! Implementations for user-facing `warpctrl` command groups.
+use local_control::discovery::InstanceRecord;
 use local_control::protocol::{
     Action, ActionKind, ActionMetadata, ControlError, ErrorCode, RequestEnvelope,
 };
@@ -106,9 +107,7 @@ fn run_action(
     params: serde_json::Value,
     output_format: OutputFormat,
 ) -> Result<(), ControlError> {
-    let records = local_control::discovery::list_instances();
-    let selector = instance_selector(args);
-    let instance = select_instance(&records, &selector)?;
+    let instance = select_target_instance(args)?;
     let request = RequestEnvelope::new(Action {
         kind: action,
         params,
@@ -125,4 +124,10 @@ fn run_action(
         OutputFormat::Ndjson => write_json_line(&data),
         OutputFormat::Pretty | OutputFormat::Text => write_json(&data),
     }
+}
+
+pub(super) fn select_target_instance(args: TargetArgs) -> Result<InstanceRecord, ControlError> {
+    let records = local_control::discovery::list_instances();
+    let selector = instance_selector(args);
+    select_instance(&records, &selector)
 }

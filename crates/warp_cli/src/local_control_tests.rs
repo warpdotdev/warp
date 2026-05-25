@@ -22,6 +22,36 @@ fn restore_discovery_dir(previous: Option<OsString>) {
         None => unsafe { std::env::remove_var(DISCOVERY_DIR_ENV) },
     }
 }
+
+fn test_instance_record() -> local_control::discovery::InstanceRecord {
+    local_control::discovery::InstanceRecord {
+        protocol_version: local_control::PROTOCOL_VERSION,
+        instance_id: local_control::discovery::InstanceId("inst_test".to_owned()),
+        pid: std::process::id(),
+        channel: "dev".to_owned(),
+        app_id: "dev.warp.Warp".to_owned(),
+        app_version: Some("test".to_owned()),
+        started_at: chrono::Utc::now(),
+        executable_path: None,
+        endpoint: Some(local_control::discovery::ControlEndpoint::localhost(1)),
+        credential_broker: Some(local_control::discovery::CredentialBrokerReference {
+            endpoint: local_control::discovery::ControlEndpoint::localhost(1),
+        }),
+        outside_warp_control_enabled: true,
+        actions: local_control::ActionKind::implemented_metadata(),
+    }
+}
+
+fn write_test_instance_record(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).expect("temp discovery dir is created");
+    let record = test_instance_record();
+    let path = dir.join("inst_test.json");
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&record).expect("record serializes"),
+    )
+    .expect("record is written");
+}
 #[test]
 fn parses_first_slice_tab_create() {
     let args = ControlArgs::try_parse_from(["warpctrl", "tab", "create", "--instance", "inst_123"])
@@ -46,6 +76,39 @@ fn parses_first_slice_instance_list() {
 fn parses_first_slice_app_smoke_metadata_commands() {
     assert!(ControlArgs::try_parse_from(["warpctrl", "app", "ping"]).is_ok());
     assert!(ControlArgs::try_parse_from(["warpctrl", "app", "version"]).is_ok());
+}
+#[test]
+fn parses_auth_commands() {
+    assert!(ControlArgs::try_parse_from(["warpctrl", "auth", "status"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "auth", "login"]).is_ok());
+    assert!(
+        ControlArgs::try_parse_from([
+            "warpctrl",
+            "auth",
+            "api-key",
+            "set",
+            "--key-env",
+            "WARPCTRL_TEST_KEY",
+        ])
+        .is_ok()
+    );
+    assert!(ControlArgs::try_parse_from(["warpctrl", "auth", "api-key", "status"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "auth", "api-key", "revoke"]).is_ok());
+}
+
+#[test]
+fn rejects_multiple_api_key_sources() {
+    let err = ControlArgs::try_parse_from([
+        "warpctrl",
+        "auth",
+        "api-key",
+        "set",
+        "--key-env",
+        "WARPCTRL_TEST_KEY",
+        "--key-stdin",
+    ])
+    .expect_err("multiple key sources are rejected");
+    assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
 }
 
 #[test]
@@ -107,4 +170,59 @@ fn tab_create_without_discovery_records_reports_no_instance() {
     let error = run_inner(args).expect_err("missing instance is rejected");
     restore_discovery_dir(previous);
     assert_eq!(error.code, ErrorCode::NoInstance);
+}
+
+#[test]
+#[serial]
+fn auth_login_reports_unsupported_until_app_sign_in_action_exists() {
+    let discovery_dir = std::env::temp_dir().join(format!(
+        "warpctrl-auth-login-discovery-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    write_test_instance_record(&discovery_dir);
+    let previous_discovery = set_discovery_dir(&discovery_dir);
+    let args =
+        ControlArgs::try_parse_from(["warpctrl", "auth", "login"]).expect("auth login parses");
+    let error = run_inner(args).expect_err("login broker action is not implemented");
+    restore_discovery_dir(previous_discovery);
+    assert_eq!(error.code, ErrorCode::UnsupportedAction);
+}
+
+#[test]
+#[serial]
+fn auth_status_without_discovery_records_reports_no_instance() {
+    let dir = std::env::temp_dir().join(format!(
+        "warpctrl-empty-auth-discovery-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&dir).expect("temp discovery dir is created");
+    let previous = set_discovery_dir(&dir);
+    let args =
+        ControlArgs::try_parse_from(["warpctrl", "auth", "status"]).expect("auth status parses");
+    let error = run_inner(args).expect_err("missing instance is rejected");
+    restore_discovery_dir(previous);
+    assert_eq!(error.code, ErrorCode::NoInstance);
+}
+
+#[test]
+#[serial]
+fn auth_api_key_set_rejects_missing_env_var() {
+    let discovery_dir = std::env::temp_dir().join(format!(
+        "warpctrl-auth-discovery-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    write_test_instance_record(&discovery_dir);
+    let previous_discovery = set_discovery_dir(&discovery_dir);
+    let args = ControlArgs::try_parse_from([
+        "warpctrl",
+        "auth",
+        "api-key",
+        "set",
+        "--key-env",
+        "WARPCTRL_MISSING_TEST_KEY",
+    ])
+    .expect("api-key set parses");
+    let error = run_inner(args).expect_err("missing env var is rejected");
+    restore_discovery_dir(previous_discovery);
+    assert_eq!(error.code, ErrorCode::InvalidParams);
 }

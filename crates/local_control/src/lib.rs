@@ -8,6 +8,7 @@ pub mod catalog;
 pub mod client;
 pub mod discovery;
 pub mod protocol;
+pub mod scripting;
 pub mod selection;
 pub mod selectors;
 
@@ -25,5 +26,9 @@ pub use discovery::{
 pub use protocol::{
     Action, ControlError, ControlResponse, ErrorCode, ErrorResponseEnvelope, ExecutionContextProof,
     PROTOCOL_VERSION, RequestEnvelope, ResponseEnvelope,
+};
+pub use scripting::{
+    ApiKeySecret, ApiKeyStatus, ApiKeyStorageRef, AuthStatusSummary, ScriptingGrant,
+    ScriptingIdentitySource, ScriptingScope,
 };
 pub use selectors::{PaneSelector, TabSelector, TargetSelector, WindowSelector};

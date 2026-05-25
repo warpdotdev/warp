@@ -1,4 +1,5 @@
 //! Command-line interface for controlling a running local Warp app.
+mod auth_commands;
 mod commands;
 mod completions;
 mod output;
@@ -7,6 +8,7 @@ mod selectors;
 use std::process::ExitCode;
 
 use crate::agent::OutputFormat;
+use auth_commands::{AuthCommand, run_auth_command};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use clap_complete::aot::Shell;
 
@@ -64,6 +66,9 @@ impl ControlArgs {
 /// Top-level `warpctrl` command groups.
 #[derive(Debug, Clone, Subcommand)]
 pub enum ControlCommand {
+    /// Manage authenticated scripting state.
+    #[command(subcommand)]
+    Auth(AuthCommand),
     /// Inspect local Warp app instances.
     #[command(subcommand)]
     Instance(InstanceCommand),
@@ -153,6 +158,7 @@ pub fn run(args: ControlArgs) -> ExitCode {
 fn run_inner(args: ControlArgs) -> Result<(), local_control::protocol::ControlError> {
     let output_format = args.output_format;
     match args.command {
+        ControlCommand::Auth(command) => run_auth_command(command, output_format),
         ControlCommand::Instance(command) => run_instance_command(command, output_format),
         ControlCommand::App(command) => run_app_command(command, output_format),
         ControlCommand::Tab(command) => run_tab_command(command, output_format),
