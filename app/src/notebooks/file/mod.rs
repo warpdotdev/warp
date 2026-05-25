@@ -29,6 +29,7 @@ use warpui::{
     ViewHandle,
 };
 
+#[cfg(not(target_family = "wasm"))]
 use remote_server::manager::RemoteServerManager;
 
 use super::context_menu::{show_rich_editor_context_menu, ContextMenuAction, ContextMenuState};
