@@ -14,9 +14,9 @@ mod mac {
     use std::{env, str};
 
     use libc::{setlocale, LC_ALL, LC_CTYPE};
-    use objc::runtime::Object;
-    use objc::{class, msg_send, sel, sel_impl};
-    use warpui::platform::mac::utils::nsstring_as_str;
+    use objc2::runtime::NSObjectProtocol;
+    use objc2::sel;
+    use objc2_foundation::NSLocale;
 
     use super::*;
 
@@ -79,51 +79,42 @@ mod mac {
     }
 
     /// Determine system locale based on language and country code.
+    //
+    // `NSLocale::countryCode` is deprecated in the SDK, but we keep using it to
+    // assemble a POSIX locale string; there is no non-deprecated accessor that
+    // returns the bare country code.
+    #[allow(deprecated)]
     fn system_locale() -> String {
-        unsafe {
-            // Read the current locale from `NSLocale`. We purposefully don't call release on
-            // `currentLocale` since we don't own the object (it was not obtained by using `new`,
-            // `alloc`, `retain` or `copy`. See https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/MemoryMgmt/Articles/mmRules.html#//apple_ref/doc/uid/20000994-BAJHFBGH
-            // for more details about memory management in Objective-C.
-            let locale_class = class!(NSLocale);
-            let locale: *const Object = msg_send![locale_class, currentLocale];
+        // Read the current locale from `NSLocale`. objc2 returns each getter
+        // result as a `Retained`, which claims the autoreleased value and
+        // releases it on drop, so we no longer manage these lifetimes by hand.
+        let locale = NSLocale::currentLocale();
 
-            // `localeIdentifier` returns extra metadata with the locale (including currency and
-            // collator) on newer versions of macOS. This is not a valid locale, so we use
-            // `languageCode` and `countryCode`, if they're available (macOS 10.12+):
-            //
-            // https://developer.apple.com/documentation/foundation/nslocale/1416263-localeidentifier?language=objc
-            // https://developer.apple.com/documentation/foundation/nslocale/1643060-countrycode?language=objc
-            // https://developer.apple.com/documentation/foundation/nslocale/1643026-languagecode?language=objc
-            let is_language_code_supported: bool =
-                msg_send![locale, respondsToSelector: sel!(languageCode)];
-            let is_country_code_supported: bool =
-                msg_send![locale, respondsToSelector: sel!(countryCode)];
-            let locale_id = if is_language_code_supported && is_country_code_supported {
-                let language_code: *const Object = msg_send![locale, languageCode];
-                let language_code_str = nsstring_as_str(language_code)
-                    .expect("should always be valid UTF-8 string")
-                    .to_owned();
-                let _: () = msg_send![language_code, release];
+        // `localeIdentifier` returns extra metadata with the locale (including currency and
+        // collator) on newer versions of macOS. This is not a valid locale, so we use
+        // `languageCode` and `countryCode`, if they're available (macOS 10.12+):
+        //
+        // https://developer.apple.com/documentation/foundation/nslocale/1416263-localeidentifier?language=objc
+        // https://developer.apple.com/documentation/foundation/nslocale/1643060-countrycode?language=objc
+        // https://developer.apple.com/documentation/foundation/nslocale/1643026-languagecode?language=objc
+        let is_language_code_supported = locale.respondsToSelector(sel!(languageCode));
+        let is_country_code_supported = locale.respondsToSelector(sel!(countryCode));
+        if is_language_code_supported && is_country_code_supported {
+            // objc2's `Retained` releases each getter result on drop, so the
+            // manual `[languageCode release]` the previous code performed (an
+            // unbalanced over-release of a +0 getter return) is intentionally
+            // gone.
+            let language_code = locale.languageCode().to_string();
+            let country_code = locale
+                .countryCode()
+                .expect("should always be valid UTF-8 string")
+                .to_string();
 
-                let country_code: *const Object = msg_send![locale, countryCode];
-                let country_code_str = nsstring_as_str(country_code)
-                    .expect("should always be valid UTF-8 string")
-                    .to_owned();
-                let _: () = msg_send![country_code, release];
+            format!("{language_code}_{country_code}.UTF-8")
+        } else {
+            let identifier = locale.localeIdentifier().to_string();
 
-                format!("{}_{}.UTF-8", &language_code_str, &country_code_str)
-            } else {
-                let identifier: *const Object = msg_send![locale, localeIdentifier];
-                let identifier_str = nsstring_as_str(identifier)
-                    .expect("should always be valid UTF-8 string")
-                    .to_owned();
-                let _: () = msg_send![identifier, release];
-
-                identifier_str + ".UTF-8"
-            };
-
-            locale_id
+            identifier + ".UTF-8"
         }
     }
 }
