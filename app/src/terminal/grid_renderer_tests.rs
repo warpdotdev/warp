@@ -327,3 +327,22 @@ fn test_calculate_selection_bounds() {
     assert_selection_bounds(10.into_lines()); // Without scroll clipping (but on the cusp of clipping)
     assert_selection_bounds(80.into_lines()); // With scroll clipping
 }
+
+#[test]
+fn test_decompose_sara_am() {
+    // THAI CHARACTER SARA AM -> NIKHAHIT (dot, drawn over the consonant) + SARA AA (spacing tail).
+    assert_eq!(
+        super::decompose_sara_am('\u{0E33}'),
+        Some(('\u{0E4D}', '\u{0E32}'))
+    );
+    // LAO VOWEL SIGN AM -> NIGGAHITA + LAO SARA AA.
+    assert_eq!(
+        super::decompose_sara_am('\u{0EB3}'),
+        Some(('\u{0ECD}', '\u{0EB2}'))
+    );
+    // Plain Thai consonants and the bare sara-am parts are left untouched.
+    assert_eq!(super::decompose_sara_am('\u{0E04}'), None); // ค
+    assert_eq!(super::decompose_sara_am('\u{0E4D}'), None); // nikhahit
+    assert_eq!(super::decompose_sara_am('\u{0E32}'), None); // sara aa
+    assert_eq!(super::decompose_sara_am('a'), None);
+}
