@@ -753,6 +753,12 @@ fn handle_model_event(event: ModelEvent, connection: &mut SqliteConnection) -> a
             enabled,
         } => upsert_workspace_language_server(connection, &workspace_path, lsp_type, enabled)
             .context("error upserting workspace language server"),
+        ModelEvent::UpsertWorkspaceCustomLanguageServer {
+            workspace_path,
+            name,
+            enabled,
+        } => upsert_workspace_custom_language_server(connection, &workspace_path, &name, enabled)
+            .context("error upserting workspace custom language server"),
         ModelEvent::UpdateBlockAgentViewVisibility {
             block_id,
             agent_view_visibility,
@@ -1474,35 +1480,85 @@ fn get_all_codebase_index_metadata(
         .collect_vec())
 }
 
+/// Discriminator for the `workspace_language_server.kind` column.
+/// Encoded as `BuiltIn` / `Custom` strings — keep `as_db` synced with
+/// the migration's `DEFAULT 'BuiltIn'`.
+#[derive(Clone, Copy)]
+enum ServerKind {
+    BuiltIn,
+    Custom,
+}
+
+impl ServerKind {
+    fn as_db(self) -> &'static str {
+        match self {
+            Self::BuiltIn => "BuiltIn",
+            Self::Custom => "Custom",
+        }
+    }
+
+    fn from_db(s: &str) -> Option<Self> {
+        match s {
+            "BuiltIn" => Some(Self::BuiltIn),
+            "Custom" => Some(Self::Custom),
+            _ => None,
+        }
+    }
+}
+
+pub(super) struct WorkspaceLanguageServers {
+    pub builtin: HashMap<PathBuf, HashMap<LSPServerType, EnablementState>>,
+    pub custom: HashMap<PathBuf, HashMap<String, EnablementState>>,
+}
+
 fn get_all_workspace_language_servers_by_workspace(
     conn: &mut SqliteConnection,
-) -> Result<HashMap<PathBuf, HashMap<LSPServerType, EnablementState>>, diesel::result::Error> {
+) -> Result<WorkspaceLanguageServers, diesel::result::Error> {
     use schema::workspace_language_server::dsl::*;
     use schema::workspace_metadata;
 
     let results = workspace_language_server
         .inner_join(workspace_metadata::table)
-        .select((workspace_metadata::repo_path, language_server_name, enabled))
-        .load::<(String, String, String)>(conn)?;
+        .select((
+            workspace_metadata::repo_path,
+            language_server_name,
+            enabled,
+            kind,
+        ))
+        .load::<(String, String, String, String)>(conn)?;
 
-    let mut grouped: HashMap<PathBuf, HashMap<LSPServerType, EnablementState>> = HashMap::new();
-    for (path_str, server_name, enablement_str) in results {
+    let mut builtin: HashMap<PathBuf, HashMap<LSPServerType, EnablementState>> = HashMap::new();
+    let mut custom: HashMap<PathBuf, HashMap<String, EnablementState>> = HashMap::new();
+    for (path_str, server_name, enablement_str, kind_str) in results {
         let path = PathBuf::from(path_str);
-        let Some(server_type) = serde_json::from_str(&server_name).ok() else {
+        let Some(enablement) = serde_json::from_str::<EnablementState>(&enablement_str).ok() else {
+            continue;
+        };
+        let Some(server_kind) = ServerKind::from_db(&kind_str) else {
             continue;
         };
 
-        let Some(enablement) = serde_json::from_str(&enablement_str).ok() else {
-            continue;
-        };
-
-        grouped
-            .entry(path)
-            .or_default()
-            .insert(server_type, enablement);
+        match server_kind {
+            ServerKind::BuiltIn => {
+                let Some(server_type) = serde_json::from_str::<LSPServerType>(&server_name).ok()
+                else {
+                    continue;
+                };
+                builtin
+                    .entry(path)
+                    .or_default()
+                    .insert(server_type, enablement);
+            }
+            ServerKind::Custom => {
+                let Some(name) = serde_json::from_str::<String>(&server_name).ok() else {
+                    continue;
+                };
+                custom.entry(path).or_default().insert(name, enablement);
+            }
+        }
     }
 
-    Ok(grouped)
+    Ok(WorkspaceLanguageServers { builtin, custom })
 }
 
 fn upsert_workspace_language_server(
@@ -1510,6 +1566,43 @@ fn upsert_workspace_language_server(
     workspace_path: &Path,
     server_type: LSPServerType,
     enablement: EnablementState,
+) -> Result<()> {
+    let server_name = serde_json::to_string(&server_type)?;
+    upsert_workspace_language_server_row(
+        conn,
+        workspace_path,
+        &server_name,
+        enablement,
+        ServerKind::BuiltIn,
+    )
+}
+
+fn upsert_workspace_custom_language_server(
+    conn: &mut SqliteConnection,
+    workspace_path: &Path,
+    name: &str,
+    enablement: EnablementState,
+) -> Result<()> {
+    let server_name = serde_json::to_string(name)?;
+    upsert_workspace_language_server_row(
+        conn,
+        workspace_path,
+        &server_name,
+        enablement,
+        ServerKind::Custom,
+    )
+}
+
+/// Shared UPSERT body. `server_name_value` is the already-encoded
+/// `language_server_name` column value (built-ins serialize the
+/// `LSPServerType` variant; customs serialize the descriptor name).
+/// The natural key is `(workspace_id, language_server_name, kind)`.
+fn upsert_workspace_language_server_row(
+    conn: &mut SqliteConnection,
+    workspace_path: &Path,
+    server_name_value: &str,
+    enablement: EnablementState,
+    server_kind: ServerKind,
 ) -> Result<()> {
     use schema::workspace_language_server::dsl::*;
     use schema::workspace_metadata::dsl::*;
@@ -1523,13 +1616,14 @@ fn upsert_workspace_language_server(
         .ok_or(anyhow::anyhow!("Can't find workspace for path"))?;
 
     let ws_id = metadata.id;
-    let server_name = serde_json::to_string(&server_type)?;
+    let kind_value = server_kind.as_db();
 
     // Now upsert the language server setting
     // Check if record already exists
     let existing = workspace_language_server
         .filter(workspace_id.eq(ws_id))
-        .filter(language_server_name.eq(server_name.clone()))
+        .filter(language_server_name.eq(server_name_value))
+        .filter(kind.eq(kind_value))
         .first::<model::WorkspaceLanguageServer>(conn)
         .optional()?;
 
@@ -1544,8 +1638,9 @@ fn upsert_workspace_language_server(
         // Insert new record
         let new_language_server = model::NewWorkspaceLanguageServer {
             workspace_id: ws_id,
-            language_server_name: server_name,
-            enabled: enablement_str.to_string(),
+            language_server_name: server_name_value.to_string(),
+            enabled: enablement_str,
+            kind: kind_value.to_string(),
         };
 
         diesel::insert_into(workspace_language_server)
@@ -2774,7 +2869,10 @@ fn read_sqlite_data(
     let ai_queries = read_ai_queries(conn)?;
 
     let codebase_indices = get_all_codebase_index_metadata(conn)?;
-    let workspace_language_servers = get_all_workspace_language_servers_by_workspace(conn)?;
+    let WorkspaceLanguageServers {
+        builtin: workspace_language_servers,
+        custom: workspace_custom_language_servers,
+    } = get_all_workspace_language_servers_by_workspace(conn)?;
     let multi_agent_conversations = read_agent_conversations(conn)?;
     let projects = get_all_projects(conn)?;
     let project_rules = get_all_project_rules(conn)?;
@@ -2795,6 +2893,7 @@ fn read_sqlite_data(
         ai_queries,
         codebase_indices,
         workspace_language_servers,
+        workspace_custom_language_servers,
         multi_agent_conversations,
         projects,
         project_rules,

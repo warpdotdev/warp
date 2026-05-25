@@ -25,6 +25,8 @@ pub mod inline_diff;
 #[cfg(feature = "local_fs")]
 pub mod language_server_shutdown_manager;
 #[cfg(not(target_family = "wasm"))]
+pub mod lsp_dispatch;
+#[cfg(not(target_family = "wasm"))]
 pub mod lsp_logs;
 pub mod lsp_telemetry;
 

@@ -60,6 +60,27 @@ lazy_static! {
 /// Leading prefix for a path to the home directory using the $HOME environment variable.
 pub const HOME_DIR_ENV_VAR_PREFIX: &str = "$HOME";
 
+/// Stable, short hex hash derived from a path. Safe to use as a
+/// filesystem-name component (no `/`, no spaces, no reserved chars).
+///
+/// Used to give each workspace a unique identifier in places where the raw
+/// path would be awkward — for example, the LSP log filename
+/// (`{workspace_hash}.log`) and the `{{workspace_hash}}` placeholder for
+/// custom LSP server descriptors (e.g. JDTLS's `-data` argument).
+///
+/// The hash is the first 8 bytes of SHA-256 over the path's `to_string_lossy`
+/// UTF-8 bytes, encoded as 16 lowercase hex chars. A 64-bit prefix is more
+/// than enough to make collisions among a single user's workspaces
+/// vanishingly unlikely.
+pub fn workspace_hash(path: &Path) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(path.to_string_lossy().as_bytes());
+    let digest = hasher.finalize();
+    hex::encode(&digest[..8])
+}
+
 const DIRS_IN_MSYS2_ROOT: [&[u8]; 14] = [
     b"bin",
     b"cmd",

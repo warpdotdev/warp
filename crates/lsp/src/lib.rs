@@ -2,6 +2,7 @@ mod command_builder;
 pub use command_builder::CommandBuilder;
 
 mod config;
+pub mod descriptor;
 mod language_server_candidate;
 pub use language_server_candidate::LanguageServerCandidate;
 pub mod install;
@@ -19,11 +20,13 @@ pub mod supported_servers;
 mod transport;
 pub mod types;
 
-pub use config::{default_init_params, LanguageId, LspServerConfig};
+pub use config::{
+    default_init_params, CustomLspServerConfig, LanguageId, LspServerConfig, LspServerConfigKind,
+};
 pub use jsonrpc::{JsonRpcService, ServerNotificationEvent, Transport};
 pub use lsp_types::notification::{self};
 pub use lsp_types::{Position, Range};
-pub use manager::{LspManagerModel, LspManagerModelEvent};
+pub use manager::{LspManagerModel, LspManagerModelEvent, ServerKey};
 pub use model::{
     BackgroundTaskInfo, DocumentDiagnostics, LanguageServerId, LspEvent, LspServerModel, LspState,
 };
@@ -69,7 +72,7 @@ pub struct LspServiceInitializationResult {
 /// to its file for debugging purposes.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn spawn_lsp_service(
-    config: LspServerConfig,
+    config: LspServerConfigKind,
     executor: Arc<Background>,
     logger: Option<SimpleLogger>,
 ) -> Result<LspServiceInitializationResult> {
@@ -123,7 +126,7 @@ pub async fn spawn_lsp_service(
 
 #[cfg(target_arch = "wasm32")]
 pub async fn spawn_lsp_service(
-    _config: LspServerConfig,
+    _config: LspServerConfigKind,
     _executor: Arc<Background>,
     _logger: Option<()>,
 ) -> Result<LspServiceInitializationResult> {
