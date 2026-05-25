@@ -935,6 +935,7 @@ impl FileNotebookView {
 
     /// Returns `true` when this notebook is backed by a remote file whose
     /// host no longer has any connected session.
+    #[cfg(not(target_family = "wasm"))]
     fn is_remote_disconnected(&self, app: &AppContext) -> bool {
         let Some(LocalOrRemotePath::Remote(remote_path)) = self.file_state.path() else {
             return false;
@@ -944,7 +945,7 @@ impl FileNotebookView {
             .is_none()
     }
 
-    fn render_body(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+    fn render_body(&self, appearance: &Appearance, _app: &AppContext) -> Box<dyn Element> {
         let body = match &self.file_state {
             FileState::NoFile => self.render_no_file(appearance),
             FileState::Loading(source) => self.render_loading(source, appearance),
@@ -953,7 +954,7 @@ impl FileNotebookView {
         };
 
         #[cfg(not(target_family = "wasm"))]
-        if matches!(self.file_state, FileState::Loaded(_)) && self.is_remote_disconnected(app) {
+        if matches!(self.file_state, FileState::Loaded(_)) && self.is_remote_disconnected(_app) {
             let banner =
                 crate::code::local_code_editor::render_remote_disconnected_banner(appearance);
             let mut col = Flex::column();
