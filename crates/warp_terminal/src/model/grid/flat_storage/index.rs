@@ -992,12 +992,12 @@ fn try_accumulate_softwrap(
     }
 }
 
-/// Tries to handle a uniform single-byte run using arithmetic carry-over,
-/// accounting for any graphemes already accumulated in `entry_builder` from
-/// previous soft-wrapped source rows.
+/// Tries to handle a uniform run using arithmetic carry-over, accounting for
+/// any graphemes already accumulated in `entry_builder` from previous
+/// soft-wrapped source rows.
 ///
-/// Only handles `cell_width == 1` — wide chars are excluded because their
-/// leading-spacer semantics require the full `process_graphemes_batch` logic.
+/// Handles `cell_width == 1` (ASCII/single-width) and `cell_width == 2`
+/// (wide chars).  Other cell widths fall through to the medium path.
 ///
 /// Returns `true` if handled; `false` to fall through to the medium path.
 fn try_emit_carryover_uniform(
@@ -1006,16 +1006,21 @@ fn try_emit_carryover_uniform(
     entry_builder: &mut EntryBuilder,
     index: &mut Index,
 ) -> bool {
-    if run.info.cell_width != 1 {
+    let cell_width = run.info.cell_width as usize;
+    if cell_width == 0 || cell_width > 2 {
         return false;
     }
     let count = run.count.get() as usize;
     let byte_len = run.info.utf8_bytes.get() as usize;
     let columns = index.columns;
-    // For cell_width == 1, num_cells == number of graphemes and
-    // graphemes_per_row == columns.
-    let graphemes_per_row = columns;
-    let remaining_graphemes = columns.saturating_sub(entry_builder.num_cells);
+    // graphemes_per_row: how many graphemes of this width fit in a complete row.
+    // For wide chars (cell_width == 2) with an odd column count, there is a
+    // 1-cell remainder that cannot hold another wide char — rows filled to
+    // that boundary get ends_with_leading_wide_char_spacer set.
+    let graphemes_per_row = columns / cell_width;
+    let full_row_spacer = cell_width == 2 && columns % 2 == 1;
+    let remaining_cells = columns.saturating_sub(entry_builder.num_cells);
+    let remaining_graphemes = remaining_cells / cell_width;
 
     // Sub-case A: builder is exactly full — flush it, then process the run
     // as if starting from an empty builder.
@@ -1024,15 +1029,21 @@ fn try_emit_carryover_uniform(
         if count > graphemes_per_row {
             // Fill and flush one full row via the builder, then use direct
             // arithmetic for the remainder.
-            entry_builder.num_cells = graphemes_per_row;
+            entry_builder.num_cells = graphemes_per_row * cell_width;
             entry_builder.incr_content_offset += graphemes_per_row * byte_len;
             entry_builder.grapheme_runs.push(GraphemeRun {
                 count: NonZeroU16::new(graphemes_per_row as u16).unwrap(),
                 info: run.info,
             });
+            if full_row_spacer {
+                entry_builder.add_leading_wide_char_spacer();
+            }
             entry_builder.flush_to_index(index);
             let mut rem = count - graphemes_per_row;
-            while rem >= graphemes_per_row {
+            // Strict `>` ensures rem stays in [1, graphemes_per_row] after the
+            // loop — with `>=` rem could reach 0, causing `has_trailing_newline`
+            // to emit an empty row instead of annotating the last content row.
+            while rem > graphemes_per_row {
                 let content_offset: ByteOffset = index.content_len.into();
                 index.content_len += graphemes_per_row * byte_len;
                 index.rows.push_back(Entry {
@@ -1042,21 +1053,21 @@ fn try_emit_carryover_uniform(
                         info: run.info,
                     }),
                     has_trailing_newline: false,
-                    ends_with_leading_wide_char_spacer: false,
+                    ends_with_leading_wide_char_spacer: full_row_spacer,
                 });
                 rem -= graphemes_per_row;
             }
-            if rem > 0 {
-                entry_builder.num_cells = rem;
-                entry_builder.incr_content_offset += rem * byte_len;
-                entry_builder.grapheme_runs.push(GraphemeRun {
-                    count: NonZeroU16::new(rem as u16).unwrap(),
-                    info: run.info,
-                });
-            }
+            // rem is in [1, graphemes_per_row] — never zero (see loop comment).
+            debug_assert!(rem > 0);
+            entry_builder.num_cells = rem * cell_width;
+            entry_builder.incr_content_offset += rem * byte_len;
+            entry_builder.grapheme_runs.push(GraphemeRun {
+                count: NonZeroU16::new(rem as u16).unwrap(),
+                info: run.info,
+            });
         } else {
             // Entire run fits in a fresh row.
-            entry_builder.num_cells = count;
+            entry_builder.num_cells = count * cell_width;
             entry_builder.incr_content_offset += count * byte_len;
             match entry_builder.grapheme_runs.last_mut() {
                 Some(last) if last.info == run.info => {
@@ -1075,7 +1086,10 @@ fn try_emit_carryover_uniform(
     // Sub-case B: run straddles the row boundary — fill the current partial
     // row, flush, then use arithmetic for the remainder.
     if remaining_graphemes > 0 && remaining_graphemes < count && graphemes_per_row > 0 {
-        entry_builder.num_cells += remaining_graphemes;
+        // For wide chars with an odd column count the partial row may have a
+        // 1-cell gap that cannot fit another wide char.
+        let partial_row_spacer = cell_width == 2 && remaining_cells % 2 == 1;
+        entry_builder.num_cells += remaining_graphemes * cell_width;
         entry_builder.incr_content_offset += remaining_graphemes * byte_len;
         match entry_builder.grapheme_runs.last_mut() {
             Some(last) if last.info == run.info => {
@@ -1086,10 +1100,14 @@ fn try_emit_carryover_uniform(
                 info: run.info,
             }),
         }
+        if partial_row_spacer {
+            entry_builder.add_leading_wide_char_spacer();
+        }
         entry_builder.flush_to_index(index);
 
         let mut rem = count - remaining_graphemes;
-        while rem >= graphemes_per_row {
+        // Same strict `>` invariant as Sub-case A.
+        while rem > graphemes_per_row {
             let content_offset: ByteOffset = index.content_len.into();
             index.content_len += graphemes_per_row * byte_len;
             index.rows.push_back(Entry {
@@ -1099,12 +1117,12 @@ fn try_emit_carryover_uniform(
                     info: run.info,
                 }),
                 has_trailing_newline: false,
-                ends_with_leading_wide_char_spacer: false,
+                ends_with_leading_wide_char_spacer: full_row_spacer,
             });
             rem -= graphemes_per_row;
         }
         if rem > 0 {
-            entry_builder.num_cells = rem;
+            entry_builder.num_cells = rem * cell_width;
             entry_builder.incr_content_offset += rem * byte_len;
             entry_builder.grapheme_runs.push(GraphemeRun {
                 count: NonZeroU16::new(rem as u16).unwrap(),
@@ -1119,8 +1137,8 @@ fn try_emit_carryover_uniform(
     }
 
     // Sub-case C: entire run fits in the remaining space of the current row.
-    if count <= remaining_graphemes && entry_builder.num_cells + count <= columns {
-        entry_builder.num_cells += count;
+    if count <= remaining_graphemes && entry_builder.num_cells + count * cell_width <= columns {
+        entry_builder.num_cells += count * cell_width;
         entry_builder.incr_content_offset += count * byte_len;
         match entry_builder.grapheme_runs.last_mut() {
             Some(last) if last.info == run.info => {

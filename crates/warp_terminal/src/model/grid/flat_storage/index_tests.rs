@@ -830,6 +830,182 @@ mod differential_tests {
         }
     }
 
+    /// Regression test: `try_emit_carryover_uniform` Sub-case A must use
+    /// strict `>` in its inner loop, not `>=`.
+    ///
+    /// When `count - graphemes_per_row` is an exact multiple of
+    /// `graphemes_per_row` the `>=` variant reduces `rem` to 0, causing the
+    /// trailing-newline path to emit an empty row instead of annotating the
+    /// last content row.
+    ///
+    /// Trigger: soft-wrapped row fills the builder to exactly `columns`, then
+    /// the next row is a uniform run of `2 * columns` graphemes with a
+    /// trailing newline.
+    #[test]
+    fn carryover_uniform_sub_a_exact_multiple_newline() {
+        // Source: 40-cell soft-wrap + 80-cell newline row, rebuild to 40 cols.
+        // entry_builder accumulates 40 cells from row 1 → Sub-case A triggers
+        // with count=80, graphemes_per_row=40, rem=40.
+        let mut index = Index::new(80, Some(2));
+
+        let mut eb = index.start_row();
+        for _ in 0..40 {
+            eb.process_grapheme_info_unchecked(ASCII_GRAPHEME_INFO);
+        }
+        eb.append_to_index(&mut index); // no newline — soft-wrap
+
+        let mut eb = index.start_row();
+        for _ in 0..80 {
+            eb.process_grapheme_info_unchecked(ASCII_GRAPHEME_INFO);
+        }
+        eb.add_trailing_newline();
+        eb.append_to_index(&mut index);
+
+        let optimized = Index::rebuild(&index, 40);
+        let baseline = Index::rebuild_baseline(&index, 40);
+        assert_indexes_equal(&optimized, &baseline, "carryover sub-A exact multiple");
+        assert_eq!(
+            optimized.content_len, index.content_len,
+            "content_len not preserved"
+        );
+    }
+
+    /// Regression test: `try_emit_carryover_uniform` Sub-case B must also use
+    /// strict `>` in its inner loop.
+    ///
+    /// Trigger: partial soft-wrapped row leaves `remaining_graphemes` cells in
+    /// the builder such that `count - remaining_graphemes` is an exact multiple
+    /// of `graphemes_per_row`.
+    #[test]
+    fn carryover_uniform_sub_b_exact_multiple_newline() {
+        // Source: 20-cell soft-wrap + 60-cell newline row, rebuild to 40 cols.
+        // entry_builder has 20 cells → remaining_graphemes=20, rem=40=GPR.
+        let mut index = Index::new(80, Some(2));
+
+        let mut eb = index.start_row();
+        for _ in 0..20 {
+            eb.process_grapheme_info_unchecked(ASCII_GRAPHEME_INFO);
+        }
+        eb.append_to_index(&mut index); // no newline — soft-wrap
+
+        let mut eb = index.start_row();
+        for _ in 0..60 {
+            eb.process_grapheme_info_unchecked(ASCII_GRAPHEME_INFO);
+        }
+        eb.add_trailing_newline();
+        eb.append_to_index(&mut index);
+
+        let optimized = Index::rebuild(&index, 40);
+        let baseline = Index::rebuild_baseline(&index, 40);
+        assert_indexes_equal(&optimized, &baseline, "carryover sub-B exact multiple");
+        assert_eq!(
+            optimized.content_len, index.content_len,
+            "content_len not preserved"
+        );
+    }
+
+    /// Regression test: `try_emit_carryover_uniform` now handles `cell_width == 2`
+    /// (wide chars) and correctly sets `ends_with_leading_wide_char_spacer` on
+    /// rows whose wide-char content doesn't reach an even column boundary.
+    ///
+    /// Uses an odd column count (7) so that every full wide-char row leaves a
+    /// 1-cell gap and must set the spacer flag — exercises both `full_row_spacer`
+    /// (inner direct-emit rows) and `partial_row_spacer` (the initial builder
+    /// flush in Sub-case B).
+    #[test]
+    fn carryover_uniform_wide_char_odd_columns() {
+        // Source: 4 ASCII (no nl) + 5 wide chars (with nl) in a 10-col index.
+        // Rebuild to 7 cols (odd).
+        //
+        // Expected output (verified against baseline):
+        //   row 0: [4 ascii + 1 wide],  ends_with_leading_wide_char_spacer=true
+        //   row 1: [3 wide],             ends_with_leading_wide_char_spacer=true
+        //   row 2: [1 wide + nl],        ends_with_leading_wide_char_spacer=false
+        let mut index = Index::new(10, Some(2));
+
+        let mut eb = index.start_row();
+        for _ in 0..4 {
+            eb.process_grapheme_info_unchecked(ASCII_GRAPHEME_INFO);
+        }
+        eb.append_to_index(&mut index); // no newline
+
+        let mut eb = index.start_row();
+        for _ in 0..5 {
+            eb.process_grapheme_info_unchecked(EMOJI_GRAPHEME_INFO);
+        }
+        eb.add_trailing_newline();
+        eb.append_to_index(&mut index);
+
+        let optimized = Index::rebuild(&index, 7);
+        let baseline = Index::rebuild_baseline(&index, 7);
+        assert_indexes_equal(&optimized, &baseline, "carryover wide char odd cols");
+        assert_eq!(
+            optimized.content_len, index.content_len,
+            "content_len not preserved"
+        );
+    }
+
+    /// Broader sweep: wide-char carry-over across various column widths including
+    /// odd counts, large runs, and multiple full-row direct-emits.
+    #[test]
+    fn carryover_uniform_wide_char_sweep() {
+        // (old_cols, new_cols) pairs that exercise wide-char carry-over paths
+        let cases: &[(usize, usize, usize, usize)] = &[
+            // (old_cols, new_cols, ascii_prefix_len, wide_count)
+            (10, 7, 4, 5),   // odd new_cols, Sub-case B + full_row_spacer
+            (10, 6, 4, 5),   // even new_cols, Sub-case B no spacer
+            (20, 7, 3, 8),   // longer run, multiple direct-emit rows
+            (20, 9, 5, 7),   // odd new_cols, Sub-case B with partial_row_spacer
+            (20, 10, 6, 7),  // even new_cols, no spacers needed
+            (30, 7, 2, 12),  // many full rows through direct-emit loop
+            (14, 7, 0, 7),   // no ASCII prefix — Sub-case A (builder full from softwrap)
+        ];
+
+        for &(old_cols, new_cols, ascii_len, wide_count) in cases {
+            let mut index = Index::new(old_cols, Some(2));
+
+            // Row 1: ASCII prefix, soft-wrapped.
+            if ascii_len > 0 {
+                let mut eb = index.start_row();
+                for _ in 0..ascii_len {
+                    eb.process_grapheme_info_unchecked(ASCII_GRAPHEME_INFO);
+                }
+                eb.append_to_index(&mut index);
+            }
+
+            // Row 2 (or row 1 if no prefix): wide chars with newline.
+            // If no prefix we use a source row of wide chars that fills
+            // old_cols exactly so it appears as a soft-wrapped row followed
+            // by a second wide-char row with newline.
+            if ascii_len == 0 {
+                // First source row: enough wide chars to fill old_cols (soft-wrap)
+                let mut eb = index.start_row();
+                let fill = old_cols / 2;
+                for _ in 0..fill {
+                    eb.process_grapheme_info_unchecked(EMOJI_GRAPHEME_INFO);
+                }
+                eb.append_to_index(&mut index);
+            }
+
+            let mut eb = index.start_row();
+            for _ in 0..wide_count {
+                eb.process_grapheme_info_unchecked(EMOJI_GRAPHEME_INFO);
+            }
+            eb.add_trailing_newline();
+            eb.append_to_index(&mut index);
+
+            let optimized = Index::rebuild(&index, new_cols);
+            let baseline = Index::rebuild_baseline(&index, new_cols);
+            assert_indexes_equal(
+                &optimized,
+                &baseline,
+                &format!(
+                    "wide-char sweep: old={old_cols}, new={new_cols}, ascii={ascii_len}, wide={wide_count}"
+                ),
+            );
+        }
+    }
+
     /// Regression test: narrowing fast path must preserve `content_len` when
     /// `count` is an exact multiple of `graphemes_per_row`.
     ///
