@@ -46,6 +46,14 @@ impl PostTarget {
         matches!(self, PostTarget::Pid(_))
     }
 
+    /// Returns the target PID, if events are delivered directly to a process.
+    pub fn pid(self) -> Option<libc::pid_t> {
+        match self {
+            PostTarget::Pid(pid) => Some(pid),
+            PostTarget::HidTap => None,
+        }
+    }
+
     /// Posts the given event according to this target.
     pub fn post(self, event: &CGEvent) {
         match self {

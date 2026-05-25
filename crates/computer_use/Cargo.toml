@@ -25,12 +25,21 @@ tokio = { workspace = true, features = ["rt", "macros"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 command.workspace = true
+core-foundation.workspace = true
+# Used (alongside core-foundation) for the experimental window-number lookup in `mac/window.rs`.
+core-graphics = "0.25.0"
 dispatch2 = "0.3.0"
 image.workspace = true
 instant.workspace = true
 libc.workspace = true
 objc2.workspace = true
-objc2-app-kit.workspace = true
+# `NSEvent`/`NSGraphicsContext`/`objc2-core-graphics` are needed to build window-targeted mouse
+# events via `NSEvent::mouseEventWithType_...` and bridge to `CGEvent` for PID-targeted posting.
+objc2-app-kit = { workspace = true, features = [
+    "NSEvent",
+    "NSGraphicsContext",
+    "objc2-core-graphics",
+] }
 objc2-core-foundation.workspace = true
 # The `libc` feature is required for `CGEvent::post_to_pid`, which delivers events to a
 # specific process without moving the global cursor.

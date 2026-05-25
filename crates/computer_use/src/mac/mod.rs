@@ -3,7 +3,9 @@ mod keycode_cache;
 mod mouse;
 mod post;
 mod screenshot;
+mod skylight;
 mod util;
+mod window;
 
 use async_trait::async_trait;
 use warpui_core::r#async::Timer;
@@ -14,6 +16,26 @@ use crate::{Action, ActionResult, Options};
 
 pub fn is_supported_on_current_platform() -> bool {
     true
+}
+
+/// Experimental: lists on-screen windows (number, owner PID/name, layer, bounds) for
+/// diagnosing PID/window targeting.
+pub fn list_windows() -> String {
+    let mut out = String::from("window#  owner_pid  layer  bounds(x,y,w,h)  owner_name\n");
+    for w in window::list_windows() {
+        out.push_str(&format!(
+            "{:<7}  {:<9}  {:<5}  ({:.0},{:.0},{:.0},{:.0})  {}\n",
+            w.number,
+            w.owner_pid,
+            w.layer,
+            w.x,
+            w.y,
+            w.width,
+            w.height,
+            w.owner_name.as_deref().unwrap_or("<unknown>"),
+        ));
+    }
+    out
 }
 
 pub struct Actor {
@@ -78,6 +100,13 @@ impl super::Actor for Actor {
                     self.keyboard.key_up(key)?;
                 }
             }
+        }
+
+        // Experimental: optionally restore the user's previous input focus after the batch of
+        // actions completes, undoing the focus-without-raise. Gated so it does not break flows
+        // that span multiple invocations (e.g. click in one call, type in the next).
+        if std::env::var_os("COMPUTER_USE_RESTORE_FOCUS").is_some() {
+            self.mouse.restore_focus();
         }
 
         let screenshot = if let Some(params) = options.screenshot_params {

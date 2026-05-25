@@ -1,15 +1,19 @@
 use std::time::Duration;
 
 use instant::Instant;
+use objc2::rc::Retained;
+use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
 use objc2_core_foundation::CGPoint;
 use objc2_core_graphics::{
-    CGEvent, CGEventSource, CGEventSourceStateID, CGEventType, CGMouseButton, CGScrollEventUnit,
+    CGEvent, CGEventField, CGEventSource, CGEventSourceStateID, CGEventType, CGMouseButton,
+    CGScrollEventUnit,
 };
 use pathfinder_geometry::vector::Vector2I;
 use warpui_core::r#async::Timer;
 
 use super::post::PostTarget;
 use super::util::main_display_scale_factor;
+use super::window;
 use crate::{MouseButton, ScrollDirection, ScrollDistance};
 
 const POSITION_POLL_INTERVAL: Duration = Duration::from_micros(500);
@@ -34,6 +38,15 @@ pub fn from_cgpoint(point: CGPoint) -> Vector2I {
     Vector2I::new((point.x * scale) as i32, (point.y * scale) as i32)
 }
 
+/// Records a focus-without-raise change so it can be undone later.
+#[derive(Clone, Copy)]
+struct FocusChange {
+    /// The (pid, window) that was focused before we changed it (to restore).
+    previous: (libc::pid_t, i64),
+    /// The (pid, window) we most recently activated.
+    activated: (libc::pid_t, i64),
+}
+
 /// Manages mouse state and posts mouse events to the system.
 pub struct Mouse {
     held_buttons: HeldButtons,
@@ -45,6 +58,8 @@ pub struct Mouse {
     /// cursor, so the global cursor position cannot be used to locate clicks. We track the
     /// intended position here and use it as the location for button and move events.
     virtual_position: CGPoint,
+    /// The focus change made by the first PID-targeted click, for later restoration.
+    focus_change: Option<FocusChange>,
 }
 
 impl Mouse {
@@ -53,6 +68,19 @@ impl Mouse {
             held_buttons: HeldButtons::default(),
             target,
             virtual_position: CGPoint { x: 0.0, y: 0.0 },
+            focus_change: None,
+        }
+    }
+
+    /// Restores input focus to the window that was focused before our first PID-targeted
+    /// click, undoing the focus-without-raise. No-op if we never changed focus.
+    pub fn restore_focus(&mut self) {
+        if let Some(change) = self.focus_change.take() {
+            super::skylight::focus_window_without_raise(
+                change.previous.0,
+                change.previous.1,
+                Some(change.activated),
+            );
         }
     }
 
@@ -65,7 +93,14 @@ impl Mouse {
 
         let point = to_cgpoint(target);
         self.virtual_position = point;
-        self.post_event(event_type, point, cg_button)?;
+        // A drag is part of an active click, so it carries the click state; a plain move does
+        // not.
+        let click_state = if self.held_buttons.primary_down().is_some() {
+            1
+        } else {
+            0
+        };
+        self.post_event(event_type, point, cg_button, click_state)?;
 
         // `CGEventPostToPid` does not move the real cursor, so polling the global cursor
         // position would always time out. Only wait when injecting through the HID tap.
@@ -79,13 +114,13 @@ impl Mouse {
     pub fn button_down(&mut self, button: &MouseButton) -> Result<(), String> {
         let point = self.event_location()?;
         self.held_buttons.set_down(button, true);
-        self.post_event(mouse_down_event_type(button), point, button.into())
+        self.post_event(mouse_down_event_type(button), point, button.into(), 1)
     }
 
     pub fn button_up(&mut self, button: &MouseButton) -> Result<(), String> {
         let point = self.event_location()?;
         self.held_buttons.set_down(button, false);
-        self.post_event(mouse_up_event_type(button), point, button.into())
+        self.post_event(mouse_up_event_type(button), point, button.into(), 1)
     }
 
     pub fn current_position(&mut self) -> Result<Vector2I, String> {
@@ -197,12 +232,64 @@ impl Mouse {
         Ok(pos)
     }
 
+    /// Posts a mouse event.
+    ///
+    /// `click_state` is the click count (1 for a single click, 2 for a double click, etc.) and
+    /// should be 0 for non-button events like plain moves. Many applications ignore synthetic
+    /// clicks that lack a non-zero click state, so it is set for button-down, button-up, and
+    /// drag events.
     fn post_event(
         &mut self,
         event_type: CGEventType,
         point: CGPoint,
         button: CGMouseButton,
+        click_state: i64,
     ) -> Result<(), String> {
+        // Experimental: a PID-targeted mouse event built as a plain CGEvent bypasses the
+        // WindowServer's hit-testing, so it arrives without an associated window and AppKit
+        // drops it. Build it instead as an NSEvent targeted at the window under the point (with
+        // window-local coordinates and the window-under-pointer fields stamped) so AppKit can
+        // route it. Falls back to a plain CGEvent when no owned window is found.
+        if let Some(pid) = self.target.pid()
+            && let Some(info) = window::window_at(pid, point.x, point.y)
+        {
+            let is_down = matches!(
+                event_type,
+                CGEventType::LeftMouseDown
+                    | CGEventType::RightMouseDown
+                    | CGEventType::OtherMouseDown
+            );
+            if is_down {
+                // Flip the target into the AppKit-active input state without raising it (yabai
+                // focus-without-raise), recording the change so it can be restored later.
+                let previous = window::frontmost_window();
+                super::skylight::focus_window_without_raise(pid, info.number, previous);
+                match self.focus_change.as_mut() {
+                    Some(change) => change.activated = (pid, info.number),
+                    None => {
+                        if let Some(previous) = previous {
+                            self.focus_change = Some(FocusChange {
+                                previous,
+                                activated: (pid, info.number),
+                            });
+                        }
+                    }
+                }
+                // Prime Chromium's user-activation gate with a decoy click off-screen so the
+                // real click is treated as a trusted continuation.
+                post_primer_click(pid);
+            }
+
+            if let Some(event) =
+                build_window_targeted_event(pid, info, event_type, point, click_state)
+            {
+                // Post via SkyLight's SLEventPostToPid (accepted by Chromium/Electron
+                // renderers), falling back to CGEventPostToPid when that symbol is missing.
+                super::skylight::post_event_to_pid(pid, &event);
+                return Ok(());
+            }
+        }
+
         let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState);
 
         let event = CGEvent::new_mouse_event(source.as_deref(), event_type, point, button)
@@ -214,9 +301,178 @@ impl Mouse {
                 )
             })?;
 
+        if click_state > 0 {
+            CGEvent::set_integer_value_field(
+                Some(&event),
+                CGEventField::MouseEventClickState,
+                click_state,
+            );
+        }
+
         self.target.post(&event);
         Ok(())
     }
+}
+
+/// Builds a mouse event targeted at `info` (the window under `point`) for the given process.
+///
+/// The event is synthesized via `NSEvent` so it carries the target window number and a
+/// window-local location, then bridged to a `CGEvent` with the window-under-pointer fields
+/// stamped. Returns `None` when the event type is not a mouse event.
+fn build_window_targeted_event(
+    pid: libc::pid_t,
+    info: window::WindowInfo,
+    event_type: CGEventType,
+    point: CGPoint,
+    click_state: i64,
+) -> Option<Retained<CGEvent>> {
+    let ns_type = ns_event_type(event_type)?;
+
+    // `NSEvent` locations are window-local in the window's base (bottom-left origin) coordinate
+    // system, whereas `point` and the window bounds are global, top-left origin.
+    let ns_local = CGPoint {
+        x: point.x - info.x,
+        y: info.height - (point.y - info.y),
+    };
+
+    // `CGEventSetWindowLocation`, by contrast, wants window-local coordinates with a top-left
+    // origin (just the screen point translated by the window origin).
+    let window_local = CGPoint {
+        x: point.x - info.x,
+        y: point.y - info.y,
+    };
+
+    // Diagnostics for the background-input experiment. Enabled via COMPUTER_USE_DEBUG so it
+    // stays silent in normal use.
+    if std::env::var_os("COMPUTER_USE_DEBUG").is_some() {
+        eprintln!(
+            "[computer_use] pid={pid} type={event_type:?} window#={} \
+             bounds=({:.1},{:.1},{:.1},{:.1}) screen_pt=({:.1},{:.1}) window_local=({:.1},{:.1})",
+            info.number,
+            info.x,
+            info.y,
+            info.width,
+            info.height,
+            point.x,
+            point.y,
+            window_local.x,
+            window_local.y,
+        );
+    }
+
+    let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+        ns_type,
+        ns_local,
+        NSEventModifierFlags::empty(),
+        0.0,
+        info.number as isize,
+        None,
+        0,
+        click_state as isize,
+        1.0,
+    )?;
+
+    let cg_event = event.CGEvent()?;
+
+    // `-[NSEvent CGEvent]` re-derives the event's screen location by flipping window-local
+    // coordinates, but the target window belongs to another process so that flip can't resolve
+    // it and yields a bogus location. Overwrite it with the true global screen point (top-left
+    // origin), which is what AppKit uses to hit-test the event on delivery.
+    CGEvent::set_location(Some(&cg_event), point);
+
+    // On the `postToPid` path the WindowServer never computes the event's window-local
+    // coordinate (it normally does this during hit-testing), so AppKit dispatches using
+    // whatever the event carries. Set it explicitly via the private `CGEventSetWindowLocation`.
+    set_window_location(&cg_event, window_local);
+
+    // Chromium/Electron renderers check the mouse-event subtype as part of deciding whether a
+    // synthesized event is trusted; real mouse events carry subtype 3 here.
+    CGEvent::set_integer_value_field(Some(&cg_event), CGEventField::MouseEventSubtype, 3);
+
+    // Stamp the window-under-pointer fields so AppKit routes the event to the target window.
+    CGEvent::set_integer_value_field(
+        Some(&cg_event),
+        CGEventField::MouseEventWindowUnderMousePointer,
+        info.number,
+    );
+    CGEvent::set_integer_value_field(
+        Some(&cg_event),
+        CGEventField::MouseEventWindowUnderMousePointerThatCanHandleThisEvent,
+        info.number,
+    );
+
+    Some(cg_event)
+}
+
+/// Posts a decoy left click off-screen (at `(-1, -1)`) to the target process via SkyLight.
+///
+/// Chromium's renderer gates activation-sensitive actions (video play/pause, `window.open`,
+/// fullscreen) behind a recent "trusted user gesture". Posting this decoy first ticks that gate
+/// so the subsequent real click is treated as a trusted continuation. It is off-screen, so it
+/// does not hit any window.
+fn post_primer_click(pid: libc::pid_t) {
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState);
+    let point = CGPoint { x: -1.0, y: -1.0 };
+    for event_type in [CGEventType::LeftMouseDown, CGEventType::LeftMouseUp] {
+        if let Some(event) =
+            CGEvent::new_mouse_event(source.as_deref(), event_type, point, CGMouseButton::Left)
+        {
+            CGEvent::set_integer_value_field(Some(&event), CGEventField::MouseEventClickState, 1);
+            super::skylight::post_event_to_pid(pid, &event);
+        }
+    }
+}
+
+/// Sets the window-local location on a `CGEvent` via the private `CGEventSetWindowLocation`.
+///
+/// There is no public setter for this field, which AppKit reads on the `postToPid` delivery
+/// path. The symbol is resolved once at runtime. `location` is window-local, top-left origin.
+fn set_window_location(event: &CGEvent, location: CGPoint) {
+    use std::ffi::c_void;
+    use std::sync::OnceLock;
+
+    type SetWindowLocationFn = unsafe extern "C" fn(*mut c_void, CGPoint);
+    // The macOS value of `RTLD_DEFAULT`, used to search all loaded images for the symbol.
+    const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
+
+    static RESOLVED: OnceLock<Option<SetWindowLocationFn>> = OnceLock::new();
+    let resolved = RESOLVED.get_or_init(|| unsafe {
+        let sym = libc::dlsym(RTLD_DEFAULT, c"CGEventSetWindowLocation".as_ptr());
+        if sym.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute::<*mut c_void, SetWindowLocationFn>(sym))
+        }
+    });
+
+    match resolved {
+        Some(set_window_location) => {
+            let event_ptr = event as *const CGEvent as *mut c_void;
+            unsafe { set_window_location(event_ptr, location) };
+        }
+        None => {
+            log::warn!(
+                "CGEventSetWindowLocation could not be resolved; background clicks may not land."
+            );
+        }
+    }
+}
+
+/// Maps a Quartz mouse event type to the corresponding AppKit event type.
+fn ns_event_type(event_type: CGEventType) -> Option<NSEventType> {
+    Some(match event_type {
+        CGEventType::LeftMouseDown => NSEventType::LeftMouseDown,
+        CGEventType::LeftMouseUp => NSEventType::LeftMouseUp,
+        CGEventType::LeftMouseDragged => NSEventType::LeftMouseDragged,
+        CGEventType::RightMouseDown => NSEventType::RightMouseDown,
+        CGEventType::RightMouseUp => NSEventType::RightMouseUp,
+        CGEventType::RightMouseDragged => NSEventType::RightMouseDragged,
+        CGEventType::OtherMouseDown => NSEventType::OtherMouseDown,
+        CGEventType::OtherMouseUp => NSEventType::OtherMouseUp,
+        CGEventType::OtherMouseDragged => NSEventType::OtherMouseDragged,
+        CGEventType::MouseMoved => NSEventType::MouseMoved,
+        _ => return None,
+    })
 }
 
 // ----------------------------------------------------------------------------
