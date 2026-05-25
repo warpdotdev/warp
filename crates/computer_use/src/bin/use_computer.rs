@@ -52,6 +52,9 @@ enum Command {
         /// The key to press. Can be a single character (e.g., "a") or a keycode (e.g., "0x24" for Return on macOS).
         key: String,
     },
+    /// Experimental (macOS only): list on-screen windows with their window number, owner PID,
+    /// owner name, layer, and bounds, to help identify the right target PID/window.
+    Windows,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -99,6 +102,18 @@ fn parse_region(s: &str) -> Result<(i32, i32, i32, i32), String> {
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let cli = Cli::parse();
+
+    // Window listing does not go through the actor's action model; handle it up front.
+    if let Command::Windows = cli.command {
+        match computer_use::experimental_list_windows() {
+            Ok(text) => print!("{text}"),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
 
     // The macOS actor reads this env var to route events to a specific process. Setting it
     // here keeps this CLI cross-platform while still exposing the experimental PID targeting.
@@ -169,6 +184,8 @@ async fn main() {
                 None,
             )
         }
+        // Handled before the actor is created, above.
+        Command::Windows => unreachable!(),
     };
 
     let options = Options { screenshot_params };

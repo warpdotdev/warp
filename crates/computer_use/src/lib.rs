@@ -45,6 +45,19 @@ pub fn create_actor() -> Box<dyn Actor> {
     }
 }
 
+/// Experimental: lists on-screen windows (number, owner PID/name, layer, bounds) to help map a
+/// target window back to its owning process. macOS only.
+#[cfg(macos)]
+pub fn experimental_list_windows() -> Result<String, String> {
+    Ok(imp::list_windows())
+}
+
+/// Experimental: lists on-screen windows. Unsupported on this platform.
+#[cfg(not(macos))]
+pub fn experimental_list_windows() -> Result<String, String> {
+    Err("Window listing is only supported on macOS.".to_string())
+}
+
 #[async_trait]
 pub trait Actor: Send + Sync + 'static {
     /// Returns the platform that this actor is running on, if known.
