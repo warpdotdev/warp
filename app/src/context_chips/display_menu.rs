@@ -13,6 +13,7 @@ use crate::{
         EditorOptions, EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys,
         TextOptions,
     },
+    localization,
     server::ids::{ClientId, HashableId, ServerId, SyncId},
     ui_components::icons::Icon,
     view_components::copyable_text_field::{
@@ -321,14 +322,21 @@ impl DisplayChipMenu {
                     };
                     let mut editor = EditorView::new(options, ctx);
                     let placeholder_text = match chip_menu_type {
-                        ChipMenuType::Directories => "Search directories...",
-                        ChipMenuType::Branches => "Search branches...",
-                        ChipMenuType::Environments => "Search environments...",
+                        ChipMenuType::Directories => {
+                            localization::text_for_app(ctx, "context_chips.menu.search_directories")
+                        }
+                        ChipMenuType::Branches => {
+                            localization::text_for_app(ctx, "context_chips.menu.search_branches")
+                        }
+                        ChipMenuType::Environments => localization::text_for_app(
+                            ctx,
+                            "context_chips.menu.search_environments",
+                        ),
                         ChipMenuType::CodeReview => {
                             unreachable!("search input should not be constructed")
                         }
                     };
-                    editor.set_placeholder_text(placeholder_text, ctx);
+                    editor.set_placeholder_text(&placeholder_text, ctx);
                     editor
                 }))
             }

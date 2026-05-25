@@ -2593,6 +2593,45 @@ fn context_chip_disabled_tooltips_do_not_use_direct_english_literals() {
     );
 }
 
+#[test]
+fn selected_misc_ui_surfaces_do_not_use_direct_english_literals() {
+    let cases = [
+        (
+            "app/src/auth/paste_auth_token_modal.rs",
+            &["Label(\"Cancel\".into())", "Label(\"Continue\".into())"][..],
+        ),
+        (
+            "app/src/context_chips/display_menu.rs",
+            &[
+                "Search directories...",
+                "Search branches...",
+                "Search environments...",
+            ][..],
+        ),
+        (
+            "app/src/view_components/markdown_toggle_view.rs",
+            &["\"Rendered\".into()", "\"Raw\".into()"][..],
+        ),
+    ];
+
+    let mut violations = Vec::new();
+    for (relative_path, snippets) in cases {
+        let path = workspace_root().join(relative_path);
+        let content = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        for snippet in snippets {
+            if content.contains(snippet) {
+                violations.push(format!("{relative_path}: {snippet}"));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "selected UI surfaces must use AppContext localization: {violations:#?}"
+    );
+}
+
 fn bundled_en_us_map() -> CatalogMap {
     serde_json::from_str(BUNDLED_EN_US).unwrap()
 }
