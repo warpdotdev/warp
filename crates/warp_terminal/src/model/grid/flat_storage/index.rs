@@ -116,286 +116,49 @@ impl Index {
         // entries_with_runs() merges the row VecDeque and grapheme_sizing BTreeMap
         // in a single O(n) scan, avoiding a per-row O(log n) BTreeMap lookup.
         for (entry, row_runs) in old_index.entries_with_runs() {
-            // Fast path: narrowing Uniform rows with arithmetic split
-            if entry_builder.is_empty() && entry.has_trailing_newline {
-                if let GraphemeSizing::Uniform(run) = &entry.grapheme_sizing {
-                    let row_cells = run.cols();
-                    let cell_width = run.info.cell_width as usize;
-                    if row_cells > columns && cell_width > 0 && columns >= cell_width {
-                        let graphemes_per_row = columns / cell_width;
-                        let count = run.count.get() as usize;
-                        let byte_len = run.info.utf8_bytes.get() as usize;
-                        let mut rem = count;
-                        while rem > graphemes_per_row {
-                            let content_offset: ByteOffset = index.content_len.into();
-                            index.content_len += graphemes_per_row * byte_len;
-                            index.rows.push_back(Entry {
-                                content_offset,
-                                grapheme_sizing: GraphemeSizing::Uniform(GraphemeRun {
-                                    count: NonZeroU16::new(graphemes_per_row as u16).unwrap(),
-                                    info: run.info,
-                                }),
-                                has_trailing_newline: false,
-                                ends_with_leading_wide_char_spacer: false,
-                            });
-                            rem -= graphemes_per_row;
-                        }
-                        // The loop condition is `rem > graphemes_per_row`, so
-                        // rem exits in [1, graphemes_per_row] — never zero.
-                        debug_assert!(rem > 0, "rem should never be zero here");
-                        let content_offset: ByteOffset = index.content_len.into();
-                        index.content_len += rem * byte_len + 1; // +1 for newline
-                        index.rows.push_back(Entry {
-                            content_offset,
-                            grapheme_sizing: GraphemeSizing::Uniform(GraphemeRun {
-                                count: NonZeroU16::new(rem as u16).unwrap(),
-                                info: run.info,
-                            }),
-                            has_trailing_newline: true,
-                            ends_with_leading_wide_char_spacer: false,
-                        });
-                        continue;
-                    }
-                }
-            }
-
-            // Fast path: widening a row that fits entirely in the new width
-            // with its newline.
-            if entry_builder.is_empty() && entry.has_trailing_newline {
-                let (cells, byte_len, nonuniform_runs) = match &entry.grapheme_sizing {
-                    GraphemeSizing::Uniform(run) => (
-                        run.cols(),
-                        run.count.get() as usize * run.info.utf8_bytes.get() as usize,
-                        None,
-                    ),
-                    GraphemeSizing::EmptyRow => (0, 0, None),
-                    GraphemeSizing::NonUniform => {
-                        let cells = row_runs.iter().map(GraphemeRun::cols).sum();
-                        let byte_len = row_runs
-                            .iter()
-                            .map(|r| r.count.get() as usize * r.info.utf8_bytes.get() as usize)
-                            .sum();
-                        (cells, byte_len, Some(row_runs))
-                    }
-                };
-                if cells <= columns {
-                    let content_offset: ByteOffset = index.content_len.into();
-                    // Include the row's trailing newline byte.
-                    index.content_len += byte_len + 1;
-
-                    // Copy grapheme sizing metadata for NonUniform rows.
-                    if let Some(runs) = nonuniform_runs {
-                        index.grapheme_sizing.insert(content_offset, runs.to_vec());
-                    }
-                    index.rows.push_back(Entry {
-                        content_offset,
-                        grapheme_sizing: entry.grapheme_sizing,
-                        has_trailing_newline: true,
-                        ends_with_leading_wide_char_spacer: false,
-                    });
-                    continue;
-                }
-            }
-            // Fast path: widening a soft-wrapped row that fits in the new
-            // width.
-            if entry_builder.is_empty() && !entry.has_trailing_newline {
-                match &entry.grapheme_sizing {
-                    GraphemeSizing::Uniform(run) if run.cols() <= columns => {
-                        entry_builder.num_cells += run.cols();
-                        entry_builder.incr_content_offset +=
-                            run.count.get() as usize * run.info.utf8_bytes.get() as usize;
-                        entry_builder.grapheme_runs.push(*run);
-                        continue;
-                    }
-                    GraphemeSizing::EmptyRow => continue,
-                    GraphemeSizing::NonUniform => {
-                        let cells: usize = row_runs.iter().map(GraphemeRun::cols).sum();
-                        if cells <= columns {
-                            // Accumulate into entry_builder for merging with next row
-                            for run in row_runs {
-                                let count = run.count.get() as usize;
-                                entry_builder.num_cells += run.cols();
-                                entry_builder.incr_content_offset +=
-                                    count * run.info.utf8_bytes.get() as usize;
-                                match entry_builder.grapheme_runs.last_mut() {
-                                    Some(last) if last.info == run.info => {
-                                        last.count = last.count.saturating_add(run.count.get());
-                                    }
-                                    _ => {
-                                        entry_builder.grapheme_runs.push(*run);
-                                    }
-                                }
-                            }
+            if entry_builder.is_empty() {
+                if entry.has_trailing_newline {
+                    // Fast path A: narrowing uniform — arithmetic split avoids
+                    // per-grapheme work when the row must be split across many
+                    // output rows.
+                    if let GraphemeSizing::Uniform(run) = &entry.grapheme_sizing {
+                        let cell_width = run.info.cell_width as usize;
+                        if run.cols() > columns && cell_width > 0 && columns >= cell_width {
+                            emit_narrowed_uniform(run, &mut index);
                             continue;
                         }
                     }
-                    GraphemeSizing::Uniform(_) => {}
+                    // Fast path B: row fits in the new width — memcpy the entry.
+                    if try_emit_row_with_newline(entry, row_runs, &mut index) {
+                        continue;
+                    }
+                } else {
+                    // Fast path C: soft-wrapped row that fits — absorb into the
+                    // builder so it merges with subsequent soft-wrap rows.
+                    if try_accumulate_softwrap(entry, row_runs, &mut entry_builder, columns) {
+                        continue;
+                    }
                 }
             }
 
-            // Fast path: uniform row with carry-over (softwrap narrowing)
-            // Only for cell_width==1 to avoid wide-char leading spacer edge cases.
+            // Fast path D: uniform single-byte run with carry-over from the
+            // previous row — arithmetic split without per-grapheme processing.
+            // Wide chars are excluded because their leading-spacer semantics
+            // require the full process_graphemes_batch logic.
             if let GraphemeSizing::Uniform(run) = &entry.grapheme_sizing {
-                let cell_width = run.info.cell_width as usize;
-                if cell_width == 1 {
-                    let count = run.count.get() as usize;
-                    let byte_len = run.info.utf8_bytes.get() as usize;
-                    let remaining_cells = index.columns.saturating_sub(entry_builder.num_cells);
-                    let remaining_graphemes = remaining_cells / cell_width;
-                    let graphemes_per_row = columns / cell_width;
-
-                    // If builder is exactly full, flush it first
-                    if remaining_graphemes == 0
-                        && entry_builder.num_cells >= columns
-                        && graphemes_per_row > 0
-                    {
-                        entry_builder.flush_to_index(&mut index);
-                        // Now treat this row as if builder were empty
-                        let remaining_graphemes = graphemes_per_row;
-                        if count > remaining_graphemes {
-                            // Same arithmetic split logic
-                            entry_builder.num_cells = remaining_graphemes * cell_width;
-                            entry_builder.incr_content_offset += remaining_graphemes * byte_len;
-                            entry_builder.grapheme_runs.push(GraphemeRun {
-                                count: NonZeroU16::new(remaining_graphemes as u16).unwrap(),
-                                info: run.info,
-                            });
-                            entry_builder.flush_to_index(&mut index);
-                            let mut rem = count - remaining_graphemes;
-                            while rem >= graphemes_per_row {
-                                let content_offset: ByteOffset = index.content_len.into();
-                                index.content_len += graphemes_per_row * byte_len;
-                                index.rows.push_back(Entry {
-                                    content_offset,
-                                    grapheme_sizing: GraphemeSizing::Uniform(GraphemeRun {
-                                        count: NonZeroU16::new(graphemes_per_row as u16).unwrap(),
-                                        info: run.info,
-                                    }),
-                                    has_trailing_newline: false,
-                                    ends_with_leading_wide_char_spacer: false,
-                                });
-                                rem -= graphemes_per_row;
-                            }
-                            if rem > 0 {
-                                entry_builder.num_cells = rem * cell_width;
-                                entry_builder.incr_content_offset += rem * byte_len;
-                                entry_builder.grapheme_runs.push(GraphemeRun {
-                                    count: NonZeroU16::new(rem as u16).unwrap(),
-                                    info: run.info,
-                                });
-                            }
-                            if entry.has_trailing_newline {
-                                entry_builder.add_trailing_newline();
-                                entry_builder.flush_to_index(&mut index);
-                            }
-                        } else {
-                            // Entire run fits in the freshly-flushed row.
-                            entry_builder.num_cells = count * cell_width;
-                            entry_builder.incr_content_offset += count * byte_len;
-                            match entry_builder.grapheme_runs.last_mut() {
-                                Some(last) if last.info == run.info => {
-                                    last.count = last.count.saturating_add(count as u16);
-                                }
-                                _ => {
-                                    entry_builder.grapheme_runs.push(*run);
-                                }
-                            }
-                            if entry.has_trailing_newline {
-                                entry_builder.add_trailing_newline();
-                                entry_builder.flush_to_index(&mut index);
-                            }
-                        }
-                        continue;
-                    }
-
-                    if remaining_graphemes > 0
-                        && remaining_graphemes < count
-                        && graphemes_per_row > 0
-                    {
-                        // Fill remaining space in current row
-                        entry_builder.num_cells += remaining_graphemes * cell_width;
-                        entry_builder.incr_content_offset += remaining_graphemes * byte_len;
-                        match entry_builder.grapheme_runs.last_mut() {
-                            Some(last) if last.info == run.info => {
-                                last.count = last.count.saturating_add(remaining_graphemes as u16);
-                            }
-                            _ => {
-                                entry_builder.grapheme_runs.push(GraphemeRun {
-                                    count: NonZeroU16::new(remaining_graphemes as u16).unwrap(),
-                                    info: run.info,
-                                });
-                            }
-                        }
-                        // Flush the full row
-                        entry_builder.flush_to_index(&mut index);
-
-                        // Process remaining graphemes with arithmetic
-                        let mut rem = count - remaining_graphemes;
-                        while rem >= graphemes_per_row {
-                            let content_offset: ByteOffset = index.content_len.into();
-                            index.content_len += graphemes_per_row * byte_len;
-                            index.rows.push_back(Entry {
-                                content_offset,
-                                grapheme_sizing: GraphemeSizing::Uniform(GraphemeRun {
-                                    count: NonZeroU16::new(graphemes_per_row as u16).unwrap(),
-                                    info: run.info,
-                                }),
-                                has_trailing_newline: false,
-                                ends_with_leading_wide_char_spacer: false,
-                            });
-                            rem -= graphemes_per_row;
-                        }
-
-                        // Leftover goes into entry_builder
-                        if rem > 0 {
-                            entry_builder.num_cells = rem * cell_width;
-                            entry_builder.incr_content_offset += rem * byte_len;
-                            entry_builder.grapheme_runs.push(GraphemeRun {
-                                count: NonZeroU16::new(rem as u16).unwrap(),
-                                info: run.info,
-                            });
-                        }
-
-                        // Handle newline
-                        if entry.has_trailing_newline {
-                            entry_builder.add_trailing_newline();
-                            entry_builder.flush_to_index(&mut index);
-                        }
-                        continue;
-                    }
-
-                    // Also handle when the entire run fits in remaining space
-                    // Only safe when cell_width==1 or total cells don't overflow the row
-                    if count <= remaining_graphemes
-                        && entry_builder.num_cells + count * cell_width <= columns
-                    {
-                        entry_builder.num_cells += count * cell_width;
-                        entry_builder.incr_content_offset += count * byte_len;
-                        match entry_builder.grapheme_runs.last_mut() {
-                            Some(last) if last.info == run.info => {
-                                last.count = last.count.saturating_add(count as u16);
-                            }
-                            _ => {
-                                entry_builder.grapheme_runs.push(*run);
-                            }
-                        }
-                        if entry.has_trailing_newline {
-                            entry_builder.add_trailing_newline();
-                            entry_builder.flush_to_index(&mut index);
-                        }
-                        continue;
-                    }
+                if try_emit_carryover_uniform(
+                    run,
+                    entry.has_trailing_newline,
+                    &mut entry_builder,
+                    &mut index,
+                ) {
+                    continue;
                 }
             }
 
-            // Medium path: bulk-accumulate fitting runs, only handle the
-            // boundary-straddling run individually.
-            emit_runs(
-                row_runs,
-                entry.has_trailing_newline,
-                &mut entry_builder,
-                &mut index,
-            );
+            // Medium path: bulk-accumulate runs that fit whole; delegate only
+            // the boundary-straddling run to process_graphemes_batch.
+            emit_runs(row_runs, entry.has_trailing_newline, &mut entry_builder, &mut index);
         }
 
         entry_builder.append_to_index_if_nonempty(&mut index);
@@ -1090,6 +853,289 @@ pub struct GraphemeInfo {
     pub cell_width: u8,
     /// The length, in bytes, of this grapheme using a UTF-8 encoding.
     pub utf8_bytes: NonZeroU16,
+}
+
+// ── Rebuild helper functions ──────────────────────────────────────────────────
+//
+// Each function handles one fast path in `Index::rebuild`.  They are free
+// functions (not methods) so they can borrow `index` and `entry_builder`
+// independently without fighting the borrow checker.
+
+/// Emits a narrowing uniform run as a sequence of full rows followed by one
+/// partial row carrying the trailing newline.
+///
+/// Preconditions (caller-enforced):
+///  - `entry_builder` is empty
+///  - the source entry has a trailing newline
+///  - `run.cols() > index.columns`
+///  - `run.info.cell_width > 0 && index.columns >= run.info.cell_width as usize`
+fn emit_narrowed_uniform(run: &GraphemeRun, index: &mut Index) {
+    let cell_width = run.info.cell_width as usize;
+    let graphemes_per_row = index.columns / cell_width;
+    let byte_len = run.info.utf8_bytes.get() as usize;
+    let mut rem = run.count.get() as usize;
+
+    while rem > graphemes_per_row {
+        let content_offset: ByteOffset = index.content_len.into();
+        index.content_len += graphemes_per_row * byte_len;
+        index.rows.push_back(Entry {
+            content_offset,
+            grapheme_sizing: GraphemeSizing::Uniform(GraphemeRun {
+                count: NonZeroU16::new(graphemes_per_row as u16).unwrap(),
+                info: run.info,
+            }),
+            has_trailing_newline: false,
+            ends_with_leading_wide_char_spacer: false,
+        });
+        rem -= graphemes_per_row;
+    }
+    // The loop condition `rem > graphemes_per_row` guarantees rem >= 1.
+    debug_assert!(rem > 0);
+    let content_offset: ByteOffset = index.content_len.into();
+    index.content_len += rem * byte_len + 1; // +1 for newline
+    index.rows.push_back(Entry {
+        content_offset,
+        grapheme_sizing: GraphemeSizing::Uniform(GraphemeRun {
+            count: NonZeroU16::new(rem as u16).unwrap(),
+            info: run.info,
+        }),
+        has_trailing_newline: true,
+        ends_with_leading_wide_char_spacer: false,
+    });
+}
+
+/// Tries to emit a source row that fits entirely within `index.columns`,
+/// including its trailing newline.
+///
+/// Returns `true` if emitted; `false` if the row is wider than the new column
+/// count (caller should fall through to the next path).
+///
+/// Preconditions: `entry_builder` is empty; entry has a trailing newline.
+fn try_emit_row_with_newline(
+    entry: &Entry,
+    row_runs: &[GraphemeRun],
+    index: &mut Index,
+) -> bool {
+    let (cells, byte_len) = match &entry.grapheme_sizing {
+        GraphemeSizing::Uniform(run) => (
+            run.cols(),
+            run.count.get() as usize * run.info.utf8_bytes.get() as usize,
+        ),
+        GraphemeSizing::EmptyRow => (0, 0),
+        GraphemeSizing::NonUniform => {
+            let cells = row_runs.iter().map(GraphemeRun::cols).sum();
+            let byte_len = row_runs
+                .iter()
+                .map(|r| r.count.get() as usize * r.info.utf8_bytes.get() as usize)
+                .sum();
+            (cells, byte_len)
+        }
+    };
+    if cells > index.columns {
+        return false;
+    }
+    let content_offset: ByteOffset = index.content_len.into();
+    index.content_len += byte_len + 1; // +1 for newline
+    if matches!(entry.grapheme_sizing, GraphemeSizing::NonUniform) {
+        index.grapheme_sizing.insert(content_offset, row_runs.to_vec());
+    }
+    index.rows.push_back(Entry {
+        content_offset,
+        grapheme_sizing: entry.grapheme_sizing,
+        has_trailing_newline: true,
+        ends_with_leading_wide_char_spacer: false,
+    });
+    true
+}
+
+/// Tries to absorb a soft-wrapped source row into `entry_builder` when the
+/// row's cells fit entirely within `columns`.
+///
+/// Returns `true` if absorbed (caller should `continue` to the next source
+/// row); `false` if the row is too wide and needs splitting (fall through).
+///
+/// Preconditions: `entry_builder` is empty; entry has no trailing newline.
+fn try_accumulate_softwrap(
+    entry: &Entry,
+    row_runs: &[GraphemeRun],
+    entry_builder: &mut EntryBuilder,
+    columns: usize,
+) -> bool {
+    match &entry.grapheme_sizing {
+        GraphemeSizing::Uniform(run) if run.cols() <= columns => {
+            entry_builder.num_cells += run.cols();
+            entry_builder.incr_content_offset +=
+                run.count.get() as usize * run.info.utf8_bytes.get() as usize;
+            entry_builder.grapheme_runs.push(*run);
+            true
+        }
+        GraphemeSizing::EmptyRow => true, // zero-width row — nothing to absorb
+        GraphemeSizing::NonUniform => {
+            let cells: usize = row_runs.iter().map(GraphemeRun::cols).sum();
+            if cells > columns {
+                return false;
+            }
+            for run in row_runs {
+                entry_builder.num_cells += run.cols();
+                entry_builder.incr_content_offset +=
+                    run.count.get() as usize * run.info.utf8_bytes.get() as usize;
+                match entry_builder.grapheme_runs.last_mut() {
+                    Some(last) if last.info == run.info => {
+                        last.count = last.count.saturating_add(run.count.get());
+                    }
+                    _ => entry_builder.grapheme_runs.push(*run),
+                }
+            }
+            true
+        }
+        GraphemeSizing::Uniform(_) => false, // cols() > columns — needs splitting
+    }
+}
+
+/// Tries to handle a uniform single-byte run using arithmetic carry-over,
+/// accounting for any graphemes already accumulated in `entry_builder` from
+/// previous soft-wrapped source rows.
+///
+/// Only handles `cell_width == 1` — wide chars are excluded because their
+/// leading-spacer semantics require the full `process_graphemes_batch` logic.
+///
+/// Returns `true` if handled; `false` to fall through to the medium path.
+fn try_emit_carryover_uniform(
+    run: &GraphemeRun,
+    has_trailing_newline: bool,
+    entry_builder: &mut EntryBuilder,
+    index: &mut Index,
+) -> bool {
+    if run.info.cell_width != 1 {
+        return false;
+    }
+    let count = run.count.get() as usize;
+    let byte_len = run.info.utf8_bytes.get() as usize;
+    let columns = index.columns;
+    // For cell_width == 1, num_cells == number of graphemes and
+    // graphemes_per_row == columns.
+    let graphemes_per_row = columns;
+    let remaining_graphemes = columns.saturating_sub(entry_builder.num_cells);
+
+    // Sub-case A: builder is exactly full — flush it, then process the run
+    // as if starting from an empty builder.
+    if entry_builder.num_cells >= columns && graphemes_per_row > 0 {
+        entry_builder.flush_to_index(index);
+        if count > graphemes_per_row {
+            // Fill and flush one full row via the builder, then use direct
+            // arithmetic for the remainder.
+            entry_builder.num_cells = graphemes_per_row;
+            entry_builder.incr_content_offset += graphemes_per_row * byte_len;
+            entry_builder.grapheme_runs.push(GraphemeRun {
+                count: NonZeroU16::new(graphemes_per_row as u16).unwrap(),
+                info: run.info,
+            });
+            entry_builder.flush_to_index(index);
+            let mut rem = count - graphemes_per_row;
+            while rem >= graphemes_per_row {
+                let content_offset: ByteOffset = index.content_len.into();
+                index.content_len += graphemes_per_row * byte_len;
+                index.rows.push_back(Entry {
+                    content_offset,
+                    grapheme_sizing: GraphemeSizing::Uniform(GraphemeRun {
+                        count: NonZeroU16::new(graphemes_per_row as u16).unwrap(),
+                        info: run.info,
+                    }),
+                    has_trailing_newline: false,
+                    ends_with_leading_wide_char_spacer: false,
+                });
+                rem -= graphemes_per_row;
+            }
+            if rem > 0 {
+                entry_builder.num_cells = rem;
+                entry_builder.incr_content_offset += rem * byte_len;
+                entry_builder.grapheme_runs.push(GraphemeRun {
+                    count: NonZeroU16::new(rem as u16).unwrap(),
+                    info: run.info,
+                });
+            }
+        } else {
+            // Entire run fits in a fresh row.
+            entry_builder.num_cells = count;
+            entry_builder.incr_content_offset += count * byte_len;
+            match entry_builder.grapheme_runs.last_mut() {
+                Some(last) if last.info == run.info => {
+                    last.count = last.count.saturating_add(count as u16);
+                }
+                _ => entry_builder.grapheme_runs.push(*run),
+            }
+        }
+        if has_trailing_newline {
+            entry_builder.add_trailing_newline();
+            entry_builder.flush_to_index(index);
+        }
+        return true;
+    }
+
+    // Sub-case B: run straddles the row boundary — fill the current partial
+    // row, flush, then use arithmetic for the remainder.
+    if remaining_graphemes > 0 && remaining_graphemes < count && graphemes_per_row > 0 {
+        entry_builder.num_cells += remaining_graphemes;
+        entry_builder.incr_content_offset += remaining_graphemes * byte_len;
+        match entry_builder.grapheme_runs.last_mut() {
+            Some(last) if last.info == run.info => {
+                last.count = last.count.saturating_add(remaining_graphemes as u16);
+            }
+            _ => entry_builder.grapheme_runs.push(GraphemeRun {
+                count: NonZeroU16::new(remaining_graphemes as u16).unwrap(),
+                info: run.info,
+            }),
+        }
+        entry_builder.flush_to_index(index);
+
+        let mut rem = count - remaining_graphemes;
+        while rem >= graphemes_per_row {
+            let content_offset: ByteOffset = index.content_len.into();
+            index.content_len += graphemes_per_row * byte_len;
+            index.rows.push_back(Entry {
+                content_offset,
+                grapheme_sizing: GraphemeSizing::Uniform(GraphemeRun {
+                    count: NonZeroU16::new(graphemes_per_row as u16).unwrap(),
+                    info: run.info,
+                }),
+                has_trailing_newline: false,
+                ends_with_leading_wide_char_spacer: false,
+            });
+            rem -= graphemes_per_row;
+        }
+        if rem > 0 {
+            entry_builder.num_cells = rem;
+            entry_builder.incr_content_offset += rem * byte_len;
+            entry_builder.grapheme_runs.push(GraphemeRun {
+                count: NonZeroU16::new(rem as u16).unwrap(),
+                info: run.info,
+            });
+        }
+        if has_trailing_newline {
+            entry_builder.add_trailing_newline();
+            entry_builder.flush_to_index(index);
+        }
+        return true;
+    }
+
+    // Sub-case C: entire run fits in the remaining space of the current row.
+    if count <= remaining_graphemes && entry_builder.num_cells + count <= columns {
+        entry_builder.num_cells += count;
+        entry_builder.incr_content_offset += count * byte_len;
+        match entry_builder.grapheme_runs.last_mut() {
+            Some(last) if last.info == run.info => {
+                last.count = last.count.saturating_add(count as u16);
+            }
+            _ => entry_builder.grapheme_runs.push(*run),
+        }
+        if has_trailing_newline {
+            entry_builder.add_trailing_newline();
+            entry_builder.flush_to_index(index);
+        }
+        return true;
+    }
+
+    false // fall through to the medium path
 }
 
 /// Processes a slice of grapheme runs into output index rows, splitting at
