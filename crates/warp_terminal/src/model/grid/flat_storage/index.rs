@@ -154,7 +154,12 @@ impl Index {
 
             // Medium path: bulk-accumulate runs that fit whole; delegate only
             // the boundary-straddling run to process_graphemes_batch.
-            emit_runs(row_runs, entry.has_trailing_newline, &mut entry_builder, &mut index);
+            emit_runs(
+                row_runs,
+                entry.has_trailing_newline,
+                &mut entry_builder,
+                &mut index,
+            );
         }
 
         entry_builder.append_to_index_if_nonempty(&mut index);
@@ -915,11 +920,7 @@ fn emit_narrowed_uniform(run: &GraphemeRun, index: &mut Index) {
 /// count (caller should fall through to the next path).
 ///
 /// Preconditions: `entry_builder` is empty; entry has a trailing newline.
-fn try_emit_row_with_newline(
-    entry: &Entry,
-    row_runs: &[GraphemeRun],
-    index: &mut Index,
-) -> bool {
+fn try_emit_row_with_newline(entry: &Entry, row_runs: &[GraphemeRun], index: &mut Index) -> bool {
     let (cells, byte_len) = match &entry.grapheme_sizing {
         GraphemeSizing::Uniform(run) => (
             run.cols(),
@@ -941,7 +942,9 @@ fn try_emit_row_with_newline(
     let content_offset: ByteOffset = index.content_len.into();
     index.content_len += byte_len + 1; // +1 for newline
     if matches!(entry.grapheme_sizing, GraphemeSizing::NonUniform) {
-        index.grapheme_sizing.insert(content_offset, row_runs.to_vec());
+        index
+            .grapheme_sizing
+            .insert(content_offset, row_runs.to_vec());
     }
     index.rows.push_back(Entry {
         content_offset,

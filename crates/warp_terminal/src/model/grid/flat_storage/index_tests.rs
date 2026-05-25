@@ -464,7 +464,7 @@ mod property_tests {
                 eb.process_grapheme_info_unchecked(info);
                 cells_used += info.cell_width as usize;
             }
-            if rng.next() % 4 != 0 {
+            if !rng.next().is_multiple_of(4) {
                 eb.add_trailing_newline();
             }
             eb.append_to_index(&mut index);
@@ -609,7 +609,7 @@ mod differential_tests {
                 eb.process_grapheme_info_unchecked(info);
                 cells_used += info.cell_width as usize;
             }
-            if rng.next() % 4 != 0 {
+            if !rng.next().is_multiple_of(4) {
                 eb.add_trailing_newline();
             }
             eb.append_to_index(&mut index);
@@ -832,7 +832,7 @@ mod differential_tests {
                     3 => {
                         // Mixed row
                         while cells < cols {
-                            if rng.next() % 3 == 0 && cells + 2 <= cols {
+                            if rng.next().is_multiple_of(3) && cells + 2 <= cols {
                                 eb.process_grapheme_info_unchecked(wide_info);
                                 cells += 2;
                             } else {
@@ -985,13 +985,13 @@ mod differential_tests {
         // (old_cols, new_cols) pairs that exercise wide-char carry-over paths
         let cases: &[(usize, usize, usize, usize)] = &[
             // (old_cols, new_cols, ascii_prefix_len, wide_count)
-            (10, 7, 4, 5),   // odd new_cols, Sub-case B + full_row_spacer
-            (10, 6, 4, 5),   // even new_cols, Sub-case B no spacer
-            (20, 7, 3, 8),   // longer run, multiple direct-emit rows
-            (20, 9, 5, 7),   // odd new_cols, Sub-case B with partial_row_spacer
-            (20, 10, 6, 7),  // even new_cols, no spacers needed
-            (30, 7, 2, 12),  // many full rows through direct-emit loop
-            (14, 7, 0, 7),   // no ASCII prefix — Sub-case A (builder full from softwrap)
+            (10, 7, 4, 5),  // odd new_cols, Sub-case B + full_row_spacer
+            (10, 6, 4, 5),  // even new_cols, Sub-case B no spacer
+            (20, 7, 3, 8),  // longer run, multiple direct-emit rows
+            (20, 9, 5, 7),  // odd new_cols, Sub-case B with partial_row_spacer
+            (20, 10, 6, 7), // even new_cols, no spacers needed
+            (30, 7, 2, 12), // many full rows through direct-emit loop
+            (14, 7, 0, 7),  // no ASCII prefix — Sub-case A (builder full from softwrap)
         ];
 
         for &(old_cols, new_cols, ascii_len, wide_count) in cases {
@@ -1053,12 +1053,12 @@ mod differential_tests {
         // with a trailing newline, rebuild to an odd new_cols that forces
         // multiple full-row emits through emit_narrowed_uniform.
         let cases: &[(usize, usize, usize)] = &[
-            (20, 7, 10),  // 10 wide → 3+3+4 rows at new=7 (each full row needs spacer)
-            (20, 5, 10),  // 10 wide → 5+5 rows at new=5 (even cols, no spacer)
-            (30, 7, 15),  // 15 wide → 3+3+3+3+3 at new=7, each full row needs spacer
-            (30, 9, 15),  // 15 wide → 4+4+4+3 at new=9 (odd cols, spacer on full rows)
-            (20, 3, 10),  // extreme narrowing, odd cols
-            (10, 7, 5),   // minimal: 5 wide → 3+2, first full row needs spacer
+            (20, 7, 10), // 10 wide → 3+3+4 rows at new=7 (each full row needs spacer)
+            (20, 5, 10), // 10 wide → 5+5 rows at new=5 (even cols, no spacer)
+            (30, 7, 15), // 15 wide → 3+3+3+3+3 at new=7, each full row needs spacer
+            (30, 9, 15), // 15 wide → 4+4+4+3 at new=9 (odd cols, spacer on full rows)
+            (20, 3, 10), // extreme narrowing, odd cols
+            (10, 7, 5),  // minimal: 5 wide → 3+2, first full row needs spacer
         ];
 
         for &(old_cols, new_cols, wide_count) in cases {
