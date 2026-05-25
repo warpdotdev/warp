@@ -95,9 +95,9 @@ pub enum NewSessionMenuAnchor {
 }
 
 impl NewSessionMenuAnchor {
-    pub fn position(self) -> Vector2F {
+    pub fn position(&self) -> Vector2F {
         match self {
-            Self::AddTabButton(position) | Self::Pointer(position) => position,
+            Self::AddTabButton(position) | Self::Pointer(position) => *position,
         }
     }
 }

@@ -6253,8 +6253,6 @@ impl Workspace {
 
     /// Builds the unified new-session menu items
     /// tab bar chevron and the vertical tab bar `+` button.
-    ///
-    /// Order: Agent → Terminal (sidecar) → Cloud Agent → [tab configs] → separator → New worktree config (sidecar) → New tab config → separator → New tab group → separator → Reopen closed session.
     fn unified_new_session_menu_items(
         &self,
         ctx: &mut ViewContext<Self>,

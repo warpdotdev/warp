@@ -194,7 +194,7 @@ impl TabData {
         let mut menu_items = vec![];
 
         for section_items in [
-            Self::group_menu_items(),
+            Self::tab_group_menu_items(),
             self.session_sharing_menu_items(index, ctx),
             self.copy_metadata_menu_items(pane_name_target, ctx),
             self.modify_tab_menu_items(index, tabs_len, pane_name_target, ctx),
@@ -531,7 +531,7 @@ impl TabData {
     }
 
     /// Returns the tab-group related entries, TODO(johnturcoo) add group actions.
-    fn group_menu_items() -> Vec<MenuItem<WorkspaceAction>> {
+    fn tab_group_menu_items() -> Vec<MenuItem<WorkspaceAction>> {
         if !FeatureFlag::GroupedTabs.is_enabled() {
             return vec![];
         }
