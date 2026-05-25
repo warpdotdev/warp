@@ -110,6 +110,7 @@ objc2-metal = { workspace = true, features = [
     "MTLTexture",
     "MTLResource",
     "MTLAllocation",
+    "MTLArgument",
     "MTLDrawable",
     "MTLPixelFormat",
     "MTLTypes",
