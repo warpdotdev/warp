@@ -11,6 +11,12 @@ use computer_use::{
 #[command(name = "use_computer")]
 #[command(about = "Manually test computer use actions")]
 struct Cli {
+    /// Experimental (macOS only): deliver events directly to this process ID via
+    /// CGEventPostToPid instead of the system-wide HID event tap. This avoids moving the real
+    /// cursor and stealing focus, but is less reliable (especially for mouse events).
+    #[arg(long, global = true)]
+    pid: Option<i32>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -93,6 +99,15 @@ fn parse_region(s: &str) -> Result<(i32, i32, i32, i32), String> {
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let cli = Cli::parse();
+
+    // The macOS actor reads this env var to route events to a specific process. Setting it
+    // here keeps this CLI cross-platform while still exposing the experimental PID targeting.
+    if let Some(pid) = cli.pid {
+        // SAFETY: set before `create_actor` spawns any threads.
+        unsafe {
+            std::env::set_var("COMPUTER_USE_TARGET_PID", pid.to_string());
+        }
+    }
 
     let mut actor = computer_use::create_actor();
 

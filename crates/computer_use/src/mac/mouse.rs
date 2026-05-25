@@ -3,12 +3,12 @@ use std::time::Duration;
 use instant::Instant;
 use objc2_core_foundation::CGPoint;
 use objc2_core_graphics::{
-    CGEvent, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGEventType, CGMouseButton,
-    CGScrollEventUnit,
+    CGEvent, CGEventSource, CGEventSourceStateID, CGEventType, CGMouseButton, CGScrollEventUnit,
 };
 use pathfinder_geometry::vector::Vector2I;
 use warpui_core::r#async::Timer;
 
+use super::post::PostTarget;
 use super::util::main_display_scale_factor;
 use crate::{MouseButton, ScrollDirection, ScrollDistance};
 
@@ -37,12 +37,22 @@ pub fn from_cgpoint(point: CGPoint) -> Vector2I {
 /// Manages mouse state and posts mouse events to the system.
 pub struct Mouse {
     held_buttons: HeldButtons,
+    /// Where synthesized events are delivered.
+    target: PostTarget,
+    /// The most recently requested cursor position, in CGEvent point coordinates.
+    ///
+    /// When delivering events directly to a PID, `CGEventPostToPid` does not move the real
+    /// cursor, so the global cursor position cannot be used to locate clicks. We track the
+    /// intended position here and use it as the location for button and move events.
+    virtual_position: CGPoint,
 }
 
 impl Mouse {
-    pub fn new() -> Self {
+    pub fn new(target: PostTarget) -> Self {
         Self {
             held_buttons: HeldButtons::default(),
+            target,
+            virtual_position: CGPoint { x: 0.0, y: 0.0 },
         }
     }
 
@@ -53,23 +63,37 @@ impl Mouse {
             (CGEventType::MouseMoved, CGMouseButton::Left)
         };
 
-        self.post_event(event_type, to_cgpoint(target), cg_button)?;
-        self.wait_for_position(target).await
+        let point = to_cgpoint(target);
+        self.virtual_position = point;
+        self.post_event(event_type, point, cg_button)?;
+
+        // `CGEventPostToPid` does not move the real cursor, so polling the global cursor
+        // position would always time out. Only wait when injecting through the HID tap.
+        if self.target.is_pid_targeted() {
+            Ok(())
+        } else {
+            self.wait_for_position(target).await
+        }
     }
 
     pub fn button_down(&mut self, button: &MouseButton) -> Result<(), String> {
-        let point = self.current_position_cgpoint()?;
+        let point = self.event_location()?;
         self.held_buttons.set_down(button, true);
         self.post_event(mouse_down_event_type(button), point, button.into())
     }
 
     pub fn button_up(&mut self, button: &MouseButton) -> Result<(), String> {
-        let point = self.current_position_cgpoint()?;
+        let point = self.event_location()?;
         self.held_buttons.set_down(button, false);
         self.post_event(mouse_up_event_type(button), point, button.into())
     }
 
     pub fn current_position(&mut self) -> Result<Vector2I, String> {
+        // In PID-targeted mode the real cursor is never moved, so report the tracked virtual
+        // position instead of the (unrelated) global cursor location.
+        if self.target.is_pid_targeted() {
+            return Ok(from_cgpoint(self.virtual_position));
+        }
         let cg_point = self.current_position_cgpoint()?;
         Ok(from_cgpoint(cg_point))
     }
@@ -117,13 +141,25 @@ impl Mouse {
             )
         })?;
 
-        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
+        self.target.post(&event);
         Ok(())
     }
 }
 
 // Private implementation details.
 impl Mouse {
+    /// Returns the location to use for a button event.
+    ///
+    /// In HID mode this is the real cursor position; in PID-targeted mode the real cursor is
+    /// never moved, so the tracked virtual position is used instead.
+    fn event_location(&mut self) -> Result<CGPoint, String> {
+        if self.target.is_pid_targeted() {
+            Ok(self.virtual_position)
+        } else {
+            self.current_position_cgpoint()
+        }
+    }
+
     /// Waits for the mouse to reach the target position, polling until it arrives
     /// or times out.
     async fn wait_for_position(&mut self, target: Vector2I) -> Result<(), String> {
@@ -178,7 +214,7 @@ impl Mouse {
                 )
             })?;
 
-        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
+        self.target.post(&event);
         Ok(())
     }
 }

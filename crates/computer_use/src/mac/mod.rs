@@ -1,11 +1,14 @@
 mod keyboard;
 mod keycode_cache;
 mod mouse;
+mod post;
 mod screenshot;
 mod util;
 
 use async_trait::async_trait;
 use warpui_core::r#async::Timer;
+
+use post::PostTarget;
 
 use crate::{Action, ActionResult, Options};
 
@@ -20,9 +23,17 @@ pub struct Actor {
 
 impl Actor {
     pub fn new() -> Self {
+        // Experimental: when COMPUTER_USE_TARGET_PID is set, events are delivered directly to
+        // that process via CGEventPostToPid instead of the system-wide HID event tap. This
+        // avoids moving the real cursor and stealing focus, but is less reliable (especially
+        // for mouse events). See `post::PostTarget` for details.
+        let target = PostTarget::from_env();
+        if let PostTarget::Pid(pid) = target {
+            log::info!("Computer use: routing events directly to PID {pid} (experimental).");
+        }
         Self {
-            keyboard: keyboard::Keyboard::new(),
-            mouse: mouse::Mouse::new(),
+            keyboard: keyboard::Keyboard::new(target),
+            mouse: mouse::Mouse::new(target),
         }
     }
 }
