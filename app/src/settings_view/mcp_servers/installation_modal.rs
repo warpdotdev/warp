@@ -1,3 +1,4 @@
+use crate::localization;
 use std::collections::HashMap;
 
 use markdown_parser::parse_markdown;
@@ -215,6 +216,7 @@ impl InstallationModalBody {
         name: String,
         appearance: &Appearance,
         close_button_mouse_state: MouseStateHandle,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
@@ -246,7 +248,11 @@ impl InstallationModalBody {
 
         // Renders MCP title text
         let title = Text::new(
-            format!("Install {name}"),
+            localization::text_for_app_with_args(
+                app,
+                "settings.mcp.install.title",
+                &[("name", &name)],
+            ),
             appearance.ui_font_family(),
             appearance.header_font_size(),
         )
@@ -401,7 +407,11 @@ impl InstallationModalBody {
         form_column
     }
 
-    fn render_source_indicator(is_shared: bool, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_source_indicator(
+        is_shared: bool,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let info_icon = ConstrainedBox::new(
             Icon::Info
                 .to_warpui_icon(appearance.theme().disabled_ui_text_color())
@@ -412,13 +422,13 @@ impl InstallationModalBody {
         .finish();
 
         let source_text = if is_shared {
-            "Shared from team"
+            localization::text_for_app(app, "settings.mcp.install.source.shared_from_team")
         } else {
-            "From another device"
+            localization::text_for_app(app, "settings.mcp.install.source.from_another_device")
         };
 
         let label_text = Text::new_inline(
-            source_text.to_string(),
+            source_text,
             appearance.ui_font_family(),
             appearance.ui_font_size(),
         )
@@ -433,12 +443,12 @@ impl InstallationModalBody {
             .finish()
     }
 
-    fn render_action_buttons(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_action_buttons(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let theme = appearance.theme();
         let cancel_button = appearance
             .ui_builder()
             .button(ButtonVariant::Text, self.cancel_mouse_state.clone())
-            .with_text_label("Cancel".into())
+            .with_text_label(localization::text_for_app(app, "settings.action.cancel"))
             .with_style(UiComponentStyles {
                 font_weight: Some(Weight::Bold),
                 font_color: Some(theme.active_ui_text_color().into()),
@@ -476,7 +486,7 @@ impl InstallationModalBody {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
                 Text::new_inline(
-                    "Install",
+                    crate::localization::text_for_app(app, "settings.mcp.install.install"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )
@@ -515,9 +525,9 @@ impl InstallationModalBody {
             .finish()
     }
 
-    fn render_buttons_row(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let source_indicator = Self::render_source_indicator(self.is_shared, appearance);
-        let action_buttons = self.render_action_buttons(appearance);
+    fn render_buttons_row(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+        let source_indicator = Self::render_source_indicator(self.is_shared, appearance, app);
+        let action_buttons = self.render_action_buttons(appearance, app);
 
         let spacer = Shrinkable::new(1., Container::new(Empty::new().finish()).finish()).finish();
 
@@ -578,6 +588,7 @@ impl View for InstallationModalBody {
                 templatable_mcp_server.name.clone(),
                 appearance,
                 self.close_button_mouse_state.clone(),
+                ctx,
             ));
 
             if let Some(instructions) = &self.instructions_in_markdown {
@@ -603,7 +614,7 @@ impl View for InstallationModalBody {
                         .with_uniform_padding(INSTALLATION_MODAL_PADDING)
                         .finish(),
                 )
-                .with_child(self.render_buttons_row(appearance))
+                .with_child(self.render_buttons_row(appearance, ctx))
                 .finish()
         } else {
             Text::new(

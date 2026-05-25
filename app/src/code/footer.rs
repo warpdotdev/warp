@@ -1,3 +1,4 @@
+use crate::localization;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -48,6 +49,10 @@ const FOOTER_HEIGHT: f32 = 24.;
 /// Margin around the LSP icon container
 const ICON_MARGIN: f32 = 4.;
 const INDICATOR_SIZE: f32 = 8.;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 #[derive(Default)]
 struct SingleFileMouseStates {
@@ -312,9 +317,9 @@ impl CodeFooterView {
             button.set_disabled(!is_ai_enabled, ctx);
             button.set_tooltip(
                 Some(if is_ai_enabled {
-                    "Open agent input with the /update-tab-config skill"
+                    text(ctx, "code.footer.tab_config.tooltip.open_agent_input")
                 } else {
-                    "Enable AI to use the /update-tab-config skill"
+                    text(ctx, "code.footer.tab_config.tooltip.enable_ai")
                 }),
                 ctx,
             );
@@ -366,7 +371,8 @@ impl CodeFooterView {
         // Create a button that dispatches EnableLSP action
         // The action handler will check lsp_repo_status to decide whether to install first
         let enable_lsp_button = server_type.map(|st| {
-            let label = format!("Enable {}", st.binary_name());
+            let label =
+                text(ctx, "code.footer.lsp.enable_server").replace("{server}", st.binary_name());
             ctx.add_typed_action_view(|_ctx| {
                 ActionButton::new(label, NakedTheme)
                     .with_size(ButtonSize::Small)
@@ -383,7 +389,7 @@ impl CodeFooterView {
 
             // Update button label based on initial status (handles cached results)
             if let Some(enable_button) = &enable_lsp_button {
-                if let Some(label) = Self::button_label_for_status(&status) {
+                if let Some(label) = Self::button_label_for_status(&status, ctx) {
                     enable_button.update(ctx, |button, ctx| {
                         button.set_label(label, ctx);
                     });
@@ -525,7 +531,8 @@ impl CodeFooterView {
 
                         // Create enable button for all CTA-worthy servers
                         let cta_statuses = me.mode.cta_lsp_repo_statuses();
-                        if let Some(label) = Self::button_label_for_cta_statuses(&cta_statuses) {
+                        if let Some(label) = Self::button_label_for_cta_statuses(&cta_statuses, ctx)
+                        {
                             me.enable_lsp_button = Some(ctx.add_typed_action_view(|_ctx| {
                                 ActionButton::new(label, NakedTheme)
                                     .with_size(ButtonSize::Small)
@@ -650,14 +657,16 @@ impl CodeFooterView {
 
     /// Returns the appropriate button label for the given LSP repo status.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    fn button_label_for_status(status: &LspRepoStatus) -> Option<String> {
+    fn button_label_for_status(status: &LspRepoStatus, app: &AppContext) -> Option<String> {
         match status {
-            LspRepoStatus::DisabledAndNotInstalled { server_type } => {
-                Some(format!("Install {}", server_type.binary_name()))
-            }
-            LspRepoStatus::DisabledAndInstalled { server_type } => {
-                Some(format!("Enable {}", server_type.binary_name()))
-            }
+            LspRepoStatus::DisabledAndNotInstalled { server_type } => Some(
+                text(app, "code.footer.lsp.install_server")
+                    .replace("{server}", server_type.binary_name()),
+            ),
+            LspRepoStatus::DisabledAndInstalled { server_type } => Some(
+                text(app, "code.footer.lsp.enable_server")
+                    .replace("{server}", server_type.binary_name()),
+            ),
             _ => None,
         }
     }
@@ -666,18 +675,21 @@ impl CodeFooterView {
     /// When multiple servers need action, uses plural labels
     /// ("Enable servers" / "Install servers").
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    fn button_label_for_cta_statuses(statuses: &[&LspRepoStatus]) -> Option<String> {
+    fn button_label_for_cta_statuses(
+        statuses: &[&LspRepoStatus],
+        app: &AppContext,
+    ) -> Option<String> {
         match statuses.len() {
             0 => None,
-            1 => Self::button_label_for_status(statuses[0]),
+            1 => Self::button_label_for_status(statuses[0], app),
             _ => {
                 let any_needs_install = statuses
                     .iter()
                     .any(|s| matches!(s, LspRepoStatus::DisabledAndNotInstalled { .. }));
                 if any_needs_install {
-                    Some("Install servers".to_string())
+                    Some(text(app, "code.footer.lsp.install_servers"))
                 } else {
-                    Some("Enable servers".to_string())
+                    Some(text(app, "code.footer.lsp.enable_servers"))
                 }
             }
         }
@@ -715,7 +727,7 @@ impl CodeFooterView {
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn update_enable_button_label(&mut self, ctx: &mut ViewContext<Self>) {
         let cta_statuses = self.mode.cta_lsp_repo_statuses();
-        let Some(label) = Self::button_label_for_cta_statuses(&cta_statuses) else {
+        let Some(label) = Self::button_label_for_cta_statuses(&cta_statuses, ctx) else {
             // No CTA-worthy statuses remain — hide the button.
             self.enable_lsp_button = None;
             return;
@@ -957,7 +969,7 @@ impl CodeFooterView {
             .root_for_workspace(self.mode.path())
             .and_then(|path| path.file_name())
             .and_then(|directory_name| directory_name.to_str().map(|s| s.to_string()))
-            .unwrap_or("unknown workspace".to_string());
+            .unwrap_or_else(|| text(app, "code.footer.workspace.unknown"));
 
         let background = appearance.theme().surface_2();
 
@@ -983,30 +995,46 @@ impl CodeFooterView {
         }
 
         if matches!(render_status, LSPServerRenderStatus::Available) {
-            col.add_child(Self::render_open_logs_menu_item(mouse_states, appearance));
+            col.add_child(Self::render_open_logs_menu_item(
+                mouse_states,
+                appearance,
+                app,
+            ));
             col.add_child(Self::render_restart_server_menu_item(
                 mouse_states,
                 appearance,
+                app,
             ));
-            col.add_child(Self::render_stop_server_menu_item(mouse_states, appearance));
+            col.add_child(Self::render_stop_server_menu_item(
+                mouse_states,
+                appearance,
+                app,
+            ));
         }
 
         if matches!(render_status, LSPServerRenderStatus::Stopped) {
             col.add_child(Self::render_start_server_menu_item(
                 mouse_states,
                 appearance,
+                app,
             ));
         }
 
         if matches!(render_status, LSPServerRenderStatus::Failed) {
-            col.add_child(Self::render_open_logs_menu_item(mouse_states, appearance));
+            col.add_child(Self::render_open_logs_menu_item(
+                mouse_states,
+                appearance,
+                app,
+            ));
             col.add_child(Self::render_restart_server_menu_item(
                 mouse_states,
                 appearance,
+                app,
             ));
             col.add_child(Self::render_remove_server_menu_item(
                 mouse_states,
                 appearance,
+                app,
             ));
         }
 
@@ -1025,8 +1053,8 @@ impl CodeFooterView {
             .path()
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("unknown workspace")
-            .to_string();
+            .map(str::to_owned)
+            .unwrap_or_else(|| text(app, "code.footer.workspace.unknown"));
 
         let background = appearance.theme().surface_2();
 
@@ -1067,11 +1095,13 @@ impl CodeFooterView {
                 mouse_states,
                 is_plural,
                 appearance,
+                app,
             ));
             col.add_child(Self::render_stop_all_servers_menu_item(
                 mouse_states,
                 is_plural,
                 appearance,
+                app,
             ));
         }
         if has_stopped {
@@ -1080,11 +1110,13 @@ impl CodeFooterView {
                 has_running,
                 is_plural,
                 appearance,
+                app,
             ));
         }
         col.add_child(Self::render_manage_servers_menu_item(
             mouse_states,
             appearance,
+            app,
         ));
 
         Self::wrap_menu_in_dismiss(col, appearance)
@@ -1097,7 +1129,7 @@ impl CodeFooterView {
         appearance: &Appearance,
         mouse_state: MouseStateHandle,
         icon_creator: F,
-        label: &'static str,
+        label: String,
         action: CodeFooterViewAction,
     ) -> Box<dyn Element> {
         let theme = appearance.theme().clone();
@@ -1159,6 +1191,7 @@ impl CodeFooterView {
     fn render_open_logs_menu_item(
         mouse_states: &SingleFileMouseStates,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let background = theme.surface_2();
@@ -1172,7 +1205,7 @@ impl CodeFooterView {
                     .to_warpui_icon(ThemeFill::Solid(text_color))
                     .finish()
             },
-            "Open logs",
+            text(app, "code.footer.menu.open_logs"),
             CodeFooterViewAction::OpenLogs,
         )
     }
@@ -1181,6 +1214,7 @@ impl CodeFooterView {
     fn render_restart_server_menu_item(
         mouse_states: &SingleFileMouseStates,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let background = theme.surface_2();
@@ -1194,7 +1228,7 @@ impl CodeFooterView {
                     .to_warpui_icon(ThemeFill::Solid(text_color))
                     .finish()
             },
-            "Restart server",
+            text(app, "code.footer.menu.restart_server"),
             CodeFooterViewAction::RestartServer,
         )
     }
@@ -1203,6 +1237,7 @@ impl CodeFooterView {
     fn render_stop_server_menu_item(
         mouse_states: &SingleFileMouseStates,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let stop_color: ColorU = AnsiColorIdentifier::Red
@@ -1217,7 +1252,7 @@ impl CodeFooterView {
                     .with_uniform_padding(2.)
                     .finish()
             },
-            "Stop server",
+            text(app, "code.footer.menu.stop_server"),
             CodeFooterViewAction::StopServer,
         )
     }
@@ -1226,6 +1261,7 @@ impl CodeFooterView {
     fn render_start_server_menu_item(
         mouse_states: &SingleFileMouseStates,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let background = theme.surface_2();
@@ -1239,7 +1275,7 @@ impl CodeFooterView {
                     .to_warpui_icon(ThemeFill::Solid(text_color))
                     .finish()
             },
-            "Start server",
+            text(app, "code.footer.menu.start_server"),
             CodeFooterViewAction::StartServer,
         )
     }
@@ -1248,6 +1284,7 @@ impl CodeFooterView {
     fn render_remove_server_menu_item(
         mouse_states: &SingleFileMouseStates,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let background = theme.surface_2();
@@ -1261,7 +1298,7 @@ impl CodeFooterView {
                     .to_warpui_icon(ThemeFill::Solid(text_color))
                     .finish()
             },
-            "Remove server",
+            text(app, "code.footer.menu.remove_server"),
             CodeFooterViewAction::RemoveServer,
         )
     }
@@ -1271,6 +1308,7 @@ impl CodeFooterView {
         mouse_states: &WorkspaceMouseStates,
         is_plural: bool,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let background = theme.surface_2();
@@ -1285,9 +1323,9 @@ impl CodeFooterView {
                     .finish()
             },
             if is_plural {
-                "Restart all servers"
+                text(app, "code.footer.menu.restart_all_servers")
             } else {
-                "Restart server"
+                text(app, "code.footer.menu.restart_server")
             },
             CodeFooterViewAction::RestartAllServers,
         )
@@ -1298,6 +1336,7 @@ impl CodeFooterView {
         mouse_states: &WorkspaceMouseStates,
         is_plural: bool,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let stop_color: ColorU = AnsiColorIdentifier::Red
@@ -1313,9 +1352,9 @@ impl CodeFooterView {
                     .finish()
             },
             if is_plural {
-                "Stop all servers"
+                text(app, "code.footer.menu.stop_all_servers")
             } else {
-                "Stop server"
+                text(app, "code.footer.menu.stop_server")
             },
             CodeFooterViewAction::StopAllServers,
         )
@@ -1327,6 +1366,7 @@ impl CodeFooterView {
         has_running: bool,
         is_plural: bool,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let background = theme.surface_2();
@@ -1341,11 +1381,11 @@ impl CodeFooterView {
                     .finish()
             },
             if !is_plural {
-                "Start server"
+                text(app, "code.footer.menu.start_server")
             } else if has_running {
-                "Start all stopped servers"
+                text(app, "code.footer.menu.start_all_stopped_servers")
             } else {
-                "Start all servers"
+                text(app, "code.footer.menu.start_all_servers")
             },
             CodeFooterViewAction::StartAllServers,
         )
@@ -1355,6 +1395,7 @@ impl CodeFooterView {
     fn render_manage_servers_menu_item(
         mouse_states: &WorkspaceMouseStates,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let background = theme.surface_2();
@@ -1368,7 +1409,7 @@ impl CodeFooterView {
                     .to_warpui_icon(ThemeFill::Solid(text_color))
                     .finish()
             },
-            "Manage servers",
+            text(app, "code.footer.menu.manage_servers"),
             CodeFooterViewAction::ManageServers,
         )
     }
@@ -1472,24 +1513,28 @@ impl CodeFooterView {
     }
 
     /// Returns a status message for a single server, if any.
-    fn server_status_message(server: &LspServerModel) -> Option<String> {
+    fn server_status_message(server: &LspServerModel, app: &AppContext) -> Option<String> {
         match server.state() {
             LspModelState::Available { .. } | LspModelState::Starting => server
                 .latest_progress_update()
                 .map(|update| update.to_display_message())
                 .filter(|msg| !msg.trim().is_empty())
                 .map(|msg| format!("{}: {msg}", server.server_name())),
-            LspModelState::Stopped { .. } | LspModelState::Stopping { .. } => {
-                Some(format!("{}: stopped", server.server_name()))
-            }
-            LspModelState::Failed { .. } => Some(format!("{}: error", server.server_name())),
+            LspModelState::Stopped { .. } | LspModelState::Stopping { .. } => Some(
+                text(app, "code.footer.lsp.server_stopped")
+                    .replace("{server}", &server.server_name()),
+            ),
+            LspModelState::Failed { .. } => Some(
+                text(app, "code.footer.lsp.server_error")
+                    .replace("{server}", &server.server_name()),
+            ),
         }
     }
 
     /// Returns the CTA message and button flag for workspace mode if any servers
     /// are disabled and need user action. Returns `None` if not in workspace mode
     /// or no CTA is needed.
-    fn workspace_cta_message(&self) -> Option<(Option<String>, bool)> {
+    fn workspace_cta_message(&self, app: &AppContext) -> Option<(Option<String>, bool)> {
         let FooterMode::Workspace {
             root_path,
             lsp_repo_statuses,
@@ -1515,11 +1560,13 @@ impl CodeFooterView {
             let root_name = root_path
                 .file_name()
                 .and_then(|s| s.to_str())
-                .unwrap_or("this workspace");
+                .map(str::to_owned)
+                .unwrap_or_else(|| text(app, "code.footer.workspace.default"));
             Some((
-                Some(format!(
-                    "Language support is not currently enabled for {root_name}"
-                )),
+                Some(
+                    text(app, "code.footer.lsp.support_not_enabled")
+                        .replace("{target}", &root_name),
+                ),
                 true,
             ))
         } else {
@@ -1548,7 +1595,7 @@ impl CodeFooterView {
             // Then check for any starting/busy server
             for server in &live {
                 let server_ref = server.as_ref(app);
-                if let Some(msg) = Self::server_status_message(server_ref) {
+                if let Some(msg) = Self::server_status_message(server_ref, app) {
                     if matches!(
                         server_ref.state(),
                         LspModelState::Starting | LspModelState::Available { .. }
@@ -1565,14 +1612,17 @@ impl CodeFooterView {
                     LspModelState::Stopped { .. } | LspModelState::Stopping { .. }
                 ) {
                     return (
-                        Some(format!("{}: stopped", server_ref.server_name())),
+                        Some(
+                            text(app, "code.footer.lsp.server_stopped")
+                                .replace("{server}", &server_ref.server_name()),
+                        ),
                         false,
                     );
                 }
             }
             // All servers are available with no progress — but in workspace mode,
             // there may still be disabled servers that need a CTA.
-            if let Some(cta) = self.workspace_cta_message() {
+            if let Some(cta) = self.workspace_cta_message(app) {
                 return cta;
             }
             return (None, false);
@@ -1587,31 +1637,34 @@ impl CodeFooterView {
                 ..
             } => match PersistedWorkspace::as_ref(app).has_enabled_lsp_server_for_file_path(path) {
                 LSPEnablementResultForFile::UnsupportedLanguage => (
-                    Some("Language support is unavailable for this file type".to_string()),
+                    Some(text(app, "code.footer.lsp.unavailable_file_type")),
                     false,
                 ),
                 LSPEnablementResultForFile::LSPNotEnabled { root_name } => match lsp_repo_status {
                     LspRepoStatus::CheckingForInstallation => (
-                        Some(format!(
-                            "Language support is not currently enabled for {}",
-                            root_name.unwrap_or("this codebase".to_string())
+                        Some(text(app, "code.footer.lsp.support_not_enabled").replace(
+                            "{target}",
+                            &root_name.unwrap_or_else(|| text(app, "code.footer.codebase.default")),
                         )),
                         false,
                     ),
                     LspRepoStatus::Ready | LspRepoStatus::Enabled => (
-                        Some("Language server is unavailable for this codebase".to_string()),
+                        Some(text(app, "code.footer.lsp.server_unavailable_codebase")),
                         false,
                     ),
                     LspRepoStatus::DisabledAndNotInstalled { .. }
                     | LspRepoStatus::DisabledAndInstalled { .. } => (
-                        Some(format!(
-                            "Language support is not currently enabled for {}",
-                            root_name.unwrap_or("this codebase".to_string())
+                        Some(text(app, "code.footer.lsp.support_not_enabled").replace(
+                            "{target}",
+                            &root_name.unwrap_or_else(|| text(app, "code.footer.codebase.default")),
                         )),
                         true,
                     ),
                     LspRepoStatus::Installing { server_type } => (
-                        Some(format!("Installing {}...", server_type.binary_name())),
+                        Some(
+                            text(app, "code.footer.lsp.installing_server")
+                                .replace("{server}", server_type.binary_name()),
+                        ),
                         false,
                     ),
                 },
@@ -1630,10 +1683,11 @@ impl CodeFooterView {
                 let root_name = root_path
                     .file_name()
                     .and_then(|s| s.to_str())
-                    .unwrap_or("this workspace");
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| text(app, "code.footer.workspace.default"));
 
                 // Check if any server has a CTA-worthy status
-                if let Some(cta) = self.workspace_cta_message() {
+                if let Some(cta) = self.workspace_cta_message(app) {
                     return cta;
                 }
 
@@ -1641,7 +1695,10 @@ impl CodeFooterView {
                 for status in lsp_repo_statuses.values() {
                     if let LspRepoStatus::Installing { server_type } = status {
                         return (
-                            Some(format!("Installing {}...", server_type.binary_name())),
+                            Some(
+                                text(app, "code.footer.lsp.installing_server")
+                                    .replace("{server}", server_type.binary_name()),
+                            ),
                             false,
                         );
                     }
@@ -1657,7 +1714,10 @@ impl CodeFooterView {
 
                 // All servers are enabled/ready but no live servers — unavailable
                 (
-                    Some(format!("Language support is unavailable for {root_name}")),
+                    Some(
+                        text(app, "code.footer.lsp.support_unavailable")
+                            .replace("{target}", &root_name),
+                    ),
                     false,
                 )
             }

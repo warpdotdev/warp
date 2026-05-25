@@ -1,3 +1,4 @@
+use crate::localization;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -23,6 +24,10 @@ use crate::terminal::view::TerminalAction;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
+
+fn pending_user_query_text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 /// Renders a pending user query block with dimmed text and a "Queued" badge.
 /// Displayed when a follow-up prompt is queued via `/fork-and-compact <prompt>`,
@@ -51,23 +56,32 @@ impl PendingUserQueryBlock {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let close_button = show_close_button.then(|| {
-            ctx.add_typed_action_view(|_| {
-                ActionButton::new("Remove queued prompt", NakedTheme)
-                    .with_icon(Icon::X)
-                    .with_size(ButtonSize::XSmall)
-                    .on_click(|ctx| {
-                        ctx.dispatch_typed_action(PendingUserQueryBlockAction::Dismiss);
-                    })
+            ctx.add_typed_action_view(|ctx| {
+                ActionButton::new(
+                    pending_user_query_text(
+                        ctx,
+                        "agent.pending_user_query.action.remove_queued_prompt",
+                    ),
+                    NakedTheme,
+                )
+                .with_icon(Icon::X)
+                .with_size(ButtonSize::XSmall)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(PendingUserQueryBlockAction::Dismiss);
+                })
             })
         });
         let send_now_button = show_send_now_button.then(|| {
-            ctx.add_typed_action_view(|_| {
-                ActionButton::new("Send now", NakedTheme)
-                    .with_icon(Icon::Play)
-                    .with_size(ButtonSize::XSmall)
-                    .on_click(|ctx| {
-                        ctx.dispatch_typed_action(PendingUserQueryBlockAction::SendNow);
-                    })
+            ctx.add_typed_action_view(|ctx| {
+                ActionButton::new(
+                    pending_user_query_text(ctx, "agent.pending_user_query.action.send_now"),
+                    NakedTheme,
+                )
+                .with_icon(Icon::Play)
+                .with_size(ButtonSize::XSmall)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(PendingUserQueryBlockAction::SendNow);
+                })
             })
         });
         Self {
@@ -169,7 +183,7 @@ impl View for PendingUserQueryBlock {
         .finish();
 
         let queued_badge = Text::new(
-            "Queued",
+            pending_user_query_text(app, "agent.pending_user_query.badge.queued"),
             appearance.ui_font_family(),
             appearance.monospace_font_size().max(4.) - 2.,
         )

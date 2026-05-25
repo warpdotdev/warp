@@ -1,3 +1,4 @@
+use crate::localization;
 use std::path::PathBuf;
 
 use warpui::elements::{
@@ -31,6 +32,10 @@ use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions};
 use crate::modal::ModalAction;
 use crate::tab_configs::branch_picker::BranchPicker;
 use crate::tab_configs::repo_picker::{RepoPicker, RepoPickerEvent};
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 /// Gap between sections in the modal body (repo picker, branch picker, checkbox).
 const SECTION_GAP: f32 = 16.;
@@ -66,10 +71,6 @@ const ESC_BADGE_CORNER_RADIUS: Radius = Radius::Pixels(3.);
 const CLOSE_ICON_SIZE: f32 = 14.;
 /// Font size for inline validation error messages.
 const ERROR_FONT_SIZE: f32 = 12.;
-/// Error shown when the user-entered worktree branch name contains invalid characters.
-const INVALID_BRANCH_NAME_ERROR: &str =
-    "Name can only contain letters, numbers, hyphens, and underscores";
-
 /// Returns `true` if `name` is a valid worktree branch name.
 ///
 /// Valid names contain only ASCII letters, digits, hyphens, and underscores.
@@ -324,7 +325,7 @@ impl View for NewWorktreeModal {
         // ── Header (custom — Modal wrapper has no title) ────────────────
         let header = {
             let title = Text::new_inline(
-                "New worktree".to_string(),
+                text(app, "tab_config.new_worktree.title"),
                 appearance.ui_font_family(),
                 HEADER_TITLE_FONT_SIZE,
             )
@@ -406,14 +407,20 @@ impl View for NewWorktreeModal {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
         // Repo picker
-        body.add_child(Self::render_section_label("Select repository", appearance));
+        body.add_child(Self::render_section_label(
+            &text(app, "tab_config.new_worktree.select_repository"),
+            appearance,
+        ));
         body.add_child(ChildView::new(&self.repo_picker).finish());
 
         // Branch picker (with gap)
         body.add_child(
-            Container::new(Self::render_section_label("Select branch", appearance))
-                .with_margin_top(SECTION_GAP)
-                .finish(),
+            Container::new(Self::render_section_label(
+                &text(app, "tab_config.new_worktree.select_branch"),
+                appearance,
+            ))
+            .with_margin_top(SECTION_GAP)
+            .finish(),
         );
         body.add_child(ChildView::new(&self.branch_picker).finish());
 
@@ -463,7 +470,7 @@ impl View for NewWorktreeModal {
             .with_child(checkbox_element)
             .with_child(
                 Text::new_inline(
-                    "Autogenerate worktree branch name".to_string(),
+                    text(app, "tab_config.new_worktree.autogenerate_branch_name"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )
@@ -482,7 +489,7 @@ impl View for NewWorktreeModal {
         if !self.autogenerate_branch_name {
             body.add_child(
                 Container::new(Self::render_section_label(
-                    "Worktree branch name",
+                    &text(app, "tab_config.new_worktree.branch_name"),
                     appearance,
                 ))
                 .with_margin_top(SECTION_GAP)
@@ -494,7 +501,7 @@ impl View for NewWorktreeModal {
                 body.add_child(
                     Container::new(
                         Text::new_inline(
-                            INVALID_BRANCH_NAME_ERROR.to_string(),
+                            text(app, "tab_config.new_worktree.invalid_branch_name"),
                             appearance.ui_font_family(),
                             ERROR_FONT_SIZE,
                         )
@@ -539,7 +546,7 @@ impl View for NewWorktreeModal {
         let cancel_button = appearance
             .ui_builder()
             .button(ButtonVariant::Text, self.cancel_button_mouse_state.clone())
-            .with_text_label("Cancel".to_string())
+            .with_text_label(text(app, "settings.action.cancel"))
             .with_style(text_button_base)
             .with_style(UiComponentStyles {
                 font_color: Some(main_text.into()),
@@ -561,7 +568,7 @@ impl View for NewWorktreeModal {
             let mut builder = appearance
                 .ui_builder()
                 .button(ButtonVariant::Text, self.open_button_mouse_state.clone())
-                .with_text_label("Open".to_string())
+                .with_text_label(text(app, "settings.action.open"))
                 .with_style(text_button_base)
                 .with_style(UiComponentStyles {
                     font_color: Some(font_color.into()),

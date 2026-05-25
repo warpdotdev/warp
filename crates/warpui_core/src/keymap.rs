@@ -66,7 +66,8 @@ pub enum DescriptionContext {
 
 /// Closure that can override a [`BindingDescription`] from live app state. See
 /// [`BindingDescription::with_dynamic_override`].
-pub type DynamicDescriptionResolver = Arc<dyn Fn(&AppContext) -> Option<String> + Send + Sync>;
+pub type DynamicDescriptionResolver =
+    Arc<dyn Fn(&AppContext, DescriptionContext) -> Option<String> + Send + Sync>;
 
 #[derive(Default, Clone)]
 /// A description of the binding.  Supports a single default context and
@@ -149,6 +150,16 @@ impl BindingDescription {
     where
         F: Fn(&AppContext) -> Option<String> + Send + Sync + 'static,
     {
+        self.dynamic_override = Some(Arc::new(move |ctx, _context| resolver(ctx)));
+        self
+    }
+
+    /// Attach a dynamic override that can return different labels for
+    /// different description contexts.
+    pub fn with_contextual_dynamic_override<F>(mut self, resolver: F) -> Self
+    where
+        F: Fn(&AppContext, DescriptionContext) -> Option<String> + Send + Sync + 'static,
+    {
         self.dynamic_override = Some(Arc::new(resolver));
         self
     }
@@ -163,7 +174,7 @@ impl BindingDescription {
     /// [`Self::in_context`] anywhere `&AppContext` is in scope.
     pub fn resolve(&self, ctx: &AppContext, context: DescriptionContext) -> Cow<'_, str> {
         match &self.dynamic_override {
-            Some(f) => match f(ctx) {
+            Some(f) => match f(ctx, context) {
                 Some(description) => Cow::Owned(titlecase(&description)),
                 None => Cow::Borrowed(self.in_context(context)),
             },
@@ -337,8 +348,8 @@ impl schemars::JsonSchema for Keystroke {
         std::borrow::Cow::Borrowed("Keystroke")
     }
 
-    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        gen.subschema_for::<String>()
+    fn json_schema(schema_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schema_generator.subschema_for::<String>()
     }
 }
 

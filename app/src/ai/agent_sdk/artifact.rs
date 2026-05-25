@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use warp_localization::{replace_placeholders, LocaleId};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -15,6 +16,7 @@ use super::artifact_upload::{
     CompletedFileArtifactUpload, FileArtifactUploadRequest, FileArtifactUploader,
 };
 use crate::ai::artifact_download::{download_artifact_bytes, download_destination};
+use crate::localization;
 #[cfg(test)]
 use crate::server::server_api::ai::FileArtifactRecord;
 use crate::server::server_api::ai::{AIClient, ArtifactDownloadResponse};
@@ -143,7 +145,12 @@ async fn get_artifact(
     ai_client
         .get_artifact_download(artifact_uid)
         .await
-        .with_context(|| format!("Failed to get artifact '{artifact_uid}'"))
+        .with_context(|| {
+            default_text_with_args(
+                "agent_sdk.artifact.error.get_failed",
+                &[("artifact_uid", artifact_uid)],
+            )
+        })
 }
 
 async fn download_artifact(
@@ -233,37 +240,92 @@ fn write_get_output_to<W: std::io::Write>(
     match output_format {
         OutputFormat::Json | OutputFormat::Ndjson => {
             serde_json::to_writer(&mut *output, &output_record)
-                .context("unable to write JSON output")?;
+                .context(default_text("agent_sdk.output.error.write_json"))?;
             writeln!(&mut *output)?;
         }
         OutputFormat::Pretty => {
-            writeln!(&mut *output, "Artifact UID: {}", output_record.artifact_uid)?;
             writeln!(
                 &mut *output,
-                "Artifact type: {}",
-                output_record.artifact_type
+                "{}",
+                artifact_label(
+                    "agent_sdk.artifact.output.artifact_uid",
+                    &output_record.artifact_uid,
+                )
             )?;
-            writeln!(&mut *output, "Created at: {}", output_record.created_at)?;
-            writeln!(&mut *output, "Download URL: {}", output_record.download_url)?;
-            writeln!(&mut *output, "Expires at: {}", output_record.expires_at)?;
-            writeln!(&mut *output, "Content type: {}", output_record.content_type)?;
+            writeln!(
+                &mut *output,
+                "{}",
+                artifact_label(
+                    "agent_sdk.artifact.output.artifact_type",
+                    &output_record.artifact_type,
+                )
+            )?;
+            writeln!(
+                &mut *output,
+                "{}",
+                artifact_label(
+                    "agent_sdk.artifact.output.created_at",
+                    &output_record.created_at
+                )
+            )?;
+            writeln!(
+                &mut *output,
+                "{}",
+                artifact_label(
+                    "agent_sdk.artifact.output.download_url",
+                    &output_record.download_url,
+                )
+            )?;
+            writeln!(
+                &mut *output,
+                "{}",
+                artifact_label(
+                    "agent_sdk.artifact.output.expires_at",
+                    &output_record.expires_at
+                )
+            )?;
+            writeln!(
+                &mut *output,
+                "{}",
+                artifact_label(
+                    "agent_sdk.artifact.output.content_type",
+                    &output_record.content_type,
+                )
+            )?;
             if let Some(filepath) = output_record.filepath {
-                writeln!(&mut *output, "Filepath: {filepath}")?;
+                writeln!(
+                    &mut *output,
+                    "{}",
+                    artifact_label("agent_sdk.artifact.output.filepath", filepath)
+                )?;
             }
             if let Some(filename) = output_record.filename {
-                writeln!(&mut *output, "Filename: {filename}")?;
+                writeln!(
+                    &mut *output,
+                    "{}",
+                    artifact_label("agent_sdk.artifact.output.filename", filename)
+                )?;
             }
             if let Some(description) = output_record.description {
-                writeln!(&mut *output, "Description: {description}")?;
+                writeln!(
+                    &mut *output,
+                    "{}",
+                    artifact_label("agent_sdk.artifact.output.description", description)
+                )?;
             }
             if let Some(size_bytes) = output_record.size_bytes {
-                writeln!(&mut *output, "Size bytes: {size_bytes}")?;
+                writeln!(
+                    &mut *output,
+                    "{}",
+                    artifact_label("agent_sdk.artifact.output.size_bytes", size_bytes)
+                )?;
             }
         }
         OutputFormat::Text => {
             writeln!(
                 &mut *output,
-                "Artifact UID\tArtifact type\tCreated at\tDownload URL\tExpires at\tContent type\tFilepath\tFilename\tDescription\tSize bytes"
+                "{}",
+                default_text("agent_sdk.artifact.output.get_text_header")
             )?;
             writeln!(
                 &mut *output,
@@ -304,21 +366,46 @@ fn write_download_output_to<W: std::io::Write>(
     match output_format {
         OutputFormat::Json | OutputFormat::Ndjson => {
             serde_json::to_writer(&mut *output, output_record)
-                .context("unable to write JSON output")?;
+                .context(default_text("agent_sdk.output.error.write_json"))?;
             writeln!(&mut *output)?;
         }
         OutputFormat::Pretty => {
-            writeln!(&mut *output, "Artifact downloaded")?;
-            writeln!(&mut *output, "Artifact UID: {}", output_record.artifact_uid)?;
             writeln!(
                 &mut *output,
-                "Artifact type: {}",
-                output_record.artifact_type
+                "{}",
+                default_text("agent_sdk.artifact.output.downloaded")
             )?;
-            writeln!(&mut *output, "Path: {}", output_record.path.display())?;
+            writeln!(
+                &mut *output,
+                "{}",
+                artifact_label(
+                    "agent_sdk.artifact.output.artifact_uid",
+                    &output_record.artifact_uid,
+                )
+            )?;
+            writeln!(
+                &mut *output,
+                "{}",
+                artifact_label(
+                    "agent_sdk.artifact.output.artifact_type",
+                    &output_record.artifact_type,
+                )
+            )?;
+            writeln!(
+                &mut *output,
+                "{}",
+                artifact_label(
+                    "agent_sdk.artifact.output.path",
+                    output_record.path.display()
+                )
+            )?;
         }
         OutputFormat::Text => {
-            writeln!(&mut *output, "Artifact UID\tArtifact type\tPath")?;
+            writeln!(
+                &mut *output,
+                "{}",
+                default_text("agent_sdk.artifact.output.download_text_header")
+            )?;
             writeln!(
                 &mut *output,
                 "{}\t{}\t{}",
@@ -356,32 +443,64 @@ fn write_upload_output_to<W: std::io::Write>(
     match output_format {
         OutputFormat::Json | OutputFormat::Ndjson => {
             serde_json::to_writer(&mut *output, &output_record)
-                .context("unable to write JSON output")?;
+                .context(default_text("agent_sdk.output.error.write_json"))?;
             writeln!(&mut *output)?;
         }
         OutputFormat::Pretty => {
-            writeln!(&mut *output, "Artifact uploaded")?;
-            writeln!(&mut *output, "Artifact UID: {}", output_record.artifact_uid)?;
-            writeln!(&mut *output, "Filepath: {}", output_record.filepath)?;
             writeln!(
                 &mut *output,
-                "Description: {}",
-                output_record.description.as_deref().unwrap_or("")
+                "{}",
+                default_text("agent_sdk.artifact.output.uploaded")
             )?;
-            writeln!(&mut *output, "MIME type: {}", output_record.mime_type)?;
             writeln!(
                 &mut *output,
-                "Size bytes: {}",
-                output_record
-                    .size_bytes
-                    .map(|size| size.to_string())
-                    .unwrap_or_default()
+                "{}",
+                artifact_label(
+                    "agent_sdk.artifact.output.artifact_uid",
+                    &output_record.artifact_uid,
+                )
+            )?;
+            writeln!(
+                &mut *output,
+                "{}",
+                artifact_label(
+                    "agent_sdk.artifact.output.filepath",
+                    &output_record.filepath
+                )
+            )?;
+            writeln!(
+                &mut *output,
+                "{}",
+                artifact_label(
+                    "agent_sdk.artifact.output.description",
+                    output_record.description.as_deref().unwrap_or(""),
+                )
+            )?;
+            writeln!(
+                &mut *output,
+                "{}",
+                artifact_label(
+                    "agent_sdk.artifact.output.mime_type",
+                    &output_record.mime_type
+                )
+            )?;
+            writeln!(
+                &mut *output,
+                "{}",
+                artifact_label(
+                    "agent_sdk.artifact.output.size_bytes",
+                    output_record
+                        .size_bytes
+                        .map(|size| size.to_string())
+                        .unwrap_or_default(),
+                )
             )?;
         }
         OutputFormat::Text => {
             writeln!(
                 &mut *output,
-                "Artifact UID\tFilepath\tDescription\tMIME type\tSize bytes"
+                "{}",
+                default_text("agent_sdk.artifact.output.upload_text_header")
             )?;
             writeln!(
                 &mut *output,
@@ -404,3 +523,16 @@ fn write_upload_output_to<W: std::io::Write>(
 #[cfg(test)]
 #[path = "artifact_tests.rs"]
 mod tests;
+
+fn default_text_with_args(key: &str, args: &[(&str, &str)]) -> String {
+    replace_placeholders(&default_text(key), args)
+        .expect("localized text template arguments must match the catalog")
+}
+
+fn default_text(key: &str) -> String {
+    localization::text_for_locale(LocaleId::EnUs, key)
+}
+
+fn artifact_label(key: &str, value: impl std::fmt::Display) -> String {
+    default_text_with_args(key, &[("value", &value.to_string())])
+}

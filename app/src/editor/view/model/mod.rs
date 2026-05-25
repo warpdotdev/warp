@@ -1,3 +1,4 @@
+use crate::localization;
 mod buffer;
 mod display_map;
 mod selections;
@@ -513,9 +514,10 @@ impl EditorModel {
                 };
                 AccessibilityContent::new(delta, format!(", {action}"), WarpA11yRole::UserAction)
             }
-            (true, false) => {
-                AccessibilityContent::new_without_help("Unselected", WarpA11yRole::UserAction)
-            }
+            (true, false) => AccessibilityContent::new_without_help(
+                localization::text_for_app(ctx, "editor.a11y.unselected"),
+                WarpA11yRole::UserAction,
+            ),
         }
     }
 

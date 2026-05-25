@@ -140,7 +140,7 @@ fn empty_card_mouse_states() -> EmptyMouseStates {
 #[test]
 fn test_render_environments_list_with_single_environment() {
     App::test((), |mut app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
+        init_env_page_view_test_models(&mut app);
 
         app.update(|ctx| {
             let appearance = Appearance::as_ref(ctx);
@@ -195,7 +195,7 @@ fn test_render_environments_list_with_single_environment() {
 #[test]
 fn test_render_environments_list_with_multiple_environments() {
     App::test((), |mut app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
+        init_env_page_view_test_models(&mut app);
 
         app.update(|ctx| {
             let appearance = Appearance::as_ref(ctx);
@@ -262,7 +262,7 @@ fn test_render_environments_list_with_multiple_environments() {
 #[test]
 fn test_render_environment_card_with_minimal_config() {
     App::test((), |mut app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
+        init_env_page_view_test_models(&mut app);
 
         app.update(|ctx| {
             let appearance = Appearance::as_ref(ctx);
@@ -317,7 +317,7 @@ fn test_render_environment_card_with_minimal_config() {
 #[test]
 fn test_render_environment_card_with_github_repos() {
     App::test((), |mut app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
+        init_env_page_view_test_models(&mut app);
 
         app.update(|ctx| {
             let appearance = Appearance::as_ref(ctx);
@@ -384,7 +384,7 @@ fn test_render_environment_card_with_github_repos() {
 #[test]
 fn test_render_environment_card_with_setup_commands() {
     App::test((), |mut app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
+        init_env_page_view_test_models(&mut app);
 
         app.update(|ctx| {
             let appearance = Appearance::as_ref(ctx);
@@ -453,7 +453,7 @@ fn test_render_environment_card_with_setup_commands() {
 #[test]
 fn test_render_environment_card_with_all_features() {
     App::test((), |mut app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
+        init_env_page_view_test_models(&mut app);
 
         app.update(|ctx| {
             let appearance = Appearance::as_ref(ctx);
@@ -538,7 +538,7 @@ fn test_render_environment_card_with_all_features() {
 #[test]
 fn test_render_environment_card_with_empty_setup_commands() {
     App::test((), |mut app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
+        init_env_page_view_test_models(&mut app);
 
         app.update(|ctx| {
             let appearance = Appearance::as_ref(ctx);
@@ -997,7 +997,7 @@ fn test_render_empty_state_github_card_unauthed_state_shows_authorize() {
 #[test]
 fn test_environment_setup_mode_selector_renders_options() {
     App::test((), |mut app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
+        init_env_page_view_test_models(&mut app);
         let window_id = create_test_window(&mut app);
 
         app.update(|ctx| {
@@ -1335,7 +1335,7 @@ fn test_render_environment_card_with_last_used_never() {
     use warp_graphql::scalars::time::ServerTimestamp;
 
     App::test((), |mut app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
+        init_env_page_view_test_models(&mut app);
 
         app.update(|ctx| {
             let appearance = Appearance::as_ref(ctx);
@@ -1406,7 +1406,7 @@ fn test_render_environment_card_with_last_used_timestamp() {
     use warp_graphql::scalars::time::ServerTimestamp;
 
     App::test((), |mut app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
+        init_env_page_view_test_models(&mut app);
 
         app.update(|ctx| {
             let appearance = Appearance::as_ref(ctx);

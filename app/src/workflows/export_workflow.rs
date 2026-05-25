@@ -109,7 +109,10 @@ impl ExportArgument {
                     }
                     // If we are missing some enum info, use the default type instead
                     Err(_) => {
-                        log::warn!("Tried to deserialize an enum argument without any static variants or dynamic command provided, defaulting to {:?} argument", ArgumentType::default());
+                        log::warn!(
+                            "Tried to deserialize an enum argument without any static variants or dynamic command provided, defaulting to {:?} argument",
+                            ArgumentType::default()
+                        );
                         ArgumentType::default()
                     }
                 }

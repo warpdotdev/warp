@@ -1,3 +1,4 @@
+use crate::localization;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -53,6 +54,14 @@ impl SessionType {
             SessionType::CliAgent(CLIAgent::Codex) => "Codex",
             SessionType::CliAgent(CLIAgent::Gemini) => "Gemini",
             SessionType::CliAgent(agent) => agent.display_name(),
+        }
+    }
+
+    pub(crate) fn localized_pill_label(&self, app: &warpui::AppContext) -> String {
+        match self {
+            SessionType::Terminal => localization::text_for_app(app, "tab_config.session.terminal"),
+            SessionType::Oz => localization::text_for_app(app, "tab_config.session.built_in_agent"),
+            SessionType::CliAgent(_) => self.pill_label().to_string(),
         }
     }
 }

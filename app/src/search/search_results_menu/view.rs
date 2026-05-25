@@ -1,3 +1,4 @@
+use crate::localization;
 use std::marker::PhantomData;
 use std::ops::Range;
 
@@ -191,7 +192,7 @@ impl<T: Action + Clone> SearchResultsMenuView<T> {
         let theme = appearance.theme();
         Container::new(
             Text::new(
-                "No results found",
+                localization::text_for_app(app, "search.no_results"),
                 appearance.ui_font_family(),
                 appearance.monospace_font_size(),
             )

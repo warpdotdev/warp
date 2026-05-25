@@ -2,11 +2,21 @@ use comfy_table::Cell;
 use serde::Serialize;
 use warp_cli::mcp::MCPCommand;
 use warp_cli::GlobalOptions;
+use warp_localization::LocaleId;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use crate::ai::agent_sdk::output::{self, TableFormat};
 use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::localization;
 use crate::server::cloud_objects::update_manager::UpdateManager;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
+
+fn text_for_locale(locale: LocaleId, key: &str) -> String {
+    localization::text_for_locale(locale, key)
+}
 
 /// Handle MCP-related CLI commands.
 pub fn run(
@@ -34,11 +44,12 @@ impl MCPCommandRunner {
             let mut servers = TemplatableMCPServerManager::get_all_runnable_mcp_servers(ctx);
             servers.sort_by_key(|(uuid, _)| *uuid);
 
-            output::print_list(
+            output::print_list_for_app(
                 servers
                     .into_iter()
                     .map(|(uuid, name)| MCPServerInfo { uuid, name }),
                 global_options.output_format,
+                ctx,
             );
 
             ctx.terminate_app(warpui::platform::TerminationMode::ForceTerminate, None);
@@ -60,7 +71,17 @@ struct MCPServerInfo {
 
 impl TableFormat for MCPServerInfo {
     fn header() -> Vec<Cell> {
-        vec![Cell::new("UUID"), Cell::new("Name")]
+        vec![
+            Cell::new(text_for_locale(LocaleId::EnUs, "agent_sdk.mcp.table.uuid")),
+            Cell::new(text_for_locale(LocaleId::EnUs, "agent_sdk.mcp.table.name")),
+        ]
+    }
+
+    fn header_for_app(app: &AppContext) -> Vec<Cell> {
+        vec![
+            Cell::new(text(app, "agent_sdk.mcp.table.uuid")),
+            Cell::new(text(app, "agent_sdk.mcp.table.name")),
+        ]
     }
 
     fn row(&self) -> Vec<Cell> {

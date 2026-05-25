@@ -1,3 +1,4 @@
+use crate::localization;
 // TODO(roland): Delete all of this once agent mode fully replaces the AI assistant panel.
 // app/src/ai/request_usage_model duplicates much of this logic.
 use std::sync::Arc;
@@ -22,6 +23,10 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 /// The key for the corresponding entry in UserDefaults.
 /// Not wiring through Settings for now since this data is only needed by the panel view.
 pub const REQUEST_LIMIT_INFO_CACHE_KEY: &str = "AIAssistantRequestLimitInfo";
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 /// Tracks the current request status for making Warp AI requests against server.
 pub enum RequestStatus {
@@ -240,9 +245,10 @@ impl Requests {
                             cache_request_limit_info(request_limit_info, ctx);
                             model.request_limit_info = request_limit_info;
                             let next_time = if let Some(next_refresh_time) = model.serialized_time_until_refresh() {
-                                format!("after {next_refresh_time}")
+                                text(ctx, "ai_assistant.request_limit.after_time")
+                                    .replace("{time}", &next_refresh_time)
                             } else {
-                                String::from("later")
+                                text(ctx, "ai_assistant.request_limit.later")
                             };
 
                             let auth_state = AuthStateProvider::as_ref(ctx).get();
@@ -252,17 +258,23 @@ impl Requests {
                                 if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
                                     if has_admin_permissions {
                                         let upgrade_url = UserWorkspaces::upgrade_link_for_team(team.uid);
-                                        format!("It seems you're out of credits. Please try again {next_time}.\n\n[Upgrade]({upgrade_url}) for more credits.")
+                                        text(ctx, "ai_assistant.request_limit.out_of_credits_upgrade")
+                                            .replace("{next_time}", &next_time)
+                                            .replace("{upgrade_url}", &upgrade_url)
                                     } else {
-                                        format!("It seems you're out of credits. Please try again {next_time}.\n\nContact a team admin to upgrade for more credits.")
+                                        text(ctx, "ai_assistant.request_limit.out_of_credits_contact_admin")
+                                            .replace("{next_time}", &next_time)
                                     }
                                 } else {
-                                    format!("It seems you're out of credits. Please try again {next_time}.")
+                                    text(ctx, "ai_assistant.request_limit.out_of_credits")
+                                        .replace("{next_time}", &next_time)
                                 }
                             } else {
                                 let user_id = auth_state.user_id().unwrap_or_default();
                                 let upgrade_url = UserWorkspaces::upgrade_link(user_id);
-                                format!("It seems you're out of credits. Please try again {next_time}.\n\n[Upgrade]({upgrade_url}) for more credits.")
+                                text(ctx, "ai_assistant.request_limit.out_of_credits_upgrade")
+                                    .replace("{next_time}", &next_time)
+                                    .replace("{upgrade_url}", &upgrade_url)
                             };
                             let response_in_markdown = markdown_segments_from_text(
                                 transcript_part_index,
@@ -287,7 +299,7 @@ impl Requests {
                             );
                         }
                         _ => {
-                            let response = "We're experiencing technical difficulties right now. Please try again later.".to_owned();
+                            let response = text(ctx, "ai_assistant.request_failed");
                             let response_in_markdown = markdown_segments_from_text(
                                 transcript_part_index,
                                 TranscriptPartSubType::Answer,

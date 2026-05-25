@@ -5,9 +5,9 @@ use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
-use crate::appearance::Appearance;
 use crate::auth::UserUid;
 use crate::server::ids::ServerId;
+use crate::{appearance::Appearance, localization};
 
 pub struct TransferOwnershipConfirmationModal {
     cancel_mouse_state: MouseStateHandle,
@@ -51,10 +51,8 @@ impl View for TransferOwnershipConfirmationModal {
         let email = self.new_owner_email.as_deref().unwrap_or_default();
 
         let description_text = Text::new(
-            format!(
-                "Are you sure you want to transfer team ownership to {}? You will no longer be the owner and will not be able to take any administrative actions for this team.",
-                email
-            ),
+            localization::text_for_app(app, "settings.transfer_ownership.description")
+                .replace("{email}", email),
             appearance.ui_font_family(),
             14.,
         )
@@ -73,7 +71,7 @@ impl View for TransferOwnershipConfirmationModal {
                 appearance
                     .ui_builder()
                     .button(ButtonVariant::Secondary, self.cancel_mouse_state.clone())
-                    .with_text_label("Cancel".to_string())
+                    .with_text_label(localization::text_for_app(app, "settings.action.cancel"))
                     .with_style(button_style)
                     .build()
                     .on_click(|ctx, _, _| {
@@ -86,7 +84,10 @@ impl View for TransferOwnershipConfirmationModal {
                     appearance
                         .ui_builder()
                         .button(ButtonVariant::Accent, self.confirm_mouse_state.clone())
-                        .with_text_label("Transfer".to_string())
+                        .with_text_label(localization::text_for_app(
+                            app,
+                            "settings.transfer_ownership.transfer",
+                        ))
                         .with_style(button_style)
                         .build()
                         .on_click(|ctx, _, _| {

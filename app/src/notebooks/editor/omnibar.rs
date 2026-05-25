@@ -1,6 +1,7 @@
 //! Implementation for the omnibar - a floating menu for editor interactions
 //! like formatting and changing block types.
 
+use crate::localization;
 use itertools::Itertools;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
@@ -446,9 +447,12 @@ impl TypedActionView for Omnibar {
                 ))
             }
             OmnibarAction::OpenLinkEditor => ActionAccessibilityContent::from_debug(),
-            OmnibarAction::UnstyleLink => ActionAccessibilityContent::Custom(
-                AccessibilityContent::new_without_help("Remove link", WarpA11yRole::UserAction),
-            ),
+            OmnibarAction::UnstyleLink => {
+                ActionAccessibilityContent::Custom(AccessibilityContent::new_without_help(
+                    localization::text_for_app(ctx, "notebook.editor.a11y.remove_link"),
+                    WarpA11yRole::UserAction,
+                ))
+            }
         }
     }
 }

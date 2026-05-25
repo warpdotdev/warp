@@ -870,7 +870,7 @@ impl TerminalView {
         let ui_state = &ambient_agent_model.ui_state;
         let screen = if ambient_agent_model.is_cancelled() {
             // Show cancelled screen
-            render_cloud_mode_cancelled_screen(appearance)
+            render_cloud_mode_cancelled_screen(appearance, app)
         } else if let Some(auth_url) = ambient_agent_model.github_auth_url() {
             // Show GitHub auth required screen
             render_cloud_mode_github_auth_required_screen(
@@ -890,10 +890,10 @@ impl TerminalView {
             )
         } else {
             // Show loading screen - determine the message based on progress state
-            let message = progress.setup_status_text();
+            let message = crate::localization::text_for_app(app, progress.setup_status_text_key());
 
             render_cloud_mode_loading_screen(
-                message,
+                &message,
                 appearance,
                 &ui_state.loading_shimmer_handle,
                 &ui_state.tip_model,
@@ -956,7 +956,7 @@ impl TerminalView {
                         .as_ref(ctx)
                         .task_fetch_error(&task_id)
                         .map(str::to_owned);
-                    ConversationDetailsData::from_task_id(task_id, fetch_error)
+                    ConversationDetailsData::from_task_id(task_id, fetch_error, ctx)
                 });
             self.conversation_details_panel.update(ctx, |panel, ctx| {
                 panel.set_conversation_details(data, ctx);

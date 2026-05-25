@@ -378,11 +378,23 @@ impl ThinkingDisplayMode {
         }
     }
 
-    pub fn command_palette_description(&self) -> &'static str {
+    pub fn display_name_key(&self) -> &'static str {
         match self {
-            ThinkingDisplayMode::ShowAndCollapse => "Set agent thinking display: show & collapse",
-            ThinkingDisplayMode::AlwaysShow => "Set agent thinking display: always show",
-            ThinkingDisplayMode::NeverShow => "Set agent thinking display: never show",
+            ThinkingDisplayMode::ShowAndCollapse => {
+                "settings.ai.other.thinking.option.show_and_collapse"
+            }
+            ThinkingDisplayMode::AlwaysShow => "settings.ai.other.thinking.option.always_show",
+            ThinkingDisplayMode::NeverShow => "settings.ai.other.thinking.option.never_show",
+        }
+    }
+
+    pub fn command_palette_description_key(&self) -> &'static str {
+        match self {
+            ThinkingDisplayMode::ShowAndCollapse => {
+                "settings.command_palette.ai.thinking.show_and_collapse"
+            }
+            ThinkingDisplayMode::AlwaysShow => "settings.command_palette.ai.thinking.always_show",
+            ThinkingDisplayMode::NeverShow => "settings.command_palette.ai.thinking.never_show",
         }
     }
 
@@ -545,9 +557,9 @@ impl schemars::JsonSchema for AgentModeCommandExecutionPredicate {
         std::borrow::Cow::Borrowed("AgentModeCommandExecutionPredicate")
     }
 
-    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    fn json_schema(schema_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         // In the settings file, predicates are serialized as plain regex strings.
-        gen.subschema_for::<String>()
+        schema_generator.subschema_for::<String>()
     }
 }
 
@@ -672,8 +684,8 @@ impl schemars::JsonSchema for ToolbarCommandMap {
         std::borrow::Cow::Borrowed("ToolbarCommandMap")
     }
 
-    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        gen.subschema_for::<HashMap<String, String>>()
+    fn json_schema(schema_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schema_generator.subschema_for::<HashMap<String, String>>()
     }
 }
 

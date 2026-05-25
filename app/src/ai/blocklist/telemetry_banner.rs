@@ -1,3 +1,4 @@
+use crate::localization;
 use warpui::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, ParentElement, Shrinkable, Text,
@@ -15,10 +16,11 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::UgcCollectionEnablementSetting;
 use crate::{Appearance, FeatureFlag, WorkspaceAction};
 
-const TITLE_EXISTING_USERS: &str = "We've updated our telemetry policy.";
-const TITLE_NEW_USERS: &str = "Help improve Warp.";
-const DESCRIPTION: &str = "We may collect certain console interactions to improve Warp's AI capabilities. You can opt out any time.";
 const PRIVACY_URL: &str = "https://warp.dev/privacy";
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 #[derive(Default, Debug, Clone)]
 pub struct TelemetryBanner {
@@ -50,9 +52,9 @@ impl View for TelemetryBanner {
         let ui_builder = appearance.ui_builder();
 
         let title = if self.is_onboarded {
-            TITLE_EXISTING_USERS
+            text(app, "agent.telemetry_banner.title_existing")
         } else {
-            TITLE_NEW_USERS
+            text(app, "agent.telemetry_banner.title_new")
         };
 
         let left = Flex::row()
@@ -82,10 +84,14 @@ impl View for TelemetryBanner {
                                 .finish(),
                         )
                         .with_child(
-                            Text::new(DESCRIPTION, ui_builder.ui_font_family(), 12.)
-                                .with_color(theme.nonactive_ui_text_color().into_solid())
-                                .soft_wrap(true)
-                                .finish(),
+                            Text::new(
+                                text(app, "agent.telemetry_banner.description"),
+                                ui_builder.ui_font_family(),
+                                12.,
+                            )
+                            .with_color(theme.nonactive_ui_text_color().into_solid())
+                            .soft_wrap(true)
+                            .finish(),
                         )
                         .finish(),
                 )
@@ -99,7 +105,7 @@ impl View for TelemetryBanner {
                 Container::new(
                     ui_builder
                         .button(ButtonVariant::Text, self.learn_more_mouse_state.clone())
-                        .with_text_label("Learn more".into())
+                        .with_text_label(text(app, "agent.telemetry_banner.learn_more"))
                         .with_style(UiComponentStyles {
                             height: Some(24.),
                             padding: Some(Coords {
@@ -130,7 +136,10 @@ impl View for TelemetryBanner {
                             ButtonVariant::Outlined,
                             self.privacy_settings_mouse_state.clone(),
                         )
-                        .with_text_label("Manage privacy settings".into())
+                        .with_text_label(text(
+                            app,
+                            "agent.telemetry_banner.manage_privacy_settings",
+                        ))
                         .with_style(UiComponentStyles {
                             ..Default::default()
                         })

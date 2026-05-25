@@ -13,12 +13,12 @@ use warpui::elements::{
 };
 use warpui::presenter::ChildView;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::AppContext;
 
 use super::{
-    DynamicEnumSuggestionStatus, Input, InputAction, MenuPositioning, DYNAMIC_ENUM_FAILURE_MESSAGE,
-    DYNAMIC_ENUM_GENERATE_MESSAGE, DYNAMIC_ENUM_HORIZONTAL_TEXT_PADDING,
-    DYNAMIC_ENUM_MENU_HEIGHT_OFFSET, DYNAMIC_ENUM_MENU_PADDING, DYNAMIC_ENUM_NO_RESULTS_MESSAGE,
-    DYNAMIC_ENUM_PENDING_MESSAGE, DYNAMIC_ENUM_RUN_MESSAGE, HISTORY_DETAILS_VIEW_WIDTH_REQUIREMENT,
+    DynamicEnumSuggestionStatus, Input, InputAction, MenuPositioning,
+    DYNAMIC_ENUM_HORIZONTAL_TEXT_PADDING, DYNAMIC_ENUM_MENU_HEIGHT_OFFSET,
+    DYNAMIC_ENUM_MENU_PADDING, HISTORY_DETAILS_VIEW_WIDTH_REQUIREMENT,
     RUN_DYNAMIC_ENUM_COMMAND_KEYSTROKE, TERMINAL_VIEW_PADDING_LEFT,
 };
 use crate::appearance::Appearance;
@@ -26,6 +26,7 @@ use crate::input_suggestions::{
     DETAILS_PANEL_MARGIN, DETAILS_PANEL_PADDING, HISTORY_DETAILS_PANEL_WIDTH,
     LABEL_PADDING as InputSuggestionsLabelPadding,
 };
+use crate::localization;
 use crate::themes::theme::WarpTheme;
 
 enum SuggestionsResizeConfig {
@@ -140,6 +141,7 @@ impl Input {
         &self,
         appearance: &Appearance,
         menu_positioning: MenuPositioning,
+        app: &AppContext,
         command: String,
         status: DynamicEnumSuggestionStatus,
         suggestions: &[String],
@@ -149,20 +151,26 @@ impl Input {
 
         let (content, resize_config) = match status {
             DynamicEnumSuggestionStatus::Unapproved => (
-                self.render_dynamic_enum_command_approval(command, appearance),
+                self.render_dynamic_enum_command_approval(command, appearance, app),
                 SuggestionsResizeConfig::WidthOnly,
             ),
             DynamicEnumSuggestionStatus::Pending => (
-                self.render_dynamic_enum_status_message(DYNAMIC_ENUM_PENDING_MESSAGE, appearance),
+                self.render_dynamic_enum_status_message(
+                    text(app, "terminal.input.dynamic_enum.pending"),
+                    appearance,
+                ),
                 SuggestionsResizeConfig::WidthAndHeight,
             ),
             DynamicEnumSuggestionStatus::Failure => (
-                self.render_dynamic_enum_status_message(DYNAMIC_ENUM_FAILURE_MESSAGE, appearance),
+                self.render_dynamic_enum_status_message(
+                    text(app, "terminal.input.dynamic_enum.failure"),
+                    appearance,
+                ),
                 SuggestionsResizeConfig::WidthAndHeight,
             ),
             DynamicEnumSuggestionStatus::Success if suggestions.is_empty() => (
                 self.render_dynamic_enum_status_message(
-                    DYNAMIC_ENUM_NO_RESULTS_MESSAGE,
+                    text(app, "terminal.input.dynamic_enum.no_results"),
                     appearance,
                 ),
                 SuggestionsResizeConfig::WidthAndHeight,
@@ -272,6 +280,7 @@ impl Input {
         &self,
         command: String,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let keybinding_style = UiComponentStyles {
@@ -290,7 +299,7 @@ impl Input {
                 ConstrainedBox::new(
                     Container::new(
                         Text::new_inline(
-                            String::from(DYNAMIC_ENUM_GENERATE_MESSAGE),
+                            text(app, "terminal.input.dynamic_enum.generate_message"),
                             appearance.ui_font_family(),
                             appearance.ui_font_size(),
                         )
@@ -341,7 +350,7 @@ impl Input {
                                 1.,
                                 Container::new(
                                     Text::new_inline(
-                                        String::from(DYNAMIC_ENUM_RUN_MESSAGE),
+                                        text(app, "terminal.input.dynamic_enum.run_command"),
                                         appearance.ui_font_family(),
                                         appearance.ui_font_size(),
                                     )
@@ -365,7 +374,7 @@ impl Input {
     /// Renders a status message for dynamic enum suggestions.
     fn render_dynamic_enum_status_message(
         &self,
-        message: &str,
+        message: String,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -373,7 +382,7 @@ impl Input {
             Align::new(
                 Container::new(
                     Text::new_inline(
-                        String::from(message),
+                        message,
                         appearance.monospace_font_family(),
                         appearance.monospace_font_size(),
                     )
@@ -388,4 +397,8 @@ impl Input {
         .with_max_height(appearance.monospace_font_size() + DYNAMIC_ENUM_MENU_HEIGHT_OFFSET)
         .finish()
     }
+}
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
 }

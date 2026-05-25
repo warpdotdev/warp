@@ -1,3 +1,4 @@
+use crate::localization;
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -532,7 +533,7 @@ impl ActionButton {
                 Some(
                     Container::new(
                         Text::new_inline(
-                            "Beta",
+                            localization::text_for_app(app, "view_components.action_button.beta"),
                             appearance.ui_font_family(),
                             overall_height - padding.top() - padding.bottom(),
                         )

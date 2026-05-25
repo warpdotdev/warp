@@ -194,7 +194,9 @@ impl FirebaseToken {
                 format!("https://securetoken.googleapis.com/v1/token?key={api_key}")
             }
             FirebaseToken::Custom(_) => {
-                format!("https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key={api_key}")
+                format!(
+                    "https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key={api_key}"
+                )
             }
         }
     }

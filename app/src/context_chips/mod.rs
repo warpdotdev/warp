@@ -77,7 +77,7 @@ impl std::fmt::Display for ChipValue {
             ChipValue::GitDiffStats(g) => {
                 write!(
                     f,
-                    "{} • +{} -{}",
+                    "{} - +{} -{}",
                     g.files_changed, g.lines_added, g.lines_removed
                 )
             }
@@ -390,7 +390,7 @@ impl ContextChipKind {
             Self::Username => ChipValue::Text("alice".to_string()),
             Self::Hostname => ChipValue::Text("ubuntu-04".to_string()),
             Self::ShellGitBranch => ChipValue::Text("git-feature-branch".to_string()),
-            Self::GitDiffStats => ChipValue::Text("3 • +10 -2".to_string()),
+            Self::GitDiffStats => ChipValue::Text("3 - +10 -2".to_string()),
             Self::GithubPullRequest => ChipValue::Text("PR #123".to_string()),
             Self::VirtualEnvironment => ChipValue::Text("pyenv".to_string()),
             Self::CondaEnvironment => ChipValue::Text("condaenv".to_string()),

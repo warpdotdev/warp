@@ -51,7 +51,7 @@ impl Builder {
         Self {
             inner: builder,
             setup: None,
-            user_prefs: Default::default(),
+            user_prefs: defaults_for_integration_tests(),
         }
     }
 

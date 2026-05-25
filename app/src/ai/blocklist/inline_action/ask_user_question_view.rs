@@ -1,3 +1,4 @@
+use crate::localization;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -764,7 +765,7 @@ impl AskUserQuestionView {
             ctx,
         );
         let skip_button = CompactibleActionButton::new(
-            "Skip all".to_string(),
+            localization::text_for_app(ctx, "agent.ask_user_question.action.skip_all"),
             Some(KeystrokeSource::Fixed(CTRL_C_KEYSTROKE.clone())),
             ButtonSize::InlineActionHeader,
             AskUserQuestionViewAction::SkipAll,
@@ -773,7 +774,7 @@ impl AskUserQuestionView {
             ctx,
         );
         let next_button = CompactibleActionButton::new(
-            "Next".to_string(),
+            localization::text_for_app(ctx, "agent.ask_user_question.action.next"),
             Some(KeystrokeSource::Fixed(
                 Keystroke::parse("enter").expect("keystroke should parse"),
             )),
@@ -1083,7 +1084,10 @@ impl AskUserQuestionView {
         let initial_text = initial_text.map(String::from);
         let input = ctx.add_view(move |ctx| {
             let input = compact_agent_input::CompactAgentInput::new(ctx);
-            input.set_placeholder_text("Type your answer and press Enter", ctx);
+            input.set_placeholder_text(
+                localization::text_for_app(ctx, "agent.ask_user_question.placeholder"),
+                ctx,
+            );
             if let Some(initial_text) = initial_text.as_deref() {
                 input.set_text(initial_text, ctx);
             }
@@ -1286,10 +1290,13 @@ impl AskUserQuestionView {
                 .finish(),
         );
         content.add_child(
-            HeaderConfig::new("Agent questions", app)
-                .with_icon(yellow_stop_icon(appearance))
-                .with_corner_radius_override(CornerRadius::with_top(Radius::Pixels(8.)))
-                .render_header(app, Some(header_right.finish())),
+            HeaderConfig::new(
+                localization::text_for_app(app, "agent.ask_user_question.title"),
+                app,
+            )
+            .with_icon(yellow_stop_icon(appearance))
+            .with_corner_radius_override(CornerRadius::with_top(Radius::Pixels(8.)))
+            .render_header(app, Some(header_right.finish())),
         );
         content.add_child(
             Expanded::new(
@@ -1319,9 +1326,12 @@ impl AskUserQuestionView {
 
     fn render_unavailable(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         wrap_with_agent_output_item_spacing(
-            HeaderConfig::new("Questions unavailable".to_string(), app)
-                .with_icon(inline_action_icons::reverted_icon(appearance))
-                .render(app),
+            HeaderConfig::new(
+                localization::text_for_app(app, "agent.ask_user_question.unavailable"),
+                app,
+            )
+            .with_icon(inline_action_icons::reverted_icon(appearance))
+            .render(app),
             app,
         )
         .finish()
@@ -1334,7 +1344,7 @@ impl AskUserQuestionView {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let AskUserQuestionCompletionState { label, status_icon } =
-            ask_user_question_completion_state(answers, appearance);
+            ask_user_question_completion_state(answers, appearance, app);
         self.render_completed(
             self.session.questions(),
             Some(answers),
@@ -1354,17 +1364,20 @@ impl AskUserQuestionView {
         let (answers, label, status_icon) = match ask_result {
             AskUserQuestionResult::Success { answers } => {
                 let AskUserQuestionCompletionState { label, status_icon } =
-                    ask_user_question_completion_state(answers, appearance);
+                    ask_user_question_completion_state(answers, appearance, app);
                 (Some(answers.as_slice()), label, status_icon)
             }
             AskUserQuestionResult::Error(_) | AskUserQuestionResult::Cancelled => (
                 None,
-                "Questions skipped".to_string(),
+                localization::text_for_app(app, "agent.ask_user_question.status.skipped"),
                 inline_action_icons::reverted_icon(appearance),
             ),
             AskUserQuestionResult::SkippedByAutoApprove { .. } => (
                 None,
-                "Questions skipped due to auto-approve".to_string(),
+                localization::text_for_app(
+                    app,
+                    "agent.ask_user_question.status.skipped_auto_approve",
+                ),
                 inline_action_icons::reverted_icon(appearance),
             ),
         };
@@ -1536,7 +1549,13 @@ impl AskUserQuestionView {
 
         let nav_message = Message::new(vec![
             MessageItem::clickable(
-                vec![MessageItem::keystroke(left_key), MessageItem::text("prev")],
+                vec![
+                    MessageItem::keystroke(left_key),
+                    MessageItem::text(localization::text_for_app(
+                        app,
+                        "agent.ask_user_question.nav.prev",
+                    )),
+                ],
                 |ctx| {
                     ctx.dispatch_typed_action(AskUserQuestionViewAction::NavigatePrev);
                 },
@@ -1544,7 +1563,13 @@ impl AskUserQuestionView {
             ),
             MessageItem::text(" / "),
             MessageItem::clickable(
-                vec![MessageItem::keystroke(right_key), MessageItem::text("next")],
+                vec![
+                    MessageItem::keystroke(right_key),
+                    MessageItem::text(localization::text_for_app(
+                        app,
+                        "agent.ask_user_question.nav.next",
+                    )),
+                ],
                 |ctx| {
                     ctx.dispatch_typed_action(AskUserQuestionViewAction::NavigateNext);
                 },
@@ -1724,27 +1749,33 @@ impl TypedActionView for AskUserQuestionView {
 fn ask_user_question_completion_state(
     answers: &[AskUserQuestionAnswerItem],
     appearance: &Appearance,
+    app: &AppContext,
 ) -> AskUserQuestionCompletionState {
     let answered_count = answers.iter().filter(|answer| !answer.is_skipped()).count();
     let total = answers.len();
 
     if answered_count == 0 {
         AskUserQuestionCompletionState {
-            label: "Questions skipped".to_string(),
+            label: localization::text_for_app(app, "agent.ask_user_question.status.skipped"),
             status_icon: inline_action_icons::reverted_icon(appearance),
         }
     } else {
         let label = if answered_count == total {
             if total == 1 {
-                "Answered question".to_string()
+                localization::text_for_app(app, "agent.ask_user_question.status.answered_one")
             } else {
-                format!("Answered all {total} questions")
+                localization::text_for_app(app, "agent.ask_user_question.status.answered_all")
+                    .replace("{total}", &total.to_string())
             }
         } else {
-            format!(
-                "Answered {answered_count} of {total} question{}",
-                if total == 1 { "" } else { "s" }
-            )
+            let key = if total == 1 {
+                "agent.ask_user_question.status.answered_count_singular"
+            } else {
+                "agent.ask_user_question.status.answered_count_plural"
+            };
+            localization::text_for_app(app, key)
+                .replace("{answered_count}", &answered_count.to_string())
+                .replace("{total}", &total.to_string())
         };
         AskUserQuestionCompletionState {
             label,

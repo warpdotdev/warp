@@ -1,3 +1,4 @@
+use crate::localization;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -987,16 +988,16 @@ fn exit_confirmation_message(
 
     let appearance = Appearance::handle(app).as_ref(app);
 
-    let (keystroke, text) = match trigger {
+    let (keystroke, text_key) = match trigger {
         ExitConfirmationTrigger::Escape => (
             Keystroke {
                 key: "escape".to_owned(),
                 ..Default::default()
             },
             if should_stop_and_exit {
-                "again to stop and exit"
+                "agent.confirmation.stop_and_exit"
             } else {
-                "again to exit"
+                "agent.confirmation.exit"
             },
         ),
         ExitConfirmationTrigger::CtrlC => (
@@ -1005,13 +1006,13 @@ fn exit_confirmation_message(
                 ctrl: true,
                 ..Default::default()
             },
-            "again to exit",
+            "agent.confirmation.exit",
         ),
     };
 
     Message::new(vec![
         MessageItem::keystroke(keystroke),
-        MessageItem::text(text),
+        MessageItem::text(localization::text_for_app(app, text_key)),
     ])
     .with_text_color(appearance.theme().ansi_fg_red())
 }
@@ -1023,7 +1024,10 @@ fn new_conversation_keybinding_confirmation_message(
     let appearance = Appearance::handle(app).as_ref(app);
     Message::new(vec![
         MessageItem::keystroke(keystroke),
-        MessageItem::text("again to start new conversation"),
+        MessageItem::text(localization::text_for_app(
+            app,
+            "agent.confirmation.start_new_conversation",
+        )),
     ])
     .with_text_color(appearance.theme().ansi_fg_magenta())
 }

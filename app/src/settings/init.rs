@@ -1,3 +1,13 @@
+use super::{
+    app_icon::AppIconSettings, app_installation_detection::UserAppInstallDetectionSettings,
+    cloud_preferences::CloudPreferencesSettings, initializer::SettingsInitializer,
+    native_preference::NativePreferenceSettings, AISettings, AccessibilitySettings,
+    AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings, ChangelogSettings,
+    CodeSettings, DebugSettings, EmacsBindingsSettings, FontSettings, FontSettingsChangedEvent,
+    GPUSettings, InputBoxType, InputModeSettings, InputSettings, LanguageSettings, PaneSettings,
+    SameLinePromptBlockSettings, ScrollSettings, SelectionSettings, SshSettings, ThemeSettings,
+    VimBannerSettings, WarpDrivePrivacySettings,
+};
 use settings::{Setting as _, SettingsManager};
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
@@ -5,18 +15,6 @@ use warpui::rendering::GPUPowerPreference;
 use warpui::{AppContext, SingletonEntity};
 use warpui_extras::user_preferences;
 
-use super::app_icon::AppIconSettings;
-use super::app_installation_detection::UserAppInstallDetectionSettings;
-use super::cloud_preferences::CloudPreferencesSettings;
-use super::initializer::SettingsInitializer;
-use super::native_preference::NativePreferenceSettings;
-use super::{
-    AISettings, AccessibilitySettings, AliasExpansionSettings, AppEditorSettings,
-    BlockVisibilitySettings, ChangelogSettings, CodeSettings, DebugSettings, EmacsBindingsSettings,
-    FontSettings, FontSettingsChangedEvent, GPUSettings, InputBoxType, InputModeSettings,
-    InputSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings, SelectionSettings,
-    SshSettings, ThemeSettings, VimBannerSettings, WarpDrivePrivacySettings,
-};
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::banner::BannerState;
 use crate::drive::settings::WarpDriveSettings;
@@ -74,6 +72,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     ScrollSettings::register(ctx);
     SelectionSettings::register(ctx);
     InputModeSettings::register(ctx);
+    LanguageSettings::register(ctx);
     ThemeSettings::register(ctx);
     AccessibilitySettings::register(ctx);
     NativePreferenceSettings::register(ctx);
@@ -330,11 +329,15 @@ pub fn init_public_user_preferences() -> (user_preferences::Model, Option<user_p
 /// 3. The migration-complete marker is absent from the native store
 ///    (handles the case where a user deletes `settings.toml` to reset).
 fn needs_settings_file_migration(ctx: &AppContext) -> bool {
+    should_migrate_settings_file(ctx, super::user_preferences_toml_file_path().exists())
+}
+
+fn should_migrate_settings_file(ctx: &AppContext, settings_file_exists: bool) -> bool {
     if !FeatureFlag::SettingsFile.is_enabled() {
         return false;
     }
 
-    if super::user_preferences_toml_file_path().exists() {
+    if settings_file_exists {
         return false;
     }
 
@@ -401,7 +404,9 @@ fn migrate_native_settings_to_settings_file(ctx: &mut AppContext) {
         ))));
     }
 
-    log::info!("Settings file migration complete — migrated {migrated_count} settings, {failed_count} failed");
+    log::info!(
+        "Settings file migration complete — migrated {migrated_count} settings, {failed_count} failed"
+    );
 
     // Record the migration so it won't re-run if the user deletes the TOML
     // file. This marker is written unconditionally — for new users the native

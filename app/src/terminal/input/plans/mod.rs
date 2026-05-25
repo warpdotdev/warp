@@ -8,6 +8,7 @@ pub use view::{InlinePlanMenuEvent, InlinePlanMenuView};
 use warpui::keymap::Keystroke;
 
 use crate::ai::document::ai_document_model::AIDocumentVersion;
+use crate::localization;
 use crate::terminal::input::inline_menu::{
     default_navigation_message_items, InlineMenuAction, InlineMenuMessageArgs, InlineMenuRowAction,
     InlineMenuType,
@@ -39,7 +40,10 @@ impl InlineMenuAction for AcceptPlan {
                         key: "enter".to_owned(),
                         ..Default::default()
                     }),
-                    MessageItem::text(" open plan"),
+                    MessageItem::text(localization::text_for_app(
+                        args.app,
+                        "terminal.inline_menu.action.open_plan",
+                    )),
                 ],
                 move |ctx| {
                     ctx.dispatch_typed_action(InlineMenuRowAction::Accept {

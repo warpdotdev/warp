@@ -127,6 +127,7 @@ fn build_rich_navigation_label(
     recommended: bool,
     show_enter_indicator: bool,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let font_size = appearance.monospace_font_size();
@@ -148,7 +149,7 @@ fn build_rich_navigation_label(
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_child(title)
             .with_child(
-                Container::new(render_recommended_badge(appearance))
+                Container::new(render_recommended_badge(appearance, app))
                     .with_margin_left(8.)
                     .finish(),
             )
@@ -258,6 +259,7 @@ pub fn rich_navigation_button<A: warpui::Action + Clone + 'static>(
                 recommended,
                 is_selected,
                 appearance,
+                app,
             );
 
             appearance

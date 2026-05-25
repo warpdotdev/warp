@@ -1,3 +1,4 @@
+use crate::localization;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -32,6 +33,14 @@ use crate::tab_configs::{PickerStyle, TabConfig, TabConfigParam, TabConfigParamT
 use crate::view_components::action_button::{
     ActionButton, DisabledTheme, KeystrokeSource, NakedTheme, PrimaryTheme,
 };
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
+
+fn text_with_value(app: &AppContext, key: &str, placeholder: &str, value: &str) -> String {
+    text(app, key).replace(placeholder, value)
+}
 
 pub fn init(app: &mut AppContext) {
     app.register_fixed_bindings(vec![
@@ -152,13 +161,13 @@ pub enum TabConfigParamsModalAction {
 
 impl TabConfigParamsModal {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        let cancel_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Cancel", NakedTheme).on_click(|ctx| {
+        let cancel_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(text(ctx, "settings.action.cancel"), NakedTheme).on_click(|ctx| {
                 ctx.dispatch_typed_action(TabConfigParamsModalAction::Cancel);
             })
         });
         let submit_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new("Open Tab", PrimaryTheme)
+            ActionButton::new(text(ctx, "tab_config.action.open_tab"), PrimaryTheme)
                 .with_keybinding(
                     KeystrokeSource::Fixed(Keystroke::parse("enter").unwrap_or_default()),
                     ctx,
@@ -167,8 +176,9 @@ impl TabConfigParamsModal {
                     ctx.dispatch_typed_action(TabConfigParamsModalAction::Submit);
                 })
         });
-        let submit_button_disabled =
-            ctx.add_typed_action_view(|_| ActionButton::new("Open Tab", DisabledTheme));
+        let submit_button_disabled = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(text(ctx, "tab_config.action.open_tab"), DisabledTheme)
+        });
         Self {
             param_fields: Vec::new(),
             pending_config: None,
@@ -286,7 +296,7 @@ impl TabConfigParamsModal {
                 TabConfigParamType::Text => {
                     let default_text = param.default.clone().unwrap_or_default();
                     let placeholder = if default_text.is_empty() {
-                        format!("Enter {name}")
+                        text_with_value(ctx, "tab_config.placeholder.enter_param", "{name}", name)
                     } else {
                         default_text.clone()
                     };
@@ -630,7 +640,12 @@ impl View for TabConfigParamsModal {
                     form.add_child(
                         Container::new(
                             Text::new_inline(
-                                format!("Default: {default_value}"),
+                                text_with_value(
+                                    app,
+                                    "tab_config.param.default_value",
+                                    "{value}",
+                                    default_value,
+                                ),
                                 appearance.ui_font_family(),
                                 appearance.ui_font_size() - 1.,
                             )

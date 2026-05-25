@@ -1,3 +1,4 @@
+use crate::localization;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -68,15 +69,9 @@ const BODY_FONT_SIZE: f32 = 13.;
 const TITLE_FONT_SIZE: f32 = 16.;
 const ZERO_STATE_HELP_TEXT_FONT_SIZE: f32 = 12.;
 
-const ZERO_STATE_HELP_TEXT: &str = "Shift + ctrl + space a block or text selection to ask Warp AI.";
 const SCRIPT_ZERO_STATE_PROMPT: &str = "Write a script to connect to an AWS EC2 instance.";
 const GIT_ZERO_STATE_PROMPT: &str = "How do I undo the most recent commits in git?";
 const FILES_ZERO_STATE_PROMPT: &str = "How do I find all files containing specific text?";
-
-// The placeholder texts are prepended with a space to give them cushion from the cursor.
-const INIT_PLACEHOLDER_TEXT: &str = " Ask a question...";
-const FOLLOWUP_PLACEHOLDER_TEXT: &str = " Type a response or click one above...";
-const RESTART_BUTTON_TEXT: &str = "Restart";
 
 const ASK_AI_BLOCK_INPUT_LIMIT: usize = 100;
 
@@ -173,6 +168,14 @@ pub fn init(app: &mut AppContext) {
     ]);
 }
 
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
+
+fn padded_text(app: &AppContext, key: &str) -> String {
+    format!(" {}", text(app, key))
+}
+
 impl AIAssistantPanelView {
     pub fn new(
         server_api: Arc<ServerApi>,
@@ -196,7 +199,7 @@ impl AIAssistantPanelView {
             })
         };
         editor.update(ctx, |editor, ctx| {
-            editor.set_placeholder_text(INIT_PLACEHOLDER_TEXT, ctx)
+            editor.set_placeholder_text(padded_text(ctx, "ai_assistant.placeholder.initial"), ctx)
         });
         ctx.subscribe_to_view(&editor, |me, _, event, ctx| {
             me.handle_editor_event(event, ctx);
@@ -563,7 +566,10 @@ impl AIAssistantPanelView {
             RequestsEvent::RequestFinished { .. } => {
                 self.editor.update(ctx, |editor, ctx| {
                     editor.clear_buffer_and_reset_undo_stack(ctx);
-                    editor.set_placeholder_text(FOLLOWUP_PLACEHOLDER_TEXT, ctx);
+                    editor.set_placeholder_text(
+                        padded_text(ctx, "ai_assistant.placeholder.followup"),
+                        ctx,
+                    );
                 });
                 self.transcript_view.update(ctx, |transcript_view, ctx| {
                     transcript_view.scroll_to_bottom_of_transcript(ctx);
@@ -631,7 +637,7 @@ impl AIAssistantPanelView {
         }
 
         self.editor.update(ctx, |editor, ctx| {
-            editor.set_placeholder_text(INIT_PLACEHOLDER_TEXT, ctx);
+            editor.set_placeholder_text(padded_text(ctx, "ai_assistant.placeholder.initial"), ctx);
         });
 
         self.requests_model.update(ctx, |requests_model, ctx| {
@@ -734,13 +740,13 @@ impl AIAssistantPanelView {
             || matches!(self.request_status(app), RequestStatus::InFlight { .. })
         {
             header.add_child(
-                Container::new(Align::new(self.render_restart_button(appearance)).finish())
+                Container::new(Align::new(self.render_restart_button(appearance, app)).finish())
                     .with_margin_right(4.)
                     .finish(),
             );
 
             header.add_child(
-                Container::new(self.render_copy_transcript_button(appearance))
+                Container::new(self.render_copy_transcript_button(appearance, app))
                     .with_margin_right(4.)
                     .finish(),
             );
@@ -766,9 +772,14 @@ impl AIAssistantPanelView {
         header.finish()
     }
 
-    fn render_copy_transcript_button(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_copy_transcript_button(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let tooltip_background = appearance.theme().surface_1().into_solid();
         let ui_builder = appearance.ui_builder().clone();
+        let tooltip_text = text(app, "ai_assistant.copy_transcript");
         icon_button(
             appearance,
             crate::ui_components::icons::Icon::Copy,
@@ -781,7 +792,7 @@ impl AIAssistantPanelView {
                 ..Default::default()
             };
             ui_builder
-                .tool_tip("Copy transcript to clipboard".to_owned())
+                .tool_tip(tooltip_text.clone())
                 .with_style(tool_tip_style)
                 .build()
                 .finish()
@@ -792,7 +803,7 @@ impl AIAssistantPanelView {
         .finish()
     }
 
-    fn render_restart_button(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_restart_button(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let default_styles = UiComponentStyles {
             border_width: None,
             font_color: Some(appearance.theme().active_ui_text_color().into()),
@@ -823,7 +834,7 @@ impl AIAssistantPanelView {
                 Some(hover_style),
                 Some(hover_style),
             )
-            .with_text_label(RESTART_BUTTON_TEXT.to_owned())
+            .with_text_label(text(app, "ai_assistant.restart"))
             .build()
             .on_click(move |ctx, _, _| ctx.dispatch_typed_action(AIAssistantAction::ResetContext))
             .with_cursor(Cursor::PointingHand)
@@ -833,13 +844,14 @@ impl AIAssistantPanelView {
     fn render_editor_size_warning(
         &self,
         appearance: &Appearance,
+        app: &AppContext,
         buffer_len: usize,
     ) -> Box<dyn Element> {
         Flex::row()
             .with_children([
                 Container::new(
                     Text::new_inline(
-                        "Character limit exceeded.",
+                        text(app, "ai_assistant.character_limit_exceeded"),
                         appearance.ui_font_family(),
                         BODY_FONT_SIZE,
                     )
@@ -918,6 +930,7 @@ impl AIAssistantPanelView {
                     self.mouse_state_handles.git_zero_state_prompt.clone(),
                     Some(300.),
                     None,
+                    text(app, "ai_assistant.zero_state.prompt.git"),
                     GIT_ZERO_STATE_PROMPT,
                 ))
                 .with_margin_top(20.)
@@ -928,6 +941,7 @@ impl AIAssistantPanelView {
                     self.mouse_state_handles.files_zero_state_prompt.clone(),
                     Some(300.),
                     None,
+                    text(app, "ai_assistant.zero_state.prompt.files"),
                     FILES_ZERO_STATE_PROMPT,
                 ))
                 .with_margin_bottom(10.)
@@ -937,6 +951,7 @@ impl AIAssistantPanelView {
                     self.mouse_state_handles.script_zero_state_prompt.clone(),
                     Some(300.),
                     None,
+                    text(app, "ai_assistant.zero_state.prompt.script"),
                     SCRIPT_ZERO_STATE_PROMPT,
                 ))
                 .finish(),
@@ -966,7 +981,10 @@ impl AIAssistantPanelView {
                             1.,
                             appearance
                                 .ui_builder()
-                                .wrappable_text(ZERO_STATE_HELP_TEXT.to_string(), true)
+                                .wrappable_text(
+                                    text(app, "ai_assistant.zero_state.help_text"),
+                                    true,
+                                )
                                 .with_style(UiComponentStyles {
                                     font_family_id: Some(appearance.ui_font_family()),
                                     font_size: Some(ZERO_STATE_HELP_TEXT_FONT_SIZE),
@@ -1104,9 +1122,11 @@ impl View for AIAssistantPanelView {
             let buffer_text = self.editor.as_ref(app).buffer_text(app);
             if self.is_prompt_too_long(buffer_text.as_str()) {
                 panel.add_child(
-                    Container::new(
-                        self.render_editor_size_warning(appearance, buffer_text.chars().count()),
-                    )
+                    Container::new(self.render_editor_size_warning(
+                        appearance,
+                        app,
+                        buffer_text.chars().count(),
+                    ))
                     .with_padding_left(PANEL_HORIZONTAL_PADDING)
                     .with_padding_bottom(5.)
                     .with_padding_top(10.)

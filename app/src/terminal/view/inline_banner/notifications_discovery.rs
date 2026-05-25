@@ -1,6 +1,8 @@
+use crate::localization;
 use serde::Serialize;
 use warpui::elements::MouseStateHandle;
 use warpui::notification::RequestPermissionsOutcome;
+use warpui::AppContext;
 use warpui::Element;
 
 use super::{
@@ -41,11 +43,12 @@ pub fn render_inline_notifications_discovery_banner(
     state: &NotificationsDiscoveryBannerState,
     notifications_mode: NotificationsMode,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let active_ui_text_color = appearance.theme().active_ui_text_color().into_solid();
 
     let learn_more_button = InlineBannerTextButton {
-        text: "Learn more".to_string(),
+        text: localization::text_for_app(app, "auth.learn_more"),
         text_color: active_ui_text_color,
         button_state: InlineBannerButtonState {
             on_click_event: TerminalAction::NotificationsDiscoveryBanner(
@@ -58,7 +61,7 @@ pub fn render_inline_notifications_discovery_banner(
         variant: InlineBannerTextButtonVariant::Secondary,
     };
     let troubleshoot_button = InlineBannerTextButton {
-        text: "Troubleshoot".to_string(),
+        text: localization::text_for_app(app, "terminal.inline_banner.troubleshoot"),
         text_color: active_ui_text_color,
         button_state: InlineBannerButtonState {
             on_click_event: TerminalAction::NotificationsDiscoveryBanner(
@@ -73,19 +76,28 @@ pub fn render_inline_notifications_discovery_banner(
 
     let (title, buttons) = match notifications_mode {
         NotificationsMode::Dismissed => (
-            "We won't show this banner again, but you can always go to Settings to enable notifications.",
+            localization::text_for_app(
+                app,
+                "terminal.inline_banner.notifications_discovery.dismissed",
+            ),
             vec![],
         ),
         NotificationsMode::Disabled => (
-            "Notifications were turned off, but you can always go to Settings to enable notifications.",
+            localization::text_for_app(
+                app,
+                "terminal.inline_banner.notifications_discovery.disabled",
+            ),
             vec![],
         ),
         NotificationsMode::Unset => (
-            trigger.discovery_banner_copy(),
+            localization::text_for_app(app, trigger.discovery_banner_copy_key()),
             vec![
                 learn_more_button,
                 InlineBannerTextButton {
-                    text: "Enable".to_string(),
+                    text: localization::text_for_app(
+                        app,
+                        "terminal.inline_banner.notifications_discovery.enable",
+                    ),
                     text_color: active_ui_text_color,
                     button_state: InlineBannerButtonState {
                         on_click_event: TerminalAction::NotificationsDiscoveryBanner(
@@ -105,20 +117,32 @@ pub fn render_inline_notifications_discovery_banner(
             let (title, docs_button) = match request_outcome {
                 Some(request_outcome) => match request_outcome {
                     RequestPermissionsOutcome::Accepted => (
-                        "Success! You are now ready to receive desktop notifications.",
+                        localization::text_for_app(
+                            app,
+                            "terminal.inline_banner.notifications_discovery.success",
+                        ),
                         learn_more_button,
                     ),
                     RequestPermissionsOutcome::PermissionsDenied => (
-                        "Warp was denied permissions to send you notifications.",
+                        localization::text_for_app(
+                            app,
+                            "terminal.inline_banner.notifications_discovery.permissions_denied",
+                        ),
                         troubleshoot_button,
                     ),
                     RequestPermissionsOutcome::OtherError { .. } => (
-                        "Something went wrong while requesting permissions.",
+                        localization::text_for_app(
+                            app,
+                            "terminal.inline_banner.notifications_discovery.permissions_error",
+                        ),
                         troubleshoot_button,
                     ),
                 },
                 None => (
-                    "Don't forget to 'Allow' the permissions request to finish setting up notifications.",
+                    localization::text_for_app(
+                        app,
+                        "terminal.inline_banner.notifications_discovery.allow_prompt",
+                    ),
                     learn_more_button,
                 ),
             };
@@ -128,7 +152,10 @@ pub fn render_inline_notifications_discovery_banner(
                 vec![
                     docs_button,
                     InlineBannerTextButton {
-                        text: "Configure notifications".to_string(),
+                        text: localization::text_for_app(
+                            app,
+                            "terminal.inline_banner.notifications_discovery.configure",
+                        ),
                         text_color: active_ui_text_color,
                         button_state: InlineBannerButtonState {
                             on_click_event: TerminalAction::NotificationsDiscoveryBanner(
@@ -156,7 +183,7 @@ pub fn render_inline_notifications_discovery_banner(
         InlineBannerStyle::CallToAction,
         appearance,
         InlineBannerContent {
-            title: title.to_owned(),
+            title,
             buttons,
             close_button: Some(close_button),
             ..Default::default()

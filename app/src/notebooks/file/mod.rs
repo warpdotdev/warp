@@ -1,3 +1,4 @@
+use crate::localization;
 use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -62,6 +63,10 @@ use crate::view_components::{MarkdownToggleEvent, MarkdownToggleView};
 use crate::workflows::{WorkflowSource, WorkflowType};
 use crate::workspace::ActiveSession;
 use crate::{cmd_or_ctrl_shift, safe_warn, send_telemetry_from_ctx};
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 /// Display mode for markdown files shown via the header segmented control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -860,7 +865,12 @@ impl FileNotebookView {
     }
 
     /// Render an error state for when loading the source file failed.
-    fn render_error(&self, source: &SourceFile, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_error(
+        &self,
+        source: &SourceFile,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let error_text_color = appearance
             .theme()
             .sub_text_color(appearance.theme().background());
@@ -870,7 +880,10 @@ impl FileNotebookView {
             .with_child(
                 appearance
                     .ui_builder()
-                    .paragraph(format!("Could not read {}", source.display_name()))
+                    .paragraph(
+                        text(app, "notebook.file.error.could_not_read")
+                            .replace("{file}", &source.display_name()),
+                    )
                     .with_style(self.state_style(appearance))
                     .build()
                     .finish(),
@@ -883,7 +896,7 @@ impl FileNotebookView {
                         .with_text_and_icon_label(
                             TextAndIcon::new(
                                 TextAndIconAlignment::TextFirst,
-                                "Try again".to_string(),
+                                text(app, "notebook.file.action.try_again"),
                                 Icon::Refresh.to_warpui_icon(error_text_color),
                                 MainAxisSize::Min,
                                 MainAxisAlignment::Center,
@@ -905,11 +918,18 @@ impl FileNotebookView {
     }
 
     /// Render the loading state while the source file is still being read.
-    fn render_loading(&self, source: &SourceFile, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_loading(
+        &self,
+        source: &SourceFile,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         Align::new(
             appearance
                 .ui_builder()
-                .paragraph(format!("Loading {}...", source.display_name()))
+                .paragraph(
+                    text(app, "notebook.file.loading").replace("{file}", &source.display_name()),
+                )
                 .with_style(self.state_style(appearance))
                 .build()
                 .finish(),
@@ -918,11 +938,11 @@ impl FileNotebookView {
     }
 
     /// Renders a placeholder for when no file has been specified.
-    fn render_no_file(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_no_file(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         Align::new(
             appearance
                 .ui_builder()
-                .paragraph("Missing source file".to_string())
+                .paragraph(text(app, "notebook.file.missing_source_file"))
                 .with_style(self.state_style(appearance))
                 .build()
                 .finish(),
@@ -942,16 +962,16 @@ impl FileNotebookView {
             .is_none()
     }
 
-    fn render_body(&self, appearance: &Appearance, _app: &AppContext) -> Box<dyn Element> {
+    fn render_body(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let body = match &self.file_state {
-            FileState::NoFile => self.render_no_file(appearance),
-            FileState::Loading(source) => self.render_loading(source, appearance),
-            FileState::Error(source) => self.render_error(source, appearance),
+            FileState::NoFile => self.render_no_file(appearance, app),
+            FileState::Loading(source) => self.render_loading(source, appearance, app),
+            FileState::Error(source) => self.render_error(source, appearance, app),
             FileState::Loaded(_) => ChildView::new(&self.editor).finish(),
         };
 
         #[cfg(not(target_family = "wasm"))]
-        if matches!(self.file_state, FileState::Loaded(_)) && self.is_remote_disconnected(_app) {
+        if matches!(self.file_state, FileState::Loaded(_)) && self.is_remote_disconnected(app) {
             let banner =
                 crate::code::local_code_editor::render_remote_disconnected_banner(appearance);
             let mut col = Flex::column();
@@ -1108,12 +1128,12 @@ impl BackingView for FileNotebookView {
 
     fn pane_header_overflow_menu_items(
         &self,
-        _ctx: &AppContext,
+        ctx: &AppContext,
     ) -> Vec<MenuItem<FileNotebookAction>> {
         let mut actions = vec![];
         if let Some(SourceFile::FileBased { .. }) = self.file_state.source() {
             actions.push(
-                MenuItemFields::new("Refresh file")
+                MenuItemFields::new(text(ctx, "notebook.file.menu.refresh_file"))
                     .with_on_select_action(FileNotebookAction::ReloadFile)
                     .into_item(),
             );
@@ -1123,13 +1143,13 @@ impl BackingView for FileNotebookView {
                 // The markdown rendered/raw toggle is always visible in the pane header, so we don't
                 // duplicate it in the overflow menu. Keep "Open in editor" available for local files.
                 actions.push(
-                    MenuItemFields::new("Open in editor")
+                    MenuItemFields::new(text(ctx, "terminal.menu.open_in_editor"))
                         .with_on_select_action(FileNotebookAction::OpenInEditor)
                         .into_item(),
                 );
                 actions.extend([
                     MenuItem::Separator,
-                    MenuItemFields::new("Copy file path")
+                    MenuItemFields::new(text(ctx, "code_review.tooltip.copy_file_path"))
                         .with_on_select_action(FileNotebookAction::CopyFilePath)
                         .into_item(),
                 ]);

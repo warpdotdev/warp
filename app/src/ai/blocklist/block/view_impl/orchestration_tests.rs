@@ -51,49 +51,63 @@ fn child_conversation_card_data_for_success_result_returns_conversation_id_and_t
 
 #[test]
 fn start_agent_copy_uses_local_labels_for_local_children() {
-    let execution_mode = StartAgentExecutionMode::local_harness("claude-code".to_string());
+    App::test((), |app| async move {
+        let execution_mode = StartAgentExecutionMode::local_harness("claude-code".to_string());
 
-    assert_eq!(start_agent_success_suffix(&execution_mode), " locally.");
-    assert_eq!(
-        start_agent_error_prefix(&execution_mode),
-        "Failed to start agent "
-    );
-    assert_eq!(
-        start_agent_cancelled_prefix(&execution_mode),
-        "Start agent "
-    );
-    assert_eq!(
-        start_agent_in_progress_prefix(&execution_mode),
-        "Starting agent "
-    );
+        app.read(|ctx| {
+            assert_eq!(
+                start_agent_success_suffix(&execution_mode, ctx),
+                " locally."
+            );
+            assert_eq!(
+                start_agent_error_prefix(&execution_mode, ctx),
+                "Failed to start agent "
+            );
+            assert_eq!(
+                start_agent_cancelled_prefix(&execution_mode, ctx),
+                "Start agent "
+            );
+            assert_eq!(
+                start_agent_in_progress_prefix(&execution_mode, ctx),
+                "Starting agent "
+            );
+        });
+    });
 }
 
 #[test]
 fn start_agent_copy_uses_remote_labels_for_remote_children() {
-    let execution_mode = StartAgentExecutionMode::Remote {
-        environment_id: "env-123".to_string(),
-        skill_references: vec![],
-        model_id: String::new(),
-        computer_use_enabled: false,
-        worker_host: String::new(),
-        harness_type: String::new(),
-        title: String::new(),
-        auth_secret_name: None,
-    };
+    App::test((), |app| async move {
+        let execution_mode = StartAgentExecutionMode::Remote {
+            environment_id: "env-123".to_string(),
+            skill_references: vec![],
+            model_id: String::new(),
+            computer_use_enabled: false,
+            worker_host: String::new(),
+            harness_type: String::new(),
+            title: String::new(),
+            auth_secret_name: None,
+        };
 
-    assert_eq!(start_agent_success_suffix(&execution_mode), " remotely.");
-    assert_eq!(
-        start_agent_error_prefix(&execution_mode),
-        "Failed to start remote agent "
-    );
-    assert_eq!(
-        start_agent_cancelled_prefix(&execution_mode),
-        "Start remote agent "
-    );
-    assert_eq!(
-        start_agent_in_progress_prefix(&execution_mode),
-        "Starting remote agent "
-    );
+        app.read(|ctx| {
+            assert_eq!(
+                start_agent_success_suffix(&execution_mode, ctx),
+                " remotely."
+            );
+            assert_eq!(
+                start_agent_error_prefix(&execution_mode, ctx),
+                "Failed to start remote agent "
+            );
+            assert_eq!(
+                start_agent_cancelled_prefix(&execution_mode, ctx),
+                "Start remote agent "
+            );
+            assert_eq!(
+                start_agent_in_progress_prefix(&execution_mode, ctx),
+                "Starting remote agent "
+            );
+        });
+    });
 }
 
 #[test]
@@ -254,49 +268,62 @@ fn participant_for_agent_id_uses_pill_style_child_agent_avatar() {
 
 #[test]
 fn transcript_metadata_uses_transcript_copy_without_technical_labels() {
-    let recipients = vec![OrchestrationParticipant {
-        display_name: "Agent 1".to_string(),
-        avatar: OrchestrationAvatar::agent("Agent 1".to_string()),
-        conversation_id: None,
-    }];
+    App::test((), |app| async move {
+        let recipients = vec![OrchestrationParticipant {
+            display_name: "Agent 1".to_string(),
+            avatar: OrchestrationAvatar::agent("Agent 1".to_string()),
+            conversation_id: None,
+        }];
 
-    let metadata = transcript_metadata(&recipients, "Fix tests").expect("metadata");
+        let metadata =
+            app.read(|ctx| transcript_metadata(&recipients, "Fix tests", ctx).expect("metadata"));
 
-    assert_eq!(metadata, "to Agent 1 • Fix tests");
-    for legacy_label in ["Messages received", "From:", "To:", "Subject:"] {
-        assert!(
-            !metadata.contains(legacy_label),
-            "Transcript metadata should not contain old technical label {legacy_label}: {metadata}"
-        );
-    }
+        assert_eq!(metadata, "to Agent 1 - Fix tests");
+        for legacy_label in ["Messages received", "From:", "To:", "Subject:"] {
+            assert!(
+                !metadata.contains(legacy_label),
+                "Transcript metadata should not contain old technical label {legacy_label}: {metadata}"
+            );
+        }
+    });
 }
 
 #[test]
 fn transcript_metadata_omits_orchestrator_recipients() {
-    let recipients = vec![OrchestrationParticipant::orchestrator()];
+    App::test((), |app| async move {
+        let recipients = app.read(|ctx| vec![OrchestrationParticipant::orchestrator(ctx)]);
 
-    assert_eq!(
-        transcript_metadata(&recipients, "Status update"),
-        Some("Status update".to_string())
-    );
-    assert_eq!(transcript_metadata(&recipients, ""), None);
+        app.read(|ctx| {
+            assert_eq!(
+                transcript_metadata(&recipients, "Status update", ctx),
+                Some("Status update".to_string())
+            );
+            assert_eq!(transcript_metadata(&recipients, "", ctx), None);
+        });
+    });
 }
 
 #[test]
 fn transcript_metadata_preserves_non_orchestrator_recipients() {
-    let recipients = vec![
-        OrchestrationParticipant::orchestrator(),
-        OrchestrationParticipant {
-            display_name: "Agent 1".to_string(),
-            avatar: OrchestrationAvatar::agent("Agent 1".to_string()),
-            conversation_id: None,
-        },
-    ];
+    App::test((), |app| async move {
+        let recipients = app.read(|ctx| {
+            vec![
+                OrchestrationParticipant::orchestrator(ctx),
+                OrchestrationParticipant {
+                    display_name: "Agent 1".to_string(),
+                    avatar: OrchestrationAvatar::agent("Agent 1".to_string()),
+                    conversation_id: None,
+                },
+            ]
+        });
 
-    assert_eq!(
-        transcript_metadata(&recipients, "Fix tests"),
-        Some("to Agent 1 • Fix tests".to_string())
-    );
+        app.read(|ctx| {
+            assert_eq!(
+                transcript_metadata(&recipients, "Fix tests", ctx),
+                Some("to Agent 1 - Fix tests".to_string())
+            );
+        });
+    });
 }
 
 #[test]

@@ -1,21 +1,21 @@
 //! Tips for cloud mode loading screen.
 
+use crate::ai::agent_tips::{tip_text_fragments, AITip};
+use crate::localization;
 use warpui::keymap::Keystroke;
 use warpui::AppContext;
-
-use crate::ai::agent_tips::AITip;
 
 /// A cloud mode tip with text and optional link.
 #[derive(Clone, Debug)]
 pub struct CloudModeTip {
-    text: String,
+    text_key: &'static str,
     link: Option<String>,
 }
 
 impl CloudModeTip {
-    pub fn new(text: impl Into<String>, link: Option<impl Into<String>>) -> Self {
+    pub fn new(text_key: &'static str, link: Option<impl Into<String>>) -> Self {
         Self {
-            text: text.into(),
+            text_key,
             link: link.map(|l| l.into()),
         }
     }
@@ -31,173 +31,174 @@ impl AITip for CloudModeTip {
     }
 
     fn description(&self) -> &str {
-        &self.text
+        self.text_key
     }
 
-    // Uses the default implementation which adds "Tip: " prefix and parses backticks as inline code
+    fn to_formatted_text(&self, app: &AppContext) -> Vec<markdown_parser::FormattedTextFragment> {
+        let description = localization::text_for_app(app, self.text_key);
+        tip_text_fragments(format!(
+            "{}{}",
+            localization::text_for_app(app, "agent.tips.prefix"),
+            description
+        ))
+    }
 }
 
 /// Returns a collection of tips for the cloud mode loading screen.
 pub fn get_cloud_mode_tips() -> Vec<CloudModeTip> {
     vec![
         CloudModeTip::new(
-            "Install the Oz Slack integration to trigger agents from any channel or DM.",
+            "terminal.ambient_agent.tip.01",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/integrations/slack"),
         ),
         CloudModeTip::new(
-            "Build programmatic agents using Oz's TypeScript and Python SDKs.",
+            "terminal.ambient_agent.tip.02",
             Some("https://docs.warp.dev/reference/api-and-sdk"),
         ),
         CloudModeTip::new(
-            "Set team or personal secrets for agents using the `oz secret` command.",
+            "terminal.ambient_agent.tip.03",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/secrets"),
         ),
+        CloudModeTip::new("terminal.ambient_agent.tip.04", Some("https://oz.warp.dev")),
         CloudModeTip::new(
-            "View all your agent runs and their status in the Oz web app.",
-            Some("https://oz.warp.dev"),
-        ),
-        CloudModeTip::new(
-            "Join any Oz cloud agent run in real-time using Agent Session Sharing.",
+            "terminal.ambient_agent.tip.05",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/viewing-cloud-agent-runs"),
         ),
         CloudModeTip::new(
-            "Set up recurring agents that run on cron schedules for automated maintenance.",
+            "terminal.ambient_agent.tip.06",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/triggers/scheduled-agents"),
         ),
         CloudModeTip::new(
-            "Create agents that automatically fix bugs when issues are filed in Linear.",
+            "terminal.ambient_agent.tip.07",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/integrations/linear"),
         ),
         CloudModeTip::new(
-            "Build agents that respond to CI failures and attempt automatic fixes.",
+            "terminal.ambient_agent.tip.08",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/integrations/github-actions"),
         ),
         CloudModeTip::new(
-            "Run agents from GitHub Actions using the `oz-agent-action`.",
+            "terminal.ambient_agent.tip.09",
             Some("https://github.com/warpdotdev/oz-agent-action"),
         ),
         CloudModeTip::new(
-            "Call the Oz REST API to trigger agents from any backend service or internal tool.",
+            "terminal.ambient_agent.tip.10",
             Some("https://docs.warp.dev/reference/api-and-sdk"),
         ),
         CloudModeTip::new(
-            "Create reusable environments with Docker images for consistent agent execution.",
+            "terminal.ambient_agent.tip.11",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/environments"),
         ),
         CloudModeTip::new(
-            "Share agent session links with your team for collaborative debugging.",
+            "terminal.ambient_agent.tip.12",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/viewing-cloud-agent-runs"),
         ),
         CloudModeTip::new(
-            "Use the `--share` flag with the Oz CLI to enable session sharing from anywhere.",
+            "terminal.ambient_agent.tip.13",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/platform"),
         ),
         CloudModeTip::new(
-            "Fork a completed Oz cloud agent session into Warp to continue the work locally.",
+            "terminal.ambient_agent.tip.14",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/viewing-cloud-agent-runs"),
         ),
         CloudModeTip::new(
-            "Build internal tools that use agents to answer questions from your databases.",
+            "terminal.ambient_agent.tip.15",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/integrations"),
         ),
         CloudModeTip::new(
-            "Create a scheduled agent to clean up stale feature flags every week.",
+            "terminal.ambient_agent.tip.16",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/triggers/scheduled-agents"),
         ),
         CloudModeTip::new(
-            "Tag @Oz in Linear issues to automatically investigate and propose fixes.",
+            "terminal.ambient_agent.tip.17",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/integrations/linear"),
         ),
         CloudModeTip::new(
-            "Run agents on remote dev boxes or CI runners using the Oz CLI.",
+            "terminal.ambient_agent.tip.18",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/platform"),
         ),
         CloudModeTip::new(
-            "Configure MCP servers to give Oz cloud agents access to GitHub, Linear, and Sentry.",
+            "terminal.ambient_agent.tip.19",
             Some("https://docs.warp.dev/agent-platform/capabilities/mcp"),
         ),
         CloudModeTip::new(
-            "Use `oz agent run` to kick off tasks without opening the Warp terminal.",
+            "terminal.ambient_agent.tip.20",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/platform"),
         ),
+        CloudModeTip::new("terminal.ambient_agent.tip.21", Some("https://oz.warp.dev")),
         CloudModeTip::new(
-            "View your teammates' agent runs in the Oz web app for shared visibility.",
-            Some("https://oz.warp.dev"),
-        ),
-        CloudModeTip::new(
-            "Build agents that automatically triage and label incoming GitHub issues.",
+            "terminal.ambient_agent.tip.22",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/integrations/github-actions"),
         ),
         CloudModeTip::new(
-            "Set up an agent to generate daily summaries of newly opened issues.",
+            "terminal.ambient_agent.tip.23",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/integrations/github-actions"),
         ),
         CloudModeTip::new(
-            "Create an agent that automatically reviews PRs and suggests improvements.",
+            "terminal.ambient_agent.tip.24",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/integrations/github-actions"),
         ),
         CloudModeTip::new(
-            "Use `oz environment create` to define reproducible execution contexts.",
+            "terminal.ambient_agent.tip.25",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/environments"),
         ),
         CloudModeTip::new(
-            "Trigger agents from webhooks to respond to production incidents.",
+            "terminal.ambient_agent.tip.26",
             Some("https://docs.warp.dev/reference/api-and-sdk"),
         ),
         CloudModeTip::new(
-            "Build an agent that restarts services or scales deployments when alerts fire.",
+            "terminal.ambient_agent.tip.27",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/triggers"),
         ),
         CloudModeTip::new(
-            "Use personal secrets for credentials that should only be used by your agents.",
+            "terminal.ambient_agent.tip.28",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/secrets"),
         ),
         CloudModeTip::new(
-            "Use team secrets for shared infrastructure credentials across all agents.",
+            "terminal.ambient_agent.tip.29",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/secrets"),
         ),
         CloudModeTip::new(
-            "Create an agent that runs nightly to check for dependency updates.",
+            "terminal.ambient_agent.tip.30",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/triggers/scheduled-agents"),
         ),
         CloudModeTip::new(
-            "Build an agent that automatically formats and lints code on a schedule.",
+            "terminal.ambient_agent.tip.31",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/triggers/scheduled-agents"),
         ),
         CloudModeTip::new(
-            "Use `oz schedule create` to set up cron-triggered agents.",
+            "terminal.ambient_agent.tip.32",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/triggers/scheduled-agents"),
         ),
         CloudModeTip::new(
-            "Pause and resume scheduled agents without deleting them using `oz schedule pause`.",
+            "terminal.ambient_agent.tip.33",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/triggers/scheduled-agents"),
         ),
         CloudModeTip::new(
-            "Use `oz mcp list` to see which MCP servers are available to your agents.",
+            "terminal.ambient_agent.tip.34",
             Some("https://docs.warp.dev/agent-platform/capabilities/mcp"),
         ),
         CloudModeTip::new(
-            "Build an internal Slack bot that delegates coding tasks to Oz agents.",
+            "terminal.ambient_agent.tip.35",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/integrations/slack"),
         ),
         CloudModeTip::new(
-            "Create an agent that responds to @mentions in Slack threads with full context.",
+            "terminal.ambient_agent.tip.36",
             Some("https://docs.warp.dev/agent-platform/cloud-agents/integrations/slack"),
         ),
         CloudModeTip::new(
-            "Use the Oz TypeScript SDK to build custom automation pipelines.",
+            "terminal.ambient_agent.tip.37",
             Some("https://docs.warp.dev/reference/api-and-sdk"),
         ),
         CloudModeTip::new(
-            "Use the Oz Python SDK to integrate agents into your data pipelines.",
+            "terminal.ambient_agent.tip.38",
             Some("https://docs.warp.dev/reference/api-and-sdk"),
         ),
         CloudModeTip::new(
-            "Monitor agent success rates and runtimes using the Oz API.",
+            "terminal.ambient_agent.tip.39",
             Some("https://docs.warp.dev/reference/api-and-sdk"),
         ),
         CloudModeTip::new(
-            "Build a dashboard that tracks all agent activity across your team.",
+            "terminal.ambient_agent.tip.40",
             Some("https://docs.warp.dev/reference/api-and-sdk"),
         ),
     ]

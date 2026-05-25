@@ -1,3 +1,20 @@
+use crate::{
+    appearance::Appearance,
+    cloud_object::{model::persistence::CloudModel, CloudObject},
+    completer::SessionAgnosticContext,
+    localization,
+    notebooks::{
+        styles::block_footer_action_button,
+        telemetry::{ActionEntrypoint, BlockInfo},
+    },
+    server::ids::{HashableId, ToServerId},
+    settings::FontSettings,
+    terminal::input::decorations::{parse_current_commands_and_tokens, ParsedTokensSnapshot},
+    themes::theme::AnsiColorIdentifier,
+    ui_components::icons::Icon,
+    util::bindings::CustomAction,
+    workflows::{CloudWorkflow, WorkflowId},
+};
 use std::borrow::Cow;
 use std::mem;
 use std::ops::Range;
@@ -27,21 +44,6 @@ use super::notebook_command::{
 };
 use super::view::EditorViewAction;
 use super::{rich_text_styles, NotebookWorkflow};
-use crate::appearance::Appearance;
-use crate::cloud_object::model::persistence::CloudModel;
-use crate::cloud_object::CloudObject;
-use crate::completer::SessionAgnosticContext;
-use crate::notebooks::styles::block_footer_action_button;
-use crate::notebooks::telemetry::{ActionEntrypoint, BlockInfo};
-use crate::server::ids::{HashableId, ToServerId};
-use crate::settings::FontSettings;
-use crate::terminal::input::decorations::{
-    parse_current_commands_and_tokens, ParsedTokensSnapshot,
-};
-use crate::themes::theme::AnsiColorIdentifier;
-use crate::ui_components::icons::Icon;
-use crate::util::bindings::CustomAction;
-use crate::workflows::{CloudWorkflow, WorkflowId};
 
 #[derive(Default)]
 struct MouseStateHandles {
@@ -227,7 +229,7 @@ impl NotebookEmbed {
                     appearance,
                     Icon::Pencil,
                     self.mouse_state_handles.edit_button_state.clone(),
-                    "Edit",
+                    text(ctx, "notebook.code_block.action.edit"),
                     None,
                 )
                 .on_click(move |ctx, _, _| {
@@ -245,7 +247,7 @@ impl NotebookEmbed {
                     appearance,
                     Icon::Copy,
                     self.mouse_state_handles.copy_button_state.clone(),
-                    "Copy",
+                    text(ctx, "notebook.code_block.action.copy"),
                     custom_action_to_display(CustomAction::Copy),
                 )
                 .on_click(move |ctx, _, _| {
@@ -267,7 +269,7 @@ impl NotebookEmbed {
                     appearance,
                     Icon::TerminalInput,
                     self.mouse_state_handles.insert_button_state.clone(),
-                    "Run in terminal",
+                    text(ctx, "notebook.code_block.action.run_in_terminal"),
                     NotebookKeybindings::as_ref(ctx).run_commands_keybinding(),
                 )
                 .on_click(move |ctx, _, _| {
@@ -318,7 +320,7 @@ impl EmbeddedItemModel for NotebookEmbed {
                             .remove_embedding_button_state
                             .clone(),
                     )
-                    .with_text_label("Remove".to_string())
+                    .with_text_label(text(ctx, "code_review.comments.remove"))
                     .build()
                     .with_cursor(Cursor::Arrow)
                     .on_click(move |ctx, _, _| {
@@ -377,4 +379,8 @@ impl ChildModelHandle for ModelHandle<NotebookEmbed> {
     fn clone_boxed(&self) -> Box<dyn ChildModelHandle> {
         Box::new(self.clone())
     }
+}
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
 }

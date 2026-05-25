@@ -1,3 +1,4 @@
+use crate::localization;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::color::internal_colors;
@@ -124,7 +125,7 @@ pub fn render_static_item(props: StaticItemProps<'_>, app: &AppContext) -> Box<d
     .finish();
 
     let title_text = Text::new_inline(
-        "New conversation",
+        localization::text_for_app(app, "workspace.conversation.new"),
         appearance.ui_font_family(),
         appearance.ui_font_size() + 2.,
     )

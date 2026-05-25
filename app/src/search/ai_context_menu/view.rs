@@ -26,6 +26,7 @@ use super::styles;
 use crate::appearance::Appearance;
 use crate::debounce::debounce;
 use crate::drive::settings::WarpDriveSettings;
+use crate::localization;
 #[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::blocks::data_source::BlockDataSource;
 #[cfg(not(target_family = "wasm"))]
@@ -1372,7 +1373,7 @@ impl AIContextMenu {
         let theme = appearance.theme();
         Container::new(
             Text::new(
-                "No results found",
+                localization::text_for_app(app, "search.no_results"),
                 appearance.ui_font_family(),
                 appearance.monospace_font_size(),
             )
@@ -1388,7 +1389,7 @@ impl AIContextMenu {
         let theme = appearance.theme();
         Container::new(
             Text::new(
-                "Loading results...",
+                localization::text_for_app(app, "search.ai_context_menu.loading_results"),
                 appearance.ui_font_family(),
                 appearance.monospace_font_size(),
             )
@@ -1405,7 +1406,7 @@ impl AIContextMenu {
         let theme = appearance.theme();
         Container::new(
             Text::new(
-                "Code symbols indexing...",
+                localization::text_for_app(app, "search.ai_context_menu.code_symbols_indexing"),
                 appearance.ui_font_family(),
                 appearance.monospace_font_size(),
             )

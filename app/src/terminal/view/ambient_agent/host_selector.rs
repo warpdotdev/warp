@@ -18,6 +18,7 @@ use warpui::{
 use crate::ai::blocklist::inline_action::orchestration_controls::ORCHESTRATION_WARP_WORKER_HOST;
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
+use crate::localization;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::report_if_error;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
@@ -36,10 +37,6 @@ const ITEM_VERTICAL_PADDING: f32 = 8.;
 const HEADER_VERTICAL_PADDING: f32 = 6.;
 
 const MENU_WIDTH: f32 = 208.;
-
-const BUTTON_TOOLTIP: &str = "Execution host";
-
-const MENU_HEADER_LABEL: &str = "Execution host";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Host {
@@ -75,6 +72,10 @@ pub enum HostSelectorEvent {
     HostSelected,
 }
 
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
+
 pub struct HostSelector {
     button: ViewHandle<ActionButton>,
     menu: ViewHandle<Menu<HostSelectorAction>>,
@@ -97,11 +98,11 @@ impl HostSelector {
         let selected = Host::Warp;
         let initial_label = selected.display_name().to_string();
 
-        let button = ctx.add_typed_action_view(|_ctx| {
+        let button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new(initial_label, NakedHeaderButtonTheme)
                 .with_size(ButtonSize::AgentInputButton)
                 .with_menu(true)
-                .with_tooltip(BUTTON_TOOLTIP)
+                .with_tooltip(text(ctx, "terminal.ambient_agent.host_selector.tooltip"))
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(HostSelectorAction::ToggleMenu);
@@ -277,7 +278,7 @@ fn build_menu_items(
     ctx: &mut ViewContext<HostSelector>,
 ) -> Vec<MenuItem<HostSelectorAction>> {
     let header = MenuItem::Header {
-        fields: MenuItemFields::new(MENU_HEADER_LABEL)
+        fields: MenuItemFields::new(text(ctx, "terminal.ambient_agent.host_selector.header"))
             .with_font_size_override(HEADER_FONT_SIZE)
             .with_override_text_color(header_text_color)
             .with_padding_override(HEADER_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)

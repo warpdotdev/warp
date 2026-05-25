@@ -1,3 +1,4 @@
+use crate::localization;
 use std::default::Default;
 use std::path::PathBuf;
 
@@ -18,8 +19,6 @@ use crate::themes::theme_creator_body::{
 };
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
-
-const THEME_CREATOR_MODAL_HEADER: &str = "Create new theme from image";
 
 pub struct ThemeCreatorModal {
     theme_creator_modal: ViewHandle<Modal<ThemeCreatorBody>>,
@@ -59,7 +58,10 @@ impl ThemeCreatorModal {
 
         let theme_creator_modal = ctx.add_typed_action_view(|ctx| {
             Modal::new(
-                Some(THEME_CREATOR_MODAL_HEADER.to_string()),
+                Some(localization::text_for_app(
+                    ctx,
+                    "settings.theme_creator.modal_header",
+                )),
                 theme_creator_body,
                 ctx,
             )

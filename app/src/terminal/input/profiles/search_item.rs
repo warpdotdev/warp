@@ -10,11 +10,10 @@ use warpui::{AppContext, Element, SingletonEntity as _};
 
 use crate::ai::execution_profiles::profiles::ClientProfileId;
 use crate::appearance::Appearance;
+use crate::localization;
 use crate::search::{ItemHighlightState, SearchItem};
 use crate::terminal::input::inline_menu::styles as inline_styles;
 use crate::terminal::input::profiles::data_source::SelectProfileMenuItem;
-
-const MANAGE_PROFILES_LABEL: &str = "Manage profiles";
 
 #[derive(Debug, Clone)]
 enum ProfileSearchItemKind {
@@ -22,8 +21,11 @@ enum ProfileSearchItemKind {
         profile_id: ClientProfileId,
         profile_name: String,
         is_selected: bool,
+        accessibility_prefix: String,
     },
-    ManageProfiles,
+    ManageProfiles {
+        label: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -38,21 +40,23 @@ impl ProfileSearchItem {
         profile_id: ClientProfileId,
         profile_name: String,
         is_selected: bool,
+        accessibility_prefix: String,
     ) -> Self {
         Self {
             kind: ProfileSearchItemKind::Profile {
                 profile_id,
                 profile_name,
                 is_selected,
+                accessibility_prefix,
             },
             match_result: None,
             score: OrderedFloat(0.0),
         }
     }
 
-    pub fn new_manage_profiles_item() -> Self {
+    pub fn new_manage_profiles_item(label: String) -> Self {
         Self {
-            kind: ProfileSearchItemKind::ManageProfiles,
+            kind: ProfileSearchItemKind::ManageProfiles { label },
             match_result: None,
             score: OrderedFloat(0.0),
         }
@@ -79,7 +83,7 @@ impl SearchItem for ProfileSearchItem {
     ) -> Box<dyn Element> {
         let icon = match self.kind {
             ProfileSearchItemKind::Profile { .. } => Icon::Psychology,
-            ProfileSearchItemKind::ManageProfiles => Icon::Gear,
+            ProfileSearchItemKind::ManageProfiles { .. } => Icon::Gear,
         }
         .to_warpui_icon(inline_styles::icon_color(appearance));
 
@@ -108,7 +112,7 @@ impl SearchItem for ProfileSearchItem {
                 is_selected,
                 ..
             } => (profile_name.clone(), *is_selected),
-            ProfileSearchItemKind::ManageProfiles => (MANAGE_PROFILES_LABEL.to_owned(), false),
+            ProfileSearchItemKind::ManageProfiles { label } => (label.clone(), false),
         };
 
         let mut label = Text::new_inline(label_text, appearance.ui_font_family(), font_size)
@@ -132,9 +136,10 @@ impl SearchItem for ProfileSearchItem {
             .with_child(label.finish());
 
         if is_selected {
-            let selected_label = "(selected)";
+            let selected_label =
+                localization::text_for_app(app, "settings.ai.profile_selector.selected");
             let selected_text = Text::new_inline(
-                selected_label.to_string(),
+                selected_label.clone(),
                 appearance.ui_font_family(),
                 font_size,
             )
@@ -170,7 +175,7 @@ impl SearchItem for ProfileSearchItem {
             ProfileSearchItemKind::Profile { profile_id, .. } => {
                 SelectProfileMenuItem::Profile { profile_id }
             }
-            ProfileSearchItemKind::ManageProfiles => SelectProfileMenuItem::ManageProfiles,
+            ProfileSearchItemKind::ManageProfiles { .. } => SelectProfileMenuItem::ManageProfiles,
         }
     }
 
@@ -180,10 +185,14 @@ impl SearchItem for ProfileSearchItem {
 
     fn accessibility_label(&self) -> String {
         match &self.kind {
-            ProfileSearchItemKind::Profile { profile_name, .. } => {
-                format!("Profile: {profile_name}")
+            ProfileSearchItemKind::Profile {
+                profile_name,
+                accessibility_prefix,
+                ..
+            } => {
+                format!("{accessibility_prefix}: {profile_name}")
             }
-            ProfileSearchItemKind::ManageProfiles => MANAGE_PROFILES_LABEL.to_string(),
+            ProfileSearchItemKind::ManageProfiles { label } => label.clone(),
         }
     }
 }

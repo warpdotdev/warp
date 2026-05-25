@@ -1,3 +1,4 @@
+use crate::localization;
 use std::cell::RefCell;
 
 use pathfinder_color::ColorU;
@@ -34,6 +35,10 @@ use crate::view_components::action_button::{
 
 /// Default width of the comment editor, in pixels.
 pub(crate) const DEFAULT_COMMENT_MAX_WIDTH: f32 = 750.0;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 #[derive(Debug)]
 pub enum CommentEditorEvent {
@@ -164,7 +169,7 @@ impl CommentEditor {
         ViewHandle<ActionButton>,
     ) {
         let save_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new("Comment", PrimaryTheme)
+            ActionButton::new(text(ctx, "code.comment.action.comment"), PrimaryTheme)
                 .with_keybinding(
                     KeystrokeSource::Fixed(Keystroke::parse("cmdorctrl-enter").unwrap_or_default()),
                     ctx,
@@ -179,16 +184,16 @@ impl CommentEditor {
             button.set_disabled(true, ctx);
         });
 
-        let close_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Cancel", NakedTheme)
+        let close_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(text(ctx, "settings.action.cancel"), NakedTheme)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(CommentEditorAction::CloseEditor);
                 })
                 .with_size(ButtonSize::Small)
         });
 
-        let remove_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Remove", DangerNakedTheme)
+        let remove_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(text(ctx, "code.comment.action.remove"), DangerNakedTheme)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(CommentEditorAction::RemoveComment);
                 })
@@ -276,7 +281,7 @@ impl CommentEditor {
         self.is_imported_comment = origin.is_imported_from_github();
 
         self.save_button.update(ctx, |button, ctx| {
-            button.set_label("Update", ctx);
+            button.set_label(text(ctx, "settings.action.update"), ctx);
         });
         ctx.notify();
 
@@ -295,7 +300,7 @@ impl CommentEditor {
         self.is_imported_comment = false;
 
         self.save_button.update(ctx, |button, ctx| {
-            button.set_label("Comment", ctx);
+            button.set_label(text(ctx, "code.comment.action.comment"), ctx);
         });
         ctx.notify();
 
@@ -323,6 +328,7 @@ impl CommentEditor {
         &self,
         appearance: &Appearance,
         background: ColorU,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let sub_text_color = theme.sub_text_color(Fill::Solid(background)).into_solid();
@@ -331,7 +337,7 @@ impl CommentEditor {
             .finish();
 
         let label = Text::new(
-            "Comment imported from GitHub".to_string(),
+            text(app, "code.comment.imported_from_github"),
             appearance.ui_font_family(),
             appearance.ui_font_size(),
         )
@@ -367,7 +373,12 @@ impl CommentEditor {
             .finish()
     }
 
-    fn render_footer_row(&self, appearance: &Appearance, background: ColorU) -> Box<dyn Element> {
+    fn render_footer_row(
+        &self,
+        appearance: &Appearance,
+        background: ColorU,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let action_buttons = self.render_action_buttons();
         let footer_row = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
@@ -378,7 +389,7 @@ impl CommentEditor {
                 .with_child(
                     Shrinkable::new(
                         1.,
-                        self.render_github_import_indicator(appearance, background),
+                        self.render_github_import_indicator(appearance, background, app),
                     )
                     .finish(),
                 )
@@ -404,7 +415,7 @@ impl View for CommentEditor {
         let background = blended_colors::neutral_2(theme);
         let border_color = blended_colors::neutral_4(theme);
 
-        let footer_row = self.render_footer_row(appearance, background);
+        let footer_row = self.render_footer_row(appearance, background, ctx);
 
         Container::new(
             ConstrainedBox::new(

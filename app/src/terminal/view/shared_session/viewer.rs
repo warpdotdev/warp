@@ -1,3 +1,4 @@
+use crate::localization;
 use session_sharing_protocol::common::{Role, WindowSize};
 use warpui::elements::MouseStateHandle;
 use warpui::{ViewContext, ViewHandle};
@@ -56,35 +57,46 @@ impl Viewer {
     pub fn role_change_menu_items(
         current_role: Role,
         is_reconnecting: bool,
+        ctx: &ViewContext<TerminalView>,
     ) -> Vec<MenuItem<PaneHeaderAction<TerminalAction, TerminalAction>>> {
         let mut items = Vec::new();
         match current_role {
             Role::Reader => items.extend([
                 // TODO: this should still dispatch an action that eventually no-ops
-                MenuItemFields::new("View")
-                    .with_icon(Icon::Check)
-                    .with_disabled(is_reconnecting)
-                    .into_item(),
-                MenuItemFields::new("Edit")
-                    .with_indent()
-                    .with_disabled(is_reconnecting)
-                    .with_on_select_action(
-                        PaneHeaderCustomAction::<TerminalAction, TerminalAction>(
-                            TerminalAction::RequestSharedSessionRole(Role::Executor),
-                        ),
-                    )
-                    .into_item(),
+                MenuItemFields::new(localization::text_for_app(
+                    ctx,
+                    "terminal.shared_session.role.view",
+                ))
+                .with_icon(Icon::Check)
+                .with_disabled(is_reconnecting)
+                .into_item(),
+                MenuItemFields::new(localization::text_for_app(
+                    ctx,
+                    "terminal.shared_session.role.edit",
+                ))
+                .with_indent()
+                .with_disabled(is_reconnecting)
+                .with_on_select_action(PaneHeaderCustomAction::<TerminalAction, TerminalAction>(
+                    TerminalAction::RequestSharedSessionRole(Role::Executor),
+                ))
+                .into_item(),
             ]),
             Role::Executor | Role::Full => items.extend([
-                MenuItemFields::new("View")
-                    .with_indent()
-                    .with_disabled(true)
-                    .into_item(),
+                MenuItemFields::new(localization::text_for_app(
+                    ctx,
+                    "terminal.shared_session.role.view",
+                ))
+                .with_indent()
+                .with_disabled(true)
+                .into_item(),
                 // TODO: this should still dispatch an action that eventually no-ops
-                MenuItemFields::new("Edit")
-                    .with_icon(Icon::Check)
-                    .with_disabled(is_reconnecting)
-                    .into_item(),
+                MenuItemFields::new(localization::text_for_app(
+                    ctx,
+                    "terminal.shared_session.role.edit",
+                ))
+                .with_icon(Icon::Check)
+                .with_disabled(is_reconnecting)
+                .into_item(),
             ]),
         }
         items
@@ -96,7 +108,7 @@ impl Viewer {
         ctx: &mut ViewContext<TerminalView>,
     ) {
         self.is_role_change_menu_open = true;
-        let items = Self::role_change_menu_items(current_role, self.is_reconnecting);
+        let items = Self::role_change_menu_items(current_role, self.is_reconnecting, ctx);
         self.role_change_menu.update(ctx, |menu, ctx| {
             menu.set_items(items, ctx);
         });

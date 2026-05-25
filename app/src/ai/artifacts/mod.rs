@@ -15,6 +15,7 @@ use crate::ai::artifact_download::default_download_filename;
 use crate::ai::artifact_download::sanitized_basename;
 #[cfg(feature = "local_fs")]
 use crate::ai::artifact_download::{default_download_directory, download_artifact_bytes};
+use crate::localization;
 use crate::notebooks::NotebookId;
 use crate::server::server_api::ai::ArtifactDownloadResponse;
 use crate::server::server_api::ServerApiProvider;
@@ -23,6 +24,10 @@ use crate::workspace::{ToastStack, WorkspaceAction};
 
 pub mod buttons;
 pub use buttons::{ArtifactButtonsRow, ArtifactButtonsRowEvent};
+
+fn text(app: &warpui::AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 #[serde(tag = "artifact_type", content = "data")]
@@ -325,9 +330,12 @@ pub fn open_screenshot_lightbox<V: warpui::View>(
         ctx.spawn(
             async move { ai_client.get_artifact_download(&uid).await },
             move |_me, result, ctx| {
-                if let Some(image) =
-                    screenshot_lightbox_image_from_download_result(result, &uid_for_callback, i)
-                {
+                if let Some(image) = screenshot_lightbox_image_from_download_result(
+                    result,
+                    &uid_for_callback,
+                    i,
+                    text(ctx, "agent_management.artifact.screenshot.failed_to_load"),
+                ) {
                     ctx.dispatch_typed_action(&WorkspaceAction::UpdateLightboxImage {
                         index: i,
                         image,
@@ -342,6 +350,7 @@ fn screenshot_lightbox_image_from_download_result(
     result: anyhow::Result<ArtifactDownloadResponse>,
     uid_for_callback: &str,
     index: usize,
+    failed_to_load_description: String,
 ) -> Option<LightboxImage> {
     match result {
         Ok(ArtifactDownloadResponse::Screenshot { data, .. }) => Some(LightboxImage {
@@ -360,7 +369,7 @@ fn screenshot_lightbox_image_from_download_result(
             log::warn!("Failed to load screenshot artifact {index}: {e}");
             Some(LightboxImage {
                 source: LightboxImageSource::Loading,
-                description: Some("Failed to load".to_string()),
+                description: Some(failed_to_load_description),
             })
         }
     }
@@ -386,7 +395,10 @@ pub fn download_file_artifact<V: warpui::View>(
                 log::warn!("Failed to load file artifact {artifact_uid}: {error}");
                 show_file_download_toast(
                     &artifact_uid,
-                    DismissibleToast::error("Failed to prepare file download.".to_string()),
+                    DismissibleToast::error(text(
+                        ctx,
+                        "agent_management.artifact.file_download.prepare_failed",
+                    )),
                     ctx,
                 );
             }
@@ -447,16 +459,20 @@ fn open_file_download_picker<V: warpui::View>(
                 move |_me, result, ctx| match result {
                     Ok(()) => show_file_download_toast(
                         &artifact_uid,
-                        DismissibleToast::success(format!("Downloaded {toast_filename}.")),
+                        DismissibleToast::success(
+                            text(ctx, "agent_management.artifact.file_download.success")
+                                .replace("{filename}", &toast_filename),
+                        ),
                         ctx,
                     ),
                     Err(error) => {
                         log::warn!("Failed to download file artifact {artifact_uid}: {error}");
                         show_file_download_toast(
                             &artifact_uid,
-                            DismissibleToast::error(format!(
-                                "Failed to download {toast_filename}."
-                            )),
+                            DismissibleToast::error(
+                                text(ctx, "agent_management.artifact.file_download.failed")
+                                    .replace("{filename}", &toast_filename),
+                            ),
                             ctx,
                         );
                     }

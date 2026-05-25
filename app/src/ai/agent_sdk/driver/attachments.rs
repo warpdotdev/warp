@@ -10,11 +10,13 @@ use mime_guess::from_path;
 use tokio::fs;
 use tokio_util::io::StreamReader;
 use warp_core::features::FeatureFlag;
+use warp_localization::{replace_placeholders, LocaleId};
 
 use crate::ai::agent_sdk::retry::with_bounded_retry;
 use crate::ai::ambient_agents::task::{AttachmentInput, TaskAttachment};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::attachment_utils::MAX_ATTACHMENT_SIZE_BYTES;
+use crate::localization;
 use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::presigned_upload::HttpStatusError;
 use crate::server::server_api::ServerApi;
@@ -22,6 +24,15 @@ use crate::util::image::MIN_IMAGE_HEADER_SIZE;
 
 /// Maximum number of file attachments for a cloud agent task.
 pub const MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY: usize = 25;
+
+fn text(key: &str) -> String {
+    localization::text_for_locale(LocaleId::EnUs, key)
+}
+
+fn text_with_args(key: &str, args: &[(&str, &str)]) -> String {
+    replace_placeholders(&text(key), args)
+        .expect("localized text template arguments must match the catalog")
+}
 
 /// Fetches task attachments via GraphQL and downloads them to the filesystem.
 /// Returns the attachments directory path if any attachments were downloaded,
@@ -44,7 +55,7 @@ pub(crate) async fn fetch_and_download_attachments(
     let attachments = ai_client
         .get_task_attachments(task_id.clone())
         .await
-        .context("Failed to fetch task attachments")?;
+        .context(text("agent_sdk.driver.attachments.error.fetch_task"))?;
 
     log::info!("Fetched {} task attachments", attachments.len());
 
@@ -83,16 +94,18 @@ pub(crate) async fn fetch_and_download_handoff_snapshot_attachments(
     let attachments = ai_client
         .get_handoff_snapshot_attachments(&task_id)
         .await
-        .context("Failed to fetch handoff snapshot attachments")?;
+        .context(text(
+            "agent_sdk.driver.attachments.error.fetch_handoff_snapshot",
+        ))?;
 
     if attachments.is_empty() {
         return Ok(None);
     }
 
     let handoff_dir = attachments_dir.join("handoff");
-    fs::create_dir_all(&handoff_dir)
-        .await
-        .context("Failed to create handoff attachments directory")?;
+    fs::create_dir_all(&handoff_dir).await.context(text(
+        "agent_sdk.driver.attachments.error.create_handoff_directory",
+    ))?;
 
     let attempts = attachments.len();
     let download_futures = attachments.into_iter().map(|attachment| {
@@ -144,7 +157,7 @@ async fn download_and_write_attachments(
 ) -> anyhow::Result<()> {
     fs::create_dir_all(attachment_dir)
         .await
-        .context("Failed to create attachments directory")?;
+        .context(text("agent_sdk.driver.attachments.error.create_directory"))?;
     log::info!(
         "Created attachments directory at: {}",
         attachment_dir.display()
@@ -181,7 +194,12 @@ async fn download_task_attachment(
     let safe_filename = Path::new(&attachment.filename)
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or_else(|| anyhow::anyhow!("Invalid filename for file_id={}", attachment.file_id))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(text_with_args(
+                "agent_sdk.driver.attachments.error.invalid_filename",
+                &[("file_id", &attachment.file_id)]
+            ))
+        })?
         .to_string();
 
     let file_path = attachment_dir.join(&safe_filename);
@@ -227,11 +245,9 @@ async fn download_attachment(
 ) -> anyhow::Result<()> {
     let operation = format!("download attachment '{}'", file_path.display());
     with_bounded_retry(&operation, || async {
-        let response = http_client
-            .get(download_url)
-            .send()
-            .await
-            .context("Failed to send download request")?;
+        let response = http_client.get(download_url).send().await.context(text(
+            "agent_sdk.driver.attachments.error.send_download_request",
+        ))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -240,19 +256,22 @@ async fn download_attachment(
                 status: status.as_u16(),
                 body: body.clone(),
             })
-            .context(format!("Download failed with status {status}: {body}")));
+            .context(text_with_args(
+                "agent_sdk.driver.attachments.error.download_status",
+                &[("status", &status.to_string()), ("body", &body)],
+            )));
         }
 
         // Stream the response body directly to disk instead of buffering the full payload
         // in memory.
         let mut file = fs::File::create(file_path)
             .await
-            .context("Failed to create file")?;
+            .context(text("agent_sdk.driver.attachments.error.create_file"))?;
         let mut response_stream =
             StreamReader::new(response.bytes_stream().map_err(std::io::Error::other));
         tokio::io::copy(&mut response_stream, &mut file)
             .await
-            .context("Failed to write file")?;
+            .context(text("agent_sdk.driver.attachments.error.write_file"))?;
 
         Ok(())
     })
@@ -267,10 +286,12 @@ pub fn process_attachment(
     index: usize,
 ) -> anyhow::Result<AttachmentInput> {
     let file_bytes = std::fs::read(attachment_path).map_err(|e| {
-        anyhow::anyhow!(
-            "Failed to read attachment file '{}': {e}",
-            attachment_path.display()
-        )
+        let path = attachment_path.display().to_string();
+        let error = e.to_string();
+        anyhow::anyhow!(text_with_args(
+            "agent_sdk.driver.attachments.error.read_attachment_file",
+            &[("path", &path), ("error", &error)]
+        ))
     })?;
 
     // Detect MIME type from file data using infer crate, fall back to file extension
@@ -288,10 +309,11 @@ pub fn process_attachment(
     });
 
     if file_bytes.len() > MAX_ATTACHMENT_SIZE_BYTES {
-        return Err(anyhow::anyhow!(
-            "File is too large ({}MB). Maximum size is 10MB.",
-            file_bytes.len() / (1024 * 1024)
-        ));
+        let size_mb = (file_bytes.len() / (1024 * 1024)).to_string();
+        return Err(anyhow::anyhow!(text_with_args(
+            "agent_sdk.driver.attachments.error.file_too_large",
+            &[("size_mb", &size_mb)]
+        )));
     }
 
     let base64_data = general_purpose::STANDARD.encode(&file_bytes);

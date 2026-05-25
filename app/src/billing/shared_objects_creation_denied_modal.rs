@@ -14,14 +14,13 @@ use super::shared_objects_creation_denied_body::{
 };
 use crate::drive::cloud_object_styling::warp_drive_icon_color;
 use crate::drive::DriveObjectType;
+use crate::localization;
 use crate::modal::{Modal, ModalEvent};
 use crate::server::ids::ServerId;
 use crate::themes::theme::Fill;
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::CustomerType;
-
-const DEFAULT_LIMIT_REACHED_MODAL_HEADER: &str = "Shared object limit reached";
 
 pub struct SharedObjectsCreationDeniedModal {
     shared_objects_creation_denied_modal: ViewHandle<Modal<SharedObjectsCreationDeniedBody>>,
@@ -48,6 +47,33 @@ pub fn init(app: &mut AppContext) {
     )]);
 }
 
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
+
+fn text_with(app: &AppContext, key: &str, replacements: &[(&str, &str)]) -> String {
+    replacements
+        .iter()
+        .fold(text(app, key), |message, (placeholder, value)| {
+            message.replace(placeholder, value)
+        })
+}
+
+fn object_type_label(app: &AppContext, object_type: DriveObjectType) -> String {
+    let key = match object_type {
+        DriveObjectType::Notebook { .. } => "drive.object.lower.notebooks",
+        DriveObjectType::Workflow => "drive.object.lower.workflows",
+        DriveObjectType::Folder => "drive.object.lower.folders",
+        DriveObjectType::EnvVarCollection => "drive.object.lower.environment_variables",
+        DriveObjectType::AgentModeWorkflow => "drive.object.lower.agent_workflows",
+        DriveObjectType::AIFact => "drive.object.lower.ai_fact",
+        DriveObjectType::AIFactCollection => "drive.object.lower.rules",
+        DriveObjectType::MCPServer => "drive.object.lower.mcp_server",
+        DriveObjectType::MCPServerCollection => "drive.object.lower.mcp_servers",
+    };
+    text(app, key)
+}
+
 impl SharedObjectsCreationDeniedModal {
     pub fn new(object_type: Option<DriveObjectType>, ctx: &mut ViewContext<Self>) -> Self {
         let shared_objects_creation_denied_body = ctx.add_typed_action_view(
@@ -65,7 +91,7 @@ impl SharedObjectsCreationDeniedModal {
 
         let shared_objects_creation_denied_modal = ctx.add_typed_action_view(|ctx| {
             Modal::new(
-                Some(DEFAULT_LIMIT_REACHED_MODAL_HEADER.into()),
+                Some(text(ctx, "drive.shared_objects_limit.title.default")),
                 shared_objects_creation_denied_body,
                 ctx,
             )
@@ -124,10 +150,19 @@ impl SharedObjectsCreationDeniedModal {
     ) {
         let appearance = Appearance::as_ref(ctx);
         self.team_uid = Some(team_uid);
+        let object_type_label = object_type_label(ctx, object_type);
         let title: Option<String> = if is_delinquent_due_to_payment_issue {
-            Some(format!("Shared {object_type}s restricted"))
+            Some(text_with(
+                ctx,
+                "drive.shared_objects_limit.title.restricted",
+                &[("{object_type}", &object_type_label)],
+            ))
         } else {
-            Some(format!("Shared {object_type}s limit reached"))
+            Some(text_with(
+                ctx,
+                "drive.shared_objects_limit.title.limit_reached",
+                &[("{object_type}", &object_type_label)],
+            ))
         };
         let (icon, icon_color) = match object_type {
             DriveObjectType::Notebook { is_ai_document } => (

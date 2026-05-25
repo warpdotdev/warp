@@ -1,4 +1,6 @@
+use crate::localization;
 use std::collections::BTreeSet;
+use warp_localization::LocaleId;
 
 use comfy_table::Cell;
 use serde::Serialize;
@@ -9,6 +11,14 @@ use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use crate::ai::agent_sdk::output::{self, TableFormat};
 use crate::ai::llms::LLMPreferences;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
+
+fn text_for_locale(locale: LocaleId, key: &str) -> String {
+    localization::text_for_locale(locale, key)
+}
 
 /// Handle model-related CLI commands.
 pub fn run(
@@ -38,7 +48,10 @@ impl ModelCommandRunner {
         ctx.spawn(refresh_future, move |_, refresh_result, ctx| {
             if refresh_result.is_err() {
                 super::report_fatal_error(
-                    anyhow::anyhow!("Timed out refreshing workspace metadata"),
+                    anyhow::anyhow!(text(
+                        ctx,
+                        "agent_sdk.common.error.workspace_metadata_timeout"
+                    )),
                     ctx,
                 );
                 return;
@@ -55,7 +68,7 @@ impl ModelCommandRunner {
                 .map(|id| ModelListItem { id })
                 .collect::<Vec<_>>();
 
-            output::print_list(items, output_format);
+            output::print_list_for_app(items, output_format, ctx);
 
             ctx.terminate_app(TerminationMode::ForceTerminate, None);
         });
@@ -76,7 +89,14 @@ struct ModelListItem {
 
 impl TableFormat for ModelListItem {
     fn header() -> Vec<Cell> {
-        vec![Cell::new("MODEL ID")]
+        vec![Cell::new(text_for_locale(
+            LocaleId::EnUs,
+            "agent_sdk.model.table.model_id",
+        ))]
+    }
+
+    fn header_for_app(app: &AppContext) -> Vec<Cell> {
+        vec![Cell::new(text(app, "agent_sdk.model.table.model_id"))]
     }
 
     fn row(&self) -> Vec<Cell> {

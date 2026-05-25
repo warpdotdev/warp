@@ -1,3 +1,4 @@
+use crate::localization;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
@@ -41,11 +42,14 @@ fn render_number_badge(
     .finish()
 }
 
-pub(super) fn render_recommended_badge(appearance: &Appearance) -> Box<dyn Element> {
+pub(super) fn render_recommended_badge(
+    appearance: &Appearance,
+    app: &AppContext,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
     Container::new(
         Text::new(
-            "Recommended".to_string(),
+            localization::text_for_app(app, "agent.block.recommended"),
             appearance.ui_font_family(),
             appearance.monospace_font_size() - 2.,
         )
@@ -162,7 +166,7 @@ pub(super) fn build_text_button_content(
         .with_cross_axis_alignment(CrossAxisAlignment::Start)
         .with_child(Expanded::new(1., label_element).finish())
         .with_child(
-            Container::new(render_recommended_badge(appearance))
+            Container::new(render_recommended_badge(appearance, app))
                 .with_margin_left(12.)
                 .finish(),
         )

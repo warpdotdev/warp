@@ -883,7 +883,9 @@ impl GridHandler {
 
         match (color_sequence, style_sequence) {
             (Some(color_sequence), Some(style_sequence)) => {
-                format!("{CSI_START}{color_sequence};{style_sequence}m{cell_content}{SGR_RESET_ATTRIBUTES}")
+                format!(
+                    "{CSI_START}{color_sequence};{style_sequence}m{cell_content}{SGR_RESET_ATTRIBUTES}"
+                )
             }
             (color_sequence, style_sequence) => {
                 let color_sequence = color_sequence.unwrap_or_default();

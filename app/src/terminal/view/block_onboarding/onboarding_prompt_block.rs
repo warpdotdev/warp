@@ -1,3 +1,4 @@
+use crate::localization;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use settings::Setting as _;
 use warpui::elements::{
@@ -23,6 +24,10 @@ use crate::terminal::SizeInfo;
 use crate::{report_if_error, send_telemetry_from_ctx};
 
 const CONFIRM_MARGIN_TOP: f32 = 16.;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 pub struct OnboardingPromptBlock {
     learn_more_highlight_index: HighlightedHyperlink,
@@ -54,34 +59,39 @@ impl OnboardingPromptBlock {
         ctx.notify();
     }
 
-    fn render_text(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_text(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let current_theme = appearance.theme();
         let font_family = appearance.monospace_font_family();
         let font_size = appearance.monospace_font_size();
         let font_color = current_theme.main_text_color(current_theme.background());
 
-        // Copy - https://docs.google.com/document/d/1zttBLI5Mw07kUupvrMQoC5aTwTXSHIUOIFFnxZ8GQEU/edit
-        const LINE_ONE: &str = "Next, let’s set up your prompt. Warp has a custom prompt builder or you can select PS1 to honor your pre-existing prompt configuration.";
-        const LINE_TWO: &str =
-            "Warp works with many custom prompts like oh-my-zsh, Starship, Powerlevel10K. ";
-        const LINK_TEXT: &str = "Learn more";
         const LINK_DESTINATION: &str =
             "https://docs.warp.dev/terminal/appearance/prompt#custom-prompt-compatibility-table";
 
         Flex::column()
             .with_children([
                 Container::new(
-                    Text::new(LINE_ONE, font_family, font_size)
-                        .with_color(font_color.into_solid())
-                        .finish(),
+                    Text::new(
+                        text(app, "terminal.block_onboarding.prompt.line_one"),
+                        font_family,
+                        font_size,
+                    )
+                    .with_color(font_color.into_solid())
+                    .finish(),
                 )
                 .with_margin_top(14.)
                 .finish(),
                 Container::new(
                     FormattedTextElement::new(
                         FormattedText::new([FormattedTextLine::Line(vec![
-                            FormattedTextFragment::plain_text(LINE_TWO),
-                            FormattedTextFragment::hyperlink(LINK_TEXT, LINK_DESTINATION),
+                            FormattedTextFragment::plain_text(text(
+                                app,
+                                "terminal.block_onboarding.prompt.line_two",
+                            )),
+                            FormattedTextFragment::hyperlink(
+                                text(app, "terminal.block_onboarding.prompt.learn_more"),
+                                LINK_DESTINATION,
+                            ),
                         ])]),
                         font_size,
                         font_family,
@@ -102,7 +112,11 @@ impl OnboardingPromptBlock {
             .finish()
     }
 
-    fn render_confirm_skip_buttons(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_confirm_skip_buttons(
+        &self,
+        app: &AppContext,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
         let mut confirm_button = appearance
             .ui_builder()
             .button(
@@ -116,7 +130,7 @@ impl OnboardingPromptBlock {
                 font_size: Some(14.),
                 ..Default::default()
             })
-            .with_centered_text_label("Confirm".to_owned());
+            .with_centered_text_label(text(app, "terminal.block_onboarding.confirm"));
         if self.selected_prompt.is_none() {
             confirm_button = confirm_button.disabled();
         }
@@ -143,6 +157,7 @@ impl OnboardingPromptBlock {
     fn render_prompt_button(
         &self,
         appearance: &Appearance,
+        app: &AppContext,
         mouse_state_handle: MouseStateHandle,
         prompt_type: OnboardingPromptType,
     ) -> Box<dyn Element> {
@@ -178,9 +193,9 @@ impl OnboardingPromptBlock {
 
                     ConstrainedBox::new(
                         Container::new(if prompt_type == OnboardingPromptType::WarpDefault {
-                            self.render_warp_prompt_button_interior(appearance)
+                            self.render_warp_prompt_button_interior(appearance, app)
                         } else {
-                            self.render_existing_prompt_button_interior(appearance)
+                            self.render_existing_prompt_button_interior(appearance, app)
                         })
                         .with_uniform_padding(PROMPT_PADDING)
                         .with_border(Border::all(border_width).with_border_fill(border_color))
@@ -232,13 +247,13 @@ impl OnboardingPromptBlock {
         .finish()
     }
 
-    fn render_existing_prompt_button_interior(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_existing_prompt_button_interior(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         // Pixel values pulled from Figma mocks
         // https://www.figma.com/file/y888viqzWBoMpFTxQqkQEN/Activation?node-id=568:1595&mode=dev
-        const HEADER_TEXT: &str = "Shell prompt (PS1)";
-        const NO_PS1_TEXT: &str = "No existing prompt.";
-        const CORRECTION_TEXT: &str = "Look incorrect? ";
-        const LINK_TEXT: &str = "Let us know.";
         const LINK_DESTINATION: &str = "https://github.com/warpdotdev/Warp/issues/new?assignees=&labels=Bug&projects=&template=01_bug_report.yml";
 
         const HEADER_MARGIN_LEFT: f32 = 4.;
@@ -263,9 +278,13 @@ impl OnboardingPromptBlock {
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CORNER_RADIUS_PIXELS)))
                 .finish()
         } else {
-            Text::new_inline(NO_PS1_TEXT, font_family, font_size)
-                .with_color(font_color.into_solid())
-                .finish()
+            Text::new_inline(
+                text(app, "terminal.block_onboarding.prompt.no_existing_ps1"),
+                font_family,
+                font_size,
+            )
+            .with_color(font_color.into_solid())
+            .finish()
         };
 
         let link_style = UiComponentStyles {
@@ -277,9 +296,13 @@ impl OnboardingPromptBlock {
         Flex::column()
             .with_child(
                 Container::new(
-                    Text::new_inline(HEADER_TEXT, font_family, font_size)
-                        .with_color(font_color.into_solid())
-                        .finish(),
+                    Text::new_inline(
+                        text(app, "terminal.block_onboarding.prompt.shell_prompt"),
+                        font_family,
+                        font_size,
+                    )
+                    .with_color(font_color.into_solid())
+                    .finish(),
                 )
                 .with_margin_left(HEADER_MARGIN_LEFT)
                 .finish(),
@@ -291,15 +314,19 @@ impl OnboardingPromptBlock {
                     Align::new(
                         Flex::row()
                             .with_children([
-                                Text::new_inline(CORRECTION_TEXT, font_family, font_size)
-                                    .with_color(
-                                        font_color.with_opacity(CORRECTION_OPACITY).into_solid(),
-                                    )
-                                    .finish(),
+                                Text::new_inline(
+                                    text(app, "terminal.block_onboarding.prompt.look_incorrect"),
+                                    font_family,
+                                    font_size,
+                                )
+                                .with_color(
+                                    font_color.with_opacity(CORRECTION_OPACITY).into_solid(),
+                                )
+                                .finish(),
                                 appearance
                                     .ui_builder()
                                     .link(
-                                        LINK_TEXT.to_string(),
+                                        text(app, "terminal.block_onboarding.prompt.let_us_know"),
                                         Some(LINK_DESTINATION.to_string()),
                                         None,
                                         self.mouse_state_handle_look_incorrect.clone(),
@@ -321,10 +348,13 @@ impl OnboardingPromptBlock {
             .finish()
     }
 
-    fn render_warp_prompt_button_interior(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_warp_prompt_button_interior(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         // Pixel values pulled from Figma mocks
         // https://www.figma.com/file/y888viqzWBoMpFTxQqkQEN/Activation?node-id=568:1595&mode=dev
-        const HEADER_TEXT: &str = "Warp prompt";
         const HEADER_MARGIN_LEFT: f32 = 4.;
         const SECTION_MARGIN_TOP: f32 = 8.;
         const OUTER_CORNER_RADIUS: f32 = 4.;
@@ -375,9 +405,13 @@ impl OnboardingPromptBlock {
         Flex::column()
             .with_child(
                 Container::new(
-                    Text::new_inline(HEADER_TEXT, font_family, appearance.ui_font_size())
-                        .with_color(font_color.into_solid())
-                        .finish(),
+                    Text::new_inline(
+                        text(app, "terminal.block_onboarding.prompt.warp_prompt"),
+                        font_family,
+                        appearance.ui_font_size(),
+                    )
+                    .with_color(font_color.into_solid())
+                    .finish(),
                 )
                 .with_margin_left(HEADER_MARGIN_LEFT)
                 .finish(),
@@ -388,7 +422,10 @@ impl OnboardingPromptBlock {
                     1.,
                     Align::new(
                         Text::new_inline(
-                            "Customizable in appearance settings.",
+                            text(
+                                app,
+                                "terminal.block_onboarding.prompt.customizable_settings",
+                            ),
                             font_family,
                             ui_font_size,
                         )
@@ -431,25 +468,27 @@ impl View for OnboardingPromptBlock {
         let border_color = current_theme.outline();
 
         let mut col = Flex::column()
-            .with_child(self.render_text(appearance))
+            .with_child(self.render_text(appearance, ctx))
             .with_child(
                 Wrap::row()
                     .with_run_spacing(-PADDING_BOTTOM)
                     .with_main_axis_alignment(MainAxisAlignment::Start)
                     .with_child(self.render_prompt_button(
                         appearance,
+                        ctx,
                         self.mouse_state_handle_warp_prompt.clone(),
                         OnboardingPromptType::WarpDefault,
                     ))
                     .with_child(self.render_prompt_button(
                         appearance,
+                        ctx,
                         self.mouse_state_handle_existing_prompt.clone(),
                         OnboardingPromptType::PS1,
                     ))
                     .finish(),
             );
         if !self.block_completed {
-            col.add_child(self.render_confirm_skip_buttons(appearance));
+            col.add_child(self.render_confirm_skip_buttons(ctx, appearance));
         }
 
         Container::new(col.finish())

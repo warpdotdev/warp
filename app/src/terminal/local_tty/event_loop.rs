@@ -166,7 +166,7 @@ where
                 Message::Shutdown => {
                     return ChannelResult::TerminateLoop {
                         child_exited: false,
-                    }
+                    };
                 }
                 Message::Resize(size) => self.pty.on_resize(&size),
                 Message::ChildExited => return ChannelResult::TerminateLoop { child_exited: true },

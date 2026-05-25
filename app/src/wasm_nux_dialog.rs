@@ -9,6 +9,7 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use crate::appearance::Appearance;
+use crate::localization;
 use crate::report_if_error;
 use crate::settings::app_installation_detection::{
     UserAppInstallDetectionSettings, UserAppInstallStatus,
@@ -22,6 +23,10 @@ const DIALOG_WIDTH: f32 = 350.;
 const DIALOG_PADDING: f32 = 24.;
 const OPEN_NATIVE_BUTTON_WIDTH: f32 = 260.;
 const OPEN_NATIVE_BUTTON_HEIGHT: f32 = 40.;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 #[derive(Debug, Copy, Clone)]
 pub enum WasmNUXDialogAction {
@@ -152,18 +157,18 @@ impl View for WasmNUXDialog {
 
         let dialog = if self.requested_download {
             Dialog::new(
-                "Open in Warp Desktop?".to_string(),
-                Some("Future links will automatically open on desktop.".to_string()),
+                text(app, "wasm_nux.open_desktop.title"),
+                Some(text(app, "wasm_nux.open_desktop.description")),
                 dialog_styles,
             )
             .with_bottom_row_child(Self::render_dialog_button(
-                "Open in Warp",
+                text(app, "wasm_nux.action.open_in_warp"),
                 WasmNUXDialogAction::OpenNativeAndClose,
                 &self.confirm_mouse_state,
                 appearance,
             ))
         } else if app_install_detected == &UserAppInstallStatus::NotDetected {
-            Dialog::new("Download Warp Desktop?".to_string(), None, dialog_styles)
+            Dialog::new(text(app, "wasm_nux.download.title"), None, dialog_styles)
                 .with_child(
                     Flex::column()
                         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -171,7 +176,7 @@ impl View for WasmNUXDialog {
                         .with_child(
                             appearance
                                 .ui_builder()
-                                .span("Warp is the intelligent terminal with AI and your dev team's knowledge built-in.")
+                                .span(text(app, "wasm_nux.download.description"))
                                 .with_style(UiComponentStyles {
                                     font_weight: Some(Weight::Thin),
                                     font_color: Some(
@@ -191,7 +196,7 @@ impl View for WasmNUXDialog {
                                 appearance
                                     .ui_builder()
                                     .link(
-                                        "Learn more".to_string(),
+                                        text(app, "wasm_nux.action.learn_more"),
                                         None,
                                         Some(Box::new(|ctx| {
                                             ctx.dispatch_typed_action(
@@ -209,25 +214,27 @@ impl View for WasmNUXDialog {
                         .finish(),
                 )
                 .with_bottom_row_child(Self::render_dialog_button(
-                    "Download",
+                    text(app, "wasm_nux.action.download"),
                     WasmNUXDialogAction::OpenDownloadDesktopAppLink,
                     &self.download_warp_mouse_state,
                     appearance,
                 ))
         } else {
             let object_kind = match web_intent_parser::current_web_intent() {
-                Some(WebIntent::DriveObject(_)) => "Warp Drive objects",
-                Some(WebIntent::SessionView(_)) => "shared sessions",
-                _ => "Warp links",
+                Some(WebIntent::DriveObject(_)) => text(app, "wasm_nux.object_kind.drive_objects"),
+                Some(WebIntent::SessionView(_)) => {
+                    text(app, "wasm_nux.object_kind.shared_sessions")
+                }
+                _ => text(app, "wasm_nux.object_kind.warp_links"),
             };
 
             Dialog::new(
-                format!("Always open {object_kind} on the web?"),
-                Some("You can change this at any time in settings.".to_string()),
+                text(app, "wasm_nux.web_preference.title").replace("{object_kind}", &object_kind),
+                Some(text(app, "wasm_nux.web_preference.description")),
                 dialog_styles,
             )
             .with_bottom_row_child(Self::render_dialog_button(
-                "Yes",
+                text(app, "wasm_nux.action.yes"),
                 WasmNUXDialogAction::SetWebAndClose,
                 &self.confirm_mouse_state,
                 appearance,

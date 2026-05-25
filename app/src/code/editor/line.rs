@@ -72,7 +72,10 @@ impl EditorLineLocation {
                 index_from_at_line: index,
             },
             EditorLineLocation::Collapsed { line_range } => {
-                debug_assert!(false, "We don't support converting from collapsed line location to render line location yet");
+                debug_assert!(
+                    false,
+                    "We don't support converting from collapsed line location to render line location yet"
+                );
                 RenderLineLocation::Current(line_range.start)
             }
         }

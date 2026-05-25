@@ -33,11 +33,11 @@ pub fn initialize_settings_for_tests_with_mode(
     use crate::settings::manager::SettingsManager;
     use crate::settings::{
         init_and_register_user_preferences, AISettings, AccessibilitySettings,
-        AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings, ChangelogSettings,
-        CloudPreferencesSettings, CodeSettings, DebugSettings, EmacsBindingsSettings, FontSettings,
-        GPUSettings, InputModeSettings, InputSettings, NativePreferenceSettings, PaneSettings,
-        SameLinePromptBlockSettings, ScrollSettings, SelectionSettings, SshSettings, ThemeSettings,
-        VimBannerSettings,
+        AliasExpansionSettings, AppEditorSettings, AppLanguage, BlockVisibilitySettings,
+        ChangelogSettings, CloudPreferencesSettings, CodeSettings, DebugSettings,
+        EmacsBindingsSettings, FontSettings, GPUSettings, InputModeSettings, InputSettings,
+        LanguageSettings, NativePreferenceSettings, PaneSettings, SameLinePromptBlockSettings,
+        ScrollSettings, SelectionSettings, SshSettings, ThemeSettings, VimBannerSettings,
     };
     use crate::terminal::general_settings::GeneralSettings;
     use crate::terminal::keys_settings::KeysSettings;
@@ -52,6 +52,7 @@ pub fn initialize_settings_for_tests_with_mode(
     use crate::user_config::WarpConfig;
     use crate::window_settings::WindowSettings;
     use crate::workspace::tab_settings::TabSettings;
+    use settings::Setting as _;
     app.add_singleton_model(|ctx| AppExecutionMode::new(mode, is_sandboxed, ctx));
 
     app.update(init_and_register_user_preferences);
@@ -82,6 +83,14 @@ pub fn initialize_settings_for_tests_with_mode(
     GPUSettings::register(app);
     InputModeSettings::register(app);
     InputSettings::register(app);
+    let language_settings = LanguageSettings::register(app);
+    language_settings.update(app, |settings, ctx| {
+        settings
+            .app_language
+            .set_value(AppLanguage::English, ctx)
+            .expect("test app language should be configurable");
+    });
+    app.update(crate::localization::register_localization_updater);
     KeysSettings::register(app);
     LigatureSettings::register(app);
 

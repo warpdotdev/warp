@@ -1,5 +1,6 @@
 //! An adapter to make session-sharing work with the [`TerminalView`].
 
+use crate::localization;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -105,9 +106,12 @@ impl Adapter {
         source_type: SessionSourceType,
         ctx: &mut ViewContext<TerminalView>,
     ) -> Self {
-        let reconnecting_banner = ctx.add_typed_action_view(|_| {
+        let reconnecting_banner = ctx.add_typed_action_view(|ctx| {
             Banner::new_without_close(BannerTextContent::formatted_text(vec![
-                FormattedTextFragment::plain_text("Offline, trying to reconnect..."),
+                FormattedTextFragment::plain_text(localization::text_for_app(
+                    ctx,
+                    "terminal.shared_session.reconnecting",
+                )),
             ]))
             .with_icon(Icon::CloudOffline)
         });

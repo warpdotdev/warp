@@ -1,3 +1,4 @@
+use crate::localization;
 use itertools::Itertools;
 use warp_core::settings::Setting;
 use warp_core::ui::appearance::Appearance;
@@ -261,7 +262,7 @@ impl SettingsImportView {
                     font_size: Some(FONT_SIZE),
                     ..Default::default()
                 })
-                .with_centered_text_label("Import".to_owned())
+                .with_centered_text_label(localization::text_for_app(app, "settings.import.import"))
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(SettingsImportAction::ImportButtonClicked);
@@ -272,7 +273,11 @@ impl SettingsImportView {
         .finish()
     }
 
-    fn render_reset_button(&self, appearance: &Appearance) -> Box<dyn warpui::Element> {
+    fn render_reset_button(
+        &self,
+        appearance: &Appearance,
+        app: &warpui::AppContext,
+    ) -> Box<dyn warpui::Element> {
         appearance
             .ui_builder()
             .button(ButtonVariant::Secondary, self.skip_button_handle.clone())
@@ -288,7 +293,10 @@ impl SettingsImportView {
                 background: Some(appearance.theme().outline().into()),
                 ..Default::default()
             })
-            .with_centered_text_label("Reset to Warp defaults".to_owned())
+            .with_centered_text_label(localization::text_for_app(
+                app,
+                "settings.import.reset_to_defaults",
+            ))
             .build()
             .on_click(move |ctx, _, _| {
                 ctx.dispatch_typed_action(SettingsImportAction::ResetButtonClicked);
@@ -412,20 +420,31 @@ impl SettingsImportView {
                 .any(|setting| setting.setting_type == SettingType::Theme)
             {
                 if num_prefs == 1 {
-                    preference_text_elements.push(self.render_secondary_text(appearance, "Theme"));
+                    preference_text_elements.push(self.render_secondary_text(
+                        appearance,
+                        localization::text_for_app(app, "settings.import.summary.theme"),
+                    ));
                 } else {
-                    preference_text_elements.push(self.render_secondary_text(appearance, "Theme,"));
+                    preference_text_elements.push(self.render_secondary_text(
+                        appearance,
+                        localization::text_for_app(app, "settings.import.summary.theme_comma"),
+                    ));
                 }
                 theme_subtraction = 1;
             }
             match num_prefs - theme_subtraction {
-                1 => preference_text_elements
-                    .push(self.render_secondary_text(appearance, "1 other setting")),
-                0 => (),
-                _ => preference_text_elements.push(self.render_secondary_text(
+                1 => preference_text_elements.push(self.render_secondary_text(
                     appearance,
-                    format!("{} other settings", num_prefs - theme_subtraction),
+                    localization::text_for_app(app, "settings.import.summary.other_singular"),
                 )),
+                0 => (),
+                _ => preference_text_elements.push(
+                    self.render_secondary_text(
+                        appearance,
+                        localization::text_for_app(app, "settings.import.summary.other_plural")
+                            .replace("{count}", &(num_prefs - theme_subtraction).to_string()),
+                    ),
+                ),
             }
         }
 
@@ -935,7 +954,7 @@ impl View for SettingsImportView {
             State::Completed { imported_idx: None } | State::Failed => {
                 Container::new(Flex::row().finish()).finish()
             }
-            State::Completed { imported_idx: _ } => self.render_reset_button(appearance),
+            State::Completed { imported_idx: _ } => self.render_reset_button(appearance, app),
         };
 
         let config_radio_buttons = appearance
@@ -960,9 +979,6 @@ impl View for SettingsImportView {
             })
             .with_button_vertical_offset(DROPDOWN_VERTICAL_PADDING);
 
-        const WELCOME_TEXT: &str = "Select a settings profile to import:";
-        const LOADING_TEXT: &str = "Looking for settings to import...";
-
         let mut display_new_session_text = false;
 
         if let State::Completed {
@@ -985,7 +1001,7 @@ impl View for SettingsImportView {
         if display_new_session_text {
             new_session_setting_text = Container::new(
                 Text::new(
-                    "Some settings will take effect when you open a new session.",
+                    localization::text_for_app(app, "settings.import.new_session_notice"),
                     font_family,
                     font_size,
                 )
@@ -1006,9 +1022,13 @@ impl View for SettingsImportView {
 
         if matches!(self.state, State::Loading) {
             return Container::new(
-                Text::new(LOADING_TEXT, font_family, font_size)
-                    .with_color(font_color.into_solid())
-                    .finish(),
+                Text::new(
+                    localization::text_for_app(app, "settings.import.loading"),
+                    font_family,
+                    font_size,
+                )
+                .with_color(font_color.into_solid())
+                .finish(),
             )
             .with_margin_top(14.)
             .with_horizontal_margin(DROPDOWN_HORIZONTAL_MARGIN)
@@ -1020,10 +1040,14 @@ impl View for SettingsImportView {
             Flex::column()
                 .with_child(
                     Container::new(
-                        Text::new(WELCOME_TEXT, font_family, font_size)
-                            .with_color(font_color.into_solid())
-                            .with_style(Properties::default().weight(Weight::Bold))
-                            .finish(),
+                        Text::new(
+                            localization::text_for_app(app, "settings.import.welcome"),
+                            font_family,
+                            font_size,
+                        )
+                        .with_color(font_color.into_solid())
+                        .with_style(Properties::default().weight(Weight::Bold))
+                        .finish(),
                     )
                     .with_horizontal_margin(DROPDOWN_HORIZONTAL_MARGIN)
                     .with_margin_top(BLOCK_TOP_MARGIN)

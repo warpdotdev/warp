@@ -2279,8 +2279,11 @@ pub fn test_shell_reinitializing() -> Builder {
 
                         async_assert_eq!(
                             "Starting shell...".to_string(),
-                            view.prompt_render_helper
-                                .prompt_working_dir(&model, view.sessions(ctx)),
+                            view.prompt_render_helper.prompt_working_dir(
+                                &model,
+                                view.sessions(ctx),
+                                ctx
+                            ),
                             "Checking the prompt value"
                         )
                     })

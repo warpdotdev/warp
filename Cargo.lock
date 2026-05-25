@@ -14533,6 +14533,7 @@ dependencies = [
  "warp_graphql",
  "warp_isolation_platform",
  "warp_js",
+ "warp_localization",
  "warp_logging",
  "warp_managed_secrets",
  "warp_multi_agent_api",
@@ -14872,6 +14873,17 @@ dependencies = [
  "serde",
  "thiserror 2.0.17",
  "uuid",
+]
+
+[[package]]
+name = "warp_localization"
+version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+ "settings_value",
+ "thiserror 2.0.17",
 ]
 
 [[package]]

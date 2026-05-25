@@ -1,7 +1,10 @@
+use crate::localization;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::error::Error;
 use std::ffi::OsString;
+use std::fmt;
 use std::future::Future;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -27,6 +30,7 @@ use warp_cli::skill::SkillSpec;
 use warp_core::features::FeatureFlag;
 use warp_core::{report_error, report_if_error, safe_debug, safe_error, safe_info};
 use warp_graphql::ai::AgentTaskState;
+use warp_localization::{replace_placeholders, LocaleId};
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::r#async::{FutureExt, TimeoutError};
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
@@ -375,112 +379,84 @@ pub enum AgentRunPrompt {
     },
 }
 
-#[derive(Debug, thiserror::Error)]
+fn text(key: &str) -> String {
+    localization::text_for_locale(LocaleId::EnUs, key)
+}
+
+fn text_with_args(key: &str, args: &[(&str, &str)]) -> String {
+    replace_placeholders(&text(key), args)
+        .expect("localized text template arguments must match the catalog")
+}
+
+#[derive(Debug)]
 pub enum AgentDriverError {
-    #[error("Terminal session is not available.")]
     TerminalUnavailable,
-    #[error("Invalid runtime state - please file a bug report.")]
     InvalidRuntimeState,
-    #[error("Requested MCP server not found: {0}")]
     MCPServerNotFound(uuid::Uuid),
-    #[error("Failed to start MCP servers")]
     MCPStartupFailed,
-    #[error("Failed to parse MCP server JSON: {0}")]
     MCPJsonParseError(String),
-    #[error("MCP server configuration is missing required variables")]
     MCPMissingVariables,
-    #[error("Agent profile \"{0}\" not found")]
     ProfileError(String),
-    #[error(
-        "Failed to authenticate with server - please log in via 'oz login', provide an API key via '--api-key <key>', or set the WARP_API_KEY environment variable"
-    )]
     NotLoggedIn,
-    #[error("Saved prompt not found for id {0}")]
     AIWorkflowNotFound(String),
-    #[error("Terminal bootstrap failed")]
     BootstrapFailed,
-    #[error("Unable to share agent session")]
     ShareSessionFailed {
-        #[source]
         error: terminal::ShareSessionError,
     },
-    #[error("Error syncing Warp Drive")]
     WarpDriveSyncFailed,
-    #[error("Requested environment not found: {0}")]
     EnvironmentNotFound(String),
-    #[error("Environment setup failed: {0}")]
     EnvironmentSetupFailed(String),
-    #[error("Cloud provider setup failed")]
-    CloudProviderSetupFailed(#[from] cloud_provider::CloudProviderSetupError),
-    #[error("Could not resolve working directory {}", path.display())]
+    CloudProviderSetupFailed(cloud_provider::CloudProviderSetupError),
     InvalidWorkingDirectory {
         path: PathBuf,
-        #[source]
         source: io::Error,
     },
-    #[error("{error}")]
-    ConversationError { error: RenderableAIError },
-    #[error("Conversation was canceled: {reason}")]
-    ConversationCancelled { reason: CancellationReason },
-    #[error("The agent got stuck waiting for user confirmation on the action: {blocked_action}")]
-    ConversationBlocked { blocked_action: String },
-    #[error("Timed out refreshing team metadata")]
+    ConversationError {
+        error: RenderableAIError,
+    },
+    ConversationCancelled {
+        reason: CancellationReason,
+    },
+    ConversationBlocked {
+        blocked_action: String,
+    },
     TeamMetadataRefreshTimeout,
-    #[error("{0}")]
     SkillResolutionFailed(String),
-    #[error("Failed to build agent configuration")]
-    ConfigBuildFailed(#[source] anyhow::Error),
-    #[error("Failed to resolve server-side prompt")]
-    PromptResolutionFailed(#[source] anyhow::Error),
-    #[error("Failed to fetch task secrets")]
-    SecretsFetchFailed(#[source] anyhow::Error),
-    #[error("Failed to load conversation: {0}")]
+    ConfigBuildFailed(anyhow::Error),
+    PromptResolutionFailed(anyhow::Error),
+    SecretsFetchFailed(anyhow::Error),
     ConversationLoadFailed(String),
-    #[error("Failed to initialize AWS Bedrock credentials: {0}")]
     AwsBedrockCredentialsFailed(String),
-    #[error(
-        "Conversation {conversation_id} was produced by the {expected} harness, but --harness {got} was requested. \
-         Re-run with --harness {expected} (or omit --harness to match) to continue this conversation."
-    )]
     ConversationHarnessMismatch {
         conversation_id: String,
         expected: String,
         got: String,
     },
-    #[error(
-        "Task {task_id} was created with the {expected} harness, but --harness {got} was requested. \
-         Re-run with --harness {expected} (or omit --harness to match) to continue this task."
-    )]
     TaskHarnessMismatch {
         task_id: String,
         expected: String,
         got: String,
     },
-    #[error(
-        "Conversation {conversation_id} has no stored transcript for the {harness} harness. \
-         The prior run may have crashed before saving any state."
-    )]
     ConversationResumeStateMissing {
         harness: String,
         conversation_id: String,
     },
-    #[error("Harness command exited with code {exit_code}")]
-    HarnessCommandFailed { exit_code: i32 },
-    #[error("Harness '{harness}' setup failed: {reason}")]
-    HarnessSetupFailed { harness: String, reason: String },
-    #[error("Harness '{harness}' config setup failed")]
+    HarnessCommandFailed {
+        exit_code: i32,
+    },
+    HarnessSetupFailed {
+        harness: String,
+        reason: String,
+    },
     HarnessConfigSetupFailed {
         harness: String,
-        #[source]
         error: anyhow::Error,
     },
-    #[error("Harness '{harness}' auth preflight failed")]
     HarnessAuthCheckFailed {
         harness: String,
         /// Stderr/stdout captured from the failing command, for logs.
         detail: String,
     },
-    #[error("Harness '{harness}' reported a runtime failure matching '{pattern}'")]
     HarnessRuntimeFailureDetected {
         harness: String,
         /// The originating needle from `runtime_error_patterns` that hit.
@@ -488,6 +464,163 @@ pub enum AgentDriverError {
         /// Matching row(s) from the harness block, trimmed and capped.
         excerpt: String,
     },
+}
+
+impl fmt::Display for AgentDriverError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            AgentDriverError::TerminalUnavailable => {
+                text("agent_sdk.driver.error.terminal_unavailable")
+            }
+            AgentDriverError::InvalidRuntimeState => {
+                text("agent_sdk.driver.error.invalid_runtime_state")
+            }
+            AgentDriverError::MCPServerNotFound(uuid) => text_with_args(
+                "agent_sdk.driver.error.mcp_server_not_found",
+                &[("uuid", &uuid.to_string())],
+            ),
+            AgentDriverError::MCPStartupFailed => text("agent_sdk.driver.error.mcp_startup_failed"),
+            AgentDriverError::MCPJsonParseError(message) => text_with_args(
+                "agent_sdk.driver.error.mcp_json_parse_error",
+                &[("message", message)],
+            ),
+            AgentDriverError::MCPMissingVariables => {
+                text("agent_sdk.driver.error.mcp_missing_variables")
+            }
+            AgentDriverError::ProfileError(profile) => text_with_args(
+                "agent_sdk.driver.error.profile_not_found",
+                &[("profile", profile)],
+            ),
+            AgentDriverError::NotLoggedIn => text("agent_sdk.driver.error.not_logged_in"),
+            AgentDriverError::AIWorkflowNotFound(id) => text_with_args(
+                "agent_sdk.driver.error.saved_prompt_not_found",
+                &[("id", id)],
+            ),
+            AgentDriverError::BootstrapFailed => text("agent_sdk.driver.error.bootstrap_failed"),
+            AgentDriverError::ShareSessionFailed { .. } => {
+                text("agent_sdk.driver.error.share_session_failed")
+            }
+            AgentDriverError::WarpDriveSyncFailed => {
+                text("agent_sdk.driver.error.warp_drive_sync_failed")
+            }
+            AgentDriverError::EnvironmentNotFound(id) => text_with_args(
+                "agent_sdk.driver.error.environment_not_found",
+                &[("id", id)],
+            ),
+            AgentDriverError::EnvironmentSetupFailed(message) => text_with_args(
+                "agent_sdk.driver.error.environment_setup_failed",
+                &[("message", message)],
+            ),
+            AgentDriverError::CloudProviderSetupFailed(_) => {
+                text("agent_sdk.driver.error.cloud_provider_setup_failed")
+            }
+            AgentDriverError::InvalidWorkingDirectory { path, .. } => text_with_args(
+                "agent_sdk.driver.error.invalid_working_directory",
+                &[("path", &path.display().to_string())],
+            ),
+            AgentDriverError::ConversationError { error } => error.to_string(),
+            AgentDriverError::ConversationCancelled { reason } => text_with_args(
+                "agent_sdk.driver.error.conversation_cancelled",
+                &[("reason", &reason.to_string())],
+            ),
+            AgentDriverError::ConversationBlocked { blocked_action } => text_with_args(
+                "agent_sdk.driver.error.conversation_blocked",
+                &[("blocked_action", blocked_action)],
+            ),
+            AgentDriverError::TeamMetadataRefreshTimeout => {
+                text("agent_sdk.driver.error.team_metadata_refresh_timeout")
+            }
+            AgentDriverError::SkillResolutionFailed(message) => message.clone(),
+            AgentDriverError::ConfigBuildFailed(_) => {
+                text("agent_sdk.driver.error.config_build_failed")
+            }
+            AgentDriverError::PromptResolutionFailed(_) => {
+                text("agent_sdk.driver.error.prompt_resolution_failed")
+            }
+            AgentDriverError::SecretsFetchFailed(_) => {
+                text("agent_sdk.driver.error.secrets_fetch_failed")
+            }
+            AgentDriverError::ConversationLoadFailed(message) => text_with_args(
+                "agent_sdk.driver.error.conversation_load_failed",
+                &[("message", message)],
+            ),
+            AgentDriverError::AwsBedrockCredentialsFailed(message) => text_with_args(
+                "agent_sdk.driver.error.aws_bedrock_credentials_failed",
+                &[("message", message)],
+            ),
+            AgentDriverError::ConversationHarnessMismatch {
+                conversation_id,
+                expected,
+                got,
+            } => text_with_args(
+                "agent_sdk.driver.error.conversation_harness_mismatch",
+                &[
+                    ("conversation_id", conversation_id),
+                    ("expected", expected),
+                    ("got", got),
+                ],
+            ),
+            AgentDriverError::TaskHarnessMismatch {
+                task_id,
+                expected,
+                got,
+            } => text_with_args(
+                "agent_sdk.driver.error.task_harness_mismatch",
+                &[("task_id", task_id), ("expected", expected), ("got", got)],
+            ),
+            AgentDriverError::ConversationResumeStateMissing {
+                harness,
+                conversation_id,
+            } => text_with_args(
+                "agent_sdk.driver.error.conversation_resume_state_missing",
+                &[("conversation_id", conversation_id), ("harness", harness)],
+            ),
+            AgentDriverError::HarnessCommandFailed { exit_code } => text_with_args(
+                "agent_sdk.driver.error.harness_command_failed",
+                &[("exit_code", &exit_code.to_string())],
+            ),
+            AgentDriverError::HarnessSetupFailed { harness, reason } => text_with_args(
+                "agent_sdk.driver.error.harness_setup_failed",
+                &[("harness", harness), ("reason", reason)],
+            ),
+            AgentDriverError::HarnessConfigSetupFailed { harness, .. } => text_with_args(
+                "agent_sdk.driver.error.harness_config_setup_failed",
+                &[("harness", harness)],
+            ),
+            AgentDriverError::HarnessAuthCheckFailed { harness, .. } => text_with_args(
+                "agent_sdk.driver.error.harness_auth_check_failed",
+                &[("harness", harness)],
+            ),
+            AgentDriverError::HarnessRuntimeFailureDetected {
+                harness, pattern, ..
+            } => text_with_args(
+                "agent_sdk.driver.error.harness_runtime_failure_detected",
+                &[("harness", harness), ("pattern", pattern)],
+            ),
+        };
+        f.write_str(&message)
+    }
+}
+
+impl Error for AgentDriverError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            AgentDriverError::ShareSessionFailed { error } => Some(error),
+            AgentDriverError::CloudProviderSetupFailed(error) => Some(error),
+            AgentDriverError::InvalidWorkingDirectory { source, .. } => Some(source),
+            AgentDriverError::ConfigBuildFailed(error)
+            | AgentDriverError::PromptResolutionFailed(error)
+            | AgentDriverError::SecretsFetchFailed(error)
+            | AgentDriverError::HarnessConfigSetupFailed { error, .. } => Some(error.as_ref()),
+            _ => None,
+        }
+    }
+}
+
+impl From<cloud_provider::CloudProviderSetupError> for AgentDriverError {
+    fn from(error: cloud_provider::CloudProviderSetupError) -> Self {
+        AgentDriverError::CloudProviderSetupFailed(error)
+    }
 }
 
 impl From<warpui::ModelDropped> for AgentDriverError {
@@ -802,7 +935,13 @@ impl AgentDriver {
                     matches!(err, AgentDriverError::EnvironmentSetupFailed(_)),
                 ) {
                     let timeout = idle_timeout.min(SETUP_FAILED_IDLE_TIMEOUT);
-                    log::info!("Environment setup failed; keeping session alive for {timeout:?}");
+                    log::info!(
+                        "{}",
+                        text_with_args(
+                            "agent_sdk.driver.log.environment_setup_failed_idle",
+                            &[("timeout", &format!("{timeout:?}"))]
+                        )
+                    );
                     warpui::r#async::Timer::after(timeout).await;
                 }
             }
@@ -2261,14 +2400,16 @@ impl AgentDriver {
                     report_if_error!(runner
                         .save_conversation(SavePoint::Periodic, foreground)
                         .await
-                        .context("Failed to save harness conversation (periodic)"));
+                        .context(text(
+                            "agent_sdk.driver.error.save_harness_conversation_periodic"
+                        )));
                 }
                 _ = harness_exit_rx => {
                     log::debug!("Requesting harness exit");
                     report_if_error!(runner
                         .exit(foreground)
                         .await
-                        .context("Failed to exit harness"));
+                        .context(text("agent_sdk.driver.error.exit_harness")));
                 }
                 detected = scanner_fut => {
                     if let Some(error) = detected {
@@ -2333,8 +2474,9 @@ impl AgentDriver {
         let final_save_succeeded = match runner
             .save_conversation(SavePoint::Final, foreground)
             .await
-            .context("Failed to save harness conversation (final)")
-        {
+            .context(text(
+                "agent_sdk.driver.error.save_harness_conversation_final",
+            )) {
             Ok(()) => true,
             Err(err) => {
                 report_error!(err);
@@ -2352,7 +2494,9 @@ impl AgentDriver {
         if let Err(err) = runner
             .cleanup(cleanup_disposition, foreground)
             .await
-            .context("Failed to clean up harness runtime state")
+            .context(text(
+                "agent_sdk.driver.error.clean_up_harness_runtime_state",
+            ))
         {
             report_error!(err);
         }
@@ -2493,7 +2637,7 @@ impl AgentDriver {
                     // When a new exchange is appended, we should already have its inputs available.
                     report_if_error!(me
                         .write_exchange_inputs(exchange)
-                        .context("Failed to write exchange inputs"));
+                        .context(text("agent_sdk.driver.error.write_exchange_inputs")));
 
                     // Forward any successful file-edit paths from this exchange's inputs to the
                     // snapshot declarations writer so the end-of-run upload covers files written
@@ -2546,7 +2690,7 @@ impl AgentDriver {
                             report_if_error!(output::with_stdout_buffered(|buf| match me.output_format {
                                 OutputFormat::Json | OutputFormat::Ndjson => output::json::conversation_started(&token, buf),
                                 OutputFormat::Text | OutputFormat::Pretty => output::text::conversation_started(&token, buf),
-                            }).context("Failed to write conversation ID"));
+                            }).context(text("agent_sdk.driver.error.write_conversation_id")));
                             written_conversation_id = true;
 
                             // Store the server conversation token and record that we should update the task
@@ -2564,7 +2708,7 @@ impl AgentDriver {
                     if exchange.output_status.is_finished() {
                         report_if_error!(me
                             .write_exchange_output(exchange)
-                            .context("Failed to write exchange output"));
+                            .context(text("agent_sdk.driver.error.write_exchange_output")));
                     }
 
                     // Perform task update after all immutable borrows end
@@ -2731,7 +2875,7 @@ impl AgentDriver {
                     }
                 }
             })
-            .context("Failed to write artifact_created"));
+            .context(text("agent_sdk.driver.error.write_artifact_created")));
         });
 
         // Submit the AI query.
@@ -2895,12 +3039,16 @@ impl AgentDriver {
                             report_if_error!(runner
                                 .handle_session_update(&spawner)
                                 .await
-                                .context("Failed to update harness state from CLI session event"));
+                                .context(text(
+                                    "agent_sdk.driver.error.update_harness_state_from_cli_session_event"
+                                )));
                             log::debug!("Triggering post-turn save of harness conversation data");
                             report_if_error!(runner
                                 .save_conversation(SavePoint::PostTurn, &spawner)
                                 .await
-                                .context("Failed to save harness conversation (post-turn)"));
+                                .context(text(
+                                    "agent_sdk.driver.error.save_harness_conversation_post_turn"
+                                )));
                         },
                         |_, _, _| {},
                     );
@@ -2921,7 +3069,8 @@ impl AgentDriver {
         match event {
             TerminalDriverEvent::SlowBootstrap => {
                 eprintln!(
-                    "Warning: Terminal session is slow to bootstrap. See https://docs.warp.dev/support-and-community/troubleshooting-and-support/known-issues#shells to troubleshoot."
+                    "{}",
+                    text("agent_sdk.driver.warning.slow_terminal_bootstrap")
                 );
             }
             TerminalDriverEvent::EstablishedSharedSession {
@@ -2939,7 +3088,9 @@ impl AgentDriver {
                             report_if_error!(server_api
                                 .update_agent_task(task_id, None, Some(session_id), None, None)
                                 .await
-                                .context("Error setting ambient agent shared session ID"));
+                                .context(text(
+                                    "agent_sdk.driver.error.set_ambient_agent_shared_session_id"
+                                )));
                         },
                         |_, _, _| {},
                     );
@@ -2999,7 +3150,9 @@ impl AgentDriver {
 
         for provider in providers {
             if let Err(err) = provider.cleanup().await {
-                report_error!(anyhow!(err).context("Unable to clean up cloud provider"));
+                report_error!(
+                    anyhow!(err).context(text("agent_sdk.driver.error.clean_up_cloud_provider"))
+                );
             }
         }
     }
@@ -3201,7 +3354,7 @@ pub(super) fn write_run_started(run_id: &str, output_format: OutputFormat) {
         OutputFormat::Json | OutputFormat::Ndjson => output::json::run_started(run_id, buf),
         OutputFormat::Text | OutputFormat::Pretty => output::text::run_started(run_id, buf),
     })
-    .context("Failed to write run ID"));
+    .context(text("agent_sdk.driver.error.write_run_id")));
 }
 
 /// Report a driver-level error to the server for the given task.
@@ -3253,7 +3406,7 @@ fn write_session_joined(join_url: &str, output_format: OutputFormat) {
             output::text::shared_session_established(join_url, buf)
         }
     })
-    .context("Failed to write shared session event"));
+    .context(text("agent_sdk.driver.error.write_shared_session_event")));
 }
 
 #[cfg(test)]

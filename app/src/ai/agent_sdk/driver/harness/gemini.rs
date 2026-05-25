@@ -17,8 +17,9 @@ use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::json_utils::{read_json_file_or_default, write_json_file};
 use super::{
-    write_temp_file, HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload,
-    SavePoint, ThirdPartyHarness,
+    default_text, default_text_with_args, default_text_with_path, write_temp_file,
+    HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
+    ThirdPartyHarness,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
@@ -199,7 +200,12 @@ impl HarnessRunner for GeminiHarnessRunner {
                 });
             })
             .await
-            .map_err(|_| anyhow::anyhow!("Agent driver dropped while sending /quit"))
+            .map_err(|_| {
+                anyhow::anyhow!(default_text_with_args(
+                    "agent_sdk.driver.harness.error.driver_dropped_sending_command",
+                    &[("command", GEMINI_EXIT_COMMAND)],
+                ))
+            })
     }
 
     async fn save_conversation(
@@ -249,8 +255,11 @@ fn prepare_gemini_environment_config(
     working_dir: &Path,
     system_prompt: Option<&str>,
 ) -> Result<()> {
-    let home_dir =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?;
+    let home_dir = dirs::home_dir().ok_or_else(|| {
+        anyhow::anyhow!(default_text(
+            "agent_sdk.driver.harness.error.home_directory"
+        ))
+    })?;
     let gemini_dir = home_dir.join(GEMINI_CONFIG_DIR);
     prepare_gemini_settings(
         &gemini_dir.join(GEMINI_SETTINGS_FILE_NAME),
@@ -263,9 +272,9 @@ fn prepare_gemini_environment_config(
     if let Some(prompt) = system_prompt {
         let prompt_path = gemini_dir.join(GEMINI_SYSTEM_PROMPT_FILE_NAME);
         std::fs::write(&prompt_path, prompt).with_context(|| {
-            format!(
-                "Failed to write Gemini system prompt to {}",
-                prompt_path.display()
+            default_text_with_path(
+                "agent_sdk.driver.harness.gemini.error.write_system_prompt",
+                &prompt_path,
             )
         })?;
     }
@@ -292,7 +301,7 @@ fn prepare_gemini_settings(settings_path: &Path, has_system_prompt: bool) -> Res
     write_json_file(
         settings_path,
         &settings,
-        "Failed to serialize Gemini settings",
+        default_text("agent_sdk.driver.harness.gemini.error.serialize_settings"),
     )
 }
 
@@ -305,7 +314,7 @@ fn prepare_gemini_trusted_folders(trusted_path: &Path, working_dir: &Path) -> Re
     write_json_file(
         trusted_path,
         &trusted,
-        "Failed to serialize Gemini trusted folders",
+        default_text("agent_sdk.driver.harness.gemini.error.serialize_trusted_folders"),
     )
 }
 

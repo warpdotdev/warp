@@ -1,3 +1,4 @@
+use crate::localization;
 use warpui::elements::{
     Container, CrossAxisAlignment, Flex, MainAxisAlignment, MouseStateHandle, ParentElement, Text,
 };
@@ -44,7 +45,7 @@ impl SharerGrantBody {
         }
     }
 
-    fn render_button_row(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_button_row(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let cancel_button = Container::new(
             appearance
                 .ui_builder()
@@ -59,7 +60,7 @@ impl SharerGrantBody {
                     width: Some(BUTTON_WIDTH),
                     ..Default::default()
                 })
-                .with_centered_text_label(String::from("Cancel"))
+                .with_centered_text_label(text(app, "shared_session.role_change.action.cancel"))
                 .build()
                 .with_cursor(Cursor::PointingHand)
                 .on_click(move |ctx, _, _| ctx.dispatch_typed_action(SharerGrantBodyAction::Cancel))
@@ -82,7 +83,7 @@ impl SharerGrantBody {
                 width: Some(BUTTON_WIDTH),
                 ..Default::default()
             })
-            .with_centered_text_label(String::from("Make Editor"))
+            .with_centered_text_label(text(app, "shared_session.role_change.action.make_editor"))
             .build()
             .with_cursor(Cursor::PointingHand)
             .on_click(move |ctx, _, _| {
@@ -108,10 +109,10 @@ impl View for SharerGrantBody {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let button_row = self.render_button_row(appearance);
+        let button_row = self.render_button_row(appearance, app);
 
-        let text1 = "This grants the ability to execute commands on your";
-        let text2 = "behalf. Use with caution.";
+        let text1 = text(app, "shared_session.role_change.grant_warning.line_1");
+        let text2 = text(app, "shared_session.role_change.grant_warning.line_2");
         let text_body = Container::new(
             Flex::column()
                 .with_child(
@@ -145,7 +146,10 @@ impl View for SharerGrantBody {
                     self.dont_show_again_mouse_state.clone(),
                     Some(TEXT_FONT_SIZE),
                 )
-                .with_label(Span::new("Don't show again.", Default::default()))
+                .with_label(Span::new(
+                    text(app, "workspace.close_session.dont_show_again"),
+                    Default::default(),
+                ))
                 .check(self.dont_show_again)
                 .build()
                 .with_cursor(Cursor::PointingHand)
@@ -165,6 +169,10 @@ impl View for SharerGrantBody {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .finish()
     }
+}
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
 }
 
 impl TypedActionView for SharerGrantBody {

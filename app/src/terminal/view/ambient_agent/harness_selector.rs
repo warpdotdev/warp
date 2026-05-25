@@ -23,6 +23,7 @@ use crate::ai::blocklist::agent_view::agent_input_footer::AgentInputButtonTheme;
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display::{brand_color, icon_for};
+use crate::localization;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::report_if_error;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
@@ -53,11 +54,11 @@ const MENU_WIDTH: f32 = 208.;
 /// than the default `ui_font_size()` to give the logos more visual presence.
 const ITEM_ICON_SIZE: f32 = 16.;
 
-/// Tooltip string for the closed-state button.
-const BUTTON_TOOLTIP: &str = "Agent harness";
-
-/// Label rendered at the top of the dropdown.
-const MENU_HEADER_LABEL: &str = "Agent harness";
+const BUTTON_TOOLTIP_KEY: &str = "terminal.ambient_agent.harness_selector.tooltip.agent_harness";
+const LOCKED_TO_WARP_TOOLTIP_KEY: &str =
+    "terminal.ambient_agent.harness_selector.tooltip.locked_to_warp";
+const DISABLED_BY_ADMIN_TOOLTIP_KEY: &str =
+    "terminal.ambient_agent.harness_selector.tooltip.disabled_by_admin";
 
 /// Actions dispatched by the [`HarnessSelector`].
 #[derive(Clone, Debug, PartialEq)]
@@ -90,12 +91,12 @@ impl HarnessSelector {
         ambient_agent_model: ModelHandle<AmbientAgentViewModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let button = ctx.add_typed_action_view(|_ctx| {
+        let button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_size(ButtonSize::AgentInputButton)
                 .with_menu(true)
                 .with_disabled_theme(AgentInputButtonTheme)
-                .with_tooltip(BUTTON_TOOLTIP)
+                .with_tooltip(localization::text_for_app(ctx, BUTTON_TOOLTIP_KEY))
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(HarnessSelectorAction::ToggleMenu);
                 })
@@ -225,9 +226,9 @@ impl HarnessSelector {
             button.set_disabled(is_locked_to_oz, ctx);
             button.set_tooltip(
                 Some(if is_locked_to_oz {
-                    "This conversation is with the Warp Agent, so the cloud handoff will also use Warp"
+                    localization::text_for_app(ctx, LOCKED_TO_WARP_TOOLTIP_KEY)
                 } else {
-                    BUTTON_TOOLTIP
+                    localization::text_for_app(ctx, BUTTON_TOOLTIP_KEY)
                 }),
                 ctx,
             );
@@ -250,6 +251,7 @@ impl HarnessSelector {
             hover_background,
             header_text_color,
             disabled_text_color,
+            ctx,
         );
         self.menu.update(ctx, |menu, ctx| {
             menu.set_border(Some(border));
@@ -281,9 +283,10 @@ fn build_menu_items(
     hover_background: Fill,
     header_text_color: pathfinder_color::ColorU,
     disabled_text_color: pathfinder_color::ColorU,
+    app: &AppContext,
 ) -> Vec<MenuItem<HarnessSelectorAction>> {
     let header = MenuItem::Header {
-        fields: MenuItemFields::new(MENU_HEADER_LABEL)
+        fields: MenuItemFields::new(localization::text_for_app(app, BUTTON_TOOLTIP_KEY))
             .with_font_size_override(HEADER_FONT_SIZE)
             .with_override_text_color(header_text_color)
             .with_padding_override(HEADER_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
@@ -312,7 +315,10 @@ fn build_menu_items(
             fields = fields
                 .with_disabled(true)
                 .with_override_text_color(disabled_text_color)
-                .with_tooltip("Disabled by your administrator");
+                .with_tooltip(localization::text_for_app(
+                    app,
+                    DISABLED_BY_ADMIN_TOOLTIP_KEY,
+                ));
         }
         items.push(MenuItem::Item(fields));
     }

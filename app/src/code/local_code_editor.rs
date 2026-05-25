@@ -1,3 +1,16 @@
+use crate::{
+    code::{
+        buffer_location::LocalOrRemotePath as BufferFileLocation,
+        editor::model::HoverableLink,
+        footer::{CodeFooterView, CodeFooterViewEvent},
+        global_buffer_model::{BufferState, GlobalBufferModel},
+        SaveOutcome, ShowFindReferencesCardProvider,
+    },
+    debounce::debounce,
+    localization,
+    settings::AISettings,
+    terminal::TerminalView,
+};
 /// This module contains a model that can be used for loading and saving text files
 /// and displaying them in a code editor.
 /// It also handles applying an optional diff to the file content that will be applied
@@ -59,17 +72,10 @@ use warpui::{
 use remote_server::manager::RemoteServerManager;
 
 use crate::ai::persisted_workspace::{PersistedWorkspace, PersistedWorkspaceEvent};
-use crate::code::buffer_location::LocalOrRemotePath as BufferFileLocation;
-use crate::code::editor::model::HoverableLink;
 use crate::code::editor::EditorReviewComment;
-use crate::code::footer::{CodeFooterView, CodeFooterViewEvent};
-use crate::code::global_buffer_model::{BufferState, GlobalBufferModel, GlobalBufferModelEvent};
-use crate::code::{SaveOutcome, ShowFindReferencesCardProvider};
+use crate::code::global_buffer_model::GlobalBufferModelEvent;
 use crate::code_review::comments::CommentId;
-use crate::debounce::debounce;
 use crate::menu::{Event, Menu, MenuItem, MenuItemFields};
-use crate::settings::AISettings;
-use crate::terminal::TerminalView;
 use crate::workspace::WorkspaceAction;
 
 const DROP_SHADOW_COLOR: ColorU = ColorU {
@@ -1834,7 +1840,7 @@ impl LocalCodeEditorView {
                         Shrinkable::new(
                             1.,
                             Text::new_inline(
-                                "Add as context",
+                                text(app, "code.selection_tooltip.add_as_context"),
                                 appearance.ui_font_family(),
                                 appearance.ui_font_size(),
                             )
@@ -1949,12 +1955,12 @@ impl LocalCodeEditorView {
     }
 
     /// Creates menu items for the context menu
-    fn context_menu_items(&self) -> Vec<MenuItem<LocalCodeEditorAction>> {
+    fn context_menu_items(&self, app: &AppContext) -> Vec<MenuItem<LocalCodeEditorAction>> {
         vec![
-            MenuItemFields::new("Go to definition")
+            MenuItemFields::new(text(app, "code.menu.go_to_definition"))
                 .with_on_select_action(LocalCodeEditorAction::GotoDefinition)
                 .into_item(),
-            MenuItemFields::new("Find references")
+            MenuItemFields::new(text(app, "code.menu.find_references"))
                 .with_on_select_action(LocalCodeEditorAction::FindReferences)
                 .into_item(),
         ]
@@ -2174,6 +2180,7 @@ impl View for LocalCodeEditorView {
                     self.conflict_banner_mouse_states
                         .overwrite_mouse_state
                         .clone(),
+                    app,
                 );
                 let mut col = Flex::column().with_child(banner);
 
@@ -2338,7 +2345,7 @@ impl TypedActionView for LocalCodeEditorView {
                 // Only show context menu if LSP is available
                 if self.is_lsp_server_available(ctx) {
                     self.context_menu_state.is_open = true;
-                    let menu_items = self.context_menu_items();
+                    let menu_items = self.context_menu_items(ctx);
                     self.context_menu.update(ctx, move |menu, ctx| {
                         menu.set_items(menu_items, ctx);
                         ctx.notify();
@@ -2363,6 +2370,7 @@ pub fn render_unsaved_changes_banner(
     appearance: &Appearance,
     discard_mouse_state: MouseStateHandle,
     overwrite_mouse_state: MouseStateHandle,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let left = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -2384,7 +2392,7 @@ pub fn render_unsaved_changes_banner(
             Shrinkable::new(
                 1.,
                 Text::new(
-                    "This file has saved changes that are not reflected here.",
+                    text(app, "code.saved_changes_notice"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )
@@ -2402,7 +2410,7 @@ pub fn render_unsaved_changes_banner(
             appearance
                 .ui_builder()
                 .button(ButtonVariant::Text, discard_mouse_state)
-                .with_text_label("Discard this version".into())
+                .with_text_label(text(app, "code.action.discard_this_version"))
                 .with_style(UiComponentStyles {
                     height: Some(24.),
                     padding: Some(Coords {
@@ -2424,7 +2432,7 @@ pub fn render_unsaved_changes_banner(
                 appearance
                     .ui_builder()
                     .button(ButtonVariant::Outlined, overwrite_mouse_state)
-                    .with_text_label("Overwrite".into())
+                    .with_text_label(text(app, "code.action.overwrite"))
                     .with_style(UiComponentStyles {
                         font_color: Some(appearance.theme().active_ui_text_color().into()),
                         ..Default::default()
@@ -2586,4 +2594,8 @@ impl ShowFindReferencesCardProvider for ShowFindReferencesCard {
         let lower_left_in = parent_bounds.contains_point(card_anchor_location.lower_left());
         upper_right_in || lower_left_in
     }
+}
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
 }

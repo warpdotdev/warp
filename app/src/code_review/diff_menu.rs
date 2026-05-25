@@ -1,5 +1,6 @@
 //! Overlay menu for the code review diff selector: pinned search input and
 //! a filtered list of label-only rows with a left check slot.
+use crate::localization;
 use std::cmp;
 
 use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
@@ -112,7 +113,10 @@ impl CodeReviewDiffMenu {
                 ..Default::default()
             };
             let mut editor = EditorView::new(options, ctx);
-            editor.set_placeholder_text("Search diff sets or branches to compare…", ctx);
+            editor.set_placeholder_text(
+                localization::text_for_app(ctx, "code_review.diff_menu.search_placeholder"),
+                ctx,
+            );
             editor
         });
 
@@ -275,11 +279,11 @@ impl CodeReviewDiffMenu {
             .finish()
     }
 
-    fn render_empty_state(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_empty_state(&self, app: &AppContext, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         Container::new(
             Text::new(
-                "No matches",
+                localization::text_for_app(app, "code_review.diff_menu.no_matches"),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -294,7 +298,7 @@ impl CodeReviewDiffMenu {
     fn render_rows(&self, ctx: &AppContext) -> Box<dyn Element> {
         if self.filtered.is_empty() {
             if !self.search_query.is_empty() {
-                return self.render_empty_state(Appearance::as_ref(ctx));
+                return self.render_empty_state(ctx, Appearance::as_ref(ctx));
             }
             return Empty::new().finish();
         }

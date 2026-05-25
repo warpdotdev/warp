@@ -1,5 +1,6 @@
 //! Shared tooltip UI components for file path and link tooltips
 
+use crate::localization;
 #[cfg(feature = "local_fs")]
 use std::path::Path;
 
@@ -201,7 +202,10 @@ where
             .with_child(
                 appearance
                     .ui_builder()
-                    .span("*Secrets are not sent to Warp's server.")
+                    .span(localization::text_for_app(
+                        app,
+                        "tooltip.secrets_not_sent_to_server",
+                    ))
                     .with_style(UiComponentStyles {
                         font_size: Some(12.),
                         margin: Some(Coords::default().top(4.)),

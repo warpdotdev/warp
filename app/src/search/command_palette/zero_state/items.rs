@@ -1,3 +1,4 @@
+use crate::localization;
 use warpui::elements::{Container, Flex, ParentElement};
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::ui_components::text::WrappableText;
@@ -170,7 +171,10 @@ impl Items {
         let mut flex = Flex::column();
 
         if !self.recent.is_empty() {
-            flex.add_child(Self::render_section_text("Recent", appearance));
+            flex.add_child(Self::render_section_text(
+                localization::text_for_app(app, "search.command_palette.zero_state.recent"),
+                appearance,
+            ));
 
             flex.add_children(self.recent.iter().enumerate().map(|(idx, result)| {
                 Self::render_query_result(
@@ -183,7 +187,10 @@ impl Items {
         }
 
         if !self.suggested.is_empty() {
-            flex.add_child(Self::render_section_text("Suggested", appearance));
+            flex.add_child(Self::render_section_text(
+                localization::text_for_app(app, "search.command_palette.zero_state.suggested"),
+                appearance,
+            ));
 
             flex.add_children(self.suggested.iter().enumerate().map(|(idx, result)| {
                 Self::render_query_result(

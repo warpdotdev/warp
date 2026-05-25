@@ -25,7 +25,12 @@ use super::requested_action::render_header_buttons;
 use crate::ai::blocklist::block::view_impl::WithContentItemSpacing;
 use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
 use crate::ai::blocklist::inline_action::requested_action::render_requested_action_row_for_text;
+use crate::localization;
 use crate::ui_components::icons::Icon;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 pub struct TitledScript {
     pub title: String,
@@ -338,12 +343,12 @@ fn script_status(
     is_collapsed: bool,
     is_viewing_detail: bool,
     app: &AppContext,
-) -> (&str, Box<dyn Element>) {
+) -> (String, Box<dyn Element>) {
     let appearance = Appearance::as_ref(app);
     let label = match (is_executing, is_collapsed) {
-        (true, _) => "Running...",
-        (false, true) => "Expand to show script",
-        (false, false) => "Hide",
+        (true, _) => text(app, "agent.requested_script.running"),
+        (false, true) => text(app, "agent.requested_script.expand"),
+        (false, false) => text(app, "agent.requested_script.hide"),
     };
     let is_expanded = (is_executing && is_viewing_detail) || (!is_executing && !is_collapsed);
     let icon = ConstrainedBox::new(

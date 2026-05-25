@@ -17,7 +17,16 @@ use warpui::{AppContext, ModelHandle, SingletonEntity};
 use super::common::set_ambient_task_context_from_run_id;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::artifacts::Artifact;
+use crate::localization;
 use crate::server::server_api::ServerApiProvider;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
+
+fn text_with_args(app: &AppContext, key: &str, args: &[(&str, &str)]) -> String {
+    localization::text_for_app_with_args(app, key, args)
+}
 
 /// Run harness-support commands.
 pub fn run(
@@ -26,7 +35,10 @@ pub fn run(
     args: HarnessSupportArgs,
 ) -> Result<()> {
     if !FeatureFlag::AgentHarness.is_enabled() {
-        return Err(anyhow::anyhow!("This feature is not enabled"));
+        return Err(anyhow::anyhow!(text(
+            ctx,
+            "agent_sdk.common.error.feature_not_enabled"
+        )));
     }
 
     // Store the run ID so that it's included on all server requests, along with a workload token.
@@ -75,7 +87,7 @@ fn ping(
                             println!("{json}");
                         }
                         OutputFormat::Pretty | OutputFormat::Text => {
-                            super::ambient::print_tasks(&[task]);
+                            super::ambient::print_tasks(&[task], ctx);
                         }
                     }
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
@@ -121,7 +133,14 @@ fn report_artifact(
                             println!("{json}");
                         }
                         OutputFormat::Pretty | OutputFormat::Text => {
-                            println!("Artifact reported: {}", response.artifact_uid);
+                            println!(
+                                "{}",
+                                text_with_args(
+                                    ctx,
+                                    "agent_sdk.harness_support.output.artifact_reported",
+                                    &[("artifact_uid", &response.artifact_uid)]
+                                )
+                            );
                         }
                     }
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
@@ -155,7 +174,10 @@ fn notify_user(
                             println!("{{}}");
                         }
                         OutputFormat::Pretty | OutputFormat::Text => {
-                            println!("Notification sent.");
+                            println!(
+                                "{}",
+                                text(ctx, "agent_sdk.harness_support.output.notification_sent")
+                            );
                         }
                     }
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
@@ -192,7 +214,10 @@ fn finish_task(
                             println!("{{}}");
                         }
                         OutputFormat::Pretty | OutputFormat::Text => {
-                            println!("Task finished.");
+                            println!(
+                                "{}",
+                                text(ctx, "agent_sdk.harness_support.output.task_finished")
+                            );
                         }
                     }
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
@@ -219,6 +244,10 @@ fn report_shutdown(
 ) -> Result<()> {
     runner.update(ctx, |_, ctx| {
         let client = ServerApiProvider::as_ref(ctx).get_harness_support_client();
+        let paired_error_message = text(
+            ctx,
+            "agent_sdk.harness_support.error.shutdown_error_args_required",
+        );
 
         ctx.spawn(
             async move {
@@ -227,9 +256,7 @@ fn report_shutdown(
                         client.report_error_shutdown(category, message).await
                     }
                     (None, None) => client.report_clean_shutdown().await,
-                    _ => anyhow::bail!(
-                        "--error-category and --error-message must be provided together"
-                    ),
+                    _ => anyhow::bail!(paired_error_message),
                 }
             },
             move |_, result, ctx| match result {
@@ -239,7 +266,10 @@ fn report_shutdown(
                             println!("{{}}");
                         }
                         OutputFormat::Pretty | OutputFormat::Text => {
-                            println!("Shutdown reported.");
+                            println!(
+                                "{}",
+                                text(ctx, "agent_sdk.harness_support.output.shutdown_reported")
+                            );
                         }
                     }
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);

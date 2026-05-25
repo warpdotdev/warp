@@ -1,11 +1,16 @@
+use crate::localization;
 use std::collections::HashMap;
+use std::error::Error;
 use std::ffi::OsString;
+use std::fmt;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
+use warp_localization::replace_placeholders;
+use warp_localization::LocaleId;
 
 use futures::channel::oneshot;
 use session_sharing_protocol::common::{Role, SessionId};
@@ -37,25 +42,51 @@ use crate::terminal::TerminalView;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// Describes why an agent's session-sharing request failed.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub(crate) enum ShareSessionError {
     /// Connection to the session-sharing server failed.
-    #[error("Internal error")]
-    Internal(#[source] Arc<anyhow::Error>),
+    Internal(Arc<anyhow::Error>),
     /// The server rejected the session-sharing request.
-    #[error("{0}")]
     Failed(String),
     /// Session sharing is disabled for this user or team.
-    #[error(
-        "Session sharing is not enabled. This is likely because an administrator has disabled session sharing for your team."
-    )]
     Disabled,
     /// The session-sharing request timed out.
-    #[error("Timed out waiting for session sharing to start")]
     Timeout,
     /// The session-sharing channel was dropped before completing.
-    #[error("Session sharing was interrupted")]
     Interrupted,
+}
+
+fn text(key: &str) -> String {
+    localization::text_for_locale(LocaleId::EnUs, key)
+}
+
+fn text_with_args(key: &str, args: &[(&str, &str)]) -> String {
+    replace_placeholders(&text(key), args)
+        .expect("localized text template arguments must match the catalog")
+}
+
+impl fmt::Display for ShareSessionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            ShareSessionError::Internal(_) => text("agent_sdk.driver.terminal.error.internal"),
+            ShareSessionError::Failed(reason) => reason.clone(),
+            ShareSessionError::Disabled => text("agent_sdk.driver.terminal.error.share_disabled"),
+            ShareSessionError::Timeout => text("agent_sdk.driver.terminal.error.share_timeout"),
+            ShareSessionError::Interrupted => {
+                text("agent_sdk.driver.terminal.error.share_interrupted")
+            }
+        };
+        f.write_str(&message)
+    }
+}
+
+impl Error for ShareSessionError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            ShareSessionError::Internal(error) => Some(error.as_ref().as_ref()),
+            _ => None,
+        }
+    }
 }
 
 const TERMINAL_SESSION_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60);
@@ -582,9 +613,13 @@ impl TerminalDriver {
                     })
                 }
                 Err(_timeout) => {
+                    let seconds = TERMINAL_SESSION_SHARE_DELAY.as_secs().to_string();
                     log::error!(
-                        "Timed out waiting for session sharing to start after {}s",
-                        TERMINAL_SESSION_SHARE_DELAY.as_secs()
+                        "{}",
+                        text_with_args(
+                            "agent_sdk.driver.terminal.error.share_timeout_after",
+                            &[("seconds", &seconds)]
+                        )
                     );
                     Err(AgentDriverError::ShareSessionFailed {
                         error: ShareSessionError::Timeout,

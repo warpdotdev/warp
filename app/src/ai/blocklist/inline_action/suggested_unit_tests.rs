@@ -1,3 +1,4 @@
+use crate::localization;
 use std::sync::Arc;
 
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
@@ -32,8 +33,9 @@ use crate::view_components::compactible_action_button::{
 };
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
-const ACCEPT_LABEL: &str = "Generate tests";
-const CANCEL_LABEL: &str = "Dismiss";
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 #[derive(Debug, Clone)]
 pub enum SuggestedUnitTestsEvent {
@@ -82,7 +84,7 @@ impl SuggestedUnitTestsView {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let accept_button = CompactibleActionButton::new(
-            ACCEPT_LABEL.to_string(),
+            text(ctx, "agent.suggested_unit_tests.generate_tests"),
             Some(KeystrokeSource::Binding(
                 ACCEPT_PROMPT_SUGGESTION_KEYBINDING,
             )),
@@ -94,7 +96,7 @@ impl SuggestedUnitTestsView {
         );
 
         let cancel_button = CompactibleActionButton::new(
-            CANCEL_LABEL.to_string(),
+            text(ctx, "agent.suggested_unit_tests.dismiss"),
             Some(KeystrokeSource::Fixed(
                 REJECT_PROMPT_SUGGESTION_KEYSTROKE.clone(),
             )),
@@ -312,7 +314,10 @@ impl SuggestedUnitTestsView {
 
         let checkbox_text = appearance
             .ui_builder()
-            .span("Don't show me suggested code banners again")
+            .span(text(
+                app,
+                "settings.ai.active.suggested_code_banners.hide_again",
+            ))
             .with_style(UiComponentStyles {
                 font_color: Some(font_color),
                 font_size: Some(font_size),
@@ -325,8 +330,8 @@ impl SuggestedUnitTestsView {
         let formatted_text = FormattedTextElement::new(
             FormattedText::new([FormattedTextLine::Line(vec![
                 FormattedTextFragment::hyperlink(
-                    "Manage suggested code banner settings",
-                    "Settings > AI",
+                    text(app, "settings.ai.active.suggested_code_banners.manage"),
+                    text(app, "settings.nav.ai"),
                 ),
             ])]),
             font_size,

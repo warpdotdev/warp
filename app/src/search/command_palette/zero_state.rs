@@ -54,6 +54,7 @@ impl ZeroState {
     /// clicked, the filter is emitted in a [`Event::FilterChipSelected`] event.
     fn render_filter_chips(
         &self,
+        app: &AppContext,
         appearance: &Appearance,
         valid_filters: impl IntoIterator<Item = QueryFilter>,
     ) -> Box<dyn Element> {
@@ -62,6 +63,7 @@ impl ZeroState {
             .with_children(valid_filters.into_iter().map(|filter| {
                 Container::new(filter.render_filter_chip(
                     self.filter_chip_to_mouse_state_handle[&filter].clone(),
+                    app,
                     appearance,
                     |event_ctx, filter| {
                         event_ctx.dispatch_typed_action(Action::FilterChipClicked { filter })
@@ -137,9 +139,11 @@ impl View for ZeroState {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let mut flex = Flex::column().with_child(
-            self.render_filter_chips(appearance, Self::valid_query_filters(app, self.window_id)),
-        );
+        let mut flex = Flex::column().with_child(self.render_filter_chips(
+            app,
+            appearance,
+            Self::valid_query_filters(app, self.window_id),
+        ));
 
         let zero_state_items = self.items.as_ref(app).render(app);
         flex.add_child(Shrinkable::new(1., zero_state_items).finish());

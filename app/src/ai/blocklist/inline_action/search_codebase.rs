@@ -1,3 +1,4 @@
+use crate::localization;
 use std::ops::Range;
 use std::sync::{Arc, RwLock};
 
@@ -34,6 +35,10 @@ use crate::terminal::ShellLaunchData;
 use crate::util::link_detection::{
     detect_links, DetectedLinkType, DetectedLinksState, LinkLocation,
 };
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 pub enum SearchCodebaseViewEvent {
     OpenLinkTooltip {
@@ -155,9 +160,11 @@ impl SearchCodebaseView {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let title_text = if let Some(repo_name) = &self.repo_name {
-            format!("Searched for \"{}\" in {}", self.search_query, repo_name)
+            text(app, "agent.search_codebase.searched_in_repo")
+                .replace("{query}", &self.search_query)
+                .replace("{repo}", repo_name)
         } else {
-            format!("Searched for \"{}\"", self.search_query)
+            text(app, "agent.search_codebase.searched").replace("{query}", &self.search_query)
         };
 
         let body = if self.collapsible.is_expanded {
@@ -229,7 +236,11 @@ impl SearchCodebaseView {
                 font_size: Some(appearance.monospace_font_size()),
                 ..Default::default()
             };
-            self.render_formatted_text("No results found".to_string(), no_results_style, appearance)
+            self.render_formatted_text(
+                text(app, "agent.search_codebase.no_results_found"),
+                no_results_style,
+                appearance,
+            )
         } else {
             render_read_files_text(
                 render_read_file_args,

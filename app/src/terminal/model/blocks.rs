@@ -737,7 +737,9 @@ impl BlockList {
                 self.finish_active_block_before_followup_append();
                 self.restore_block(block, BootstrapStage::PostBootstrapPrecmd, &mut processor);
             } else {
-                log::warn!("A non-active follow-up scrollback block was either not started or not completed");
+                log::warn!(
+                    "A non-active follow-up scrollback block was either not started or not completed"
+                );
             }
         }
 
@@ -3386,7 +3388,9 @@ impl BlockList {
 
 impl ansi::Handler for BlockList {
     fn set_title(&mut self, _: Option<String>) {
-        log::error!("Handler method BlockList::set_title should never be called. This should be handled by TerminalModel.");
+        log::error!(
+            "Handler method BlockList::set_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn set_cursor_style(&mut self, style: Option<CursorStyle>) {
@@ -3664,11 +3668,15 @@ impl ansi::Handler for BlockList {
     }
 
     fn push_title(&mut self) {
-        log::error!("Handler method BlockList::push_title should never be called. This should be handled by TerminalModel.");
+        log::error!(
+            "Handler method BlockList::push_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn pop_title(&mut self) {
-        log::error!("Handler method BlockList::pop_title should never be called. This should be handled by TerminalModel.");
+        log::error!(
+            "Handler method BlockList::pop_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn text_area_size_pixels<W: io::Write>(&mut self, writer: &mut W) {

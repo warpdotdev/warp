@@ -1,3 +1,4 @@
+use crate::localization;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::MouseStateHandle;
 use warpui::ui_components::components::UiComponent;
@@ -74,7 +75,10 @@ impl ExpireApiKeyButton {
                 | Err(_) => {
                     me.request_state = RequestState::Idle;
                     ctx.emit(ExpireApiKeyButtonEvent::ExpireApiKeyFailed {
-                        message: "Failed to delete API key. Please try again.".to_string(),
+                        message: localization::text_for_app(
+                            ctx,
+                            "settings.platform.api_keys.error.delete_failed",
+                        ),
                     });
                     ctx.notify();
                 }

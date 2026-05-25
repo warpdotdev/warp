@@ -9,7 +9,7 @@ use warpui::SingletonEntity;
 use warpui_extras::user_preferences;
 
 use super::{
-    migrate_native_settings_to_settings_file, needs_settings_file_migration,
+    migrate_native_settings_to_settings_file, should_migrate_settings_file,
     SETTINGS_FILE_MIGRATION_COMPLETE_KEY,
 };
 use crate::terminal::session_settings::{NotificationsMode, NotificationsSettings};
@@ -218,6 +218,7 @@ fn test_migration_handles_string_setting() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_migration_does_not_rerun_when_marker_present() {
     warpui::App::test((), |mut app| async move {
         let _guard = FeatureFlag::SettingsFile.override_enabled(true);
@@ -235,7 +236,7 @@ fn test_migration_does_not_rerun_when_marker_present() {
         // Before migration, the guard should allow migration.
         app.read(|ctx| {
             assert!(
-                needs_settings_file_migration(ctx),
+                should_migrate_settings_file(ctx, false),
                 "migration should be needed before first run"
             );
         });
@@ -248,7 +249,7 @@ fn test_migration_does_not_rerun_when_marker_present() {
         // After migration, the marker should prevent re-migration.
         app.read(|ctx| {
             assert!(
-                !needs_settings_file_migration(ctx),
+                !should_migrate_settings_file(ctx, false),
                 "migration should not be needed after marker is written"
             );
         });

@@ -1,3 +1,5 @@
+use crate::localization;
+use std::borrow::Cow;
 pub mod telemetry;
 
 use std::cell::RefCell;
@@ -702,6 +704,7 @@ struct PaneRowState {
 }
 
 enum TerminalPrimaryLineData {
+    DefaultText,
     StatusText {
         text: String,
     },
@@ -712,10 +715,14 @@ enum TerminalPrimaryLineData {
 }
 
 impl TerminalPrimaryLineData {
-    fn text(&self) -> &str {
+    fn display_text(&self, app: &AppContext) -> Cow<'_, str> {
         match self {
+            TerminalPrimaryLineData::DefaultText => Cow::Owned(localization::text_for_app(
+                app,
+                "workspace.vertical_tabs.new_session",
+            )),
             TerminalPrimaryLineData::StatusText { text, .. }
-            | TerminalPrimaryLineData::Text { text, .. } => text,
+            | TerminalPrimaryLineData::Text { text, .. } => Cow::Borrowed(text),
         }
     }
 }
@@ -1258,7 +1265,7 @@ fn render_control_bar(
         .with_child(Shrinkable::new(1., text_input).finish())
         .finish();
 
-    let settings_button = render_settings_button(state, appearance);
+    let settings_button = render_settings_button(state, appearance, app);
     let new_tab_button = render_new_tab_button(state, workspace, appearance, app);
 
     Container::new(
@@ -1334,12 +1341,15 @@ fn render_detail_kind_badge_icon(
 fn render_settings_button(
     state: &VerticalTabsPanelState,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let sub_text = theme.sub_text_color(theme.background());
     let main_text = theme.main_text_color(theme.background());
     let is_popup_open = state.show_settings_popup;
     let ui_builder = appearance.ui_builder().clone();
+    let view_options_tooltip =
+        localization::text_for_app(app, "workspace.vertical_tabs.tooltip.view_options");
 
     let button = Hoverable::new(
         state.settings_button_mouse_state.clone(),
@@ -1369,7 +1379,7 @@ fn render_settings_button(
 
             if hover_state.is_hovered() && !is_popup_open {
                 let tooltip = ui_builder
-                    .tool_tip("View options".to_string())
+                    .tool_tip(view_options_tooltip.clone())
                     .build()
                     .finish();
                 let mut stack = Stack::new().with_child(button_container);
@@ -1407,6 +1417,8 @@ fn render_new_tab_button(
     let sub_text = theme.sub_text_color(theme.background());
     let main_text = theme.main_text_color(theme.background());
     let ui_builder = appearance.ui_builder().clone();
+    let tab_configs_tooltip =
+        localization::text_for_app(app, "workspace.vertical_tabs.tooltip.tab_configs");
     let tab_configs_keybinding =
         keybinding_name_to_display_string(super::TOGGLE_TAB_CONFIGS_MENU_BINDING_NAME, app);
     let is_active = workspace.show_new_session_dropdown_menu.is_some()
@@ -1442,12 +1454,12 @@ fn render_new_tab_button(
         let contents = if hover_state.is_hovered() {
             let tooltip = if let Some(sublabel) = tab_configs_keybinding.clone() {
                 ui_builder
-                    .tool_tip_with_sublabel("Tab configs".to_string(), sublabel)
+                    .tool_tip_with_sublabel(tab_configs_tooltip.clone(), sublabel)
                     .build()
                     .finish()
             } else {
                 ui_builder
-                    .tool_tip("Tab configs".to_string())
+                    .tool_tip(tab_configs_tooltip.clone())
                     .build()
                     .finish()
             };
@@ -1551,9 +1563,13 @@ fn render_groups(
 
     if workspace.tabs.is_empty() {
         return Container::new(
-            Text::new_inline("No tabs open", appearance.ui_font_family(), 12.)
-                .with_color(theme.sub_text_color(theme.background()).into())
-                .finish(),
+            Text::new_inline(
+                localization::text_for_app(app, "workspace.vertical_tabs.empty.no_tabs_open"),
+                appearance.ui_font_family(),
+                12.,
+            )
+            .with_color(theme.sub_text_color(theme.background()).into())
+            .finish(),
         )
         .with_padding(Padding::uniform(12.))
         .finish();
@@ -1679,7 +1695,10 @@ fn render_groups(
         } else {
             return Container::new(
                 Text::new_inline(
-                    "No tabs match your search.",
+                    localization::text_for_app(
+                        app,
+                        "workspace.vertical_tabs.empty.no_search_results",
+                    ),
                     appearance.ui_font_family(),
                     12.,
                 )
@@ -2299,7 +2318,7 @@ fn render_group_header(props: GroupHeaderProps<'_>, app: &AppContext) -> Box<dyn
     let theme = appearance.theme();
     let title = pane_group.display_title(app);
     let title = if title.is_empty() {
-        "Untitled tab".to_string()
+        localization::text_for_app(app, "workspace.vertical_tabs.untitled_tab")
     } else {
         title
     };
@@ -2614,22 +2633,27 @@ impl TypedPane<'_> {
         matches!(self, TypedPane::Terminal(_) | TypedPane::Code(_))
             || self.warp_drive_object_type().is_some()
     }
-    fn kind_label(&self) -> &'static str {
-        match self {
-            TypedPane::Terminal(_) => "Terminal",
-            TypedPane::Code(_) => "Code",
-            TypedPane::CodeDiff => "Code Diff",
-            TypedPane::File => "File",
-            TypedPane::Notebook { .. } => "Notebook",
-            TypedPane::Workflow { .. } => "Workflow",
-            TypedPane::Settings => "Settings",
-            TypedPane::EnvVarCollection => "Environment Variables",
-            TypedPane::EnvironmentManagement => "Environments",
-            TypedPane::AIFact => "Rules",
-            TypedPane::AIDocument => "Plan",
-            TypedPane::ExecutionProfileEditor => "Execution Profile",
-            TypedPane::Other => "Other",
-        }
+    fn kind_label(&self, app: &AppContext) -> String {
+        let key = match self {
+            TypedPane::Terminal(_) => "workspace.vertical_tabs.pane_kind.terminal",
+            TypedPane::Code(_) => "workspace.vertical_tabs.pane_kind.code",
+            TypedPane::CodeDiff => "workspace.vertical_tabs.pane_kind.code_diff",
+            TypedPane::File => "workspace.vertical_tabs.pane_kind.file",
+            TypedPane::Notebook { .. } => "workspace.vertical_tabs.pane_kind.notebook",
+            TypedPane::Workflow { .. } => "workspace.vertical_tabs.pane_kind.workflow",
+            TypedPane::Settings => "workspace.vertical_tabs.pane_kind.settings",
+            TypedPane::EnvVarCollection => {
+                "workspace.vertical_tabs.pane_kind.environment_variables"
+            }
+            TypedPane::EnvironmentManagement => "workspace.vertical_tabs.pane_kind.environments",
+            TypedPane::AIFact => "workspace.vertical_tabs.pane_kind.rules",
+            TypedPane::AIDocument => "workspace.vertical_tabs.pane_kind.plan",
+            TypedPane::ExecutionProfileEditor => {
+                "workspace.vertical_tabs.pane_kind.execution_profile"
+            }
+            TypedPane::Other => "workspace.vertical_tabs.pane_kind.other",
+        };
+        localization::text_for_app(app, key)
     }
 
     fn badge(&self, app: &AppContext) -> Option<String> {
@@ -2638,7 +2662,7 @@ impl TypedPane<'_> {
                 .file_view(app)
                 .as_ref(app)
                 .contains_unsaved_changes(app)
-                .then(|| "Unsaved".to_string()),
+                .then(|| localization::text_for_app(app, "workspace.vertical_tabs.badge.unsaved")),
             TypedPane::Terminal(_)
             | TypedPane::CodeDiff
             | TypedPane::File
@@ -2680,6 +2704,7 @@ fn pane_display_title_and_subtitle(
     typed: &TypedPane<'_>,
     title: &str,
     secondary_title: &str,
+    app: &AppContext,
 ) -> (String, String) {
     if matches!(typed, TypedPane::Code(_)) && !title.is_empty() {
         let path = Path::new(title);
@@ -2698,7 +2723,7 @@ fn pane_display_title_and_subtitle(
     } else {
         (
             if title.is_empty() {
-                typed.kind_label().to_string()
+                typed.kind_label(app)
             } else {
                 title.to_string()
             },
@@ -2730,6 +2755,7 @@ fn build_vertical_tabs_summary_data(
             &typed,
             pane_configuration.title().trim(),
             pane_configuration.title_secondary().trim(),
+            app,
         );
 
         match typed {
@@ -2757,11 +2783,12 @@ fn build_vertical_tabs_summary_data(
                     terminal_title_fallback_font(&agent_text),
                     terminal_view.last_completed_command_text(),
                 );
+                let primary_label_text = primary_label.display_text(app);
                 let status = summary_conversation_status_for_terminal(terminal_view, app);
                 push_normalized_unique_summary_label(
                     &mut primary_labels,
                     &mut primary_seen,
-                    primary_label.text(),
+                    primary_label_text.as_ref(),
                     status,
                 );
 
@@ -2873,6 +2900,7 @@ impl<'a> PaneProps<'a> {
             &typed,
             pane_configuration.title().trim(),
             pane_configuration.title_secondary().trim(),
+            app,
         );
 
         Some(Self {
@@ -3018,8 +3046,8 @@ fn terminal_pane_search_text_fragments(
                 terminal_title_fallback_font(&agent_text),
                 terminal_view.last_completed_command_text(),
             )
-            .text()
-            .to_string()
+            .display_text(app)
+            .into_owned()
         });
     let pull_request_label = terminal_view
         .current_pull_request_url(app)
@@ -3030,7 +3058,7 @@ fn terminal_pane_search_text_fragments(
         primary_text,
         working_directory,
         terminal_view.current_git_branch(app),
-        terminal_kind_badge_label(agent_text.is_oz_agent, agent_text.cli_agent),
+        terminal_kind_badge_label(agent_text.is_oz_agent, agent_text.cli_agent, app),
         pull_request_label,
         terminal_view.current_diff_line_changes(app),
     )
@@ -3100,19 +3128,20 @@ fn terminal_primary_line_data(
         };
     }
 
-    TerminalPrimaryLineData::Text {
-        text: "New session".to_string(),
-        font: TerminalPrimaryLineFont::Ui,
-    }
+    TerminalPrimaryLineData::DefaultText
 }
 
-fn terminal_kind_badge_label(is_oz_agent: bool, cli_agent: Option<CLIAgent>) -> String {
+fn terminal_kind_badge_label(
+    is_oz_agent: bool,
+    cli_agent: Option<CLIAgent>,
+    app: &AppContext,
+) -> String {
     if let Some(cli_agent) = cli_agent {
         cli_agent.display_name().to_string()
     } else if is_oz_agent {
         "Oz".to_string()
     } else {
-        "Terminal".to_string()
+        localization::text_for_app(app, "workspace.vertical_tabs.pane_kind.terminal")
     }
 }
 
@@ -3294,7 +3323,9 @@ fn cloud_agent_working_directory_and_env(
         .and_then(|id| CloudAmbientAgentEnvironment::get_by_id(id, app))
         .map(|env| env.model().string_model.display_name());
 
-    let setup_status: Option<&str> = model_ref.agent_progress().map(|p| p.setup_status_text());
+    let setup_status: Option<String> = model_ref
+        .agent_progress()
+        .map(|p| localization::text_for_app(app, p.setup_status_text_key()));
 
     match (env_name, setup_status, working_directory) {
         (Some(env), Some(status), _) => Some(format!("{env} · {status}")),
@@ -4156,6 +4187,7 @@ fn render_terminal_primary_line_for_view(
         terminal_view,
         appearance,
         text_color,
+        app,
     )
 }
 
@@ -4168,6 +4200,7 @@ fn render_terminal_primary_line(
     terminal_view: &TerminalView,
     appearance: &Appearance,
     text_color: WarpThemeFill,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
 
@@ -4196,6 +4229,17 @@ fn render_terminal_primary_line(
             .finish()
     };
     match primary_line {
+        TerminalPrimaryLineData::DefaultText => {
+            let title_el = Text::new_inline(
+                primary_line.display_text(app).into_owned(),
+                appearance.ui_font_family(),
+                12.,
+            )
+            .with_clip(ClipConfig::ellipsis())
+            .with_color(text_color.into())
+            .finish();
+            wrap_with_error_indicator(title_el)
+        }
         TerminalPrimaryLineData::StatusText { text, .. } => {
             Text::new_inline(text, appearance.ui_font_family(), 12.)
                 .with_clip(ClipConfig::ellipsis())
@@ -4599,27 +4643,33 @@ fn subtitle_options_for_primary(
 ) -> [(VerticalTabsCompactSubtitle, &'static str); 2] {
     match primary {
         VerticalTabsPrimaryInfo::Command => [
-            (VerticalTabsCompactSubtitle::Branch, "Branch"),
+            (
+                VerticalTabsCompactSubtitle::Branch,
+                "workspace.vertical_tabs.settings.branch",
+            ),
             (
                 VerticalTabsCompactSubtitle::WorkingDirectory,
-                "Working Directory",
+                "workspace.vertical_tabs.settings.working_directory",
             ),
         ],
         VerticalTabsPrimaryInfo::WorkingDirectory => [
-            (VerticalTabsCompactSubtitle::Branch, "Branch"),
+            (
+                VerticalTabsCompactSubtitle::Branch,
+                "workspace.vertical_tabs.settings.branch",
+            ),
             (
                 VerticalTabsCompactSubtitle::Command,
-                "Command / Conversation",
+                "workspace.vertical_tabs.settings.command_conversation",
             ),
         ],
         VerticalTabsPrimaryInfo::Branch => [
             (
                 VerticalTabsCompactSubtitle::Command,
-                "Command / Conversation",
+                "workspace.vertical_tabs.settings.command_conversation",
             ),
             (
                 VerticalTabsCompactSubtitle::WorkingDirectory,
-                "Working Directory",
+                "workspace.vertical_tabs.settings.working_directory",
             ),
         ],
     }
@@ -4659,10 +4709,11 @@ pub(super) fn render_settings_popup(
         resolve_vertical_tabs_mode(app),
         VerticalTabsResolvedMode::Summary
     );
+    let text = |key: &str| localization::text_for_app(app, key);
     let sub_text = theme.sub_text_color(theme.background());
     let view_as_header = Container::new(
         Text::new_inline(
-            "View as".to_string(),
+            text("workspace.vertical_tabs.settings.view_as"),
             appearance.ui_font_family(),
             SETTINGS_POPUP_MENU_ITEM_FONT_SIZE,
         )
@@ -4681,7 +4732,7 @@ pub(super) fn render_settings_popup(
                 Expanded::new(
                     1.,
                     render_popup_text_segment(
-                        "Panes",
+                        &text("workspace.vertical_tabs.settings.panes"),
                         matches!(current_granularity, VerticalTabsDisplayGranularity::Panes),
                         state.panes_segment_mouse_state.clone(),
                         VerticalTabsDisplayGranularity::Panes,
@@ -4695,7 +4746,7 @@ pub(super) fn render_settings_popup(
                 Expanded::new(
                     1.,
                     render_popup_text_segment(
-                        "Tabs",
+                        &text("workspace.vertical_tabs.settings.tabs"),
                         matches!(current_granularity, VerticalTabsDisplayGranularity::Tabs),
                         state.tabs_segment_mouse_state.clone(),
                         VerticalTabsDisplayGranularity::Tabs,
@@ -4721,7 +4772,7 @@ pub(super) fn render_settings_popup(
 
     let tab_item_header = Container::new(
         Text::new_inline(
-            "Tab item".to_string(),
+            text("workspace.vertical_tabs.settings.tab_item"),
             appearance.ui_font_family(),
             SETTINGS_POPUP_MENU_ITEM_FONT_SIZE,
         )
@@ -4733,7 +4784,7 @@ pub(super) fn render_settings_popup(
     .finish();
 
     let focused_session_option = render_tab_item_mode_option(
-        "Focused session",
+        &text("workspace.vertical_tabs.settings.focused_session"),
         matches!(
             current_tab_item_mode,
             VerticalTabsTabItemMode::FocusedSession
@@ -4746,7 +4797,7 @@ pub(super) fn render_settings_popup(
 
     let summary_option = if FeatureFlag::VerticalTabsSummaryMode.is_enabled() {
         Some(render_tab_item_mode_option(
-            "Summary",
+            &text("workspace.vertical_tabs.settings.summary"),
             matches!(current_tab_item_mode, VerticalTabsTabItemMode::Summary),
             state.summary_option_mouse_state.clone(),
             VerticalTabsTabItemMode::Summary,
@@ -4759,7 +4810,7 @@ pub(super) fn render_settings_popup(
 
     let density_header = Container::new(
         Text::new_inline(
-            "Density".to_string(),
+            text("workspace.vertical_tabs.settings.density"),
             appearance.ui_font_family(),
             SETTINGS_POPUP_MENU_ITEM_FONT_SIZE,
         )
@@ -4836,7 +4887,7 @@ pub(super) fn render_settings_popup(
 
     let pane_title_header = Container::new(
         Text::new_inline(
-            "Pane title as".to_string(),
+            text("workspace.vertical_tabs.settings.pane_title_as"),
             appearance.ui_font_family(),
             SETTINGS_POPUP_MENU_ITEM_FONT_SIZE,
         )
@@ -4848,7 +4899,7 @@ pub(super) fn render_settings_popup(
     .finish();
 
     let command_option = render_primary_info_option(
-        "Command / Conversation",
+        &text("workspace.vertical_tabs.settings.command_conversation"),
         matches!(current_primary_info, VerticalTabsPrimaryInfo::Command),
         state.command_option_mouse_state.clone(),
         VerticalTabsPrimaryInfo::Command,
@@ -4857,7 +4908,7 @@ pub(super) fn render_settings_popup(
     );
 
     let directory_option = render_primary_info_option(
-        "Working Directory",
+        &text("workspace.vertical_tabs.settings.working_directory"),
         matches!(
             current_primary_info,
             VerticalTabsPrimaryInfo::WorkingDirectory
@@ -4869,7 +4920,7 @@ pub(super) fn render_settings_popup(
     );
 
     let branch_option = render_primary_info_option(
-        "Branch",
+        &text("workspace.vertical_tabs.settings.branch"),
         matches!(current_primary_info, VerticalTabsPrimaryInfo::Branch),
         state.branch_option_mouse_state.clone(),
         VerticalTabsPrimaryInfo::Branch,
@@ -4907,7 +4958,7 @@ pub(super) fn render_settings_popup(
 
             let subtitle_header = Container::new(
                 Text::new_inline(
-                    "Additional metadata".to_string(),
+                    text("workspace.vertical_tabs.settings.additional_metadata"),
                     appearance.ui_font_family(),
                     SETTINGS_POPUP_MENU_ITEM_FONT_SIZE,
                 )
@@ -4924,9 +4975,9 @@ pub(super) fn render_settings_popup(
                 state.subtitle_option_1_mouse_state.clone(),
                 state.subtitle_option_2_mouse_state.clone(),
             ];
-            for (i, (value, label)) in options.iter().enumerate() {
+            for (i, (value, label_key)) in options.iter().enumerate() {
                 popup_col.add_child(render_compact_subtitle_option(
-                    label,
+                    &text(label_key),
                     current_subtitle == *value,
                     mouse_states[i].clone(),
                     *value,
@@ -4941,7 +4992,7 @@ pub(super) fn render_settings_popup(
 
             let show_header = Container::new(
                 Text::new_inline(
-                    "Show".to_string(),
+                    text("workspace.vertical_tabs.settings.show"),
                     appearance.ui_font_family(),
                     SETTINGS_POPUP_MENU_ITEM_FONT_SIZE,
                 )
@@ -4958,14 +5009,14 @@ pub(super) fn render_settings_popup(
             let pr_link_info_tooltip = if show_pr_link && pr_validation_suppressed {
                 Some(ShowToggleInfoTooltip {
                     mouse_state: state.show_pr_link_info_tooltip_mouse_state.clone(),
-                    tooltip_text: "Requires the GitHub CLI to be installed and authenticated",
+                    tooltip_text: text("workspace.vertical_tabs.settings.github_cli_required"),
                 })
             } else {
                 None
             };
 
             popup_col.add_child(render_show_toggle_option(
-                "PR link",
+                &text("workspace.vertical_tabs.settings.pr_link"),
                 show_pr_link,
                 state.show_pr_link_mouse_state.clone(),
                 WorkspaceAction::ToggleVerticalTabsShowPrLink,
@@ -4974,7 +5025,7 @@ pub(super) fn render_settings_popup(
                 theme,
             ));
             popup_col.add_child(render_show_toggle_option(
-                "Diff stats",
+                &text("workspace.vertical_tabs.settings.diff_stats"),
                 show_diff_stats,
                 state.show_diff_stats_mouse_state.clone(),
                 WorkspaceAction::ToggleVerticalTabsShowDiffStats,
@@ -4987,7 +5038,7 @@ pub(super) fn render_settings_popup(
     popup_col.add_child(make_divider(theme));
 
     popup_col.add_child(render_show_toggle_option(
-        "Show details on hover",
+        &text("workspace.vertical_tabs.settings.show_details_on_hover"),
         show_details_on_hover,
         state.show_details_on_hover_mouse_state.clone(),
         WorkspaceAction::ToggleVerticalTabsShowDetailsOnHover,
@@ -5175,7 +5226,7 @@ fn render_primary_info_option(
 
 struct ShowToggleInfoTooltip {
     mouse_state: MouseStateHandle,
-    tooltip_text: &'static str,
+    tooltip_text: String,
 }
 
 fn render_show_toggle_option(
@@ -5199,7 +5250,7 @@ fn render_show_toggle_option(
     let ui_builder = appearance.ui_builder().clone();
 
     let info_mouse_state = info_tooltip.as_ref().map(|t| t.mouse_state.clone());
-    let info_tooltip_text = info_tooltip.as_ref().map(|t| t.tooltip_text.to_string());
+    let info_tooltip_text = info_tooltip.as_ref().map(|t| t.tooltip_text.clone());
 
     Hoverable::new(mouse_state, move |hover_state| {
         let check_icon: Box<dyn Element> = if is_enabled {
@@ -5596,8 +5647,10 @@ fn render_terminal_detail_primary_line(
     primary_line: &TerminalPrimaryLineData,
     color: WarpThemeFill,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let font_family = match primary_line {
+        TerminalPrimaryLineData::DefaultText => appearance.ui_font_family(),
         TerminalPrimaryLineData::StatusText { .. } => appearance.ui_font_family(),
         TerminalPrimaryLineData::Text { font, .. } => match font {
             TerminalPrimaryLineFont::Ui => appearance.ui_font_family(),
@@ -5605,10 +5658,14 @@ fn render_terminal_detail_primary_line(
         },
     };
 
-    Text::new(primary_line.text().to_string(), font_family, 12.)
-        .soft_wrap(true)
-        .with_color(color.into())
-        .finish()
+    Text::new(
+        primary_line.display_text(app).into_owned(),
+        font_family,
+        12.,
+    )
+    .soft_wrap(true)
+    .with_color(color.into())
+    .finish()
 }
 
 fn detail_pane_props<'a>(
@@ -5666,7 +5723,7 @@ fn render_terminal_detail_section(
     let agent_text = terminal_agent_text(terminal_view, app);
     let (conversation_display_title, cli_agent_title) =
         preferred_agent_tab_titles(&agent_text, agent_tab_text_preference(app));
-    let kind_label = terminal_kind_badge_label(agent_text.is_oz_agent, agent_text.cli_agent);
+    let kind_label = terminal_kind_badge_label(agent_text.is_oz_agent, agent_text.cli_agent, app);
     let status = if let Some(session) =
         cli_agent_session.filter(|s| s.listener.is_some() && agent_supports_rich_status(&s.agent))
     {
@@ -5716,6 +5773,7 @@ fn render_terminal_detail_section(
         &primary_line,
         text_colors.sub,
         appearance,
+        app,
     ));
 
     let mut metadata_row = Flex::row()
@@ -5802,7 +5860,11 @@ fn render_code_detail_section(
 
     if extra_open_tabs > 0 {
         section.add_child(render_detail_wrapping_text(
-            format!("and {extra_open_tabs} more"),
+            localization::text_for_app_with_args(
+                app,
+                "workspace.vertical_tabs.and_more",
+                &[("count", &extra_open_tabs.to_string())],
+            ),
             12.,
             text_colors.sub,
             None,
@@ -5858,7 +5920,7 @@ fn render_warp_drive_object_detail_section(
         appearance,
     ));
     section.add_child(render_detail_badge(
-        props.typed.kind_label(),
+        props.typed.kind_label(app),
         Some(render_detail_kind_badge_icon(props, appearance, app)),
         None,
         text_colors.disabled,
@@ -6201,10 +6263,14 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
                         terminal_view.last_completed_command_text(),
                     );
                     Some(
-                        Text::new_inline(line_data.text().to_string(), font_family, 10.)
-                            .with_clip(ClipConfig::ellipsis())
-                            .with_color(sub_text_color.into())
-                            .finish(),
+                        Text::new_inline(
+                            line_data.display_text(app).into_owned(),
+                            font_family,
+                            10.,
+                        )
+                        .with_clip(ClipConfig::ellipsis())
+                        .with_color(sub_text_color.into())
+                        .finish(),
                     )
                 }
             };

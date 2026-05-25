@@ -1,3 +1,4 @@
+use crate::localization;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -19,6 +20,10 @@ use crate::settings_view::features_page::render_group;
 use crate::settings_view::settings_page::{render_body_item, LocalOnlyIconState, ToggleState};
 use crate::undo_close::settings::UndoCloseEnabled;
 use crate::undo_close::UndoCloseSettings;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum Action {
@@ -111,7 +116,11 @@ impl UndoCloseView {
     }
 
     /// Renders the editor for the grace period duration.
-    fn render_grace_period_editor(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_grace_period_editor(
+        &self,
+        app: &AppContext,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
         let border_color = if self.is_grace_period_valid {
@@ -133,7 +142,7 @@ impl UndoCloseView {
             .with_child(
                 Container::new(
                     Text::new_inline(
-                        "Grace period (seconds)",
+                        text(app, "settings.features.undo_close.grace_period.label"),
                         appearance.ui_font_family(),
                         appearance.ui_font_size(),
                     )
@@ -174,7 +183,7 @@ impl View for UndoCloseView {
         let mut column = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(render_body_item::<Action>(
-                "Enable reopening of closed sessions".into(),
+                text(app, "settings.features.undo_close.label"),
                 None,
                 LocalOnlyIconState::for_setting(
                     UndoCloseEnabled::storage_key(),
@@ -197,7 +206,7 @@ impl View for UndoCloseView {
 
         if enabled {
             column.add_child(render_group(
-                [self.render_grace_period_editor(appearance)],
+                [self.render_grace_period_editor(app, appearance)],
                 appearance,
             ));
         }

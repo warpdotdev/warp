@@ -653,7 +653,9 @@ impl CloudPreferencesSyncer {
                 && !settings_manager.sync_regardless_of_users_syncing_setting(storage_key)
             {
                 // Skip syncing if settings sync is disabled and this particular cloud pref is not always synced.
-                log::debug!("Not syncing cloud preference with storage key {storage_key} because settings sync is disabled for it");
+                log::debug!(
+                    "Not syncing cloud preference with storage key {storage_key} because settings sync is disabled for it"
+                );
                 continue;
             }
 
@@ -670,7 +672,9 @@ impl CloudPreferencesSyncer {
                 .unwrap_or(false);
             if !is_current_value_syncable {
                 // Don't sync this preference if the current value is not syncable.
-                log::debug!("Not syncing cloud preference with storage key {storage_key} because the current value is not syncable");
+                log::debug!(
+                    "Not syncing cloud preference with storage key {storage_key} because the current value is not syncable"
+                );
                 continue;
             }
 

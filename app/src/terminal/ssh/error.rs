@@ -1,10 +1,13 @@
+use crate::localization;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use warp_core::channel::ChannelState;
 use warp_core::ui::theme::WarpTheme;
+use warpui::elements::Text;
 use warpui::elements::{
     Border, Container, CrossAxisAlignment, Flex, HighlightedHyperlink, Hoverable, Icon,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
 };
+use warpui::fonts::{Properties, Weight};
 use warpui::keymap::FixedBinding;
 use warpui::platform::Cursor;
 use warpui::ui_components::button::ButtonVariant;
@@ -21,18 +24,6 @@ use crate::terminal::warpify::render::{apply_spacing_styles, build_description_r
 use crate::terminal::warpify::settings::WarpifySettings;
 use crate::ui_components::icons::Icon as UiIcon;
 
-const TMUX_NOT_INSTALLED_ERROR: &str =
-    "tmux is not installed on the remote machine. Please install tmux and try again.";
-const UNSUPPORTED_TMUX_VERSION_ERROR: &str =
-    "The tmux version available on the remote machine is below 3.0. Please install tmux 3.0 or greater using a different method and try again.";
-const TMUX_FAILED_ERROR: &str =
-    "tmux failed to execute on the remote machine. Please re-install tmux and try again.";
-const WARPIFY_TIMEOUT_ERROR: &str = "Warpifying the session hit a timeout.";
-const UNSUPPORTED_SHELL_ERROR: &str =
-    "Unsupported shell. Please set bash, zsh, or fish as your default shell and try again.";
-const TMUX_INSTALL_FAILED_ERROR: &str =
-    "The tmux install hit an unexpected error. Please install tmux manually and try again.";
-
 const SSH_GITHUB_ISSUE_URL: &str = "https://github.com/warpdotdev/Warp/issues/new?assignees=&labels=Bugs,SSH-tmux&projects=&template=03_ssh_tmux.yml";
 
 fn get_ssh_github_issue_url(title: &str) -> String {
@@ -48,38 +39,58 @@ fn get_ssh_github_issue_url(title: &str) -> String {
 }
 
 impl WarpificationUnavailableReason {
-    fn error_message(&self) -> &'static str {
+    fn text_key(&self) -> &'static str {
         match self {
-            WarpificationUnavailableReason::TmuxNotInstalled { .. } => TMUX_NOT_INSTALLED_ERROR,
-            WarpificationUnavailableReason::UnsupportedTmuxVersion { .. } => {
-                UNSUPPORTED_TMUX_VERSION_ERROR
+            WarpificationUnavailableReason::TmuxNotInstalled { .. } => {
+                "terminal.ssh_error.tmux_not_installed"
             }
-            WarpificationUnavailableReason::TmuxFailed => TMUX_FAILED_ERROR,
-            WarpificationUnavailableReason::Timeout { .. } => WARPIFY_TIMEOUT_ERROR,
-            WarpificationUnavailableReason::UnsupportedShell { .. } => UNSUPPORTED_SHELL_ERROR,
-            WarpificationUnavailableReason::TmuxInstallFailed { .. } => TMUX_INSTALL_FAILED_ERROR,
+            WarpificationUnavailableReason::UnsupportedTmuxVersion { .. } => {
+                "terminal.ssh_error.unsupported_tmux_version"
+            }
+            WarpificationUnavailableReason::TmuxFailed => "terminal.ssh_error.tmux_failed",
+            WarpificationUnavailableReason::Timeout { .. } => "terminal.ssh_error.warpify_timeout",
+            WarpificationUnavailableReason::UnsupportedShell { .. } => {
+                "terminal.ssh_error.unsupported_shell"
+            }
+            WarpificationUnavailableReason::TmuxInstallFailed { .. } => {
+                "terminal.ssh_error.tmux_install_failed"
+            }
         }
     }
 
-    fn error_title(&self) -> &'static str {
+    fn title_key(&self) -> &'static str {
         match self {
-            WarpificationUnavailableReason::TmuxNotInstalled { .. } => "tmux Not Installed",
-            WarpificationUnavailableReason::UnsupportedTmuxVersion { .. } => {
-                "Unsupported Tmux Version"
+            WarpificationUnavailableReason::TmuxNotInstalled { .. } => {
+                "terminal.ssh_error.title.tmux_not_installed"
             }
-            WarpificationUnavailableReason::TmuxFailed => "tmux Failed",
+            WarpificationUnavailableReason::UnsupportedTmuxVersion { .. } => {
+                "terminal.ssh_error.title.unsupported_tmux_version"
+            }
+            WarpificationUnavailableReason::TmuxFailed => "terminal.ssh_error.title.tmux_failed",
             WarpificationUnavailableReason::Timeout {
                 is_tmux_install, ..
             } => {
                 if *is_tmux_install {
-                    "tmux Install Timeout"
+                    "terminal.ssh_error.title.tmux_install_timeout"
                 } else {
-                    "SSH Warpify Timeout"
+                    "terminal.ssh_error.title.ssh_warpify_timeout"
                 }
             }
-            WarpificationUnavailableReason::UnsupportedShell { .. } => "Unsupported Shell",
-            WarpificationUnavailableReason::TmuxInstallFailed { .. } => "tmux Install Failed",
+            WarpificationUnavailableReason::UnsupportedShell { .. } => {
+                "terminal.ssh_error.title.unsupported_shell"
+            }
+            WarpificationUnavailableReason::TmuxInstallFailed { .. } => {
+                "terminal.ssh_error.title.tmux_install_failed"
+            }
         }
+    }
+
+    fn error_message(&self, app: &AppContext) -> String {
+        localization::text_for_app(app, self.text_key())
+    }
+
+    fn error_title(&self, app: &AppContext) -> String {
+        localization::text_for_app(app, self.title_key())
     }
 }
 
@@ -165,14 +176,26 @@ impl SshErrorBlock {
         theme: &WarpTheme,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let header_contents = warpify::render::build_header_row(
-            "Error Warpifying session",
-            Icon::new(UiIcon::AlertTriangle.into(), theme.ui_error_color()),
-            theme,
-            appearance,
-        )
-        .with_margin_right(8.)
-        .finish();
+        let mut header_row = Flex::row();
+        header_row
+            .add_child(Icon::new(UiIcon::AlertTriangle.into(), theme.ui_error_color()).finish());
+        header_row.add_child(
+            Container::new(
+                Text::new(
+                    localization::text_for_app(app, "terminal.ssh_error.header"),
+                    appearance.monospace_font_family(),
+                    appearance.monospace_font_size(),
+                )
+                .with_style(Properties::default().weight(Weight::Bold))
+                .with_color(theme.active_ui_text_color().into())
+                .finish(),
+            )
+            .with_margin_left(8.)
+            .finish(),
+        );
+        let header_contents = Container::new(header_row.finish())
+            .with_margin_right(8.)
+            .finish();
 
         let right_hand_size = warpify::render::render_never_warpify_ssh_link(
             &self.ssh_host,
@@ -219,8 +242,9 @@ impl View for SshErrorBlock {
 
         content.add_child(self.render_title_ui(app, theme, appearance));
 
+        let error_message = self.error_reason.error_message(app);
         content.add_child(warpify::render::description_row(
-            self.error_reason.error_message(),
+            &error_message,
             theme,
             appearance,
         ));
@@ -228,16 +252,30 @@ impl View for SshErrorBlock {
         let ui_builder = appearance.ui_builder();
 
         if self.should_show_report_to_warp_button() {
-            let report_issue_text = build_description_row(FormattedText::new([FormattedTextLine::Line(vec![
-                    FormattedTextFragment::plain_text("We are actively working on improving the stability of SSH in Warp. Please consider "),
-                    FormattedTextFragment::hyperlink("filing an issue", get_ssh_github_issue_url(self.error_reason.error_title())),
-                    FormattedTextFragment::plain_text(" on GitHub so we can better identify the problem."),
+            let report_issue_text = build_description_row(
+                FormattedText::new([FormattedTextLine::Line(vec![
+                    FormattedTextFragment::plain_text(localization::text_for_app(
+                        app,
+                        "terminal.ssh_error.report_issue.prefix",
+                    )),
+                    FormattedTextFragment::hyperlink(
+                        localization::text_for_app(app, "terminal.ssh_error.report_issue.link"),
+                        get_ssh_github_issue_url(&self.error_reason.error_title(app)),
+                    ),
+                    FormattedTextFragment::plain_text(localization::text_for_app(
+                        app,
+                        "terminal.ssh_error.report_issue.suffix",
+                    )),
                 ])]),
-                theme, appearance, self.report_link_highlight_index.clone())
-                .with_hyperlink_font_color(theme.accent().into())
-                .register_default_click_handlers(|link, ctx, _| {
-                    ctx.dispatch_typed_action(SshErrorBlockAction::OpenUrl(link.url));
-                }).finish();
+                theme,
+                appearance,
+                self.report_link_highlight_index.clone(),
+            )
+            .with_hyperlink_font_color(theme.accent().into())
+            .register_default_click_handlers(|link, ctx, _| {
+                ctx.dispatch_typed_action(SshErrorBlockAction::OpenUrl(link.url));
+            })
+            .finish();
             content.add_child(apply_spacing_styles(Container::new(report_issue_text)).finish());
         }
 
@@ -250,7 +288,10 @@ impl View for SshErrorBlock {
                             ButtonVariant::Accent,
                             self.warpify_without_tmux_button_mouse_state.clone(),
                         )
-                        .with_centered_text_label("Warpify without TMUX".into())
+                        .with_centered_text_label(localization::text_for_app(
+                            app,
+                            "terminal.ssh_error.action.warpify_without_tmux",
+                        ))
                         .with_style(UiComponentStyles {
                             font_size: Some(appearance.monospace_font_size()),
                             ..Default::default()
@@ -271,7 +312,10 @@ impl View for SshErrorBlock {
                         ButtonVariant::Secondary,
                         self.continue_button_mouse_state.clone(),
                     )
-                    .with_centered_text_label("Continue without Warpification".into())
+                    .with_centered_text_label(localization::text_for_app(
+                        app,
+                        "terminal.ssh_error.action.continue_without_warpification",
+                    ))
                     .with_style(UiComponentStyles {
                         font_size: Some(appearance.monospace_font_size()),
                         ..Default::default()

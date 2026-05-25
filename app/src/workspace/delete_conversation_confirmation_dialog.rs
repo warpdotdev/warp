@@ -1,3 +1,4 @@
+use crate::localization;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
@@ -16,6 +17,14 @@ use crate::ui_components::dialog::{dialog_styles, Dialog};
 use crate::view_components::action_button::{
     ActionButton, DangerPrimaryTheme, KeystrokeSource, NakedTheme,
 };
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
+
+fn text_with_value(app: &AppContext, key: &str, placeholder: &str, value: &str) -> String {
+    text(app, key).replace(placeholder, value)
+}
 
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
@@ -51,19 +60,22 @@ pub struct DeleteConversationConfirmationDialog {
 
 impl DeleteConversationConfirmationDialog {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        let cancel_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Cancel", NakedTheme).on_click(|ctx| {
+        let cancel_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(text(ctx, "settings.action.cancel"), NakedTheme).on_click(|ctx| {
                 ctx.dispatch_typed_action(DeleteConversationConfirmationAction::Cancel);
             })
         });
 
         let enter_keystroke = Keystroke::parse("enter").expect("Valid keystroke");
         let delete_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new("Delete", DangerPrimaryTheme)
-                .with_keybinding(KeystrokeSource::Fixed(enter_keystroke), ctx)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(DeleteConversationConfirmationAction::Confirm);
-                })
+            ActionButton::new(
+                text(ctx, "workspace.delete_conversation.confirm"),
+                DangerPrimaryTheme,
+            )
+            .with_keybinding(KeystrokeSource::Fixed(enter_keystroke), ctx)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(DeleteConversationConfirmationAction::Confirm);
+            })
         });
 
         Self {
@@ -101,15 +113,19 @@ impl View for DeleteConversationConfirmationDialog {
         let title = self
             .source
             .as_ref()
-            .map(|s| format!("Delete '{}'?", s.conversation_title))
-            .unwrap_or_else(|| "Delete conversation?".into());
+            .map(|s| {
+                text_with_value(
+                    app,
+                    "workspace.delete_conversation.title_with_name",
+                    "{title}",
+                    s.conversation_title.as_str(),
+                )
+            })
+            .unwrap_or_else(|| text(app, "workspace.delete_conversation.title"));
 
         let dialog = Dialog::new(
             title,
-            Some(
-                "This conversation will be permanently deleted. This action cannot be undone."
-                    .into(),
-            ),
+            Some(text(app, "workspace.delete_conversation.description")),
             UiComponentStyles {
                 width: Some(DIALOG_WIDTH),
                 ..dialog_styles(appearance)
