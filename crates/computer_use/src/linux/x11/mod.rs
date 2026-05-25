@@ -12,7 +12,7 @@ use x11rb::protocol::xproto::{self, ConnectionExt as _};
 use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 
-use crate::{Action, ActionResult, Options};
+use crate::{Action, ActionResult, Options, TargetedAction};
 
 /// An actor that performs computer use actions on X11.
 pub struct Actor {
@@ -71,14 +71,17 @@ impl crate::Actor for Actor {
 
     async fn perform_actions(
         &mut self,
-        actions: &[Action],
+        actions: &[TargetedAction],
         options: Options,
     ) -> Result<ActionResult, String> {
         let mut mouse = mouse::Mouse::new(&self.conn, self.root_window());
         let mut keyboard = keyboard::Keyboard::new(&self.conn, &self.keyboard_mapping);
         let mut last_mouse_position: Option<Vector2I> = None;
 
-        for action in actions {
+        for targeted in actions {
+            // Per-window targeting is not supported on X11; act on the screen regardless of the
+            // requested target.
+            let action: &Action = &targeted.action;
             match action {
                 Action::Wait(duration) => {
                     Timer::after(*duration).await;
@@ -135,9 +138,6 @@ impl crate::Actor for Actor {
             Some(mouse.current_position()?)
         };
 
-        Ok(ActionResult {
-            screenshot,
-            cursor_position,
-        })
+        Ok(ActionResult::legacy(screenshot, cursor_position))
     }
 }

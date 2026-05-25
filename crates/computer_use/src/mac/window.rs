@@ -13,7 +13,8 @@ use core_foundation::number::{CFNumber, CFNumberRef};
 use core_foundation::string::{CFString, CFStringRef};
 use core_graphics::window::{
     copy_window_info, kCGWindowBounds, kCGWindowLayer, kCGWindowListExcludeDesktopElements,
-    kCGWindowListOptionOnScreenOnly, kCGWindowNumber, kCGWindowOwnerName, kCGWindowOwnerPID,
+    kCGWindowListOptionOnScreenOnly, kCGWindowName, kCGWindowNumber, kCGWindowOwnerName,
+    kCGWindowOwnerPID,
 };
 
 /// Describes an on-screen window: its window number and bounds in global screen points
@@ -91,6 +92,34 @@ pub fn window_at(pid: libc::pid_t, x: f64, y: f64) -> Option<WindowInfo> {
     fallback
 }
 
+/// Finds the on-screen window with the given `window_id`, returning its number and bounds in
+/// global screen points (top-left origin). Used to resolve a `Target::Window` to concrete
+/// geometry for window-local coordinate remapping and window-scoped screenshot scaling.
+pub fn window_by_id(window_id: u32) -> Option<WindowInfo> {
+    let option = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
+    let info = copy_window_info(option, 0)?;
+
+    let number_key = unsafe { kCGWindowNumber } as *const c_void;
+    let bounds_key = unsafe { kCGWindowBounds } as *const c_void;
+
+    for entry in info.iter() {
+        let dict: CFDictionary =
+            unsafe { CFDictionary::wrap_under_get_rule(*entry as CFDictionaryRef) };
+        if dict_i64(&dict, number_key) != Some(window_id as i64) {
+            continue;
+        }
+        let (bx, by, bw, bh) = dict_dict(&dict, bounds_key).and_then(|b| read_bounds(&b))?;
+        return Some(WindowInfo {
+            number: window_id as i64,
+            x: bx,
+            y: by,
+            width: bw,
+            height: bh,
+        });
+    }
+    None
+}
+
 /// Returns the `(owner_pid, window_number)` of the frontmost on-screen normal window, i.e. the
 /// window that currently has input focus. Used to deactivate the previous window when moving
 /// focus to a target without raising it.
@@ -118,16 +147,36 @@ pub fn frontmost_window() -> Option<(libc::pid_t, i64)> {
     None
 }
 
-/// A description of an on-screen window, for diagnostics.
+/// A description of an on-screen window, for diagnostics and enumeration.
 pub struct WindowDescription {
     pub number: i64,
     pub owner_pid: i64,
     pub owner_name: Option<String>,
+    pub title: Option<String>,
     pub layer: i64,
     pub x: f64,
     pub y: f64,
     pub width: f64,
     pub height: f64,
+}
+
+/// Enumerates on-screen windows as crate-level [`crate::WindowInfo`] records, so the agent can
+/// pick a window to target. Ordered front-to-back, excluding desktop elements.
+pub fn enumerate_windows() -> Vec<crate::WindowInfo> {
+    list_windows()
+        .into_iter()
+        .map(|w| crate::WindowInfo {
+            window_id: w.number.max(0) as u32,
+            pid: w.owner_pid as i32,
+            app_name: w.owner_name.unwrap_or_default(),
+            title: w.title.unwrap_or_default(),
+            x: w.x as i32,
+            y: w.y as i32,
+            width: w.width as i32,
+            height: w.height as i32,
+            layer: w.layer as i32,
+        })
+        .collect()
 }
 
 /// Lists on-screen windows (excluding desktop elements), front-to-back, for diagnostics.
@@ -139,6 +188,7 @@ pub fn list_windows() -> Vec<WindowDescription> {
 
     let owner_pid_key = unsafe { kCGWindowOwnerPID } as *const c_void;
     let owner_name_key = unsafe { kCGWindowOwnerName } as *const c_void;
+    let name_key = unsafe { kCGWindowName } as *const c_void;
     let layer_key = unsafe { kCGWindowLayer } as *const c_void;
     let number_key = unsafe { kCGWindowNumber } as *const c_void;
     let bounds_key = unsafe { kCGWindowBounds } as *const c_void;
@@ -161,6 +211,9 @@ pub fn list_windows() -> Vec<WindowDescription> {
             number,
             owner_pid,
             owner_name: dict_string(&dict, owner_name_key),
+            // The window title requires the Screen Recording permission to be readable; it is
+            // often empty otherwise.
+            title: dict_string(&dict, name_key),
             layer: dict_i64(&dict, layer_key).unwrap_or(0),
             x: bx,
             y: by,

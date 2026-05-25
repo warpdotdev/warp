@@ -88,24 +88,31 @@ impl RequestComputerUseExecutor {
         let screenshot_params = request.screenshot_params;
         let mut actor = computer_use::create_actor();
         let platform = actor.platform();
+        // Advertise whether background per-window control is available on this client/OS so the
+        // agent knows whether it can target specific windows.
+        let background_supported = computer_use::background_supported();
         ActionExecution::Async {
             execute_future: Box::pin(async move {
                 let result = actor
                     .perform_actions(&[], computer_use::Options { screenshot_params })
                     .await;
-                (result, platform)
+                (result, platform, background_supported)
             }),
             on_complete: Box::new(|action_result, _ctx| match action_result {
                 (
                     Ok(computer_use::ActionResult {
                         screenshot: Some(screenshot),
+                        windows,
                         ..
                     }),
                     Some(platform),
+                    background_supported,
                 ) => AIAgentActionResultType::RequestComputerUse(
                     RequestComputerUseResult::Approved {
                         screenshot,
                         platform,
+                        windows,
+                        background_supported,
                     },
                 ),
                 (
@@ -114,15 +121,16 @@ impl RequestComputerUseExecutor {
                         ..
                     }),
                     None,
+                    _,
                 ) => AIAgentActionResultType::RequestComputerUse(RequestComputerUseResult::Error(
                     "Unknown platform".to_string(),
                 )),
-                (Ok(_), _) => {
+                (Ok(_), _, _) => {
                     AIAgentActionResultType::RequestComputerUse(RequestComputerUseResult::Error(
                         "Failed to capture initial screenshot".to_string(),
                     ))
                 }
-                (Err(err), _) => AIAgentActionResultType::RequestComputerUse(
+                (Err(err), _, _) => AIAgentActionResultType::RequestComputerUse(
                     RequestComputerUseResult::Error(err),
                 ),
             }),

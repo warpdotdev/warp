@@ -12,7 +12,7 @@ use windows::Win32::System::StationsAndDesktops::{
     CloseDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS, HDESK, OpenInputDesktop,
 };
 
-use crate::{Action, ActionResult, Options};
+use crate::{Action, ActionResult, Options, TargetedAction};
 
 /// Returns whether computer_use can drive input on this machine right now.
 ///
@@ -103,7 +103,7 @@ impl super::Actor for Actor {
 
     async fn perform_actions(
         &mut self,
-        actions: &[Action],
+        actions: &[TargetedAction],
         options: Options,
     ) -> Result<ActionResult, String> {
         // Probe at the top of every call so transient loss of the input desktop (workstation
@@ -115,7 +115,10 @@ impl super::Actor for Actor {
         let keyboard = &mut self.keyboard;
         let mouse = &mut self.mouse;
 
-        for action in actions {
+        for targeted in actions {
+            // Per-window targeting is not supported on Windows; act on the screen / foreground
+            // window regardless of the requested target.
+            let action: &Action = &targeted.action;
             match action {
                 Action::Wait(duration) => {
                     Timer::after(*duration).await;
@@ -152,9 +155,9 @@ impl super::Actor for Actor {
             None
         };
 
-        Ok(ActionResult {
+        Ok(ActionResult::legacy(
             screenshot,
-            cursor_position: Some(mouse.current_position()?),
-        })
+            Some(mouse.current_position()?),
+        ))
     }
 }
