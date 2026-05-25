@@ -14991,6 +14991,7 @@ dependencies = [
  "cfg-if",
  "channel_versions",
  "command-corrections",
+ "criterion",
  "enum-iterator",
  "get-size",
  "itertools 0.14.0",

@@ -31,6 +31,7 @@ use attribute_map::AttributeMap;
 use content::Content;
 use get_size::GetSize;
 use grapheme::Grapheme;
+#[cfg(not(feature = "test-util"))]
 use index::Index;
 use itertools::Itertools;
 use string_offset::ByteOffset;
@@ -39,6 +40,9 @@ use style::BgAndStyle;
 use super::row::Row;
 use super::{cell, CellType};
 use crate::model::{ansi, Point};
+
+#[cfg(feature = "test-util")]
+pub use index::{GraphemeInfo, Index};
 
 const DEFAULT_FG_COLOR: ansi::Color = ansi::Color::Named(ansi::NamedColor::Foreground);
 

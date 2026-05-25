@@ -179,7 +179,7 @@ impl Index {
     /// naturally handles soft-wrapping at the new column width without any of
     /// the arithmetic fast-paths found in [`Self::rebuild`], making it easy to
     /// audit for correctness.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn rebuild_baseline(old_index: &Index, columns: usize) -> Self {
         let mut index = Self::new(columns, Some(old_index.len()));
         index.content_len = old_index

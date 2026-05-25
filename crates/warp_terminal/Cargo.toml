@@ -36,7 +36,13 @@ warp_util.workspace = true
 warpui.workspace = true
 
 [dev-dependencies]
+criterion = { version = "0.5.1", features = ["html_reports"] }
 unicode-segmentation = "1.11.0"
 
 [features]
 test-util = []
+
+[[bench]]
+name = "flat_storage_rebuild_bench"
+harness = false
+required-features = ["test-util"]
