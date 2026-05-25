@@ -453,6 +453,73 @@ fn parses_pane_mutation_commands() {
 }
 
 #[test]
+fn parses_file_mutation_commands() {
+    let args =
+        ControlArgs::try_parse_from(["warpctrl", "file", "write", "/tmp/test.txt", "hello world"])
+            .expect("file write parses");
+    let ControlCommand::File(FileCommand::Write(write_args)) = args.command else {
+        panic!("expected file write command");
+    };
+    assert_eq!(write_args.path, "/tmp/test.txt");
+    assert_eq!(write_args.contents, "hello world");
+
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "file", "delete", "/tmp/test.txt"])
+            .expect("file delete parses")
+            .command,
+        ControlCommand::File(FileCommand::Delete(_))
+    ));
+
+    assert!(ControlArgs::try_parse_from(["warpctrl", "file", "write"]).is_err());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "file", "delete"]).is_err());
+}
+
+#[test]
+fn parses_drive_mutation_commands() {
+    assert!(matches!(
+        ControlArgs::try_parse_from([
+            "warpctrl",
+            "drive",
+            "create",
+            "--type",
+            "workflow",
+            "build",
+            "{\"command\":\"cargo check\"}",
+        ])
+        .expect("drive create parses")
+        .command,
+        ControlCommand::Drive(DriveCommand::Create(_))
+    ));
+
+    assert!(matches!(
+        ControlArgs::try_parse_from([
+            "warpctrl", "drive", "delete", "--type", "workflow", "abc123"
+        ])
+        .expect("drive delete parses")
+        .command,
+        ControlCommand::Drive(DriveCommand::Delete(_))
+    ));
+
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "drive", "run", "--type", "workflow", "abc123"])
+            .expect("drive run parses")
+            .command,
+        ControlCommand::Drive(DriveCommand::Run(_))
+    ));
+
+    assert!(matches!(
+        ControlArgs::try_parse_from([
+            "warpctrl", "drive", "insert", "--type", "notebook", "abc123"
+        ])
+        .expect("drive insert parses")
+        .command,
+        ControlCommand::Drive(DriveCommand::Insert(_))
+    ));
+
+    assert!(ControlArgs::try_parse_from(["warpctrl", "drive", "create"]).is_err());
+}
+
+#[test]
 #[serial]
 fn tab_create_without_discovery_records_reports_no_instance() {
     let dir = std::env::temp_dir().join(format!(

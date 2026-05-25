@@ -1,8 +1,14 @@
+use std::fs;
+use std::path::Path;
+
 use ::local_control::auth::CredentialGrant;
 use ::local_control::protocol::ActionKind;
 use ::local_control::protocol::{
-    Action, ControlResponse, PaneSelector, PaneTarget, SessionSelector, SessionTarget, TabSelector,
-    TabTarget, TargetSelector, WindowSelector, WindowTarget,
+    Action, ControlResponse, DriveCreateParams, DriveDeleteParams, DriveInsertParams,
+    DriveMutationResult, DriveObjectSelector, DriveObjectType, DriveRunParams, DriveTarget,
+    DriveUpdateParams, FileDeleteParams, FileMutationResult, FileTarget, FileWriteParams,
+    PaneSelector, PaneTarget, SessionSelector, SessionTarget, TabSelector, TabTarget,
+    TargetSelector, WindowSelector, WindowTarget,
 };
 use ::local_control::{
     ErrorCode, InstanceId, InvocationContext, PermissionCategory, RequestEnvelope,
@@ -16,10 +22,21 @@ use super::{
     action_metadata_for_name, appearance_state_result, capabilities, ensure_feature_enabled,
     ensure_scripting_grant_for_settings, ensure_settings_allow_action,
     outside_warp_action_enabled_for_settings, rejected_setting_key, require_active_window_id,
-    setting_get_result, setting_list_result, theme_list_result, validate_action_params,
-    validate_app_focus_target_test, validate_tab_create_target, validate_window_create_target_test,
+    resolve_file_mutation_path, setting_get_result, setting_list_result, theme_list_result,
+    validate_action_params, validate_app_focus_target_test, validate_drive_target,
+    validate_file_mutation_target, validate_tab_create_target, validate_window_create_target_test,
     LocalControlBridge,
 };
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::Owner;
+use crate::drive::folders::{CloudFolder, CloudFolderModel};
+use crate::env_vars::{
+    CloudEnvVarCollection, CloudEnvVarCollectionModel, EnvVar, EnvVarCollection,
+};
+use crate::notebooks::{CloudNotebook, CloudNotebookModel};
+use crate::projects::ProjectManagementModel;
+use crate::server::ids::{ClientId, SyncId};
 use crate::settings::{
     AllowOutsideWarpAppStateMutations, AllowOutsideWarpAuthenticatedUserActions,
     AllowOutsideWarpControl, AllowOutsideWarpMetadataConfigurationMutations,
@@ -27,6 +44,9 @@ use crate::settings::{
     AllowOutsideWarpUnderlyingDataReads, LocalControlSettings,
 };
 use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workflows::workflow::Workflow;
+use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 use ::local_control::scripting::{ScriptingGrant, ScriptingIdentitySource, ScriptingScope};
 
 fn settings_with_values(
@@ -118,6 +138,164 @@ fn enable_outside_warp_metadata_reads(app: &mut App) {
         });
     });
 }
+
+fn enable_outside_warp_underlying_data_mutations(app: &mut App) {
+    app.update(|ctx| {
+        LocalControlSettings::handle(ctx).update(ctx, |settings, ctx| {
+            let _ = settings.allow_outside_warp_control.set_value(true, ctx);
+            let _ = settings
+                .allow_outside_warp_underlying_data_mutations
+                .set_value(true, ctx);
+        });
+    });
+}
+
+fn initialize_drive_app(app: &mut App, logged_in: bool) {
+    initialize_settings_for_tests(app);
+    if logged_in {
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    } else {
+        app.add_singleton_model(|_| AuthStateProvider::new_logged_out_for_test());
+    }
+    app.add_singleton_model(CloudModel::mock);
+    app.add_singleton_model(UserWorkspaces::default_mock);
+    app.add_singleton_model(LocalControlBridge::new);
+}
+
+fn initialize_file_mutation_app(app: &mut App, root: &Path, logged_in: bool) {
+    initialize_settings_for_tests(app);
+    if logged_in {
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    } else {
+        app.add_singleton_model(|_| AuthStateProvider::new_logged_out_for_test());
+    }
+    let root = root.to_path_buf();
+    app.add_singleton_model(move |ctx| {
+        let mut model = ProjectManagementModel::new(Vec::new(), None, ctx);
+        model.upsert_project(root, ctx);
+        model
+    });
+    app.add_singleton_model(LocalControlBridge::new);
+}
+
+fn create_workflow(app: &mut App, name: &str, command: &str) -> String {
+    CloudModel::handle(app).update(app, |cloud_model, ctx| {
+        let client_id = ClientId::new();
+        let sync_id = SyncId::ClientId(client_id);
+        let uid = sync_id.uid();
+        cloud_model.create_object(
+            sync_id,
+            CloudWorkflow::new_local(
+                CloudWorkflowModel::new(Workflow::new(name, command)),
+                Owner::mock_current_user(),
+                None,
+                client_id,
+            ),
+            ctx,
+        );
+        uid
+    })
+}
+
+fn create_notebook(app: &mut App, title: &str, data: &str) -> String {
+    CloudModel::handle(app).update(app, |cloud_model, ctx| {
+        let client_id = ClientId::new();
+        let sync_id = SyncId::ClientId(client_id);
+        let uid = sync_id.uid();
+        cloud_model.create_object(
+            sync_id,
+            CloudNotebook::new_local(
+                CloudNotebookModel {
+                    title: title.to_owned(),
+                    data: data.to_owned(),
+                    ..CloudNotebookModel::default()
+                },
+                Owner::mock_current_user(),
+                None,
+                client_id,
+            ),
+            ctx,
+        );
+        uid
+    })
+}
+
+fn create_environment(app: &mut App, title: &str) -> String {
+    CloudModel::handle(app).update(app, |cloud_model, ctx| {
+        let client_id = ClientId::new();
+        let sync_id = SyncId::ClientId(client_id);
+        let uid = sync_id.uid();
+        cloud_model.create_object(
+            sync_id,
+            CloudEnvVarCollection::new_local(
+                CloudEnvVarCollectionModel::new(EnvVarCollection::new(
+                    Some(title.to_owned()),
+                    None,
+                    vec![EnvVar::new("PORT".to_owned(), "4000".to_owned(), None)],
+                )),
+                Owner::mock_current_user(),
+                None,
+                client_id,
+            ),
+            ctx,
+        );
+        uid
+    })
+}
+
+fn create_folder(app: &mut App, name: &str) -> String {
+    CloudModel::handle(app).update(app, |cloud_model, ctx| {
+        let client_id = ClientId::new();
+        let sync_id = SyncId::ClientId(client_id);
+        let uid = sync_id.uid();
+        cloud_model.create_object(
+            sync_id,
+            CloudFolder::new_local(
+                CloudFolderModel::new(name, false),
+                Owner::mock_current_user(),
+                None,
+                client_id,
+            ),
+            ctx,
+        );
+        uid
+    })
+}
+
+fn authenticated_grant(
+    action: ActionKind,
+    ctx: &mut warpui::ModelContext<LocalControlBridge>,
+) -> CredentialGrant {
+    let mut grant = CredentialGrant::new(
+        InstanceId("inst_test".to_owned()),
+        action,
+        InvocationContext::OutsideWarp,
+        Duration::minutes(5),
+    );
+    grant.authenticated_user.subject =
+        super::permissions::authenticated_user_subject_for_action(action, ctx)
+            .expect("authenticated subject check succeeds");
+    grant
+}
+
+fn spoofed_authenticated_grant(action: ActionKind) -> CredentialGrant {
+    let mut grant = CredentialGrant::new(
+        InstanceId("inst_test".to_owned()),
+        action,
+        InvocationContext::OutsideWarp,
+        Duration::minutes(5),
+    );
+    grant.authenticated_user.subject = Some("spoofed-user".to_owned());
+    grant
+}
+
+fn response_drive_mutation(response: ::local_control::ResponseEnvelope) -> DriveMutationResult {
+    let ControlResponse::Ok { data } = response.response else {
+        panic!("expected ok response");
+    };
+    serde_json::from_value(data).expect("drive mutation result decodes")
+}
+
 fn grant_for(action: ActionKind) -> CredentialGrant {
     CredentialGrant::new(
         InstanceId("test-instance".to_owned()),
@@ -1357,4 +1535,597 @@ fn api_key_error_codes_serialize_stably() {
         serde_json::to_value(ErrorCode::ApiKeySubjectMismatch).expect("serializes"),
         serde_json::json!("api_key_subject_mismatch")
     );
+}
+
+#[test]
+fn file_and_drive_mutations_require_underlying_data_mutation_permission() {
+    let settings_no_underlying_mutation =
+        settings_with_values(true, true, true, true, false, false);
+
+    for action in [
+        ActionKind::FileWrite,
+        ActionKind::FileDelete,
+        ActionKind::DriveCreate,
+        ActionKind::DriveUpdate,
+        ActionKind::DriveDelete,
+        ActionKind::DriveRun,
+        ActionKind::DriveInsert,
+    ] {
+        assert_eq!(
+            action.metadata().permission_category,
+            PermissionCategory::MutateUnderlyingData
+        );
+        let err = ensure_settings_allow_action(
+            &settings_no_underlying_mutation,
+            InvocationContext::OutsideWarp,
+            action,
+        )
+        .expect_err("underlying data mutation permission is disabled");
+        assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+    }
+}
+
+#[test]
+fn file_mutation_grant_requires_authenticated_user_subject() {
+    let grant = CredentialGrant::new(
+        InstanceId("instance".to_owned()),
+        ActionKind::FileWrite,
+        InvocationContext::OutsideWarp,
+        Duration::minutes(5),
+    );
+
+    let err = grant
+        .verify_for_action(ActionKind::FileWrite)
+        .expect_err("file.write requires authenticated user grant");
+    assert_eq!(err.code, ErrorCode::AuthenticatedUserRequired);
+}
+
+#[test]
+fn drive_mutation_grant_requires_authenticated_user_subject() {
+    let grant = CredentialGrant::new(
+        InstanceId("instance".to_owned()),
+        ActionKind::DriveCreate,
+        InvocationContext::OutsideWarp,
+        Duration::minutes(5),
+    );
+
+    let err = grant
+        .verify_for_action(ActionKind::DriveCreate)
+        .expect_err("drive.create requires authenticated user grant");
+    assert_eq!(err.code, ErrorCode::AuthenticatedUserRequired);
+}
+
+#[test]
+fn drive_target_validation_rejects_name_selectors_and_empty_ids() {
+    let action = ActionKind::DriveUpdate;
+
+    let name_target = TargetSelector {
+        drive: Some(DriveTarget::Name {
+            object_type: DriveObjectType::Workflow,
+            name: "my-workflow".to_owned(),
+        }),
+        ..TargetSelector::default()
+    };
+    let empty_id_target = TargetSelector {
+        drive: Some(DriveTarget::Id {
+            object_type: DriveObjectType::Workflow,
+            id: DriveObjectSelector("".to_owned()),
+        }),
+        ..TargetSelector::default()
+    };
+
+    let err = validate_drive_target(&name_target, action).expect_err("name selector is rejected");
+    assert_eq!(err.code, ErrorCode::UnsupportedAction);
+
+    let err =
+        validate_drive_target(&empty_id_target, action).expect_err("empty id selector is rejected");
+    assert_eq!(err.code, ErrorCode::InvalidSelector);
+}
+
+#[test]
+fn file_mutation_target_validation_rejects_id_selectors_and_mismatched_paths() {
+    let action = ActionKind::FileWrite;
+
+    let id_target = TargetSelector {
+        file: Some(FileTarget::Id {
+            id: ::local_control::FileSelector("file-id".to_owned()),
+        }),
+        ..TargetSelector::default()
+    };
+    let mismatched_path_target = TargetSelector {
+        file: Some(FileTarget::Path {
+            path: "other.txt".to_owned(),
+        }),
+        ..TargetSelector::default()
+    };
+
+    let err = validate_file_mutation_target(action, &id_target, "notes.txt")
+        .expect_err("file id selector is unsupported");
+    assert_eq!(err.code, ErrorCode::UnsupportedAction);
+
+    let err = validate_file_mutation_target(action, &mismatched_path_target, "notes.txt")
+        .expect_err("mismatched file path target is rejected");
+    assert_eq!(err.code, ErrorCode::TargetStateConflict);
+}
+
+#[test]
+fn file_mutation_path_safety_rejects_traversal_and_paths_outside_roots() {
+    let tempdir = tempfile::tempdir().expect("tempdir is created");
+    let root = tempdir.path().join("workspace");
+    let other_root = tempdir.path().join("other-workspace");
+    let outside = tempdir.path().join("outside.txt");
+    fs::create_dir(&root).expect("root is created");
+    fs::create_dir(&other_root).expect("other root is created");
+    fs::write(&outside, "outside").expect("outside file is written");
+    let roots = vec![root.canonicalize().expect("root canonicalizes")];
+
+    let err = resolve_file_mutation_path(ActionKind::FileWrite, "../secret", &roots, true)
+        .expect_err("parent traversal is rejected");
+    assert_eq!(err.code, ErrorCode::InvalidSelector);
+
+    let err = resolve_file_mutation_path(
+        ActionKind::FileWrite,
+        &outside.display().to_string(),
+        &roots,
+        false,
+    )
+    .expect_err("absolute path outside root is rejected");
+    assert_eq!(err.code, ErrorCode::InvalidSelector);
+
+    let multiple_roots = vec![
+        root.canonicalize().expect("root canonicalizes"),
+        other_root.canonicalize().expect("other root canonicalizes"),
+    ];
+    let err =
+        resolve_file_mutation_path(ActionKind::FileWrite, "relative.txt", &multiple_roots, true)
+            .expect_err("relative path is ambiguous with multiple roots");
+    assert_eq!(err.code, ErrorCode::InvalidSelector);
+}
+
+#[test]
+fn file_mutations_require_logged_in_user() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+    App::test((), |mut app| async move {
+        let tempdir = tempfile::tempdir().expect("tempdir is created");
+        initialize_file_mutation_app(&mut app, tempdir.path(), false);
+        enable_outside_warp_underlying_data_mutations(&mut app);
+        let request = RequestEnvelope::new(
+            Action::with_params(
+                ActionKind::FileWrite,
+                FileWriteParams {
+                    path: tempdir.path().join("new.txt").display().to_string(),
+                    contents: "hello".to_owned(),
+                    create: true,
+                },
+            )
+            .expect("file.write params serialize"),
+        );
+        LocalControlBridge::handle(&app).update(&mut app, |bridge, ctx| {
+            let response = bridge.handle_request(
+                request,
+                spoofed_authenticated_grant(ActionKind::FileWrite),
+                ctx,
+            );
+            assert_eq!(
+                response_error_code(response),
+                ErrorCode::AuthenticatedUserUnavailable
+            );
+        });
+    })
+}
+
+#[test]
+fn file_write_create_and_delete_succeed_for_disposable_project_files() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+    App::test((), |mut app| async move {
+        let tempdir = tempfile::tempdir().expect("tempdir is created");
+        initialize_file_mutation_app(&mut app, tempdir.path(), true);
+        enable_outside_warp_underlying_data_mutations(&mut app);
+        let existing = tempdir.path().join("existing.txt");
+        fs::write(&existing, "old").expect("existing file is written");
+        let created = tempdir.path().join("created.txt");
+
+        let write_request = RequestEnvelope::new(
+            Action::with_params(
+                ActionKind::FileWrite,
+                FileWriteParams {
+                    path: existing.display().to_string(),
+                    contents: "new".to_owned(),
+                    create: false,
+                },
+            )
+            .expect("file.write params serialize"),
+        );
+        let create_request = RequestEnvelope::new(
+            Action::with_params(
+                ActionKind::FileWrite,
+                FileWriteParams {
+                    path: created.display().to_string(),
+                    contents: "created".to_owned(),
+                    create: true,
+                },
+            )
+            .expect("file.write params serialize"),
+        );
+        let delete_request = RequestEnvelope::new(
+            Action::with_params(
+                ActionKind::FileDelete,
+                FileDeleteParams {
+                    path: created.display().to_string(),
+                    recursive: false,
+                },
+            )
+            .expect("file.delete params serialize"),
+        );
+        LocalControlBridge::handle(&app).update(&mut app, |bridge, ctx| {
+            let response = bridge.handle_request(
+                write_request,
+                authenticated_grant(ActionKind::FileWrite, ctx),
+                ctx,
+            );
+            let ControlResponse::Ok { data } = response.response else {
+                panic!("expected file.write ok response");
+            };
+            let result: FileMutationResult =
+                serde_json::from_value(data).expect("file mutation result decodes");
+            assert_eq!(result.path, existing.display().to_string());
+            assert_eq!(
+                fs::read_to_string(&existing).expect("existing file is read"),
+                "new"
+            );
+
+            let response = bridge.handle_request(
+                create_request,
+                authenticated_grant(ActionKind::FileWrite, ctx),
+                ctx,
+            );
+            let ControlResponse::Ok { data } = response.response else {
+                panic!("expected file.write create ok response");
+            };
+            let result: FileMutationResult =
+                serde_json::from_value(data).expect("file mutation result decodes");
+            assert_eq!(result.path, created.display().to_string());
+            assert_eq!(
+                fs::read_to_string(&created).expect("created file is read"),
+                "created"
+            );
+
+            let response = bridge.handle_request(
+                delete_request,
+                authenticated_grant(ActionKind::FileDelete, ctx),
+                ctx,
+            );
+            let ControlResponse::Ok { data } = response.response else {
+                panic!("expected file.delete ok response");
+            };
+            let result: FileMutationResult =
+                serde_json::from_value(data).expect("file mutation result decodes");
+            assert_eq!(result.path, created.display().to_string());
+            assert!(!created.exists());
+        });
+    })
+}
+
+#[test]
+fn drive_mutations_require_logged_in_user() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_drive_app(&mut app, false);
+        enable_outside_warp_underlying_data_mutations(&mut app);
+        let request = RequestEnvelope::new(
+            Action::with_params(
+                ActionKind::DriveCreate,
+                DriveCreateParams {
+                    object_type: DriveObjectType::Workflow,
+                    name: "build".to_owned(),
+                    content: serde_json::json!({ "command": "cargo check" }),
+                },
+            )
+            .expect("drive.create params serialize"),
+        );
+        LocalControlBridge::handle(&app).update(&mut app, |bridge, ctx| {
+            let response = bridge.handle_request(
+                request,
+                spoofed_authenticated_grant(ActionKind::DriveCreate),
+                ctx,
+            );
+            assert_eq!(
+                response_error_code(response),
+                ErrorCode::AuthenticatedUserUnavailable
+            );
+        });
+    })
+}
+
+#[test]
+fn drive_mutations_require_underlying_data_mutation_permission_in_bridge() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_drive_app(&mut app, true);
+        let request = RequestEnvelope::new(
+            Action::with_params(
+                ActionKind::DriveCreate,
+                DriveCreateParams {
+                    object_type: DriveObjectType::Notebook,
+                    name: "notes".to_owned(),
+                    content: serde_json::json!({ "data": "# Notes" }),
+                },
+            )
+            .expect("drive.create params serialize"),
+        );
+        LocalControlBridge::handle(&app).update(&mut app, |bridge, ctx| {
+            let grant_with_wrong_action = CredentialGrant::new(
+                InstanceId("inst_test".to_owned()),
+                ActionKind::AppPing,
+                InvocationContext::OutsideWarp,
+                Duration::minutes(5),
+            );
+            let response = bridge.handle_request(request, grant_with_wrong_action, ctx);
+            assert_eq!(
+                response_error_code(response),
+                ErrorCode::InsufficientPermissions
+            );
+        });
+    })
+}
+
+#[test]
+fn drive_create_returns_safe_success_for_allowlisted_object_types() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_drive_app(&mut app, true);
+        enable_outside_warp_underlying_data_mutations(&mut app);
+        LocalControlBridge::handle(&app).update(&mut app, |bridge, ctx| {
+            let workflow = response_drive_mutation(
+                bridge.handle_request(
+                    RequestEnvelope::new(
+                        Action::with_params(
+                            ActionKind::DriveCreate,
+                            DriveCreateParams {
+                                object_type: DriveObjectType::Workflow,
+                                name: "build".to_owned(),
+                                content: serde_json::json!({ "command": "cargo check" }),
+                            },
+                        )
+                        .expect("drive.create workflow params serialize"),
+                    ),
+                    authenticated_grant(ActionKind::DriveCreate, ctx),
+                    ctx,
+                ),
+            );
+            assert_eq!(workflow.object.object_type, DriveObjectType::Workflow);
+            assert_eq!(workflow.object.name, "build");
+
+            let notebook = response_drive_mutation(
+                bridge.handle_request(
+                    RequestEnvelope::new(
+                        Action::with_params(
+                            ActionKind::DriveCreate,
+                            DriveCreateParams {
+                                object_type: DriveObjectType::Notebook,
+                                name: "notes".to_owned(),
+                                content: serde_json::json!({ "data": "# Notes" }),
+                            },
+                        )
+                        .expect("drive.create notebook params serialize"),
+                    ),
+                    authenticated_grant(ActionKind::DriveCreate, ctx),
+                    ctx,
+                ),
+            );
+            assert_eq!(notebook.object.object_type, DriveObjectType::Notebook);
+            assert_eq!(notebook.object.name, "notes");
+
+            let environment = response_drive_mutation(
+                bridge.handle_request(
+                    RequestEnvelope::new(
+                        Action::with_params(
+                            ActionKind::DriveCreate,
+                            DriveCreateParams {
+                                object_type: DriveObjectType::Environment,
+                                name: "dev".to_owned(),
+                                content: serde_json::json!({
+                                    "vars": [{ "name": "PORT", "value": { "Constant": "4000" } }]
+                                }),
+                            },
+                        )
+                        .expect("drive.create environment params serialize"),
+                    ),
+                    authenticated_grant(ActionKind::DriveCreate, ctx),
+                    ctx,
+                ),
+            );
+            assert_eq!(environment.object.object_type, DriveObjectType::Environment);
+            assert_eq!(environment.object.name, "dev");
+        });
+    })
+}
+
+#[test]
+fn drive_update_and_delete_return_safe_success() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_drive_app(&mut app, true);
+        enable_outside_warp_underlying_data_mutations(&mut app);
+        let notebook_id = create_notebook(&mut app, "notes", "# Notes");
+        let environment_id = create_environment(&mut app, "dev");
+        LocalControlBridge::handle(&app).update(&mut app, |bridge, ctx| {
+            let update = response_drive_mutation(bridge.handle_request(
+                RequestEnvelope::new(
+                    Action::with_params(
+                        ActionKind::DriveUpdate,
+                        DriveUpdateParams {
+                            object_type: DriveObjectType::Notebook,
+                            id: notebook_id.clone(),
+                            content: serde_json::json!({ "title": "updated", "data": "changed" }),
+                        },
+                    )
+                    .expect("drive.update params serialize"),
+                ),
+                authenticated_grant(ActionKind::DriveUpdate, ctx),
+                ctx,
+            ));
+            assert_eq!(update.object.name, "updated");
+
+            let delete = response_drive_mutation(
+                bridge.handle_request(
+                    RequestEnvelope::new(
+                        Action::with_params(
+                            ActionKind::DriveDelete,
+                            DriveDeleteParams {
+                                object_type: DriveObjectType::Environment,
+                                id: environment_id.clone(),
+                            },
+                        )
+                        .expect("drive.delete params serialize"),
+                    ),
+                    authenticated_grant(ActionKind::DriveDelete, ctx),
+                    ctx,
+                ),
+            );
+            assert_eq!(delete.object.id, environment_id);
+            assert_eq!(delete.object.object_type, DriveObjectType::Environment);
+        });
+    })
+}
+
+#[test]
+fn drive_run_and_insert_fail_closed_without_policy_approval() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_drive_app(&mut app, true);
+        enable_outside_warp_underlying_data_mutations(&mut app);
+        let workflow_id = create_workflow(&mut app, "build", "cargo check");
+        let notebook_id = create_notebook(&mut app, "notes", "# Notes");
+        let run_request = RequestEnvelope::new(
+            Action::with_params(
+                ActionKind::DriveRun,
+                DriveRunParams {
+                    object_type: DriveObjectType::Workflow,
+                    id: workflow_id,
+                },
+            )
+            .expect("drive.run params serialize"),
+        );
+        let insert_request = RequestEnvelope::new(
+            Action::with_params(
+                ActionKind::DriveInsert,
+                DriveInsertParams {
+                    object_type: DriveObjectType::Notebook,
+                    id: notebook_id,
+                },
+            )
+            .expect("drive.insert params serialize"),
+        );
+        LocalControlBridge::handle(&app).update(&mut app, |bridge, ctx| {
+            let response = bridge.handle_request(
+                run_request,
+                authenticated_grant(ActionKind::DriveRun, ctx),
+                ctx,
+            );
+            assert_eq!(
+                response_error_code(response),
+                ErrorCode::ExecutionContextNotAllowed
+            );
+
+            let response = bridge.handle_request(
+                insert_request,
+                authenticated_grant(ActionKind::DriveInsert, ctx),
+                ctx,
+            );
+            assert_eq!(
+                response_error_code(response),
+                ErrorCode::ExecutionContextNotAllowed
+            );
+        });
+    })
+}
+
+#[test]
+fn drive_mutations_reject_unsupported_targets_and_mismatched_types() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_drive_app(&mut app, true);
+        enable_outside_warp_underlying_data_mutations(&mut app);
+        let folder_id = create_folder(&mut app, "my-folder");
+        let notebook_id = create_notebook(&mut app, "notes", "# Notes");
+
+        let name_target_request = {
+            let mut request = RequestEnvelope::new(
+                Action::with_params(
+                    ActionKind::DriveCreate,
+                    DriveCreateParams {
+                        object_type: DriveObjectType::Workflow,
+                        name: "build".to_owned(),
+                        content: serde_json::json!({ "command": "cargo check" }),
+                    },
+                )
+                .expect("drive.create params serialize"),
+            );
+            request.target = TargetSelector {
+                drive: Some(DriveTarget::Name {
+                    object_type: DriveObjectType::Workflow,
+                    name: "build".to_owned(),
+                }),
+                ..TargetSelector::default()
+            };
+            request
+        };
+        let mismatched_target_request = {
+            let mut request = RequestEnvelope::new(
+                Action::with_params(
+                    ActionKind::DriveUpdate,
+                    DriveUpdateParams {
+                        object_type: DriveObjectType::Notebook,
+                        id: notebook_id.clone(),
+                        content: serde_json::json!({ "data": "updated" }),
+                    },
+                )
+                .expect("drive.update params serialize"),
+            );
+            request.target = TargetSelector {
+                drive: Some(DriveTarget::Id {
+                    object_type: DriveObjectType::Workflow,
+                    id: DriveObjectSelector(notebook_id),
+                }),
+                ..TargetSelector::default()
+            };
+            request
+        };
+        let unsupported_object_request = RequestEnvelope::new(
+            Action::with_params(
+                ActionKind::DriveDelete,
+                DriveDeleteParams {
+                    object_type: DriveObjectType::Workflow,
+                    id: folder_id,
+                },
+            )
+            .expect("drive.delete params serialize"),
+        );
+        LocalControlBridge::handle(&app).update(&mut app, |bridge, ctx| {
+            let response = bridge.handle_request(
+                name_target_request,
+                authenticated_grant(ActionKind::DriveCreate, ctx),
+                ctx,
+            );
+            assert_eq!(response_error_code(response), ErrorCode::UnsupportedAction);
+
+            let response = bridge.handle_request(
+                mismatched_target_request,
+                authenticated_grant(ActionKind::DriveUpdate, ctx),
+                ctx,
+            );
+            assert_eq!(
+                response_error_code(response),
+                ErrorCode::TargetStateConflict
+            );
+
+            let response = bridge.handle_request(
+                unsupported_object_request,
+                authenticated_grant(ActionKind::DriveDelete, ctx),
+                ctx,
+            );
+            assert_eq!(response_error_code(response), ErrorCode::UnsupportedAction);
+        });
+    })
 }

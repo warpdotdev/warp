@@ -419,6 +419,12 @@ async fn handle_control_request(
 }
 
 #[cfg(test)]
+pub(crate) use handlers::drive::{drive_object_summary, validate_drive_target};
+#[cfg(test)]
+pub(crate) use handlers::file_mutations::{
+    resolve_file_mutation_path, validate_file_mutation_target,
+};
+#[cfg(test)]
 pub(crate) use handlers::layout::{
     validate_app_focus_target_test, validate_window_create_target_test,
 };

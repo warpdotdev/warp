@@ -1,10 +1,11 @@
 //! Target and parameter validation for the first local-control action slice.
 use crate::local_control::handlers::metadata::action_metadata_for_name;
 use ::local_control::protocol::{
-    ActionGetParams, BlockGetParams, BlockListParams, HistoryListParams, PaneMaximizeParams,
-    PaneNavigateParams, PaneResizeParams, PaneSplitParams, PaneTarget, SessionTarget,
-    SettingGetParams, TabActivateParams, TabCloseParams, TabMoveParams, TabTarget, TargetSelector,
-    WindowCloseParams, WindowCreateParams, WindowTarget,
+    ActionGetParams, BlockGetParams, BlockListParams, DriveCreateParams, DriveDeleteParams,
+    DriveInsertParams, DriveRunParams, DriveUpdateParams, FileDeleteParams, FileWriteParams,
+    HistoryListParams, PaneMaximizeParams, PaneNavigateParams, PaneResizeParams, PaneSplitParams,
+    PaneTarget, SessionTarget, SettingGetParams, TabActivateParams, TabCloseParams, TabMoveParams,
+    TabTarget, TargetSelector, WindowCloseParams, WindowCreateParams, WindowTarget,
 };
 use ::local_control::{ActionKind, ControlError, ErrorCode};
 use warpui::ModelContext;
@@ -122,6 +123,69 @@ pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result
             Ok(())
         }),
         ActionKind::HistoryList => action.params_as::<HistoryListParams>().map(|_| ()),
+        ActionKind::FileWrite => action.params_as::<FileWriteParams>().and_then(|params| {
+            if params.path.trim().is_empty() {
+                return Err(ControlError::new(
+                    ErrorCode::InvalidParams,
+                    "file.write requires a non-empty path",
+                ));
+            }
+            Ok(())
+        }),
+        ActionKind::FileDelete => action.params_as::<FileDeleteParams>().and_then(|params| {
+            if params.path.trim().is_empty() {
+                return Err(ControlError::new(
+                    ErrorCode::InvalidParams,
+                    "file.delete requires a non-empty path",
+                ));
+            }
+            Ok(())
+        }),
+        ActionKind::DriveCreate => action.params_as::<DriveCreateParams>().and_then(|params| {
+            if params.name.trim().is_empty() {
+                return Err(ControlError::new(
+                    ErrorCode::InvalidParams,
+                    "drive.create requires a non-empty name",
+                ));
+            }
+            Ok(())
+        }),
+        ActionKind::DriveUpdate => action.params_as::<DriveUpdateParams>().and_then(|params| {
+            if params.id.trim().is_empty() {
+                return Err(ControlError::new(
+                    ErrorCode::InvalidParams,
+                    "drive.update requires a non-empty Drive object id",
+                ));
+            }
+            Ok(())
+        }),
+        ActionKind::DriveDelete => action.params_as::<DriveDeleteParams>().and_then(|params| {
+            if params.id.trim().is_empty() {
+                return Err(ControlError::new(
+                    ErrorCode::InvalidParams,
+                    "drive.delete requires a non-empty Drive object id",
+                ));
+            }
+            Ok(())
+        }),
+        ActionKind::DriveRun => action.params_as::<DriveRunParams>().and_then(|params| {
+            if params.id.trim().is_empty() {
+                return Err(ControlError::new(
+                    ErrorCode::InvalidParams,
+                    "drive.run requires a non-empty Drive object id",
+                ));
+            }
+            Ok(())
+        }),
+        ActionKind::DriveInsert => action.params_as::<DriveInsertParams>().and_then(|params| {
+            if params.id.trim().is_empty() {
+                return Err(ControlError::new(
+                    ErrorCode::InvalidParams,
+                    "drive.insert requires a non-empty Drive object id",
+                ));
+            }
+            Ok(())
+        }),
         _ => Ok(()),
     }
 }

@@ -455,7 +455,14 @@ impl ActionKind {
             | Self::AppResourceCenterToggle
             | Self::AppAiAssistantToggle
             | Self::AppCodeReviewToggle
-            | Self::AppVerticalTabsToggle => ActionImplementationStatus::Implemented,
+            | Self::AppVerticalTabsToggle
+            | Self::FileWrite
+            | Self::FileDelete
+            | Self::DriveCreate
+            | Self::DriveUpdate
+            | Self::DriveDelete
+            | Self::DriveRun
+            | Self::DriveInsert => ActionImplementationStatus::Implemented,
             _ => ActionImplementationStatus::Stub,
         };
         let requires_authenticated_user = self.default_requires_authenticated_user();
@@ -772,6 +779,15 @@ impl ActionKind {
             | Self::InputClear
             | Self::InputModeSet => {
                 return vec![InvocationContext::InsideWarp];
+            }
+            Self::FileWrite
+            | Self::FileDelete
+            | Self::DriveCreate
+            | Self::DriveUpdate
+            | Self::DriveDelete
+            | Self::DriveRun
+            | Self::DriveInsert => {
+                return vec![InvocationContext::OutsideWarp];
             }
             _ => ActionImplementationStatus::Stub,
         };
