@@ -399,7 +399,17 @@ pub(super) fn run_file_command(
 ) -> Result<(), ControlError> {
     match command {
         FileCommand::List(args) => run_action(args, ActionKind::FileList, json!({}), output_format),
-        FileCommand::Open(_) => unsupported_action("file.open"),
+        FileCommand::Open(args) => run_action(
+            args.target,
+            ActionKind::FileOpen,
+            json!({
+                "path": args.path.to_string_lossy(),
+                "line": args.line,
+                "column": args.column,
+                "new_tab": args.new_tab,
+            }),
+            output_format,
+        ),
     }
 }
 
@@ -414,7 +424,12 @@ pub(super) fn run_project_command(
         ProjectCommand::List(args) => {
             run_action(args, ActionKind::ProjectList, json!({}), output_format)
         }
-        ProjectCommand::Open(_) => unsupported_action("project.open"),
+        ProjectCommand::Open(args) => run_action(
+            args.target,
+            ActionKind::ProjectOpen,
+            json!({ "type": "path", "path": args.path.to_string_lossy() }),
+            output_format,
+        ),
     }
 }
 

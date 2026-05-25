@@ -1,6 +1,7 @@
 //! App-side action handlers invoked by the local-control bridge.
 pub(super) mod data;
 pub(super) mod drive;
+pub(super) mod file_project_open;
 pub(super) mod layout;
 pub(super) mod metadata;
 pub(super) mod product_metadata;

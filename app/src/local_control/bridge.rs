@@ -10,7 +10,8 @@ use ::local_control::{
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::local_control::handlers::{
-    data, drive, layout, metadata, product_metadata, session_input, settings_surfaces, surfaces,
+    data, drive, file_project_open, layout, metadata, product_metadata, session_input,
+    settings_surfaces, surfaces,
 };
 use crate::local_control::permissions::{
     ensure_action_allowed, ensure_authenticated_user_matches, ensure_feature_enabled,
@@ -730,6 +731,43 @@ impl LocalControlBridge {
                     return ResponseEnvelope::error(request.request_id, error);
                 }
                 match drive::drive_inspect(&request.target, &request.action, ctx) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::FileOpen => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as()
+                    .and_then(|params| file_project_open::file_open(&request.target, params, ctx))
+                {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::ProjectOpen => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as::<::local_control::protocol::ActionParams>()
+                    .and_then(|params| match params {
+                        ::local_control::protocol::ActionParams::Path { path } => {
+                            file_project_open::project_open(&request.target, path, ctx)
+                        }
+                        _ => Err(ControlError::new(
+                            ErrorCode::InvalidParams,
+                            "project.open requires a path payload",
+                        )),
+                    }) {
                     Ok(data) => ResponseEnvelope::ok(request.request_id, data),
                     Err(error) => ResponseEnvelope::error(request.request_id, error),
                 }

@@ -621,7 +621,9 @@ impl ActionKind {
             | Self::SurfaceCodeReviewToggle
             | Self::SurfaceLeftPanelToggle
             | Self::SurfaceRightPanelToggle
-            | Self::SurfaceVerticalTabsToggle => ActionImplementationStatus::Implemented,
+            | Self::SurfaceVerticalTabsToggle
+            | Self::FileOpen
+            | Self::ProjectOpen => ActionImplementationStatus::Implemented,
             Self::AuthStatus
             | Self::AuthLogin
             | Self::AuthApiKeySet
@@ -648,8 +650,6 @@ impl ActionKind {
             | Self::AppearanceZoomReset
             | Self::KeybindingList
             | Self::KeybindingGet
-            | Self::FileOpen
-            | Self::ProjectOpen
             | Self::DriveOpen
             | Self::DriveNotebookOpen
             | Self::DriveEnvVarCollectionOpen
