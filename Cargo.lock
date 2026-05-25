@@ -15303,10 +15303,10 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-channel",
- "cocoa 0.26.0",
  "gloo-storage",
  "log",
- "objc",
+ "objc2 0.6.3",
+ "objc2-foundation 0.3.2",
  "ouroboros",
  "rand 0.8.6",
  "ring",
