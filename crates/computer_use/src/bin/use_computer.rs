@@ -4,21 +4,42 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use computer_use::{
-    Action, Key, MouseButton, Options, ScreenshotParams, ScreenshotRegion, Vector2I,
+    Action, Key, MouseButton, Options, ScreenshotParams, ScreenshotRegion, Target, TargetedAction,
+    Vector2I,
 };
 
 #[derive(Parser)]
 #[command(name = "use_computer")]
 #[command(about = "Manually test computer use actions")]
 struct Cli {
-    /// Experimental (macOS only): deliver events directly to this process ID via
-    /// CGEventPostToPid instead of the system-wide HID event tap. This avoids moving the real
-    /// cursor and stealing focus, but is less reliable (especially for mouse events).
+    /// Experimental (macOS only): target a specific background window/process instead of the
+    /// screen. Deliver events directly to this process ID (and `--window-id`, if given) without
+    /// moving the real cursor or raising the window.
     #[arg(long, global = true)]
     pid: Option<i32>,
 
+    /// Experimental (macOS only): the CGWindowID of the window to target, used with `--pid`.
+    /// When omitted, the window is resolved from the action's coordinates. Use the `windows`
+    /// subcommand to list window ids.
+    #[arg(long, global = true)]
+    window_id: Option<u32>,
+
     #[command(subcommand)]
     command: Command,
+}
+
+impl Cli {
+    /// Resolves the per-action / screenshot target from the CLI flags. A `--pid` selects a
+    /// background window target; otherwise the legacy whole-screen target is used.
+    fn target(&self) -> Target {
+        match self.pid {
+            Some(pid) => Target::Window {
+                window_id: self.window_id.unwrap_or(0),
+                pid,
+            },
+            None => Target::Screen,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -115,15 +136,7 @@ async fn main() {
         return;
     }
 
-    // The macOS actor reads this env var to route events to a specific process. Setting it
-    // here keeps this CLI cross-platform while still exposing the experimental PID targeting.
-    if let Some(pid) = cli.pid {
-        // SAFETY: set before `create_actor` spawns any threads.
-        unsafe {
-            std::env::set_var("COMPUTER_USE_TARGET_PID", pid.to_string());
-        }
-    }
-
+    let target = cli.target();
     let mut actor = computer_use::create_actor();
 
     let (actions, screenshot_params, output_path) = match cli.command {
@@ -154,6 +167,7 @@ async fn main() {
                     max_long_edge_px: None,
                     max_total_px: None,
                     region,
+                    target,
                 }),
                 Some(output),
             )
@@ -188,6 +202,11 @@ async fn main() {
         Command::Windows => unreachable!(),
     };
 
+    // Pair every action with the resolved target before handing off to the actor.
+    let actions: Vec<TargetedAction> = actions
+        .into_iter()
+        .map(|action| TargetedAction { action, target })
+        .collect();
     let options = Options { screenshot_params };
 
     match actor.perform_actions(&actions, options).await {

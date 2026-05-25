@@ -1364,9 +1364,24 @@ pub(crate) fn convert_tool_call_result_to_input(
                         .cursor_position
                         .as_ref()
                         .map(|c| computer_use::Vector2I::new(c.x, c.y));
+                    let windows = success
+                        .windows
+                        .iter()
+                        .map(convert_api_window_info)
+                        .collect();
+                    // A non-zero captured window id indicates a window screenshot was taken.
+                    let captured_window =
+                        (success.captured_window_id != 0).then_some(computer_use::CapturedWindow {
+                            window_id: success.captured_window_id,
+                            width_px: success.captured_width_px,
+                            height_px: success.captured_height_px,
+                            scale_factor: success.captured_scale_factor,
+                        });
                     UseComputerResult::Success(computer_use::ActionResult {
                         screenshot,
                         cursor_position,
+                        windows,
+                        captured_window,
                     })
                 }
                 Some(api::use_computer_result::Result::Error(error)) => {
@@ -1392,6 +1407,8 @@ pub(crate) fn convert_tool_call_result_to_input(
                             api::request_computer_use_result::Approved {
                                 screen_dimensions: Some(screen_dimensions),
                                 initial_screenshot: Some(initial_screenshot),
+                                windows,
+                                background_supported,
                                 ..
                             },
                             Some(platform),
@@ -1405,6 +1422,8 @@ pub(crate) fn convert_tool_call_result_to_input(
                                 mime_type: initial_screenshot.mime_type.clone().into(),
                             },
                             platform,
+                            windows: windows.iter().map(convert_api_window_info).collect(),
+                            background_supported: *background_supported,
                         },
                         _ => RequestComputerUseResult::Error(
                             "Missing screen dimensions, initial screenshot, or valid platform"
@@ -2124,6 +2143,21 @@ fn convert_api_platform(platform: i32) -> Option<computer_use::Platform> {
             log::warn!("Unknown platform value: {platform}");
             None
         }
+    }
+}
+
+/// Reconstructs the internal computer_use window record from the API `WindowInfo` message.
+fn convert_api_window_info(window: &api::WindowInfo) -> computer_use::WindowInfo {
+    computer_use::WindowInfo {
+        window_id: window.window_id,
+        pid: window.pid,
+        app_name: window.app_name.clone(),
+        title: window.title.clone(),
+        x: window.x,
+        y: window.y,
+        width: window.width,
+        height: window.height,
+        layer: window.layer,
     }
 }
 

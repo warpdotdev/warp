@@ -22,6 +22,12 @@ impl Keyboard {
         }
     }
 
+    /// Sets where subsequent synthesized key events are delivered. Called per-action so typing
+    /// can be routed to a specific background process.
+    pub fn set_target(&mut self, target: PostTarget) {
+        self.target = target;
+    }
+
     /// Sends a key down event for the given key.
     pub fn key_down(&self, key: &Key) -> Result<(), String> {
         post_key_down(self.resolve_keycode(key)?, self.target)

@@ -1,9 +1,5 @@
 use objc2_core_graphics::{CGEvent, CGEventTapLocation};
 
-/// Environment variable used to route computer-use events to a specific process by PID
-/// instead of the system-wide HID event tap.
-const TARGET_PID_ENV_VAR: &str = "COMPUTER_USE_TARGET_PID";
-
 /// Describes where synthesized Quartz events are delivered.
 ///
 /// This is an experimental knob for evaluating background, non-interfering control. The
@@ -21,26 +17,6 @@ pub enum PostTarget {
 }
 
 impl PostTarget {
-    /// Determines the post target from the environment, falling back to the HID event tap.
-    ///
-    /// Setting `COMPUTER_USE_TARGET_PID` to a valid PID routes all events to that process. An
-    /// unset or unparseable value leaves the historical HID behavior in place.
-    pub fn from_env() -> Self {
-        match std::env::var(TARGET_PID_ENV_VAR) {
-            Ok(value) => match value.trim().parse::<libc::pid_t>() {
-                Ok(pid) => PostTarget::Pid(pid),
-                Err(_) => {
-                    log::warn!(
-                        "Ignoring invalid {TARGET_PID_ENV_VAR} value {value:?}; \
-                         falling back to the HID event tap."
-                    );
-                    PostTarget::HidTap
-                }
-            },
-            Err(_) => PostTarget::HidTap,
-        }
-    }
-
     /// Returns true when events are delivered directly to a process rather than the HID tap.
     pub fn is_pid_targeted(self) -> bool {
         matches!(self, PostTarget::Pid(_))

@@ -198,7 +198,7 @@ pub(crate) enum PersistedAIAgentActionType {
     InitProject,
     UseComputer {
         action_summary: String,
-        actions: Vec<computer_use::Action>,
+        actions: Vec<computer_use::TargetedAction>,
         screenshot_params: Option<computer_use::ScreenshotParams>,
     },
     RequestComputerUse {

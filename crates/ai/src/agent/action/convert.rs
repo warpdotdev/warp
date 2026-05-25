@@ -425,10 +425,11 @@ impl TryFrom<api::message::tool_call::UseComputer> for AIAgentActionType {
             .actions
             .into_iter()
             .map(|action| {
+                let target = convert_computer_use_target(action.target);
                 let Some(action_type) = action.r#type else {
                     return Err(ToolToAIAgentActionError::MissingComputerUseActionType);
                 };
-                match action_type {
+                let action = match action_type {
                     use_computer::action::Type::MouseMove(mouse_move) => {
                         Ok(computer_use::Action::MouseMove {
                             to: coordinates_to_vec(mouse_move.to.as_ref())?,
@@ -476,7 +477,8 @@ impl TryFrom<api::message::tool_call::UseComputer> for AIAgentActionType {
                         let key = convert_key(key_up.key)?;
                         Ok(computer_use::Action::KeyUp { key })
                     }
-                }
+                }?;
+                Ok(computer_use::TargetedAction { action, target })
             })
             .try_collect()?;
         let screenshot_params = value
@@ -526,6 +528,22 @@ fn convert_screenshot_params(
         max_long_edge_px: (params.max_long_edge_px > 0).then_some(params.max_long_edge_px as usize),
         max_total_px: (params.max_total_px > 0).then_some(params.max_total_px as usize),
         region,
+        target: convert_computer_use_target(params.target),
+    }
+}
+
+/// Converts an optional API `ComputerUseTarget` into the internal computer_use target. An absent
+/// or `Screen` target maps to the legacy whole-screen behavior.
+fn convert_computer_use_target(
+    target: Option<api::message::tool_call::ComputerUseTarget>,
+) -> computer_use::Target {
+    use api::message::tool_call::computer_use_target::Target as ApiTarget;
+    match target.and_then(|t| t.target) {
+        Some(ApiTarget::Window(window)) => computer_use::Target::Window {
+            window_id: window.window_id,
+            pid: window.pid,
+        },
+        Some(ApiTarget::Screen(_)) | None => computer_use::Target::Screen,
     }
 }
 

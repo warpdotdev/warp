@@ -8,14 +8,75 @@ mod util;
 mod window;
 
 use async_trait::async_trait;
+use pathfinder_geometry::vector::Vector2I;
 use warpui_core::r#async::Timer;
 
 use post::PostTarget;
+use util::main_display_scale_factor;
 
-use crate::{Action, ActionResult, Options};
+use crate::{Action, ActionResult, Options, Target, TargetedAction};
 
 pub fn is_supported_on_current_platform() -> bool {
     true
+}
+
+/// Reports whether background, per-window control is available. On macOS the background input
+/// stack (focus-without-raise + window-targeted posting) is present, so this is always true.
+pub fn background_supported() -> bool {
+    true
+}
+
+/// Enumerates the on-screen windows as crate-level [`crate::WindowInfo`] records.
+pub fn enumerate_windows() -> Vec<crate::WindowInfo> {
+    window::enumerate_windows()
+}
+
+/// Maps a computer-use [`Target`] to the lower-level [`PostTarget`] used for event delivery.
+fn post_target_for(target: Target) -> PostTarget {
+    match target {
+        Target::Screen => PostTarget::HidTap,
+        Target::Window { pid, .. } => PostTarget::Pid(pid as libc::pid_t),
+    }
+}
+
+/// Returns a copy of `action` with its coordinates remapped for the given target.
+///
+/// For a `Window` target the incoming coordinates are window-local pixels in the captured window
+/// screenshot's space; they are translated to global physical pixels that the mouse pipeline
+/// expects. This assumes the window shares the main display's backing scale factor (single-
+/// display); multi-display / mixed-scale handling is a follow-up. `Screen` targets and windows
+/// that cannot be resolved are left unchanged (legacy global-pixel behavior).
+fn remap_action_for_target(action: &Action, target: Target) -> Action {
+    let Target::Window { window_id, .. } = target else {
+        return action.clone();
+    };
+    let Some(info) = window::window_by_id(window_id) else {
+        return action.clone();
+    };
+    let scale = main_display_scale_factor();
+    let remap = |p: Vector2I| {
+        Vector2I::new(
+            (info.x * scale) as i32 + p.x(),
+            (info.y * scale) as i32 + p.y(),
+        )
+    };
+    match action {
+        Action::MouseMove { to } => Action::MouseMove { to: remap(*to) },
+        Action::MouseDown { button, at } => Action::MouseDown {
+            button: button.clone(),
+            at: remap(*at),
+        },
+        Action::MouseWheel {
+            at,
+            direction,
+            distance,
+        } => Action::MouseWheel {
+            at: remap(*at),
+            direction: *direction,
+            distance: *distance,
+        },
+        other => other.clone(),
+    }
 }
 
 /// Experimental: lists on-screen windows (number, owner PID/name, layer, bounds) for
@@ -45,17 +106,11 @@ pub struct Actor {
 
 impl Actor {
     pub fn new() -> Self {
-        // Experimental: when COMPUTER_USE_TARGET_PID is set, events are delivered directly to
-        // that process via CGEventPostToPid instead of the system-wide HID event tap. This
-        // avoids moving the real cursor and stealing focus, but is less reliable (especially
-        // for mouse events). See `post::PostTarget` for details.
-        let target = PostTarget::from_env();
-        if let PostTarget::Pid(pid) = target {
-            log::info!("Computer use: routing events directly to PID {pid} (experimental).");
-        }
+        // The post target now defaults to the HID event tap (legacy screen/frontmost behavior)
+        // and is overridden per-action when an action targets a specific window.
         Self {
-            keyboard: keyboard::Keyboard::new(target),
-            mouse: mouse::Mouse::new(target),
+            keyboard: keyboard::Keyboard::new(PostTarget::HidTap),
+            mouse: mouse::Mouse::new(PostTarget::HidTap),
         }
     }
 }
@@ -68,11 +123,19 @@ impl super::Actor for Actor {
 
     async fn perform_actions(
         &mut self,
-        actions: &[Action],
+        actions: &[TargetedAction],
         options: Options,
     ) -> Result<ActionResult, String> {
-        for action in actions {
-            match action {
+        for targeted in actions {
+            // Route this action to its target: the HID tap for screen actions, or directly to the
+            // owning process for a window action (without raising it or moving the cursor).
+            let post_target = post_target_for(targeted.target);
+            self.mouse.set_target(post_target);
+            self.keyboard.set_target(post_target);
+
+            // For a window target, translate window-local coordinates to global physical pixels.
+            let action = remap_action_for_target(&targeted.action, targeted.target);
+            match &action {
                 Action::Wait(duration) => {
                     Timer::after(*duration).await;
                 }
@@ -109,15 +172,20 @@ impl super::Actor for Actor {
             self.mouse.restore_focus();
         }
 
-        let screenshot = if let Some(params) = options.screenshot_params {
-            Some(screenshot::take(params)?)
-        } else {
-            None
+        let (screenshot, captured_window) = match options.screenshot_params {
+            Some(params) => {
+                let (screenshot, captured) = screenshot::take(params)?;
+                (Some(screenshot), captured)
+            }
+            None => (None, None),
         };
 
         Ok(ActionResult {
             screenshot,
             cursor_position: Some(self.mouse.current_position()?),
+            // Always refresh the window list so the caller has up-to-date targets to choose from.
+            windows: window::enumerate_windows(),
+            captured_window,
         })
     }
 }

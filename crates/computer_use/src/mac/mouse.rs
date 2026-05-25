@@ -72,6 +72,12 @@ impl Mouse {
         }
     }
 
+    /// Sets where subsequent synthesized events are delivered. Called per-action so a batch can
+    /// drive the HID tap for some actions and a specific process for others.
+    pub fn set_target(&mut self, target: PostTarget) {
+        self.target = target;
+    }
+
     /// Restores input focus to the window that was focused before our first PID-targeted
     /// click, undoing the focus-without-raise. No-op if we never changed focus.
     pub fn restore_focus(&mut self) {

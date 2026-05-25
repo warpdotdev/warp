@@ -973,6 +973,8 @@ impl TryFrom<RequestComputerUseResult> for api::request::input::tool_call_result
             RequestComputerUseResult::Approved {
                 screenshot,
                 platform,
+                windows,
+                background_supported,
             } => Ok(
                 api::request::input::tool_call_result::Result::RequestComputerUse(
                     api::RequestComputerUseResult {
@@ -989,8 +991,8 @@ impl TryFrom<RequestComputerUseResult> for api::request::input::tool_call_result
                                     height: screenshot.height as i32,
                                 }),
                                 platform: convert_platform(platform).into(),
-                                // Window targeting metadata is not yet captured locally.
-                                windows: vec![],
+                                windows: windows.into_iter().map(convert_window_info).collect(),
+                                background_supported,
                             },
                         )),
                     },
@@ -1024,6 +1026,9 @@ impl TryFrom<UseComputerResult> for api::request::input::tool_call_result::Resul
     fn try_from(result: UseComputerResult) -> Result<Self, Self::Error> {
         match result {
             UseComputerResult::Success(result) => {
+                // Copy out the captured-window metadata (if any) before the owned fields of
+                // `result` are moved into the message below.
+                let captured = result.captured_window;
                 Ok(api::request::input::tool_call_result::Result::UseComputer(
                     api::UseComputerResult {
                         result: Some(api::use_computer_result::Result::Success(
@@ -1035,9 +1040,15 @@ impl TryFrom<UseComputerResult> for api::request::input::tool_call_result::Resul
                                     height: s.height as i32,
                                 }),
                                 cursor_position: result.cursor_position.map(vec_to_coordinates),
-                                // Window targeting metadata is not yet captured locally.
-                                captured_window: None,
-                                windows: vec![],
+                                windows: result
+                                    .windows
+                                    .into_iter()
+                                    .map(convert_window_info)
+                                    .collect(),
+                                captured_window_id: captured.map_or(0, |c| c.window_id),
+                                captured_width_px: captured.map_or(0, |c| c.width_px),
+                                captured_height_px: captured.map_or(0, |c| c.height_px),
+                                captured_scale_factor: captured.map_or(0.0, |c| c.scale_factor),
                             },
                         )),
                     },
@@ -1061,6 +1072,21 @@ fn vec_to_coordinates(vec: computer_use::Vector2I) -> api::Coordinates {
     api::Coordinates {
         x: vec.x(),
         y: vec.y(),
+    }
+}
+
+/// Converts a computer_use window record into the API `WindowInfo` message.
+fn convert_window_info(window: computer_use::WindowInfo) -> api::WindowInfo {
+    api::WindowInfo {
+        window_id: window.window_id,
+        pid: window.pid,
+        app_name: window.app_name,
+        title: window.title,
+        x: window.x,
+        y: window.y,
+        width: window.width,
+        height: window.height,
+        layer: window.layer,
     }
 }
 
