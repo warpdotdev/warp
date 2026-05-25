@@ -2571,6 +2571,28 @@ fn app_ui_calls_do_not_use_direct_english_literals() {
     );
 }
 
+#[test]
+fn context_chip_disabled_tooltips_do_not_use_direct_english_literals() {
+    let path = workspace_root().join("app/src/context_chips/context_chip.rs");
+    let content = fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+    let violations = [
+        "fn tooltip_text(&self)",
+        "fn tooltip_override_text(&self)",
+        "Requires a local session",
+        "Requires the GitHub CLI",
+        "Requires the `",
+    ]
+    .into_iter()
+    .filter(|snippet| content.contains(snippet))
+    .collect::<Vec<_>>();
+
+    assert!(
+        violations.is_empty(),
+        "context chip disabled tooltips must use AppContext localization: {violations:#?}"
+    );
+}
+
 fn bundled_en_us_map() -> CatalogMap {
     serde_json::from_str(BUNDLED_EN_US).unwrap()
 }

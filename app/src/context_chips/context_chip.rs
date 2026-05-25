@@ -172,16 +172,6 @@ pub enum ChipDisabledReason {
 }
 
 impl ChipDisabledReason {
-    pub fn tooltip_text(&self) -> String {
-        match self {
-            Self::RequiresLocalSession => "Requires a local session".to_string(),
-            Self::RequiresExecutable { command } if command == "gh" => {
-                "Requires the GitHub CLI".to_string()
-            }
-            Self::RequiresExecutable { command } => format!("Requires the `{command}` command"),
-        }
-    }
-
     pub fn tooltip_text_for_app(&self, app: &AppContext) -> String {
         match self {
             Self::RequiresLocalSession => {
@@ -210,13 +200,6 @@ pub enum ChipAvailability {
 impl ChipAvailability {
     pub fn is_enabled(&self) -> bool {
         matches!(self, Self::Enabled)
-    }
-
-    pub fn tooltip_override_text(&self) -> Option<String> {
-        match self {
-            Self::Disabled(reason) => Some(reason.tooltip_text()),
-            Self::Enabled | Self::Hidden => None,
-        }
     }
 
     pub fn tooltip_override_text_for_app(&self, app: &AppContext) -> Option<String> {

@@ -94,15 +94,7 @@ impl Renderer {
         availability: ChipAvailability,
     ) -> Self {
         let is_disabled = !availability.is_enabled();
-        let tooltip_override_text = availability.tooltip_override_text();
-        Self::new_with_tooltip_override(
-            kind,
-            chip,
-            value,
-            styles,
-            is_disabled,
-            tooltip_override_text,
-        )
+        Self::new_with_tooltip_override(kind, chip, value, styles, is_disabled, None)
     }
 
     pub fn new_for_app(
