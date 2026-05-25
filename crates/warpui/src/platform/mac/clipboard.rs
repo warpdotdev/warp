@@ -1,36 +1,31 @@
 use std::ffi::CStr;
-use std::os::raw::{c_uchar, c_void};
+use std::os::raw::c_uchar;
 use std::slice;
 
-use anyhow::{anyhow, Result};
-use cocoa::appkit::{NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString};
-use cocoa::base::{id, nil};
-use cocoa::foundation::{NSArray, NSData, NSString};
-use objc::{class, msg_send, sel, sel_impl};
+use anyhow::Result;
+use cocoa::base::id;
+use objc2::rc::Retained;
+use objc2_app_kit::{NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString};
+use objc2_foundation::{NSArray, NSData, NSString};
 use warpui_core::clipboard::{ClipboardContent, ImageData};
-
-use super::make_nsstring;
 
 extern "C" {
     fn getFilePathsFromPasteboard() -> id;
 }
 
-pub struct Clipboard(id);
+pub struct Clipboard(Retained<NSPasteboard>);
 
 unsafe impl Send for Clipboard {}
 
 impl Clipboard {
     pub fn new() -> Result<Self> {
-        let pboard = unsafe { NSPasteboard::generalPasteboard(nil) };
-        if pboard.is_null() {
-            Err(anyhow!("NSPasteboard::generalPasteboard returned nil"))
-        } else {
-            Ok(Clipboard(pboard))
-        }
+        // `generalPasteboard` is documented to always return the shared
+        // pasteboard, so objc2 models it as a non-null `Retained`.
+        Ok(Clipboard(NSPasteboard::generalPasteboard()))
     }
 }
 
-unsafe fn pasteboard_type_for_image_mime_type(mime_type: &str) -> Option<id> {
+fn pasteboard_type_for_image_mime_type(mime_type: &str) -> Option<Retained<NSString>> {
     let pasteboard_type = match mime_type {
         "image/png" => "public.png",
         "image/jpeg" => "public.jpeg",
@@ -39,22 +34,22 @@ unsafe fn pasteboard_type_for_image_mime_type(mime_type: &str) -> Option<id> {
         "image/svg+xml" => "public.svg-image",
         _ => return None,
     };
-    Some(make_nsstring(pasteboard_type))
+    Some(NSString::from_str(pasteboard_type))
 }
 
 impl crate::Clipboard for Clipboard {
     fn write(&mut self, contents: ClipboardContent) {
         unsafe {
-            let nsstr = make_nsstring(&contents.plain_text);
+            let nsstr = NSString::from_str(&contents.plain_text);
             self.0
-                .declareTypes_owner(NSArray::arrayWithObject(nil, NSPasteboardTypeString), nil);
-            NSPasteboard::setString_forType(self.0, nsstr, NSPasteboardTypeString);
+                .declareTypes_owner(&NSArray::from_slice(&[NSPasteboardTypeString]), None);
+            self.0.setString_forType(&nsstr, NSPasteboardTypeString);
 
             if let Some(html) = contents.html {
-                let nsstr = make_nsstring(&html);
+                let nsstr = NSString::from_str(&html);
                 self.0
-                    .addTypes_owner(NSArray::arrayWithObject(nil, NSPasteboardTypeHTML), nil);
-                NSPasteboard::setString_forType(self.0, nsstr, NSPasteboardTypeHTML);
+                    .addTypes_owner(&NSArray::from_slice(&[NSPasteboardTypeHTML]), None);
+                self.0.setString_forType(&nsstr, NSPasteboardTypeHTML);
             }
 
             if let Some(images) = contents.images {
@@ -64,17 +59,13 @@ impl crate::Clipboard for Clipboard {
                     else {
                         continue;
                     };
-                    let data: id = msg_send![class!(NSData), alloc];
-                    let data: id = data.initWithBytes_length_(
-                        image.data.as_ptr() as *const c_void,
-                        image.data.len() as u64,
-                    );
+                    // `NSData::with_bytes` copies the image bytes into a +1-retained
+                    // NSData. The pasteboard retains it in `setData:forType:`, and the
+                    // `Retained` releases our reference when it drops at the loop end.
+                    let data = NSData::with_bytes(&image.data);
                     self.0
-                        .addTypes_owner(NSArray::arrayWithObject(nil, pasteboard_type), nil);
-                    let _: () = msg_send![self.0, setData: data forType: pasteboard_type];
-                    // Balance the +1 retain from `[NSData alloc]`. The pasteboard retains
-                    // `data` in `setData:forType:`, so the object stays alive as needed.
-                    let _: () = msg_send![data, release];
+                        .addTypes_owner(&NSArray::from_slice(&[&*pasteboard_type]), None);
+                    self.0.setData_forType(Some(&data), &pasteboard_type);
                 }
             }
         }
@@ -84,11 +75,11 @@ impl crate::Clipboard for Clipboard {
         unsafe {
             // Try getting file paths from the clipboard. If we end up with an empty
             // array of file paths, fallback to getting the string from the pasteboard.
-            let file_paths = getFilePathsFromPasteboard();
+            let file_paths = &*getFilePathsFromPasteboard().cast::<NSArray<NSString>>();
             let available_paths = file_paths.count();
 
-            let text = NSPasteboard::stringForType(self.0, NSPasteboardTypeString);
-            let mut content = ClipboardContent::plain_text(if text != nil {
+            let text = self.0.stringForType(NSPasteboardTypeString);
+            let mut content = ClipboardContent::plain_text(if let Some(text) = text.as_deref() {
                 CStr::from_ptr(text.UTF8String())
                     .to_str()
                     .unwrap_or("")
@@ -112,8 +103,8 @@ impl crate::Clipboard for Clipboard {
                 );
             }
 
-            let html = NSPasteboard::stringForType(self.0, NSPasteboardTypeHTML);
-            if html != nil {
+            let html = self.0.stringForType(NSPasteboardTypeHTML);
+            if let Some(html) = html.as_deref() {
                 content.html = Some(
                     CStr::from_ptr(html.UTF8String())
                         .to_str()
@@ -141,24 +132,20 @@ impl Clipboard {
             // macOS pasteboard type identifiers for supported image formats
             // Ordered by preference for web compatibility
             let supported_pasteboard_types = [
-                make_nsstring("public.png"),
-                make_nsstring("public.jpeg"),
-                make_nsstring("public.gif"),
-                make_nsstring("public.webp"),
-                make_nsstring("public.svg-image"),
-                make_nsstring("com.compuserve.gif"),
+                NSString::from_str("public.png"),
+                NSString::from_str("public.jpeg"),
+                NSString::from_str("public.gif"),
+                NSString::from_str("public.webp"),
+                NSString::from_str("public.svg-image"),
+                NSString::from_str("com.compuserve.gif"),
             ];
 
             let mut images = Vec::new();
 
-            for &pasteboard_type in &supported_pasteboard_types {
-                let data = NSPasteboard::dataForType(self.0, pasteboard_type);
-                if data != nil {
-                    let length = NSData::length(data);
+            for pasteboard_type in &supported_pasteboard_types {
+                if let Some(data) = self.0.dataForType(pasteboard_type) {
+                    let length = data.len();
                     if length > 0 {
-                        let bytes_ptr = NSData::bytes(data) as *const u8;
-                        let bytes = slice::from_raw_parts(bytes_ptr, length as usize);
-
                         let mime_type = match CStr::from_ptr(pasteboard_type.UTF8String())
                             .to_str()
                             .unwrap_or("")
@@ -173,8 +160,8 @@ impl Clipboard {
 
                         // Try to extract filename from HTML content if available
                         let filename = {
-                            let html = NSPasteboard::stringForType(self.0, NSPasteboardTypeHTML);
-                            if html != nil {
+                            let html = self.0.stringForType(NSPasteboardTypeHTML);
+                            if let Some(html) = html.as_deref() {
                                 let html_str =
                                     CStr::from_ptr(html.UTF8String()).to_str().unwrap_or("");
                                 if !html_str.is_empty() {
@@ -188,7 +175,7 @@ impl Clipboard {
                         };
 
                         images.push(ImageData {
-                            data: bytes.to_vec(),
+                            data: data.to_vec(),
                             mime_type: mime_type.to_string(),
                             filename,
                         });
