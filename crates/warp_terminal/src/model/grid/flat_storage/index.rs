@@ -905,6 +905,31 @@ impl EntryBuilder {
                     self.add_leading_wide_char_spacer();
                 }
                 std::mem::take(self).append_to_index(index);
+
+                // If the grapheme is wider than the entire column width it
+                // can never fit via normal packing. Emit one grapheme per row
+                // (matching process_grapheme_info's behaviour) and move on.
+                if cell_width > index.columns {
+                    // The initial flush above already emitted the preceding row
+                    // (with ends_with_leading_wide_char_spacer set). Now emit
+                    // each wide char on its own row; all but the last get the
+                    // spacer flag (because the next wide char will "overflow"
+                    // onto the following row, mirroring process_grapheme_info).
+                    while remaining > 0 {
+                        self.num_cells += cell_width;
+                        self.incr_content_offset += grapheme_len;
+                        self.grapheme_runs.push(GraphemeRun {
+                            count: unsafe { NonZeroU16::new_unchecked(1) },
+                            info,
+                        });
+                        if remaining > 1 {
+                            self.add_leading_wide_char_spacer();
+                        }
+                        std::mem::take(self).append_to_index(index);
+                        remaining -= 1;
+                    }
+                    return;
+                }
                 continue;
             }
 
