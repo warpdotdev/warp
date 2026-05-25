@@ -664,6 +664,8 @@ fn render_grid_without_ligatures<'a>(
                         offset_row,
                         col,
                         &marked_text_cell,
+                        None,
+                        None,
                         cell_type,
                         false,
                         FirstCellInSecret::default(),
@@ -800,6 +802,8 @@ fn render_grid_without_ligatures<'a>(
                 offset_row,
                 col,
                 cell,
+                (col > 0).then(|| &row[col - 1]),
+                (col + 1 < grid.columns()).then(|| &row[col + 1]),
                 cell_type,
                 first_cell_in_link,
                 first_cell_in_secret,
@@ -875,6 +879,8 @@ fn render_cell(
     offset_row: usize,
     col: usize,
     cell: &Cell,
+    prev_cell: Option<&Cell>,
+    next_cell: Option<&Cell>,
     cell_type: CellType,
     first_cell_in_link: bool,
     first_cell_in_secret: FirstCellInSecret,
@@ -927,6 +933,8 @@ fn render_cell(
 
     render_cell_glyph(
         cell,
+        prev_cell,
+        next_cell,
         &cell_type,
         first_cell_in_link,
         first_cell_in_secret,
@@ -1431,6 +1439,24 @@ fn render_grid_with_ligatures<'a>(
                             deferred_str_cells
                                 .push((col, cell_colors.foreground_color, s.to_owned()));
                         }
+                        // Thai/Lao SARA AM: defer like a Str cell, splitting it into the spacing
+                        // "aa" tail (this cell) and the nikhahit dot drawn over the preceding
+                        // consonant cell, so the vowel stays attached. See [`decompose_sara_am`].
+                        CharOrStr::Char(c) if decompose_sara_am(c).is_some() => {
+                            let (nikhahit, sara_aa) =
+                                decompose_sara_am(c).expect("checked by guard");
+                            string_builder.append_placeholder(col);
+                            deferred_str_cells.push((
+                                col,
+                                cell_colors.foreground_color,
+                                sara_aa.to_string(),
+                            ));
+                            deferred_str_cells.push((
+                                col.saturating_sub(1),
+                                cell_colors.foreground_color,
+                                nikhahit.to_string(),
+                            ));
+                        }
                         other => string_builder.append_content(other, col),
                     }
                 }
@@ -1701,11 +1727,35 @@ impl FontIdCache {
     }
 }
 
+/// Decomposes Thai/Lao SARA AM into the parts a complex-text shaper would.
+///
+/// SARA AM (Thai U+0E33, Lao U+0EB3) is a spacing vowel whose single glyph fuses two visually
+/// separate pieces: a nikhahit dot that belongs *above the preceding consonant*, and a spacing
+/// "aa" tail to the right. Because it has a Unicode width of 1, the terminal stores it in its own
+/// grid cell, one column to the right of its consonant — so the dot detaches from the consonant
+/// and renders over the (empty) sara-am cell instead. That is the "สระอำ แยกกัน" splitting.
+///
+/// Returning `(nikhahit, sara_aa)` lets the renderer draw the dot over the consonant cell and the
+/// tail in the sara-am cell, keeping the vowel attached. This decomposition is used purely for
+/// rendering/layout — the grid keeps the original codepoint so copy, search, and find stay
+/// byte-faithful.
+fn decompose_sara_am(c: char) -> Option<(char, char)> {
+    match c {
+        // THAI CHARACTER SARA AM -> THAI CHARACTER NIKHAHIT + THAI CHARACTER SARA AA
+        '\u{0E33}' => Some(('\u{0E4D}', '\u{0E32}')),
+        // LAO VOWEL SIGN AM -> LAO NIGGAHITA + LAO VOWEL SIGN AA
+        '\u{0EB3}' => Some(('\u{0ECD}', '\u{0EB2}')),
+        _ => None,
+    }
+}
+
 /// Draw the glyph for the cell here, but don't draw the decorations (underlines and strikethroughs)
 /// yet.
 #[allow(clippy::too_many_arguments)]
 fn render_cell_glyph(
     cell: &Cell,
+    prev_cell: Option<&Cell>,
+    next_cell: Option<&Cell>,
     cell_type: &CellType,
     first_cell_in_link: bool,
     first_cell_in_secret: FirstCellInSecret,
@@ -1770,28 +1820,27 @@ fn render_cell_glyph(
                 glyph_type,
             });
         }
-        None => match cell_content {
-            // Special-case whitespace, which doesn't need rendering.  We
-            // explicitly check these two chars instead of using
-            // `char::is_whitespace` for performance reasons.
-            CharOrStr::Char(' ' | '\t') => {}
-            CharOrStr::Char(char) => {
-                if let Some((glyph_id, font_id)) =
-                    glyphs.glyph_for_char(char, *font_id, ctx.font_cache)
-                {
-                    ctx.scene
-                        .draw_glyph(origin, glyph_id, font_id, font_size, foreground_color);
+        None => {
+            // If the following cell is a Thai/Lao SARA AM spacing vowel, render this cell's
+            // content together with it as a single shaped cluster. SARA AM (ำ) fuses a nikhahit
+            // dot that belongs *above this consonant* with a spacing "aa" tail; shaping them
+            // together lets HarfBuzz's Thai shaper position the dot over the consonant (via GPOS)
+            // and place the tail after it. The SARA AM cell itself then draws nothing (see the
+            // SARA AM arm below). See [`decompose_sara_am`].
+            let following_sara_am = next_cell.and_then(|n| match n.content_for_display() {
+                CharOrStr::Char(c) => decompose_sara_am(c).map(|_| c),
+                CharOrStr::Str(_) => None,
+            });
+
+            if let Some(sara_am_char) = following_sara_am {
+                let mut cluster = String::new();
+                match cell_content {
+                    CharOrStr::Char(c) => cluster.push(c),
+                    CharOrStr::Str(s) => cluster.push_str(s),
                 }
-            }
-            // Certain zerowidth characters, such as emoji presentation selectors, can affect the
-            // underlying glyph and change the rendering. Hence, we need to layout/render the text
-            // as a combined string. For example, \0x2601\0xFE0F causes ☁️ to become 2-wide.
-            // Thai combining vowels (e.g. "วั") also produce multiple glyphs — the base consonant
-            // and the above/below mark — which must all be drawn at the same cell origin so the
-            // font's own glyph metrics position the mark correctly above the consonant.
-            CharOrStr::Str(content_with_zerowidth) => {
+                cluster.push(sara_am_char);
                 for (glyph_id, glyph_font_id, position) in glyphs.glyphs_for_string(
-                    content_with_zerowidth,
+                    &cluster,
                     *font_id,
                     ctx.font_cache,
                     font_family,
@@ -1799,10 +1848,6 @@ fn render_cell_glyph(
                     properties,
                     ctx,
                 ) {
-                    // Apply HarfBuzz's shaped position so combining marks (e.g. Thai ั / ี)
-                    // sit at the offset the script's GPOS table prescribes — without this,
-                    // every glyph stacks on the cell origin and marks land on the previous
-                    // cell or wherever the bare glyph happens to extend.
                     ctx.scene.draw_glyph(
                         origin + position,
                         glyph_id,
@@ -1811,8 +1856,75 @@ fn render_cell_glyph(
                         foreground_color,
                     );
                 }
+            } else {
+                match cell_content {
+                    // Special-case whitespace, which doesn't need rendering.  We
+                    // explicitly check these two chars instead of using
+                    // `char::is_whitespace` for performance reasons.
+                    CharOrStr::Char(' ' | '\t') => {}
+                    // Thai/Lao SARA AM is normally rendered as part of the preceding consonant's
+                    // cluster (see `following_sara_am` above). Only draw it standalone when there
+                    // is no preceding cell to attach to (e.g. at the start of a line).
+                    CharOrStr::Char(c) if decompose_sara_am(c).is_some() => {
+                        if prev_cell.is_none() {
+                            if let Some((glyph_id, font_id)) =
+                                glyphs.glyph_for_char(c, *font_id, ctx.font_cache)
+                            {
+                                ctx.scene.draw_glyph(
+                                    origin,
+                                    glyph_id,
+                                    font_id,
+                                    font_size,
+                                    foreground_color,
+                                );
+                            }
+                        }
+                    }
+                    CharOrStr::Char(char) => {
+                        if let Some((glyph_id, font_id)) =
+                            glyphs.glyph_for_char(char, *font_id, ctx.font_cache)
+                        {
+                            ctx.scene.draw_glyph(
+                                origin,
+                                glyph_id,
+                                font_id,
+                                font_size,
+                                foreground_color,
+                            );
+                        }
+                    }
+                    // Certain zerowidth characters, such as emoji presentation selectors, can
+                    // affect the underlying glyph and change the rendering. Hence, we need to
+                    // layout/render the text as a combined string. For example, \0x2601\0xFE0F
+                    // causes ☁️ to become 2-wide. Thai combining vowels (e.g. "วั") also produce
+                    // multiple glyphs — the base consonant and the above/below mark — positioned
+                    // by HarfBuzz's GPOS table.
+                    CharOrStr::Str(content_with_zerowidth) => {
+                        for (glyph_id, glyph_font_id, position) in glyphs.glyphs_for_string(
+                            content_with_zerowidth,
+                            *font_id,
+                            ctx.font_cache,
+                            font_family,
+                            font_size,
+                            properties,
+                            ctx,
+                        ) {
+                            // Apply HarfBuzz's shaped position so combining marks (e.g. Thai ั / ี)
+                            // sit at the offset the script's GPOS table prescribes — without this,
+                            // every glyph stacks on the cell origin and marks land on the previous
+                            // cell or wherever the bare glyph happens to extend.
+                            ctx.scene.draw_glyph(
+                                origin + position,
+                                glyph_id,
+                                glyph_font_id,
+                                font_size,
+                                foreground_color,
+                            );
+                        }
+                    }
+                }
             }
-        },
+        }
     }
 
     if first_cell_in_link {
