@@ -99,7 +99,7 @@ impl Index {
     /// Rebuilds an [`Index`] to wrap lines at a different number of columns.
     pub fn rebuild(old_index: &Index, columns: usize) -> Self {
         let capacity = if columns > 0 && old_index.columns > 0 {
-            old_index.len() * old_index.columns / columns + 1
+            old_index.len().saturating_mul(old_index.columns) / columns + 1
         } else {
             old_index.len()
         };
