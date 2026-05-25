@@ -41,7 +41,6 @@ use warpui::platform::OperatingSystem;
 
 use super::model_spec_scores::{
     render_model_spec_header, render_model_spec_scores, CostRow, ModelSpecScoresLayout,
-    MODEL_SPECS_DESCRIPTION, MODEL_SPECS_TITLE, REASONING_LEVEL_DESCRIPTION, REASONING_LEVEL_TITLE,
 };
 
 fn localized_text(app: &AppContext, key: &str) -> String {
@@ -481,11 +480,17 @@ impl SearchItem for ModelSearchItem {
         let theme = appearance.theme();
 
         let (title, description) = if self.reasoning_level.is_some() {
-            (REASONING_LEVEL_TITLE, REASONING_LEVEL_DESCRIPTION)
+            (
+                localized_text(app, "terminal.input.models.reasoning_level.title"),
+                localized_text(app, "terminal.input.models.reasoning_level.description"),
+            )
         } else {
-            (MODEL_SPECS_TITLE, MODEL_SPECS_DESCRIPTION)
+            (
+                localized_text(app, "terminal.input.models.model_specs.title"),
+                localized_text(app, "terminal.input.models.model_specs.description"),
+            )
         };
-        let header = render_model_spec_header(title, description, app);
+        let header = render_model_spec_header(&title, &description, app);
 
         let is_using_api_key =
             self.is_custom_endpoint || is_using_api_key_for_provider(&self.provider, app);

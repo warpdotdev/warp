@@ -233,7 +233,7 @@ impl NotebookEmbed {
                     appearance,
                     Icon::Pencil,
                     self.mouse_state_handles.edit_button_state.clone(),
-                    "Edit",
+                    text(ctx, "notebook.code_block.action.edit"),
                     None,
                 )
                 .on_click(move |ctx, _, _| {
@@ -251,7 +251,7 @@ impl NotebookEmbed {
                     appearance,
                     Icon::Copy,
                     self.mouse_state_handles.copy_button_state.clone(),
-                    "Copy",
+                    text(ctx, "notebook.code_block.action.copy"),
                     custom_action_to_display(CustomAction::Copy),
                 )
                 .on_click(move |ctx, _, _| {
@@ -273,7 +273,7 @@ impl NotebookEmbed {
                     appearance,
                     Icon::TerminalInput,
                     self.mouse_state_handles.insert_button_state.clone(),
-                    "Run in terminal",
+                    text(ctx, "notebook.code_block.action.run_in_terminal"),
                     NotebookKeybindings::as_ref(ctx).run_commands_keybinding(),
                 )
                 .on_click(move |ctx, _, _| {

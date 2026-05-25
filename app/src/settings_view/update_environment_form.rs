@@ -251,28 +251,32 @@ enum SuggestImageState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EnvironmentFormCopy {
-    name_placeholder: &'static str,
-    repos_placeholder_authed: &'static str,
-    repos_placeholder_unauthed: &'static str,
-    docker_image_label: &'static str,
-    docker_image_placeholder: &'static str,
-    description_placeholder: &'static str,
-    setup_commands_placeholder: &'static str,
-    setup_commands_helper: &'static str,
+    name_placeholder_key: &'static str,
+    repos_placeholder_authed_key: &'static str,
+    repos_placeholder_unauthed_key: &'static str,
+    docker_image_label_key: &'static str,
+    docker_image_placeholder_key: &'static str,
+    description_placeholder_key: &'static str,
+    setup_commands_placeholder_key: &'static str,
+    setup_commands_helper_key: &'static str,
     show_description_character_count: bool,
 }
 
 impl EnvironmentFormCopy {
     pub fn orchestration_modal() -> Self {
         Self {
-            name_placeholder: "e.g., dev-env",
-            repos_placeholder_authed: "Browse GitHub repos...",
-            repos_placeholder_unauthed: REPOS_PLACEHOLDER_UNAUTHED,
-            docker_image_label: "Docker image",
-            docker_image_placeholder: "e.g., node:20-alpine",
-            description_placeholder: DESCRIPTION_PLACEHOLDER,
-            setup_commands_placeholder: "e.g., node start",
-            setup_commands_helper: "Press Enter or click the submit button to add each command.",
+            name_placeholder_key: "settings.environment.form.orchestration.name.placeholder",
+            repos_placeholder_authed_key:
+                "settings.environment.form.orchestration.repos.placeholder_authed",
+            repos_placeholder_unauthed_key: "settings.environment.form.repos.placeholder_unauthed",
+            docker_image_label_key: "settings.environment.form.orchestration.docker_image.label",
+            docker_image_placeholder_key:
+                "settings.environment.form.orchestration.docker_image.placeholder",
+            description_placeholder_key: "settings.environment.form.description.placeholder",
+            setup_commands_placeholder_key:
+                "settings.environment.form.orchestration.setup_commands.placeholder",
+            setup_commands_helper_key:
+                "settings.environment.form.orchestration.setup_commands.helper",
             show_description_character_count: false,
         }
     }
@@ -281,14 +285,14 @@ impl EnvironmentFormCopy {
 impl Default for EnvironmentFormCopy {
     fn default() -> Self {
         Self {
-            name_placeholder: "Environment name",
-            repos_placeholder_authed: REPOS_PLACEHOLDER_AUTHED,
-            repos_placeholder_unauthed: REPOS_PLACEHOLDER_UNAUTHED,
-            docker_image_label: "Docker image reference",
-            docker_image_placeholder: "e.g. python:3.11, node:20-alpine",
-            description_placeholder: DESCRIPTION_PLACEHOLDER,
-            setup_commands_placeholder: "e.g. cd my-repo && pip install -r requirements.txt",
-            setup_commands_helper: "Setup commands run independently. Each command runs from the workspace root (/workspace). If a command depends on the previous one, combine them with &&.",
+            name_placeholder_key: "settings.environment.form.name.placeholder",
+            repos_placeholder_authed_key: "settings.environment.form.repos.placeholder_authed",
+            repos_placeholder_unauthed_key: "settings.environment.form.repos.placeholder_unauthed",
+            docker_image_label_key: "settings.environment.form.docker_image.label",
+            docker_image_placeholder_key: "settings.environment.form.docker_image.placeholder",
+            description_placeholder_key: "settings.environment.form.description.placeholder",
+            setup_commands_placeholder_key: "settings.environment.form.setup_commands.placeholder",
+            setup_commands_helper_key: "settings.environment.form.setup_commands.helper",
             show_description_character_count: true,
         }
     }
@@ -370,9 +374,6 @@ pub struct UpdateEnvironmentForm {
 }
 
 const DESCRIPTION_MAX_CHARS: usize = 240;
-const DESCRIPTION_PLACEHOLDER: &str = "e.g., this environment is for all front end focused agents";
-const REPOS_PLACEHOLDER_AUTHED: &str = "Enter repos (owner/repo format)";
-const REPOS_PLACEHOLDER_UNAUTHED: &str = "Paste repo URL(s)";
 const FORM_FIELD_SPACING: f32 = 20.;
 const FORM_LABEL_SPACING: f32 = 6.;
 const FORM_INPUT_HEIGHT: f32 = 36.;
@@ -511,8 +512,12 @@ impl UpdateEnvironmentForm {
             })
         });
 
-        let cancel_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Cancel", SecondaryTheme).on_click(|ctx| {
+        let cancel_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(
+                crate::localization::text_for_app(ctx, "settings.action.cancel"),
+                SecondaryTheme,
+            )
+            .on_click(|ctx| {
                 ctx.dispatch_typed_action(UpdateEnvironmentFormAction::Cancel);
             })
         });
@@ -717,20 +722,29 @@ impl UpdateEnvironmentForm {
 
     pub fn set_copy(&mut self, copy: EnvironmentFormCopy, ctx: &mut ViewContext<Self>) {
         self.copy = copy;
+        let name_placeholder = crate::localization::text_for_app(ctx, copy.name_placeholder_key);
+        let description_placeholder =
+            crate::localization::text_for_app(ctx, copy.description_placeholder_key);
+        let docker_image_placeholder =
+            crate::localization::text_for_app(ctx, copy.docker_image_placeholder_key);
+        let repos_placeholder =
+            crate::localization::text_for_app(ctx, copy.repos_placeholder_authed_key);
+        let setup_commands_placeholder =
+            crate::localization::text_for_app(ctx, copy.setup_commands_placeholder_key);
         self.name_editor.update(ctx, |editor, ctx| {
-            editor.set_placeholder_text(copy.name_placeholder, ctx);
+            editor.set_placeholder_text(name_placeholder, ctx);
         });
         self.description_editor.update(ctx, |editor, ctx| {
-            editor.set_placeholder_text(copy.description_placeholder, ctx);
+            editor.set_placeholder_text(description_placeholder, ctx);
         });
         self.docker_image_editor.update(ctx, |editor, ctx| {
-            editor.set_placeholder_text(copy.docker_image_placeholder, ctx);
+            editor.set_placeholder_text(docker_image_placeholder, ctx);
         });
         self.repos_input_editor.update(ctx, |editor, ctx| {
-            editor.set_placeholder_text(copy.repos_placeholder_authed, ctx);
+            editor.set_placeholder_text(repos_placeholder, ctx);
         });
         self.setup_commands_input.update(ctx, |input, ctx| {
-            input.set_placeholder_text(copy.setup_commands_placeholder, ctx);
+            input.set_placeholder_text(setup_commands_placeholder, ctx);
         });
         self.update_repos_input_placeholder(ctx);
         ctx.notify();
@@ -993,23 +1007,9 @@ impl UpdateEnvironmentForm {
         let placeholder = if self.github_dropdown_state.auth_url.is_some()
             || self.github_dropdown_state.load_error_message.is_some()
         {
-            if self.copy == EnvironmentFormCopy::default() {
-                crate::localization::text_for_app(
-                    ctx,
-                    "settings.environment.form.repos.placeholder_unauthed",
-                )
-            } else {
-                self.copy.repos_placeholder_unauthed.to_string()
-            }
+            crate::localization::text_for_app(ctx, self.copy.repos_placeholder_unauthed_key)
         } else {
-            if self.copy == EnvironmentFormCopy::default() {
-                crate::localization::text_for_app(
-                    ctx,
-                    "settings.environment.form.repos.placeholder_authed",
-                )
-            } else {
-                self.copy.repos_placeholder_authed.to_string()
-            }
+            crate::localization::text_for_app(ctx, self.copy.repos_placeholder_authed_key)
         };
         self.repos_input_editor.update(ctx, |editor, ctx| {
             editor.set_placeholder_text(&placeholder, ctx);
@@ -1986,14 +1986,8 @@ impl UpdateEnvironmentForm {
                 tooltip_mouse_state: None,
             });
 
-        let setup_commands_helper = if self.copy == EnvironmentFormCopy::default() {
-            crate::localization::text_for_app(
-                app,
-                "settings.environment.form.setup_commands.helper",
-            )
-        } else {
-            self.copy.setup_commands_helper.to_string()
-        };
+        let setup_commands_helper =
+            crate::localization::text_for_app(app, self.copy.setup_commands_helper_key);
 
         let helper_text = Text::new(
             setup_commands_helper,
@@ -3167,11 +3161,8 @@ impl UpdateEnvironmentForm {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_spacing(FORM_LABEL_SPACING);
 
-        let docker_image_label = if self.copy == EnvironmentFormCopy::default() {
-            crate::localization::text_for_app(app, "settings.environment.form.docker_image.label")
-        } else {
-            self.copy.docker_image_label.to_string()
-        };
+        let docker_image_label =
+            crate::localization::text_for_app(app, self.copy.docker_image_label_key);
 
         // Label (without suggest button)
         field.add_child(Self::render_form_label(

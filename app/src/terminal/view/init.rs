@@ -740,7 +740,10 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "terminal:scroll_up_one_page",
-            "Scroll terminal output up one page",
+            binding_description(
+                "Scroll terminal output up one page",
+                "terminal.binding.scroll_output_up_one_page",
+            ),
             TerminalAction::PageUp,
         )
         .with_key_binding("pageup")
@@ -752,7 +755,10 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:scroll_down_one_page",
-            "Scroll terminal output down one page",
+            binding_description(
+                "Scroll terminal output down one page",
+                "terminal.binding.scroll_output_down_one_page",
+            ),
             TerminalAction::PageDown,
         )
         .with_key_binding("pagedown")

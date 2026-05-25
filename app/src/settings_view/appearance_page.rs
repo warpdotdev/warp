@@ -1556,7 +1556,12 @@ impl AppearanceSettingsPageView {
             .chip_kinds()
             .into_iter()
             .filter_map(|kind| {
-                ContextChipRenderer::default_from_kind(kind, ChipAvailability::Enabled, appearance)
+                ContextChipRenderer::default_from_kind(
+                    kind,
+                    ChipAvailability::Enabled,
+                    appearance,
+                    app,
+                )
             })
             .collect()
     }

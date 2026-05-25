@@ -90,6 +90,10 @@ fn text(app: &AppContext, key: &str) -> String {
     localization::text_for_app(app, key)
 }
 
+fn text_with_args(app: &AppContext, key: &str, args: &[(&str, &str)]) -> String {
+    localization::text_for_app_with_args(app, key, args)
+}
+
 fn binding_description(fallback: &'static str, key: &'static str) -> BindingDescription {
     BindingDescription::new(fallback).with_dynamic_override(move |app| Some(text(app, key)))
 }
@@ -984,7 +988,7 @@ impl RequestedCommandView {
     /// Extracts the tool name from MCP tool command text, removing parameters.
     /// For example, "tool_name(param1, param2)" becomes "tool_name".
     fn extract_mcp_tool_name(&self, command_text: &str) -> String {
-        if let Some(paren_pos) = command_text.find('(') {
+        if let Some(paren_pos) = command_text.find('(').or_else(|| command_text.find('（')) {
             command_text[..paren_pos].trim().to_string()
         } else {
             command_text.trim().to_string()
@@ -1465,13 +1469,26 @@ impl View for RequestedCommandView {
                 // If we have a result, show the JSON response.
                 let result_text = match result {
                     CallMCPToolResult::Success { result } => serde_json::to_string_pretty(result)
-                        .unwrap_or_else(|_| "Error formatting JSON".to_string()),
-                    CallMCPToolResult::Error(error) => {
-                        format!("Error: {error}")
+                        .unwrap_or_else(|_| {
+                            text(
+                                app,
+                                "agent.requested_command.mcp_tool.error_formatting_json",
+                            )
+                        }),
+                    CallMCPToolResult::Error(error) => text_with_args(
+                        app,
+                        "agent.requested_command.mcp_tool.result_error",
+                        &[("error", error)],
+                    ),
+                    CallMCPToolResult::Cancelled => {
+                        text(app, "agent.requested_command.mcp_tool.cancelled")
                     }
-                    CallMCPToolResult::Cancelled => "Tool call was cancelled".to_string(),
                 };
-                format!("{command_text}\n\nResponse: {result_text}")
+                text_with_args(
+                    app,
+                    "agent.requested_command.mcp_tool.response",
+                    &[("command", command_text), ("response", &result_text)],
+                )
             } else if self.is_header_expanded {
                 command_text.to_string()
             } else {

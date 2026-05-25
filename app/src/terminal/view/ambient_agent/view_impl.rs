@@ -888,10 +888,10 @@ impl TerminalView {
             )
         } else {
             // Show loading screen - determine the message based on progress state
-            let message = progress.setup_status_text();
+            let message = crate::localization::text_for_app(app, progress.setup_status_text_key());
 
             render_cloud_mode_loading_screen(
-                message,
+                &message,
                 appearance,
                 &ui_state.loading_shimmer_handle,
                 &ui_state.tip_model,
@@ -954,7 +954,7 @@ impl TerminalView {
                         .as_ref(ctx)
                         .task_fetch_error(&task_id)
                         .map(str::to_owned);
-                    ConversationDetailsData::from_task_id(task_id, fetch_error)
+                    ConversationDetailsData::from_task_id(task_id, fetch_error, ctx)
                 });
             self.conversation_details_panel.update(ctx, |panel, ctx| {
                 panel.set_conversation_details(data, ctx);

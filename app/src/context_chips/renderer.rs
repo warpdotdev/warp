@@ -9,11 +9,11 @@ use warpui::elements::{
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
 use warpui::ui_components::components::UiComponent;
-use warpui::Action;
 use warpui::{
     elements::{Container, CrossAxisAlignment, Flex, Text},
     Element,
 };
+use warpui::{Action, AppContext};
 
 use crate::appearance::Appearance;
 use crate::ui_components::icons;
@@ -65,15 +65,14 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(
+    fn new_with_tooltip_override(
         kind: ContextChipKind,
         chip: ContextChip,
         value: ChipValue,
         styles: RendererStyles,
-        availability: ChipAvailability,
+        is_disabled: bool,
+        tooltip_override_text: Option<String>,
     ) -> Self {
-        let is_disabled = !availability.is_enabled();
-        let tooltip_override_text = availability.tooltip_override_text();
         Self {
             kind,
             chip,
@@ -87,12 +86,62 @@ impl Renderer {
         }
     }
 
+    pub fn new(
+        kind: ContextChipKind,
+        chip: ContextChip,
+        value: ChipValue,
+        styles: RendererStyles,
+        availability: ChipAvailability,
+    ) -> Self {
+        let is_disabled = !availability.is_enabled();
+        let tooltip_override_text = availability.tooltip_override_text();
+        Self::new_with_tooltip_override(
+            kind,
+            chip,
+            value,
+            styles,
+            is_disabled,
+            tooltip_override_text,
+        )
+    }
+
+    pub fn new_for_app(
+        kind: ContextChipKind,
+        chip: ContextChip,
+        value: ChipValue,
+        styles: RendererStyles,
+        availability: ChipAvailability,
+        app: &AppContext,
+    ) -> Self {
+        let is_disabled = !availability.is_enabled();
+        let tooltip_override_text = availability.tooltip_override_text_for_app(app);
+        Self::new_with_tooltip_override(
+            kind,
+            chip,
+            value,
+            styles,
+            is_disabled,
+            tooltip_override_text,
+        )
+    }
+
     pub fn default_from_kind(
         chip_kind: ContextChipKind,
         availability: ChipAvailability,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Option<Self> {
-        Self::default_from_kind_with_agent_view(chip_kind, availability, false, appearance)
+        let chip = chip_kind.to_chip()?;
+        let placeholder_value = chip_kind.placeholder_value();
+        let styles = chip_kind.default_styles(appearance, false);
+        Some(Self::new_for_app(
+            chip_kind,
+            chip,
+            placeholder_value,
+            styles,
+            availability,
+            app,
+        ))
     }
 
     pub fn default_from_kind_with_agent_view(

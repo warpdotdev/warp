@@ -84,6 +84,16 @@ pub(crate) fn text_for_locale(locale: LocaleId, key: &str) -> String {
     text(locale, key)
 }
 
+#[cfg(test)]
+pub(crate) fn text_for_locale_with_args(
+    locale: LocaleId,
+    key: &str,
+    args: &[(&str, &str)],
+) -> String {
+    replace_placeholders(&text_for_locale(locale, key), args)
+        .expect("localized text template arguments must match the catalog")
+}
+
 fn text(locale: LocaleId, key: &str) -> String {
     CATALOGS.text(locale, key).into_owned()
 }

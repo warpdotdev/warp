@@ -72,7 +72,6 @@ use self::execute::{
 };
 
 use super::BlocklistAIHistoryModel;
-use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
@@ -1328,6 +1327,8 @@ impl BlocklistAIActionModel {
                     return;
                 };
                 let titles = conversation.get_document_titles_for_action(&result.id);
+                let default_title =
+                    crate::localization::text_for_app(ctx, "ai_document.title.default");
 
                 let doc_model = AIDocumentModel::handle(ctx);
                 doc_model.update(ctx, |doc_model, doc_ctx| {
@@ -1340,7 +1341,7 @@ impl BlocklistAIActionModel {
                             .as_ref()
                             .and_then(|t| t.get(index))
                             .cloned()
-                            .unwrap_or_else(|| DEFAULT_PLANNING_DOCUMENT_TITLE.to_string());
+                            .unwrap_or_else(|| default_title.clone());
 
                         doc_model.restore_document(
                             doc_context.document_id,

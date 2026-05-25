@@ -1025,27 +1025,39 @@ fn test_environment_form_copy_orchestration_modal_overrides_settings_defaults() 
     let default_copy = EnvironmentFormCopy::default();
     let orchestration_copy = EnvironmentFormCopy::orchestration_modal();
 
-    assert_eq!(default_copy.name_placeholder, "Environment name");
-    assert_eq!(default_copy.docker_image_label, "Docker image reference");
+    assert_eq!(
+        default_copy.name_placeholder_key,
+        "settings.environment.form.name.placeholder"
+    );
+    assert_eq!(
+        default_copy.docker_image_label_key,
+        "settings.environment.form.docker_image.label"
+    );
     assert!(default_copy.show_description_character_count);
 
-    assert_eq!(orchestration_copy.name_placeholder, "e.g., dev-env");
     assert_eq!(
-        orchestration_copy.repos_placeholder_authed,
-        "Browse GitHub repos..."
-    );
-    assert_eq!(orchestration_copy.docker_image_label, "Docker image");
-    assert_eq!(
-        orchestration_copy.docker_image_placeholder,
-        "e.g., node:20-alpine"
+        orchestration_copy.name_placeholder_key,
+        "settings.environment.form.orchestration.name.placeholder"
     );
     assert_eq!(
-        orchestration_copy.setup_commands_placeholder,
-        "e.g., node start"
+        orchestration_copy.repos_placeholder_authed_key,
+        "settings.environment.form.orchestration.repos.placeholder_authed"
     );
     assert_eq!(
-        orchestration_copy.setup_commands_helper,
-        "Press Enter or click the submit button to add each command."
+        orchestration_copy.docker_image_label_key,
+        "settings.environment.form.orchestration.docker_image.label"
+    );
+    assert_eq!(
+        orchestration_copy.docker_image_placeholder_key,
+        "settings.environment.form.orchestration.docker_image.placeholder"
+    );
+    assert_eq!(
+        orchestration_copy.setup_commands_placeholder_key,
+        "settings.environment.form.orchestration.setup_commands.placeholder"
+    );
+    assert_eq!(
+        orchestration_copy.setup_commands_helper_key,
+        "settings.environment.form.orchestration.setup_commands.helper"
     );
     assert!(!orchestration_copy.show_description_character_count);
 }

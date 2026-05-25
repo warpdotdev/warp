@@ -36,9 +36,6 @@ use warpui::{
     AppContext, Element, SingletonEntity,
 };
 
-const OPEN_WARP_AI_ITEM_BODY_TEXT: &str = "Ask Warp AI for command suggestions";
-const TRANSLATE_WITH_WARP_AI_ITEM_BODY_TEXT: &str = "Translate into shell command using Warp AI";
-
 #[derive(Clone, Debug)]
 pub enum WarpAISearchItem {
     /// Translates the query within command search.
@@ -49,10 +46,17 @@ pub enum WarpAISearchItem {
 }
 
 impl WarpAISearchItem {
-    fn item_body_text(&self) -> &'static str {
+    fn item_body_text_key(&self) -> &'static str {
         match self {
-            WarpAISearchItem::Translate => TRANSLATE_WITH_WARP_AI_ITEM_BODY_TEXT,
-            WarpAISearchItem::Open => OPEN_WARP_AI_ITEM_BODY_TEXT,
+            WarpAISearchItem::Translate => "search.command_search.warp_ai.translate_body",
+            WarpAISearchItem::Open => "search.command_search.warp_ai.open_body",
+        }
+    }
+
+    fn item_body_text_fallback(&self) -> &'static str {
+        match self {
+            WarpAISearchItem::Translate => "Translate into shell command using Warp AI",
+            WarpAISearchItem::Open => "Ask Warp AI for command suggestions",
         }
     }
 }
@@ -106,7 +110,7 @@ impl SearchItem for WarpAISearchItem {
     ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         Text::new_inline(
-            self.item_body_text(),
+            crate::localization::text_for_app(app, self.item_body_text_key()),
             appearance.monospace_font_family(),
             appearance.monospace_font_size(),
         )
@@ -140,7 +144,7 @@ impl SearchItem for WarpAISearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Warp AI: {}", self.item_body_text())
+        format!("Warp AI: {}", self.item_body_text_fallback())
     }
 }
 

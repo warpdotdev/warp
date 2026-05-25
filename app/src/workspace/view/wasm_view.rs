@@ -213,7 +213,7 @@ impl Workspace {
                     .map(str::to_owned)
                 {
                     let details =
-                        ConversationDetailsData::from_task_id(task_id, Some(error_message));
+                        ConversationDetailsData::from_task_id(task_id, Some(error_message), ctx);
                     panel.set_conversation_details(details, ctx);
                     ctx.notify();
                     return;

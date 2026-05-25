@@ -509,6 +509,11 @@ pub const SET_INPUT_MODE_UNLOCKED_TERMINAL_ACTION_NAME: &str = "input:set_mode_u
 
 const START_NEW_CONVERSATION_KEYBINDING_NAME: &str = "input:start_new_agent_conversation";
 
+fn input_binding_description(fallback: &'static str, key: &'static str) -> BindingDescription {
+    BindingDescription::new(fallback)
+        .with_dynamic_override(move |app| Some(localization::text_for_app(app, key)))
+}
+
 /// The position ID used to identify the start of the replacement span for completions.
 const COMPLETIONS_START_OF_REPLACEMENT_SPAN_POSITION_ID: &str =
     "start_of_completions_replacement_span";
@@ -803,27 +808,35 @@ impl InputSuggestionsMode {
         }
     }
 
-    /// Returns the placeholder text for this mode, if it has a custom one.
-    pub fn placeholder_text(&self) -> Option<&'static str> {
+    /// Returns the placeholder text key for this mode, if it has a custom one.
+    pub fn placeholder_text_key(&self) -> Option<&'static str> {
         match self {
             InputSuggestionsMode::UserQueryMenu {
                 action: UserQueryMenuAction::ForkFrom,
                 ..
-            } => Some("Search queries"),
+            } => Some("terminal.input.placeholder.search_queries"),
             InputSuggestionsMode::UserQueryMenu {
                 action: UserQueryMenuAction::Rewind,
                 ..
-            } => Some("Search queries to rewind to"),
-            InputSuggestionsMode::ConversationMenu => Some("Search conversations"),
-            InputSuggestionsMode::SkillMenu => Some("Search skills"),
-            InputSuggestionsMode::ModelSelector => Some("Search models"),
-            InputSuggestionsMode::ProfileSelector => Some("Search profiles"),
-            InputSuggestionsMode::SlashCommands if FeatureFlag::AgentView.is_enabled() => {
-                Some("Search commands")
+            } => Some("terminal.input.placeholder.search_queries_to_rewind"),
+            InputSuggestionsMode::ConversationMenu => {
+                Some("terminal.input.placeholder.search_conversations")
             }
-            InputSuggestionsMode::PromptsMenu => Some("Search prompts"),
-            InputSuggestionsMode::IndexedReposMenu => Some("Search indexed repos"),
-            InputSuggestionsMode::PlanMenu { .. } => Some("Search plans"),
+            InputSuggestionsMode::SkillMenu => Some("terminal.input.placeholder.search_skills"),
+            InputSuggestionsMode::ModelSelector => Some("terminal.input.placeholder.search_models"),
+            InputSuggestionsMode::ProfileSelector => {
+                Some("terminal.input.placeholder.search_profiles")
+            }
+            InputSuggestionsMode::SlashCommands if FeatureFlag::AgentView.is_enabled() => {
+                Some("terminal.input.placeholder.search_commands")
+            }
+            InputSuggestionsMode::PromptsMenu => Some("terminal.input.placeholder.search_prompts"),
+            InputSuggestionsMode::IndexedReposMenu => {
+                Some("terminal.input.placeholder.search_indexed_repos")
+            }
+            InputSuggestionsMode::PlanMenu { .. } => {
+                Some("terminal.input.placeholder.search_plans")
+            }
             _ => None,
         }
     }
@@ -1814,7 +1827,7 @@ pub fn init(app: &mut AppContext) {
         FixedBinding::custom(
             CustomAction::History,
             InputAction::Up,
-            "Show History",
+            input_binding_description("Show History", "terminal.input.binding.show_history"),
             // We need to ensure the workflow info box is not open as the "up" arrow
             // key is used to navigate the environment variables dropdown.
             // Same goes with the LLM menu.
@@ -1831,14 +1844,17 @@ pub fn init(app: &mut AppContext) {
 
     app.register_editable_bindings([EditableBinding::new(
         "input:insert_network_logging_workflow",
-        "Show Warp network log",
+        input_binding_description(
+            "Show Warp network log",
+            "terminal.input.binding.show_warp_network_log",
+        ),
         WorkspaceAction::OpenNetworkLogPane,
     )
     .with_enabled(|| ContextFlag::NetworkLogConsole.is_enabled())]);
 
     app.register_editable_bindings([EditableBinding::new(
         "input:clear_screen",
-        "Clear screen",
+        input_binding_description("Clear screen", "terminal.input.binding.clear_screen"),
         InputAction::ClearScreen,
     )
     .with_context_predicate(id!("Input"))
@@ -1847,14 +1863,20 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "terminal:scroll_up_one_page",
-            "Scroll terminal output up one page",
+            input_binding_description(
+                "Scroll terminal output up one page",
+                "terminal.input.binding.scroll_up_one_page",
+            ),
             InputAction::PageUp,
         )
         .with_context_predicate(id!("Input") & !id!("IMEOpen"))
         .with_key_binding("pageup"),
         EditableBinding::new(
             "terminal:scroll_down_one_page",
-            "Scroll terminal output down one page",
+            input_binding_description(
+                "Scroll terminal output down one page",
+                "terminal.input.binding.scroll_down_one_page",
+            ),
             InputAction::PageDown,
         )
         .with_context_predicate(id!("Input") & !id!("IMEOpen"))
@@ -1863,8 +1885,7 @@ pub fn init(app: &mut AppContext) {
 
     app.register_editable_bindings([EditableBinding::new(
         "workspace:edit_prompt",
-        BindingDescription::new("Edit Prompt")
-            .with_custom_description(bindings::MAC_MENUS_CONTEXT, "Edit Prompt"),
+        input_binding_description("Edit Prompt", "terminal.input.binding.edit_prompt"),
         WorkspaceAction::OpenPromptEditor {
             open_source: PromptEditorOpenSource::CommandPalette,
         },
@@ -1883,7 +1904,10 @@ pub fn init(app: &mut AppContext) {
     {
         app.register_editable_bindings([EditableBinding::new(
             "input:toggle_classic_completions_mode",
-            "(Experimental) Toggle classic completions mode",
+            input_binding_description(
+                "(Experimental) Toggle classic completions mode",
+                "terminal.input.binding.toggle_classic_completions_mode",
+            ),
             InputAction::ToggleClassicCompletionsMode,
         )
         .with_context_predicate(id!("Input"))]);
@@ -1893,7 +1917,7 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "workspace:show_command_search",
-            "Command Search",
+            input_binding_description("Command Search", "terminal.input.binding.command_search"),
             WorkspaceAction::ShowCommandSearch(Default::default()),
         )
         // Only show command search if none of the input-related panels are open, and if we aren't
@@ -1908,7 +1932,7 @@ pub fn init(app: &mut AppContext) {
         .with_custom_action(CustomAction::CommandSearch),
         EditableBinding::new(
             "input:search_command_history",
-            "History Search",
+            input_binding_description("History Search", "terminal.input.binding.history_search"),
             WorkspaceAction::ShowCommandSearch(CommandSearchOptions {
                 filter: Some(QueryFilter::History),
                 init_content: Default::default(),
@@ -1918,7 +1942,10 @@ pub fn init(app: &mut AppContext) {
         .with_custom_action(CustomAction::HistorySearch),
         EditableBinding::new(
             OPEN_COMPLETIONS_KEYBINDING_NAME,
-            "Open completions menu",
+            input_binding_description(
+                "Open completions menu",
+                "terminal.input.binding.open_completions_menu",
+            ),
             InputAction::MaybeOpenCompletionSuggestions,
         )
         .with_context_predicate(id!("Input"))
@@ -1928,7 +1955,7 @@ pub fn init(app: &mut AppContext) {
     if let Some(custom_action) = workflows::CategoriesView::custom_action() {
         app.register_editable_bindings([EditableBinding::new(
             "input:toggle_workflows",
-            "Workflows",
+            input_binding_description("Workflows", "terminal.input.binding.workflows"),
             InputAction::SelectAndRefreshVoltron(VoltronItem::Workflows),
         )
         .with_context_predicate(id!("Input"))
@@ -1951,7 +1978,10 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "input:toggle_natural_language_command_search",
-            "Open AI Command Suggestions",
+            input_binding_description(
+                "Open AI Command Suggestions",
+                "terminal.input.binding.open_ai_command_suggestions",
+            ),
             InputAction::ShowAiCommandSearch,
         )
         .with_context_predicate(
@@ -1964,7 +1994,10 @@ pub fn init(app: &mut AppContext) {
         .with_custom_action(CustomAction::AISearch),
         EditableBinding::new(
             START_NEW_CONVERSATION_KEYBINDING_NAME,
-            "New agent conversation",
+            input_binding_description(
+                "New agent conversation",
+                "terminal.input.binding.new_agent_conversation",
+            ),
             InputAction::StartNewAgentConversation,
         )
         .with_enabled(|| !FeatureFlag::AgentView.is_enabled())
@@ -1976,7 +2009,10 @@ pub fn init(app: &mut AppContext) {
         .with_linux_or_windows_key_binding("ctrl-alt-shift-N"),
         EditableBinding::new(
             "input:enable_auto_detection",
-            "Trigger Auto Detection",
+            input_binding_description(
+                "Trigger Auto Detection",
+                "terminal.input.binding.trigger_auto_detection",
+            ),
             InputAction::EnableAutoDetection,
         )
         .with_enabled(|| FeatureFlag::AgentMode.is_enabled())
@@ -1990,7 +2026,10 @@ pub fn init(app: &mut AppContext) {
         .with_key_binding("alt-shift-I"),
         EditableBinding::new(
             "input:clear_and_reset_ai_context_menu_query",
-            "Clear and reset AI context menu query",
+            input_binding_description(
+                "Clear and reset AI context menu query",
+                "terminal.input.binding.clear_and_reset_ai_context_menu_query",
+            ),
             InputAction::ClearAndResetAIContextMenuQuery,
         )
         .with_context_predicate(id!("Input") & id!("AIContextMenuOpen") & !id!("IMEOpen"))
@@ -2221,7 +2260,11 @@ impl Input {
                     event
                 {
                     let window_id = ctx.window_id();
-                    let toast_message = format!("Failed to prepare cloud handoff: {error_message}");
+                    let toast_message = localization::text_for_app_with_args(
+                        ctx,
+                        "terminal.input.cloud_handoff.prepare_failed",
+                        &[("error", error_message)],
+                    );
                     ToastStack::handle(ctx).update(ctx, |ts, ctx| {
                         ts.add_ephemeral_toast(
                             DismissibleToast::error(toast_message),
@@ -3222,9 +3265,10 @@ impl Input {
                     let window_id = ctx.window_id();
                     ToastStack::handle(ctx).update(ctx, |ts, ctx| {
                         ts.add_ephemeral_toast(
-                            DismissibleToast::error(
-                                "Attached images were removed — the selected model does not support images.".to_string(),
-                            ),
+                            DismissibleToast::error(localization::text_for_app(
+                                ctx,
+                                "terminal.input.toast.attached_images_removed",
+                            )),
                             window_id,
                             ctx,
                         );
@@ -4015,14 +4059,17 @@ impl Input {
         if !skipped_files.is_empty() {
             let window_id = ctx.window_id();
             let message = if skipped_files.len() == 1 {
-                format!(
-                    "{} was not attached — exceeds 10MB limit.",
-                    skipped_files[0]
+                localization::text_for_app_with_args(
+                    ctx,
+                    "terminal.input.toast.attachment_skipped.singular",
+                    &[("filename", &skipped_files[0])],
                 )
             } else {
-                format!(
-                    "{} files were not attached — exceed 10MB limit.",
-                    skipped_files.len()
+                let count = skipped_files.len().to_string();
+                localization::text_for_app_with_args(
+                    ctx,
+                    "terminal.input.toast.attachment_skipped.plural",
+                    &[("count", &count)],
                 )
             };
             ToastStack::handle(ctx).update(ctx, |ts, ctx| {
@@ -4406,7 +4453,10 @@ impl Input {
                     ctx.dispatch_typed_action_deferred(action);
                 } else {
                     ctx.emit(Event::ShowToast {
-                        message: "Couldn't navigate to conversation.".to_string(),
+                        message: localization::text_for_app(
+                            ctx,
+                            "terminal.input.toast.could_not_navigate_to_conversation",
+                        ),
                         flavor: ToastFlavor::Error,
                     });
                 }
@@ -5225,7 +5275,11 @@ impl Input {
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
-                        DismissibleToast::error(format!("Skill not found: {}", reference)),
+                        DismissibleToast::error(localization::text_for_app_with_args(
+                            ctx,
+                            "terminal.input.toast.skill_not_found",
+                            &[("skill", &reference.to_string())],
+                        )),
                         window_id,
                         ctx,
                     );
@@ -5287,8 +5341,10 @@ impl Input {
         else {
             let window_id = ctx.window_id();
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                let toast =
-                    DismissibleToast::default(String::from("No active conversation to export"));
+                let toast = DismissibleToast::default(localization::text_for_app(
+                    ctx,
+                    "terminal.input.conversation_export.no_active_conversation",
+                ));
                 toast_stack.add_ephemeral_toast(toast, window_id, ctx);
             });
             return;
@@ -5352,8 +5408,10 @@ impl Input {
             let window_id = ctx.window_id();
             let display_path = file_path.display().to_string();
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                let toast = DismissibleToast::default(format!(
-                    "File {display_path} already exists and will be overwritten"
+                let toast = DismissibleToast::default(localization::text_for_app_with_args(
+                    ctx,
+                    "terminal.input.conversation_export.overwrite_warning",
+                    &[("path", &display_path)],
                 ));
                 toast_stack.add_ephemeral_toast(toast, window_id, ctx);
             });
@@ -5366,8 +5424,10 @@ impl Input {
                 let window_id = ctx.window_id();
                 let display_path = file_path.display().to_string();
                 ToastStack::handle(ctx).update(ctx, move |toast_stack, ctx| {
-                    let toast = DismissibleToast::default(format!(
-                        "Conversation exported to {display_path}"
+                    let toast = DismissibleToast::default(localization::text_for_app_with_args(
+                        ctx,
+                        "terminal.input.conversation_export.success",
+                        &[("path", &display_path)],
                     ));
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
@@ -5375,27 +5435,35 @@ impl Input {
             Err(e) => {
                 // Show error toast with user-friendly message
                 let user_message = match e.kind() {
-                    std::io::ErrorKind::PermissionDenied => {
-                        format!(
-                            "Permission denied writing to {}. Check file permissions.",
-                            file_path.display()
-                        )
-                    }
+                    std::io::ErrorKind::PermissionDenied => localization::text_for_app_with_args(
+                        ctx,
+                        "terminal.input.conversation_export.error.permission_denied",
+                        &[("path", &file_path.display().to_string())],
+                    ),
                     std::io::ErrorKind::NotFound => {
-                        format!(
-                            "Directory not found: {}",
-                            file_path
-                                .parent()
-                                .map(|p| p.display().to_string())
-                                .unwrap_or_default()
+                        let parent_path = file_path
+                            .parent()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default();
+                        localization::text_for_app_with_args(
+                            ctx,
+                            "terminal.input.conversation_export.error.directory_not_found",
+                            &[("path", &parent_path)],
                         )
                     }
-                    std::io::ErrorKind::AlreadyExists => {
-                        format!("File {} already exists", file_path.display())
-                    }
-                    _ => {
-                        format!("Failed to export to {}: {}", file_path.display(), e)
-                    }
+                    std::io::ErrorKind::AlreadyExists => localization::text_for_app_with_args(
+                        ctx,
+                        "terminal.input.conversation_export.error.file_exists",
+                        &[("path", &file_path.display().to_string())],
+                    ),
+                    _ => localization::text_for_app_with_args(
+                        ctx,
+                        "terminal.input.conversation_export.error.failed",
+                        &[
+                            ("path", &file_path.display().to_string()),
+                            ("error", &e.to_string()),
+                        ],
+                    ),
                 };
 
                 log::error!(
@@ -6371,10 +6439,10 @@ impl Input {
             .suggestions_mode_model
             .as_ref(ctx)
             .mode()
-            .placeholder_text()
+            .placeholder_text_key()
         {
             self.editor.update(ctx, |editor, ctx| {
-                editor.set_placeholder_text(placeholder, ctx);
+                editor.set_placeholder_text(localization::text_for_app(ctx, placeholder), ctx);
             });
             return;
         }
@@ -6751,8 +6819,10 @@ impl Input {
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
-                        DismissibleToast::error(format!(
-                            "Cannot run `{truncated_command}` (command already running)."
+                        DismissibleToast::error(localization::text_for_app_with_args(
+                            ctx,
+                            "terminal.input.toast.command_already_running",
+                            &[("command", &truncated_command)],
                         )),
                         window_id,
                         ctx,
@@ -7455,13 +7525,17 @@ impl Input {
         // Emit the a11y content as the last step so that it overwrites any of the a11y content
         // emitted by the editor (if multiple `AccessibilityContent`s are emitted within the same
         // event loop, the last one wins).
-        let mut accessibility_text = format!("Workflow command {} inserted.", &command_to_insert);
+        let mut accessibility_text = localization::text_for_app_with_args(
+            ctx,
+            "terminal.input.a11y.workflow_command_inserted",
+            &[("command", &command_to_insert)],
+        );
         if let Some(a11y_content) = self.selected_workflow_a11y_text(ctx) {
             let _ = write!(accessibility_text, " {a11y_content}");
         }
         ctx.emit_a11y_content(AccessibilityContent::new(
             accessibility_text,
-            "Press shift-tab to select the next workflow argument",
+            localization::text_for_app(ctx, "terminal.input.a11y.select_next_workflow_argument"),
             WarpA11yRole::UserAction,
         ));
 
@@ -7559,9 +7633,16 @@ impl Input {
             .selected_workflow_state
             .as_ref()
             .and_then(|selected_workflow_state| {
-                selected_workflow_state.more_info_view.read(ctx, |view, _| {
+                let argument_name = selected_workflow_state.more_info_view.read(ctx, |view, _| {
                     view.selected_argument()
-                        .map(|argument| format!("Selected Workflow argument {}", argument.name()))
+                        .map(|argument| argument.name().to_string())
+                });
+                argument_name.map(|argument| {
+                    localization::text_for_app_with_args(
+                        ctx,
+                        "terminal.input.a11y.selected_workflow_argument",
+                        &[("argument", &argument)],
+                    )
                 })
             })
     }
@@ -7813,7 +7894,11 @@ impl Input {
                 self.try_execute_command(&command, ctx);
 
                 ctx.emit_a11y_content(AccessibilityContent::new_without_help(
-                    format!("Executed: {command}"),
+                    localization::text_for_app_with_args(
+                        ctx,
+                        "terminal.input.a11y.executed_command",
+                        &[("command", &command)],
+                    ),
                     WarpA11yRole::UserAction,
                 ));
             }
@@ -10375,12 +10460,15 @@ impl Input {
                     // Show voice status as placeholder when the buffer is empty.
                     if self.editor.as_ref(ctx).is_empty(ctx) {
                         let placeholder = if *is_listening {
-                            "Listening..."
+                            "terminal.input.voice.listening"
                         } else {
-                            "Transcribing..."
+                            "terminal.input.voice.transcribing"
                         };
                         self.editor.update(ctx, |editor, ctx| {
-                            editor.set_placeholder_text(placeholder, ctx);
+                            editor.set_placeholder_text(
+                                localization::text_for_app(ctx, placeholder),
+                                ctx,
+                            );
                         });
                     }
                 } else {
@@ -12690,10 +12778,10 @@ impl Input {
                         let window_id = ctx.window_id();
                         ToastStack::handle(ctx).update(ctx, |ts, ctx| {
                             ts.add_ephemeral_toast(
-                                DismissibleToast::error(
-                                    "No agent harnesses are available. Contact your team admin."
-                                        .to_string(),
-                                ),
+                                DismissibleToast::error(localization::text_for_app(
+                                    ctx,
+                                    "terminal.input.toast.no_agent_harnesses",
+                                )),
                                 window_id,
                                 ctx,
                             );
@@ -12744,9 +12832,10 @@ impl Input {
                         let window_id = ctx.window_id();
                         ToastStack::handle(ctx).update(ctx, |ts, ctx| {
                             ts.add_ephemeral_toast(
-                                DismissibleToast::default(
-                                    "Preparing handoff — try again in a moment.".to_owned(),
-                                )
+                                DismissibleToast::default(localization::text_for_app(
+                                    ctx,
+                                    "terminal.input.toast.preparing_handoff",
+                                ))
                                 .with_object_id("local-to-cloud-handoff-not-ready".to_owned()),
                                 window_id,
                                 ctx,
@@ -13273,9 +13362,10 @@ impl Input {
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
-                        DismissibleToast::error(
-                            "Cannot send queries as a read-only viewer.".to_string(),
-                        ),
+                        DismissibleToast::error(localization::text_for_app(
+                            ctx,
+                            "terminal.input.toast.read_only_viewer",
+                        )),
                         window_id,
                         ctx,
                     );
@@ -13646,9 +13736,10 @@ impl Input {
                     let window_id = ctx.window_id();
                     ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                         toast_stack.add_ephemeral_toast(
-                            DismissibleToast::error(
-                                "Too many attachments for this conversation.".to_string(),
-                            ),
+                            DismissibleToast::error(localization::text_for_app(
+                                ctx,
+                                "terminal.input.toast.too_many_attachments",
+                            )),
                             window_id,
                             ctx,
                         );

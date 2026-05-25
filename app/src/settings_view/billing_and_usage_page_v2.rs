@@ -329,7 +329,10 @@ impl BillingAndUsagePageV2View {
 
         let addon_credit_modal_view = ctx.add_typed_action_view(|ctx| {
             Modal::new(
-                Some("Monthly spending limit".to_string()),
+                Some(localization::text_for_app(
+                    ctx,
+                    "settings.billing.addon_credits.modal_title",
+                )),
                 addon_credit_modal,
                 ctx,
             )
@@ -439,7 +442,10 @@ impl BillingAndUsagePageV2View {
             UserWorkspacesEvent::UpdateWorkspaceSettingsRejected(_err) => {
                 self.pending_auto_reload_toast = None;
                 self.show_toast(
-                    "Failed to update workspace settings",
+                    &localization::text_for_app(
+                        ctx,
+                        "settings.billing.toast.update_workspace_failed",
+                    ),
                     ToastFlavor::Error,
                     ctx,
                 );
@@ -450,7 +456,10 @@ impl BillingAndUsagePageV2View {
             UserWorkspacesEvent::PurchaseAddonCreditsSuccess => {
                 self.addon_credits.purchase_loading = false;
                 self.show_toast(
-                    "Successfully purchased add-on credits",
+                    &localization::text_for_app(
+                        ctx,
+                        "settings.billing.toast.addon_credits_purchased",
+                    ),
                     ToastFlavor::Success,
                     ctx,
                 );
@@ -640,7 +649,10 @@ impl BillingAndUsagePageV2View {
                                 .with_text_and_icon_label(
                                     TextAndIcon::new(
                                         TextAndIconAlignment::IconFirst,
-                                        "Manage billing",
+                                        localization::text_for_app(
+                                            app,
+                                            "settings.billing.action.manage_billing",
+                                        ),
                                         Icon::CoinsStacked.to_warpui_icon(fg_color),
                                         MainAxisSize::Min,
                                         MainAxisAlignment::Center,
@@ -712,9 +724,12 @@ impl BillingAndUsagePageV2View {
         } else {
             let current_user_id = self.auth_state.user_id().unwrap_or_default();
             right_side.add_child(
-                Container::new(render_customer_type_badge(appearance, "Free".into()))
-                    .with_margin_right(8.)
-                    .finish(),
+                Container::new(render_customer_type_badge(
+                    appearance,
+                    localization::text_for_app(app, "settings.billing.plan.free"),
+                ))
+                .with_margin_right(8.)
+                .finish(),
             );
             right_side.add_child(
                 Container::new(
@@ -727,7 +742,10 @@ impl BillingAndUsagePageV2View {
                         .with_text_and_icon_label(
                             TextAndIcon::new(
                                 TextAndIconAlignment::IconFirst,
-                                "Compare plans",
+                                localization::text_for_app(
+                                    app,
+                                    "settings.billing.action.compare_plans",
+                                ),
                                 Icon::CoinsStacked
                                     .to_warpui_icon(appearance.theme().active_ui_text_color()),
                                 MainAxisSize::Min,
@@ -1188,9 +1206,13 @@ impl BillingAndUsagePageV2View {
             || (!auto_reload_enabled && selected_credit_option.is_none());
         let price_label = selected_credit_option
             .map(|opt| {
-                let credits = opt.credits.separate_with_commas();
+                let credits = localized_credits(app, opt.credits);
                 let dollars = format!("${:.2}", opt.price_usd_cents as f64 / 100.0);
-                format!("{credits} credits / {dollars}")
+                localization::text_for_app_with_args(
+                    app,
+                    "settings.billing.addon_credits.price_label",
+                    &[("credits", &credits), ("price", &dollars)],
+                )
             })
             .unwrap_or_default();
         let auto_reload_credit_amount = selected_credit_option
@@ -2074,11 +2096,13 @@ impl View for BillingAndUsagePageV2View {
         page.add_child(self.render_plan_section(appearance, app));
 
         let tabs = vec![
-            SettingsTab::new(
+            SettingsTab::new_with_value(
+                BillingUsageTab::Overview.localized_label(app),
                 BillingUsageTab::Overview.label(),
                 self.tab_mouse_states.overview.clone(),
             ),
-            SettingsTab::new(
+            SettingsTab::new_with_value(
+                BillingUsageTab::UsageHistory.localized_label(app),
                 BillingUsageTab::UsageHistory.label(),
                 self.tab_mouse_states.usage_history.clone(),
             ),
@@ -2257,7 +2281,10 @@ impl TypedActionView for BillingAndUsagePageV2View {
                         .get(self.addon_credits.selected_denomination)
                     else {
                         self.show_toast(
-                            "Unable to enable auto-reload until pricing options load.",
+                            &localization::text_for_app(
+                                ctx,
+                                "settings.billing.addon_credits.auto_reload.toast.pricing_unavailable",
+                            ),
                             ToastFlavor::Error,
                             ctx,
                         );

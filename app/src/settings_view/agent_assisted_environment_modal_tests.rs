@@ -119,7 +119,7 @@ fn test_modal_show_renders_expected_copy_with_empty_repos_message() {
             let modal = harness.modal();
             let modal = modal.as_ref(ctx);
 
-            let selected_section = modal.render_selected_section(appearance);
+            let selected_section = modal.render_selected_section(appearance, ctx);
             let selected_text = selected_section.debug_text_content().unwrap_or_default();
             assert!(
                 selected_text.contains("Selected repos"),
@@ -132,7 +132,7 @@ fn test_modal_show_renders_expected_copy_with_empty_repos_message() {
                 selected_text
             );
 
-            let available_section = modal.render_available_section(appearance);
+            let available_section = modal.render_available_section(appearance, ctx);
             let available_text = available_section.debug_text_content().unwrap_or_default();
             assert!(
                 available_text.contains("Available indexed repos"),

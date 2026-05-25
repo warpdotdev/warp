@@ -15,7 +15,7 @@ fn format_upload_artifact_text_includes_request_details() {
             description: Some("Daily summary".to_string()),
         };
 
-        let text = app.read(|_| format_upload_artifact_text(&request, None));
+        let text = app.read(|ctx| format_upload_artifact_text(&request, None, ctx));
 
         assert_eq!(
             text,
@@ -40,7 +40,7 @@ fn format_upload_artifact_text_includes_success_summary() {
             size_bytes: 128,
         };
 
-        let text = app.read(|_| format_upload_artifact_text(&request, Some(&result)));
+        let text = app.read(|ctx| format_upload_artifact_text(&request, Some(&result), ctx));
 
         assert_eq!(
             text,
@@ -58,12 +58,13 @@ fn format_upload_artifact_text_includes_terminal_status() {
             description: None,
         };
 
-        let error_text = app.read(|_| {
+        let error_text = app.read(|ctx| {
             format_upload_artifact_text(
                 &request,
                 Some(&UploadArtifactResult::Error(
                     "permission denied".to_string(),
                 )),
+                ctx,
             )
         });
         assert_eq!(
@@ -71,8 +72,8 @@ fn format_upload_artifact_text_includes_terminal_status() {
             "Upload artifact: reports/daily.txt\nStatus: upload failed: permission denied"
         );
 
-        let cancelled_text = app.read(|_| {
-            format_upload_artifact_text(&request, Some(&UploadArtifactResult::Cancelled))
+        let cancelled_text = app.read(|ctx| {
+            format_upload_artifact_text(&request, Some(&UploadArtifactResult::Cancelled), ctx)
         });
         assert_eq!(cancelled_text, "Upload artifact: reports/daily.txt");
     });

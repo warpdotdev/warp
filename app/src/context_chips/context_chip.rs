@@ -6,11 +6,13 @@ use std::{
 
 use super::ChipValue;
 
+use crate::localization;
 use crate::terminal::model::{
     block::{Block, BlockMetadata},
     session::{Session, SessionId},
 };
 use crate::terminal::shell::ShellType;
+use warpui::AppContext;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShellCommandGenerator {
@@ -179,6 +181,22 @@ impl ChipDisabledReason {
             Self::RequiresExecutable { command } => format!("Requires the `{command}` command"),
         }
     }
+
+    pub fn tooltip_text_for_app(&self, app: &AppContext) -> String {
+        match self {
+            Self::RequiresLocalSession => {
+                localization::text_for_app(app, "context_chips.disabled.requires_local_session")
+            }
+            Self::RequiresExecutable { command } if command == "gh" => {
+                localization::text_for_app(app, "context_chips.disabled.requires_github_cli")
+            }
+            Self::RequiresExecutable { command } => localization::text_for_app_with_args(
+                app,
+                "context_chips.disabled.requires_command",
+                &[("command", command)],
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -197,6 +215,13 @@ impl ChipAvailability {
     pub fn tooltip_override_text(&self) -> Option<String> {
         match self {
             Self::Disabled(reason) => Some(reason.tooltip_text()),
+            Self::Enabled | Self::Hidden => None,
+        }
+    }
+
+    pub fn tooltip_override_text_for_app(&self, app: &AppContext) -> Option<String> {
+        match self {
+            Self::Disabled(reason) => Some(reason.tooltip_text_for_app(app)),
             Self::Enabled | Self::Hidden => None,
         }
     }

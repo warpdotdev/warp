@@ -835,29 +835,37 @@ fn terminal_primary_line_uses_monospace_for_last_completed_command() {
 
 #[test]
 fn terminal_search_fragments_include_rendered_terminal_badges() {
-    let fragments = terminal_search_text_fragments(
-        "Review the failing tests".to_string(),
-        "~/warp".to_string(),
-        Some("main".to_string()),
-        terminal_kind_badge_label(false, Some(CLIAgent::Claude)),
-        Some(terminal_pull_request_badge_label(
-            "https://github.com/warpdotdev/warp-internal/pull/12345",
-        )),
-        Some(GitLineChanges {
-            files_changed: 1,
-            lines_added: 2,
-            lines_removed: 3,
-        }),
-    );
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            register_language_settings(ctx, AppLanguage::English);
+        });
 
-    assert!(search_fragments_contain_query(&fragments, "claude"));
-    assert!(search_fragments_contain_query(
-        &fragments,
-        "review the failing tests"
-    ));
-    assert!(search_fragments_contain_query(&fragments, "#12345"));
-    assert!(search_fragments_contain_query(&fragments, "+2"));
-    assert!(search_fragments_contain_query(&fragments, "-3"));
+        app.read(|ctx| {
+            let fragments = terminal_search_text_fragments(
+                "Review the failing tests".to_string(),
+                "~/warp".to_string(),
+                Some("main".to_string()),
+                terminal_kind_badge_label(false, Some(CLIAgent::Claude), ctx),
+                Some(terminal_pull_request_badge_label(
+                    "https://github.com/warpdotdev/warp-internal/pull/12345",
+                )),
+                Some(GitLineChanges {
+                    files_changed: 1,
+                    lines_added: 2,
+                    lines_removed: 3,
+                }),
+            );
+
+            assert!(search_fragments_contain_query(&fragments, "claude"));
+            assert!(search_fragments_contain_query(
+                &fragments,
+                "review the failing tests"
+            ));
+            assert!(search_fragments_contain_query(&fragments, "#12345"));
+            assert!(search_fragments_contain_query(&fragments, "+2"));
+            assert!(search_fragments_contain_query(&fragments, "-3"));
+        });
+    })
 }
 
 #[test]

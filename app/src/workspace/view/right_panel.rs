@@ -7,6 +7,7 @@ use crate::code_review::code_review_view::{
 };
 use crate::code_review::code_review_view::{CodeReviewCommentDebugState, CodeReviewViewEvent};
 use crate::code_review::telemetry_event::CodeReviewContextDestination;
+use crate::localization;
 use crate::pane_group::pane::view::header::{components::HEADER_EDGE_PADDING, PANE_HEADER_HEIGHT};
 use crate::pane_group::WorkingDirectoriesEvent;
 use crate::pane_group::{Event as PaneGroupEvent, PaneGroup, WorkingDirectoriesModel};
@@ -49,21 +50,20 @@ use warpui::keymap::EditableBinding;
 use warpui::EntityId;
 use warpui::{
     elements::{
-        resizable_state_handle, Container, DragBarSide, Element, MainAxisSize, MouseStateHandle,
-        Resizable, ResizableStateHandle,
-    },
-    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle, WeakViewHandle,
-};
-use warpui::{
-    elements::{
-        ChildView, Clipped, ConstrainedBox, CrossAxisAlignment, Flex, MainAxisAlignment,
-        ParentElement, Shrinkable, Text,
+        resizable_state_handle, ChildView, Clipped, ConstrainedBox, Container, CrossAxisAlignment,
+        DragBarSide, Element, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+        ParentElement, Resizable, ResizableStateHandle, Shrinkable, Text,
     },
     fonts::{Properties, Weight},
     platform::Cursor,
     ui_components::components::UiComponent,
+    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle, WeakViewHandle,
 };
+
+fn right_panel_text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 /// Describes which agent destination is available for sending review comments.
 #[derive(Clone, Debug, PartialEq)]
@@ -441,7 +441,7 @@ impl RightPanelView {
         let maximize_button = ctx.add_typed_action_view(|ctx| {
             let mut button = ActionButton::new("", PaneHeaderTheme)
                 .with_icon(Icon::Maximize)
-                .with_tooltip("Maximize")
+                .with_tooltip(right_panel_text(ctx, "code_review.action.maximize"))
                 .with_tooltip_positioning_provider(Arc::new(MenuPositioning::BelowInputBox))
                 .on_click(|ctx| ctx.dispatch_typed_action(RightPanelAction::ToggleMaximize));
 
@@ -456,12 +456,15 @@ impl RightPanelView {
         });
 
         #[cfg(feature = "local_fs")]
-        let open_repository_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Open repository", NakedTheme)
-                .with_size(crate::view_components::action_button::ButtonSize::Small)
-                .with_tooltip("Navigate to a repo and initialize it for coding")
-                .with_tooltip_alignment(TooltipAlignment::Center)
-                .on_click(|ctx| ctx.dispatch_typed_action(RightPanelAction::OpenRepository))
+        let open_repository_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(
+                right_panel_text(ctx, "code_review.action.open_repository"),
+                NakedTheme,
+            )
+            .with_size(crate::view_components::action_button::ButtonSize::Small)
+            .with_tooltip(right_panel_text(ctx, "code_review.tooltip.open_repository"))
+            .with_tooltip_alignment(TooltipAlignment::Center)
+            .on_click(|ctx| ctx.dispatch_typed_action(RightPanelAction::OpenRepository))
         });
 
         Self {
@@ -768,12 +771,15 @@ impl RightPanelView {
 
         let tooltip = if let Some(keybinding) = tooltip_keybinding {
             ui_builder
-                .tool_tip_with_sublabel("Close panel".to_string(), keybinding)
+                .tool_tip_with_sublabel(
+                    right_panel_text(app, "code_review.action.close_panel"),
+                    keybinding,
+                )
                 .build()
                 .finish()
         } else {
             ui_builder
-                .tool_tip("Close panel".to_string())
+                .tool_tip(right_panel_text(app, "code_review.action.close_panel"))
                 .build()
                 .finish()
         };
@@ -825,7 +831,8 @@ impl RightPanelView {
             return Flex::column()
                 .with_child(simple_header)
                 .with_child(
-                    Shrinkable::new(1.0, CodeReviewView::render_loading_state(appearance)).finish(),
+                    Shrinkable::new(1.0, CodeReviewView::render_loading_state(appearance, app))
+                        .finish(),
                 )
                 .finish();
         };
@@ -850,19 +857,19 @@ impl RightPanelView {
                         // No "Open repository" CTA when the session is remote — the
                         // button navigates to a local folder, which is not meaningful
                         // in a remote session.
-                        CodeReviewView::render_remote_state(appearance, None)
+                        CodeReviewView::render_remote_state(app, appearance, None)
                     } else if env.is_wsl {
-                        CodeReviewView::render_wsl_state(appearance, open_repo_button())
+                        CodeReviewView::render_wsl_state(app, appearance, open_repo_button())
                     } else {
-                        CodeReviewView::render_not_repo_state(appearance, open_repo_button())
+                        CodeReviewView::render_not_repo_state(app, appearance, open_repo_button())
                     }
                 } else {
-                    CodeReviewView::render_not_repo_state(appearance, open_repo_button())
+                    CodeReviewView::render_not_repo_state(app, appearance, open_repo_button())
                 }
             };
 
             #[cfg(not(feature = "local_fs"))]
-            let no_repo_body = CodeReviewView::render_not_repo_state(appearance, None);
+            let no_repo_body = CodeReviewView::render_not_repo_state(app, appearance, None);
 
             return Flex::column()
                 .with_child(simple_header)
@@ -895,7 +902,8 @@ impl RightPanelView {
             Flex::column()
                 .with_child(simple_header)
                 .with_child(
-                    Shrinkable::new(1.0, CodeReviewView::render_loading_state(appearance)).finish(),
+                    Shrinkable::new(1.0, CodeReviewView::render_loading_state(appearance, app))
+                        .finish(),
                 )
                 .finish()
         }
@@ -1025,6 +1033,7 @@ impl RightPanelView {
             if has_files {
                 Some(render_file_navigation_button(
                     appearance,
+                    app,
                     file_sidebar_expanded,
                     self.file_navigation_button_mouse_state.clone(),
                     |ctx| {
@@ -1041,10 +1050,14 @@ impl RightPanelView {
 
         let title = Shrinkable::new(
             1.0,
-            Text::new_inline("Code review".to_string(), appearance.ui_font_family(), 12.)
-                .with_style(Properties::default().weight(Weight::Bold))
-                .with_color(sub_text_color.into())
-                .finish(),
+            Text::new_inline(
+                right_panel_text(app, "code_review.title"),
+                appearance.ui_font_family(),
+                12.,
+            )
+            .with_style(Properties::default().weight(Weight::Bold))
+            .with_color(sub_text_color.into())
+            .finish(),
         )
         .finish();
 
@@ -1087,9 +1100,15 @@ impl RightPanelView {
 
     pub fn set_maximized(&mut self, is_maximized: bool, ctx: &mut ViewContext<Self>) {
         let (icon, tooltip) = if is_maximized {
-            (Icon::Minimize, "Minimize")
+            (
+                Icon::Minimize,
+                right_panel_text(ctx, "code_review.action.minimize"),
+            )
         } else {
-            (Icon::Maximize, "Maximize")
+            (
+                Icon::Maximize,
+                right_panel_text(ctx, "code_review.action.maximize"),
+            )
         };
 
         self.maximize_button.update(ctx, |button, ctx| {

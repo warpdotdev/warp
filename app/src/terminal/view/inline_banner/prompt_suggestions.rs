@@ -42,9 +42,6 @@ use crate::server::ids::ServerId;
 const INLINE_BANNER_SPACING: f32 = 8.;
 const INLINE_BANNER_BUTTON_PADDING: f32 = 8.;
 
-const DELINQUENT_DUE_TO_PAYMENT_ISSUE_TOOLTIP_MESSAGE: &str = "Restricted due to payment issue";
-const OUT_OF_REQUESTS_TOOLTIP_MESSAGE: &str = "Out of credits";
-
 /// Types of zero-state prompt suggestions.
 #[derive(Debug, Copy, Clone, Serialize)]
 pub enum ZeroStatePromptSuggestionType {
@@ -240,7 +237,7 @@ fn render_button(
         stack.add_child(container.finish());
 
         if is_button_disabled && mouse_state.is_hovered() {
-            if let Some(tooltip_text) = get_tooltip_text_for_alert_state(prompt_alert_state) {
+            if let Some(tooltip_text) = get_tooltip_text_for_alert_state(prompt_alert_state, app) {
                 let tooltip = appearance
                     .ui_builder()
                     .tool_tip(tooltip_text)
@@ -293,19 +290,26 @@ fn render_button(
     }
 }
 
-fn get_tooltip_text_for_alert_state(alert_state: &PromptAlertState) -> Option<String> {
+fn get_tooltip_text_for_alert_state(
+    alert_state: &PromptAlertState,
+    app: &AppContext,
+) -> Option<String> {
     // This is not an exhaustive list; the actual prompt alert component will have more information,
     // so we can keep the tooltip's text relatively minimal and just capture broad groups.
     match alert_state {
-        PromptAlertState::DelinquentDueToPaymentIssue => {
-            Some(DELINQUENT_DUE_TO_PAYMENT_ISSUE_TOOLTIP_MESSAGE.to_string())
-        }
+        PromptAlertState::DelinquentDueToPaymentIssue => Some(crate::localization::text_for_app(
+            app,
+            "terminal.prompt_suggestions.tooltip.restricted_payment_issue",
+        )),
         PromptAlertState::RequestLimitReached
         | PromptAlertState::AnonymousUserRequestLimitHardGate
         | PromptAlertState::AnonymousUserRequestLimitSoftGate
         | PromptAlertState::OveragesToggleableButNotEnabled
         | PromptAlertState::MonthlyOveragesSpendLimitReached => {
-            Some(OUT_OF_REQUESTS_TOOLTIP_MESSAGE.to_string())
+            Some(crate::localization::text_for_app(
+                app,
+                "terminal.prompt_suggestions.tooltip.out_of_credits",
+            ))
         }
         _ => None,
     }

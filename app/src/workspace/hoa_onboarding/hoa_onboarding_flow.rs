@@ -611,6 +611,7 @@ impl View for HoaOnboardingFlow {
                     &self.close_button,
                     &self.cta_button,
                     appearance,
+                    app,
                 );
 
                 Container::new(Align::new(banner).finish())

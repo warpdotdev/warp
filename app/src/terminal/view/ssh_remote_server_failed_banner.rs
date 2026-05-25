@@ -13,13 +13,9 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
-use crate::{terminal::model::session::SessionId, ui_components::icons::Icon, Appearance};
-
-const BANNER_TITLE: &str = "Couldn't connect to the Warp SSH extension";
-
-const BANNER_BODY: &str =
-    "While advanced features like file browsing and code review are currently \
-    disabled, the rest of your Warpified experience is fully available.";
+use crate::{
+    localization, terminal::model::session::SessionId, ui_components::icons::Icon, Appearance,
+};
 
 #[derive(Clone, Debug)]
 pub enum SshRemoteServerFailedBannerAction {
@@ -79,7 +75,7 @@ impl View for SshRemoteServerFailedBanner {
         .finish();
 
         let title = Text::new(
-            BANNER_TITLE.to_string(),
+            localization::text_for_app(app, "terminal.ssh_remote_server_failed.title"),
             appearance.ui_font_family(),
             font_size,
         )
@@ -87,7 +83,7 @@ impl View for SshRemoteServerFailedBanner {
         .finish();
 
         let body = Text::new(
-            BANNER_BODY.to_string(),
+            localization::text_for_app(app, "terminal.ssh_remote_server_failed.body"),
             appearance.ui_font_family(),
             small_font_size,
         )

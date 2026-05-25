@@ -138,7 +138,7 @@ fn accept_disabled_reason_reports_local_claude_message() {
 
     assert_eq!(
         state.accept_disabled_reason(),
-        Some("Local Claude Code child agents are temporarily disabled.")
+        Some("agent.orchestration.controls.local_claude_disabled")
     );
 }
 

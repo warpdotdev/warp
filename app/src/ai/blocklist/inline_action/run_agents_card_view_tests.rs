@@ -131,7 +131,10 @@ fn cloud_with_opencode_disables_accept() {
     ));
     let reason = state.orch.accept_disabled_reason();
     assert!(reason.is_some(), "Cloud + OpenCode should disable Accept");
-    assert!(reason.unwrap().contains("OpenCode"));
+    assert_eq!(
+        reason,
+        Some("agent.orchestration.controls.opencode_cloud_unsupported")
+    );
 }
 
 #[test]
@@ -151,12 +154,9 @@ fn local_with_disabled_claude_or_codex_disables_accept() {
     for (harness, expected) in [
         (
             "claude",
-            "Local Claude Code child agents are temporarily disabled.",
+            "agent.orchestration.controls.local_claude_disabled",
         ),
-        (
-            "codex",
-            "Local Codex child agents are temporarily disabled.",
-        ),
+        ("codex", "agent.orchestration.controls.local_codex_disabled"),
     ] {
         let state = make_edit_state_with_orch_fields(harness, RunAgentsExecutionMode::Local);
         assert_eq!(state.orch.accept_disabled_reason(), Some(expected));
@@ -502,7 +502,7 @@ mod override_from_approved_config_tests {
             .override_from_approved_config(&local_config("auto", "claude"));
         assert_eq!(
             state.orch.accept_disabled_reason(),
-            Some("Local Claude Code child agents are temporarily disabled.")
+            Some("agent.orchestration.controls.local_claude_disabled")
         );
     }
 }

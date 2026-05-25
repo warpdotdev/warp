@@ -1,4 +1,6 @@
 use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use serde_json::json;
 use settings_value::SettingsValue as _;
@@ -19,6 +21,29 @@ const ZH_CN: &str = r#"{
 const BUNDLED_EN_US: &str = include_str!("../../../app/assets/bundled/locales/en-US.json");
 const BUNDLED_ZH_CN: &str = include_str!("../../../app/assets/bundled/locales/zh-CN.json");
 const ALLOWED_EMPTY_TRANSLATION_KEYS: &[&str] = &["auth.empty"];
+
+const UI_LITERAL_PATTERNS: &[&str] = &[
+    "with_text_label(",
+    "with_centered_text_label(",
+    "set_placeholder_text(",
+    "ActionButton::new(",
+    "MenuItemFields::new(",
+    "DropdownItem::new(",
+    ".span(",
+    ".paragraph(",
+    "Text::new(",
+    "Text::new_inline(",
+    "DismissibleToast::error(",
+    "DismissibleToast::success(",
+    "DismissibleToast::default(",
+    "tool_tip(",
+    "with_tooltip(",
+    "FormattedTextFragment::plain_text(",
+    "FormattedTextFragment::hyperlink(",
+    "FormattedTextFragment::hyperlink_action(",
+];
+
+const ALLOWED_DIRECT_UI_LITERALS: &[&str] = &["...", "Warp", "ZDR"];
 
 type CatalogMap = serde_json::Map<String, serde_json::Value>;
 
@@ -528,6 +553,22 @@ fn bundled_appearance_catalogs_include_theme_and_icon_copy() {
         "agent.block.toast.feedback_thanks",
         "agent.orchestration.sending_message_to",
         "agent.orchestration.started_agent",
+        "agent_sdk.api_key.error.create_failed",
+        "agent_sdk.api_key.error.expire_failed",
+        "agent_sdk.api_key.confirm.expire",
+        "agent_sdk.api_key.confirm.expire_cancelled",
+        "agent_sdk.api_key.confirm.expire_help",
+        "agent_sdk.api_key.error.expire_non_interactive_requires_force",
+        "agent_sdk.api_key.error.multiple_matches_specify_uid",
+        "agent_sdk.api_key.error.not_found",
+        "agent_sdk.api_key.output.created",
+        "agent_sdk.api_key.output.expired",
+        "agent_sdk.api_key.output.multiple_matches",
+        "agent_sdk.api_key.output.not_expired",
+        "agent_sdk.api_key.output.raw_api_key",
+        "agent_sdk.api_key.output.secret_shown_once",
+        "agent_sdk.api_key.output.uid",
+        "agent_sdk.api_key.prompt.select_key_to_expire",
         "agent.output.current_directory",
         "agent.output.conversation_search.grepping",
         "agent.output.conversation_search.grepping_with_patterns",
@@ -594,6 +635,29 @@ fn bundled_appearance_catalogs_include_theme_and_icon_copy() {
         "agent_management.filter.status.working",
         "agent_management.loading.agents",
         "agent_management.loading.tooltip",
+        "agent_sdk.secret.confirm.delete",
+        "agent_sdk.secret.confirm.delete_cancelled",
+        "agent_sdk.secret.confirm.delete_help",
+        "agent_sdk.secret.error.bedrock_access_key_non_interactive_required",
+        "agent_sdk.secret.error.bedrock_access_key_update_value",
+        "agent_sdk.secret.error.bedrock_api_key_update_value",
+        "agent_sdk.secret.error.bedrock_non_interactive_required",
+        "agent_sdk.secret.error.delete_non_interactive_requires_force",
+        "agent_sdk.secret.error.not_found",
+        "agent_sdk.secret.error.read_value_file_failed",
+        "agent_sdk.secret.output.created",
+        "agent_sdk.secret.output.deleted",
+        "agent_sdk.secret.output.updated",
+        "agent_sdk.secret.prompt.aws_access_key_id",
+        "agent_sdk.secret.prompt.aws_region",
+        "agent_sdk.secret.prompt.aws_secret_access_key",
+        "agent_sdk.secret.prompt.aws_session_token_optional",
+        "agent_sdk.secret.prompt.bedrock_api_key",
+        "agent_sdk.secret.prompt.openai_base_url",
+        "agent_sdk.secret.prompt.openai_base_url_help",
+        "agent_sdk.secret.prompt.secret_value",
+        "agent_sdk.secret.scope.personal",
+        "agent_sdk.secret.scope.team",
         "agent_management.metadata.credits_used",
         "agent_management.metadata.harness",
         "agent_management.metadata.run_time",
@@ -1045,6 +1109,10 @@ fn bundled_appearance_catalogs_include_theme_and_icon_copy() {
         "code_review.tooltip.unsaved_changes",
         "code_review.tooltip.view_changes",
         "context_chips.directory.parent",
+        "context_chips.disabled.requires_command",
+        "context_chips.disabled.requires_github_cli",
+        "context_chips.disabled.requires_local_session",
+        "context_chips.menu.copy_chip",
         "context_chips.node.install_latest_command",
         "context_chips.node.install_nvm",
         "context_chips.node.install_nvm_empty_description",
@@ -2228,7 +2296,6 @@ fn bundled_appearance_catalogs_include_theme_and_icon_copy() {
         "workspace.action.add_new_repo",
         "workspace.action.check_latest_and_retry",
         "workspace.action.undo",
-        "workspace.action.upgrade_ai_usage",
         "workspace.action.view",
         "workspace.banner.autoupdate.unable_to_launch.description",
         "workspace.banner.autoupdate.unable_to_launch_deprecated.description",
@@ -2492,6 +2559,18 @@ fn bundled_catalogs_only_use_intentional_empty_values() {
     );
 }
 
+#[test]
+fn app_ui_calls_do_not_use_direct_english_literals() {
+    let app_src = workspace_root().join("app/src");
+    let mut violations = Vec::new();
+    collect_direct_ui_literal_violations(&app_src, &mut violations);
+
+    assert!(
+        violations.is_empty(),
+        "direct user-visible English literals in UI calls: {violations:#?}"
+    );
+}
+
 fn bundled_en_us_map() -> CatalogMap {
     serde_json::from_str(BUNDLED_EN_US).unwrap()
 }
@@ -2538,4 +2617,124 @@ fn is_placeholder_name(name: &str) -> bool {
     };
     (first == '_' || first.is_ascii_alphabetic())
         && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("localization crate should live under crates/localization")
+        .to_path_buf()
+}
+
+fn collect_direct_ui_literal_violations(dir: &Path, violations: &mut Vec<String>) {
+    let entries =
+        fs::read_dir(dir).unwrap_or_else(|err| panic!("failed to read {}: {err}", dir.display()));
+
+    for entry in entries {
+        let entry = entry.expect("failed to read app source directory entry");
+        let path = entry.path();
+        if path.is_dir() {
+            collect_direct_ui_literal_violations(&path, violations);
+            continue;
+        }
+
+        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+            continue;
+        }
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with("_tests.rs") || name == "localization_tests.rs")
+        {
+            continue;
+        }
+
+        let content = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        for (line_index, line) in content.lines().enumerate() {
+            if let Some(literal) = direct_ui_english_literal(line) {
+                violations.push(format!(
+                    "{}:{}: {literal:?}",
+                    path.strip_prefix(workspace_root())
+                        .unwrap_or(path.as_path())
+                        .display(),
+                    line_index + 1
+                ));
+            }
+        }
+    }
+}
+
+fn direct_ui_english_literal(line: &str) -> Option<&str> {
+    if line.contains("localization::")
+        || line.contains("text_for_app")
+        || line.contains("_text(")
+        || line.contains("ai_settings_text(")
+        || line.contains("workspace_text(")
+        || line.contains("billing_text(")
+        || line.contains("code_review_text(")
+        || line.contains("rule_text(")
+        || line.contains("code_text(")
+        || line.contains("input_binding_description(")
+        || line.contains("binding_description(")
+        || line.contains("FormattedTextFragment::inline_code(")
+    {
+        return None;
+    }
+
+    let pattern = UI_LITERAL_PATTERNS
+        .iter()
+        .find(|pattern| line.contains(**pattern))?;
+    let literal = first_string_literal_after(line, pattern)?;
+    if ALLOWED_DIRECT_UI_LITERALS.contains(&literal) || !looks_like_english_ui_text(literal) {
+        return None;
+    }
+    Some(literal)
+}
+
+fn first_string_literal_after<'a>(line: &'a str, pattern: &str) -> Option<&'a str> {
+    let start = line.find(pattern)? + pattern.len();
+    let rest = &line[start..];
+    let mut offset = rest.len() - rest.trim_start().len();
+    let rest = &rest[offset..];
+    if let Some(after_ref) = rest.strip_prefix('&') {
+        offset += 1;
+        offset += after_ref.len() - after_ref.trim_start().len();
+    }
+
+    if line.as_bytes().get(start + offset) != Some(&b'"') {
+        return None;
+    }
+
+    let literal_start = start + offset + 1;
+    let bytes = line.as_bytes();
+    let mut i = literal_start;
+    while i < bytes.len() {
+        if bytes[i] == b'"' && !is_escaped_quote(bytes, i) {
+            return Some(&line[literal_start..i]);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn is_escaped_quote(bytes: &[u8], quote_index: usize) -> bool {
+    let mut slash_count = 0;
+    let mut i = quote_index;
+    while i > 0 && bytes[i - 1] == b'\\' {
+        slash_count += 1;
+        i -= 1;
+    }
+    slash_count % 2 == 1
+}
+
+fn looks_like_english_ui_text(literal: &str) -> bool {
+    literal.len() >= 3
+        && literal.chars().any(|ch| ch.is_ascii_alphabetic())
+        && literal
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_uppercase())
+        && literal.chars().any(|ch| ch.is_ascii_lowercase())
 }

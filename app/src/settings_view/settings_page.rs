@@ -2041,7 +2041,7 @@ pub(super) trait SettingsWidget {
 /// Callers should add an `on_click` handler and add the button to the UI below
 /// the setting.
 pub(super) fn build_reset_button(
-    _app: &AppContext,
+    app: &AppContext,
     appearance: &Appearance,
     mouse_state: MouseStateHandle,
     changed_from_default: bool,
@@ -2060,5 +2060,8 @@ pub(super) fn build_reset_button(
             font_size: Some(appearance.ui_font_size() * 0.8),
             ..Default::default()
         })
-        .with_text_label("Reset to default".to_owned())
+        .with_text_label(localization::text_for_app(
+            app,
+            "settings.action.reset_to_default",
+        ))
 }

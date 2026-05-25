@@ -32,7 +32,6 @@ use crate::ai::agent::{
     AIAgentAction, AIAgentActionType, AIAgentOutputMessage, AIAgentOutputMessageType,
     CreateDocumentsResult, EditDocumentsResult,
 };
-use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::localization;
 use crate::{
@@ -360,6 +359,10 @@ impl TerminalView {
                                         // Create a mapping from document index to title
                                         let document_titles: Vec<String> =
                                             documents.iter().map(|doc| doc.title.clone()).collect();
+                                        let default_title = crate::localization::text_for_app(
+                                            ctx,
+                                            "ai_document.title.default",
+                                        );
 
                                         document_model.update(ctx, |doc_model, doc_ctx| {
                                             for (index, doc_context) in
@@ -368,9 +371,7 @@ impl TerminalView {
                                                 let title = document_titles
                                                     .get(index)
                                                     .cloned()
-                                                    .unwrap_or_else(|| {
-                                                        DEFAULT_PLANNING_DOCUMENT_TITLE.to_string()
-                                                    });
+                                                    .unwrap_or_else(|| default_title.clone());
 
                                                 doc_model.restore_document(
                                                     doc_context.document_id,

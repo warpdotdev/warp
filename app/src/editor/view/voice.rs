@@ -195,10 +195,12 @@ impl EditorView {
         ctx.notify();
     }
 
-    fn voice_error_toast(&mut self, message: &str, ctx: &mut ViewContext<Self>) {
+    fn voice_error_toast(&mut self, message_key: &str, ctx: &mut ViewContext<Self>) {
         let window_id = ctx.window_id();
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-            let toast = crate::view_components::DismissibleToast::error(message.to_string());
+            let toast = crate::view_components::DismissibleToast::error(
+                crate::localization::text_for_app(ctx, message_key),
+            );
             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
         });
     }
@@ -270,7 +272,7 @@ impl EditorView {
                     .as_ref(ctx)
                     .can_request_voice()
                 {
-                    self.voice_error_toast(super::VOICE_LIMIT_HIT_TOAST_TEXT, ctx);
+                    self.voice_error_toast("editor.voice.toast.limit_reached", ctx);
                     return false;
                 }
 
@@ -503,11 +505,11 @@ impl EditorView {
             }
             Err(e) => match e {
                 TranscribeError::QuotaLimit => {
-                    self.voice_error_toast(super::VOICE_LIMIT_HIT_TOAST_TEXT, ctx)
+                    self.voice_error_toast("editor.voice.toast.limit_reached", ctx)
                 }
                 _ => {
                     log::error!("Failed to transcribe voice input: {e:?}");
-                    self.voice_error_toast(super::VOICE_ERROR_TOAST_TEXT, ctx)
+                    self.voice_error_toast("editor.voice.toast.processing_error", ctx)
                 }
             },
         }

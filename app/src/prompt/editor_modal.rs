@@ -238,6 +238,7 @@ impl EditorModal {
         &self,
         kind: ContextChipKind,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Option<ContextChipRenderer> {
         let availability = kind
             .to_chip()
@@ -247,7 +248,7 @@ impl EditorModal {
             return None;
         }
 
-        ContextChipRenderer::default_from_kind(kind, availability, appearance)
+        ContextChipRenderer::default_from_kind(kind, availability, appearance, app)
     }
 
     fn update_used_chips(&mut self, used_chips: Vec<ContextChipKind>, ctx: &mut ViewContext<Self>) {
@@ -255,12 +256,12 @@ impl EditorModal {
         let unused_chips = available_chips()
             .into_iter()
             .filter(|kind| !used_chips.contains(kind))
-            .filter_map(|kind| self.chip_renderer_for_kind(kind, appearance))
+            .filter_map(|kind| self.chip_renderer_for_kind(kind, appearance, ctx))
             .collect::<Vec<_>>();
 
         let used_chips = used_chips
             .into_iter()
-            .filter_map(|kind| self.chip_renderer_for_kind(kind, appearance))
+            .filter_map(|kind| self.chip_renderer_for_kind(kind, appearance, ctx))
             .collect::<Vec<_>>();
         self.chip_configurator
             .open_single_zone_with_renderers(used_chips, unused_chips);

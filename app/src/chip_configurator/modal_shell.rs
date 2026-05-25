@@ -15,10 +15,10 @@ use warpui::elements::{
 use warpui::platform::Cursor;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{Action, Element};
+use warpui::{Action, AppContext, Element};
 
 use super::{ChipConfigurator, ChipConfiguratorAction};
-use crate::Appearance;
+use crate::{localization, Appearance};
 
 const MODAL_WIDTH: f32 = 700.;
 const BORDER_WIDTH: f32 = 1.;
@@ -29,7 +29,6 @@ const PRIMARY_BUTTON_HEIGHT: f32 = 40.;
 const SECTION_UNIFORM_PADDING: f32 = 16.;
 const MARGIN_BETWEEN_MODAL_SECTIONS: f32 = 16.;
 const MODAL_CONTENT_FONT_SIZE: f32 = 14.;
-const RESTORE_DEFAULT_LABEL: &str = "Restore default";
 
 /// Mouse state handles for interactive controls in chip editor sections and modals.
 #[derive(Default)]
@@ -67,6 +66,7 @@ pub fn render_chip_editor_modal<A: Action + Clone + Copy + 'static>(
     chip_configurator: &ChipConfigurator,
     config: ChipEditorModalConfig<A>,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
 
@@ -89,11 +89,12 @@ pub fn render_chip_editor_modal<A: Action + Clone + Copy + 'static>(
                     mouse_handles: config.mouse_handles,
                 },
                 appearance,
+                app,
             ))
             .with_margin_bottom(MARGIN_BETWEEN_MODAL_SECTIONS)
             .finish(),
         )
-        .with_child(render_buttons(&config, appearance))
+        .with_child(render_buttons(&config, appearance, app))
         .finish();
 
     let modal = Container::new(
@@ -142,11 +143,15 @@ fn render_restore_default_button<A: Action + Clone + Copy + 'static>(
     reset_action: A,
     mouse_handle: &MouseStateHandle,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let button = Hoverable::new(mouse_handle.clone(), |_state| {
         appearance
             .ui_builder()
-            .span(RESTORE_DEFAULT_LABEL.to_string())
+            .span(localization::text_for_app(
+                app,
+                "prompt.editor.restore_default",
+            ))
             .with_style(UiComponentStyles {
                 font_size: Some(MODAL_CONTENT_FONT_SIZE),
                 ..Default::default()
@@ -182,6 +187,7 @@ pub fn render_chip_editor_sections<A: Action + Clone + Copy + 'static>(
     chip_configurator: &ChipConfigurator,
     config: ChipEditorSectionsConfig<A>,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let header_row = Flex::row()
         .with_child(render_section_label(
@@ -193,6 +199,7 @@ pub fn render_chip_editor_sections<A: Action + Clone + Copy + 'static>(
             config.reset_action,
             &config.mouse_handles.restore_default,
             appearance,
+            app,
         ))
         .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
         .with_main_axis_size(MainAxisSize::Max)
@@ -205,7 +212,10 @@ pub fn render_chip_editor_sections<A: Action + Clone + Copy + 'static>(
     );
 
     let left_section = Flex::column()
-        .with_child(render_section_label("Left side", appearance))
+        .with_child(render_section_label(
+            &localization::text_for_app(app, "chip_configurator.left_side"),
+            appearance,
+        ))
         .with_child(
             Container::new(chip_configurator.render_left_drop_zone(
                 config.activate_action,
@@ -218,7 +228,10 @@ pub fn render_chip_editor_sections<A: Action + Clone + Copy + 'static>(
         .finish();
 
     let right_section = Flex::column()
-        .with_child(render_section_label("Right side", appearance))
+        .with_child(render_section_label(
+            &localization::text_for_app(app, "chip_configurator.right_side"),
+            appearance,
+        ))
         .with_child(
             Container::new(chip_configurator.render_right_drop_zone(
                 config.activate_action,
@@ -291,9 +304,10 @@ fn render_primary_button<A: Action + Clone + Copy + 'static>(
 fn render_buttons<A: Action + Clone + Copy + 'static>(
     config: &ChipEditorModalConfig<A>,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let cancel_button = render_primary_button(
-        "Cancel".to_string(),
+        localization::text_for_app(app, "settings.action.cancel"),
         ButtonVariant::Outlined,
         false,
         &config.mouse_handles.cancel,
@@ -302,7 +316,7 @@ fn render_buttons<A: Action + Clone + Copy + 'static>(
     );
 
     let save_button = render_primary_button(
-        "Save changes".to_string(),
+        localization::text_for_app(app, "prompt.editor.save_changes"),
         ButtonVariant::Accent,
         !config.is_dirty,
         &config.mouse_handles.save,

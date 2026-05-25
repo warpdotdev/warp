@@ -1,4 +1,5 @@
 use crate::features::FeatureFlag;
+use crate::localization;
 use crate::report_if_error;
 use crate::settings::{InputSettings, WarpPromptSeparator};
 use crate::terminal::event::{BlockType, UserBlockCompleted};
@@ -1364,8 +1365,13 @@ impl CurrentPrompt {
                     .is_some_and(|state| state.last_computed_value.is_some());
                 if has_value && chip_kind.is_copyable() {
                     if let Some(chip) = chip_kind.to_chip() {
+                        let label = localization::text_for_app_with_args(
+                            ctx,
+                            "context_chips.menu.copy_chip",
+                            &[("title", chip.title())],
+                        );
                         Some(
-                            MenuItemFields::new(format!("Copy {}", chip.title()))
+                            MenuItemFields::new(label)
                                 .with_on_select_action(TerminalAction::ContextMenu(
                                     ContextMenuAction::CopyPrompt {
                                         position,
