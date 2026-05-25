@@ -226,9 +226,7 @@ impl Index {
                                     count * run.info.utf8_bytes.get() as usize;
                                 match entry_builder.grapheme_runs.last_mut() {
                                     Some(last) if last.info == run.info => {
-                                        last.count = last
-                                            .count
-                                            .saturating_add(run.count.get());
+                                        last.count = last.count.saturating_add(run.count.get());
                                     }
                                     _ => {
                                         entry_builder.grapheme_runs.push(*run);
@@ -326,9 +324,7 @@ impl Index {
                         entry_builder.incr_content_offset += remaining_graphemes * byte_len;
                         match entry_builder.grapheme_runs.last_mut() {
                             Some(last) if last.info == run.info => {
-                                last.count = last
-                                    .count
-                                    .saturating_add(remaining_graphemes as u16);
+                                last.count = last.count.saturating_add(remaining_graphemes as u16);
                             }
                             _ => {
                                 entry_builder.grapheme_runs.push(GraphemeRun {
@@ -384,8 +380,7 @@ impl Index {
                         entry_builder.incr_content_offset += count * byte_len;
                         match entry_builder.grapheme_runs.last_mut() {
                             Some(last) if last.info == run.info => {
-                                last.count =
-                                    last.count.saturating_add(count as u16);
+                                last.count = last.count.saturating_add(count as u16);
                             }
                             _ => {
                                 entry_builder.grapheme_runs.push(*run);
@@ -402,7 +397,12 @@ impl Index {
 
             // Medium path: bulk-accumulate fitting runs, only handle the
             // boundary-straddling run individually.
-            emit_runs(row_runs, entry.has_trailing_newline, &mut entry_builder, &mut index);
+            emit_runs(
+                row_runs,
+                entry.has_trailing_newline,
+                &mut entry_builder,
+                &mut index,
+            );
         }
 
         entry_builder.append_to_index_if_nonempty(&mut index);
@@ -726,9 +726,7 @@ impl Index {
         self.rows.iter().map(move |entry| {
             let runs: &[GraphemeRun] = match &entry.grapheme_sizing {
                 GraphemeSizing::Uniform(run) => std::slice::from_ref(run),
-                GraphemeSizing::NonUniform => sizing_iter
-                    .next()
-                    .map_or(&[], |(_, v)| v.as_slice()),
+                GraphemeSizing::NonUniform => sizing_iter.next().map_or(&[], |(_, v)| v.as_slice()),
                 GraphemeSizing::EmptyRow => &[],
             };
             (entry, runs)
@@ -807,54 +805,6 @@ impl EntryBuilder {
         Default::default()
     }
 
-    /// Processes the next [`Grapheme`] in the row.
-    pub fn process_grapheme(&mut self, grapheme: &Grapheme, index: &mut Index) {
-        if grapheme.starts_new_row() {
-            self.add_trailing_newline();
-            std::mem::take(self).append_to_index(index);
-            return;
-        }
-
-        self.process_grapheme_info(grapheme.sizing_info(), index);
-    }
-
-    /// Processes the next grapheme in the row, based only on its sizing
-    /// information (and not its content).
-    fn process_grapheme_info(&mut self, info: GraphemeInfo, index: &mut Index) {
-        let grapheme_len = info.utf8_bytes.get() as usize;
-        debug_assert!(
-            grapheme_len > 0,
-            "should not process an empty string as a grapheme"
-        );
-
-        if info.cell_width == 0 {
-            #[cfg(debug_assertions)]
-            log::error!("encountered unexpected grapheme with a computed cell width of zero!");
-            return;
-        }
-        debug_assert!(
-            info.cell_width <= 2,
-            "graphemes should not be more than two cells wide, but encountered one with width {}",
-            info.cell_width
-        );
-
-        // If there isn't enough room in the row for this grapheme, cut off
-        // the row here, starting the new row with the _current_ grapheme.
-        if self.num_cells + info.cell_width as usize > index.columns {
-            // If this is a non-full row and we've got a wide char, mark
-            // the fact that we have a leading wide char spacer.
-            if info.cell_width > 1 && self.num_cells != index.columns {
-                self.add_leading_wide_char_spacer();
-            }
-            std::mem::take(self).append_to_index(index);
-            debug_assert_eq!(self.incr_content_offset, ByteOffset::zero());
-        }
-
-        self.num_cells += info.cell_width as usize;
-
-        self.process_grapheme_info_unchecked(info);
-    }
-
     /// Processes the next grapheme in the row, without performing any checks
     /// around whether or not the row is full.
     ///
@@ -871,9 +821,7 @@ impl EntryBuilder {
         // Store information about this grapheme's cell width and UTF-8 length.
         match self.grapheme_runs.last_mut() {
             Some(last_run) if last_run.info == info => {
-                last_run.count = last_run
-                    .count
-                    .saturating_add(1);
+                last_run.count = last_run.count.saturating_add(1);
             }
             _ => {
                 self.grapheme_runs.push(GraphemeRun {
@@ -897,7 +845,11 @@ impl EntryBuilder {
 
         while remaining > 0 {
             let space = index.columns.saturating_sub(self.num_cells);
-            let fits = if cell_width > 0 { space / cell_width } else { 0 };
+            let fits = if cell_width > 0 {
+                space / cell_width
+            } else {
+                0
+            };
 
             if fits == 0 {
                 // No room for even one grapheme — flush and retry.
