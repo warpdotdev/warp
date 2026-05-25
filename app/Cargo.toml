@@ -26,6 +26,10 @@ test = false
 name = "warp"
 path = "src/bin/local.rs"
 test = false
+[[bin]]
+name = "warpctrl"
+path = "src/bin/warpctrl.rs"
+test = false
 
 [[bin]]
 name = "integration"
@@ -258,6 +262,7 @@ rmcp = { workspace = true, features = ["client"] }
 warp_isolation_platform.workspace = true
 warp_ripgrep.workspace = true
 warp_managed_secrets.workspace = true
+local_control.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block.workspace = true
@@ -947,6 +952,7 @@ hoa_code_review = []
 vertical_tabs = []
 vertical_tabs_summary_mode = []
 tab_configs = []
+warp_control_cli = []
 agent_harness = []
 oz_handoff = []
 handoff_local_cloud = []

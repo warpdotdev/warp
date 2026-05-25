@@ -796,6 +796,9 @@ pub enum FeatureFlag {
     /// Enables tab configs — user-definable TOML templates for launching custom tab layouts.
     TabConfigs,
 
+    /// Enables Warp local control through the standalone warpctrl CLI.
+    WarpControlCli,
+
     /// When enabled, free-tier users are blocked from AI features (no-AI experiment arm).
     FreeUserNoAi,
 
@@ -940,6 +943,8 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::SshRemoteServer,
     FeatureFlag::DragTabsToWindows,
     FeatureFlag::RemoteCodebaseIndexing,
+    FeatureFlag::RemoteCodeReview,
+    FeatureFlag::WarpControlCli,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

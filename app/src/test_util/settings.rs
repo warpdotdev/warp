@@ -35,9 +35,9 @@ pub fn initialize_settings_for_tests_with_mode(
         init_and_register_user_preferences, AISettings, AccessibilitySettings,
         AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings, ChangelogSettings,
         CloudPreferencesSettings, CodeSettings, DebugSettings, EmacsBindingsSettings, FontSettings,
-        GPUSettings, InputModeSettings, InputSettings, NativePreferenceSettings, PaneSettings,
-        SameLinePromptBlockSettings, ScrollSettings, SelectionSettings, SshSettings, ThemeSettings,
-        VimBannerSettings,
+        GPUSettings, InputModeSettings, InputSettings, LocalControlSettings,
+        NativePreferenceSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings,
+        SelectionSettings, SshSettings, ThemeSettings, VimBannerSettings,
     };
     use crate::terminal::general_settings::GeneralSettings;
     use crate::terminal::keys_settings::KeysSettings;
@@ -84,6 +84,9 @@ pub fn initialize_settings_for_tests_with_mode(
     InputSettings::register(app);
     KeysSettings::register(app);
     LigatureSettings::register(app);
+    if warp_core::features::FeatureFlag::WarpControlCli.is_enabled() {
+        LocalControlSettings::register(app);
+    }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
