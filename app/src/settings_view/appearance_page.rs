@@ -2895,16 +2895,11 @@ impl SettingsWidget for CustomAppIconWidget {
         #[allow(unused_mut)]
         let show_bundle_warning = {
             #[cfg(target_os = "macos")]
-            #[allow(deprecated)]
             {
-                use cocoa::base::id;
-                use objc::{class, msg_send, sel, sel_impl};
-                unsafe {
-                    let running_app: id =
-                        msg_send![class!(NSRunningApplication), currentApplication];
-                    let bundle_id: id = msg_send![running_app, bundleIdentifier];
-                    bundle_id.is_null()
-                }
+                use objc2_app_kit::NSRunningApplication;
+                NSRunningApplication::currentApplication()
+                    .bundleIdentifier()
+                    .is_none()
             }
             #[cfg(not(target_os = "macos"))]
             {
