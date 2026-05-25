@@ -267,7 +267,22 @@ cocoa.workspace = true
 core-foundation.workspace = true
 mach2 = "0.5"
 objc.workspace = true
-objc2-foundation = { workspace = true, features = ["NSBundle"] }
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = [
+    "NSApplication",
+    "NSImage",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSWorkspace",
+] }
+objc2-core-foundation.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "NSBundle",
+    "NSLocale",
+    "NSPathUtilities",
+    "NSString",
+    "NSURL",
+] }
 permissions = "0.4.1"
 pprof = { workspace = true, optional = true, features = ["frame-pointer"] }
 security-framework-sys = "2.0.0"
