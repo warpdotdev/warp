@@ -1,26 +1,23 @@
-use std::{path::PathBuf, time::Duration};
+use std::path::PathBuf;
+use std::time::Duration;
 
 use itertools::Itertools as _;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 
-use crate::{
-    agent::{
-        action::{
-            AIAgentActionType, AIAgentPtyWriteMode, CommentSide, FileEdit, InsertReviewComment,
-            InsertedCommentLine, InsertedCommentLocation, ReadFilesRequest, ReadSkillRequest,
-            SearchCodebaseRequest, ShellCommandDelay, SuggestPromptRequest, UploadArtifactRequest,
-            UseComputerRequest,
-        },
-        action_result::{AnyFileContent, FileContext},
-        convert::ToolToAIAgentActionError,
-        FileLocations,
-    },
-    diff_validation::{ParsedDiff, V4AHunk},
-    document::AIDocumentId,
-    skills::SkillReference,
+use crate::agent::action::{
+    AIAgentActionType, AIAgentPtyWriteMode, CommentSide, FileEdit, InsertReviewComment,
+    InsertedCommentLine, InsertedCommentLocation, ReadFilesRequest, ReadSkillRequest,
+    SearchCodebaseRequest, ShellCommandDelay, SuggestPromptRequest, UploadArtifactRequest,
+    UseComputerRequest,
 };
+use crate::agent::action_result::{AnyFileContent, FileContext};
+use crate::agent::convert::ToolToAIAgentActionError;
+use crate::agent::FileLocations;
+use crate::diff_validation::{ParsedDiff, V4AHunk};
+use crate::document::AIDocumentId;
+use crate::skills::SkillReference;
 
 impl From<api::message::tool_call::RunShellCommand> for AIAgentActionType {
     fn from(value: api::message::tool_call::RunShellCommand) -> Self {

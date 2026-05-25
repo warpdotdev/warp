@@ -1,12 +1,9 @@
+use warp_core::send_telemetry_from_ctx;
 use warpui::{Entity, ModelContext, ModelHandle};
 
-use warp_core::send_telemetry_from_ctx;
-
-use crate::{
-    ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent},
-    server::telemetry::TelemetryEvent,
-    terminal::input::buffer_model::InputBufferModel,
-};
+use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
+use crate::server::telemetry::TelemetryEvent;
+use crate::terminal::input::buffer_model::InputBufferModel;
 
 /// Model responsible for managing state required to conditionally render the shortcuts view.
 pub struct AgentShortcutViewModel {

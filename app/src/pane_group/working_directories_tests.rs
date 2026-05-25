@@ -4,10 +4,10 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::code::buffer_location::LocalOrRemotePath;
 use repo_metadata::repositories::DetectedRepositories;
 use warpui::{App, EntityId};
 
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::pane_group::WorkingDirectoriesModel;
 
 fn local(path: &std::path::Path) -> LocalOrRemotePath {
@@ -45,27 +45,28 @@ fn refresh_working_directories_collapses_subroots_to_nearest_repo_root() {
         let terminal_2 = EntityId::new();
 
         let working_directories_handle = app.add_model(|_| WorkingDirectoriesModel::new());
-        let roots: Vec<PathBuf> = working_directories_handle.update(&mut app, |model, ctx| {
-            model.refresh_working_directories_for_pane_group(
-                pane_group_id,
-                vec![
-                    (terminal_1, LocalOrRemotePath::Local(repo_a.clone())),
-                    (terminal_2, LocalOrRemotePath::Local(repo_b.clone())),
-                ],
-                vec![],
-                Some(terminal_1),
-                ctx,
-            );
+        let roots: Vec<LocalOrRemotePath> =
+            working_directories_handle.update(&mut app, |model, ctx| {
+                model.refresh_working_directories_for_pane_group(
+                    pane_group_id,
+                    vec![
+                        (terminal_1, LocalOrRemotePath::Local(repo_a.clone())),
+                        (terminal_2, LocalOrRemotePath::Local(repo_b.clone())),
+                    ],
+                    vec![],
+                    Some(terminal_1),
+                    ctx,
+                );
 
-            model
-                .most_recent_directories_for_pane_group(pane_group_id)
-                .expect("pane group exists")
-                .map(|dir| dir.path)
-                .collect()
-        });
+                model
+                    .most_recent_directories_for_pane_group(pane_group_id)
+                    .expect("pane group exists")
+                    .map(|dir| dir.path)
+                    .collect()
+            });
 
         assert_eq!(roots.len(), 1);
-        assert_eq!(roots[0], canonical_repo_root);
+        assert_eq!(roots[0], local(&canonical_repo_root));
     });
 }
 
@@ -91,30 +92,31 @@ fn refresh_working_directories_preserves_non_repo_paths_and_dedupes() {
         let terminal_3 = EntityId::new();
 
         let working_directories_handle = app.add_model(|_| WorkingDirectoriesModel::new());
-        let roots: HashSet<PathBuf> = working_directories_handle.update(&mut app, |model, ctx| {
-            model.refresh_working_directories_for_pane_group(
-                pane_group_id,
-                vec![
-                    (terminal_1, LocalOrRemotePath::Local(dir_1.clone())),
-                    (terminal_2, LocalOrRemotePath::Local(dir_2.clone())),
-                    // Duplicate root should be deduped.
-                    (terminal_3, LocalOrRemotePath::Local(dir_1.clone())),
-                ],
-                vec![],
-                Some(terminal_1),
-                ctx,
-            );
+        let roots: HashSet<LocalOrRemotePath> =
+            working_directories_handle.update(&mut app, |model, ctx| {
+                model.refresh_working_directories_for_pane_group(
+                    pane_group_id,
+                    vec![
+                        (terminal_1, LocalOrRemotePath::Local(dir_1.clone())),
+                        (terminal_2, LocalOrRemotePath::Local(dir_2.clone())),
+                        // Duplicate root should be deduped.
+                        (terminal_3, LocalOrRemotePath::Local(dir_1.clone())),
+                    ],
+                    vec![],
+                    Some(terminal_1),
+                    ctx,
+                );
 
-            model
-                .most_recent_directories_for_pane_group(pane_group_id)
-                .expect("pane group exists")
-                .map(|dir| dir.path)
-                .collect()
-        });
+                model
+                    .most_recent_directories_for_pane_group(pane_group_id)
+                    .expect("pane group exists")
+                    .map(|dir| dir.path)
+                    .collect()
+            });
 
         assert_eq!(
             roots,
-            HashSet::from_iter([canonical_1, canonical_2]),
+            HashSet::from_iter([local(&canonical_1), local(&canonical_2)]),
             "should preserve non-repo roots and dedupe exact paths"
         );
     });

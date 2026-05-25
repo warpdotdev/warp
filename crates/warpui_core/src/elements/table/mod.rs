@@ -8,7 +8,12 @@ use ordered_float::OrderedFloat;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
+use sum_tree::SumTree;
 
+use super::{
+    Point, ScrollData, ScrollableElement, SelectableElement, Selection, SelectionFragment,
+    SmartSelectFn,
+};
 use crate::event::DispatchedEvent;
 use crate::scene::ClipBounds;
 use crate::text::word_boundaries::WordBoundariesPolicy;
@@ -18,12 +23,6 @@ use crate::{
     AfterLayoutContext, AppContext, Element, EventContext, LayoutContext, PaintContext,
     SizeConstraint,
 };
-
-use super::{
-    Point, ScrollData, ScrollableElement, SelectableElement, Selection, SelectionFragment,
-    SmartSelectFn,
-};
-use sum_tree::SumTree;
 
 // ============================================================================
 // Constants

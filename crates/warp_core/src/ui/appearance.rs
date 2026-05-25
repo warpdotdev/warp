@@ -1,9 +1,8 @@
-use warpui::{
-    fonts::{FamilyId, Weight},
-    Entity, ModelContext, SingletonEntity,
-};
+use warpui::fonts::{FamilyId, Weight};
+use warpui::{Entity, ModelContext, SingletonEntity};
 
-use super::{builder::UiBuilder, theme::WarpTheme};
+use super::builder::UiBuilder;
+use super::theme::WarpTheme;
 
 /// The standard font size to use for headers (e.g.: in dialogs).
 const HEADER_FONT_SIZE: f32 = 18.;

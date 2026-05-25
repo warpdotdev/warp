@@ -8,16 +8,14 @@ use async_channel::{self, Receiver, Sender};
 use async_trait::async_trait;
 use chrono::DateTime;
 use parking_lot::Mutex;
+use warp_completer::completer::{CommandExitStatus, CommandOutput};
+use warp_core::command::ExitCode;
 
-use super::{ExecuteCommandOptions, ExecutorCommandEvent};
+use super::{CommandExecutor, ExecuteCommandOptions, ExecutorCommandEvent};
 use crate::server::datetime_ext::DateTimeExt;
 use crate::terminal::event::ExecutedExecutorCommandEvent;
 use crate::terminal::model::tmux::commands::TmuxCommand;
 use crate::terminal::shell::Shell;
-
-use super::CommandExecutor;
-use warp_completer::completer::{CommandExitStatus, CommandOutput};
-use warp_core::command::ExitCode;
 
 /// A `Session`-scoped executor for commands via tmux.
 pub struct TmuxCommandExecutor {

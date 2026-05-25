@@ -2,96 +2,81 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-use serde_json::Value;
-use session_sharing_protocol::common::ParticipantId;
-use session_sharing_protocol::common::Role;
-use session_sharing_protocol::common::SessionId as SharedSessionId;
-use session_sharing_protocol::sharer::SessionEndedReason;
-use strum_macros::EnumDiscriminants;
-use strum_macros::EnumIter;
+use serde_json::{json, Value};
+use session_sharing_protocol::common::{ParticipantId, Role, SessionId as SharedSessionId};
+use session_sharing_protocol::sharer::{SessionEndedReason, SessionSourceType};
+use strum_macros::{EnumDiscriminants, EnumIter};
 use warp_completer::completer::MatchType;
 use warp_core::command::ExitCode;
-use warp_core::telemetry::EnablementState;
-use warp_core::telemetry::TelemetryEvent as TelemetryEventTrait;
-use warp_core::telemetry::TelemetryEventDesc;
+use warp_core::interval_timer::TimingDataPoint;
+use warp_core::telemetry::{
+    EnablementState, TelemetryEvent as TelemetryEventTrait, TelemetryEventDesc,
+};
 use warpui::keymap::Keystroke;
 use warpui::notification::{NotificationSendError, RequestPermissionsOutcome};
 use warpui::rendering::ThinStrokes;
 
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::AIAgentActionId;
-use crate::ai::agent::AIAgentExchangeId;
-use crate::ai::agent::AIAgentInput as FullAIAgentInput;
-use crate::ai::agent::AIIdentifiers;
-use crate::ai::agent::EntrypointType;
-use crate::ai::agent::PassiveSuggestionTrigger;
-use crate::ai::agent::ServerOutputId;
-use crate::ai::agent::SuggestedLoggingId;
+use crate::ai::agent::{
+    AIAgentActionId, AIAgentExchangeId, AIAgentInput as FullAIAgentInput, AIIdentifiers,
+    EntrypointType, PassiveSuggestionTrigger, ServerOutputId, SuggestedLoggingId,
+};
 use crate::ai::agent_management::notifications::NotificationSourceAgent;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
-use crate::ai::blocklist::AIBlockResponseRating;
-use crate::ai::blocklist::CommandExecutionPermissionAllowedReason;
-use crate::ai::blocklist::InputType;
+use crate::ai::blocklist::{
+    AIBlockResponseRating, CommandExecutionPermissionAllowedReason, InputType,
+    InputTypeAutoDetectionSource,
+};
 use crate::ai::execution_profiles::AskUserQuestionPermission;
 use crate::ai::mcp::TemplateVariable;
-use crate::ai::predict::generate_ai_input_suggestions::GenerateAIInputSuggestionsRequest;
-use crate::ai::predict::generate_ai_input_suggestions::GenerateAIInputSuggestionsResponseV2;
+use crate::ai::predict::generate_ai_input_suggestions::{
+    GenerateAIInputSuggestionsRequest, GenerateAIInputSuggestionsResponseV2,
+};
 use crate::ai::predict::next_command_model::HistoryBasedAutosuggestionState;
 use crate::auth::auth_manager::LoginGatedFeature;
 use crate::channel::Channel;
-use crate::cloud_object::{
-    model::generic_string_model::GenericStringObjectId, GenericStringObjectFormat, ObjectType,
-    Space,
-};
+use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
+use crate::cloud_object::{GenericStringObjectFormat, ObjectType, Space};
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
-use crate::drive::CloudObjectTypeAndId;
-use crate::drive::DriveSortOrder;
+use crate::drive::{CloudObjectTypeAndId, DriveSortOrder};
 use crate::features::FeatureFlag;
 use crate::launch_configs::save_modal::SaveState;
 use crate::notebooks::telemetry::NotebookTelemetryAction;
-use crate::notebooks::NotebookId;
-use crate::notebooks::NotebookLocation;
+use crate::notebooks::{NotebookId, NotebookLocation};
 use crate::palette::PaletteMode;
 use crate::pane_group::PaneDragDropLocation;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::search::command_search::searcher::CommandSearchItemAction;
 use crate::search::QueryFilter;
 use crate::server::block::DisplaySetting;
-use crate::server::ids::ObjectUid;
-use crate::server::ids::ServerId;
-use crate::settings::import::config::ParsedTerminalSetting;
-use crate::settings::import::config::SettingType;
+use crate::server::ids::{ObjectUid, ServerId};
+use crate::settings::import::config::{ParsedTerminalSetting, SettingType};
 use crate::settings::import::model::TerminalType;
 use crate::settings::AgentModeCodingPermissionsType;
 use crate::settings_view::TeamsInviteOption;
 use crate::tab::TabTelemetryAction;
 use crate::terminal::block_list_viewport::InputMode;
-use crate::terminal::cli_agent_sessions::CLIAgentInputEntrypoint;
-use crate::terminal::cli_agent_sessions::CLIAgentRichInputCloseReason;
+use crate::terminal::cli_agent_sessions::{CLIAgentInputEntrypoint, CLIAgentRichInputCloseReason};
 use crate::terminal::input::TelemetryInputSuggestionsMode;
 use crate::terminal::model::ansi::WarpificationUnavailableReason;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::SessionId;
-use crate::terminal::model::terminal_model::BlockSelectionCardinality;
-use crate::terminal::model::terminal_model::TmuxInstallationState;
+use crate::terminal::model::terminal_model::{BlockSelectionCardinality, TmuxInstallationState};
 use crate::terminal::settings::AltScreenPaddingMode;
 use crate::terminal::shared_session::SharedSessionActionSource;
 use crate::terminal::shell::ShellType;
 use crate::terminal::ssh::ssh_detection::SshInteractiveSessionDetected;
 use crate::terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingChipType;
-use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionTriggeredFrom;
-use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
-use crate::terminal::view::BlockEntity;
-use crate::terminal::view::BlockSelectionDetails;
-use crate::terminal::view::ContextMenuInfo;
-use crate::terminal::view::GridHighlightedLink;
-use crate::terminal::view::PromptPart;
+use crate::terminal::view::inline_banner::{
+    ZeroStatePromptSuggestionTriggeredFrom, ZeroStatePromptSuggestionType,
+};
 use crate::terminal::view::{
+    BlockEntity, BlockSelectionDetails, ContextMenuInfo, GridHighlightedLink,
     NotificationsDiscoveryBannerAction, NotificationsErrorBannerAction, NotificationsTrigger,
+    PromptPart,
 };
 use crate::terminal::ShareBlockType;
 use crate::tips::WelcomeTipFeature;
@@ -99,14 +84,9 @@ use crate::tips::WelcomeTipFeature;
 use crate::util::file::external_editor::settings::EditorLayout;
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
-use crate::workflows::WorkflowId;
-use crate::workflows::WorkflowSelectionSource;
-use crate::workflows::WorkflowSource;
-use crate::workspace::tab_settings::TabCloseButtonPosition;
-use crate::workspace::tab_settings::WorkspaceDecorationVisibility;
+use crate::workflows::{WorkflowId, WorkflowSelectionSource, WorkflowSource};
+use crate::workspace::tab_settings::{TabCloseButtonPosition, WorkspaceDecorationVisibility};
 use crate::workspace::TabMovement;
-use session_sharing_protocol::sharer::SessionSourceType;
-use warp_core::interval_timer::TimingDataPoint;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct BootstrappingInfo {
@@ -2529,6 +2509,7 @@ pub enum TelemetryEvent {
     },
     AIExecutionProfileContextWindowSelected {
         tokens: Option<u32>,
+        model_id: String,
     },
     /// The AI input was not sent because there was already an in-flight request.
     AIInputNotSent {
@@ -2564,7 +2545,9 @@ pub enum TelemetryEvent {
     InputBufferSubmitted {
         input_type: input_classifier::InputType,
         is_locked: bool,
+        input_type_decision_source: Option<InputTypeAutoDetectionSource>,
         was_lock_set_with_empty_buffer: bool,
+        block_id: BlockId,
     },
     /// User submitted a prompt from the create project view - metadata (non-UGC)
     CreateProjectPromptSubmitted {
@@ -2899,6 +2882,14 @@ pub enum TelemetryEvent {
         attempt: u32,
         remote_os: Option<String>,
         remote_arch: Option<String>,
+    },
+    /// Emitted when the remote server daemon process finishes startup and
+    /// binds its Unix domain socket.  Reports the same `IntervalTimer`
+    /// data that `AppStartup` reports for the GUI, but from the headless
+    /// daemon process on the remote host.  Only emitted on success — if
+    /// the daemon crashes before binding, no event is sent.
+    RemoteServerDaemonStartup {
+        timing_data: Vec<warp_core::interval_timer::TimingDataPoint>,
     },
     /// Emitted when all reconnection attempts are exhausted.
     RemoteServerReconnectExhausted {
@@ -4341,6 +4332,9 @@ impl TelemetryEvent {
                 "remote_os": remote_os,
                 "remote_arch": remote_arch,
             })),
+            TelemetryEvent::RemoteServerDaemonStartup { timing_data } => {
+                Some(json!({ "timing_data": timing_data }))
+            }
             TelemetryEvent::RemoteServerSetupDuration {
                 duration_ms,
                 installed_binary,
@@ -4427,9 +4421,12 @@ impl TelemetryEvent {
                 "model_type": model_type,
                 "model_value": model_value,
             })),
-            TelemetryEvent::AIExecutionProfileContextWindowSelected { tokens } => Some(json!({
-                "tokens": tokens,
-            })),
+            TelemetryEvent::AIExecutionProfileContextWindowSelected { tokens, model_id } => {
+                Some(json!({
+                    "tokens": tokens,
+                    "model_id": model_id,
+                }))
+            }
             TelemetryEvent::AIInputNotSent {
                 entrypoint,
                 inputs,
@@ -4484,11 +4481,15 @@ impl TelemetryEvent {
             TelemetryEvent::InputBufferSubmitted {
                 input_type,
                 is_locked,
+                input_type_decision_source,
                 was_lock_set_with_empty_buffer,
+                block_id,
             } => Some(json!({
                 "input_type": input_type,
                 "is_locked": is_locked,
+                "input_type_decision_source": input_type_decision_source,
                 "was_lock_set_with_empty_buffer": was_lock_set_with_empty_buffer,
+                "block_id": block_id,
             })),
             TelemetryEvent::CreateProjectPromptSubmitted {
                 is_custom_prompt,
@@ -4753,6 +4754,7 @@ impl TelemetryEvent {
             TelemetryEvent::AgentExitedShellProcess { .. } => true,
             TelemetryEvent::CreateProjectPromptSubmitted { .. } => false,
             TelemetryEvent::CreateProjectPromptSubmittedContent { .. } => true,
+            TelemetryEvent::InputBufferSubmitted { .. } => false,
             TelemetryEvent::AgentModePrediction {
                 actual_next_command_run,
                 history_based_autosuggestion_state,
@@ -5158,7 +5160,6 @@ impl TelemetryEvent {
             | TelemetryEvent::InlineConversationMenuOpened { .. }
             | TelemetryEvent::InlineConversationMenuItemSelected { .. }
             | TelemetryEvent::AgentShortcutsViewToggled { .. }
-            | TelemetryEvent::InputBufferSubmitted { .. }
             | TelemetryEvent::RecentMenuItemSelected { .. }
             | TelemetryEvent::OpenRepoFolderSubmitted { .. }
             | TelemetryEvent::OutOfCreditsBannerClosed { .. }
@@ -5204,6 +5205,7 @@ impl TelemetryEvent {
             | TelemetryEvent::RemoteServerBinaryCheck { .. }
             | TelemetryEvent::RemoteServerInstallation { .. }
             | TelemetryEvent::RemoteServerInitialization { .. }
+            | TelemetryEvent::RemoteServerDaemonStartup { .. }
             | TelemetryEvent::RemoteServerDisconnection { .. }
             | TelemetryEvent::RemoteServerClientRequestError { .. }
             | TelemetryEvent::RemoteServerMessageDecodingError { .. }
@@ -5777,6 +5779,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::RemoteServerBinaryCheck
             | Self::RemoteServerInstallation
             | Self::RemoteServerInitialization
+            | Self::RemoteServerDaemonStartup
             | Self::RemoteServerDisconnection
             | Self::RemoteServerClientRequestError
             | Self::RemoteServerMessageDecodingError
@@ -6190,6 +6193,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::RemoteServerBinaryCheck => "RemoteServer.BinaryCheck",
             Self::RemoteServerInstallation => "RemoteServer.Installation",
             Self::RemoteServerInitialization => "RemoteServer.Initialization",
+            Self::RemoteServerDaemonStartup => "RemoteServer.DaemonStartup",
             Self::RemoteServerDisconnection => "RemoteServer.Disconnection",
             Self::RemoteServerClientRequestError => "RemoteServer.ClientRequestError",
             Self::RemoteServerMessageDecodingError => "RemoteServer.MessageDecodingError",
@@ -6350,7 +6354,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
 
     fn description(&self) -> &'static str {
         match self {
-            Self::AIExecutionProfileContextWindowSelected => {
+            Self::AIExecutionProfileContextWindowSelected { .. } => {
                 "Selected a context window limit for an execution profile's base model"
             }
             Self::AISuggestedAgentModeWorkflowAdded => {
@@ -7234,6 +7238,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::RemoteServerInitialization => {
                 "Remote server connection and initialization completed (success or failure)"
+            }
+            Self::RemoteServerDaemonStartup => {
+                "Remote server daemon startup completed and socket bound"
             }
             Self::RemoteServerDisconnection => {
                 "An established remote server connection was dropped"

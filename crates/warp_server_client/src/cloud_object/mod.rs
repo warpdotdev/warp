@@ -1,34 +1,37 @@
-use std::{borrow::Cow, fmt, str::FromStr};
+use std::borrow::Cow;
+use std::fmt;
+use std::str::FromStr;
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use pathfinder_geometry::vector::vec2f;
 use serde::{Deserialize, Serialize};
-use warp_core::{
-    features::FeatureFlag,
-    ui::{Icon, appearance::Appearance, theme::Fill},
+use warp_core::features::FeatureFlag;
+use warp_core::ui::Icon;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::Fill;
+use warp_graphql::object_permissions::AccessLevel;
+use warp_graphql::scalars::time::ServerTimestamp;
+use warpui_core::Element;
+use warpui_core::elements::{
+    Align, ChildAnchor, ConstrainedBox, Hoverable, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, Stack,
 };
-use warp_graphql::{object_permissions::AccessLevel, scalars::time::ServerTimestamp};
-use warpui_core::{
-    Element,
-    elements::{
-        Align, ChildAnchor, ConstrainedBox, Hoverable, MouseStateHandle, OffsetPositioning,
-        ParentAnchor, ParentElement, ParentOffsetBounds, Stack,
-    },
-    ui_components::components::UiComponent,
-};
+use warpui_core::ui_components::components::UiComponent;
 
-use crate::{
-    auth::UserUid,
-    drive::sharing::{SharingAccessLevel, Subject, TeamKind, UserKind},
-    ids::{FolderId, ServerId, SyncId},
-};
+use crate::auth::UserUid;
+use crate::drive::sharing::{SharingAccessLevel, Subject, TeamKind, UserKind};
+use crate::ids::{FolderId, ServerId, SyncId};
 
 mod creation;
+mod generic_cloud_object;
+mod server_object;
 mod update;
 
 pub use creation::*;
+pub use generic_cloud_object::*;
+pub use server_object::*;
 pub use update::*;
 /// The type of object id each ObjectType corresponds to.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1054,8 +1057,7 @@ impl TryFrom<warp_graphql::object::Space> for Owner {
 
 impl From<Owner> for warp_graphql::object_permissions::Owner {
     fn from(owner: Owner) -> Self {
-        use warp_graphql::object_permissions::Owner as GraphQLOwner;
-        use warp_graphql::object_permissions::OwnerType;
+        use warp_graphql::object_permissions::{Owner as GraphQLOwner, OwnerType};
         match owner {
             Owner::User { user_uid } => GraphQLOwner {
                 type_: OwnerType::User,

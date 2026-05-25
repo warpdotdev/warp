@@ -1,4 +1,6 @@
-use std::{borrow::Cow, collections::VecDeque, sync::Arc};
+use std::borrow::Cow;
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 use async_channel::{Receiver, Sender};
 use parking_lot::FairMutex;
@@ -6,28 +8,24 @@ use thiserror::Error;
 use warpui::r#async::block_on;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
+use super::Message;
 use crate::ai::agent::AIAgentPtyWriteMode;
 use crate::terminal::input::CommandExecutionSource;
+use crate::terminal::line_editor_status::{LineEditorStatus, LineEditorStatusEvent};
+use crate::terminal::model::ansi::Handler;
 use crate::terminal::model::completions::ShellCompletion;
+use crate::terminal::model::escape_sequences;
 use crate::terminal::model::session::{
-    ExecutorCommandEvent, InBandCommandCancelledEvent, Sessions,
+    ExecutorCommandEvent, InBandCommandCancelledEvent, SessionInfo, Sessions,
 };
 use crate::terminal::model::tmux::commands::TmuxCommand;
-use crate::terminal::model_events::AnsiHandlerEvent;
+use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher};
+use crate::terminal::shell::ShellType;
 use crate::terminal::view::LINEFEED_REGEX;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::writeable_pty::bootstrap_file::{permanent_bootstrap_file, TempBootstrapFile};
-use crate::terminal::{
-    bootstrap,
-    line_editor_status::{LineEditorStatus, LineEditorStatusEvent},
-    model::{ansi::Handler, escape_sequences, session::SessionInfo},
-    model_events::{ModelEvent, ModelEventDispatcher},
-    shell::ShellType,
-    SizeUpdate, TerminalModel,
-};
+use crate::terminal::{bootstrap, SizeUpdate, TerminalModel};
 use crate::SessionSettings;
-
-use super::Message;
 
 /// Byte sequence to emulate the user pressing ENTER, used to execute a command in the shell.
 const COMMAND_ENTER: &[u8] = &[escape_sequences::C0::CR, escape_sequences::C0::LF];

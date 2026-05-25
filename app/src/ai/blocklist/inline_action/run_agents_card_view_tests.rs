@@ -1,10 +1,11 @@
+use std::path::PathBuf;
+
 use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
 use ai::agent::action_result::{
     RunAgentsAgentOutcome, RunAgentsAgentOutcomeKind, RunAgentsLaunchedExecutionMode,
     RunAgentsResult,
 };
 use ai::skills::SkillReference;
-use std::path::PathBuf;
 
 use super::RunAgentsEditState;
 use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationEditState;
@@ -357,9 +358,10 @@ mod format_terminal_state_tests {
 }
 
 mod override_from_approved_config_tests {
+    use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationExecutionMode};
+
     use super::super::RunAgentsEditState;
     use super::*;
-    use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationExecutionMode};
 
     fn local_config(model: &str, harness: &str) -> OrchestrationConfig {
         OrchestrationConfig {

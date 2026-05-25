@@ -1,3 +1,8 @@
+use std::collections::HashMap;
+
+use itertools::Itertools;
+use warpui::{AppContext, Entity};
+
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::conversation_navigation::ConversationNavigationData;
 use crate::search::command_palette::conversations::search::{
@@ -12,9 +17,6 @@ use crate::search::data_source::{DataSourceSearchError, Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::SyncDataSource;
 use crate::workspace::Workspace;
-use itertools::Itertools;
-use std::collections::HashMap;
-use warpui::{AppContext, Entity};
 
 /// Sections for grouping conversations in the command palette.
 #[derive(Debug, PartialEq, Eq, Hash)]

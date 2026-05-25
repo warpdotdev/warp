@@ -1,29 +1,20 @@
-use itertools::Itertools as _;
-use std::fs::OpenOptions;
+use std::fs::{create_dir_all, write, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
-use std::{
-    fs::{create_dir_all, write},
-    path::Path,
-};
+use std::path::{Path, PathBuf};
+
+use itertools::Itertools as _;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
-
 use version_compare::Version;
-
-use crate::builder::cargo_target_tmpdir;
-use warp::{
-    integration_testing::{
-        terminal::util::{
-            current_shell_starter_and_version, default_histfile_directory, ExpectedOutput,
-        },
-        view_getters,
-    },
-    terminal::shell::ShellType,
+use warp::integration_testing::terminal::util::{
+    current_shell_starter_and_version, default_histfile_directory, ExpectedOutput,
 };
+use warp::integration_testing::view_getters;
+use warp::terminal::shell;
+use warp::terminal::shell::ShellType;
 use warpui::{App, WindowId};
 
-use warp::terminal::shell;
+use crate::builder::cargo_target_tmpdir;
 
 pub fn get_input_buffer(
     app: &App,

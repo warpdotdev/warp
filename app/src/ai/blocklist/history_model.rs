@@ -1,58 +1,50 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "local_fs")]
+use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use chrono::{DateTime, Local, NaiveDateTime};
+#[cfg(feature = "local_fs")]
+use diesel::SqliteConnection;
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
-use warp_multi_agent_api::response_event::stream_finished::ConversationUsageMetadata;
-use warp_multi_agent_api::{
-    client_action::{Action, StartNewConversation},
-    response_event::stream_finished::TokenUsage,
+use warp_multi_agent_api::client_action::{Action, StartNewConversation};
+use warp_multi_agent_api::response_event::stream_finished::{
+    ConversationUsageMetadata, TokenUsage,
 };
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
-
-#[cfg(feature = "local_fs")]
-use std::sync::{Arc, Mutex};
-
-#[cfg(feature = "local_fs")]
-use diesel::SqliteConnection;
-
-use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent::conversation::ConversationStatus;
-use crate::ai::agent::conversation::{ServerAIConversationMetadata, UpdateConversationError};
-use crate::ai::agent::task::helper::{MessageExt, ToolCallExt};
-use crate::ai::agent::task::TaskId;
-use crate::ai::agent::AIAgentExchangeId;
-use crate::ai::agent::CancellationReason;
-use crate::ai::artifacts::Artifact;
-use crate::ai::document::ai_document_model::AIDocumentModel;
-use crate::input_suggestions::HistoryOrder;
-use crate::persistence::model::AgentConversationData;
-use crate::persistence::ModelEvent;
-use crate::server::server_api::ServerApiProvider;
-use crate::terminal::model::block::BlockId;
-use crate::terminal::view::blocklist_filter;
-use crate::GlobalResourceHandlesProvider;
-use crate::{
-    ai::agent::{
-        conversation::{AIConversation, AIConversationId},
-        AIAgentActionId, AIAgentExchange, AIAgentInput, AIAgentOutputStatus, FinishedAIAgentOutput,
-        MessageId, RenderableAIError, RequestCost, Suggestions,
-    },
-    persistence::model::AgentConversation,
-    ui_components::icons::Icon,
-};
-
-#[cfg(feature = "local_fs")]
-use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
 
 use super::controller::response_stream::ResponseStreamId;
 use super::persistence::{PersistedAIInput, PersistedAIInputType};
 use super::RequestInput;
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::{
+    AIConversation, AIConversationId, ConversationStatus, ServerAIConversationMetadata,
+    UpdateConversationError,
+};
+use crate::ai::agent::task::helper::{MessageExt, ToolCallExt};
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{
+    AIAgentActionId, AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus,
+    CancellationReason, FinishedAIAgentOutput, MessageId, RenderableAIError, RequestCost,
+    Suggestions,
+};
+use crate::ai::artifacts::Artifact;
+use crate::ai::document::ai_document_model::AIDocumentModel;
+use crate::input_suggestions::HistoryOrder;
+use crate::persistence::model::{AgentConversation, AgentConversationData};
+use crate::persistence::ModelEvent;
+#[cfg(feature = "local_fs")]
+use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
+use crate::server::server_api::ServerApiProvider;
+use crate::terminal::model::block::BlockId;
+use crate::terminal::view::blocklist_filter;
+use crate::ui_components::icons::Icon;
+use crate::GlobalResourceHandlesProvider;
 
 mod conversation_loader;
 pub use conversation_loader::{
@@ -821,10 +813,13 @@ impl BlocklistAIHistoryModel {
         for conversation in conversations.into_iter() {
             let conversation_id = conversation.id();
             conversation_ids.push(conversation_id);
-            self.live_conversation_ids_for_terminal_view
+            let live_conversation_ids = self
+                .live_conversation_ids_for_terminal_view
                 .entry(terminal_view_id)
-                .or_default()
-                .push(conversation_id);
+                .or_default();
+            if !live_conversation_ids.contains(&conversation_id) {
+                live_conversation_ids.push(conversation_id);
+            }
 
             if let Some(key) = agent_id_key(&conversation) {
                 self.agent_id_to_conversation_id
@@ -864,13 +859,8 @@ impl BlocklistAIHistoryModel {
         });
     }
 
-    /// Sets the active conversation ID, transferring ownership from any other
-    /// terminal view that currently holds it.
-    ///
-    /// Use this when the user **explicitly navigates** to a conversation in a
-    /// different view (e.g. from the conversation history or command palette).
-    /// For automatic follow-ups during tool-call cycles, use [`Self::mark_active_conversation_id`]
-    /// instead — it updates the active pointer without touching other views.
+    /// Sets the active conversation ID for a terminal view and transfers ownership
+    /// from any other terminal view that currently holds it.
     pub fn set_active_conversation_id(
         &mut self,
         conversation_id: AIConversationId,
@@ -900,11 +890,9 @@ impl BlocklistAIHistoryModel {
             .iter_mut()
             .filter(|(other_terminal_view_id, _)| **other_terminal_view_id != terminal_view_id)
         {
-            if let Some(pos) = other_terminal_view_live_conversation_ids
-                .iter()
-                .position(|id| *id == conversation_id)
-            {
-                other_terminal_view_live_conversation_ids.remove(pos);
+            let previous_len = other_terminal_view_live_conversation_ids.len();
+            other_terminal_view_live_conversation_ids.retain(|id| *id != conversation_id);
+            if other_terminal_view_live_conversation_ids.len() != previous_len {
                 previous_owners.push(*other_terminal_view);
             }
 
@@ -927,40 +915,6 @@ impl BlocklistAIHistoryModel {
                 previous_terminal_view_id,
                 new_terminal_view_id: terminal_view_id,
             });
-        }
-
-        self.active_conversation_for_terminal_view
-            .insert(terminal_view_id, conversation_id);
-
-        ctx.emit(BlocklistAIHistoryEvent::SetActiveConversation {
-            conversation_id,
-            terminal_view_id,
-        });
-    }
-
-    /// Marks a conversation as the active conversation for a terminal view
-    /// **without** removing it from other views.
-    ///
-    /// This is the non-transferring counterpart to [`Self::set_active_conversation_id`].
-    /// Use this during automatic follow-ups and request sending where the
-    /// conversation already belongs to this view and we only need to update
-    /// the "most recently streamed" pointer.
-    pub fn mark_active_conversation_id(
-        &mut self,
-        conversation_id: AIConversationId,
-        terminal_view_id: EntityId,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if !self
-            .live_conversation_ids_for_terminal_view
-            .get(&terminal_view_id)
-            .is_some_and(|conversation_ids| conversation_ids.contains(&conversation_id))
-        {
-            log::warn!(
-                "mark_active_conversation_id: conversation {conversation_id:?} is not in \
-                 terminal view {terminal_view_id:?} live list, skipping"
-            );
-            return;
         }
 
         self.active_conversation_for_terminal_view
@@ -2580,6 +2534,13 @@ pub enum BlocklistAIHistoryEvent {
     ConversationUsageMetadataUpdated {
         conversation_id: AIConversationId,
     },
+
+    /// Emitted when a sharer-owned conversation establishes a local
+    /// shared session.
+    LocalSharedSessionEstablished {
+        conversation_id: AIConversationId,
+        session_id: session_sharing_protocol::common::SessionId,
+    },
 }
 
 impl BlocklistAIHistoryEvent {
@@ -2661,6 +2622,8 @@ impl BlocklistAIHistoryEvent {
             // orchestrator footer reading descendant credits) can't be
             // disambiguated by a single owner pane.
             BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. } => None,
+            // Conversation-scoped; subscribers resolve the owning view via conversation_id.
+            BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => None,
         }
     }
 }

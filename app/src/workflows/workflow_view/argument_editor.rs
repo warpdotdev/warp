@@ -2,43 +2,37 @@ use std::cmp::Ordering;
 
 use itertools::Itertools;
 use pathfinder_color::ColorU;
-use warp_core::{features::FeatureFlag, ui::appearance::Appearance};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
 use warp_editor::editor::NavigationKey;
-use warpui::{
-    elements::{
-        ChildView, ConstrainedBox, Container, CrossAxisAlignment, Fill, Flex, MainAxisAlignment,
-        MainAxisSize, ParentElement, Shrinkable,
-    },
-    text_layout::TextStyle,
-    ui_components::{
-        button::ButtonVariant,
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    AppContext, Element, SingletonEntity as _, ViewContext, ViewHandle,
+use warpui::elements::{
+    ChildView, ConstrainedBox, Container, CrossAxisAlignment, Fill, Flex, MainAxisAlignment,
+    MainAxisSize, ParentElement, Shrinkable,
 };
-
-use crate::{
-    drive::workflows::{
-        workflow_arg_selector::{WorkflowArgSelector, WorkflowArgSelectorStyles},
-        workflow_arg_type_helpers::{self, ArgumentTypeEditor},
-    },
-    editor::{
-        EditOrigin, EditorView, Event as EditorEvent, InteractionState,
-        PlainTextEditorViewAction as EditorAction,
-    },
-    pane_group::PaneEvent,
-    ui_components::{buttons::icon_button, icons::Icon},
-    workflows::workflow::Workflow,
-    workspace::WorkspaceAction,
-};
+use warpui::text_layout::TextStyle;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, SingletonEntity as _, ViewContext, ViewHandle};
 
 use super::alias_argument_selector::{AliasArgumentSelector, AliasArgumentSelectorEvent};
-
 use super::{
     WorkflowAction, WorkflowView, WorkflowViewEvent, BUTTON_BORDER_RADIUS, EDITOR_FONT_SIZE,
     HORIZONTAL_TEXT_INPUT_PADDING, SECTION_SPACING, VERTICAL_TEXT_INPUT_PADDING,
     WORKFLOW_PARAMETER_HIGHLIGHT_COLOR,
 };
+use crate::drive::workflows::workflow_arg_selector::{
+    WorkflowArgSelector, WorkflowArgSelectorStyles,
+};
+use crate::drive::workflows::workflow_arg_type_helpers::{self, ArgumentTypeEditor};
+use crate::editor::{
+    EditOrigin, EditorView, Event as EditorEvent, InteractionState,
+    PlainTextEditorViewAction as EditorAction,
+};
+use crate::pane_group::PaneEvent;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::workflows::workflow::Workflow;
+use crate::workspace::WorkspaceAction;
 
 const ARGUMENT_INPUT_HEIGHT: f32 = 30.;
 const ARGUMENT_LABEL_TEXT: &str = "Arguments";

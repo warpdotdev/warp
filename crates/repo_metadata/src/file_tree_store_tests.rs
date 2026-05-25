@@ -1,7 +1,9 @@
+use std::sync::Arc;
+
+use warp_util::standardized_path::StandardizedPath;
+
 use crate::entry::{DirectoryEntry, Entry, FileId, FileMetadata};
 use crate::file_tree_store::{FileTreeEntry, FileTreeEntryState};
-use std::sync::Arc;
-use warp_util::standardized_path::StandardizedPath;
 
 fn std_path(s: &str) -> StandardizedPath {
     StandardizedPath::try_new(s).expect("test path should be valid")

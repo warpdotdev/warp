@@ -1,8 +1,8 @@
-use dirs::home_dir;
 use std::path::{Path, PathBuf};
 #[cfg(not(target_family = "wasm"))]
 use std::{fs, sync::Arc, time::Duration};
 
+use dirs::home_dir;
 #[cfg(not(target_family = "wasm"))]
 use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
 use repo_metadata::RepositoryUpdate;
@@ -365,10 +365,10 @@ impl SingletonEntity for WarpManagedPathsWatcher {}
 
 #[cfg(test)]
 mod tests {
-    use dirs::home_dir;
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
 
+    use dirs::home_dir;
     use repo_metadata::{RepositoryUpdate, TargetFile};
 
     use super::{

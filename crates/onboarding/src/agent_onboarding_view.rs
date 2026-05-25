@@ -1,3 +1,14 @@
+use std::time::Duration;
+
+use ai::LLMId;
+use instant::Instant;
+use warp_core::features::FeatureFlag;
+use warp_core::send_telemetry_from_ctx;
+use warpui::assets::asset_cache::AssetSource;
+use warpui::image_cache::ImageType;
+use warpui::windowing::state::{ApplicationStage, StateEvent};
+use warpui::windowing::WindowManager;
+
 use crate::model::{
     OnboardingAuthState, OnboardingStateEvent, OnboardingStateModel, OnboardingStep,
     SelectedSettings,
@@ -8,32 +19,21 @@ use crate::slides::{
     ThemePickerSlideEvent, ThirdPartySlide,
 };
 use crate::telemetry::OnboardingEvent;
-use ai::LLMId;
-use instant::Instant;
-use std::time::Duration;
-use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
-use warpui::assets::asset_cache::AssetSource;
-use warpui::image_cache::ImageType;
-use warpui::windowing::{
-    state::{ApplicationStage, StateEvent},
-    WindowManager,
-};
 
 const APP_BECAME_ACTIVE_DEBOUNCE: Duration = Duration::from_secs(15);
 
 use pathfinder_geometry::vector::vec2f;
 use ui_components::{button, Component as _, Options as _};
-use warp_core::ui::{appearance::Appearance, theme::WarpTheme};
-use warpui::elements::Rect;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::WarpTheme;
+use warpui::elements::{
+    CacheOption, ChildAnchor, Container, Empty, Image, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Rect, Shrinkable, Stack,
+};
+use warpui::keymap::macros::*;
+use warpui::keymap::{FixedBinding, Keystroke};
+use warpui::presenter::ChildView;
 use warpui::{
-    elements::{
-        CacheOption, ChildAnchor, Container, Empty, Image, OffsetPositioning, ParentAnchor,
-        ParentElement, ParentOffsetBounds, Shrinkable, Stack,
-    },
-    keymap::Keystroke,
-    keymap::{macros::*, FixedBinding},
-    presenter::ChildView,
     AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
     ViewContext, ViewHandle,
 };

@@ -1,7 +1,7 @@
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
+
 use crate::terminal::block_list_viewport::InputMode;
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
-};
 
 define_settings_group!(InputModeSettings, settings: [
     input_mode: InputModeState {

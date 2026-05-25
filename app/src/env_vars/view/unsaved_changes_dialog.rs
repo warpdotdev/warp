@@ -1,18 +1,13 @@
 use warp_core::ui::appearance::Appearance;
-use warpui::{
-    elements::{Container, MouseStateHandle},
-    fonts::Weight,
-    platform::Cursor,
-    ui_components::{
-        button::ButtonVariant,
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    Element,
-};
-
-use crate::ui_components::dialog::{dialog_styles, Dialog};
+use warpui::elements::{Container, MouseStateHandle};
+use warpui::fonts::Weight;
+use warpui::platform::Cursor;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::Element;
 
 use super::env_var_collection::{EnvVarCollectionAction, EnvVarCollectionView};
+use crate::ui_components::dialog::{dialog_styles, Dialog};
 
 const UNSAVED_CHANGES_TEXT: &str = "You have unsaved changes.";
 const KEEP_EDITING_TEXT: &str = "Keep editing";

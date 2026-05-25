@@ -1,5 +1,6 @@
-use lazy_static::lazy_static;
 use std::collections::HashSet;
+
+use lazy_static::lazy_static;
 
 lazy_static! {
     /// The set of command corrections that are NOT preferred over Next Command, in the case that both

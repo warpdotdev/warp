@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 
+use chrono::DateTime;
+use uuid::Uuid;
+use warpui::{Entity, ModelContext, SingletonEntity};
+
 use crate::ai::mcp::templatable::{
     GalleryData, JsonTemplate, TemplatableMCPServer, TemplateVariable,
 };
 use crate::server::cloud_objects::update_manager::{UpdateManager, UpdateManagerEvent};
 use crate::server::datetime_ext::DateTimeExt;
-use chrono::DateTime;
-use uuid::Uuid;
-use warpui::{Entity, ModelContext, SingletonEntity};
 
 #[derive(Clone, Debug)]
 pub struct GalleryMCPServer {

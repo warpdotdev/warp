@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+
 use warp::settings::INPUT_MODE;
 use warp::terminal::block_list_viewport::InputMode;
 

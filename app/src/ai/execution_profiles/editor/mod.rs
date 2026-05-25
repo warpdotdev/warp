@@ -1,50 +1,51 @@
+use std::path::{Path, PathBuf};
+
+use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
+use itertools::Itertools;
+use regex::Regex;
+use thousands::Separable;
+use warp_core::ui::theme::color::internal_colors;
+use warpui::elements::{
+    Align, Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
+    Container, CrossAxisAlignment, Expanded, Flex, Highlight, MouseStateHandle, ParentElement,
+    PartialClickableElement, ScrollbarWidth, Text,
+};
+use warpui::fonts::Properties;
+use warpui::platform::Cursor;
+use warpui::ui_components::slider::SliderStateHandle;
+use warpui::ui_components::switch::SwitchStateHandle;
+use warpui::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
+
 use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
+use crate::ai::execution_profiles::profiles::{
+    AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId,
+};
 use crate::ai::execution_profiles::{
-    profiles::{AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId},
     AIExecutionProfile, ActionPermission, RunAgentsPermission, WriteToPtyPermission,
 };
 use crate::ai::llms::{
     DisableReason, LLMContextWindow, LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent,
 };
 use crate::ai::paths::host_native_absolute_path;
-use crate::editor::InteractionState;
-use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions};
+use crate::editor::{
+    EditorView, Event as EditorEvent, InteractionState, SingleLineEditorOptions, TextOptions,
+};
 use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::pane::view;
+use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 use crate::settings::{AISettings, AISettingsChangedEvent, AgentModeCommandExecutionPredicate};
 use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{ActionButton, DangerSecondaryTheme};
 use crate::view_components::{
-    action_button::{ActionButton, DangerSecondaryTheme},
     Dropdown, DropdownItem, FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
 };
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspacesEvent;
-use crate::TemplatableMCPServerManager;
-use crate::UserWorkspaces;
-use crate::{
-    pane_group::{pane::view, BackingView, PaneConfiguration, PaneEvent},
-    Appearance,
-};
-use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
-use itertools::Itertools;
-use regex::Regex;
-use thousands::Separable;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::fonts::Properties;
-use warpui::platform::Cursor;
-use warpui::ui_components::slider::SliderStateHandle;
-use warpui::ui_components::switch::SwitchStateHandle;
-
-use std::path::{Path, PathBuf};
-use warpui::{
-    elements::{
-        Align, Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
-        Container, CrossAxisAlignment, Expanded, Flex, Highlight, MouseStateHandle, ParentElement,
-        PartialClickableElement, ScrollbarWidth, Text,
-    },
-    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
-};
+use crate::{Appearance, TemplatableMCPServerManager, UserWorkspaces};
 
 const MODEL_MENU_WIDTH: f32 = 250.;
 

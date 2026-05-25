@@ -1,10 +1,10 @@
 //! Module containing operating system information such as the name, category, and version.
 
-use serde::Serialize;
-use serde_with::SerializeDisplay;
 use std::fmt::{Display, Formatter};
 use std::sync::OnceLock;
 
+use serde::Serialize;
+use serde_with::SerializeDisplay;
 #[cfg(target_family = "wasm")]
 use warpui::platform::wasm;
 #[cfg(target_family = "wasm")]

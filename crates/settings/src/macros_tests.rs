@@ -2,9 +2,7 @@ use anyhow::Result;
 use warpui::{AppContext, SingletonEntity};
 
 use crate::manager::SettingsManager;
-use crate::{Setting, SupportedPlatforms, SyncToCloud};
-
-use crate::*;
+use crate::{Setting, SupportedPlatforms, SyncToCloud, *};
 
 define_settings_group!(TestSettings, settings: [
     simple_setting: SimpleSetting {

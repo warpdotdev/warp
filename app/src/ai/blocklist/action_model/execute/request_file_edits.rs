@@ -2,22 +2,17 @@ mod apply_diff_model;
 mod diff_application;
 mod telemetry;
 
-use warp_util::file::FileSaveError;
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use ai::diff_validation::AIRequestedCodeDiff;
-use futures::{channel::oneshot, future::BoxFuture, FutureExt};
-use itertools::Itertools;
-use vec1::{vec1, Vec1};
-use warp_core::send_telemetry_from_ctx;
-use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _, ViewHandle};
-
 use apply_diff_model::ApplyDiffModel;
-pub(crate) use diff_application::apply_edits;
 use diff_application::DiffApplicationError;
-pub(crate) use diff_application::FileReadResult;
+pub(crate) use diff_application::{apply_edits, FileReadResult};
+use futures::channel::oneshot;
+use futures::future::BoxFuture;
+use futures::FutureExt;
+use itertools::Itertools;
 pub(crate) use telemetry::MalformedFinalLineProxyEvent;
 #[allow(unused_imports)]
 pub use telemetry::{EditAcceptAndContinueClickedEvent, EditAcceptClickedEvent};
@@ -25,28 +20,26 @@ pub use telemetry::{
     EditReceivedEvent, EditResolvedEvent, EditStats, RequestFileEditsFormatKind,
     RequestFileEditsTelemetryEvent,
 };
-
-use crate::{
-    ai::{
-        agent::{
-            conversation::AIConversationId, AIAgentAction, AIAgentActionId,
-            AIAgentActionResultType, AIAgentActionType, AIAgentOutputMessage,
-            AIAgentOutputMessageType, AIIdentifiers, RequestFileEditsResult, UpdatedFileContext,
-        },
-        blocklist::{
-            inline_action::code_diff_view::{
-                CodeDiffView, CodeDiffViewEvent, DiffSessionType, FileDiff,
-            },
-            BlocklistAIPermissions, RequestedEditResolution,
-        },
-        paths::host_native_absolute_path,
-    },
-    safe_warn,
-    terminal::model::session::{active_session::ActiveSession, SessionType},
-    BlocklistAIHistoryModel,
-};
+use vec1::{vec1, Vec1};
+use warp_core::send_telemetry_from_ctx;
+use warp_util::file::FileSaveError;
+use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _, ViewHandle};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
+    AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, RequestFileEditsResult,
+    UpdatedFileContext,
+};
+use crate::ai::blocklist::inline_action::code_diff_view::{
+    CodeDiffView, CodeDiffViewEvent, DiffSessionType, FileDiff,
+};
+use crate::ai::blocklist::{BlocklistAIPermissions, RequestedEditResolution};
+use crate::ai::paths::host_native_absolute_path;
+use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model::session::SessionType;
+use crate::{safe_warn, BlocklistAIHistoryModel};
 
 pub struct RequestFileEditsExecutor {
     active_session: ModelHandle<ActiveSession>,

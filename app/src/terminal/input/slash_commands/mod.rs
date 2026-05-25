@@ -3,14 +3,15 @@ mod data_source;
 mod search_item;
 pub(super) mod view;
 
-pub use cloud_mode_v2_view::{CloudModeV2SlashCommandView, Section as CloudModeV2Section};
-pub use data_source::*;
-pub use view::{CloseReason, InlineSlashCommandView, SlashCommandsEvent};
-
 #[cfg(feature = "local_fs")]
 use std::path::PathBuf;
 
 use ai::skills::SkillReference;
+pub use cloud_mode_v2_view::{CloudModeV2SlashCommandView, Section as CloudModeV2Section};
+pub use data_source::*;
+pub use view::{CloseReason, InlineSlashCommandView, SlashCommandsEvent};
+#[cfg(not(target_family = "wasm"))]
+use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
@@ -33,7 +34,9 @@ use crate::ai::blocklist::agent_view::{
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::PendingCloudLaunch;
-use crate::ai::blocklist::{BlocklistAIHistoryModel, SlashCommandRequest};
+use crate::ai::blocklist::{
+    BlocklistAIHistoryModel, InputTypeAutoDetectionSource, SlashCommandRequest,
+};
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
 use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};
@@ -60,8 +63,6 @@ use crate::view_components::DismissibleToast;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 use crate::workspace::{ForkedConversationDestination, ToastStack, WorkspaceAction};
 use crate::TelemetryEvent;
-#[cfg(not(target_family = "wasm"))]
-use warp_cli::agent::Harness;
 
 #[derive(Debug, Clone)]
 pub enum AcceptSlashCommandOrSavedPrompt {
@@ -255,7 +256,7 @@ impl Input {
                 if detected_command.command.auto_enter_ai_mode
                     || !FeatureFlag::AgentView.is_enabled()
                 {
-                    self.enter_ai_mode(ctx);
+                    self.enter_ai_mode(Some(InputTypeAutoDetectionSource::SlashCommand), ctx);
                 }
 
                 if detected_command.command.name == commands::EDIT.name
@@ -282,7 +283,7 @@ impl Input {
                 }
 
                 // Skill commands always require AI mode
-                self.enter_ai_mode(ctx);
+                self.enter_ai_mode(Some(InputTypeAutoDetectionSource::SlashCommand), ctx);
             }
         }
     }

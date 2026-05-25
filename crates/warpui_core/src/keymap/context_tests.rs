@@ -1,4 +1,5 @@
-use super::{macros::*, *};
+use super::macros::*;
+use super::*;
 
 #[test]
 fn test_context_predicate_eval() -> anyhow::Result<()> {

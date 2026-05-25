@@ -5,14 +5,13 @@ use warpui::{
     WindowId,
 };
 
+use super::{AutoCloudHandoffTrigger, Workspace, WorkspaceAction, WorkspaceRegistry};
 use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::settings::AISettings;
 use crate::system::{SystemStats, SystemStatsEvent};
 use crate::terminal::view::TerminalView;
 use crate::BlocklistAIHistoryModel;
-
-use super::{AutoCloudHandoffTrigger, Workspace, WorkspaceAction, WorkspaceRegistry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AutoCloudHandoffSkipReason {

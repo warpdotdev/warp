@@ -5,13 +5,14 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use bimap::BiMap;
-
 use futures_util::stream::AbortHandle;
 use lsp::types::TextDocumentContentChangeEvent;
 use lsp::{LspManagerModel, LspServerLogLevel, LspServerModel};
+use remote_server::manager::RemoteServerManager;
 use string_offset::{ByteOffset, CharOffset};
 use vec1::vec1;
-use warp_core::{features::FeatureFlag, safe_error};
+use warp_core::features::FeatureFlag;
+use warp_core::safe_error;
 use warp_editor::content::buffer::{Buffer, ToBufferCharOffset};
 use warp_editor::content::diff::{text_diff, TextDiff};
 use warp_editor::content::edit::PreciseDelta;
@@ -23,8 +24,6 @@ use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle};
-
-use remote_server::manager::RemoteServerManager;
 
 use super::buffer_location::{LocalOrRemotePath, SyncClock};
 

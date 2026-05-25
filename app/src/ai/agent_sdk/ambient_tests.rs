@@ -1,11 +1,10 @@
 //! Unit tests for ambient agent CLI argument mapping and message helpers.
 use chrono::{TimeZone, Utc};
-
 use warp_cli::json_filter::JsonOutput;
 use warp_cli::task::{
-    ArtifactTypeArg, ExecutionLocationArg, ListTasksArgs, RunSortByArg, RunSortOrderArg,
-    RunSourceArg, RunStateArg,
+    ArtifactTypeArg, ExecutionLocationArg, ListTasksArgs, RunSortByArg, RunSourceArg, RunStateArg,
 };
+use warp_cli::SortOrderArg;
 
 use super::*;
 use crate::server::server_api::ai::{ArtifactType, ExecutionLocation, RunSortBy, RunSortOrder};
@@ -139,7 +138,7 @@ fn every_field_maps_through() {
         updated_after: Some(updated_after),
         query: Some("oz run".to_string()),
         sort_by: Some(RunSortByArg::CreatedAt),
-        sort_order: Some(RunSortOrderArg::Asc),
+        sort_order: Some(SortOrderArg::Asc),
         cursor: Some("abcd==".to_string()),
         json_output: JsonOutput::default(),
     };

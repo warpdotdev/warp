@@ -1,13 +1,9 @@
-use crate::{
-    content::text::{BlockHeaderSize, BufferBlockStyle},
-    extract_block,
-    render::model::{BlockItem, RenderState, viewport::ViewportItem},
-};
-
-use super::{
-    RenderContext, RenderableBlock,
-    placeholder::{BlockPlaceholder, Options},
-};
+use super::placeholder::{BlockPlaceholder, Options};
+use super::{RenderContext, RenderableBlock};
+use crate::content::text::{BlockHeaderSize, BufferBlockStyle};
+use crate::extract_block;
+use crate::render::model::viewport::ViewportItem;
+use crate::render::model::{BlockItem, RenderState};
 
 pub struct RenderableHeader {
     viewport_item: ViewportItem,

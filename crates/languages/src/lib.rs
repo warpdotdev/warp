@@ -1,9 +1,7 @@
-use std::{
-    borrow::Cow,
-    collections::HashMap,
-    path::Path,
-    sync::{Arc, Mutex},
-};
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use arborium::tree_sitter::{Language as ParserGrammar, Query};
 use lazy_static::lazy_static;

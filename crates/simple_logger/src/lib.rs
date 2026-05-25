@@ -1,7 +1,5 @@
-use std::{
-    path::PathBuf,
-    sync::{Arc, Weak},
-};
+use std::path::PathBuf;
+use std::sync::{Arc, Weak};
 
 use async_channel::Sender;
 use async_fs::OpenOptions;

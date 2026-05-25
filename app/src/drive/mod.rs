@@ -13,7 +13,8 @@ pub mod settings;
 pub mod sharing;
 pub mod workflows;
 
-use std::{cmp::Ordering, fmt};
+use std::cmp::Ordering;
+use std::fmt;
 
 pub use index::DriveIndexVariant;
 pub use panel::{DrivePanel, DrivePanelEvent};
@@ -22,15 +23,11 @@ use warp_core::user_preferences::GetUserPreferences as _;
 pub use warp_server_client::drive::CloudObjectTypeAndId;
 use warpui::AppContext;
 
-use crate::{
-    cloud_object::{
-        model::view::{CloudViewModel, UpdateTimestamp},
-        CloudObject, ObjectType,
-    },
-    server::ids::ServerId,
-    ui_components::icons::Icon,
-    workflows::CloudWorkflow,
-};
+use crate::cloud_object::model::view::{CloudViewModel, UpdateTimestamp};
+use crate::cloud_object::{CloudObject, ObjectType};
+use crate::server::ids::ServerId;
+use crate::ui_components::icons::Icon;
+use crate::workflows::CloudWorkflow;
 
 type SortByComparator<'a> = dyn FnMut(&&dyn CloudObject, &&dyn CloudObject) -> Ordering + 'a;
 

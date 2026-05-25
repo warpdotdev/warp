@@ -10,23 +10,13 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use tempfile::NamedTempFile;
 use warp_cli::agent::Harness;
-use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
-
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::ambient_agents::{task::HarnessModelConfig, AmbientAgentTaskId};
-use crate::ai::mcp::JSONMCPServer;
-use crate::server::server_api::harness_support::{upload_to_target, HarnessSupportClient};
-use crate::server::server_api::ServerApi;
-use crate::terminal::cli_agent_sessions::{CLIAgentSessionStatus, CLIAgentSessionsModel};
-use crate::terminal::model::block::{BlockId, SerializedBlock};
-use crate::terminal::CLIAgent;
-use crate::util::path::resolve_executable;
 use warp_cli::{
     OZ_CLI_ENV, OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV, SERVER_ROOT_URL_OVERRIDE_ENV,
     SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
 use warp_managed_secrets::ManagedSecretValue;
+use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
 use super::terminal::{CommandHandle, TerminalDriver};
 use super::{
@@ -34,6 +24,17 @@ use super::{
     LEGACY_OZ_PARENT_STATE_ROOT_ENV, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
     OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
 };
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
+use crate::ai::ambient_agents::task::HarnessModelConfig;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::mcp::JSONMCPServer;
+use crate::server::server_api::harness_support::{upload_to_target, HarnessSupportClient};
+use crate::server::server_api::ServerApi;
+use crate::terminal::cli_agent_sessions::{CLIAgentSessionStatus, CLIAgentSessionsModel};
+use crate::terminal::model::block::{BlockId, SerializedBlock};
+use crate::terminal::CLIAgent;
+use crate::util::path::resolve_executable;
 
 pub(crate) mod claude_code;
 pub(crate) mod claude_transcript;
@@ -479,6 +480,7 @@ pub(crate) trait HarnessRunner: Send + Sync {
     async fn start(
         &self,
         foreground: &ModelSpawner<AgentDriver>,
+        setup_events: &SetupClientEventReporter,
     ) -> Result<CommandHandle, AgentDriverError>;
 
     /// Save the current conversation state (transcript upload, etc.).

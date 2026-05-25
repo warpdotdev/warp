@@ -1,6 +1,7 @@
+use warpui::{App, EntityId};
+
 use super::*;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
-use warpui::{App, EntityId};
 
 #[test]
 fn sender_run_id_and_task_id_for_send_falls_back_to_ambient_task_id() {

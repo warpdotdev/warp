@@ -5,16 +5,17 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::repositories::stub_git_repository;
-use crate::repository::{RepositorySubscriber, TrackedRemoteRef};
-use crate::watcher::{DirectoryWatcher, TaskQueue};
-use crate::{CanonicalizedPath, RepoMetadataError, Repository, RepositoryUpdate};
 use futures::channel::mpsc;
 use futures::{FutureExt as _, StreamExt as _};
 use virtual_fs::{Stub, VirtualFS};
 use warp_util::standardized_path::StandardizedPath;
 use warpui::r#async::Timer;
 use warpui::{App, ModelContext, ModelHandle};
+
+use crate::repositories::stub_git_repository;
+use crate::repository::{RepositorySubscriber, TrackedRemoteRef};
+use crate::watcher::{DirectoryWatcher, TaskQueue};
+use crate::{CanonicalizedPath, RepoMetadataError, Repository, RepositoryUpdate};
 
 #[test]
 fn test_add_repository_success() {
@@ -375,8 +376,9 @@ async fn wait_for_queue_complete(queue: ModelHandle<TaskQueue>, app: &mut App) {
 
 #[test]
 fn test_is_git_internal_path() {
-    use crate::entry::is_git_internal_path;
     use std::path::Path;
+
+    use crate::entry::is_git_internal_path;
 
     // .git/ internal paths should be detected
     assert!(is_git_internal_path(Path::new("/repo/.git/HEAD")));

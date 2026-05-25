@@ -4,13 +4,12 @@ use warp_core::ui::theme::AnsiColorIdentifier;
 use warpui::elements::{ChildView, CrossAxisAlignment, Empty, Flex, ParentElement};
 use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
-use crate::view_components::copyable_text_field::COPY_FEEDBACK_DURATION;
-
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::{AgentConversationEntryId, AgentRunDisplayStatus};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
+use crate::view_components::copyable_text_field::COPY_FEEDBACK_DURATION;
 use crate::workspace::WorkspaceAction;
 
 const BUTTON_SPACING: f32 = 4.;

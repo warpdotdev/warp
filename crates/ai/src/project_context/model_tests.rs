@@ -1,5 +1,6 @@
-use super::*;
 use std::path::PathBuf;
+
+use super::*;
 
 #[test]
 fn test_find_applicable_rules_empty_rules() {

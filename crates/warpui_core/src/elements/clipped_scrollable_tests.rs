@@ -2,14 +2,11 @@ use std::collections::HashSet;
 
 use pathfinder_geometry::vector::vec2f;
 
-use crate::{
-    elements::{Axis, ConstrainedBox, Empty, Flex, ParentElement, SavePosition, Stack},
-    platform::WindowStyle,
-    units::IntoPixels,
-    App, Element, Entity, Presenter, TypedActionView, WindowInvalidation,
-};
-
 use super::{ClippedScrollStateHandle, ClippedScrollable, ScrollTarget, ScrollToPositionMode};
+use crate::elements::{Axis, ConstrainedBox, Empty, Flex, ParentElement, SavePosition, Stack};
+use crate::platform::WindowStyle;
+use crate::units::IntoPixels;
+use crate::{App, Element, Entity, Presenter, TypedActionView, WindowInvalidation};
 
 macro_rules! assert_float_eq {
     ($lhs:expr, $rhs:expr) => {{

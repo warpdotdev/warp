@@ -1,39 +1,39 @@
 use futures::Future;
+use warpui::elements::{
+    Align, Flex, Hoverable, MouseStateHandle, ParentElement, SavePosition, Shrinkable,
+};
+use warpui::presenter::ChildView;
+use warpui::windowing::{StateEvent, WindowManager};
 use warpui::{
-    elements::{Align, Flex, Hoverable, MouseStateHandle, ParentElement, SavePosition, Shrinkable},
-    presenter::ChildView,
-    windowing::{StateEvent, WindowManager},
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
-use crate::{
-    ai::{document::ai_document_model::AIDocumentId, facts::CloudAIFactModel},
-    cloud_object::{
-        model::{persistence::CloudModel, view::CloudViewModel},
-        CloudObjectEventEntrypoint, GenericStringObjectFormat, JsonObjectType, Owner, Space,
-    },
-    env_vars::{manager::EnvVarCollectionSource, CloudEnvVarCollection},
-    notebooks::{manager::NotebookSource, CloudNotebook},
-    server::{
-        cloud_objects::update_manager::{InitiatedBy, UpdateManager},
-        ids::{ClientId, ServerId, SyncId},
-        telemetry::SharingDialogSource,
-    },
-    workflows::{manager::WorkflowOpenSource, CloudWorkflow, WorkflowViewMode},
-    workspaces::user_workspaces::UserWorkspaces,
+use super::drive_helpers::{
+    has_feature_gated_anonymous_user_reached_env_var_limit,
+    has_feature_gated_anonymous_user_reached_notebook_limit,
+    has_feature_gated_anonymous_user_reached_workflow_limit,
 };
-
-use super::{
-    drive_helpers::{
-        has_feature_gated_anonymous_user_reached_env_var_limit,
-        has_feature_gated_anonymous_user_reached_notebook_limit,
-        has_feature_gated_anonymous_user_reached_workflow_limit,
-    },
-    index::{DriveIndex, DriveIndexAction, DriveIndexEvent},
-    items::WarpDriveItemId,
-    CloudObjectTypeAndId, DriveObjectType,
+use super::index::{DriveIndex, DriveIndexAction, DriveIndexEvent};
+use super::items::WarpDriveItemId;
+use super::{CloudObjectTypeAndId, DriveObjectType};
+use crate::ai::document::ai_document_model::AIDocumentId;
+use crate::ai::facts::CloudAIFactModel;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::model::view::CloudViewModel;
+use crate::cloud_object::{
+    CloudObjectEventEntrypoint, GenericStringObjectFormat, JsonObjectType, Owner, Space,
 };
+use crate::env_vars::manager::EnvVarCollectionSource;
+use crate::env_vars::CloudEnvVarCollection;
+use crate::notebooks::manager::NotebookSource;
+use crate::notebooks::CloudNotebook;
+use crate::server::cloud_objects::update_manager::{InitiatedBy, UpdateManager};
+use crate::server::ids::{ClientId, ServerId, SyncId};
+use crate::server::telemetry::SharingDialogSource;
+use crate::workflows::manager::WorkflowOpenSource;
+use crate::workflows::{CloudWorkflow, WorkflowViewMode};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub const MIN_SIDEBAR_WIDTH: f32 = 250.;
 pub const MAX_SIDEBAR_WIDTH_RATIO: f32 = 0.75;

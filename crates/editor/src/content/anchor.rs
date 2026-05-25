@@ -1,11 +1,8 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, Weak},
-};
-
-use sum_tree::SumTree;
+use std::collections::HashMap;
+use std::sync::{Arc, Weak};
 
 use string_offset::CharOffset;
+use sum_tree::SumTree;
 
 use super::text::BufferText;
 

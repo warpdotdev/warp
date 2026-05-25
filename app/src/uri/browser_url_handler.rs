@@ -1,5 +1,7 @@
 use url::Url;
 
+use super::web_intent_parser::WebIntent;
+
 const DEFAULT_TITLE: &str = "Warp";
 const BASE_APP_PATH: &str = "/app";
 
@@ -54,6 +56,9 @@ pub fn parse_current_url() -> Option<Url> {
 
 fn get_base_app_url() -> Option<Url> {
     if let Some(current_url) = parse_current_url() {
+        if should_preserve_current_url_on_base_fallback(&current_url) {
+            return Some(current_url);
+        }
         let mut new_url = current_url.clone();
         new_url.set_path(BASE_APP_PATH);
         new_url.set_query(None);
@@ -61,4 +66,11 @@ fn get_base_app_url() -> Option<Url> {
     }
     log::error!("Failed to get the base url");
     None
+}
+
+fn should_preserve_current_url_on_base_fallback(url: &Url) -> bool {
+    matches!(
+        WebIntent::try_from_url(url),
+        Ok(WebIntent::ConversationView(_) | WebIntent::SessionView(_))
+    )
 }

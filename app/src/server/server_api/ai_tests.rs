@@ -1,5 +1,4 @@
-use chrono::TimeZone;
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use futures::executor::block_on;
 
 use super::super::auth::CLOUD_AGENT_ID_HEADER;
