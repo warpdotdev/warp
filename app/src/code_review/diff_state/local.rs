@@ -65,6 +65,12 @@ use super::{
 #[cfg(all(feature = "local_fs", feature = "local_tty"))]
 use crate::terminal::local_shell::LocalShellState;
 
+/// Maximum file size (in bytes) for content loaded from git via `git show`
+/// or `git cat-file`. Files larger than this are skipped to prevent multi-GB
+/// allocations when a file has a small diff but enormous content at the base
+/// commit (e.g. a one-line edit in a 4 GB data file).
+const MAX_FILE_CONTENT_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
+
 // Unicode bidirectional characters that should be flagged
 const BIDI_CHARS: [char; 9] = [
     '\u{202A}', // LEFT-TO-RIGHT EMBEDDING
@@ -2114,7 +2120,20 @@ impl LocalDiffStateModel {
         Self::get_binary_files_vs_commit(repo_path, "HEAD").await
     }
 
-    /// Gets the file content at HEAD commit for diff comparison
+    /// Returns the size (in bytes) of a git object at `<ref>:<path>`, or `None`
+    /// if the object doesn't exist or the command fails.
+    async fn get_file_size_at_ref(repo_path: &Path, git_ref: &str, file_path: &str) -> Option<u64> {
+        let object = format!("{git_ref}:{file_path}");
+        log::debug!("[GIT OPERATION] local.rs get_file_size_at_ref git cat-file -s {object}");
+        run_git_command(repo_path, &["cat-file", "-s", &object])
+            .await
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+    }
+
+    /// Gets the file content at HEAD commit for diff comparison.
+    /// Returns `None` for files that exceed [`MAX_FILE_CONTENT_SIZE`] to
+    /// prevent multi-GB allocations for large files with small diffs.
     async fn get_file_content_at_head(
         repo_path: &Path,
         file_path: &str,
@@ -2128,6 +2147,16 @@ impl LocalDiffStateModel {
                 Some(String::new())
             }
             _ => {
+                // Pre-check file size to avoid buffering multi-GB content for
+                // large files that have small diffs.
+                if let Some(size) = Self::get_file_size_at_ref(repo_path, "HEAD", file_path).await {
+                    if size > MAX_FILE_CONTENT_SIZE {
+                        log::info!(
+                            "Skipping content_at_head for {file_path}: file size ({size} bytes) exceeds {MAX_FILE_CONTENT_SIZE} byte limit"
+                        );
+                        return None;
+                    }
+                }
                 log::debug!(
                     "[GIT OPERATION] local.rs get_file_content_at_head git show HEAD:{file_path}"
                 );
@@ -2566,12 +2595,24 @@ impl LocalDiffStateModel {
         Ok(binary_files)
     }
 
-    /// Gets the file content at a specific commit
+    /// Gets the file content at a specific commit.
+    /// Returns `None` for files that exceed [`MAX_FILE_CONTENT_SIZE`] to
+    /// prevent multi-GB allocations for large files with small diffs.
     async fn get_file_content_at_commit(
         repo_path: &Path,
         file_path: &str,
         commit: &str,
     ) -> Option<String> {
+        // Pre-check file size to avoid buffering multi-GB content for
+        // large files that have small diffs.
+        if let Some(size) = Self::get_file_size_at_ref(repo_path, commit, file_path).await {
+            if size > MAX_FILE_CONTENT_SIZE {
+                log::info!(
+                    "Skipping content at {commit} for {file_path}: file size ({size} bytes) exceeds {MAX_FILE_CONTENT_SIZE} byte limit"
+                );
+                return None;
+            }
+        }
         log::debug!(
             "[GIT OPERATION] local.rs get_file_content_at_commit git show {commit}:{file_path}"
         );
