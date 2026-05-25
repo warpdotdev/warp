@@ -105,10 +105,13 @@ mod mac {
             // unbalanced over-release of a +0 getter return) is intentionally
             // gone.
             let language_code = locale.languageCode().to_string();
+            // `countryCode` is nil for a region-less locale, so degrade to an
+            // empty country to match the previous `nsstring_as_str` behavior,
+            // which yielded `""` on a nil return.
             let country_code = locale
                 .countryCode()
-                .expect("should always be valid UTF-8 string")
-                .to_string();
+                .map(|c| c.to_string())
+                .unwrap_or_default();
 
             format!("{language_code}_{country_code}.UTF-8")
         } else {
