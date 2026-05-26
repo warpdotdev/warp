@@ -26884,8 +26884,8 @@ impl View for TerminalView {
                             };
                             if should_log {
                                 cell.set(Some(now));
-                                log::info!(
-                                    "[orch-viewer-loading] TerminalView::render: rendering \
+                                log::debug!(
+                                    "[orch-viewer] TerminalView::render: rendering \
                                      Loading UI view_addr={:p} view_id={:?} \
                                      is_view_pending_clause={is_view_pending_clause} \
                                      is_loading_transcript={is_loading_transcript} \

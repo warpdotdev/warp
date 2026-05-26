@@ -592,11 +592,10 @@ impl BlocklistAIController {
                         ctx,
                     );
                 }
-                // Viewer-mode broadcast events (PR 1 of
-                // `specs/orch-viewer-polling/TECH.md`) are consumed by
-                // `OrchestrationViewerModel` in PR 2 and are intentionally
-                // ignored here. `BlocklistAIController` has no per-pane
-                // viewer state to update.
+                // Viewer-mode broadcast events are consumed by
+                // `OrchestrationViewerModel` and are intentionally ignored
+                // here. `BlocklistAIController` has no per-pane viewer state
+                // to update.
                 OrchestrationEventStreamerEvent::ChildSpawned { .. }
                 | OrchestrationEventStreamerEvent::ChildStatusChanged { .. } => {}
             });

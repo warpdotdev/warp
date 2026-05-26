@@ -1565,8 +1565,8 @@ impl TerminalModel {
         if prev_is_loading != next_is_loading
             || self.conversation_transcript_viewer_status.is_some() != status.is_some()
         {
-            log::info!(
-                "[orch-viewer-loading] TerminalModel::set_conversation_transcript_viewer_status \
+            log::debug!(
+                "[orch-viewer] TerminalModel::set_conversation_transcript_viewer_status \
                  model_addr={:p} {:?} → {:?}",
                 self as *const _,
                 self.conversation_transcript_viewer_status,
@@ -1975,8 +1975,8 @@ impl TerminalModel {
         if std::mem::discriminant(&self.shared_session_status)
             != std::mem::discriminant(&shared_session_status)
         {
-            log::info!(
-                "[orch-viewer-loading] TerminalModel::set_shared_session_status \
+            log::debug!(
+                "[orch-viewer] TerminalModel::set_shared_session_status \
                  model_addr={:p} {:?} → {:?}",
                 self as *const _,
                 self.shared_session_status,

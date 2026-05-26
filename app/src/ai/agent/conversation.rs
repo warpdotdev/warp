@@ -1021,8 +1021,7 @@ impl AIConversation {
     /// this is the highest sequence seen across the parent's *direct child
     /// set* — a different scope. Both numbers come from the same server
     /// event log so they're comparable, but they live on different
-    /// conversation rows so the two readings never collide. See
-    /// `specs/orch-viewer-polling/TECH.md` (§ `Cursor consistency`).
+    /// conversation rows so the two readings never collide.
     pub fn last_event_sequence(&self) -> Option<i64> {
         self.last_event_sequence
     }

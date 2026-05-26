@@ -384,8 +384,8 @@ impl Network {
         ws_proxy_rx: async_channel::Receiver<UpstreamMessage>,
         ctx: &mut ModelContext<Self>,
     ) {
-        log::info!(
-            "[orch-viewer-loading] viewer Network::start_websocket: dispatching initial join \
+        log::debug!(
+            "[orch-viewer] viewer Network::start_websocket: dispatching initial join \
              session_id={session_id} (no automatic retry on FailedToJoin; reconnect_websocket \
              only runs after a successful first JoinedSuccessfully)"
         );
@@ -396,8 +396,8 @@ impl Network {
             Self::connect_websocket_and_get_user_id(session_id, auth_client, auth_state.clone()),
             move |network, conn, ctx| match conn {
                 Ok(((sink, stream), user_id)) => {
-                    log::info!(
-                        "[orch-viewer-loading] viewer Network::start_websocket: WS connected for \
+                    log::debug!(
+                        "[orch-viewer] viewer Network::start_websocket: WS connected for \
                          session_id={session_id}; sending Initialize"
                     );
                     let initialize_message = UpstreamMessage::Initialize(InitPayload {
@@ -421,9 +421,8 @@ impl Network {
                 }
                 Err(e) => {
                     log::error!(
-                        "[orch-viewer-loading] viewer Network::start_websocket: WS connect FAILED \
-                         for session_id={session_id}: {e:#} (emitting FailedToJoin; pane will \
-                         stay in ViewPending with no automatic retry)"
+                        "viewer Network::start_websocket: WS connect FAILED for \
+                         session_id={session_id}: {e:#}; emitting FailedToJoin (no automatic retry)"
                     );
                     ctx.emit(NetworkEvent::FailedToJoin {
                         reason: FailedToJoinReason::FailedToConnectToServer,
@@ -552,8 +551,8 @@ impl Network {
                     );
                     return;
                 }
-                log::info!(
-                    "[orch-viewer-loading] viewer Network: JoinedSuccessfully session_id={} \
+                log::debug!(
+                    "[orch-viewer] viewer Network: JoinedSuccessfully session_id={} \
                      viewer_id={viewer_id:?} latest_event_no={latest_event_no:?} (EventLoop will \
                      transition ViewPending → ActiveViewer once catch-up completes)",
                     self.session_id,
@@ -637,9 +636,9 @@ impl Network {
             }
             DownstreamMessage::FailedToJoin { reason } => {
                 log::warn!(
-                    "[orch-viewer-loading] viewer Network: server replied FailedToJoin for \
+                    "viewer Network: server replied FailedToJoin for \
                      session_id={} reason={reason:?} stage={:?} (no automatic retry on initial \
-                     join failure; reconnect_websocket requires event_loop.is_some())",
+                     join failure)",
                     self.session_id,
                     std::mem::discriminant(&self.stage),
                 );

@@ -795,11 +795,9 @@ impl ServerApi {
         Ok(request.eventsource())
     }
 
-    /// Opens an SSE stream for the new ancestor-scoped endpoint that serves
+    /// Opens an SSE stream against the ancestor-scoped endpoint that serves
     /// every direct child of the supplied parent run. Mirrors
     /// [`Self::stream_agent_events`] in transport, auth, and header handling.
-    /// See `specs/orch-viewer-polling/TECH.md` (server-side spec landed in
-    /// `warp-server` PR 11326).
     pub async fn stream_agent_events_for_ancestor(
         &self,
         ancestor_run_id: &str,

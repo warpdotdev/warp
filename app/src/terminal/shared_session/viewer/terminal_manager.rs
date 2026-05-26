@@ -909,10 +909,9 @@ impl TerminalManager {
             NetworkEvent::FailedToJoin { reason } => {
                 let session_id = network.as_ref(ctx).session_id();
                 log::warn!(
-                    "[orch-viewer-loading] viewer TerminalManager: NetworkEvent::FailedToJoin \
-                     session_id={session_id} reason={reason:?} — showing toast and leaving pane \
-                     in SharedSessionStatus::ViewPending. The 'Loading session...' UI will not \
-                     clear without a manual retry or a fresh ensure_shared_session_viewer_child_pane."
+                    "viewer TerminalManager: NetworkEvent::FailedToJoin \
+                     session_id={session_id} reason={reason:?}; pane stays in ViewPending \
+                     until manual retry or a fresh ensure_shared_session_viewer_child_pane"
                 );
                 let Some(view) = weak_view_handle.upgrade(ctx) else {
                     return;
@@ -1617,9 +1616,8 @@ impl TerminalManager {
     /// holds a viewer-mode registration on the shared
     /// [`OrchestrationEventStreamer`]; we unregister explicitly here so
     /// the streamer can refcount-tear-down the ancestor SSE on the last
-    /// pane close. The unregister API is idempotent (see spec
-    /// § `Risks and mitigations: Drop refcount race`), so calling it
-    /// when the flag is off (or when the streamer has already removed the
+    /// pane close. The unregister API is idempotent, so calling it when
+    /// the flag is off (or when the streamer has already removed the
     /// entry) is harmless.
     fn stop_orchestration_polling(
         orchestration_viewer_model: &Arc<FairMutex<Option<ModelHandle<OrchestrationViewerModel>>>>,
@@ -1630,7 +1628,7 @@ impl TerminalManager {
         };
         let parent_task_id = handle.as_ref(ctx).parent_task_id();
         let consumer_id = handle.id();
-        log::info!(
+        log::debug!(
             "[orch-viewer] stopping orchestration viewer model parent_task_id={parent_task_id} \
              consumer_id={consumer_id:?}"
         );

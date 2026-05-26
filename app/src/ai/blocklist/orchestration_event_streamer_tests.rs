@@ -1236,15 +1236,14 @@ fn on_conversation_removed_prunes_killed_child_run_id_from_parent_but_keeps_tomb
     });
 }
 
-// ---- PR 1 of `specs/orch-viewer-polling/TECH.md` ----
+// ---- Viewer-mode bookkeeping surface ----
 //
-// The tests below cover the pure-additive surface added in PR 1:
-// `conversation_status_from_lifecycle_event_type`, `is_known_child`,
-// the `register_viewer_mode_consumer` / `unregister_viewer_mode_consumer`
-// refcount, and the `is_remote_run_view` flag-gated relaxation. PR 1
-// does not wire any of these into a live event path, so the tests are
-// either pure-function or short App fixtures that drive the bookkeeping
-// directly.
+// The tests below cover the additive surface that supports the
+// viewer-mode ancestor SSE path: `conversation_status_from_lifecycle_event_type`,
+// `is_known_child`, the `register_viewer_mode_consumer` /
+// `unregister_viewer_mode_consumer` refcount, and the
+// `is_remote_run_view` flag-gated relaxation. These tests drive the
+// bookkeeping directly via pure-function calls or short App fixtures.
 
 #[test]
 fn lifecycle_event_type_in_progress_maps_to_in_progress() {
@@ -1289,8 +1288,8 @@ fn lifecycle_event_type_cancelled_maps_to_cancelled() {
 #[test]
 fn lifecycle_event_type_blocked_maps_to_blocked_with_empty_action() {
     // Matches the REST path on `AmbientAgentTaskState::Blocked`: empty
-    // `blocked_action`. See `Risks and mitigations: Blocked payload` in
-    // `specs/orch-viewer-polling/TECH.md`.
+    // `blocked_action`. The wire event does not currently carry a
+    // `blocked_action` payload.
     assert_eq!(
         conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Blocked),
         ConversationStatus::Blocked {
@@ -1387,8 +1386,8 @@ fn is_known_child_dedupes_per_parent_after_first_observation() {
         });
 
         // Register a consumer to materialize the entry, then seed the known
-        // set (simulating PR 2's emission path which will populate this on
-        // the first lifecycle event observed for a new run_id).
+        // set (simulating the emission path that populates this on the
+        // first lifecycle event observed for a new run_id).
         let consumer_id = warpui::EntityId::new();
         let placeholder_conv_id =
             crate::ai::agent::conversation::AIConversation::new(true, false).id();
@@ -1403,7 +1402,7 @@ fn is_known_child_dedupes_per_parent_after_first_observation() {
             );
         });
 
-        // First observation: seed `known_children` (PR 2's emission path).
+        // First observation: seed `known_children` (emission path).
         streamer.update(&mut app, |me, _| {
             me.viewer_mode_orchestrators
                 .get_mut(&parent_task_id)
@@ -1480,8 +1479,8 @@ fn viewer_mode_consumer_refcount_handles_multiple_panes_and_double_unregister() 
         let parent_task_id = make_parent_task_id_for_test(0xc1);
         let consumer_a = warpui::EntityId::new();
         let consumer_b = warpui::EntityId::new();
-        // Each pane has its own orchestrator-placeholder conversation; PR 2
-        // uses the recorded value to persist per-pane cursors.
+        // Each pane has its own orchestrator-placeholder conversation; the
+        // recorded value is used to persist per-pane cursors.
         let placeholder_a = crate::ai::agent::conversation::AIConversation::new(true, false).id();
         let placeholder_b = crate::ai::agent::conversation::AIConversation::new(true, false).id();
 
@@ -1527,7 +1526,8 @@ fn viewer_mode_consumer_refcount_handles_multiple_panes_and_double_unregister() 
         });
 
         // Double-unregister must be a no-op. Covers the `Drop` refcount race
-        // documented in `Risks and mitigations: Drop refcount race`.
+        // where a late `Drop` impl unregisters after the last consumer has
+        // already removed the entry.
         streamer.update(&mut app, |me, _| {
             me.unregister_viewer_mode_consumer(parent_task_id, consumer_a);
             me.unregister_viewer_mode_consumer(parent_task_id, consumer_b);

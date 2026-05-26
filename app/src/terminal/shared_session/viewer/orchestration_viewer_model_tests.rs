@@ -703,9 +703,8 @@ fn registers_child_agent_name_trims_whitespace() {
 
 #[test]
 fn child_status_changed_with_unknown_run_id_is_silently_dropped() {
-    // Spec § `PR 2 — OrchestrationViewerModel as consumer`:
-    //   "If the run_id is not in the local map (unlikely race), drop the
-    //   event silently — the spawn flow will re-create the placeholder."
+    // If the run_id is not in the local map (unlikely race), drop the
+    // event silently — the spawn flow will re-create the placeholder.
     App::test((), |mut app| async move {
         let parent = task_id(PARENT_TASK_ID);
         let (terminal_view_id, _, model) = setup_model(&mut app, parent);
@@ -1345,7 +1344,7 @@ fn b2_ignores_token_assigned_for_unrelated_conversation() {
 
 // ---- child-link sibling preload --------------------------------------------
 //
-// Removed: see specs/QUALITY-726/TECH.md §B4 for the deferral note.
+// Removed: tracked separately under shared-session viewer support work.
 
 // ---- idle_due_to_no_children polling-cost mitigation ----------------------
 

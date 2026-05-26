@@ -8,7 +8,7 @@
 //! 1. **Streamer-driven (flag ON, default).** The model registers itself as a
 //!    viewer-mode consumer with [`OrchestrationEventStreamer`] which:
 //!     - Runs a one-shot REST `?ancestor_run_id=` snapshot to seed the
-//!       known-child set and the SSE cursor (see spec § `Cold-start seeding`).
+//!       known-child set and the SSE cursor.
 //!     - Opens a long-lived ancestor SSE that streams lifecycle events for
 //!       every direct child.
 //!     - Broadcasts [`OrchestrationEventStreamerEvent::ChildSpawned`] /
@@ -17,8 +17,8 @@
 //!       local placeholder conversations.
 //! 2. **Legacy REST polling (flag OFF).** The model periodically polls
 //!    `GET /agent/runs?ancestor_run_id=` (5s / 30s idle) and reconciles the
-//!    full child list each cycle. Retained until rollout finishes (see spec
-//!    § `PR 3 — Cleanup`).
+//!    full child list each cycle. Retained until the streamer path is
+//!    rolled out everywhere.
 //!
 //! In both paths the model maintains a `run_id → AIConversationId` map so
 //! per-child pill metadata, status writes, and `EnsureSharedSessionViewerChildPane`
@@ -60,18 +60,12 @@ const STATUS_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const STATUS_POLL_INTERVAL_IDLE: Duration = Duration::from_secs(30);
 
 /// Cadence for the per-child `session_id` discovery refetch used by the
-/// streamer-driven path. While at least one child is registered with
-/// `session_id = None` (or has never had its pane materialized), we
+/// streamer-driven path. Lifecycle events carry only the new status, not
+/// the claim-time `session_id`, so a child that stays queued without
+/// emitting a transition would never get its pane materialized through
+/// the lifecycle path. While any tracked child still has
+/// `session_id = None` (or has not been materialized as a pane yet) we
 /// periodically refetch its pill metadata via `get_ambient_agent_task`.
-///
-/// This is needed because lifecycle events (`ChildStatusChanged`) carry
-/// only the new status, not the claim-time `session_id`. If the server
-/// takes a long time to claim execution for a child (e.g. queued waiting
-/// for capacity) and no lifecycle transition fires in between, the
-/// `session_id` would never get back-filled by the existing
-/// `handle_child_status_changed` refetch hook and the user would stare at
-/// "Loading session..." indefinitely. A repro logged a 24s window of
-/// session_id pending; a 5s cadence comfortably catches that.
 ///
 /// The timer self-cancels when every tracked child has both
 /// `session_id = Some(_)` and `pane_materialization_requested = true`,
@@ -147,9 +141,7 @@ impl Entity for OrchestrationViewerModel {
 }
 
 impl OrchestrationViewerModel {
-    /// Returns the orchestrator's `AmbientAgentTaskId`. Used by
-    /// `stop_orchestration_polling` to unregister from the streamer's
-    /// viewer-mode entry before the model is dropped.
+    /// Returns the orchestrator's `AmbientAgentTaskId`.
     pub fn parent_task_id(&self) -> AmbientAgentTaskId {
         self.parent_task_id
     }
@@ -173,7 +165,7 @@ impl OrchestrationViewerModel {
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         if FeatureFlag::OrchestrationViewerStreamer.is_enabled() {
-            log::info!(
+            log::debug!(
                 "[orch-viewer] constructing OrchestrationViewerModel (streamer path) \
                  parent_task_id={parent_task_id} terminal_view_id={terminal_view_id:?}"
             );
@@ -205,7 +197,7 @@ impl OrchestrationViewerModel {
             return model;
         }
 
-        log::info!(
+        log::debug!(
             "[orch-viewer] constructing OrchestrationViewerModel (legacy poll path) \
              parent_task_id={parent_task_id} terminal_view_id={terminal_view_id:?}"
         );
@@ -261,68 +253,58 @@ impl OrchestrationViewerModel {
         }
     }
 
-    /// Identifies the orchestrator placeholder via fields that are reliably
-    /// set on the viewer side under QUALITY-726 semantics:
+    /// Identifies the orchestrator placeholder via:
     ///
-    /// - `is_viewing_shared_session()` is stamped by `on_shared_init` on the
+    /// - `is_viewing_shared_session()`, stamped by `on_shared_init` on the
     ///   active conversation when the viewer joins a shared session.
-    /// - `parent_conversation_id().is_none()` distinguishes the orchestrator
-    ///   placeholder from child placeholders, which `register_child` sets up
-    ///   via `start_new_child_conversation` (in turn calling
-    ///   `set_parent_for_conversation`).
+    /// - `parent_conversation_id().is_none()`, which distinguishes the
+    ///   orchestrator placeholder from child placeholders (which
+    ///   `register_child` sets up via `start_new_child_conversation`).
     ///
     /// We deliberately do NOT require `conversation.task_id() == Some(self.parent_task_id)`:
-    /// under QUALITY-726, viewer-side parent placeholders are created from
-    /// replayed StreamInit events whose `run_id` is intentionally empty
-    /// (see `replay_agent_conversations.rs`), so `task_id` on the placeholder
-    /// is always `None`. Requiring it makes this check structurally
-    /// unsatisfiable and matches what the legacy REST polling path tolerates
-    /// in `find_parent_conversation_id`, which just reads
-    /// `active_conversation_id(terminal_view_id)` with no further checks.
+    /// the viewer-side parent placeholder is created from replayed
+    /// StreamInit events whose `run_id` is intentionally empty, so
+    /// `task_id` on the placeholder is always `None`. Requiring it would
+    /// make this check structurally unsatisfiable; the legacy REST polling
+    /// path tolerates the same shape in `find_parent_conversation_id`.
     fn register_viewer_mode_consumer_if_possible(&self, ctx: &mut ModelContext<Self>) {
         let Some(parent_conversation_id) =
             BlocklistAIHistoryModel::as_ref(ctx).active_conversation_id(self.terminal_view_id)
         else {
-            log::warn!(
-                "[orch-viewer] no active conversation for terminal_view_id={:?} \
-                 parent_task_id={}; viewer-mode consumer not yet registered",
+            log::debug!(
+                "[orch-viewer] no active conversation yet for terminal_view_id={:?} \
+                 parent_task_id={}; registration deferred",
                 self.terminal_view_id,
                 self.parent_task_id,
             );
             return;
         };
-        let (is_viewing_shared_session, has_parent_conv, conv_task_id) =
-            BlocklistAIHistoryModel::as_ref(ctx)
-                .conversation(&parent_conversation_id)
-                .map(|conversation| {
-                    (
-                        conversation.is_viewing_shared_session(),
-                        conversation.parent_conversation_id().is_some(),
-                        conversation.task_id(),
-                    )
-                })
-                .unwrap_or((false, false, None));
+        let (is_viewing_shared_session, has_parent_conv) = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&parent_conversation_id)
+            .map(|conversation| {
+                (
+                    conversation.is_viewing_shared_session(),
+                    conversation.parent_conversation_id().is_some(),
+                )
+            })
+            .unwrap_or((false, false));
         let is_parent_placeholder = is_viewing_shared_session && !has_parent_conv;
         if !is_parent_placeholder {
-            log::warn!(
-                "[orch-viewer] active conversation {:?} for terminal_view_id={:?} is not the \
-                 expected parent placeholder (is_viewing_shared_session={is_viewing_shared_session}, \
-                 has_parent_conv={has_parent_conv}, conv_task_id={conv_task_id:?}, \
-                 expected parent_task_id={}); deferring registration",
-                parent_conversation_id,
+            log::debug!(
+                "[orch-viewer] active conversation {parent_conversation_id:?} for \
+                 terminal_view_id={:?} is not the parent placeholder yet \
+                 (is_viewing_shared_session={is_viewing_shared_session}, \
+                 has_parent_conv={has_parent_conv}); registration deferred",
                 self.terminal_view_id,
-                self.parent_task_id,
             );
             return;
         }
 
         let parent_task_id = self.parent_task_id;
         let consumer_id = ctx.model_id();
-        log::info!(
+        log::debug!(
             "[orch-viewer] registering viewer-mode consumer parent_task_id={parent_task_id} \
-             placeholder_conv_id={parent_conversation_id:?} consumer_id={consumer_id:?} \
-             terminal_view_id={:?} (placeholder task_id={conv_task_id:?})",
-            self.terminal_view_id,
+             placeholder_conv_id={parent_conversation_id:?} consumer_id={consumer_id:?}"
         );
         OrchestrationEventStreamer::handle(ctx).update(ctx, move |streamer, ctx| {
             streamer.register_viewer_mode_consumer(
@@ -393,7 +375,7 @@ impl OrchestrationViewerModel {
             return;
         }
 
-        log::info!(
+        log::debug!(
             "[orch-viewer] fetching pill metadata for new child task_id={task_id} \
              parent_task_id={}",
             self.parent_task_id
@@ -460,7 +442,7 @@ impl OrchestrationViewerModel {
             // cue that the server has more to tell us about this run —
             // refetch and re-register so the existing-entry branch of
             // `register_child` can flip `pane_materialization_requested`.
-            log::info!(
+            log::debug!(
                 "[orch-viewer] refetching metadata for child task_id={task_id} \
                  parent_task_id={} (still pending materialization)",
                 self.parent_task_id
@@ -473,8 +455,8 @@ impl OrchestrationViewerModel {
     /// response through `register_child`. Shared between
     /// `handle_child_spawned` (first observation) and
     /// `handle_child_status_changed` (late-bind path for the claim-time
-    /// `session_id`). The `trigger` label is logged on fetch failure so
-    /// the two callers are distinguishable in the diagnostic stream.
+    /// `session_id`). The `trigger` label is logged on fetch failure to
+    /// distinguish the two callers.
     fn spawn_task_metadata_fetch(
         &mut self,
         task_id: AmbientAgentTaskId,
@@ -733,8 +715,8 @@ impl OrchestrationViewerModel {
             return;
         }
 
-        log::info!(
-            "[orch-viewer-loading] PendingSessionIdPoll: refetching {} pending child(ren) \
+        log::debug!(
+            "[orch-viewer] PendingSessionIdPoll: refetching {} pending child(ren) \
              parent_task_id={}",
             pending.len(),
             self.parent_task_id,
@@ -997,12 +979,11 @@ impl OrchestrationViewerModel {
             );
             return;
         };
-        log::info!(
-            "[orch-viewer-loading] dispatching EnsureSharedSessionViewerChildPane \
+        log::debug!(
+            "[orch-viewer] dispatching EnsureSharedSessionViewerChildPane \
              conversation_id={conversation_id:?} session_id={session_id} \
-             child_task_id={child_task_id:?} parent_task_id={} terminal_view_id={:?}",
+             child_task_id={child_task_id:?} parent_task_id={}",
             self.parent_task_id,
-            self.terminal_view_id,
         );
         view.update(ctx, |_view, ctx| {
             ctx.emit(TerminalViewEvent::EnsureSharedSessionViewerChildPane {

@@ -237,11 +237,8 @@ struct ConversationStreamState {
 ///
 /// Today the only consumers are shared-session viewer panes (registered via
 /// [`Self::register_viewer_mode_consumer`]), which is why hydration and
-/// server-cursor push are absent on the ancestor path; if/when a local
-/// orchestrator subscribes to its own ancestor stream (replacing N
-/// per-run-ids streams for its children) it would register here too. See
-/// `specs/orch-viewer-polling/TECH.md` and the note on
-/// [`AncestorForwardingConsumer`].
+/// server-cursor push are absent on the ancestor path. See the note on
+/// [`AncestorForwardingConsumer`] for the future direction.
 #[derive(Default)]
 struct OrchestratorStreamState {
     /// Active viewer-mode consumers. Keyed on the consumer's `EntityId`
@@ -263,7 +260,7 @@ struct OrchestratorStreamState {
     /// [`OrchestrationEventStreamer::persist_event_cursor`] on every
     /// advance, which also persists it to SQLite. Initialized from
     /// `max(child.last_event_sequence, locally persisted cursor)` on cold
-    /// start (see spec § `Cold-start seeding`).
+    /// start.
     event_cursor: i64,
     /// `true` once the cold-start REST seed has been applied. Used to gate
     /// SSE-open until the seed has populated `known_children` and the
@@ -288,9 +285,7 @@ pub struct OrchestrationEventStreamer {
     /// Per-conversation streaming state.
     streams: HashMap<AIConversationId, ConversationStreamState>,
     /// Per-orchestrator viewer-mode entries (one ancestor SSE per
-    /// `parent_task_id`, shared across viewer panes). Pure-additive in PR 1;
-    /// PR 2 wires the SSE driver to this map. See
-    /// `specs/orch-viewer-polling/TECH.md`.
+    /// `parent_task_id`, shared across viewer panes).
     viewer_mode_orchestrators: HashMap<AmbientAgentTaskId, OrchestratorStreamState>,
     /// Monotonic counter for SSE connection generations. Ensures stale
     /// callbacks from replaced connections are discarded.
@@ -311,23 +306,18 @@ pub enum OrchestrationEventStreamerEvent {
     /// First time the streamer has seen a particular `run_id` under
     /// `parent_task_id`. Emitted exactly once per child by the viewer-mode
     /// ancestor consumer; viewer-pane subscribers translate it into a local
-    /// placeholder conversation. See `Streamer ↔ viewer-model contract` in
-    /// `specs/orch-viewer-polling/TECH.md`.
-    ///
-    /// PR 1 declares the variant; PR 2 emits it from the SSE driver.
+    /// placeholder conversation.
     #[allow(dead_code)]
     ChildSpawned {
         parent_task_id: AmbientAgentTaskId,
         run_id: String,
     },
-    /// Lifecycle transition for a known child under `parent_task_id`. The
-    /// `status` field is the result of the
-    /// `LifecycleEventType -> ConversationStatus` mapping helper added
-    /// alongside this variant. Viewer-pane subscribers look up the
-    /// child's local placeholder via their own `run_id -> conversation_id`
-    /// map and write the status through `BlocklistAIHistoryModel`.
-    ///
-    /// PR 1 declares the variant; PR 2 emits it from the SSE driver.
+    /// Lifecycle transition for a known child under `parent_task_id`.
+    /// `status` is the result of the
+    /// `LifecycleEventType -> ConversationStatus` mapping helper.
+    /// Viewer-pane subscribers look up the child's local placeholder via
+    /// their own `run_id -> conversation_id` map and write the status
+    /// through `BlocklistAIHistoryModel`.
     #[allow(dead_code)]
     ChildStatusChanged {
         parent_task_id: AmbientAgentTaskId,
@@ -370,8 +360,7 @@ impl OrchestrationEventStreamer {
         // resuming its own SSE. The local cursor is still persisted to
         // SQLite above (it represents "highest sequence seen across the
         // parent's direct child set" for viewer-mode conversations, a
-        // different scope from owner-side). See
-        // `specs/orch-viewer-polling/TECH.md`, § `Cursor consistency`.
+        // different scope from owner-side).
         let (own_run_id, is_viewer_mode) = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
             .map(|conversation| {
@@ -501,7 +490,7 @@ impl OrchestrationEventStreamer {
         let stream = self.streams.entry(conversation_id).or_default();
         let inserted = stream.consumers.insert(consumer_id);
         if inserted {
-            log::info!(
+            log::debug!(
                 "register_consumer for {conversation_id:?}: {consumer_id:?} \
                  (total={})",
                 stream.consumers.len()
@@ -534,7 +523,7 @@ impl OrchestrationEventStreamer {
                 .get(&conversation_id)
                 .map(|s| s.consumers.len())
                 .unwrap_or(0);
-            log::info!(
+            log::debug!(
                 "unregister_consumer for {conversation_id:?}: {consumer_id:?} \
                  (remaining={remaining})"
             );
@@ -584,9 +573,7 @@ impl OrchestrationEventStreamer {
     /// On first registration for a `parent_task_id` (or on any registration
     /// before the cold-start seed has applied) this kicks off the seed REST
     /// fetch; once the seed lands the ancestor SSE opens automatically via
-    /// [`Self::start_ancestor_sse_if_seeded`]. See
-    /// `specs/orch-viewer-polling/TECH.md` (§ `Cold-start seeding`,
-    /// § `PR 2 — Ancestor SSE consumer + viewer-model migration`).
+    /// [`Self::start_ancestor_sse_if_seeded`].
     ///
     /// `dead_code` stays suppressed because the only caller is
     /// `OrchestrationViewerModel` (gated on `FeatureFlag::OrchestrationViewerStreamer`);
@@ -609,7 +596,7 @@ impl OrchestrationEventStreamer {
                 .consumers
                 .insert(consumer_id, orchestrator_placeholder_conv_id)
                 .is_some();
-            log::info!(
+            log::debug!(
                 "register_viewer_mode_consumer for parent_task_id={parent_task_id}: \
                  consumer_id={consumer_id:?} (refcount={}, was_present={was_present})",
                 entry.consumers.len()
@@ -638,9 +625,10 @@ impl OrchestrationEventStreamer {
 
     /// Pair to [`Self::register_viewer_mode_consumer`]. Drops `consumer_id`
     /// from `parent_task_id`'s entry; when the last viewer unregisters, the
-    /// entry itself is removed *and* the ancestor SSE is torn down. Idempotent
-    /// and safe to call on an already-removed entry — see the spec's
-    /// `Drop refcount race` risk.
+    /// entry itself is removed *and* the ancestor SSE is torn down.
+    /// Idempotent and safe to call on an already-removed entry — late
+    /// `Drop` impls or double-unregisters race against the entry already
+    /// being torn down by the last consumer.
     #[allow(dead_code)]
     pub fn unregister_viewer_mode_consumer(
         &mut self,
@@ -655,7 +643,7 @@ impl OrchestrationEventStreamer {
         let removed = entry.consumers.remove(&consumer_id).is_some();
         let remaining = entry.consumers.len();
         if removed {
-            log::info!(
+            log::debug!(
                 "unregister_viewer_mode_consumer for parent_task_id={parent_task_id}: \
                  consumer_id={consumer_id:?} (remaining={remaining})"
             );
@@ -708,7 +696,7 @@ impl OrchestrationEventStreamer {
             .map(|entry| entry.known_children.iter().cloned().collect::<Vec<_>>())
             .unwrap_or_default();
         if !run_ids.is_empty() {
-            log::info!(
+            log::debug!(
                 "[orch-viewer-streamer] replaying known children for parent_task_id={parent_task_id}: \
                  count={}",
                 run_ids.len()
@@ -750,19 +738,16 @@ impl OrchestrationEventStreamer {
 
     /// Issues a one-shot `GET /agent/runs?ancestor_run_id={parent}` to
     /// populate the per-orchestrator entry's known-child set and seed the
-    /// SSE cursor. Per spec § `Cold-start seeding`:
-    ///
-    /// `seed = max(child.last_event_sequence across direct children, locally
-    /// persisted cursor on the orchestrator placeholder)`
-    ///
-    /// Once the seed lands, [`Self::finish_ancestor_seed_fetch`] opens the
-    /// ancestor SSE with `since=seed`.
+    /// SSE cursor to `max(child.last_event_sequence across direct children,
+    /// locally persisted cursor on the orchestrator placeholder)`. Once the
+    /// seed lands, [`Self::finish_ancestor_seed_fetch`] opens the ancestor
+    /// SSE with `since=seed`.
     fn spawn_ancestor_seed_fetch(
         &mut self,
         parent_task_id: AmbientAgentTaskId,
         ctx: &mut ModelContext<Self>,
     ) {
-        log::info!(
+        log::debug!(
             "[orch-viewer-streamer] spawning ancestor seed fetch for parent_task_id={parent_task_id} \
              (limit={VIEWER_MODE_SEED_FETCH_LIMIT})"
         );
@@ -827,7 +812,7 @@ impl OrchestrationEventStreamer {
                     }
                     entry.event_cursor = seed;
                     entry.seeded = true;
-                    log::info!(
+                    log::debug!(
                         "[orch-viewer-streamer] ancestor seed applied for parent_task_id={parent_task_id}: \
                          tasks_received={tasks_received} children_seeded={} known_children_total={} \
                          seed_cursor={seed} local_cursor_before={local_cursor}",
@@ -1597,14 +1582,12 @@ impl OrchestrationEventStreamer {
     /// run lives elsewhere (and that process owns the inbox), so this
     /// process should not open its own SSE for the conversation.
     ///
-    /// Shared-session viewer placeholders are excluded *only* when the new
+    /// Shared-session viewer placeholders are excluded *only* when the
     /// `OrchestrationViewerStreamer` flag is off. When the flag is on, the
-    /// streamer serves them via its viewer-mode entry path (PR 1
-    /// bookkeeping + PR 2 ancestor SSE), so they must not be excluded here.
-    /// `is_remote_child()` stays excluded unconditionally — owner-side
-    /// remote children still receive events through their parent's existing
-    /// per-run-ids SSE. See `specs/orch-viewer-polling/TECH.md`,
-    /// § `Risks and mitigations: is_remote_run_view relaxation scope`.
+    /// streamer serves them via the ancestor SSE on its viewer-mode entry
+    /// path, so they must not be excluded here. `is_remote_child()` stays
+    /// excluded unconditionally — owner-side remote children still receive
+    /// events through their parent's existing per-run-ids SSE.
     fn is_remote_run_view(
         &self,
         conversation_id: AIConversationId,
@@ -2180,10 +2163,8 @@ fn parse_occurred_at(s: &str) -> prost_types::Timestamp {
 /// forward-compat catch-all (`Unspecified`) maps to `Error` to match how
 /// `AmbientAgentTaskState::Unknown` is treated today.
 ///
-/// `Blocked` is mapped with an empty `blocked_action`. The wire event
-/// currently does not carry a `blocked_action` payload, matching the REST
-/// path. See `specs/orch-viewer-polling/TECH.md`,
-/// § `Risks and mitigations: Blocked payload`.
+/// `Blocked` is mapped with an empty `blocked_action`: the wire event does
+/// not currently carry a `blocked_action` payload, matching the REST path.
 #[allow(deprecated)]
 pub(super) fn conversation_status_from_lifecycle_event_type(
     event_type: api::LifecycleEventType,

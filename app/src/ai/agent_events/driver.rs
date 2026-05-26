@@ -21,21 +21,19 @@ pub(crate) const DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG: usize = 5;
 /// Selects which server-side filter shape an [`AgentEventSource`] should use
 /// when opening a stream.
 ///
-/// The existing per-run-ids filter (`AgentEventFilter::RunIds`) maps to the
-/// `?run_ids[]=` query parameter on the SSE endpoint and is used by both the
-/// orchestrator-owner per-conversation stream and the dormant Claude wake
-/// listener. The ancestor filter (`AgentEventFilter::AncestorRunId`) maps to
-/// the new `?ancestor_run_id=` shape added in `warp-server` for the
-/// orchestration-viewer-polling spec (`specs/orch-viewer-polling/TECH.md`) and
-/// streams events for any direct child of the supplied parent run.
+/// `RunIds` maps to the `?run_ids[]=` query parameter on the SSE endpoint
+/// and is used by the orchestrator-owner per-conversation stream and the
+/// dormant Claude wake listener. `AncestorRunId` maps to the
+/// `?ancestor_run_id=` shape and streams events for every direct child of
+/// the supplied parent run; today only the shared-session viewer's
+/// pill bar consumes it.
 #[derive(Clone, Debug)]
 pub(crate) enum AgentEventFilter {
     /// One stream per multiplexed set of run IDs. Matches today's
     /// `?run_ids[]=` endpoint.
     RunIds(Vec<String>),
     /// Stream events for every direct child of the supplied parent run.
-    /// Matches the `?ancestor_run_id=` endpoint added by PR 2 of
-    /// `specs/orch-viewer-polling/TECH.md`.
+    /// Matches the `?ancestor_run_id=` endpoint.
     AncestorRunId(String),
 }
 
