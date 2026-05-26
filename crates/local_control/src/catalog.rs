@@ -547,21 +547,48 @@ impl ActionKind {
             | Self::AppPing
             | Self::AppVersion
             | Self::AppActive
+            | Self::AppFocus
             | Self::CapabilityList
             | Self::CapabilityInspect
             | Self::WindowList
             | Self::WindowInspect
+            | Self::WindowCreate
+            | Self::WindowFocus
+            | Self::WindowClose
             | Self::TabList
             | Self::TabInspect
             | Self::TabCreate
+            | Self::TabActivate
+            | Self::TabMove
+            | Self::TabClose
+            | Self::TabRename
+            | Self::TabResetName
+            | Self::TabColorClear
             | Self::PaneList
             | Self::PaneInspect
+            | Self::PaneSplit
+            | Self::PaneFocus
+            | Self::PaneNavigate
+            | Self::PaneResize
+            | Self::PaneMaximize
+            | Self::PaneUnmaximize
+            | Self::PaneClose
+            | Self::PaneRename
+            | Self::PaneResetName
             | Self::SessionList
             | Self::SessionInspect
+            | Self::SessionActivate
+            | Self::SessionPrevious
+            | Self::SessionNext
+            | Self::SessionReopenClosed
             | Self::BlockList
             | Self::BlockInspect
             | Self::BlockOutput
             | Self::InputGet
+            | Self::InputInsert
+            | Self::InputReplace
+            | Self::InputClear
+            | Self::InputModeSet
             | Self::HistoryList
             | Self::ThemeList
             | Self::ThemeGet
@@ -572,41 +599,31 @@ impl ActionKind {
             | Self::KeybindingGet
             | Self::ActionList
             | Self::ActionInspect
+            | Self::SurfaceSettingsOpen
+            | Self::SurfaceCommandPaletteOpen
+            | Self::SurfaceCommandSearchOpen
+            | Self::SurfaceWarpDriveOpen
+            | Self::SurfaceWarpDriveToggle
+            | Self::SurfaceResourceCenterToggle
+            | Self::SurfaceAiAssistantToggle
+            | Self::SurfaceCodeReviewToggle
+            | Self::SurfaceLeftPanelToggle
+            | Self::SurfaceRightPanelToggle
+            | Self::SurfaceVerticalTabsToggle
             | Self::FileList
+            | Self::FileOpen
             | Self::ProjectActive
             | Self::ProjectList
+            | Self::ProjectOpen
             | Self::DriveList
-            | Self::DriveInspect => ActionImplementationStatus::Implemented,
-            Self::AppFocus
-            | Self::AuthStatus
+            | Self::DriveInspect
+            | Self::DriveOpen
+            | Self::DriveNotebookOpen
+            | Self::DriveEnvVarCollectionOpen
+            | Self::DriveObjectShareOpen => ActionImplementationStatus::Implemented,
+            Self::AuthStatus
             | Self::AuthLogin
-            | Self::WindowCreate
-            | Self::WindowFocus
-            | Self::WindowClose
-            | Self::TabActivate
-            | Self::TabMove
-            | Self::TabClose
-            | Self::TabRename
-            | Self::TabResetName
             | Self::TabColorSet
-            | Self::TabColorClear
-            | Self::PaneSplit
-            | Self::PaneFocus
-            | Self::PaneNavigate
-            | Self::PaneResize
-            | Self::PaneMaximize
-            | Self::PaneUnmaximize
-            | Self::PaneClose
-            | Self::PaneRename
-            | Self::PaneResetName
-            | Self::SessionActivate
-            | Self::SessionPrevious
-            | Self::SessionNext
-            | Self::SessionReopenClosed
-            | Self::InputInsert
-            | Self::InputReplace
-            | Self::InputClear
-            | Self::InputModeSet
             | Self::InputRun
             | Self::ThemeSet
             | Self::ThemeSystemSet
@@ -620,23 +637,6 @@ impl ActionKind {
             | Self::AppearanceZoomReset
             | Self::SettingSet
             | Self::SettingToggle
-            | Self::SurfaceSettingsOpen
-            | Self::SurfaceCommandPaletteOpen
-            | Self::SurfaceCommandSearchOpen
-            | Self::SurfaceWarpDriveOpen
-            | Self::SurfaceWarpDriveToggle
-            | Self::SurfaceResourceCenterToggle
-            | Self::SurfaceAiAssistantToggle
-            | Self::SurfaceCodeReviewToggle
-            | Self::SurfaceLeftPanelToggle
-            | Self::SurfaceRightPanelToggle
-            | Self::SurfaceVerticalTabsToggle
-            | Self::FileOpen
-            | Self::ProjectOpen
-            | Self::DriveOpen
-            | Self::DriveNotebookOpen
-            | Self::DriveEnvVarCollectionOpen
-            | Self::DriveObjectShareOpen
             | Self::DriveObjectCreate
             | Self::DriveObjectUpdate
             | Self::DriveObjectDelete
