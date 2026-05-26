@@ -40,10 +40,8 @@ pub fn is_warp_default_terminal() -> bool {
     };
 
     // `LSCopyDefaultRoleHandlerForContentType` follows the Core Foundation
-    // create rule, so take ownership of the +1 reference immediately. The
-    // previous code only wrapped it after the `get_warp_bundle_id` check below,
-    // leaking the handler when that returned `None`; `CFRetained` now releases
-    // it on every exit path.
+    // create rule, so take ownership of the +1 reference immediately;
+    // `CFRetained` releases it on every exit path.
     let handler_string = unsafe { CFRetained::from_raw(handler) };
 
     let Some(warp_bundle_id) = get_warp_bundle_id() else {

@@ -87,7 +87,7 @@ mod mac {
     fn system_locale() -> String {
         // Read the current locale from `NSLocale`. objc2 returns each getter
         // result as a `Retained`, which claims the autoreleased value and
-        // releases it on drop, so we no longer manage these lifetimes by hand.
+        // releases it on drop.
         let locale = NSLocale::currentLocale();
 
         // `localeIdentifier` returns extra metadata with the locale (including currency and
@@ -100,14 +100,9 @@ mod mac {
         let is_language_code_supported = locale.respondsToSelector(sel!(languageCode));
         let is_country_code_supported = locale.respondsToSelector(sel!(countryCode));
         if is_language_code_supported && is_country_code_supported {
-            // objc2's `Retained` releases each getter result on drop, so the
-            // manual `[languageCode release]` the previous code performed (an
-            // unbalanced over-release of a +0 getter return) is intentionally
-            // gone.
             let language_code = locale.languageCode().to_string();
             // `countryCode` is nil for a region-less locale, so degrade to an
-            // empty country to match the previous `nsstring_as_str` behavior,
-            // which yielded `""` on a nil return.
+            // empty country.
             let country_code = locale
                 .countryCode()
                 .map(|c| c.to_string())

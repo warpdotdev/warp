@@ -387,8 +387,7 @@ fn default_app_to_open_path(file_path: &Path) -> Option<String> {
 }
 
 // Returns the bundle identifier of the application macOS would use to open the
-// given file, or `None` if there is no registered handler. Ported from the
-// former `app_bundle.m`.
+// given file, or `None` if there is no registered handler.
 fn get_default_app_bundle_for_file(file_path: &NSString) -> Option<Retained<NSString>> {
     let file_url = NSURL::fileURLWithPath(file_path);
     let app_url = NSWorkspace::sharedWorkspace().URLForApplicationToOpenURL(&file_url)?;
