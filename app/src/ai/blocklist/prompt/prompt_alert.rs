@@ -448,11 +448,8 @@ impl View for PromptAlertView {
         let can_purchase_addon_credits = current_team
             .and_then(|team| team.billing_metadata.tier.purchase_add_on_credits_policy)
             .is_some_and(|policy| policy.enabled);
-        let is_enterprise_team =
-            current_team.is_some_and(|team| team.billing_metadata.is_enterprise_plan());
 
-        let suggest_buy_credits = !is_enterprise_team
-            && can_purchase_addon_credits
+        let suggest_buy_credits = can_purchase_addon_credits
             && has_admin_permissions
             && matches!(
                 state,
