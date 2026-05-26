@@ -1,34 +1,20 @@
 //! Drives the orchestration pill bar in shared session viewers.
 //!
-//! After the viewer joins a parent ambient-agent session,
-//! [`OrchestrationViewerModel`] discovers and tracks the parent's direct
-//! children using one of two delivery paths, gated on
-//! [`FeatureFlag::OrchestrationViewerStreamer`]:
+//! After the viewer joins a parent ambient-agent session, this model
+//! discovers and tracks the parent's direct children using one of two
+//! delivery paths, gated on [`FeatureFlag::OrchestrationViewerStreamer`]:
 //!
-//! 1. **Streamer-driven (flag ON, default).** The model registers itself as a
-//!    viewer-mode consumer with [`OrchestrationEventStreamer`] which:
-//!     - Runs a one-shot REST `?ancestor_run_id=` snapshot to seed the
-//!       known-child set and the SSE cursor.
-//!     - Opens a long-lived ancestor SSE that streams lifecycle events for
-//!       every direct child.
-//!     - Broadcasts [`OrchestrationEventStreamerEvent::ChildSpawned`] /
-//!       [`OrchestrationEventStreamerEvent::ChildStatusChanged`] keyed on
-//!       `parent_task_id`. The viewer model translates those events into
-//!       local placeholder conversations.
-//! 2. **Legacy REST polling (flag OFF).** The model periodically polls
-//!    `GET /agent/runs?ancestor_run_id=` (5s / 30s idle) and reconciles the
-//!    full child list each cycle. Retained until the streamer path is
-//!    rolled out everywhere.
+//! 1. **Streamer-driven (flag ON, default).** Registers as a viewer-mode
+//!    consumer on [`OrchestrationEventStreamer`], which opens an ancestor
+//!    SSE (seeded by a one-shot REST snapshot) and broadcasts
+//!    `ChildSpawned`/`ChildStatusChanged` events.
+//! 2. **Legacy REST polling (flag OFF).** Periodically polls
+//!    `GET /agent/runs?ancestor_run_id=` and reconciles the full child
+//!    list each cycle.
 //!
-//! In both paths the model maintains a `run_id → AIConversationId` map so
-//! per-child pill metadata, status writes, and `EnsureSharedSessionViewerChildPane`
-//! emissions resolve to the right local placeholder. Each viewer pane has
-//! its own model and its own placeholder conversations — the streamer is
-//! shared, the placeholders are not.
-//!
-//! Pill clicks navigate via `SwapPaneToConversation` (the existing
-//! local-orchestration mechanism), swapping the parent pane for the
-//! hidden child pane materialized by `EnsureSharedSessionViewerChildPane`.
+//! Each viewer pane has its own model with its own placeholder
+//! conversations; the streamer (when on) is a shared singleton.
+//! Pill clicks navigate via `SwapPaneToConversation`.
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -48,90 +34,49 @@ use crate::server::server_api::ai::TaskListFilter;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::{Event as TerminalViewEvent, TerminalView};
 
-/// Max child runs per legacy `GET /agent/runs?ancestor_run_id=` page. Used by
-/// the polling path only; the streamer-driven path's cold-start seed uses
-/// its own constant inside [`OrchestrationEventStreamer`].
+/// Max child runs per legacy `?ancestor_run_id=` page (polling path).
 const CHILD_DISCOVERY_FETCH_LIMIT: i32 = 100;
-/// Polling cadence (legacy path) while at least one child is non-terminal.
+/// Polling cadence (legacy path) while any child is non-terminal.
 const STATUS_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// Slower polling cadence (legacy path) once every known child is terminal.
-/// We don't stop polling entirely because follow-up input can spawn new
-/// children.
 const STATUS_POLL_INTERVAL_IDLE: Duration = Duration::from_secs(30);
-
-/// Cadence for the per-child `session_id` discovery refetch used by the
-/// streamer-driven path. Lifecycle events carry only the new status, not
-/// the claim-time `session_id`, so a child that stays queued without
-/// emitting a transition would never get its pane materialized through
-/// the lifecycle path. While any tracked child still has
-/// `session_id = None` (or has not been materialized as a pane yet) we
-/// periodically refetch its pill metadata via `get_ambient_agent_task`.
-///
-/// The timer self-cancels when every tracked child has both
-/// `session_id = Some(_)` and `pane_materialization_requested = true`,
-/// so cost is bounded by how long children stay pre-claim.
+/// Refetch cadence for children whose claim-time `session_id` is not yet known.
 const PENDING_SESSION_ID_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Per-child orchestration metadata, keyed by `AmbientAgentTaskId`.
 struct ChildAgentEntry {
     conversation_id: AIConversationId,
-    /// Server-side session id; `None` until execution has been claimed.
+    /// `None` until execution has been claimed.
     session_id: Option<SessionId>,
-    /// Most recent state observed (polling path) or the last status applied
-    /// (streamer path). Used by the polling path to dedupe status writes;
-    /// the streamer path treats every event as authoritative.
+    /// Polling path uses this to dedupe status writes.
     last_state: AmbientAgentTaskState,
-    /// True once we've emitted `EnsureSharedSessionViewerChildPane` for
-    /// this child, so re-polls / re-events don't spam the event bus.
+    /// True once `EnsureSharedSessionViewerChildPane` has been emitted.
     pane_materialization_requested: bool,
 }
 
-/// Owns child discovery + status tracking for a shared session viewer of an
-/// orchestrated session.
+/// Owns child discovery + status tracking for a shared session viewer of
+/// an orchestrated session.
 pub struct OrchestrationViewerModel {
-    /// Orchestrator run id; used as the `ancestor_run_id` filter on both
-    /// paths (REST poll under the flag off, broadcast event subscription
-    /// filter under the flag on).
     parent_task_id: AmbientAgentTaskId,
-    /// Owns the child conversations and anchors the orchestrator lookup.
     terminal_view_id: EntityId,
-    /// Used to emit `EnsureSharedSessionViewerChildPane` on the parent's
-    /// view when a child becomes joinable.
     terminal_view: WeakViewHandle<TerminalView>,
-    /// Local map of children we've materialized as placeholder conversations.
-    /// Indexed by `AmbientAgentTaskId` so both paths (REST list response,
-    /// streamer broadcast event) can resolve to the same record.
+    /// Placeholder conversations materialized for direct children.
     children: HashMap<AmbientAgentTaskId, ChildAgentEntry>,
-    /// Secondary index keyed on the stringified run_id. The streamer's
-    /// broadcast events carry `String` run_ids, so this lets the event
-    /// handler skip the parse + map lookup that the polling path uses.
-    /// Always kept in sync with [`Self::children`].
+    /// Secondary index keyed by stringified `run_id`, used by the streamer
+    /// path's broadcast event handler. Kept in sync with `children`.
     children_by_run_id: HashMap<String, AmbientAgentTaskId>,
-    /// (Polling path only) Aborted and replaced by every
-    /// `schedule_next_poll` so we never have more than one timer chain in
-    /// flight. Always `None` when the streamer flag is on.
+    /// (Polling path.) `None` on the streamer path.
     polling_handle: Option<SpawnedFutureHandle>,
-    /// (Polling path only) Bumped before each fetch; stale responses are
-    /// dropped so a slow timer-fired fetch can't clobber a fresher kick.
+    /// (Polling path.) Bumped before each fetch so stale responses can
+    /// be dropped.
     fetch_generation: u64,
-    /// Set when the most recent fetch returned no children; we wait for
-    /// an `AppendedExchange` on the orchestrator before polling again.
-    /// Distinct from the in-flight state (`polling_handle = None`).
+    /// Set when the most recent fetch returned no children; resumed by
+    /// the next orchestrator `AppendedExchange`.
     idle_due_to_no_children: bool,
-    /// Timer chain for the per-child `session_id` discovery refetch.
-    /// Scheduled by `maybe_schedule_pending_session_id_poll` whenever any
-    /// tracked child is still pending materialization
-    /// (`session_id.is_none() || !pane_materialization_requested`).
-    /// Reschedules itself on each tick until every child has materialized;
-    /// then stays `None` until the next pending child is registered.
-    /// Always `None` on the legacy polling path, which gets the same
-    /// late-bind behaviour for free via the full-list refetch.
+    /// (Streamer path.) Periodic timer fetching the claim-time
+    /// `session_id` for not-yet-claimed children.
     pending_session_id_poll_handle: Option<SpawnedFutureHandle>,
-    /// Test-only: increments each time `spawn_task_metadata_fetch` is
-    /// invoked. Lets unit tests assert on the refetch dispatch decisions
-    /// in `handle_child_spawned` and `handle_child_status_changed`
-    /// without standing up a `MockAIClient`. Behaviorally inert in
-    /// non-test builds.
+    /// Test-only: counts `spawn_task_metadata_fetch` invocations.
     #[cfg(test)]
     metadata_fetch_dispatch_count: usize,
 }
@@ -146,18 +91,7 @@ impl OrchestrationViewerModel {
         self.parent_task_id
     }
     /// Builds a viewer model attached to the given parent shared session.
-    ///
-    /// When [`FeatureFlag::OrchestrationViewerStreamer`] is ON:
-    /// - Registers as a viewer-mode consumer on the shared
-    ///   [`OrchestrationEventStreamer`] singleton, which kicks off the
-    ///   cold-start REST seed and opens the ancestor SSE.
-    /// - Subscribes to `ChildSpawned` / `ChildStatusChanged` broadcasts.
-    /// - No polling loop or `AppendedExchange` subscription is created.
-    ///
-    /// When the flag is OFF (legacy path):
-    /// - Subscribes to `BlocklistAIHistoryEvent::AppendedExchange` to kick
-    ///   polling out of idle.
-    /// - Kicks off the initial children fetch and schedules the first poll.
+    /// See the module docs for the two delivery paths.
     pub fn new(
         parent_task_id: AmbientAgentTaskId,
         terminal_view_id: EntityId,
@@ -240,20 +174,11 @@ impl OrchestrationViewerModel {
         }
     }
 
-    /// Identifies the orchestrator placeholder via:
-    ///
-    /// - `is_viewing_shared_session()`, stamped by `on_shared_init` on the
-    ///   active conversation when the viewer joins a shared session.
-    /// - `parent_conversation_id().is_none()`, which distinguishes the
-    ///   orchestrator placeholder from child placeholders (which
-    ///   `register_child` sets up via `start_new_child_conversation`).
-    ///
-    /// We deliberately do NOT require `conversation.task_id() == Some(self.parent_task_id)`:
-    /// the viewer-side parent placeholder is created from replayed
-    /// StreamInit events whose `run_id` is intentionally empty, so
-    /// `task_id` on the placeholder is always `None`. Requiring it would
-    /// make this check structurally unsatisfiable; the legacy REST polling
-    /// path tolerates the same shape in `find_parent_conversation_id`.
+    /// Registers this model as a viewer-mode consumer once the active
+    /// conversation is the orchestrator placeholder (identified by
+    /// `is_viewing_shared_session() && parent_conversation_id().is_none()`).
+    /// Defers if the placeholder hasn't been stamped yet; re-runs from
+    /// history events that may flip the placeholder state.
     fn register_viewer_mode_consumer_if_possible(&self, ctx: &mut ModelContext<Self>) {
         let Some(parent_conversation_id) =
             BlocklistAIHistoryModel::as_ref(ctx).active_conversation_id(self.terminal_view_id)
@@ -299,9 +224,8 @@ impl OrchestrationViewerModel {
         });
     }
 
-    /// Routes broadcast events from [`OrchestrationEventStreamer`] into the
-    /// per-pane placeholder map. Filters on `parent_task_id` so a single
-    /// streamer singleton can serve multiple orchestrators concurrently.
+    /// Routes broadcast events from the streamer, filtered on this model's
+    /// `parent_task_id`.
     fn handle_streamer_event(
         &mut self,
         event: &OrchestrationEventStreamerEvent,
@@ -321,20 +245,14 @@ impl OrchestrationViewerModel {
             } if *parent_task_id == self.parent_task_id => {
                 self.handle_child_status_changed(run_id, status.clone(), ctx);
             }
-            // Events for other orchestrators (or non-viewer-mode variants)
-            // are intentionally ignored. Each viewer pane has its own model
-            // filtered on its own `parent_task_id`.
+            // Other orchestrators (or non-viewer-mode variants) are ignored.
             _ => {}
         }
     }
 
-    /// First observation of a child run_id for this orchestrator. Fetches
-    /// pill metadata via `get_ambient_agent_task`, creates the child
-    /// placeholder conversation, and emits
-    /// `EnsureSharedSessionViewerChildPane` if a session id is already
-    /// known. If pill metadata can't be fetched (transient error, deleted
-    /// task), the event is dropped — the next status event for the same
-    /// run_id will re-attempt.
+    /// First observation of a child `run_id`. Fetches pill metadata and
+    /// dispatches to `register_child`. Dropped events are retried on the
+    /// next status change for the same `run_id`.
     fn handle_child_spawned(&mut self, run_id: String, ctx: &mut ModelContext<Self>) {
         let Ok(task_id) = run_id.parse::<AmbientAgentTaskId>() else {
             log::warn!("[orch-viewer] ChildSpawned with malformed run_id={run_id:?}; dropping");
@@ -348,23 +266,10 @@ impl OrchestrationViewerModel {
         self.spawn_task_metadata_fetch(task_id, "ChildSpawned", ctx);
     }
 
-    /// Looks up the placeholder for `run_id` and writes the status through
-    /// [`BlocklistAIHistoryModel::update_conversation_status`]. Drops
-    /// silently if the local map has no entry for this run_id — the
-    /// `ChildSpawned` handler will run next and re-create the placeholder.
-    /// `TaskStatusSyncModel::on_conversation_status_updated` already
-    /// early-returns for `is_viewing_shared_session()` conversations so
-    /// these writes do not echo back to the server.
-    ///
-    /// If the placeholder is still pending materialization
-    /// (`entry.session_id.is_none() || !entry.pane_materialization_requested`),
-    /// a metadata refetch is dispatched so the claim-time `session_id`
-    /// gets picked up. The polling path gets this for free by re-fetching
-    /// the full child list every cycle; the streamer path needs an
-    /// explicit hook because lifecycle events carry only status, not
-    /// session_id. Once the entry has been materialized (i.e. once a
-    /// `register_child` call has seen `session_id: Some(_)`), subsequent
-    /// status changes do NOT refetch — they're just status-only writes.
+    /// Writes the new status through `BlocklistAIHistoryModel`. If the
+    /// entry hasn't been fully materialized yet (no `session_id` or no
+    /// pane), also kicks a metadata refetch so the claim-time
+    /// `session_id` eventually lands.
     fn handle_child_status_changed(
         &mut self,
         run_id: &str,
@@ -372,8 +277,7 @@ impl OrchestrationViewerModel {
         ctx: &mut ModelContext<Self>,
     ) {
         let Some(task_id) = self.children_by_run_id.get(run_id).copied() else {
-            // No placeholder yet; the corresponding ChildSpawned handler
-            // will create one on first observation.
+            // No placeholder yet; the ChildSpawned handler will create one.
             return;
         };
         let Some(entry) = self.children.get(&task_id) else {
@@ -388,22 +292,13 @@ impl OrchestrationViewerModel {
         });
 
         if needs_metadata_refetch {
-            // The placeholder hasn't picked up a `session_id` yet (child
-            // was queued/pending at first observation), so the pill click
-            // can't materialize a viewer pane. A status transition is our
-            // cue that the server has more to tell us about this run —
-            // refetch and re-register so the existing-entry branch of
-            // `register_child` can flip `pane_materialization_requested`.
             self.spawn_task_metadata_fetch(task_id, "ChildStatusChanged", ctx);
         }
     }
 
-    /// Dispatches a `get_ambient_agent_task(task_id)` fetch and routes the
-    /// response through `register_child`. Shared between
-    /// `handle_child_spawned` (first observation) and
-    /// `handle_child_status_changed` (late-bind path for the claim-time
-    /// `session_id`). The `trigger` label is logged on fetch failure to
-    /// distinguish the two callers.
+    /// Fetches a single task's metadata and routes the response through
+    /// `register_child`. The `trigger` label is logged on failure to
+    /// distinguish the caller.
     fn spawn_task_metadata_fetch(
         &mut self,
         task_id: AmbientAgentTaskId,
@@ -488,9 +383,7 @@ impl OrchestrationViewerModel {
                 entry.pane_materialization_requested = true;
                 self.request_child_pane_materialization(conversation_id, sid, ctx);
             }
-            // Existing-entry branch may have transitioned the entry to
-            // fully-materialized; the helper short-circuits when no children
-            // remain pending, so this is safe to call unconditionally.
+            // Re-arm the session_id timer; no-op once all children are materialized.
             self.maybe_schedule_pending_session_id_poll(ctx);
             return;
         }
@@ -537,12 +430,8 @@ impl OrchestrationViewerModel {
                     conversation.set_fallback_display_title(fallback_title);
                 }
             }
-            // Stamp the child's `run_id` / `task_id` and populate the
-            // `agent_id_to_conversation_id` index so transcript references
-            // (received-message, send-message, lifecycle blocks) resolve to
-            // this child via `conversation_id_for_agent_id`. Replaces the
-            // earlier `set_task_id` call, which set the conversation field
-            // but never updated the reverse index.
+            // Stamp run_id/task_id and populate the agent_id index so
+            // transcript references resolve to this child.
             history.assign_run_id_for_conversation(
                 conversation_id,
                 task_id.to_string(),
@@ -581,33 +470,21 @@ impl OrchestrationViewerModel {
             self.request_child_pane_materialization(conversation_id, sid, ctx);
         }
 
-        // A freshly-registered entry with `session_id = None` (the most
-        // common case for the streamer path) needs the periodic refetch
-        // timer running so the claim-time session_id eventually flows in.
-        // No-ops on the legacy polling path (its full-list refetch already
-        // covers the same ground).
+        // Streamer path only: arm the session_id refetch timer.
         self.maybe_schedule_pending_session_id_poll(ctx);
     }
 
     // ---- Pending-session_id polling (streamer path) -------------------
 
-    /// Returns true iff at least one tracked child is still pending
-    /// materialization. Used by [`Self::maybe_schedule_pending_session_id_poll`]
-    /// as the timer's continuation gate.
+    /// True iff at least one tracked child is still pending materialization.
     fn has_pending_session_id_children(&self) -> bool {
         self.children
             .values()
             .any(|entry| entry.session_id.is_none() || !entry.pane_materialization_requested)
     }
 
-    /// Schedules the next [`PENDING_SESSION_ID_POLL_INTERVAL`] tick of the
-    /// streamer-path session_id discovery refetch, iff:
-    /// - the streamer flag is on (legacy path covers this via its full
-    ///   list refetch),
-    /// - no timer is currently in flight, and
-    /// - at least one tracked child is still pending materialization.
-    ///
-    /// Safe to call unconditionally; the early-return guards keep it cheap.
+    /// Schedules the next session_id refetch tick on the streamer path.
+    /// Safe to call unconditionally — bails when not needed.
     fn maybe_schedule_pending_session_id_poll(&mut self, ctx: &mut ModelContext<Self>) {
         if !FeatureFlag::OrchestrationViewerStreamer.is_enabled() {
             return;
@@ -630,17 +507,9 @@ impl OrchestrationViewerModel {
         self.pending_session_id_poll_handle = Some(handle);
     }
 
-    /// Body of the pending-session_id timer tick. Dispatches a metadata
-    /// refetch for every child whose `session_id` is still unknown or
-    /// whose pane has never been materialized, then reschedules the timer
-    /// if any pending children remain.
-    ///
-    /// Each refetch goes through [`Self::spawn_task_metadata_fetch`],
-    /// which routes the response into the existing-entry branch of
-    /// [`Self::register_child`]. That branch flips
-    /// `pane_materialization_requested` and emits
-    /// `EnsureSharedSessionViewerChildPane` once the server returns a
-    /// claim-time `session_id`.
+    /// Body of the session_id timer tick. Refetches metadata for every
+    /// child still missing a `session_id`/pane, then reschedules until
+    /// the pending set is empty.
     fn run_pending_session_id_poll(&mut self, ctx: &mut ModelContext<Self>) {
         let pending: Vec<AmbientAgentTaskId> = self
             .children
@@ -652,9 +521,6 @@ impl OrchestrationViewerModel {
             .collect();
 
         if pending.is_empty() {
-            // The last tick's refetches already filled in session_id and
-            // flipped pane_materialization_requested for every tracked
-            // child; nothing left to do.
             return;
         }
 
@@ -662,11 +528,6 @@ impl OrchestrationViewerModel {
             self.spawn_task_metadata_fetch(task_id, "PendingSessionIdPoll", ctx);
         }
 
-        // Reschedule the next tick. has_pending_session_id_children will
-        // return false (and the timer will stop) once every pending
-        // entry's refetch callback has completed and flipped
-        // pane_materialization_requested via register_child's
-        // existing-entry branch.
         self.maybe_schedule_pending_session_id_poll(ctx);
     }
 

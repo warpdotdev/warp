@@ -304,21 +304,12 @@ pub enum OrchestrationEventStreamerEvent {
         wake_message: AgentMessageEventMetadata,
     },
     /// First time the streamer has seen a particular `run_id` under
-    /// `parent_task_id`. Emitted exactly once per child by the viewer-mode
-    /// ancestor consumer; viewer-pane subscribers translate it into a local
-    /// placeholder conversation.
-    #[allow(dead_code)]
+    /// `parent_task_id`. Emitted exactly once per child.
     ChildSpawned {
         parent_task_id: AmbientAgentTaskId,
         run_id: String,
     },
     /// Lifecycle transition for a known child under `parent_task_id`.
-    /// `status` is the result of the
-    /// `LifecycleEventType -> ConversationStatus` mapping helper.
-    /// Viewer-pane subscribers look up the child's local placeholder via
-    /// their own `run_id -> conversation_id` map and write the status
-    /// through `BlocklistAIHistoryModel`.
-    #[allow(dead_code)]
     ChildStatusChanged {
         parent_task_id: AmbientAgentTaskId,
         run_id: String,
@@ -536,29 +527,16 @@ impl OrchestrationEventStreamer {
         }
     }
 
-    // ---- Viewer-mode consumer registry (orchestration-viewer-polling) ----
+    // ---- Viewer-mode consumer registry --------------------------------
 
     /// Registers a viewer-mode consumer (a shared-session viewer pane) for
-    /// the orchestrator identified by `parent_task_id`. Reference-counted:
-    /// multiple viewer panes viewing the same orchestrator share the
-    /// per-orchestrator entry and the underlying ancestor SSE. Each consumer
-    /// supplies its own pane-local orchestrator-placeholder
-    /// `AIConversationId`; the streamer keeps that mapping so the
-    /// cursor-persistence path can write through to every viewer pane's
-    /// local conversation row.
+    /// `parent_task_id`. Refcounted: multiple viewer panes share the
+    /// per-orchestrator entry and the ancestor SSE. Each consumer supplies
+    /// its own placeholder `AIConversationId` so cursor persistence can
+    /// write through to every pane's local conversation row.
     ///
-    /// Idempotent: re-registering the same `consumer_id` updates the recorded
-    /// placeholder conversation but does not double-count the refcount.
-    ///
-    /// On first registration for a `parent_task_id` (or on any registration
-    /// before the cold-start seed has applied) this kicks off the seed REST
-    /// fetch; once the seed lands the ancestor SSE opens automatically via
-    /// [`Self::start_ancestor_sse_if_seeded`].
-    ///
-    /// `dead_code` stays suppressed because the only caller is
-    /// `OrchestrationViewerModel` (gated on `FeatureFlag::OrchestrationViewerStreamer`);
-    /// release builds without that path active never instantiate this method.
-    #[allow(dead_code)]
+    /// Idempotent. On first registration this kicks off the cold-start
+    /// REST seed; the ancestor SSE opens automatically once it lands.
     pub fn register_viewer_mode_consumer(
         &mut self,
         parent_task_id: AmbientAgentTaskId,
@@ -598,27 +576,21 @@ impl OrchestrationEventStreamer {
     }
 
     /// Pair to [`Self::register_viewer_mode_consumer`]. Drops `consumer_id`
-    /// from `parent_task_id`'s entry; when the last viewer unregisters, the
-    /// entry itself is removed *and* the ancestor SSE is torn down.
-    /// Idempotent and safe to call on an already-removed entry — late
-    /// `Drop` impls or double-unregisters race against the entry already
-    /// being torn down by the last consumer.
-    #[allow(dead_code)]
+    /// from `parent_task_id`'s entry; when the last viewer unregisters,
+    /// the entry is removed and the ancestor SSE is torn down.
+    /// Idempotent.
     pub fn unregister_viewer_mode_consumer(
         &mut self,
         parent_task_id: AmbientAgentTaskId,
         consumer_id: EntityId,
     ) {
         let Some(entry) = self.viewer_mode_orchestrators.get_mut(&parent_task_id) else {
-            // Idempotent: late `Drop` impl, double-unregister, or unregister
-            // after the entry was already torn down. Just no-op.
             return;
         };
         entry.consumers.remove(&consumer_id);
         let remaining = entry.consumers.len();
         if remaining == 0 {
-            // Tear down the ancestor SSE for `parent_task_id` (last viewer
-            // pane closed) before dropping the bookkeeping entry.
+            // Last viewer closed: tear down the ancestor SSE.
             if let Some(connection) = entry.sse_connection.take() {
                 connection.abort_handle.abort();
             }
@@ -626,23 +598,17 @@ impl OrchestrationEventStreamer {
         }
     }
 
-    /// Returns `true` iff the streamer's viewer-mode entry for
-    /// `parent_task_id` has previously observed `run_id` (either through a
-    /// lifecycle event on the ancestor SSE or via the cold-start REST
-    /// snapshot). Used by the ancestor consumer's emission logic to emit
-    /// `ChildSpawned` exactly once per child; returns `false` if no viewer-
-    /// mode entry exists for the parent.
-    #[allow(dead_code)]
-    pub fn is_known_child(&self, parent_task_id: AmbientAgentTaskId, run_id: &str) -> bool {
+    /// True iff the viewer-mode entry has previously observed `run_id`
+    /// (via the ancestor SSE or the cold-start REST seed).
+    #[cfg(test)]
+    pub(crate) fn is_known_child(&self, parent_task_id: AmbientAgentTaskId, run_id: &str) -> bool {
         self.viewer_mode_orchestrators
             .get(&parent_task_id)
             .is_some_and(|entry| entry.known_children.contains(run_id))
     }
 
-    /// Returns the placeholder `AIConversationId`s currently registered for
-    /// the orchestrator identified by `parent_task_id`. The cursor-persist
-    /// path writes to every registered placeholder so each viewer pane
-    /// resumes from the same point on the next restart.
+    /// Placeholder `AIConversationId`s registered for `parent_task_id`.
+    /// The cursor-persist path writes through to every entry.
     fn viewer_mode_placeholders(
         &self,
         parent_task_id: AmbientAgentTaskId,
@@ -693,12 +659,9 @@ impl OrchestrationEventStreamer {
 
     // ---- Ancestor SSE consumer (viewer-mode driver wiring) -----------
 
-    /// Issues a one-shot `GET /agent/runs?ancestor_run_id={parent}` to
-    /// populate the per-orchestrator entry's known-child set and seed the
-    /// SSE cursor to `max(child.last_event_sequence across direct children,
-    /// locally persisted cursor on the orchestrator placeholder)`. Once the
-    /// seed lands, [`Self::finish_ancestor_seed_fetch`] opens the ancestor
-    /// SSE with `since=seed`.
+    /// One-shot `?ancestor_run_id=` REST fetch that seeds the per-
+    /// orchestrator entry's known-child set and SSE cursor. The ancestor
+    /// SSE opens automatically once the seed lands.
     fn spawn_ancestor_seed_fetch(
         &mut self,
         parent_task_id: AmbientAgentTaskId,
@@ -896,14 +859,10 @@ impl OrchestrationEventStreamer {
         );
     }
 
-    /// Drains buffered ancestor SSE events, dispatches `ChildSpawned` /
-    /// `ChildStatusChanged` broadcast events to viewer subscribers, and
-    /// advances the per-orchestrator cursor. `new_message` events arriving
-    /// on the ancestor stream are dropped here — viewer-mode subscribers do
-    /// not surface inter-agent messages, so the existing
-    /// `OrchestrationEventService::enqueue_event_batch` integration is
-    /// intentionally bypassed (the streamer's other call sites still feed
-    /// the service for owner-side conversations).
+    /// Drains buffered ancestor SSE events, dispatches `ChildSpawned`/
+    /// `ChildStatusChanged` broadcasts, and advances the cursor.
+    /// `new_message` events are dropped — viewer-mode consumers only
+    /// surface lifecycle transitions.
     fn drain_ancestor_events(
         &mut self,
         parent_task_id: AmbientAgentTaskId,
