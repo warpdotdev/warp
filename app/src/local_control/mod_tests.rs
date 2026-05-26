@@ -125,8 +125,8 @@ fn tab_create_rejects_unsupported_selector_forms() {
 }
 
 #[test]
-fn capabilities_advertises_readonly_capability_targets() {
-    let capabilities = capabilities();
+fn capabilities_advertises_implemented_readonly_and_app_state_actions() {
+    let actions = capabilities();
 
     for action in [
         ActionKind::InstanceInspect,
@@ -155,12 +155,62 @@ fn capabilities_advertises_readonly_capability_targets() {
         ActionKind::ProjectList,
         ActionKind::DriveList,
         ActionKind::DriveInspect,
+        ActionKind::InstanceList,
+        ActionKind::AppPing,
+        ActionKind::AppVersion,
+        ActionKind::AppFocus,
+        ActionKind::WindowCreate,
+        ActionKind::WindowFocus,
+        ActionKind::WindowClose,
+        ActionKind::TabCreate,
+        ActionKind::TabActivate,
+        ActionKind::TabMove,
+        ActionKind::TabClose,
+        ActionKind::PaneSplit,
+        ActionKind::PaneFocus,
+        ActionKind::PaneNavigate,
+        ActionKind::PaneResize,
+        ActionKind::PaneMaximize,
+        ActionKind::PaneUnmaximize,
+        ActionKind::PaneClose,
+        ActionKind::SessionActivate,
+        ActionKind::SessionPrevious,
+        ActionKind::SessionNext,
+        ActionKind::SessionReopenClosed,
+        ActionKind::InputInsert,
+        ActionKind::InputReplace,
+        ActionKind::InputClear,
+        ActionKind::InputModeSet,
+        ActionKind::SurfaceSettingsOpen,
+        ActionKind::SurfaceCommandPaletteOpen,
+        ActionKind::SurfaceCommandSearchOpen,
+        ActionKind::SurfaceWarpDriveOpen,
+        ActionKind::SurfaceWarpDriveToggle,
+        ActionKind::SurfaceResourceCenterToggle,
+        ActionKind::SurfaceAiAssistantToggle,
+        ActionKind::SurfaceCodeReviewToggle,
+        ActionKind::SurfaceLeftPanelToggle,
+        ActionKind::SurfaceRightPanelToggle,
+        ActionKind::SurfaceVerticalTabsToggle,
+        ActionKind::FileOpen,
+        ActionKind::ProjectOpen,
+        ActionKind::DriveOpen,
+        ActionKind::DriveNotebookOpen,
+        ActionKind::DriveEnvVarCollectionOpen,
+        ActionKind::DriveObjectShareOpen,
     ] {
-        assert!(capabilities.contains(&action), "missing {}", action.as_str());
+        assert!(actions.contains(&action), "missing {}", action.as_str());
     }
 
-    assert!(!capabilities.contains(&ActionKind::InputRun));
-    assert!(!capabilities.contains(&ActionKind::DriveObjectCreate));
+    for action in [
+        ActionKind::InputRun,
+        ActionKind::DriveWorkflowRun,
+        ActionKind::DriveObjectCreate,
+        ActionKind::DriveObjectUpdate,
+        ActionKind::DriveObjectDelete,
+    ] {
+        assert!(!actions.contains(&action), "unexpected {}", action.as_str());
+    }
 }
 
 #[test]
