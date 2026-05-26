@@ -42,49 +42,6 @@ pub(super) fn ensure_action_allowed(
     let settings = LocalControlSettings::as_ref(ctx);
     ensure_settings_allow_action(settings, context, action)
 }
-
-pub(crate) fn ensure_settings_allow_action(
-    settings: &LocalControlSettings,
-    context: InvocationContext,
-    action: ActionKind,
-) -> Result<(), ControlError> {
-    let metadata = action.metadata();
-    match context {
-        InvocationContext::InsideWarp => {
-            if !settings.inside_warp_control_enabled() {
-                return Err(ControlError::new(
-                    ErrorCode::LocalControlDisabled,
-                    format!(
-                        "{} is disabled for inside-Warp local control",
-                        action.as_str()
-                    ),
-                ));
-            }
-        }
-        InvocationContext::OutsideWarp => {
-            if metadata.requires_authenticated_user {
-                return Err(ControlError::new(
-                    ErrorCode::ExecutionContextNotAllowed,
-                    format!(
-                        "{} requires verified Warp-terminal invocation",
-                        action.as_str()
-                    ),
-                ));
-            }
-            if !settings.outside_warp_control_enabled() {
-                return Err(ControlError::new(
-                    ErrorCode::LocalControlDisabled,
-                    format!(
-                        "{} is disabled for outside-Warp local control",
-                        action.as_str()
-                    ),
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
 pub(super) fn authenticated_user_subject_for_action(
     action: ActionKind,
     ctx: &mut ModelContext<LocalControlBridge>,
@@ -141,6 +98,48 @@ pub(super) fn ensure_authenticated_user_matches(
                 grant.action.as_str()
             ),
         ));
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_settings_allow_action(
+    settings: &LocalControlSettings,
+    context: InvocationContext,
+    action: ActionKind,
+) -> Result<(), ControlError> {
+    let metadata = action.metadata();
+    match context {
+        InvocationContext::InsideWarp => {
+            if !settings.inside_warp_control_enabled() {
+                return Err(ControlError::new(
+                    ErrorCode::LocalControlDisabled,
+                    format!(
+                        "{} is disabled for inside-Warp local control",
+                        action.as_str()
+                    ),
+                ));
+            }
+        }
+        InvocationContext::OutsideWarp => {
+            if metadata.requires_authenticated_user {
+                return Err(ControlError::new(
+                    ErrorCode::ExecutionContextNotAllowed,
+                    format!(
+                        "{} requires verified Warp-terminal invocation",
+                        action.as_str()
+                    ),
+                ));
+            }
+            if !settings.outside_warp_control_enabled() {
+                return Err(ControlError::new(
+                    ErrorCode::LocalControlDisabled,
+                    format!(
+                        "{} is disabled for outside-Warp local control",
+                        action.as_str()
+                    ),
+                ));
+            }
+        }
     }
     Ok(())
 }

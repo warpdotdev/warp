@@ -266,14 +266,11 @@ fn enabled_within_warp_allows_inside_warp_context() {
 #[test]
 fn outside_warp_authenticated_actions_are_execution_context_denied() {
     let settings = settings_with_mode(LocalControlMode::EnabledEverywhere);
-
-    let err = ensure_settings_allow_action(
-        &settings,
-        InvocationContext::OutsideWarp,
-        ActionKind::InputRun,
-    )
-    .expect_err("outside-Warp authenticated action is rejected");
-    assert_eq!(err.code, ErrorCode::ExecutionContextNotAllowed);
+    for action in [ActionKind::InputRun, ActionKind::DriveObjectCreate] {
+        let err = ensure_settings_allow_action(&settings, InvocationContext::OutsideWarp, action)
+            .expect_err("outside-Warp authenticated action is rejected");
+        assert_eq!(err.code, ErrorCode::ExecutionContextNotAllowed);
+    }
 }
 
 #[test]
