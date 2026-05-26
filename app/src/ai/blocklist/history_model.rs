@@ -2357,6 +2357,106 @@ impl BlocklistAIHistoryModel {
         Ok(conversation)
     }
 
+    /// Merges cloud task / title data into an existing local placeholder
+    /// conversation. Used when a restored remote-child hidden pane needs to
+    /// hydrate from the cloud transcript while preserving the local
+    /// placeholder's `AIConversationId`, parent linkage, `task_id`, and
+    /// `is_remote_child` flag (so the placeholder stays the canonical key in
+    /// `child_agent_panes` and the orchestration topology indexes).
+    ///
+    /// Modeled on `insert_forked_conversation_from_tasks` but does not
+    /// allocate a new conversation; it rebuilds the conversation from the
+    /// cloud tasks under the existing local id and re-stamps the relevant
+    /// child-placeholder fields.
+    pub fn merge_cloud_tasks_into_existing_conversation(
+        &mut self,
+        local_placeholder_id: AIConversationId,
+        tasks: Vec<warp_multi_agent_api::Task>,
+        cloud_conversation: AIConversation,
+    ) -> anyhow::Result<AIConversation> {
+        // Snapshot the placeholder's local-only fields so we can re-stamp
+        // them onto the merged conversation. This keeps the placeholder's
+        // identity (parent linkage, run_id/task_id, remote-child flag,
+        // agent name) authoritative; the cloud transcript only supplies
+        // tasks/title/server metadata.
+        let placeholder = self
+            .conversations_by_id
+            .get(&local_placeholder_id)
+            .cloned();
+
+        // Build the cloud conversation_data so `new_restored` reconstructs
+        // server-side metadata (token, run_id, artifacts, etc.) directly.
+        let cloud_conversation_data = AgentConversationData {
+            server_conversation_token: cloud_conversation
+                .server_conversation_token()
+                .map(|t| t.as_str().to_string()),
+            conversation_usage_metadata: Some(cloud_conversation.usage_metadata()),
+            reverted_action_ids: None,
+            forked_from_server_conversation_token: cloud_conversation
+                .forked_from_server_conversation_token()
+                .map(|t| t.as_str().to_string()),
+            artifacts_json: serde_json::to_string(cloud_conversation.artifacts()).ok(),
+            parent_agent_id: placeholder.as_ref().and_then(|p| {
+                p.parent_agent_id()
+                    .map(ToString::to_string)
+                    .or_else(|| cloud_conversation.parent_agent_id().map(ToString::to_string))
+            }),
+            agent_name: placeholder
+                .as_ref()
+                .and_then(|p| p.agent_name().map(ToString::to_string))
+                .or_else(|| cloud_conversation.agent_name().map(ToString::to_string)),
+            orchestration_harness_type: placeholder
+                .as_ref()
+                .and_then(|p| p.orchestration_harness_type().map(ToString::to_string))
+                .or_else(|| {
+                    cloud_conversation
+                        .orchestration_harness_type()
+                        .map(ToString::to_string)
+                }),
+            parent_conversation_id: placeholder
+                .as_ref()
+                .and_then(|p| p.parent_conversation_id())
+                .map(|id| id.to_string()),
+            is_remote_child: placeholder
+                .as_ref()
+                .map(|p| p.is_remote_child())
+                .unwrap_or(false),
+            root_task_is_optimistic: None,
+            run_id: placeholder
+                .as_ref()
+                .and_then(|p| p.run_id())
+                .or_else(|| cloud_conversation.run_id()),
+            autoexecute_override: None,
+            last_event_sequence: cloud_conversation.last_event_sequence(),
+            pinned: placeholder.as_ref().is_some_and(|p| p.is_pinned()),
+        };
+
+        let mut merged = AIConversation::new_restored(
+            local_placeholder_id,
+            tasks,
+            Some(cloud_conversation_data),
+        )?;
+        merged.reassign_exchange_ids();
+
+        if let Some(metadata) = cloud_conversation.server_metadata() {
+            merged.set_server_metadata(metadata.clone());
+        }
+
+        if let Some(token) = merged.server_conversation_token() {
+            self.server_token_to_conversation_id
+                .insert(token.clone(), local_placeholder_id);
+        }
+
+        self.conversations_by_id
+            .insert(local_placeholder_id, merged.clone());
+
+        if let Some(parent_id) = self.resolved_parent_conversation_id_for_conversation(&merged) {
+            self.index_child_conversation(local_placeholder_id, parent_id);
+        }
+
+        Ok(merged)
+    }
+
     /// Clears all stored conversation-related data in memory.
     /// This is used when logging out to ensure no AI history persists across users.
     pub(crate) fn reset(&mut self) {

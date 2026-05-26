@@ -907,6 +907,24 @@ pub struct PaneGroup {
     /// Entries are removed as each task's data arrives and the pane is replaced.
     pending_ambient_agent_conversation_restorations: HashMap<AmbientAgentTaskId, PaneId>,
 
+    /// Hidden remote-child placeholder panes whose task data was not yet
+    /// cached when `hydrate_task_backed_hidden_child_pane` ran. Modelled on
+    /// `pending_ambient_agent_conversation_restorations`, but keyed by the
+    /// child's `AmbientAgentTaskId` with the local placeholder
+    /// `AIConversationId` and the hidden pane id stored as the value so the
+    /// subscription handler can update the existing pane in place when task
+    /// data arrives. Distinct map (rather than reusing the ambient one) so
+    /// the visible-tree `replace_pane` flow doesn't accidentally swap a
+    /// hidden child pane.
+    pending_remote_child_hydrations: HashMap<AmbientAgentTaskId, (AIConversationId, PaneId)>,
+
+    /// Set when the long-lived AgentConversationsModel subscription has been
+    /// installed. Used to lazily install the subscription the first time
+    /// either pending map gains an entry, so hidden-child hydrations dispatched
+    /// outside of snapshot restoration still wake up on TasksUpdated /
+    /// ConversationsLoaded.
+    pending_ambient_restoration_subscription_installed: bool,
+
     /// Maps child agent conversation IDs to their hidden pane IDs, so they can
     /// be revealed from the parent's status card.
     child_agent_panes: HashMap<AIConversationId, PaneId>,
@@ -3102,6 +3120,8 @@ impl PaneGroup {
             left_panel_open: false,
             is_right_panel_maximized: false,
             pending_ambient_agent_conversation_restorations: HashMap::new(),
+            pending_remote_child_hydrations: HashMap::new(),
+            pending_ambient_restoration_subscription_installed: false,
             child_agent_panes: HashMap::new(),
             transitively_shared_child_panes: HashMap::new(),
             child_agent_origin: None,
@@ -3375,50 +3395,12 @@ impl PaneGroup {
                 );
                 return;
             };
-
-            let new_pane_id =
-                self.insert_ambient_agent_pane_hidden_for_child_agent(parent_pane_id, ctx);
-
-            if let Some(new_terminal_view) = self.terminal_view_from_pane_id(new_pane_id, ctx) {
-                let mut restored = false;
-                new_terminal_view.update(ctx, |terminal_view, ctx| {
-                    terminal_view.restore_conversation_after_view_creation(
-                        RestoredAIConversation::new(child_conversation),
-                        true,
-                        RestoreConversationEntryBehavior::PreserveAgentViewState,
-                        ctx,
-                    );
-                    terminal_view.enter_agent_view(
-                        None,
-                        Some(child_id),
-                        AgentViewEntryOrigin::CloudAgent,
-                        ctx,
-                    );
-                    let Some(ambient_agent_view_model) = terminal_view
-                        .ambient_agent_view_model()
-                        .into_optional_handle()
-                        .cloned()
-                    else {
-                        return;
-                    };
-                    ambient_agent_view_model.update(ctx, |model, ctx| {
-                        model.set_conversation_id(Some(child_id));
-                        model.enter_viewing_existing_session(task_id, ctx);
-                    });
-                    restored = true;
-                });
-                if restored {
-                    self.child_agent_panes.insert(child_id, new_pane_id.into());
-                } else {
-                    log::error!(
-                        "Failed to restore remote child agent pane {child_id:?}: missing ambient agent view model"
-                    );
-                    self.discard_pane(new_pane_id.into(), ctx);
-                }
-            } else {
-                log::error!("Failed to get terminal view for remote child agent pane {child_id:?}");
-                self.discard_pane(new_pane_id.into(), ctx);
-            }
+            self.hydrate_task_backed_hidden_child_pane(
+                child_conversation,
+                parent_pane_id,
+                task_id,
+                ctx,
+            );
             return;
         }
         let child_task_context =
@@ -3661,6 +3643,18 @@ impl PaneGroup {
 
         self.pending_ambient_agent_conversation_restorations = pending.into_iter().collect();
 
+        self.ensure_pending_ambient_restoration_subscription(ctx);
+    }
+
+    /// Installs the long-lived AgentConversationsModel subscription used by
+    /// both `pending_ambient_agent_conversation_restorations` and
+    /// `pending_remote_child_hydrations` if it has not been installed yet.
+    /// Idempotent across multiple callers.
+    fn ensure_pending_ambient_restoration_subscription(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.pending_ambient_restoration_subscription_installed {
+            return;
+        }
+        self.pending_ambient_restoration_subscription_installed = true;
         let conversations_model = AgentConversationsModel::handle(ctx);
         ctx.subscribe_to_model(&conversations_model, |me, _, event, ctx| {
             me.handle_pending_ambient_restoration_event(event, ctx);
@@ -3682,6 +3676,14 @@ impl PaneGroup {
             return;
         }
 
+        self.process_pending_ambient_restorations(ctx);
+        self.process_pending_remote_child_hydrations(ctx);
+    }
+
+    /// Drains entries from `pending_ambient_agent_conversation_restorations`
+    /// for which task data is now available, replacing or hydrating the
+    /// corresponding panes.
+    fn process_pending_ambient_restorations(&mut self, ctx: &mut ViewContext<Self>) {
         if self
             .pending_ambient_agent_conversation_restorations
             .is_empty()
@@ -3766,6 +3768,340 @@ impl PaneGroup {
                 }
             }
         }
+    }
+
+    /// Drains entries from `pending_remote_child_hydrations` for which task
+    /// data is now available, hydrating each hidden child pane in place.
+    fn process_pending_remote_child_hydrations(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.pending_remote_child_hydrations.is_empty() {
+            return;
+        }
+
+        let ready_tasks: Vec<_> = self
+            .pending_remote_child_hydrations
+            .keys()
+            .filter(|task_id| {
+                AgentConversationsModel::as_ref(ctx)
+                    .get_task_data(task_id)
+                    .is_some()
+            })
+            .copied()
+            .collect();
+
+        for task_id in ready_tasks {
+            let Some((child_id, _pane_id)) =
+                self.pending_remote_child_hydrations.remove(&task_id)
+            else {
+                continue;
+            };
+            self.attempt_remote_child_hydration(child_id, task_id, ctx);
+        }
+    }
+
+    /// Hydrates a restored hidden remote-child pane from task data and cloud
+    /// transcript. Idempotent: if the placeholder is already hydrated
+    /// (tasks/title present) the call is a no-op.
+    ///
+    /// Per the Phase 1 plan, this is the task-backed restore path for the
+    /// `is_remote_child` branch of `create_hidden_child_agent_pane`. It
+    /// always creates the hidden ambient pane and registers it in
+    /// `child_agent_panes` keyed by the placeholder's local
+    /// `AIConversationId`. It fetches task data via
+    /// `AgentConversationsModel::get_or_async_fetch_task_data` and either
+    /// (a) attaches to the live ambient session via
+    /// `enter_viewing_existing_session(task_id)` when the task is
+    /// `Attachable`, or
+    /// (b) loads the cloud conversation transcript via
+    /// `BlocklistAIHistoryModel::load_conversation_by_server_token`,
+    /// merges it onto the placeholder via
+    /// `merge_cloud_tasks_into_existing_conversation`, and re-restores
+    /// the conversation into the pane.
+    /// If neither resolves (no server token, no transcript), we fall back to
+    /// the existing `enter_viewing_existing_session` plus tombstone path so
+    /// we are never worse than today.
+    fn hydrate_task_backed_hidden_child_pane(
+        &mut self,
+        child_conversation: AIConversation,
+        parent_pane_id: PaneId,
+        task_id: AmbientAgentTaskId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let child_id = child_conversation.id();
+
+        // Idempotency guard: if the placeholder already has a hidden pane
+        // tracked and has hydrated tasks (non-optimistic root task with
+        // exchanges), skip. This protects against double-hydration when
+        // `restore_missing_child_agent_panes_for_parent` runs again.
+        if let Some(existing_pane_id) = self.child_agent_panes.get(&child_id).copied() {
+            if self.has_pane_id(existing_pane_id) && child_conversation.exchange_count() > 0 {
+                return;
+            }
+        }
+
+        // Always create the hidden pane first so subsequent code paths
+        // (whether sync hydration or async via the pending map) can update
+        // it in place.
+        let new_pane_id =
+            self.insert_ambient_agent_pane_hidden_for_child_agent(parent_pane_id, ctx);
+
+        let Some(new_terminal_view) = self.terminal_view_from_pane_id(new_pane_id, ctx) else {
+            log::error!("Failed to get terminal view for remote child agent pane {child_id:?}");
+            self.discard_pane(new_pane_id.into(), ctx);
+            return;
+        };
+
+        // Restore the placeholder conversation into the new view first, so the
+        // pane already has the placeholder's parent linkage and agent name
+        // before we attempt any task-backed hydration.
+        let mut restored = false;
+        new_terminal_view.update(ctx, |terminal_view, ctx| {
+            terminal_view.restore_conversation_after_view_creation(
+                RestoredAIConversation::new(child_conversation),
+                true,
+                RestoreConversationEntryBehavior::PreserveAgentViewState,
+                ctx,
+            );
+            terminal_view.enter_agent_view(
+                None,
+                Some(child_id),
+                AgentViewEntryOrigin::CloudAgent,
+                ctx,
+            );
+            restored = terminal_view
+                .ambient_agent_view_model()
+                .into_optional_handle()
+                .is_some();
+        });
+
+        if !restored {
+            log::error!(
+                "Failed to restore remote child agent pane {child_id:?}: missing ambient agent view model"
+            );
+            self.discard_pane(new_pane_id.into(), ctx);
+            return;
+        }
+
+        // Track the pane keyed by the placeholder's local id. Live-attach and
+        // transcript hydration both keep this key stable.
+        self.child_agent_panes.insert(child_id, new_pane_id.into());
+
+        // Kick off the task-data fetch if needed.
+        let task_now = AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
+            model.get_or_async_fetch_task_data(&task_id, ctx)
+        });
+
+        if task_now.is_none() {
+            // Task data not in memory yet; install a subscription so we
+            // re-run this hydration once it arrives. Keep the existing
+            // `enter_viewing_existing_session` semantics in the interim so
+            // the live-session attach is at least attempted; the pending
+            // entry will retry the merge/transcript path when the task
+            // arrives.
+            self.pending_remote_child_hydrations
+                .insert(task_id, (child_id, new_pane_id.into()));
+            self.ensure_pending_ambient_restoration_subscription(ctx);
+            self.enter_remote_child_existing_session_in_place(new_pane_id.into(), child_id, task_id, ctx);
+            return;
+        }
+
+        // Task data available — resolve the open action and dispatch.
+        self.attempt_remote_child_hydration(child_id, task_id, ctx);
+    }
+
+    /// Resolves a hydration action for a restored remote-child pane and
+    /// applies it in place. Called both directly (sync path) and from the
+    /// long-lived AgentConversationsModel subscription (async retry).
+    fn attempt_remote_child_hydration(
+        &mut self,
+        child_id: AIConversationId,
+        task_id: AmbientAgentTaskId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(pane_id) = self
+            .child_agent_panes
+            .get(&child_id)
+            .copied()
+            .filter(|pane_id| self.has_pane_id(*pane_id))
+        else {
+            return;
+        };
+
+        let resolution = AgentConversationsModel::resolve_open_action(
+            AgentConversationNavigationSubject::Entry(AgentConversationEntryId::AmbientRun(
+                task_id,
+            )),
+            None,
+            ctx,
+        );
+
+        match resolution {
+            Some(WorkspaceAction::OpenOrAttachAmbientAgentConversation { task_id, .. }) => {
+                self.enter_remote_child_existing_session_in_place(pane_id, child_id, task_id, ctx);
+            }
+            Some(WorkspaceAction::OpenConversationTranscriptViewer {
+                conversation_id: server_token,
+                ambient_agent_task_id: _,
+            }) => {
+                self.hydrate_remote_child_transcript_in_place(
+                    pane_id,
+                    child_id,
+                    task_id,
+                    server_token,
+                    ctx,
+                );
+            }
+            _ => {
+                // No live session and no transcript — fall back to the
+                // existing behavior: enter the (possibly empty) ambient
+                // session and insert the conversation-ended tombstone. This
+                // matches the pre-Fix-B behavior so we are never worse than
+                // today.
+                self.enter_remote_child_existing_session_in_place(pane_id, child_id, task_id, ctx);
+                if let Some(terminal_view) = self.terminal_view_from_pane_id(pane_id, ctx) {
+                    terminal_view.update(ctx, |view, ctx| {
+                        view.insert_conversation_ended_tombstone_with_resolved_cta(ctx);
+                    });
+                }
+            }
+        }
+    }
+
+    /// Updates the hidden child pane's ambient agent view model in place to
+    /// attach to the live ambient session for `task_id`. Mirrors the
+    /// pre-Fix-B behavior so live-streaming runs continue to attach instead
+    /// of being downgraded to a transcript viewer.
+    fn enter_remote_child_existing_session_in_place(
+        &mut self,
+        pane_id: PaneId,
+        child_id: AIConversationId,
+        task_id: AmbientAgentTaskId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(terminal_view) = self.terminal_view_from_pane_id(pane_id, ctx) else {
+            return;
+        };
+        terminal_view.update(ctx, |terminal_view, ctx| {
+            let Some(ambient_agent_view_model) = terminal_view
+                .ambient_agent_view_model()
+                .into_optional_handle()
+                .cloned()
+            else {
+                return;
+            };
+            ambient_agent_view_model.update(ctx, |model, ctx| {
+                model.set_conversation_id(Some(child_id));
+                model.enter_viewing_existing_session(task_id, ctx);
+            });
+        });
+    }
+
+    /// Fetches the cloud conversation transcript identified by `server_token`,
+    /// merges it onto the placeholder local conversation
+    /// (`merge_cloud_tasks_into_existing_conversation`), and re-restores the
+    /// merged conversation into the hidden child pane in place. Falls back to
+    /// the live-session attach + tombstone path if the transcript fetch
+    /// fails.
+    fn hydrate_remote_child_transcript_in_place(
+        &mut self,
+        pane_id: PaneId,
+        child_id: AIConversationId,
+        task_id: AmbientAgentTaskId,
+        server_token: ServerConversationToken,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let history_handle = BlocklistAIHistoryModel::handle(ctx);
+        let future = history_handle.update(ctx, |history_model, ctx| {
+            history_model.load_conversation_by_server_token(&server_token, ctx)
+        });
+        ctx.spawn(future, move |group, conversation, ctx| {
+            let Some(pane_id) = group
+                .child_agent_panes
+                .get(&child_id)
+                .copied()
+                .filter(|p| *p == pane_id && group.has_pane_id(*p))
+            else {
+                return;
+            };
+            match conversation {
+                Some(CloudConversationData::Oz(cloud)) => {
+                    let tasks: Vec<warp_multi_agent_api::Task> = cloud
+                        .all_tasks()
+                        .filter_map(|task| task.source().cloned())
+                        .collect();
+                    let cloud_conversation = *cloud;
+                    let merge_result =
+                        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                            history.merge_cloud_tasks_into_existing_conversation(
+                                child_id,
+                                tasks,
+                                cloud_conversation,
+                            )
+                        });
+                    match merge_result {
+                        Ok(merged) => {
+                            if let Some(terminal_view) =
+                                group.terminal_view_from_pane_id(pane_id, ctx)
+                            {
+                                terminal_view.update(ctx, |view, ctx| {
+                                    view.restore_conversation_after_view_creation(
+                                        RestoredAIConversation::new(merged),
+                                        true,
+                                        RestoreConversationEntryBehavior::PreserveAgentViewState,
+                                        ctx,
+                                    );
+                                });
+                            }
+                            // After merging, still attach to the live
+                            // ambient session so streaming runs continue to
+                            // attach as before; transcript is now visible
+                            // via the merged exchanges.
+                            group.enter_remote_child_existing_session_in_place(
+                                pane_id, child_id, task_id, ctx,
+                            );
+                            if let Some(terminal_view) =
+                                group.terminal_view_from_pane_id(pane_id, ctx)
+                            {
+                                terminal_view.update(ctx, |view, ctx| {
+                                    view.insert_conversation_ended_tombstone_with_resolved_cta(
+                                        ctx,
+                                    );
+                                });
+                            }
+                        }
+                        Err(err) => {
+                            log::warn!(
+                                "merge_cloud_tasks_into_existing_conversation failed for {child_id:?}: {err:#}"
+                            );
+                            group.enter_remote_child_existing_session_in_place(
+                                pane_id, child_id, task_id, ctx,
+                            );
+                            if let Some(terminal_view) =
+                                group.terminal_view_from_pane_id(pane_id, ctx)
+                            {
+                                terminal_view.update(ctx, |view, ctx| {
+                                    view.insert_conversation_ended_tombstone_with_resolved_cta(
+                                        ctx,
+                                    );
+                                });
+                            }
+                        }
+                    }
+                }
+                Some(CloudConversationData::CLIAgent(_)) | None => {
+                    // Non-Oz transcript or fetch failure — fall back to the
+                    // pre-Fix-B behavior (attach to ambient session +
+                    // tombstone).
+                    group.enter_remote_child_existing_session_in_place(
+                        pane_id, child_id, task_id, ctx,
+                    );
+                    if let Some(terminal_view) = group.terminal_view_from_pane_id(pane_id, ctx) {
+                        terminal_view.update(ctx, |view, ctx| {
+                            view.insert_conversation_ended_tombstone_with_resolved_cta(ctx);
+                        });
+                    }
+                }
+            }
+        });
     }
 
     /// Fetches conversation data and loads it into the given transcript viewer.
