@@ -1210,7 +1210,15 @@ impl PaneGroup {
                                 self.hide_pane_for_move(pane_id, ctx);
                             }
                             TabBarHoverIndex::OverTab(tab_idx) => {
-                                self.panes.clear_hidden_panes_from_move();
+                                // Don't pre-clear the source's hidden state
+                                // here. When the destination is a different
+                                // tab the workspace's `remove_pane_for_move`
+                                // will clean up via `remove_hidden_pane`. When
+                                // the destination is this same tab the
+                                // workspace re-hides via `hide_pane_for_move`,
+                                // and an unguarded clear here would toggle
+                                // visibility on every drag tick — re-mounting
+                                // the terminal and flushing its IME state.
                                 ctx.emit(Event::SwitchTabFocusAndMovePane {
                                     tab_idx: *tab_idx,
                                     pane_id,
@@ -5555,6 +5563,9 @@ impl PaneGroup {
     }
 
     pub fn hide_pane_for_move(&mut self, id: PaneId, ctx: &mut ViewContext<Self>) {
+        if self.panes.is_pane_hidden_for_move(id) {
+            return;
+        }
         self.panes.hide_pane_for_move(id);
 
         ctx.notify();

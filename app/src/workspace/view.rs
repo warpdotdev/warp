@@ -1145,12 +1145,6 @@ pub struct Workspace {
     /// where the new pane will land. Cleared on `DropTab` (whether or not the
     /// drop succeeds) and updated on every `DragTab` tick.
     current_drag_target_pane: Option<(PaneId, Direction)>,
-    /// When the user starts dragging the currently-active tab from the
-    /// vertical panel, we auto-switch the active tab to the previous one in
-    /// MRU order so they have a visible destination pane to drop on (iTerm-
-    /// style). This holds the original active tab index so we can restore it
-    /// if the drag is cancelled (drop didn't consume).
-    pre_drag_active_tab: Option<usize>,
 }
 
 impl Workspace {
@@ -3271,7 +3265,6 @@ impl Workspace {
             create_auth_secret_modal: None,
             last_tab_drag: None,
             current_drag_target_pane: None,
-            pre_drag_active_tab: None,
         };
 
         ws.configure_new_workspace(workspace_setting, ctx);
@@ -22144,29 +22137,12 @@ impl TypedActionView for Workspace {
                 send_telemetry_from_ctx!(TelemetryEvent::DragAndDropTab, ctx);
                 let last_tab_drag = self.last_tab_drag.take();
                 self.current_drag_target_pane = None;
-                let pre_drag_active = self.pre_drag_active_tab.take();
-                let mut consumed = false;
                 if !is_cross_window {
                     if let Some((src_idx, drop_pos)) = last_tab_drag {
                         if self.try_drop_tab_on_pane(src_idx, drop_pos, ctx) {
-                            consumed = true;
+                            return;
                         }
                     }
-                }
-                // If we auto-switched away from the dragged tab to give the
-                // user a visible destination, restore the original active tab
-                // when the drop was a no-op so they end up back where they
-                // started. When the drop consumed, the destination tab is
-                // already focused inside `try_drop_tab_on_pane`.
-                if !consumed {
-                    if let Some(original) = pre_drag_active {
-                        if original < self.tabs.len() {
-                            self.set_active_tab_index(original, ctx);
-                        }
-                    }
-                }
-                if consumed {
-                    return;
                 }
                 if is_cross_window {
                     let drop_result =
@@ -25082,15 +25058,6 @@ impl Workspace {
         });
     }
 
-    /// Returns the tab index of the previous most-recently-used tab (i.e. the
-    /// one the user was on before the current active tab), if any. Used when
-    /// auto-switching during a tab-to-pane-split drag so the user has a
-    /// visible destination tab to drop into.
-    fn previous_mru_tab_index(&self) -> Option<usize> {
-        let prev_id = self.tab_mru_order.get(1)?;
-        self.tabs.iter().position(|t| t.pane_group.id() == *prev_id)
-    }
-
     /// Closest-edge logic: returns the split direction implied by the cursor's
     /// position within a pane rect. The cursor's distance to each of the four
     /// edges is computed in normalized [0, 1] units; the smallest distance
@@ -25118,42 +25085,38 @@ impl Workspace {
         }
     }
 
-    /// Looks for a tab in this workspace (other than `src_idx`) whose pane area
-    /// currently contains the drag position. Returns the target tab's index,
-    /// its pane group handle, the specific pane the drop landed on (used as
-    /// the split anchor), and the split direction implied by which edge of
-    /// the pane the cursor is closest to. Skips the source tab.
+    /// Looks for a pane in the currently-active tab whose area contains the
+    /// drag position. Returns the active tab's index, its pane group handle,
+    /// the specific pane the drop landed on (used as the split anchor), and
+    /// the split direction implied by which edge of the pane the cursor is
+    /// closest to. Returns `None` when the user is dragging the active tab
+    /// itself (no valid in-window destination) or when the cursor isn't over
+    /// any pane in the active tab.
+    ///
+    /// Only the active tab's `PaneGroup` is rendered into the view tree
+    /// (`render_banner_and_active_tab`), so it's the only one whose pane
+    /// rects are guaranteed to be live. Pane positions are cached
+    /// indefinitely and never cleared when a `PaneGroup` unmounts, so
+    /// iterating over all tabs would match stale rects from previously-active
+    /// tabs and route the drop to the wrong destination.
     fn find_drop_target_pane(
         &self,
         src_idx: usize,
         drop_pos: RectF,
         ctx: &mut ViewContext<Self>,
     ) -> Option<(usize, ViewHandle<PaneGroup>, PaneId, Direction)> {
+        let dst_idx = self.active_tab_index;
+        if src_idx == dst_idx {
+            return None;
+        }
+        let dst_pg = self.tabs.get(dst_idx)?.pane_group.clone();
+        let pane_ids = dst_pg.as_ref(ctx).visible_pane_ids();
         let center = drop_pos.center();
-        // Snapshot the candidate (dst_idx, pane_group, visible pane ids) up
-        // front so we don't hold a borrow on `ctx` through
-        // `element_position_by_id`.
-        let candidates: Vec<(usize, ViewHandle<PaneGroup>, Vec<PaneId>)> = self
-            .tabs
-            .iter()
-            .enumerate()
-            .filter_map(|(dst_idx, tab)| {
-                if dst_idx == src_idx {
-                    return None;
-                }
-                let pg = tab.pane_group.clone();
-                let pane_ids = pg.as_ref(ctx).visible_pane_ids();
-                Some((dst_idx, pg, pane_ids))
-            })
-            .collect();
-
-        for (dst_idx, dst_pg, pane_ids) in candidates {
-            for pane_id in pane_ids {
-                if let Some(rect) = ctx.element_position_by_id(pane_id.position_id()) {
-                    if rect.contains_point(center) {
-                        let direction = Self::pick_direction(rect, center);
-                        return Some((dst_idx, dst_pg, pane_id, direction));
-                    }
+        for pane_id in pane_ids {
+            if let Some(rect) = ctx.element_position_by_id(pane_id.position_id()) {
+                if rect.contains_point(center) {
+                    let direction = Self::pick_direction(rect, center);
+                    return Some((dst_idx, dst_pg, pane_id, direction));
                 }
             }
         }
@@ -25231,23 +25194,6 @@ impl Workspace {
         position: RectF,
         ctx: &mut ViewContext<Self>,
     ) {
-        // On the first drag tick: if the user is dragging the currently-active
-        // tab, auto-switch the view to the previous MRU tab so they have a
-        // visible destination pane to drop on. Mirrors iTerm's drag UX.
-        // Restored on `DropTab` if the drop didn't consume.
-        if FeatureFlag::DragTabToPaneSplit.is_enabled()
-            && self.last_tab_drag.is_none()
-            && current_index == self.active_tab_index
-            && self.pre_drag_active_tab.is_none()
-        {
-            if let Some(prev_idx) = self.previous_mru_tab_index() {
-                if prev_idx != current_index {
-                    self.pre_drag_active_tab = Some(current_index);
-                    self.set_active_tab_index(prev_idx, ctx);
-                }
-            }
-        }
-
         // Remember the most recent tab-drag position so `DropTab` can resolve
         // a drop onto a pane in another tab into a horizontal split.
         if FeatureFlag::DragTabToPaneSplit.is_enabled() {
@@ -25423,6 +25369,16 @@ impl Workspace {
             }
 
             ctx.notify();
+            return;
+        }
+
+        // Suppress reorder when the drag is currently over another tab's
+        // pane area: the eventual `DropTab` will resolve into a tab-to-pane
+        // split via `try_drop_tab_on_pane`. Without this, the reorder block
+        // swaps the source tab into the destination tab's slot and flips
+        // `active_tab_index`, which then makes `find_drop_target_pane`
+        // reject the drop (`src_idx == active_tab_index`).
+        if would_drop_on_pane {
             return;
         }
 
