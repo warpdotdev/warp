@@ -34,10 +34,15 @@ impl AsyncAssetType for MermaidDiagramAsset {}
 /// renderer's diagram-type detection treats the first non-empty,
 /// non-`%%`-prefixed line as the diagram token; with frontmatter that token
 /// becomes `---` instead of the actual diagram type (e.g. `xychart-beta`),
-/// and the renderer fails to dispatch to the right parser. Warp passes a
-/// hardcoded [`MermaidTheme::light`] anyway and does not honor any of the
-/// frontmatter config keys, so stripping is lossless. See
-/// warpdotdev/warp#10676.
+/// and the renderer fails to dispatch to the right parser.
+///
+/// This helper intentionally preserves Warp's existing renderer behavior:
+/// Warp passes a hardcoded [`MermaidTheme::light`] and currently ignores all
+/// Mermaid frontmatter metadata and config entries (for example `title`,
+/// `config.theme`, `config.themeVariables`, `config.look`, and
+/// diagram-specific `config` sections). A renderer-level frontmatter parser in
+/// `mermaid_to_svg` would be the more general long-term fix if those config
+/// values should affect output. See warpdotdev/warp#10676.
 pub fn strip_mermaid_frontmatter(source: &str) -> Cow<'_, str> {
     fn next_line_end(s: &str, start: usize) -> usize {
         s[start..]

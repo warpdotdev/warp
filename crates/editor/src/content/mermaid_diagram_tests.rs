@@ -49,6 +49,26 @@ fn strip_frontmatter_removes_leading_config_block() {
 }
 
 #[test]
+fn strip_frontmatter_removes_metadata_and_config_keys_warp_does_not_consume() {
+    let source = "\
+---
+title: Ignored title
+config:
+  theme: dark
+  look: handDrawn
+  themeVariables:
+    primaryColor: '#ff0000'
+  flowchart:
+    curve: basis
+---
+flowchart TD
+A --> B
+";
+    let stripped = strip_mermaid_frontmatter(source);
+    assert_eq!(stripped, "flowchart TD\nA --> B\n");
+}
+
+#[test]
 fn strip_frontmatter_preserves_source_without_frontmatter() {
     let source = "graph TD\nA --> B\n";
     let stripped = strip_mermaid_frontmatter(source);
