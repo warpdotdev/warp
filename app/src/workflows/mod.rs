@@ -81,7 +81,7 @@ pub enum WorkflowSelectionSource {
     Alias,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkflowViewMode {
     View,
     Edit,

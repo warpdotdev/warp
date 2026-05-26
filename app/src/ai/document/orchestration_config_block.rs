@@ -112,7 +112,7 @@ const BASE_MODEL_HELPER: &str = "The primary model all agents will use.";
 
 // ── Action type ─────────────────────────────────────────────────────
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OrchestrationConfigBlockAction {
     ToggleApproval,
     ToggleDetails,

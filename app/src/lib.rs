@@ -1570,6 +1570,7 @@ pub(crate) fn initialize_app(
     editor::init(ctx);
     onboarding::init(ctx);
     menu::init(ctx);
+    view_components::init(ctx);
     tips::tip_view::init(ctx);
     launch_configs::init(ctx);
     workflows::init(ctx);

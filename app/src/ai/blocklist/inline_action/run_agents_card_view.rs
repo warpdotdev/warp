@@ -180,7 +180,7 @@ struct RunAgentsCardHandles {
     pickers: OrchestrationPickerHandles<RunAgentsCardViewAction>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RunAgentsCardViewAction {
     Accept,
     AcceptWithoutOrchestration,

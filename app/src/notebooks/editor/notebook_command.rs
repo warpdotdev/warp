@@ -195,7 +195,7 @@ impl NotebookCommand {
             dropdown.set_rich_items(
                 CodeBlockType::all().map(|code_block_type| {
                     let mut item = MenuItemFields::new(code_block_type.to_string())
-                        .with_on_select_action(DropdownAction::SelectActionAndClose(
+                        .with_on_select_action(DropdownAction::select_action_and_close(
                             EditorViewAction::CodeBlockTypeSelectedAtOffset {
                                 code_block_type: code_block_type.clone(),
                                 start_anchor: start.clone(),

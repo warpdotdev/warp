@@ -556,7 +556,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum FeaturesPageAction {
     ToggleCopyOnSelect,
     ToggleNotifications,
