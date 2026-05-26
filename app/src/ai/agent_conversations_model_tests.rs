@@ -17,7 +17,8 @@ use super::{
     record_earliest_rtc_task_refresh_timestamp, AgentConversationsModel,
     AgentConversationsModelEvent, AgentManagementFilters, AgentRunDisplayStatus, ArtifactFilter,
     ConversationMetadata, ConversationUpdateKind, EnvironmentFilter, HarnessFilter, OwnerFilter,
-    RtcTaskRefreshThrottleState, StatusFilter, TaskFetchState, MAX_PERSONAL_TASKS, MAX_TEAM_TASKS,
+    RtcTaskRefreshThrottleState, StatusFilter, TaskFetchError, TaskFetchState, MAX_PERSONAL_TASKS,
+    MAX_TEAM_TASKS,
 };
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::api::ServerConversationToken;
@@ -2126,7 +2127,7 @@ fn test_get_or_async_fetch_task_data_returns_cached_task_without_fetching() {
                 task_id,
                 TaskFetchState::PermanentlyFailed {
                     at: Instant::now(),
-                    message: "test".to_string(),
+                    error: TaskFetchError::new("test".to_string(), None),
                 },
             );
             model
@@ -2161,7 +2162,7 @@ fn test_get_or_async_fetch_task_data_skips_when_permanently_failed() {
                 task_id,
                 TaskFetchState::PermanentlyFailed {
                     at: Instant::now(),
-                    message: "403 Forbidden".to_string(),
+                    error: TaskFetchError::new("403 Forbidden".to_string(), Some(403)),
                 },
             );
             model
@@ -2224,7 +2225,7 @@ fn test_get_or_async_fetch_task_data_skips_within_transient_cooldown() {
                 task_id,
                 TaskFetchState::TransientlyFailed {
                     at: Instant::now(),
-                    message: "500 Internal Server Error".to_string(),
+                    error: TaskFetchError::new("500 Internal Server Error".to_string(), Some(500)),
                 },
             );
             model

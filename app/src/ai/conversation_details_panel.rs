@@ -33,7 +33,9 @@ use crate::ai::agent::conversation::{
     AIConversation, AIConversationId, ConversationStatus, StatusColorStyle,
 };
 use crate::ai::agent_conversations_model::entry::PrincipalType;
-use crate::ai::agent_conversations_model::{AgentConversationEntry, AgentRunDisplayStatus};
+use crate::ai::agent_conversations_model::{
+    AgentConversationEntry, AgentRunDisplayStatus, TaskFetchError,
+};
 use crate::ai::agent_management::details_action_buttons::{
     ActionButtonsConfig, AgentDetailsButtonEvent, ConversationActionButtonsRow,
 };
@@ -222,8 +224,8 @@ pub struct ConversationDetailsData {
     skill_spec: Option<SkillSpec>,
     /// Execution harness for this conversation/task.
     harness: Option<Harness>,
-    /// Error message displayed when the API call to fetch run data failed.
-    fetch_error: Option<String>,
+    /// Error details displayed when the API call to fetch run data failed.
+    fetch_error: Option<TaskFetchError>,
 }
 
 impl ConversationDetailsData {
@@ -502,7 +504,10 @@ impl ConversationDetailsData {
 
     /// Minimal details data for when we only know the task id (e.g. shared sessions)
     /// but have not loaded the full `AmbientAgentTask` yet.
-    pub fn from_task_id(task_id: AmbientAgentTaskId, fetch_error: Option<String>) -> Self {
+    pub(crate) fn from_task_id(
+        task_id: AmbientAgentTaskId,
+        fetch_error: Option<TaskFetchError>,
+    ) -> Self {
         ConversationDetailsData {
             mode: PanelMode::Task {
                 task_id: Some(task_id),
@@ -1121,25 +1126,15 @@ impl ConversationDetailsPanel {
         )
     }
 
-    fn is_metadata_access_denied_fetch_error(fetch_error: &str) -> bool {
-        let normalized = fetch_error.to_ascii_lowercase();
-        normalized.contains("forbidden")
-            || normalized.contains("not_authorized")
-            || normalized.contains("not authorized")
-            || normalized.contains("permission")
-            || normalized.contains("403")
-    }
-
     fn render_fetch_error_notice(
         &self,
-        fetch_error: &str,
+        fetch_error: &TaskFetchError,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let ui_font_size = appearance.ui_font_size();
-
-        if Self::is_metadata_access_denied_fetch_error(fetch_error) {
+        if fetch_error.is_access_denied() {
             let icon_color = blended_colors::text_sub(theme, theme.surface_1());
             let notice_icon =
                 ConstrainedBox::new(Icon::Info.to_warpui_icon(icon_color.into()).finish())
@@ -1197,7 +1192,7 @@ impl ConversationDetailsPanel {
         .with_height(STATUS_ICON_SIZE)
         .finish();
         let error_text = render_copyable_text_field(
-            CopyableTextFieldConfig::new(fetch_error.to_string())
+            CopyableTextFieldConfig::new(fetch_error.message().to_string())
                 .with_font_size(ui_font_size)
                 .with_text_color(theme.ansi_fg_red())
                 .with_wrap_text(true)
@@ -2185,7 +2180,7 @@ impl TypedActionView for ConversationDetailsPanel {
             ConversationDetailsPanelAction::CopyFetchError => {
                 if let Some(error) = &self.data.fetch_error {
                     ctx.clipboard()
-                        .write(ClipboardContent::plain_text(error.clone()));
+                        .write(ClipboardContent::plain_text(error.message().to_string()));
                     self.record_copy(CopyButtonKind::FetchError, ctx);
                 }
             }

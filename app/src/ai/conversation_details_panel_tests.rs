@@ -9,6 +9,7 @@ use warpui::{App, EntityId, SingletonEntity};
 
 use super::{ConversationDetailsData, ConversationDetailsPanel, PanelMode};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::agent_conversations_model::TaskFetchError;
 use crate::ai::ambient_agents::task::{AgentConfigSnapshot, HarnessConfig, TaskPrincipalInfo};
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
@@ -87,27 +88,30 @@ fn create_agent_output_message(id: &str, task_id: &str) -> api::Message {
 
 #[test]
 fn test_metadata_access_denied_fetch_error_detection() {
-    for message in [
-        "You do not have permission for this operation. (forbidden)",
-        "API error 403: forbidden",
-        "not_authorized",
-        "Not authorized to view run metadata",
-    ] {
+    for status in [401, 403] {
+        let error = TaskFetchError::new(
+            "Run metadata fetch failed without access details".to_string(),
+            Some(status),
+        );
         assert!(
-            ConversationDetailsPanel::is_metadata_access_denied_fetch_error(message),
-            "expected access-denied metadata fetch error for {message:?}"
+            error.is_access_denied(),
+            "expected status {status} to be access denied"
         );
     }
 
-    for message in [
-        "Connection error.",
-        "Server error.",
-        "Run metadata fetch timed out.",
-        "resource not found",
+    for (status, message) in [
+        (
+            Some(400),
+            "permission denied text alone should not decide the UI",
+        ),
+        (Some(404), "API error 404: resource not found"),
+        (Some(500), "API error 500: server error"),
+        (None, "API error 403: forbidden"),
     ] {
+        let error = TaskFetchError::new(message.to_string(), status);
         assert!(
-            !ConversationDetailsPanel::is_metadata_access_denied_fetch_error(message),
-            "did not expect access-denied metadata fetch error for {message:?}"
+            !error.is_access_denied(),
+            "did not expect access-denied metadata fetch error for status {status:?} and message {message:?}"
         );
     }
 }

@@ -955,7 +955,7 @@ impl TerminalView {
                     let fetch_error = conversations_handle
                         .as_ref(ctx)
                         .task_fetch_error(&task_id)
-                        .map(str::to_owned);
+                        .cloned();
                     ConversationDetailsData::from_task_id(task_id, fetch_error)
                 });
             self.conversation_details_panel.update(ctx, |panel, ctx| {
