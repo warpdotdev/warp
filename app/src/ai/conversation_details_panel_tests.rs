@@ -7,7 +7,7 @@ use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, EntityId, SingletonEntity};
 
-use super::{ConversationDetailsData, PanelMode};
+use super::{ConversationDetailsData, ConversationDetailsPanel, PanelMode};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::ambient_agents::task::{AgentConfigSnapshot, HarnessConfig, TaskPrincipalInfo};
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
@@ -82,6 +82,33 @@ fn create_agent_output_message(id: &str, task_id: &str) -> api::Message {
         )),
         request_id: "request-1".to_string(),
         timestamp: None,
+    }
+}
+
+#[test]
+fn test_metadata_access_denied_fetch_error_detection() {
+    for message in [
+        "You do not have permission for this operation. (forbidden)",
+        "API error 403: forbidden",
+        "not_authorized",
+        "Not authorized to view run metadata",
+    ] {
+        assert!(
+            ConversationDetailsPanel::is_metadata_access_denied_fetch_error(message),
+            "expected access-denied metadata fetch error for {message:?}"
+        );
+    }
+
+    for message in [
+        "Connection error.",
+        "Server error.",
+        "Run metadata fetch timed out.",
+        "resource not found",
+    ] {
+        assert!(
+            !ConversationDetailsPanel::is_metadata_access_denied_fetch_error(message),
+            "did not expect access-denied metadata fetch error for {message:?}"
+        );
     }
 }
 
