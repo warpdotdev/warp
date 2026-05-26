@@ -361,6 +361,7 @@ impl AgentInputFooter {
                 .with_tooltip(FAST_FORWARD_OFF_TOOLTIP)
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
+                .with_disabled_theme(FastForwardLockedTheme)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(TerminalAction::ToggleAutoexecuteMode);
                 })
@@ -734,8 +735,6 @@ impl AgentInputFooter {
                 me.update_ftu_callout_render_state(ctx);
             }
         });
-        // Re-sync the fast-forward chip when agent view is entered/exited so the
-        // locked-on state for cloud agent conversations reflects the current pane.
         ctx.subscribe_to_model(
             &display_chip_config.agent_view_controller,
             |me, _, _, ctx| {
@@ -1957,38 +1956,40 @@ impl AgentInputFooter {
     }
 
     fn sync_fast_forward_button(&self, ctx: &mut ViewContext<Self>) {
-        // In ambient/cloud agent conversations, the chip is locked in its always-on
-        // state. Clicking it (and the keybinding) are no-ops; the action handler in
-        // `TerminalView::handle_action` short-circuits there.
+        // In cloud agent conversations fast forward is force-enabled.
         let terminal_model = self.terminal_model.lock();
-        let is_locked = is_in_cloud_context(
+        let is_force_enabled = is_in_cloud_context(
             terminal_model.block_list().agent_view_state(),
             &terminal_model,
         );
         drop(terminal_model);
+
         // Read directly from the conversation, same data source as the warping
         // indicator footer's auto-approve chip.
-        let conversation_is_active = BlocklistAIHistoryModel::as_ref(ctx)
+        let is_active = BlocklistAIHistoryModel::as_ref(ctx)
             .active_conversation(self.terminal_view_id)
             .map(|c| c.autoexecute_any_action())
-            .unwrap_or(false);
-        let is_active = conversation_is_active || is_locked;
+            .unwrap_or(false)
+            || is_force_enabled;
+
         let icon = if is_active {
             Icon::FastForwardFilled
         } else {
             Icon::FastForward
         };
-        let tooltip = if is_locked {
+        let tooltip = if is_force_enabled {
             FAST_FORWARD_LOCKED_TOOLTIP
         } else if is_active {
             FAST_FORWARD_ON_TOOLTIP
         } else {
             FAST_FORWARD_OFF_TOOLTIP
         };
+
         self.fast_forward_button.update(ctx, |button, ctx| {
             button.set_icon(Some(icon), ctx);
             button.set_tooltip(Some(tooltip), ctx);
             button.set_active(is_active, ctx);
+            button.set_disabled(is_force_enabled, ctx);
         });
     }
 
@@ -2859,6 +2860,38 @@ impl ActionButtonTheme for FastForwardButtonTheme {
 
     fn should_opt_out_of_contrast_adjustment(&self) -> bool {
         true
+    }
+}
+
+/// Disabled-state theme used by the fast-forward chip when fast-forward is
+/// locked on (cloud agent conversations). Delegates entirely to
+/// `FastForwardButtonTheme`, but forces `hovered=true` on the background so
+/// the chip still reads as "on" while the underlying button is disabled
+/// (which gives us the arrow cursor and no-op click handler for free).
+struct FastForwardLockedTheme;
+
+impl ActionButtonTheme for FastForwardLockedTheme {
+    fn background(&self, _hovered: bool, appearance: &Appearance) -> Option<Fill> {
+        // Force the active (hovered) background so the disabled chip still
+        // visually looks like fast-forward is on.
+        FastForwardButtonTheme.background(true, appearance)
+    }
+
+    fn text_color(
+        &self,
+        hovered: bool,
+        background: Option<Fill>,
+        appearance: &Appearance,
+    ) -> ColorU {
+        FastForwardButtonTheme.text_color(hovered, background, appearance)
+    }
+
+    fn border(&self, appearance: &Appearance) -> Option<ColorU> {
+        FastForwardButtonTheme.border(appearance)
+    }
+
+    fn should_opt_out_of_contrast_adjustment(&self) -> bool {
+        FastForwardButtonTheme.should_opt_out_of_contrast_adjustment()
     }
 }
 

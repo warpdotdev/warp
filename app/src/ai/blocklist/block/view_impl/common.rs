@@ -183,8 +183,8 @@ pub struct ButtonProps<'a> {
 /// Props for the auto-approve / fast-forward button in the warping indicator.
 ///
 /// When `is_locked` is set, the button is rendered in its always-on state and
-/// the click handler (plus the associated keybinding) are no-ops. Used for
-/// ambient agent conversations where fast-forward is always conceptually on.
+/// the click handler (plus the action dispatched by the keybinding) are no-ops.
+/// Used for ambient agent conversations where fast-forward is always conceptually on.
 pub struct AutoExecuteButtonProps<'a> {
     pub button_handle: &'a MouseStateHandle,
     pub keystroke: Option<&'a Keystroke>,
@@ -776,6 +776,7 @@ fn render_hide_responses_button(
         props.keystroke,
         tooltip_text.to_string(),
         props.is_active,
+        false,
         |ctx| {
             ctx.dispatch_typed_action(BlocklistAIStatusBarAction::ToggleHideResponses);
         },
@@ -807,6 +808,7 @@ pub fn render_switch_control_to_user_button(
         props.keystroke,
         tooltip.to_string(),
         props.is_active,
+        false,
         |ctx| {
             ctx.dispatch_typed_action(TerminalAction::SetInputModeTerminal);
         },
@@ -830,6 +832,7 @@ fn render_stop_button(props: ButtonProps, appearance: &Appearance) -> Box<dyn El
         props.keystroke,
         "Stop agent task".to_string(),
         props.is_active,
+        false,
         |ctx: &mut EventContext<'_>| {
             ctx.dispatch_typed_action(BlocklistAIStatusBarAction::Stop);
         },
@@ -867,6 +870,7 @@ fn render_queue_next_prompt_button(
         props.keystroke,
         tooltip_text.to_string(),
         props.is_active,
+        false,
         |ctx| {
             ctx.dispatch_typed_action(TerminalAction::ToggleQueueNextPrompt);
         },
@@ -905,20 +909,14 @@ fn render_auto_approve_button(
         "Auto-approve all agent actions for this task"
     };
 
-    // Hide the keybinding label when locked since the keybinding is a no-op.
-    let keystroke = if props.is_locked {
-        None
-    } else {
-        props.keystroke
-    };
-
     render_warping_indicator_button(
         props.button_handle.clone(),
         appearance,
         icon,
-        keystroke,
+        props.keystroke,
         tooltip_text.to_string(),
         is_active,
+        props.is_locked,
         move |ctx| {
             if props.is_locked {
                 return;
@@ -1007,6 +1005,7 @@ fn render_warping_indicator_button<F>(
     keybinding: Option<&Keystroke>,
     tooltip: String,
     is_active: bool,
+    is_disabled: bool,
     mut on_click: F,
 ) -> Box<dyn Element>
 where
@@ -1053,6 +1052,12 @@ where
         UiComponentStyles::default().set_background(internal_colors::fg_overlay_3(theme).into()),
     );
 
+    let cursor = if is_disabled {
+        Cursor::Arrow
+    } else {
+        Cursor::PointingHand
+    };
+
     let mut button = Button::new(
         mouse_state,
         styles,
@@ -1062,7 +1067,7 @@ where
     )
     .with_custom_label(button_content)
     .with_tooltip(move || ui_builder.tool_tip(tooltip.clone()).build().finish())
-    .with_cursor(Some(Cursor::PointingHand));
+    .with_cursor(Some(cursor));
 
     if is_active {
         button = button.active();
