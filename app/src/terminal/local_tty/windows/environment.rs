@@ -338,7 +338,13 @@ fn reg_value_to_string(value: &RegValue, key: &str) -> anyhow::Result<OsString> 
     };
 
     // These are null-terminated, but we don't want the terminator here. We add it back later.
-    os_str.map(|v| v.to_string_lossy().trim_end_matches('\0').into())
+    os_str.map(|v| {
+        let s = v.to_string_lossy();
+        match s.find('\0') {
+            Some(pos) => s[..pos].into(),
+            None => v,
+        }
+    })
 }
 
 /// Best-effort lowercase transformation of an OsString.
