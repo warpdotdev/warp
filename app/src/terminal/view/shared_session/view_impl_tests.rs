@@ -811,7 +811,7 @@ fn test_local_to_cloud_handoff_session_join_keeps_details_panel_hidden() {
                         submission_state: HandoffSubmissionState::Idle,
                         auto_submit: None,
                         orchestration_handoff: None,
-                        source_conversation_active: false,
+                        should_inject_continue: false,
                     }),
                     ctx,
                 );

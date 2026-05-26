@@ -2568,10 +2568,9 @@ impl Input {
                     // the user can refine before forking.
                     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
                     let auto_handoff = me.editor.as_ref(ctx).buffer_text(ctx).trim().is_empty()
-                        && crate::ai::blocklist::handoff::source_conversation_has_content(
-                            me.terminal_view_id,
-                            ctx,
-                        );
+                        && BlocklistAIHistoryModel::as_ref(ctx)
+                            .active_conversation(me.terminal_view_id)
+                            .is_some_and(|c| !c.is_empty());
                     #[cfg(not(all(feature = "local_fs", not(target_family = "wasm"))))]
                     let auto_handoff = false;
 
@@ -4109,16 +4108,12 @@ impl Input {
         }
 
         let prompt = self.editor.as_ref(ctx).buffer_text(ctx).trim().to_owned();
-        // Empty buffer + source conversation with content launches an immediate
-        // empty-prompt handoff; the workspace synthesizes the launch (and
-        // collects attachments) so all three entry points stay symmetric.
-        // Empty buffer without source content is a no-op so the compose draft
-        // is preserved.
+        // Empty buffer + source conversation with content launches an immediate empty-prompt handoff.
         if prompt.is_empty() {
-            if !crate::ai::blocklist::handoff::source_conversation_has_content(
-                self.terminal_view_id,
-                ctx,
-            ) {
+            let source_has_content = BlocklistAIHistoryModel::as_ref(ctx)
+                .active_conversation(self.terminal_view_id)
+                .is_some_and(|c| !c.is_empty());
+            if !source_has_content {
                 return true;
             }
 

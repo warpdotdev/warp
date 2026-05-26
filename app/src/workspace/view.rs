@@ -164,9 +164,9 @@ use crate::ai::agent_management::notifications::NotificationFilter;
 use crate::ai::agent_management::telemetry::AgentManagementTelemetryEvent;
 use crate::ai::agent_management::view::{AgentManagementView, AgentManagementViewEvent};
 use crate::ai::agent_management::AgentManagementEvent;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::ambient_agents::telemetry::{HandoffEntryPoint, HandoffInjectionPath};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::agent_input_footer::editor::AgentToolbarEditorMode;
 use crate::ai::blocklist::agent_view::editor::{AgentToolbarEditorEvent, AgentToolbarEditorModal};
@@ -750,7 +750,7 @@ struct LocalToCloudHandoffOpenParams {
     launch: Option<PendingCloudLaunch>,
     environment_id: Option<SyncId>,
     intent: LocalToCloudHandoffIntent,
-    source_conversation_active: bool,
+    should_inject_continue: bool,
 }
 
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
@@ -14532,7 +14532,6 @@ impl Workspace {
         }
         Self::show_handoff_success_toast(ctx);
 
-        // Fresh-launch handoff has no source conversation, so it is never active.
         let pending = PendingHandoff {
             forked_conversation_id: None,
             title: None,
@@ -14541,7 +14540,7 @@ impl Workspace {
             submission_state: HandoffSubmissionState::Idle,
             auto_submit: launch,
             orchestration_handoff: None,
-            source_conversation_active: false,
+            should_inject_continue: false,
         };
         model_handle.update(ctx, |model, model_ctx| {
             model.set_pending_handoff(Some(pending), model_ctx);
@@ -14690,13 +14689,10 @@ impl Workspace {
             return;
         }
 
-        // Footer chip, `&` Enter, and `/handoff` (no arg) all dispatch with
-        // `launch: None`. Synthesize an empty `PendingCloudLaunch` for those
-        // entry points so the rest of the handoff flow auto-submits without an
-        // explicit prompt; `build_handoff_spawn_request` decides whether to
-        // substitute `"Continue"` / `"Apply the workspace changes..."` or send
-        // `prompt: None` on the wire. Attachments are collected from the source
-        // input here so all three entry points stay symmetric.
+        // Chip, `&` Enter, and `/handoff` with no arg dispatch `launch: None`;
+        // synthesize an empty `PendingCloudLaunch` so auto-submit fires. The
+        // empty-prompt substitution happens in `build_handoff_spawn_request`.
+        // Attachments come from the source input for symmetry across entry points.
         let launch = match (launch, intent) {
             (
                 None,
@@ -14731,11 +14727,11 @@ impl Workspace {
         });
         let empty_prompt = launch.as_ref().is_none_or(|l| l.prompt.is_empty());
         let injection_path = if !empty_prompt {
-            crate::ai::ambient_agents::telemetry::HandoffInjectionPath::None
+            HandoffInjectionPath::None
         } else if source_conversation_active {
-            crate::ai::ambient_agents::telemetry::HandoffInjectionPath::Continue
+            HandoffInjectionPath::Continue
         } else {
-            crate::ai::ambient_agents::telemetry::HandoffInjectionPath::SnapshotRehydration
+            HandoffInjectionPath::SnapshotRehydration
         };
 
         send_telemetry_from_ctx!(
@@ -14851,7 +14847,7 @@ impl Workspace {
                             launch,
                             environment_id,
                             intent,
-                            source_conversation_active,
+                            should_inject_continue: source_conversation_active,
                         },
                         ctx,
                     );
@@ -14901,7 +14897,7 @@ impl Workspace {
             launch,
             environment_id,
             intent,
-            source_conversation_active,
+            should_inject_continue,
         } = params;
         let show_user_feedback = intent.shows_user_feedback();
         let history_model = BlocklistAIHistoryModel::handle(ctx);
@@ -15020,7 +15016,7 @@ impl Workspace {
             submission_state: HandoffSubmissionState::Idle,
             auto_submit: launch,
             orchestration_handoff,
-            source_conversation_active,
+            should_inject_continue,
         };
         model_handle.update(ctx, |model, model_ctx| {
             model.set_pending_handoff(Some(pending), model_ctx);

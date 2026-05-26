@@ -257,12 +257,10 @@ pub struct AgentDriverOptions {
     pub snapshot_upload_timeout: Option<Duration>,
     /// Declarations script timeout override.
     pub snapshot_script_timeout: Option<Duration>,
-    /// When true, the AgentDriver skips dispatching the initial
-    /// `StartFromAmbientRunPrompt` so the cloud agent comes up ready for a
-    /// user follow-up instead of hallucinating a turn against an empty user
-    /// message. Populated from the `--skip-initial-turn` CLI flag, which the
-    /// worker emits per-execution based on the execution input (empty prompt
-    /// + no snapshot token). The CLI flag is the worker→driver contract.
+    /// Skip the initial `StartFromAmbientRunPrompt` so the agent waits for a
+    /// follow-up instead of hallucinating an empty turn. Sourced from the
+    /// `--skip-initial-turn` CLI flag, which the worker emits when the
+    /// execution input has neither a prompt nor a snapshot token.
     pub skip_initial_turn: bool,
 }
 
@@ -2503,16 +2501,15 @@ impl AgentDriver {
         let run_exit = IdleTimeoutSender::new(tx);
         let restored_conversation_id = self.restored_conversation_id;
 
-        // ServerSide-prompt prologue, shared by the skip and non-skip paths:
-        // enter the agent view and emit the canonical
-        // `AmbientSetupPhaseEnded` marker so viewers tear down the Cloud Mode
-        // Setup V2 chip. `AgentRunPrompt::Local` has no cloud setup phase and
-        // enters the view with the user prompt itself below.
+        // ServerSide prompts enter the agent view and emit
+        // `AmbientSetupPhaseEnded` to tear down the Cloud Mode Setup V2 chip.
+        // (Local prompts have no cloud setup phase; they enter the view with
+        // the user prompt below.)
         //
-        // For the skip path we also schedule the deferred `Success` here,
-        // *before* the history subscription is wired up; a follow-up
-        // `AppendedExchange` cancels the timer via the shared
-        // `Arc<AtomicUsize>` generation counter inside `IdleTimeoutSender`.
+        // When `skip_initial_turn` is set, also schedule the deferred `Success`
+        // now so the run isn't stuck waiting for a turn that will never arrive.
+        // The `AppendedExchange` handler below cancels this timer if a follow-up
+        // shows up, keeping the run alive long enough to handle the new turn.
         if matches!(&task_prompt, AgentRunPrompt::ServerSide { .. }) {
             self.terminal_driver.update(ctx, |td, ctx| {
                 td.with_terminal_view(ctx, |terminal, ctx| {
@@ -2863,12 +2860,7 @@ impl AgentDriver {
             .context("Failed to write artifact_created"));
         });
 
-        // Dispatch the AI input for the non-skip paths. The ServerSide
-        // prologue above already entered the view and emitted the
-        // `AmbientSetupPhaseEnded` marker; here we just fire the LLM input.
-        // `AgentRunPrompt::Local` enters the view with the user prompt
-        // itself (and uses the restored conversation id when present so the
-        // prompt is sent as a follow-up to a `--conversation`-restored run).
+        // Submit the AI query.
         if !self.skip_initial_turn {
             self.terminal_driver.update(ctx, |td, ctx| {
                 td.with_terminal_view(ctx, |terminal, ctx| match task_prompt {

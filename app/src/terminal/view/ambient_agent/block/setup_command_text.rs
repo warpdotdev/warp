@@ -112,9 +112,6 @@ impl CloudModeSetupTextBlock {
             .agent_view_state()
             .active_conversation_id()
         {
-            // Compat fallback for viewers connected to pre-feature sharers
-            // that don't emit AmbientSetupPhaseEnded. Idempotent with the
-            // canonical event_loop arm.
             ctx.subscribe_to_model(
                 &BlocklistAIHistoryModel::handle(ctx),
                 move |me, history_model, event, ctx| {
