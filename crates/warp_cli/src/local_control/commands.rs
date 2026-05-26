@@ -285,6 +285,12 @@ pub(super) fn run_input_command(
         InputCommand::Clear(args) => {
             run_action(args, ActionKind::InputClear, json!({}), output_format)
         }
+        InputCommand::Run(args) => run_action(
+            args.target,
+            ActionKind::InputRun,
+            json!({ "command": args.command }),
+            output_format,
+        ),
         InputCommand::Mode(command) => match command {
             crate::local_control::InputModeCommand::Set(args) => run_action(
                 args.target,
@@ -489,11 +495,47 @@ fn run_drive_object_command(
             json!({ "id": args.id }),
             output_format,
         ),
-        DriveObjectCommand::Create(_) => unsupported_action("drive.object.create"),
-        DriveObjectCommand::Update(_) => unsupported_action("drive.object.update"),
-        DriveObjectCommand::Delete(_) => unsupported_action("drive.object.delete"),
-        DriveObjectCommand::Insert(_) => unsupported_action("drive.object.insert"),
-        DriveObjectCommand::ShareToTeam(_) => unsupported_action("drive.object.share_to_team"),
+        DriveObjectCommand::Create(args) => run_action(
+            args.target,
+            ActionKind::DriveObjectCreate,
+            json!({
+                "object_type": drive_object_type_name(args.object_type),
+                "content": args.content,
+                "content_file": args.content_file.map(|path| path.to_string_lossy().to_string()),
+            }),
+            output_format,
+        ),
+        DriveObjectCommand::Update(args) => run_action(
+            args.target,
+            ActionKind::DriveObjectUpdate,
+            json!({
+                "id": args.id,
+                "content": args.content,
+                "content_file": args.content_file.map(|path| path.to_string_lossy().to_string()),
+            }),
+            output_format,
+        ),
+        DriveObjectCommand::Delete(args) => run_action(
+            args.target,
+            ActionKind::DriveObjectDelete,
+            json!({ "id": args.id }),
+            output_format,
+        ),
+        DriveObjectCommand::Insert(args) => run_action(
+            args.target,
+            ActionKind::DriveObjectInsert,
+            json!({
+                "id": args.id,
+                "target": parse_insert_target(args.insert_target)?,
+            }),
+            output_format,
+        ),
+        DriveObjectCommand::ShareToTeam(args) => run_action(
+            args.target,
+            ActionKind::DriveObjectShareToTeam,
+            json!({ "id": args.id }),
+            output_format,
+        ),
     }
 }
 
@@ -659,6 +701,22 @@ fn drive_object_type_name(object_type: crate::local_control::DriveObjectType) ->
         crate::local_control::DriveObjectType::Space => "space",
         crate::local_control::DriveObjectType::Trash => "trash",
     }
+}
+
+fn parse_insert_target(
+    target: Option<String>,
+) -> Result<Option<local_control::protocol::TargetSelector>, ControlError> {
+    target
+        .map(|target| {
+            serde_json::from_str(&target).map_err(|err| {
+                ControlError::with_details(
+                    ErrorCode::InvalidSelector,
+                    "drive.object.insert --target must be a JSON target selector",
+                    err.to_string(),
+                )
+            })
+        })
+        .transpose()
 }
 
 fn block_output_format(plain: bool, ansi: bool, json: bool) -> &'static str {

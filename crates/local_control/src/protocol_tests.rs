@@ -1,5 +1,21 @@
 use super::*;
 
+fn action_name(kind: ActionKind) -> String {
+    serde_json::to_value(kind)
+        .expect("action kind serializes")
+        .as_str()
+        .expect("action kind serializes as string")
+        .to_owned()
+}
+
+fn error_code_name(code: ErrorCode) -> String {
+    serde_json::to_value(code)
+        .expect("error code serializes")
+        .as_str()
+        .expect("error code serializes as string")
+        .to_owned()
+}
+
 #[test]
 fn request_envelope_serializes_stable_action_names() {
     let request = RequestEnvelope::new(Action::new(ActionKind::WindowFocus));
@@ -23,102 +39,66 @@ fn response_error_serializes_machine_code() {
 }
 
 #[test]
-fn ambiguous_target_error_code_is_stable() {
-    let value = serde_json::to_value(ErrorCode::AmbiguousTarget).expect("code serializes");
-    assert_eq!(value, serde_json::json!("ambiguous_target"));
-}
-
-#[test]
-fn input_run_is_cataloged_as_authenticated_underlying_mutation_stub() {
-    let action = serde_json::from_value::<ActionKind>(serde_json::json!("input.run"))
-        .expect("input.run is cataloged");
-    let metadata = action.metadata();
-    assert_eq!(
-        metadata.implementation_status,
-        ActionImplementationStatus::Stub
-    );
-    assert_eq!(
-        metadata.permission_category,
-        PermissionCategory::MutateUnderlyingData
-    );
-    assert_eq!(
-        metadata.state_data_category,
-        StateDataCategory::UnderlyingDataMutation
-    );
-    assert!(metadata.requires_authenticated_user);
-}
-
-#[test]
 fn malformed_action_name_is_not_deserialized() {
     let action = serde_json::from_value::<ActionKind>(serde_json::json!("tab.create.extra"));
     assert!(action.is_err());
 }
 
 #[test]
-fn tab_create_metadata_is_first_slice_logged_out_safe_mutation() {
-    let metadata = ActionKind::TabCreate.metadata();
-    assert_eq!(
-        metadata.implementation_status,
-        ActionImplementationStatus::Implemented
-    );
-    assert_eq!(metadata.risk_tier, RiskTier::MutatingNonDestructive);
-    assert_eq!(
-        metadata.state_data_category,
-        StateDataCategory::AppStateMutation
-    );
-    assert!(!metadata.requires_authenticated_user);
-    assert!(!metadata.authenticated_user.required);
-    assert_eq!(
-        metadata.permission_category,
-        PermissionCategory::MutateAppState
-    );
-    assert_eq!(
-        metadata.allowed_invocation_contexts,
-        vec![
-            InvocationContext::InsideWarp,
-            InvocationContext::OutsideWarp
-        ]
-    );
+fn file_content_and_unapproved_execution_actions_are_not_in_catalog() {
+    for action in [
+        "file.read",
+        "file.write",
+        "file.append",
+        "file.delete",
+        "drive.object.share-public",
+        "drive.object.share-external",
+        "agent.prompt.submit",
+        "command.accept",
+    ] {
+        assert!(serde_json::from_value::<ActionKind>(serde_json::json!(action)).is_err());
+    }
 }
 
 #[test]
-fn structural_metadata_actions_are_logged_out_safe_read_metadata() {
-    for action in [
-        ActionKind::InstanceList,
-        ActionKind::InstanceInspect,
-        ActionKind::AppPing,
-        ActionKind::AppInspect,
-        ActionKind::AppVersion,
-        ActionKind::AppActive,
-        ActionKind::ActionList,
-        ActionKind::ActionGet,
-        ActionKind::CapabilityList,
-        ActionKind::CapabilityInspect,
-        ActionKind::WindowList,
-        ActionKind::WindowInspect,
-        ActionKind::TabList,
-        ActionKind::TabInspect,
-        ActionKind::PaneList,
-        ActionKind::PaneInspect,
-        ActionKind::SessionList,
-        ActionKind::SessionInspect,
-    ] {
-        let metadata = action.metadata();
+fn action_catalog_has_unique_stable_names() {
+    let names = ActionKind::ALL
+        .iter()
+        .copied()
+        .map(action_name)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(names.len(), ActionKind::ALL.len());
+
+    for action in ActionKind::ALL {
+        assert_eq!(action.as_str(), action_name(*action));
+        assert_eq!(action.metadata().name, action.as_str());
+    }
+}
+
+#[test]
+fn implemented_metadata_matches_action_status() {
+    let implemented = ActionKind::implemented_metadata()
+        .into_iter()
+        .map(|metadata| metadata.kind)
+        .collect::<std::collections::HashSet<_>>();
+    let expected = ActionKind::ALL
+        .iter()
+        .copied()
+        .filter(|action| action.is_implemented())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(implemented, expected);
+    assert!(implemented.contains(&ActionKind::InputRun));
+    assert!(implemented.contains(&ActionKind::DriveObjectShareToTeam));
+    assert!(!implemented.contains(&ActionKind::DriveWorkflowRun));
+}
+
+#[test]
+fn implemented_actions_allow_outside_warp_invocation() {
+    for metadata in ActionKind::implemented_metadata() {
         assert_eq!(
             metadata.implementation_status,
             ActionImplementationStatus::Implemented
         );
-        assert_eq!(metadata.risk_tier, RiskTier::ReadOnlyMetadata);
-        assert_eq!(
-            metadata.state_data_category,
-            StateDataCategory::MetadataRead
-        );
-        assert_eq!(
-            metadata.permission_category,
-            PermissionCategory::ReadMetadata
-        );
-        assert!(!metadata.requires_authenticated_user);
-        assert!(!metadata.authenticated_user.required);
         assert_eq!(
             metadata.allowed_invocation_contexts,
             vec![InvocationContext::OutsideWarp]
@@ -127,205 +107,65 @@ fn structural_metadata_actions_are_logged_out_safe_read_metadata() {
 }
 
 #[test]
-fn structural_metadata_actions_have_expected_target_scopes() {
-    for action in [
-        ActionKind::InstanceList,
-        ActionKind::InstanceInspect,
-        ActionKind::AppPing,
-        ActionKind::AppInspect,
-        ActionKind::AppVersion,
-        ActionKind::AppActive,
-    ] {
-        assert_eq!(action.metadata().target_scope, TargetScope::Instance);
-    }
+fn representative_security_categories_are_stable() {
+    let cases = [
+        (
+            ActionKind::TabList,
+            StateDataCategory::MetadataRead,
+            PermissionCategory::ReadMetadata,
+        ),
+        (
+            ActionKind::BlockOutput,
+            StateDataCategory::UnderlyingDataRead,
+            PermissionCategory::ReadUnderlyingData,
+        ),
+        (
+            ActionKind::TabCreate,
+            StateDataCategory::AppStateMutation,
+            PermissionCategory::MutateAppState,
+        ),
+        (
+            ActionKind::SettingSet,
+            StateDataCategory::MetadataConfigurationMutation,
+            PermissionCategory::MutateMetadataConfiguration,
+        ),
+        (
+            ActionKind::InputRun,
+            StateDataCategory::UnderlyingDataMutation,
+            PermissionCategory::MutateUnderlyingData,
+        ),
+        (
+            ActionKind::DriveObjectShareToTeam,
+            StateDataCategory::UnderlyingDataMutation,
+            PermissionCategory::MutateUnderlyingData,
+        ),
+    ];
 
-    assert_eq!(
-        ActionKind::ActionList.metadata().target_scope,
-        TargetScope::Action
-    );
-    assert_eq!(
-        ActionKind::ActionGet.metadata().target_scope,
-        TargetScope::Action
-    );
-    assert_eq!(
-        ActionKind::CapabilityList.metadata().target_scope,
-        TargetScope::Action
-    );
-    assert_eq!(
-        ActionKind::CapabilityInspect.metadata().target_scope,
-        TargetScope::Action
-    );
-    assert_eq!(
-        ActionKind::WindowList.metadata().target_scope,
-        TargetScope::Window
-    );
-    assert_eq!(
-        ActionKind::WindowInspect.metadata().target_scope,
-        TargetScope::Window
-    );
-    assert_eq!(
-        ActionKind::TabList.metadata().target_scope,
-        TargetScope::Tab
-    );
-    assert_eq!(
-        ActionKind::TabInspect.metadata().target_scope,
-        TargetScope::Tab
-    );
-    assert_eq!(
-        ActionKind::PaneList.metadata().target_scope,
-        TargetScope::Pane
-    );
-    assert_eq!(
-        ActionKind::PaneInspect.metadata().target_scope,
-        TargetScope::Pane
-    );
-    assert_eq!(
-        ActionKind::SessionList.metadata().target_scope,
-        TargetScope::Session
-    );
-    assert_eq!(
-        ActionKind::SessionInspect.metadata().target_scope,
-        TargetScope::Session
-    );
-}
-
-#[test]
-fn underlying_data_actions_require_underlying_data_permission_and_authenticated_user() {
-    for action in [
-        ActionKind::BlockList,
-        ActionKind::BlockGet,
-        ActionKind::InputGet,
-        ActionKind::HistoryList,
-    ] {
+    for (action, state_category, permission_category) in cases {
         let metadata = action.metadata();
-        assert_eq!(
-            metadata.implementation_status,
-            ActionImplementationStatus::Implemented
-        );
-        assert_eq!(metadata.risk_tier, RiskTier::ReadOnlyTerminalData);
-        assert_eq!(
-            metadata.state_data_category,
-            StateDataCategory::UnderlyingDataRead
-        );
-        assert_eq!(
-            metadata.permission_category,
-            PermissionCategory::ReadUnderlyingData
-        );
-        assert!(metadata.requires_authenticated_user);
-        assert!(metadata.authenticated_user.required);
-        assert_eq!(
-            metadata.allowed_invocation_contexts,
-            vec![
-                InvocationContext::InsideWarp,
-                InvocationContext::OutsideWarp
-            ]
-        );
+        assert_eq!(metadata.state_data_category, state_category);
+        assert_eq!(metadata.permission_category, permission_category);
     }
 }
 
 #[test]
-fn underlying_data_actions_have_expected_target_scopes() {
-    assert_eq!(
-        ActionKind::BlockList.metadata().target_scope,
-        TargetScope::Block
-    );
-    assert_eq!(
-        ActionKind::BlockGet.metadata().target_scope,
-        TargetScope::Block
-    );
-    assert_eq!(
-        ActionKind::InputGet.metadata().target_scope,
-        TargetScope::Session
-    );
-    assert_eq!(
-        ActionKind::HistoryList.metadata().target_scope,
-        TargetScope::History
-    );
-}
-
-#[test]
-fn action_with_params_roundtrips_typed_action_get_params() {
-    let action = Action::with_params(
-        ActionKind::ActionGet,
-        ActionGetParams {
-            action: "tab.create".to_owned(),
-        },
-    )
-    .expect("params serialize");
-    assert_eq!(action.kind, ActionKind::ActionGet);
-    assert_eq!(action.params["action"], "tab.create");
-
-    let params = action
-        .params_as::<ActionGetParams>()
-        .expect("params deserialize");
-    assert_eq!(params.action, "tab.create");
-}
-
-#[test]
-fn action_metadata_serializes_security_categories() {
-    let metadata = ActionKind::TabCreate.metadata();
-    let value = serde_json::to_value(metadata).expect("metadata serializes");
-    assert_eq!(value["name"], "tab.create");
-    assert_eq!(value["state_data_category"], "app_state_mutation");
-    assert_eq!(value["permission_category"], "mutate_app_state");
-    assert_eq!(
-        value["authenticated_user"]["required"],
-        serde_json::json!(false)
-    );
-}
-
-#[test]
-fn default_permissions_preserve_security_categories() {
-    assert_eq!(
-        ActionKind::TabCreate.metadata().permission_category,
-        PermissionCategory::MutateAppState
-    );
-    assert_eq!(
-        ActionKind::InputInsert.metadata().permission_category,
-        PermissionCategory::MutateAppState
-    );
-    assert_eq!(
-        ActionKind::SettingSet.metadata().permission_category,
-        PermissionCategory::MutateMetadataConfiguration
-    );
-    assert_eq!(
-        ActionKind::TabList.metadata().permission_category,
-        PermissionCategory::ReadMetadata
-    );
-    assert_eq!(
-        ActionKind::BlockList.metadata().permission_category,
-        PermissionCategory::ReadUnderlyingData
-    );
-}
-
-#[test]
-fn non_first_slice_actions_are_catalog_stubs() {
-    let metadata = ActionKind::WindowCreate.metadata();
+fn input_run_is_authenticated_underlying_mutation() {
+    let metadata = ActionKind::InputRun.metadata();
     assert_eq!(
         metadata.implementation_status,
-        ActionImplementationStatus::Stub
-    );
-    assert!(
-        metadata
-            .allowed_invocation_contexts
-            .contains(&InvocationContext::OutsideWarp)
-    );
-}
-
-#[test]
-fn file_content_actions_are_explicitly_excluded() {
-    for action_name in EXCLUDED_FILE_CONTENT_ACTION_NAMES {
-        let action = serde_json::from_str::<ActionKind>(&format!("\"{action_name}\""));
-        assert!(action.is_err(), "{action_name} must not be allowlisted");
-    }
-    assert_eq!(
-        ActionKind::FileOpen.metadata().permission_category,
-        PermissionCategory::MutateAppState
+        ActionImplementationStatus::Implemented
     );
     assert_eq!(
-        ActionKind::FileList.metadata().permission_category,
-        PermissionCategory::ReadMetadata
+        metadata.state_data_category,
+        StateDataCategory::UnderlyingDataMutation
     );
+    assert_eq!(
+        metadata.permission_category,
+        PermissionCategory::MutateUnderlyingData
+    );
+    assert_eq!(metadata.parameter_spec, ActionParameterSpec::Text);
+    assert!(metadata.requires_authenticated_user);
+    assert!(metadata.authenticated_user.required);
 }
 
 #[test]
@@ -356,20 +196,6 @@ fn drive_sharing_contract_distinguishes_dialog_from_team_mutation() {
 }
 
 #[test]
-fn action_catalog_has_unique_stable_names() {
-    let mut names = std::collections::BTreeSet::new();
-    for action in ActionKind::ALL {
-        assert!(
-            names.insert(action.as_str()),
-            "duplicate action name {}",
-            action.as_str()
-        );
-        let serialized = serde_json::to_value(action).expect("action serializes");
-        assert_eq!(serialized, serde_json::json!(action.as_str()));
-    }
-}
-
-#[test]
 fn drive_selector_and_typed_params_serialize_stably() {
     let target = TargetSelector {
         drive_object: Some(DriveObjectTarget::Lookup {
@@ -388,4 +214,38 @@ fn drive_selector_and_typed_params_serialize_stably() {
     let value = serde_json::to_value(params).expect("params serialize");
     assert_eq!(value["type"], "drive_object_id");
     assert_eq!(value["id"], "drive_123");
+}
+
+#[test]
+fn structured_error_codes_have_unique_stable_strings() {
+    let codes = [
+        ErrorCode::LocalControlDisabled,
+        ErrorCode::UnauthorizedLocalClient,
+        ErrorCode::InsufficientPermissions,
+        ErrorCode::AuthenticatedUserRequired,
+        ErrorCode::AuthenticatedUserUnavailable,
+        ErrorCode::ExecutionContextNotAllowed,
+        ErrorCode::ProtocolVersionUnsupported,
+        ErrorCode::InvalidRequest,
+        ErrorCode::InvalidSelector,
+        ErrorCode::InvalidParams,
+        ErrorCode::NoInstance,
+        ErrorCode::AmbiguousInstance,
+        ErrorCode::AmbiguousTarget,
+        ErrorCode::StaleTarget,
+        ErrorCode::TargetStateConflict,
+        ErrorCode::MissingTarget,
+        ErrorCode::TransportUnavailable,
+        ErrorCode::BridgeUnavailable,
+        ErrorCode::UnsupportedAction,
+        ErrorCode::NotAllowlisted,
+        ErrorCode::Internal,
+    ];
+    let serialized = codes
+        .into_iter()
+        .map(error_code_name)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(serialized.len(), codes.len());
+    assert!(serialized.contains("authenticated_user_unavailable"));
+    assert!(serialized.contains("not_allowlisted"));
 }

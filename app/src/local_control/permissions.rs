@@ -1,13 +1,21 @@
 //! Permission checks that map protocol action metadata onto local settings.
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::ai::execution_profiles::{AIExecutionProfile, WarpControlPermission};
 use crate::auth::AuthStateProvider;
 use crate::features::FeatureFlag;
 use crate::settings::{LocalControlPermissionCategory, LocalControlSettings};
 use ::local_control::auth::CredentialGrant;
-use ::local_control::{ActionKind, ControlError, ErrorCode, InvocationContext, PermissionCategory};
+use ::local_control::{
+    Action, ActionKind, ControlError, ErrorCode, InvocationContext, PermissionCategory,
+};
 use warpui::{ModelContext, SingletonEntity};
 
 use crate::local_control::LocalControlBridge;
+
+#[cfg(test)]
+static TEST_ALLOW_INPUT_RUN_POLICY: AtomicBool = AtomicBool::new(false);
 
 pub(super) fn warp_control_cli_enabled() -> bool {
     FeatureFlag::WarpControlCli.is_enabled()
@@ -97,6 +105,33 @@ pub(crate) fn ensure_agent_profile_allows_action(
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use ::local_control::{Action, InstanceId};
+    use chrono::Duration;
+
+    use super::*;
+
+    #[test]
+    fn input_run_policy_is_fail_closed_without_test_override() {
+        let grant = CredentialGrant::new(
+            InstanceId("inst".to_owned()),
+            ActionKind::InputRun,
+            InvocationContext::OutsideWarp,
+            Duration::minutes(5),
+        );
+        let action = Action::new(ActionKind::InputRun);
+
+        let err = ensure_input_run_policy_allows(&grant, &action)
+            .expect_err("input.run requires explicit policy approval");
+        assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+
+        let _guard = allow_input_run_policy_for_test();
+        ensure_input_run_policy_allows(&grant, &action)
+            .expect("test policy override allows input.run");
+    }
+}
+
 pub(super) fn ensure_action_allowed(
     context: InvocationContext,
     action: ActionKind,
@@ -168,6 +203,50 @@ pub(super) fn authenticated_user_subject_for_action(
                 format!("{} requires a logged-in Warp user", action.as_str()),
             )
         })
+}
+
+pub(crate) fn ensure_input_run_policy_allows(
+    grant: &CredentialGrant,
+    action: &Action,
+) -> Result<(), ControlError> {
+    if input_run_policy_allows(grant, action) {
+        return Ok(());
+    }
+    Err(ControlError::new(
+        ErrorCode::InsufficientPermissions,
+        "input.run requires explicit local approval policy before command execution",
+    ))
+}
+
+#[cfg(not(test))]
+fn input_run_policy_allows(_grant: &CredentialGrant, _action: &Action) -> bool {
+    false
+}
+
+#[cfg(test)]
+fn input_run_policy_allows(grant: &CredentialGrant, action: &Action) -> bool {
+    grant.action == ActionKind::InputRun
+        && action.kind == ActionKind::InputRun
+        && TEST_ALLOW_INPUT_RUN_POLICY.load(Ordering::SeqCst)
+}
+
+#[cfg(test)]
+pub(crate) fn allow_input_run_policy_for_test() -> TestInputRunPolicyGuard {
+    TestInputRunPolicyGuard {
+        previous: TEST_ALLOW_INPUT_RUN_POLICY.swap(true, Ordering::SeqCst),
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct TestInputRunPolicyGuard {
+    previous: bool,
+}
+
+#[cfg(test)]
+impl Drop for TestInputRunPolicyGuard {
+    fn drop(&mut self) {
+        TEST_ALLOW_INPUT_RUN_POLICY.store(self.previous, Ordering::SeqCst);
+    }
 }
 
 pub(super) fn ensure_authenticated_user_matches(

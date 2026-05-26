@@ -867,27 +867,3 @@ fn reject_concrete_tab_selector_for_relative_activation(
     }
     Ok(())
 }
-
-#[cfg(test)]
-pub(crate) use tests::{
-    validate_app_focus_target_pub as validate_app_focus_target_test,
-    validate_window_create_target_pub as validate_window_create_target_test,
-};
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    pub(crate) fn validate_app_focus_target_pub(
-        target: &TargetSelector,
-    ) -> Result<(), ControlError> {
-        validate_app_focus_target(target)
-    }
-
-    pub(crate) fn validate_window_create_target_pub(
-        target: &TargetSelector,
-        params: &WindowCreateParams,
-    ) -> Result<(), ControlError> {
-        validate_window_create_target(target, params)
-    }
-}

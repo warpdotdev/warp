@@ -1,7 +1,8 @@
 use ::local_control::protocol::{
     BlockListParams, BlockListResult, BlockOutputFormat, BlockOutputParams, BlockOutputResult,
     BlockSummary, BlockTarget, HistoryEntrySummary, HistoryListParams, HistoryListResult,
-    InputStateResult, PaneTarget, SessionTarget, TabTarget, TargetSelector, WindowTarget,
+    InputRunParams, InputStateResult, PaneTarget, SessionTarget, TabTarget, TargetSelector,
+    WindowTarget,
 };
 use ::local_control::{ActionKind, ControlError, ErrorCode};
 use warpui::{ModelContext, SingletonEntity, ViewHandle};
@@ -135,6 +136,31 @@ pub(crate) fn output_block(
         block_output_result_from_model(&model, session_id, target.block.as_ref(), params)
     })?;
     to_control_data(result)
+}
+
+pub(crate) fn run_input_command(
+    target: &TargetSelector,
+    params: InputRunParams,
+    ctx: &mut ModelContext<LocalControlBridge>,
+) -> Result<serde_json::Value, ControlError> {
+    let resolved = resolve_terminal_read_target(ActionKind::InputRun, target, ctx)?;
+    let session_id = resolved
+        .terminal_view
+        .read(ctx, |terminal, _| terminal.active_block_session_id())
+        .ok_or_else(|| {
+            ControlError::new(
+                ErrorCode::MissingTarget,
+                "input.run requires a target terminal session",
+            )
+        })?;
+    resolved.terminal_view.update(ctx, |terminal, ctx| {
+        terminal.execute_command_or_set_pending(&params.command, ctx);
+    });
+    Ok(serde_json::json!({
+        "action": ActionKind::InputRun.as_str(),
+        "submitted": true,
+        "session_id": session_id.as_u64().to_string(),
+    }))
 }
 
 pub(crate) fn validate_terminal_read_target(

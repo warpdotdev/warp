@@ -294,6 +294,8 @@ pub enum InputCommand {
     Replace(InputTextArgs),
     /// Clear the staged input buffer.
     Clear(TargetArgs),
+    /// Submit a command to the selected input.
+    Run(InputRunArgs),
     /// Set terminal or agent input mode.
     #[command(subcommand)]
     Mode(InputModeCommand),
@@ -692,6 +694,13 @@ pub struct BlockOutputArgs {
 pub struct InputTextArgs {
     /// Text to stage.
     pub text: String,
+    #[command(flatten)]
+    pub target: TargetArgs,
+}
+#[derive(Debug, Clone, Args)]
+pub struct InputRunArgs {
+    /// Command to submit.
+    pub command: String,
     #[command(flatten)]
     pub target: TargetArgs,
 }

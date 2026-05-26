@@ -463,6 +463,11 @@ pub struct InputClearParams {}
 pub struct InputModeSetParams {
     pub mode: InputMode,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputRunParams {
+    pub command: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryEntrySummary {
@@ -654,6 +659,19 @@ pub struct DriveListResult {
 pub struct DriveInspectResult {
     pub object: DriveObjectSummary,
     pub content: serde_json::Value,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriveMutationAudit {
+    pub action: String,
+    pub authenticated_user_subject: String,
+    pub permission_category: PermissionCategory,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DriveMutationResult {
+    pub object: DriveObjectSummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit: Option<DriveMutationAudit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

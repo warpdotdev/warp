@@ -85,7 +85,7 @@ fn scripting_grant_rejects_subject_mismatch_for_authenticated_actions() {
         revoked: false,
     };
     let err = grant
-        .verify_for_action(ActionKind::InputInsert, Some("other@example.com"))
+        .verify_for_action(ActionKind::InputRun, Some("other@example.com"))
         .expect_err("subject mismatch is rejected");
     assert_eq!(err.code, ErrorCode::AuthenticatedUserUnavailable);
 }

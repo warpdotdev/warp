@@ -2,7 +2,8 @@
 use crate::local_control::handlers::metadata::action_metadata_for_name;
 use ::local_control::protocol::{
     ActionGetParams, ActionParams, BlockListParams, BlockOutputParams, DriveInspectParams,
-    FileOpenParams, HistoryListParams, InputInsertParams, InputModeSetParams, InputReplaceParams,
+    DriveObjectCreateParams, DriveObjectInsertParams, DriveObjectUpdateParams, FileOpenParams,
+    HistoryListParams, InputInsertParams, InputModeSetParams, InputReplaceParams, InputRunParams,
     PaneMaximizeParams, PaneNavigateParams, PaneResizeParams, PaneSplitParams, PaneTarget,
     SessionTarget, SettingGetParams, SettingSetParams, SettingToggleParams, TabActivateParams,
     TabCloseParams, TabMoveParams, TabTarget, TargetSelector, WindowCloseParams,
@@ -103,6 +104,15 @@ pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result
         ActionKind::HistoryList => action.params_as::<HistoryListParams>().map(|_| ()),
         ActionKind::InputInsert => action.params_as::<InputInsertParams>().map(|_| ()),
         ActionKind::InputReplace => action.params_as::<InputReplaceParams>().map(|_| ()),
+        ActionKind::InputRun => action.params_as::<InputRunParams>().and_then(|params| {
+            if params.command.trim().is_empty() {
+                return Err(ControlError::new(
+                    ErrorCode::InvalidParams,
+                    "input.run requires a non-empty command",
+                ));
+            }
+            Ok(())
+        }),
         ActionKind::InputModeSet => action.params_as::<InputModeSetParams>().map(|_| ()),
         ActionKind::SettingSet => action.params_as::<SettingSetParams>().map(|_| ()),
         ActionKind::SettingToggle => action.params_as::<SettingToggleParams>().map(|_| ()),
@@ -153,6 +163,47 @@ pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result
                 Ok(())
             })
         }
+        ActionKind::DriveObjectCreate => action
+            .params_as::<DriveObjectCreateParams>()
+            .and_then(validate_drive_content_source),
+        ActionKind::DriveObjectUpdate => {
+            action
+                .params_as::<DriveObjectUpdateParams>()
+                .and_then(|params| {
+                    if params.id.0.trim().is_empty() {
+                        return Err(ControlError::new(
+                            ErrorCode::InvalidParams,
+                            "drive.object.update requires a non-empty Drive object id",
+                        ));
+                    }
+                    validate_drive_content_source(params)
+                })
+        }
+        ActionKind::DriveObjectDelete | ActionKind::DriveObjectShareToTeam => action
+            .params_as::<DriveInspectParams>()
+            .and_then(|params| match params {
+                DriveInspectParams { id } if !id.trim().is_empty() => Ok(()),
+                DriveInspectParams { .. } => Err(ControlError::new(
+                    ErrorCode::InvalidParams,
+                    format!(
+                        "{} requires a non-empty Drive object id",
+                        action.kind.as_str()
+                    ),
+                )),
+            }),
+        ActionKind::DriveObjectInsert => {
+            action
+                .params_as::<DriveObjectInsertParams>()
+                .and_then(|params| {
+                    if params.id.0.trim().is_empty() {
+                        return Err(ControlError::new(
+                            ErrorCode::InvalidParams,
+                            "drive.object.insert requires a non-empty Drive object id",
+                        ));
+                    }
+                    Ok(())
+                })
+        }
         ActionKind::InstanceList
         | ActionKind::InstanceInspect
         | ActionKind::AppPing
@@ -197,6 +248,49 @@ fn validate_empty_action_params(action: &::local_control::Action) -> Result<(), 
         ErrorCode::InvalidParams,
         format!("{} does not accept parameters", action.kind.as_str()),
     ))
+}
+
+trait DriveContentSource {
+    fn content(&self) -> Option<&str>;
+    fn content_file(&self) -> Option<&str>;
+}
+
+impl DriveContentSource for DriveObjectCreateParams {
+    fn content(&self) -> Option<&str> {
+        self.content.as_deref()
+    }
+
+    fn content_file(&self) -> Option<&str> {
+        self.content_file.as_deref()
+    }
+}
+
+impl DriveContentSource for DriveObjectUpdateParams {
+    fn content(&self) -> Option<&str> {
+        self.content.as_deref()
+    }
+
+    fn content_file(&self) -> Option<&str> {
+        self.content_file.as_deref()
+    }
+}
+
+fn validate_drive_content_source<T: DriveContentSource>(params: T) -> Result<(), ControlError> {
+    match (params.content(), params.content_file()) {
+        (Some(content), None) if content.trim().is_empty() => Err(ControlError::new(
+            ErrorCode::InvalidParams,
+            "Drive object content must be non-empty",
+        )),
+        (None, Some(content_file)) if content_file.trim().is_empty() => Err(ControlError::new(
+            ErrorCode::InvalidParams,
+            "Drive object content_file must be non-empty",
+        )),
+        (Some(_), Some(_)) => Err(ControlError::new(
+            ErrorCode::InvalidParams,
+            "Drive object mutations accept either content or content_file, not both",
+        )),
+        _ => Ok(()),
+    }
 }
 
 pub(super) fn target_window_id(

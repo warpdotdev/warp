@@ -3,6 +3,7 @@ use std::ffi::OsString;
 use clap::Parser as _;
 use clap_complete::aot::Shell;
 use local_control::protocol::{ControlError, ErrorCode, PaneTarget, TabTarget, WindowTarget};
+use local_control::{ActionImplementationStatus, ActionKind};
 use serde_json::json;
 use serial_test::serial;
 
@@ -293,6 +294,7 @@ fn parses_mutating_command_surface_without_execution_submit() {
     );
     assert!(ControlArgs::try_parse_from(["warpctrl", "input", "replace", "cargo check"]).is_ok());
     assert!(ControlArgs::try_parse_from(["warpctrl", "input", "clear"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "input", "run", "cargo check"]).is_ok());
     assert!(ControlArgs::try_parse_from(["warpctrl", "input", "mode", "set", "agent"]).is_ok());
     assert!(ControlArgs::try_parse_from(["warpctrl", "theme", "system", "set", "true"]).is_ok());
     assert!(
@@ -341,6 +343,37 @@ fn parses_mutating_command_surface_without_execution_submit() {
 #[test]
 fn parses_drive_share_surface_and_native_team_share_only() {
     assert!(
+        ControlArgs::try_parse_from([
+            "warpctrl",
+            "drive",
+            "object",
+            "create",
+            "--type",
+            "notebook",
+            "--content",
+            "hello"
+        ])
+        .is_ok()
+    );
+    assert!(
+        ControlArgs::try_parse_from([
+            "warpctrl",
+            "drive",
+            "object",
+            "update",
+            "obj_1",
+            "--content-file",
+            "/tmp/notebook.json"
+        ])
+        .is_ok()
+    );
+    assert!(
+        ControlArgs::try_parse_from(["warpctrl", "drive", "object", "delete", "obj_1"]).is_ok()
+    );
+    assert!(
+        ControlArgs::try_parse_from(["warpctrl", "drive", "object", "insert", "obj_1"]).is_ok()
+    );
+    assert!(
         ControlArgs::try_parse_from(["warpctrl", "drive", "object", "share", "open", "obj_1"])
             .is_ok()
     );
@@ -376,7 +409,6 @@ fn excludes_local_file_content_crud_commands() {
 
 #[test]
 fn excludes_command_and_agent_prompt_submission() {
-    assert!(ControlArgs::try_parse_from(["warpctrl", "input", "run", "cargo check"]).is_err());
     assert!(ControlArgs::try_parse_from(["warpctrl", "agent", "prompt", "hello"]).is_err());
     assert!(ControlArgs::try_parse_from(["warpctrl", "command", "accept"]).is_err());
 }
@@ -440,6 +472,56 @@ fn structured_error_output_uses_stable_error_code() {
 }
 
 #[test]
+fn operator_readme_tracks_action_catalog_status() {
+    let readme = include_str!("../../../specs/warp-control-cli/README.md");
+    for action in ActionKind::ALL {
+        let metadata = action.metadata();
+        let status = match metadata.implementation_status {
+            ActionImplementationStatus::Implemented => "status: implemented",
+            ActionImplementationStatus::Stub => "status: stub",
+        };
+        assert!(
+            readme.contains(&format!("action: `{}`, {status}", metadata.name)),
+            "README must document implementation status for {}",
+            metadata.name
+        );
+    }
+}
+
+#[test]
+fn dogfood_warpctrl_skill_documents_current_boundaries() {
+    let skill = include_str!("../../../resources/channel-gated-skills/dogfood/warpctrl/SKILL.md");
+    for command in [
+        "warpctrl --output-format json instance list",
+        "warpctrl --output-format json action list",
+        "warpctrl --output-format json tab create",
+    ] {
+        assert!(skill.contains(command), "skill must mention {command}");
+    }
+    for boundary in [
+        "file read",
+        "file write",
+        "file append",
+        "file delete",
+        "accepted-command submission",
+        "agent-prompt submission",
+        "arbitrary internal dispatch",
+        "public links",
+    ] {
+        assert!(
+            skill.contains(boundary),
+            "skill must document excluded boundary {boundary}"
+        );
+    }
+    for sharing_path in ["drive object share open", "drive object share-to-team"] {
+        assert!(
+            skill.contains(sharing_path),
+            "skill must document Drive sharing path {sharing_path}"
+        );
+    }
+}
+
+#[test]
 fn parses_app_focus_command() {
     assert!(matches!(
         ControlArgs::try_parse_from(["warpctrl", "app", "focus"])
@@ -472,12 +554,12 @@ fn parses_window_mutation_commands() {
         ControlCommand::Window(WindowCommand::Close(_))
     ));
 
-    let args = ControlArgs::try_parse_from(["warpctrl", "window", "close", "--force"])
-        .expect("window close --force parses");
-    let ControlCommand::Window(WindowCommand::Close(close)) = args.command else {
-        panic!("expected window close command");
-    };
-    assert!(close.force);
+    assert!(matches!(
+        ControlArgs::try_parse_from(["warpctrl", "window", "close", "--window-title", "Scratch"])
+            .expect("window close with selector parses")
+            .command,
+        ControlCommand::Window(WindowCommand::Close(_))
+    ));
 }
 
 #[test]
@@ -489,22 +571,22 @@ fn parses_tab_mutation_commands() {
         ControlCommand::Tab(TabCommand::Activate(_))
     ));
     assert!(matches!(
-        ControlArgs::try_parse_from(["warpctrl", "tab", "previous"])
-            .expect("tab previous parses")
+        ControlArgs::try_parse_from(["warpctrl", "tab", "activate", "--previous"])
+            .expect("tab activate previous parses")
             .command,
-        ControlCommand::Tab(TabCommand::Previous(_))
+        ControlCommand::Tab(TabCommand::Activate(_))
     ));
     assert!(matches!(
-        ControlArgs::try_parse_from(["warpctrl", "tab", "next"])
-            .expect("tab next parses")
+        ControlArgs::try_parse_from(["warpctrl", "tab", "activate", "--next"])
+            .expect("tab activate next parses")
             .command,
-        ControlCommand::Tab(TabCommand::Next(_))
+        ControlCommand::Tab(TabCommand::Activate(_))
     ));
     assert!(matches!(
-        ControlArgs::try_parse_from(["warpctrl", "tab", "last"])
-            .expect("tab last parses")
+        ControlArgs::try_parse_from(["warpctrl", "tab", "activate", "--last"])
+            .expect("tab activate last parses")
             .command,
-        ControlCommand::Tab(TabCommand::Last(_))
+        ControlCommand::Tab(TabCommand::Activate(_))
     ));
 
     let args = ControlArgs::try_parse_from(["warpctrl", "tab", "move", "--direction", "right"])
@@ -522,8 +604,8 @@ fn parses_tab_mutation_commands() {
         ControlCommand::Tab(TabCommand::Close(_))
     ));
     assert!(matches!(
-        ControlArgs::try_parse_from(["warpctrl", "tab", "close", "--scope", "others"])
-            .expect("tab close with scope parses")
+        ControlArgs::try_parse_from(["warpctrl", "tab", "close", "--others"])
+            .expect("tab close with others parses")
             .command,
         ControlCommand::Tab(TabCommand::Close(_))
     ));
@@ -568,10 +650,10 @@ fn parses_pane_mutation_commands() {
         ControlCommand::Pane(PaneCommand::Maximize(_))
     ));
     assert!(matches!(
-        ControlArgs::try_parse_from(["warpctrl", "pane", "maximize", "--enabled", "true"])
-            .expect("pane maximize parses with enabled")
+        ControlArgs::try_parse_from(["warpctrl", "pane", "unmaximize"])
+            .expect("pane unmaximize parses")
             .command,
-        ControlCommand::Pane(PaneCommand::Maximize(_))
+        ControlCommand::Pane(PaneCommand::Unmaximize(_))
     ));
 
     let args = ControlArgs::try_parse_from([

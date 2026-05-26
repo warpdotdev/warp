@@ -462,17 +462,6 @@ async fn handle_control_request(
 }
 
 #[cfg(test)]
-pub(crate) use handlers::layout::{
-    validate_app_focus_target_test, validate_window_create_target_test,
-};
-#[cfg(test)]
-pub(crate) use handlers::metadata::action_metadata_for_name;
-#[cfg(test)]
-pub(crate) use handlers::settings_surfaces::{
-    appearance_state_result, rejected_setting_key, setting_get_result, setting_list_result,
-    theme_list_result,
-};
-#[cfg(test)]
 pub(crate) use permissions::{
     capabilities, ensure_agent_profile_allows_action, ensure_settings_allow_action,
     outside_warp_action_enabled_for_settings,

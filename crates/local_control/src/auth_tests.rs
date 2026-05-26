@@ -75,6 +75,27 @@ fn scoped_credential_carries_permission_and_authenticated_user_metadata() {
     assert!(!grant.authenticated_user.required);
     assert!(grant.authenticated_user.subject.is_none());
 }
+#[test]
+fn authenticated_drive_mutation_grant_requires_user_subject() {
+    let mut grant = CredentialGrant::new(
+        InstanceId("inst_test".to_owned()),
+        ActionKind::DriveObjectCreate,
+        InvocationContext::OutsideWarp,
+        Duration::minutes(5),
+    );
+    assert!(grant.authenticated_user.required);
+    assert!(grant.authenticated_user.subject.is_none());
+
+    let err = grant
+        .verify_for_action(ActionKind::DriveObjectCreate)
+        .expect_err("authenticated user subject is required");
+    assert_eq!(err.code, ErrorCode::AuthenticatedUserRequired);
+
+    grant.authenticated_user.subject = Some("user_123".to_owned());
+    grant
+        .verify_for_action(ActionKind::DriveObjectCreate)
+        .expect("authenticated user subject satisfies the grant");
+}
 
 #[test]
 fn mismatched_permission_metadata_is_rejected() {
