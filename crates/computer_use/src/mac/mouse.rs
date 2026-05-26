@@ -72,6 +72,12 @@ impl Mouse {
         }
     }
 
+    /// Sets where subsequent synthesized events are delivered. Called per-action so a batch can
+    /// drive the HID tap for some actions and a specific process for others.
+    pub fn set_target(&mut self, target: PostTarget) {
+        self.target = target;
+    }
+
     /// Restores input focus to the window that was focused before our first PID-targeted
     /// click, undoing the focus-without-raise. No-op if we never changed focus.
     pub fn restore_focus(&mut self) {
@@ -232,6 +238,41 @@ impl Mouse {
         Ok(pos)
     }
 
+    /// Flips the target window into the AppKit-active input state without raising it (yabai
+    /// focus-without-raise), recording the change so it can be restored later.
+    ///
+    /// This now runs for a hover (mouse-moved) as well as a press, so the pre-click move lands on
+    /// a key window. Controls that gate on the window being key and on hover tracking (e.g.
+    /// NSToolbar buttons) need this; a forgiving control like NSTextView accepts a click without
+    /// it, which is why background clicks into a text body worked but toolbar buttons did not.
+    /// Idempotent: repeated moves to the same already-activated window do not re-focus.
+    fn ensure_window_focused(&mut self, pid: libc::pid_t, window_number: i64) {
+        if let Some(change) = self.focus_change
+            && change.activated == (pid, window_number)
+        {
+            return;
+        }
+        let previous = window::frontmost_window();
+        super::skylight::focus_window_without_raise(pid, window_number, previous);
+        match self.focus_change.as_mut() {
+            Some(change) => change.activated = (pid, window_number),
+            None => {
+                if let Some(previous) = previous {
+                    self.focus_change = Some(FocusChange {
+                        previous,
+                        activated: (pid, window_number),
+                    });
+                }
+            }
+        }
+        if std::env::var_os("COMPUTER_USE_DEBUG").is_some() {
+            eprintln!(
+                "[computer_use] focus-without-raise pid={pid} window#={window_number} \
+                 previous={previous:?}"
+            );
+        }
+    }
+
     /// Posts a mouse event.
     ///
     /// `click_state` is the click count (1 for a single click, 2 for a double click, etc.) and
@@ -245,11 +286,10 @@ impl Mouse {
         button: CGMouseButton,
         click_state: i64,
     ) -> Result<(), String> {
-        // Experimental: a PID-targeted mouse event built as a plain CGEvent bypasses the
-        // WindowServer's hit-testing, so it arrives without an associated window and AppKit
-        // drops it. Build it instead as an NSEvent targeted at the window under the point (with
-        // window-local coordinates and the window-under-pointer fields stamped) so AppKit can
-        // route it. Falls back to a plain CGEvent when no owned window is found.
+        // For a PID target with an owned window under the point, deliver a window-targeted event
+        // directly to the process via SkyLight, without raising the window or moving the cursor.
+        // Falls back to a plain CGEvent via the configured target when there is no PID target or
+        // no owned window under the point.
         if let Some(pid) = self.target.pid()
             && let Some(info) = window::window_at(pid, point.x, point.y)
         {
@@ -259,56 +299,34 @@ impl Mouse {
                     | CGEventType::RightMouseDown
                     | CGEventType::OtherMouseDown
             );
-            if is_down {
-                // Flip the target into the AppKit-active input state without raising it (yabai
-                // focus-without-raise), recording the change so it can be restored later.
-                let previous = window::frontmost_window();
-                super::skylight::focus_window_without_raise(pid, info.number, previous);
-                match self.focus_change.as_mut() {
-                    Some(change) => change.activated = (pid, info.number),
-                    None => {
-                        if let Some(previous) = previous {
-                            self.focus_change = Some(FocusChange {
-                                previous,
-                                activated: (pid, info.number),
-                            });
-                        }
-                    }
-                }
-                // Prime Chromium's user-activation gate with a decoy click off-screen so the
-                // real click is treated as a trusted continuation.
+            let is_move = matches!(event_type, CGEventType::MouseMoved);
+            // Establish focus-without-raise on a hover or a press (not on drags) so the pre-click
+            // mouse-moved and the press both land on a key window, which toolbar buttons require.
+            if is_down || is_move {
+                self.ensure_window_focused(pid, info.number);
+            }
+            if is_down && primer_click_enabled() {
+                // Prime Chromium's user-activation gate with a decoy off-screen click. Opt-in
+                // (default off): the off-window down/up disrupts AppKit controls that run a modal
+                // tracking loop in `mouseDown:` (e.g. NSToolbar buttons). Enable via
+                // COMPUTER_USE_PRIMER_CLICK only when targeting Chromium/Electron.
                 post_primer_click(pid);
             }
 
+            // Window-targeted NSEvent bridged to a CGEvent, delivered via SkyLight's
+            // SLEventPostToPid (accepted by Chromium/Electron renderers).
             if let Some(event) =
                 build_window_targeted_event(pid, info, event_type, point, click_state)
             {
-                // Post via SkyLight's SLEventPostToPid (accepted by Chromium/Electron
-                // renderers), falling back to CGEventPostToPid when that symbol is missing.
                 super::skylight::post_event_to_pid(pid, &event);
                 return Ok(());
             }
+            // Non-mouse event type: fall through to the generic path below.
         }
 
-        let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState);
-
-        let event = CGEvent::new_mouse_event(source.as_deref(), event_type, point, button)
-            .ok_or_else(|| {
-                format!(
-                    "Failed to create mouse event (type={:?}, position=({}, {}), button={:?}). \
-                     The cause is unknown.",
-                    event_type, point.x, point.y, button
-                )
-            })?;
-
-        if click_state > 0 {
-            CGEvent::set_integer_value_field(
-                Some(&event),
-                CGEventField::MouseEventClickState,
-                click_state,
-            );
-        }
-
+        // Fallback: no PID target, or no owned window under the point. Post a plain event via the
+        // configured target (HID tap for screen targets, CGEventPostToPid for a PID target).
+        let event = build_plain_mouse_event(event_type, point, button, click_state)?;
         self.target.post(&event);
         Ok(())
     }
@@ -346,8 +364,9 @@ fn build_window_targeted_event(
     // stays silent in normal use.
     if std::env::var_os("COMPUTER_USE_DEBUG").is_some() {
         eprintln!(
-            "[computer_use] pid={pid} type={event_type:?} window#={} \
-             bounds=({:.1},{:.1},{:.1},{:.1}) screen_pt=({:.1},{:.1}) window_local=({:.1},{:.1})",
+            "[computer_use] post pid={pid} type={event_type:?} click_state={click_state} \
+             window#={} bounds=({:.1},{:.1},{:.1},{:.1}) global=({:.1},{:.1}) \
+             window_local=({:.1},{:.1})",
             info.number,
             info.x,
             info.y,
@@ -404,13 +423,50 @@ fn build_window_targeted_event(
     Some(cg_event)
 }
 
+/// Returns whether the experimental off-window "primer" click is enabled (opt-in, default off).
+fn primer_click_enabled() -> bool {
+    std::env::var_os("COMPUTER_USE_PRIMER_CLICK").is_some()
+}
+
+/// Builds a plain CGEvent mouse event at the global `point`, stamping the click state. Used by the
+/// non-window fallback delivery path.
+fn build_plain_mouse_event(
+    event_type: CGEventType,
+    point: CGPoint,
+    button: CGMouseButton,
+    click_state: i64,
+) -> Result<Retained<CGEvent>, String> {
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState);
+    let event = CGEvent::new_mouse_event(source.as_deref(), event_type, point, button).ok_or_else(
+        || {
+            format!(
+                "Failed to create mouse event (type={event_type:?}, position=({}, {}), \
+                 button={button:?}). The cause is unknown.",
+                point.x, point.y
+            )
+        },
+    )?;
+    if click_state > 0 {
+        CGEvent::set_integer_value_field(
+            Some(&event),
+            CGEventField::MouseEventClickState,
+            click_state,
+        );
+    }
+    Ok(event.into())
+}
+
 /// Posts a decoy left click off-screen (at `(-1, -1)`) to the target process via SkyLight.
 ///
 /// Chromium's renderer gates activation-sensitive actions (video play/pause, `window.open`,
 /// fullscreen) behind a recent "trusted user gesture". Posting this decoy first ticks that gate
 /// so the subsequent real click is treated as a trusted continuation. It is off-screen, so it
-/// does not hit any window.
+/// does not hit any window. This is opt-in because it breaks AppKit controls that track in
+/// `mouseDown:`; see the call site for details.
 fn post_primer_click(pid: libc::pid_t) {
+    if std::env::var_os("COMPUTER_USE_DEBUG").is_some() {
+        eprintln!("[computer_use] primer click pid={pid} global=(-1.0,-1.0)");
+    }
     let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState);
     let point = CGPoint { x: -1.0, y: -1.0 };
     for event_type in [CGEventType::LeftMouseDown, CGEventType::LeftMouseUp] {

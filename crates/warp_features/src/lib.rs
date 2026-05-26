@@ -581,6 +581,12 @@ pub enum FeatureFlag {
     /// Enables computer use functionality in local clients.
     LocalComputerUse,
 
+    /// Enables background, per-window computer use: driving a specific window directly without
+    /// raising it or moving the cursor. Off by default and manually enabled only (not in the
+    /// default/DOGFOOD/PREVIEW/RELEASE sets). When off, computer use behaves exactly like the
+    /// legacy full-screen path.
+    BackgroundComputerUse,
+
     /// Enables team API key creation in the API key management UI.
     TeamApiKeys,
 

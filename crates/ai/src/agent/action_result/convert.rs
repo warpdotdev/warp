@@ -973,6 +973,7 @@ impl TryFrom<RequestComputerUseResult> for api::request::input::tool_call_result
             RequestComputerUseResult::Approved {
                 screenshot,
                 platform,
+                windows,
             } => Ok(
                 api::request::input::tool_call_result::Result::RequestComputerUse(
                     api::RequestComputerUseResult {
@@ -989,6 +990,7 @@ impl TryFrom<RequestComputerUseResult> for api::request::input::tool_call_result
                                     height: screenshot.height as i32,
                                 }),
                                 platform: convert_platform(platform).into(),
+                                windows: windows.into_iter().map(convert_window_info).collect(),
                             },
                         )),
                     },
@@ -1022,6 +1024,9 @@ impl TryFrom<UseComputerResult> for api::request::input::tool_call_result::Resul
     fn try_from(result: UseComputerResult) -> Result<Self, Self::Error> {
         match result {
             UseComputerResult::Success(result) => {
+                // Copy out the captured-window metadata (if any) before the owned fields of
+                // `result` are moved into the message below.
+                let captured = result.captured_window;
                 Ok(api::request::input::tool_call_result::Result::UseComputer(
                     api::UseComputerResult {
                         result: Some(api::use_computer_result::Result::Success(
@@ -1033,6 +1038,21 @@ impl TryFrom<UseComputerResult> for api::request::input::tool_call_result::Resul
                                     height: s.height as i32,
                                 }),
                                 cursor_position: result.cursor_position.map(vec_to_coordinates),
+                                windows: result
+                                    .windows
+                                    .into_iter()
+                                    .map(convert_window_info)
+                                    .collect(),
+                                // The window id is an opaque string on the wire; on macOS it is a
+                                // CGWindowID, so format the u32 back to a string at the boundary.
+                                captured_window: captured.map(|c| {
+                                    api::use_computer_result::success::CapturedWindow {
+                                        window_id: c.window_id.to_string(),
+                                        width_px: c.width_px,
+                                        height_px: c.height_px,
+                                        scale_factor: c.scale_factor,
+                                    }
+                                }),
                             },
                         )),
                     },
@@ -1056,6 +1076,22 @@ fn vec_to_coordinates(vec: computer_use::Vector2I) -> api::Coordinates {
     api::Coordinates {
         x: vec.x(),
         y: vec.y(),
+    }
+}
+
+/// Converts a computer_use window record into the API `WindowInfo` message.
+fn convert_window_info(window: computer_use::WindowInfo) -> api::WindowInfo {
+    api::WindowInfo {
+        // The window id travels as an opaque string; on macOS it is a CGWindowID (u32).
+        window_id: window.window_id.to_string(),
+        pid: window.pid,
+        app_name: window.app_name,
+        title: window.title,
+        x: window.x,
+        y: window.y,
+        width: window.width,
+        height: window.height,
+        layer: window.layer,
     }
 }
 

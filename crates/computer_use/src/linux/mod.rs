@@ -4,7 +4,7 @@ mod x11;
 
 use async_trait::async_trait;
 
-use crate::{Action, ActionResult, Options};
+use crate::{ActionResult, Options, TargetedAction};
 
 /// Returns true if a Wayland environment is available.
 fn is_wayland_available() -> bool {
@@ -77,7 +77,7 @@ impl super::Actor for Actor {
 
     async fn perform_actions(
         &mut self,
-        actions: &[Action],
+        actions: &[TargetedAction],
         options: Options,
     ) -> Result<ActionResult, String> {
         match &mut self.inner {

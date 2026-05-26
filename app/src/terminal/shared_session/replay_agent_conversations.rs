@@ -185,6 +185,10 @@ fn create_finished_event_from_conversation(conversation: &AIConversation) -> Res
                 .iter()
                 .filter_map(|u| u.to_proto_byok_usage())
                 .collect(),
+            // The local proto override is ahead of the pinned rev and added
+            // platform_credits_spent / custom_endpoint_token_usage; default them here as they are
+            // unrelated to this prototype.
+            ..Default::default()
         },
     );
 

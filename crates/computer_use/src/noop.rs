@@ -22,12 +22,9 @@ impl super::Actor for Actor {
 
     async fn perform_actions(
         &mut self,
-        _actions: &[super::Action],
+        _actions: &[super::TargetedAction],
         _options: super::Options,
     ) -> Result<ActionResult, String> {
-        Ok(ActionResult {
-            screenshot: None,
-            cursor_position: None,
-        })
+        Ok(ActionResult::legacy(None, None))
     }
 }
