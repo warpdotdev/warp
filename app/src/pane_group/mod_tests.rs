@@ -41,7 +41,7 @@ use crate::ai::blocklist::history_model::CloudConversationData;
 use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::{BlocklistAIHistoryModel, QueuedQueryModel};
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
@@ -146,6 +146,9 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(NotebookKeybindings::new);
     app.add_singleton_model(TerminalKeybindings::new);
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+    // QueuedQueryModel subscribes to history events; register after the
+    // history model is in place.
+    app.add_singleton_model(QueuedQueryModel::new);
     // Pill bar model subscribes to history events; register after the
     // history model is in place.
     app.add_singleton_model(|ctx| {

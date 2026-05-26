@@ -19,7 +19,7 @@ use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::{
-    BlocklistAIHistoryModel, BlocklistAIPermissions, SerializedBlockListItem,
+    BlocklistAIHistoryModel, BlocklistAIPermissions, QueuedQueryModel, SerializedBlockListItem,
 };
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::document::ai_document_model::AIDocumentModel;
@@ -92,6 +92,9 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
     app.add_singleton_model(LocalWorkflows::new);
     app.add_singleton_model(|_| History::default());
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+    // QueuedQueryModel subscribes to history events; register after the
+    // history model is in place.
+    app.add_singleton_model(QueuedQueryModel::new);
     // Pill bar model subscribes to history events; register after the
     // history model is in place.
     app.add_singleton_model(|ctx| OrchestrationPillBarModel::new(Default::default(), ctx));

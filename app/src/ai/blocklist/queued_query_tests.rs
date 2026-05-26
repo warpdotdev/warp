@@ -13,6 +13,7 @@ use super::{
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::test_util::settings::initialize_history_persistence_for_tests;
 
 /// Helper to drive the singleton `QueuedQueryModel` (plus its required `BlocklistAIHistoryModel`
 /// singleton) inside a test app and capture emitted events.
@@ -22,6 +23,11 @@ where
         + 'static,
 {
     App::test((), |mut app| async move {
+        // Initializes settings (incl. `PrivatePreferences`) and registers
+        // `GlobalResourceHandlesProvider`. The provider is required because
+        // `BlocklistAIHistoryModel::delete_conversation` reads the global
+        // model-event sender to enqueue a sqlite delete.
+        initialize_history_persistence_for_tests(&mut app);
         app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let model = app.add_singleton_model(QueuedQueryModel::new);
         let events: Rc<RefCell<Vec<QueuedQueryEvent>>> = Rc::new(RefCell::new(Vec::new()));
