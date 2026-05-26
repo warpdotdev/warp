@@ -3006,23 +3006,19 @@ fn delete_objects(
                     conn,
                     sync_id,
                     object_id_type,
-                    Box::new(|conn, notebook_id| {
-                        notebook_persistence::delete_notebook(conn, notebook_id)
-                    }),
+                    Box::new(notebook_persistence::delete_notebook),
                 )?,
                 ObjectIdType::Workflow => delete_cloud_object(
                     conn,
                     sync_id,
                     object_id_type,
-                    Box::new(|conn, workflow_id| {
-                        workflow_persistence::delete_workflow(conn, workflow_id)
-                    }),
+                    Box::new(workflow_persistence::delete_workflow),
                 )?,
                 ObjectIdType::Folder => delete_cloud_object(
                     conn,
                     sync_id,
                     object_id_type,
-                    Box::new(|conn, folder_id| folder_persistence::delete_folder(conn, folder_id)),
+                    Box::new(folder_persistence::delete_folder),
                 )?,
                 ObjectIdType::GenericStringObject => delete_cloud_object(
                     conn,

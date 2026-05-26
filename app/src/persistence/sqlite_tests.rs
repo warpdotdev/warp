@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use ai::workspace::WorkspaceMetadata;
 use chrono::Utc;
+use cloud_object_persistence::to_cloud_object_permissions;
 use diesel::connection::SimpleConnection;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
