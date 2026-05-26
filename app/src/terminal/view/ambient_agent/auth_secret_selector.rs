@@ -371,7 +371,6 @@ impl AuthSecretSelector {
         owner: SecretOwner,
         ctx: &mut ViewContext<Self>,
     ) {
-        let active_harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
         let removed_pending = self.pending_deletes.remove(&(harness, name.clone(), owner));
 
         CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
@@ -381,23 +380,21 @@ impl AuthSecretSelector {
             }
         });
 
-        if harness == active_harness {
-            // Drop the selection if it pointed at the just-deleted secret
-            // so the chip falls back to the inherit label.
-            let selected = self
-                .ambient_agent_model
-                .as_ref(ctx)
-                .selected_harness_auth_secret_name()
-                .map(|s| s.to_string());
-            if selected.as_deref() == Some(name.as_str()) {
-                self.ambient_agent_model.update(ctx, |model, ctx| {
-                    model.set_harness_auth_secret_name(None, ctx);
-                });
-            }
-
-            self.refresh_menu(ctx);
-            self.refresh_button(ctx);
+        // Drop the selection if it pointed at the just-deleted secret
+        // so the chip falls back to the inherit label.
+        let selected = self
+            .ambient_agent_model
+            .as_ref(ctx)
+            .selected_harness_auth_secret_name()
+            .map(|s| s.to_string());
+        if selected.as_deref() == Some(name.as_str()) {
+            self.ambient_agent_model.update(ctx, |model, ctx| {
+                model.set_harness_auth_secret_name(None, ctx);
+            });
         }
+
+        self.refresh_menu(ctx);
+        self.refresh_button(ctx);
 
         // Only surface a toast for a deletion *this* selector initiated.
         // A deletion fired from a different surface (or a different
@@ -409,7 +406,11 @@ impl AuthSecretSelector {
                 ts.add_ephemeral_toast(DismissibleToast::success(message), window_id, ctx);
             });
         }
-        ctx.notify();
+
+        let active_harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
+        if harness == active_harness {
+            ctx.notify();
+        }
     }
 
     fn handle_secret_deletion_failed(
@@ -473,8 +474,6 @@ impl AuthSecretSelector {
             owner,
         } = pending_deletion;
 
-        // Drop duplicate dispatches while a delete for this exact
-        // harness-owned secret is still in flight (PRODUCT behavior 9).
         if !self
             .pending_deletes
             .insert((harness, name.clone(), owner.clone()))

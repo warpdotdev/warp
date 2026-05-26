@@ -5299,9 +5299,6 @@ impl PaneGroup {
             if self.pane_with_open_auth_secret_delete_confirmation_dialog == Some(pane_id) {
                 self.pane_with_open_auth_secret_delete_confirmation_dialog = None;
             }
-            if self.pane_with_open_auth_secret_delete_confirmation_dialog == Some(pane_id) {
-                self.pane_with_open_auth_secret_delete_confirmation_dialog = None;
-            }
             if self.pane_with_open_agent_assisted_environment_modal == Some(pane_id) {
                 self.pane_with_open_agent_assisted_environment_modal = None;
             }

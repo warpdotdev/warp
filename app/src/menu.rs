@@ -34,12 +34,6 @@ use warpui::{
     Action, AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, WindowId,
 };
 
-use crate::appearance::Appearance;
-use crate::safe_triangle::SafeTriangle;
-use crate::themes::theme::Fill;
-use crate::ui_components::icons;
-use crate::util::time_format::format_approx_duration_from_now_sentence_case;
-
 pub const CHEVRON_RIGHT_ALIGN_SVG_PATH: &str = "bundled/svg/chevron-right-align.svg";
 
 const SUBMENU_OVERLAP: f32 = 8.;
@@ -398,6 +392,47 @@ struct RightSideLabel {
     text: String,
     font_properties: Properties,
 }
+#[derive(Clone)]
+struct RightSideIconConfig<A> {
+    icon: icons::Icon,
+    override_color: Option<Fill>,
+    /// Optional action dispatched when the right-side icon is clicked. When
+    /// set, the right-side icon becomes its own hit target: clicking it
+    /// dispatches this action without firing the row's own `on_select_action`,
+    /// and prevents the row click from propagating.
+    action: Option<A>,
+    /// Optional accessibility label for the right-side icon hit target.
+    a11y_label: Option<String>,
+    /// When true, the right-side icon is rendered as disabled with no hover or
+    /// click action.
+    disabled: bool,
+    /// Tracks hover state independently from the row.
+    mouse_state: MouseStateHandle,
+}
+
+impl<A> RightSideIconConfig<A> {
+    fn new(icon: icons::Icon) -> Self {
+        Self {
+            icon,
+            override_color: None,
+            action: None,
+            a11y_label: None,
+            disabled: false,
+            mouse_state: MouseStateHandle::default(),
+        }
+    }
+
+    fn without_action<B>(self) -> RightSideIconConfig<B> {
+        RightSideIconConfig {
+            icon: self.icon,
+            override_color: self.override_color,
+            action: None,
+            a11y_label: self.a11y_label,
+            disabled: self.disabled,
+            mouse_state: self.mouse_state,
+        }
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct MenuItemFields<A: Action + Clone> {
@@ -424,21 +459,7 @@ pub struct MenuItemFields<A: Action + Clone> {
     tooltip: Option<String>,
     tooltip_position: MenuTooltipPosition,
     right_side_label: Option<RightSideLabel>,
-    right_side_icon: Option<(icons::Icon, Option<Fill>)>,
-    /// Optional action dispatched when the right-side icon is clicked. When
-    /// set, the right-side icon becomes its own hit target: clicking it
-    /// dispatches this action without firing the row's own `on_select_action`,
-    /// and prevents the row click from propagating.
-    right_side_icon_action: Option<A>,
-    /// Optional accessibility label for the right-side icon hit target.
-    right_side_icon_a11y_label: Option<String>,
-    /// When true, the right-side icon is rendered as disabled (no hover,
-    /// no click action). Used to lock the affordance while a pending
-    /// request is in flight.
-    right_side_icon_disabled: bool,
-    /// Optional mouse state for the right-side icon so its hover state is
-    /// tracked independently from the row.
-    right_side_icon_mouse_state: MouseStateHandle,
+    right_side_icon: Option<RightSideIconConfig<A>>,
     /// Optional override for the background color
     /// hovered or selected. When `None`, the default hover/selected background
     /// from the theme is used (accent or dark overlay, depending on
@@ -490,10 +511,6 @@ impl<A: Action + Clone> MenuItemFields<A> {
             tooltip_position: MenuTooltipPosition::default(),
             right_side_label: None,
             right_side_icon: None,
-            right_side_icon_action: None,
-            right_side_icon_a11y_label: None,
-            right_side_icon_disabled: false,
-            right_side_icon_mouse_state: MouseStateHandle::default(),
             override_hover_background_color: None,
             icon_size_override: None,
             clip_config: None,
@@ -524,10 +541,6 @@ impl<A: Action + Clone> MenuItemFields<A> {
             tooltip_position: MenuTooltipPosition::default(),
             right_side_label: None,
             right_side_icon: None,
-            right_side_icon_action: None,
-            right_side_icon_a11y_label: None,
-            right_side_icon_disabled: false,
-            right_side_icon_mouse_state: MouseStateHandle::default(),
             override_hover_background_color: None,
             icon_size_override: None,
             clip_config: None,
@@ -561,10 +574,6 @@ impl<A: Action + Clone> MenuItemFields<A> {
             tooltip_position: MenuTooltipPosition::default(),
             right_side_label: None,
             right_side_icon: None,
-            right_side_icon_action: None,
-            right_side_icon_a11y_label: None,
-            right_side_icon_disabled: false,
-            right_side_icon_mouse_state: MouseStateHandle::default(),
             override_hover_background_color: None,
             icon_size_override: None,
             clip_config: None,
@@ -601,10 +610,6 @@ impl<A: Action + Clone> MenuItemFields<A> {
             tooltip_position: MenuTooltipPosition::default(),
             right_side_label: None,
             right_side_icon: None,
-            right_side_icon_action: None,
-            right_side_icon_a11y_label: None,
-            right_side_icon_disabled: false,
-            right_side_icon_mouse_state: MouseStateHandle::default(),
             override_hover_background_color: None,
             icon_size_override: None,
             clip_config: None,
@@ -639,10 +644,6 @@ impl<A: Action + Clone> MenuItemFields<A> {
             tooltip_position: MenuTooltipPosition::default(),
             right_side_label: None,
             right_side_icon: None,
-            right_side_icon_action: None,
-            right_side_icon_a11y_label: None,
-            right_side_icon_disabled: false,
-            right_side_icon_mouse_state: MouseStateHandle::default(),
             override_hover_background_color: None,
             icon_size_override: None,
             clip_config: None,
@@ -676,10 +677,6 @@ impl<A: Action + Clone> MenuItemFields<A> {
             tooltip_position: MenuTooltipPosition::default(),
             right_side_label: None,
             right_side_icon: None,
-            right_side_icon_action: None,
-            right_side_icon_a11y_label: None,
-            right_side_icon_disabled: false,
-            right_side_icon_mouse_state: MouseStateHandle::default(),
             override_hover_background_color: None,
             icon_size_override: None,
             clip_config: None,
@@ -710,10 +707,6 @@ impl<A: Action + Clone> MenuItemFields<A> {
             tooltip_position: MenuTooltipPosition::default(),
             right_side_label: None,
             right_side_icon: None,
-            right_side_icon_action: None,
-            right_side_icon_a11y_label: None,
-            right_side_icon_disabled: false,
-            right_side_icon_mouse_state: MouseStateHandle::default(),
             override_hover_background_color: None,
             icon_size_override: None,
             clip_config: None,
@@ -759,15 +752,13 @@ impl<A: Action + Clone> MenuItemFields<A> {
             tooltip: self.tooltip,
             tooltip_position: self.tooltip_position,
             right_side_label: self.right_side_label,
-            right_side_icon: self.right_side_icon,
-            // The right-side icon action is `Option<A>`; we can't safely
-            // map it to `Option<B>` here, so drop it. Callers that need
-            // the right-side action must set it via
-            // `with_right_side_icon_action` after conversion.
-            right_side_icon_action: None,
-            right_side_icon_a11y_label: self.right_side_icon_a11y_label,
-            right_side_icon_disabled: self.right_side_icon_disabled,
-            right_side_icon_mouse_state: self.right_side_icon_mouse_state,
+            // The right-side icon action is `Option<A>`; we can't safely map
+            // it to `Option<B>` here, so drop it. Callers that need the
+            // right-side action must set it via `with_right_side_icon_action`
+            // after conversion.
+            right_side_icon: self
+                .right_side_icon
+                .map(RightSideIconConfig::without_action),
             override_hover_background_color: self.override_hover_background_color,
             icon_size_override: self.icon_size_override,
             clip_config: self.clip_config,
@@ -903,7 +894,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
     }
 
     pub fn with_right_side_icon(mut self, icon: icons::Icon) -> Self {
-        self.right_side_icon = Some((icon, None));
+        self.right_side_icon = Some(RightSideIconConfig::new(icon));
         self
     }
 
@@ -912,17 +903,23 @@ impl<A: Action + Clone> MenuItemFields<A> {
     /// `on_select_action`: clicking the icon dispatches this action and
     /// the row click is suppressed.
     pub fn with_right_side_icon_action(mut self, action: A) -> Self {
-        self.right_side_icon_action = Some(action);
+        if let Some(config) = &mut self.right_side_icon {
+            config.action = Some(action);
+        }
         self
     }
 
     pub fn with_right_side_icon_a11y_label(mut self, label: impl Into<String>) -> Self {
-        self.right_side_icon_a11y_label = Some(label.into());
+        if let Some(config) = &mut self.right_side_icon {
+            config.a11y_label = Some(label.into());
+        }
         self
     }
 
     pub fn with_right_side_icon_disabled(mut self, disabled: bool) -> Self {
-        self.right_side_icon_disabled = disabled;
+        if let Some(config) = &mut self.right_side_icon {
+            config.disabled = disabled;
+        }
         self
     }
 
@@ -1064,24 +1061,24 @@ impl<A: Action + Clone> MenuItemFields<A> {
         color: Fill,
         dispatch_item_actions: bool,
     ) -> Option<Box<dyn Element>> {
-        let (icon, override_color) = self.right_side_icon.as_ref()?;
+        let config = self.right_side_icon.as_ref()?;
         let icon_size = self
             .icon_size_override
             .unwrap_or_else(|| appearance.ui_font_size());
-        let icon_color = override_color.unwrap_or(color);
-        if let Some(action) = &self.right_side_icon_action {
+        let icon_color = config.override_color.unwrap_or(color);
+        if let Some(action) = &config.action {
             let mut button = icon_button_with_color(
                 appearance,
-                *icon,
+                config.icon,
                 false,
-                self.right_side_icon_mouse_state.clone(),
+                config.mouse_state.clone(),
                 icon_color,
             );
-            if self.right_side_icon_disabled {
+            if config.disabled {
                 button = button.disabled();
             }
             let mut hoverable = button.build();
-            if !self.right_side_icon_disabled {
+            if !config.disabled {
                 let action = action.clone();
                 hoverable = hoverable.on_click(move |ctx, _, _| {
                     if dispatch_item_actions {
@@ -1092,12 +1089,20 @@ impl<A: Action + Clone> MenuItemFields<A> {
                 // doesn't latch onto the press that targets the icon.
                 hoverable = hoverable.on_mouse_down(|_, _, _| {});
             }
-            let element = Container::new(hoverable.finish())
+            let button_element = if config.disabled {
+                EventHandler::new(hoverable.finish())
+                    .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
+                    .on_left_mouse_up(|_, _, _| DispatchEventResult::StopPropagation)
+                    .finish()
+            } else {
+                hoverable.finish()
+            };
+            let element = Container::new(button_element)
                 .with_margin_left(icon_size / 2.)
                 .finish();
             return Some(Shrinkable::new(1., Align::new(element).right().finish()).finish());
         }
-        let icon_element = ConstrainedBox::new(icon.to_warpui_icon(icon_color).finish())
+        let icon_element = ConstrainedBox::new(config.icon.to_warpui_icon(icon_color).finish())
             .with_width(icon_size)
             .with_height(icon_size)
             .finish();
@@ -1399,6 +1404,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
                 });
             }
         });
+        ret = ret.with_defer_events_to_children();
 
         let on_select_action = self.on_select_action.clone();
 

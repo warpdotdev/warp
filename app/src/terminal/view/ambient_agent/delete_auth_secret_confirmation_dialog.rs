@@ -35,7 +35,6 @@ pub(super) enum DeleteAuthSecretConfirmationDialogAction {
 }
 
 pub(super) struct DeleteAuthSecretConfirmationDialog {
-    visible: bool,
     pending_deletion: Option<PendingAuthSecretDeletion>,
     cancel_button: ViewHandle<ActionButton>,
     delete_button: ViewHandle<ActionButton>,
@@ -56,7 +55,6 @@ impl DeleteAuthSecretConfirmationDialog {
         });
 
         Self {
-            visible: false,
             pending_deletion: None,
             cancel_button,
             delete_button,
@@ -69,12 +67,10 @@ impl DeleteAuthSecretConfirmationDialog {
         ctx: &mut ViewContext<Self>,
     ) {
         self.pending_deletion = Some(pending_deletion);
-        self.visible = true;
         ctx.notify();
     }
 
     pub(super) fn hide(&mut self, ctx: &mut ViewContext<Self>) {
-        self.visible = false;
         self.pending_deletion = None;
         ctx.notify();
     }
@@ -90,7 +86,7 @@ impl View for DeleteAuthSecretConfirmationDialog {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        if !self.visible {
+        if self.pending_deletion.is_none() {
             return Empty::new().finish();
         }
 
