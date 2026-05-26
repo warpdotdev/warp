@@ -50,6 +50,7 @@ pub(crate) use self::environment_selector::sort_environments_by_recency;
 pub(crate) use self::environment_selector::{
     EnvironmentSelector, EnvironmentSelectorEvent, EnvironmentSelectorTarget,
 };
+use crate::ai::blocklist::agent_view::is_in_cloud_context;
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::usage::icon_for_context_window_usage;
@@ -121,6 +122,8 @@ const DISABLE_NLD_TOOLTIP: &str = "Disable terminal command autodetection";
 
 const FAST_FORWARD_ON_TOOLTIP: &str = "Turn off auto-approve all agent actions";
 const FAST_FORWARD_OFF_TOOLTIP: &str = "Auto-approve all agent actions for this task";
+const FAST_FORWARD_LOCKED_TOOLTIP: &str =
+    "Fast forward is always enabled for cloud agent conversations";
 
 const START_REMOTE_CONTROL_TOOLTIP: &str = "Start remote control";
 const START_REMOTE_CONTROL_LOGIN_REQUIRED_TOOLTIP: &str = "Log in to use /remote-control";
@@ -731,6 +734,14 @@ impl AgentInputFooter {
                 me.update_ftu_callout_render_state(ctx);
             }
         });
+        // Re-sync the fast-forward chip when agent view is entered/exited so the
+        // locked-on state for cloud agent conversations reflects the current pane.
+        ctx.subscribe_to_model(
+            &display_chip_config.agent_view_controller,
+            |me, _, _, ctx| {
+                me.sync_fast_forward_button(ctx);
+            },
+        );
 
         // Keep the remote-control chip in sync with login state so we can
         // disable it and swap the tooltip when the user is anonymous or
@@ -1946,18 +1957,30 @@ impl AgentInputFooter {
     }
 
     fn sync_fast_forward_button(&self, ctx: &mut ViewContext<Self>) {
+        // In ambient/cloud agent conversations, the chip is locked in its always-on
+        // state. Clicking it (and the keybinding) are no-ops; the action handler in
+        // `TerminalView::handle_action` short-circuits there.
+        let terminal_model = self.terminal_model.lock();
+        let is_locked = is_in_cloud_context(
+            terminal_model.block_list().agent_view_state(),
+            &terminal_model,
+        );
+        drop(terminal_model);
         // Read directly from the conversation, same data source as the warping
         // indicator footer's auto-approve chip.
-        let is_active = BlocklistAIHistoryModel::as_ref(ctx)
+        let conversation_is_active = BlocklistAIHistoryModel::as_ref(ctx)
             .active_conversation(self.terminal_view_id)
             .map(|c| c.autoexecute_any_action())
             .unwrap_or(false);
+        let is_active = conversation_is_active || is_locked;
         let icon = if is_active {
             Icon::FastForwardFilled
         } else {
             Icon::FastForward
         };
-        let tooltip = if is_active {
+        let tooltip = if is_locked {
+            FAST_FORWARD_LOCKED_TOOLTIP
+        } else if is_active {
             FAST_FORWARD_ON_TOOLTIP
         } else {
             FAST_FORWARD_OFF_TOOLTIP
