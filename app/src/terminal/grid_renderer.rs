@@ -3,13 +3,14 @@ mod cell_type;
 
 use core::mem;
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::{Range, RangeInclusive};
 
 use lazy_static::lazy_static;
 use num_traits::Float as _;
 use unicode_width::UnicodeWidthChar;
 use warp_core::features::FeatureFlag;
+use warp_terminal::model::grid::HyperlinkId;
 use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
 use warpui::color::ColorU;
 use warpui::elements::{Border, CornerRadius, Fill, Radius, DEFAULT_UI_LINE_HEIGHT_RATIO};
@@ -308,6 +309,12 @@ pub fn render_grid<'a>(
     image_metadata: &HashMap<u32, StoredImageMetadata>,
     bg_color_sampler: Option<&mut ColorSampler>,
     hide_cursor_cell: bool,
+    // Scope passed through to the OSC 8 first-cell position cache to
+    // disambiguate ids across grids rendered in the same frame. Use a
+    // stable string like `"alt_screen"` or `"block_<n>_output"`. Pass
+    // `""` to skip caching (e.g. for grids that never need to be the
+    // click target of an integration test).
+    osc8_cache_scope: &str,
     ctx: &mut PaintContext,
     app: &AppContext,
 ) {
@@ -345,6 +352,7 @@ pub fn render_grid<'a>(
                 image_metadata,
                 bg_color_sampler,
                 hide_cursor_cell,
+                osc8_cache_scope,
                 ctx,
                 app,
             );
@@ -377,6 +385,7 @@ pub fn render_grid<'a>(
                 image_metadata,
                 bg_color_sampler,
                 hide_cursor_cell,
+                osc8_cache_scope,
                 ctx,
                 app,
             );
@@ -411,6 +420,7 @@ pub fn render_grid<'a>(
                 image_metadata,
                 bg_color_sampler,
                 hide_cursor_cell,
+                osc8_cache_scope,
                 ctx,
                 app,
             );
@@ -444,6 +454,7 @@ pub fn render_grid<'a>(
                 image_metadata,
                 bg_color_sampler,
                 hide_cursor_cell,
+                osc8_cache_scope,
                 ctx,
                 app,
             );
@@ -481,6 +492,7 @@ fn render_grid_without_ligatures<'a>(
     image_metadata: &HashMap<u32, StoredImageMetadata>,
     mut bg_color_sampler: Option<&mut ColorSampler>,
     hide_cursor_cell: bool,
+    osc8_cache_scope: &str,
     ctx: &mut PaintContext,
     app: &AppContext,
 ) {
@@ -517,6 +529,11 @@ fn render_grid_without_ligatures<'a>(
         .iter()
         .flat_map(|match_vec| match_vec.iter().rev());
     let mut current_filter_match = None;
+
+    // Tracks OSC 8 hyperlink ids whose first visible cell has already been
+    // position-cached this render, so integration tests can click on a
+    // stable per-id position without us caching the same id repeatedly.
+    let mut seen_hyperlink_ids: HashSet<HyperlinkId> = HashSet::new();
 
     let visible_url = highlighted_url
         .as_ref()
@@ -795,6 +812,14 @@ fn render_grid_without_ligatures<'a>(
                 && grid.cursor_point() == Point::new(offset_row, col)
                 && visible_cursor_shape == Some(CursorShape::Block))
             .then(|| theme.cursor().into_solid());
+            cache_osc8_hyperlink_position(
+                cell.hyperlink_id(),
+                &mut seen_hyperlink_ids,
+                osc8_cache_scope,
+                grid_origin + cell_size * vec2f(col as f32, offset_row as f32),
+                cell_size,
+                ctx,
+            );
             cached_background_color = render_cell(
                 grid,
                 offset_row,
@@ -984,6 +1009,7 @@ fn render_grid_with_ligatures<'a>(
     image_metadata: &HashMap<u32, StoredImageMetadata>,
     mut bg_color_sampler: Option<&mut ColorSampler>,
     hide_cursor_cell: bool,
+    osc8_cache_scope: &str,
     ctx: &mut PaintContext,
     app: &AppContext,
 ) {
@@ -1016,6 +1042,11 @@ fn render_grid_with_ligatures<'a>(
         .iter()
         .flat_map(|match_vec| match_vec.iter().rev());
     let mut current_filter_match = None;
+
+    // Tracks OSC 8 hyperlink ids whose first visible cell has already been
+    // position-cached this render, so integration tests can click on a
+    // stable per-id position without us caching the same id repeatedly.
+    let mut seen_hyperlink_ids: HashSet<HyperlinkId> = HashSet::new();
 
     let visible_url = highlighted_url
         .as_ref()
@@ -1366,6 +1397,14 @@ fn render_grid_with_ligatures<'a>(
                     RectF::new(cell_origin, cell_size),
                 );
             }
+            cache_osc8_hyperlink_position(
+                cell.hyperlink_id(),
+                &mut seen_hyperlink_ids,
+                osc8_cache_scope,
+                grid_origin + glyph_offset,
+                cell_size,
+                ctx,
+            );
             cell_decorations.extend(calculate_cell_decorations(
                 cell,
                 &cell_type,
@@ -2002,6 +2041,40 @@ fn handle_secret_redaction<'a>(
     } else {
         None
     }
+}
+
+/// Cache the position of the first visible cell of each OSC 8 hyperlink
+/// span under a stable id
+/// (`terminal_view:first_cell_in_osc8_hyperlink:<scope>:<n>`). The scope
+/// disambiguates ids across grids — `HyperlinkId`s are only unique within
+/// a single `HyperlinkRegistry`, so two grids rendered in the same frame
+/// could both assign id `1` to their first hyperlink and collide on the
+/// position cache without the scope. Integration tests use the cached
+/// position to dispatch synthetic clicks at the cell. No-op when the cell
+/// has no hyperlink id, when this hyperlink has already been cached this
+/// render, or when `scope` is empty.
+fn cache_osc8_hyperlink_position(
+    hyperlink_id: Option<HyperlinkId>,
+    seen: &mut HashSet<HyperlinkId>,
+    scope: &str,
+    cell_origin: Vector2F,
+    cell_size: Vector2F,
+    ctx: &mut PaintContext,
+) {
+    if scope.is_empty() {
+        return;
+    }
+    let Some(id) = hyperlink_id else { return };
+    if !seen.insert(id) {
+        return;
+    }
+    ctx.position_cache.cache_position_indefinitely(
+        format!(
+            "terminal_view:first_cell_in_osc8_hyperlink:{scope}:{}",
+            id.get()
+        ),
+        RectF::new(cell_origin, cell_size),
+    );
 }
 
 /// Renders a native glyph.

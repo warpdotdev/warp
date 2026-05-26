@@ -762,6 +762,7 @@ impl Element for AltScreenElement {
             &model.image_id_to_metadata,
             Some(&mut sampler),
             self.grid_render_params.hide_cursor_cell,
+            "alt_screen",
             ctx,
             app,
         );

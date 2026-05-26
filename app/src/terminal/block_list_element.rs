@@ -2540,6 +2540,9 @@ impl BlockListElement {
                         block_grid_params,
                         None,
                         image_metadata,
+                        // rprompt is never a synthetic-click target in OSC 8
+                        // integration tests; skip the position cache.
+                        "",
                         ctx,
                         app,
                     );
@@ -2594,6 +2597,9 @@ impl BlockListElement {
                 block_grid_params,
                 cursor_visible.then(|| block.prompt_and_command_grid().cursor_style().shape),
                 image_metadata,
+                // Command grid is not an OSC 8 click target in integration
+                // tests; skip the position cache.
+                "",
                 ctx,
                 app,
             );
@@ -2697,6 +2703,7 @@ impl BlockListElement {
                 block_grid_params,
                 cursor_visible.then(|| block.output_grid().cursor_style().shape),
                 image_metadata,
+                &format!("block_{block_index}_output"),
                 ctx,
                 app,
             );

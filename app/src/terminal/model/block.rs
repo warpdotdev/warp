@@ -2219,6 +2219,12 @@ impl Block {
             .contents_to_string_force_full_grid_contents(false, None)
     }
 
+    /// Block output as GitHub-flavored markdown with OSC 8 hyperlinks
+    /// rendered as `[visible](URI)`. See `BlockGrid::contents_to_markdown_string`.
+    pub fn output_to_markdown_string(&self) -> String {
+        self.output_grid().contents_to_markdown_string()
+    }
+
     pub fn output_with_secrets_unobfuscated(&self) -> String {
         self.output_grid()
             .contents_to_string_with_secrets_unobfuscated(false, None)
@@ -2974,6 +2980,11 @@ impl ansi::Handler for Block {
 
     fn input(&mut self, c: char) {
         delegate!(self.input(c));
+    }
+
+    fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
+        // Delegate to BlockGrid -> GridHandler. See `specs/GH6393/tech.md` §3c.
+        delegate!(self.set_hyperlink(hyperlink));
     }
 
     fn goto(&mut self, row: VisibleRow, column: usize) {
