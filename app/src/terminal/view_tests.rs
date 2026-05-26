@@ -10,9 +10,7 @@ use chrono::Local;
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::CLIAgentSessionState;
 use warp_cli::agent::Harness;
-use warp_terminal::model::escape_sequences::{
-    C0, BRACKETED_PASTE_END, BRACKETED_PASTE_START,
-};
+use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START, C0};
 use warpui::notification::UserNotification;
 use warpui::platform::WindowStyle;
 use warpui::{App, Presenter, ReadModel, WindowInvalidation};
@@ -5590,7 +5588,12 @@ fn paste_raw_image_clipboard_in_cli_agent_sends_correct_bytes() {
             });
 
             let writes = pty_writes.borrow();
-            assert_eq!(writes.len(), 1, "expected 1 PTY write, got {}", writes.len());
+            assert_eq!(
+                writes.len(),
+                1,
+                "expected 1 PTY write, got {}",
+                writes.len()
+            );
 
             if cfg!(windows) {
                 if agent == CLIAgent::Claude {
