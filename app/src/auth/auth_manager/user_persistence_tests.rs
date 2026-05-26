@@ -1,11 +1,8 @@
 use chrono::DateTime;
 
-use crate::auth::{
-    user::{FirebaseAuthTokens, PersonalObjectLimits, UserMetadata},
-    UserUid,
-};
-
 use super::PersistedUser;
+use crate::auth::user::{FirebaseAuthTokens, PersonalObjectLimits, UserMetadata};
+use crate::auth::UserUid;
 
 /// Verifies that the JSON blob format as of March 6, 2026 can be deserialized correctly.
 ///
@@ -87,15 +84,15 @@ fn test_serialize_persisted_user() {
 #[test]
 #[allow(deprecated)]
 fn test_windows_user_persistence() {
-    use crate::auth::{AuthManager, AuthStateProvider};
-    use crate::server::{
-        datetime_ext::DateTimeExt, telemetry::context_provider::AppTelemetryContextProvider,
-    };
-    use crate::ServerApiProvider;
     use chrono::DateTime;
     use warp_core::channel::ChannelState;
     use warpui::{App, SingletonEntity};
     use warpui_extras::secure_storage;
+
+    use crate::auth::{AuthManager, AuthStateProvider};
+    use crate::server::datetime_ext::DateTimeExt;
+    use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+    use crate::ServerApiProvider;
 
     App::test((), |mut app| async move {
         app.add_singleton_model(|_ctx| ServerApiProvider::new_for_test());

@@ -1,13 +1,7 @@
-use crate::ai::agent::conversation::ConversationStatus;
-use crate::context_chips::display_chip::GitLineChanges;
-use crate::pane_group::pane::IPaneType;
-use crate::pane_group::{PaneId, TerminalPaneId};
-use crate::safe_triangle::SafeTriangle;
-use crate::terminal::CLIAgent;
-use crate::workspace::tab_settings::VerticalTabsDisplayGranularity;
+use std::path::PathBuf;
+
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
-use std::path::PathBuf;
 use warpui::elements::PositionedElementOffsetBounds;
 use warpui::EntityId;
 
@@ -27,6 +21,13 @@ use super::{
     VerticalTabsDetailTargetKind, VerticalTabsSummaryBranchEntry, VerticalTabsSummaryData,
     VerticalTabsSummaryPrimaryLabel,
 };
+use crate::ai::agent::conversation::ConversationStatus;
+use crate::context_chips::display_chip::GitLineChanges;
+use crate::pane_group::pane::IPaneType;
+use crate::pane_group::{PaneId, TerminalPaneId};
+use crate::safe_triangle::SafeTriangle;
+use crate::terminal::CLIAgent;
+use crate::workspace::tab_settings::VerticalTabsDisplayGranularity;
 
 fn label(text: &str) -> VerticalTabsSummaryPrimaryLabel {
     VerticalTabsSummaryPrimaryLabel {
@@ -1128,6 +1129,7 @@ fn summary_search_fragments_include_hidden_overflow_values() {
                 pull_request_label: Some("#789".to_string()),
             },
         ],
+        has_unread_activity: false,
     };
 
     let fragments = summary_search_text_fragments(&summary, Some("Custom tab"));

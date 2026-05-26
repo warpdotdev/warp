@@ -6,7 +6,6 @@
 
 use pathfinder_color::ColorU;
 use warp_cli::agent::Harness;
-
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{Fill as WarpThemeFill, WarpTheme};
 

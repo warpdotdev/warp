@@ -2,19 +2,20 @@
 // external secrets from the browser.
 #![cfg_attr(target_family = "wasm", allow(dead_code, unused_variables))]
 
-use anyhow::anyhow;
 use core::fmt;
+use std::path::PathBuf;
+
+use anyhow::anyhow;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::PathBuf;
 use warp_util::path::ShellFamily;
 
 #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use crate::terminal::local_shell::execute_command;
-
-use crate::{terminal::shell::ShellType, ui_components::icons::Icon};
+use crate::terminal::shell::ShellType;
+use crate::ui_components::icons::Icon;
 
 lazy_static! {
     // Used as a delimeter to separate metadata (such as names and references)

@@ -1,60 +1,53 @@
-use crate::appearance::Appearance;
-use crate::drive::CloudObjectTypeAndId;
-use crate::search::binding_source::{BindingFilterFn, BindingSource};
-use crate::search::command_palette::mixer::CommandPaletteItemAction;
-use crate::search::command_palette::SelectedItems;
-use crate::search::result_renderer::QueryResultRenderer;
-use crate::search::search_bar::SelectionUpdate;
-use crate::search::search_bar::{SearchBar, SearchBarEvent, SearchBarState, SearchResultOrdering};
-use crate::search::QueryFilter;
-use crate::send_telemetry_from_ctx;
-use crate::server::telemetry::LaunchConfigUiLocation;
-use crate::server::telemetry::TelemetryEvent;
-use crate::settings::CtrlTabBehavior;
-use crate::terminal::keys_settings::KeysSettings;
-use crate::themes::theme::WarpTheme;
-use crate::view_components::DismissibleToast;
-use crate::ToastStack;
-use lazy_static::lazy_static;
-use warp_core::send_telemetry_from_app_ctx;
-use warp_util::path::LineAndColumnArg;
-
-use crate::search::action::search_item::MatchedBinding;
-use itertools::Itertools;
-use warpui::elements::DispatchEventResult;
-use warpui::elements::EventHandler;
-use warpui::event::KeyState;
-use warpui::platform::keyboard::KeyCode;
-use warpui::FocusContext;
-
-use crate::search::command_palette::zero_state::{self, Event as ZeroStateEvent, ZeroState};
-use crate::search::data_source::QueryResult;
-
 use std::collections::HashSet;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::features::FeatureFlag;
-use crate::palette::PaletteMode;
-use crate::root_view::OpenLaunchConfigArg;
-use crate::search::command_palette::data_sources::DataSourceStore;
-use crate::server::ids::SyncId;
-use crate::session_management::SessionSource;
-use crate::workspace::{active_terminal_in_window, ForkedConversationDestination, WorkspaceAction};
+use itertools::Itertools;
+use lazy_static::lazy_static;
+use warp_core::send_telemetry_from_app_ctx;
+use warp_util::path::LineAndColumnArg;
 use warpui::elements::{
     Align, Border, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
-    Container, CornerRadius, Dismiss, Empty, Fill, Flex, ParentElement, Radius, SavePosition,
-    Shrinkable,
+    Container, CornerRadius, Dismiss, DispatchEventResult, Empty, EventHandler, Fill, Flex,
+    ParentElement, Radius, SavePosition, Shrinkable,
 };
+use warpui::event::KeyState;
 use warpui::keymap::BindingId;
+use warpui::platform::keyboard::KeyCode;
 use warpui::units::{IntoPixels, Pixels};
 use warpui::{
-    AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView,
-    ViewContext, ViewHandle, WindowId,
+    AppContext, Element, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity,
+    TypedActionView, ViewContext, ViewHandle, WindowId,
 };
 
 use super::super::palette_styles as styles;
 use super::CommandPaletteMixer;
+use crate::appearance::Appearance;
+use crate::drive::CloudObjectTypeAndId;
+use crate::features::FeatureFlag;
+use crate::palette::PaletteMode;
+use crate::root_view::OpenLaunchConfigArg;
+use crate::search::action::search_item::MatchedBinding;
+use crate::search::binding_source::{BindingFilterFn, BindingSource};
+use crate::search::command_palette::data_sources::DataSourceStore;
+use crate::search::command_palette::mixer::CommandPaletteItemAction;
+use crate::search::command_palette::zero_state::{self, Event as ZeroStateEvent, ZeroState};
+use crate::search::command_palette::SelectedItems;
+use crate::search::data_source::QueryResult;
+use crate::search::result_renderer::QueryResultRenderer;
+use crate::search::search_bar::{
+    SearchBar, SearchBarEvent, SearchBarState, SearchResultOrdering, SelectionUpdate,
+};
+use crate::search::QueryFilter;
+use crate::server::ids::SyncId;
+use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
+use crate::session_management::SessionSource;
+use crate::settings::CtrlTabBehavior;
+use crate::terminal::keys_settings::KeysSettings;
+use crate::themes::theme::WarpTheme;
+use crate::view_components::DismissibleToast;
+use crate::workspace::{active_terminal_in_window, ForkedConversationDestination, WorkspaceAction};
+use crate::{send_telemetry_from_ctx, ToastStack};
 
 lazy_static! {
     /// Set of hardcoded action names that we want to show in the command palette zero state.

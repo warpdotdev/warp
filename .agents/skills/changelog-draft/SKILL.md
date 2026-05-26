@@ -36,11 +36,11 @@ Record the range as `previous_cut_tag..release_tag`.
 
 ### Step 2 — Fetch PR data
 
-Run the `fetch_prs.py` script to collect all PRs merged in the release range and extract explicit changelog markers:
+Run the `fetch_prs.py` script to collect all public-release PRs merged in the release range and extract explicit changelog markers. Pass the repository that the workflow checked out, not necessarily the public repository. Release workflows run from `warpdotdev/warp-internal`, and the script deterministically resolves `warp-repo-sync[bot]` PRs back to their original public `warpdotdev/warp` PR metadata before emitting JSON. When running from `warpdotdev/warp-internal`, the script intentionally omits PRs that were not authored by the repo-sync bot, because those are private internal changes that must not be exposed to the changelog agent or generated artifacts.
 
 ```bash
 python3 .agents/skills/changelog-draft/scripts/fetch_prs.py \
-  --repo warpdotdev/warp \
+  --repo "${GITHUB_REPOSITORY:-warpdotdev/warp}" \
   --base-ref <previous_tag> \
   --head-ref <release_tag>
 ```
@@ -52,6 +52,7 @@ The script outputs JSON to stdout with this structure:
   "prs": [
     {
       "number": 1234,
+      "url": "https://github.com/warpdotdev/warp/pull/1234",
       "title": "...",
       "author": "username",
       "body": "...",
@@ -61,11 +62,21 @@ The script outputs JSON to stdout with this structure:
         { "category": "NEW-FEATURE", "text": "Added dark mode" }
       ],
       "linked_issues": [5678],
-      "changed_files": ["app/src/ai/agent.rs", "crates/warp_features/src/lib.rs"]
+      "changed_files": ["app/src/ai/agent.rs", "crates/warp_features/src/lib.rs"],
+      "source_repo": "warpdotdev/warp",
+      "internal_pr": {
+        "number": 25712,
+        "url": "https://github.com/warpdotdev/warp-internal/pull/25712",
+        "author": "warp-repo-sync[bot]",
+        "title": "...",
+        "repo": "warpdotdev/warp-internal"
+      }
     }
   ]
 }
 ```
+
+Use the top-level `number`, `url`, `author`, `body`, `labels`, `changed_files`, and `source_repo` fields as the source of truth. `internal_pr` is audit-only and must never be used for contributor attribution or user-facing changelog links. If `url` is empty, omit the PR link from user-facing markdown rather than synthesizing one.
 
 ### Step 3 — Classify contributors
 
@@ -174,6 +185,8 @@ Combine explicit entries (Step 2) and inferred entries (Step 6) into the final r
 
 PRs marked with `CHANGELOG-NONE` are explicitly opted out and must never appear in the changelog markdown.
 
+When creating entries, copy `pr_number`, `url`, `author`, `source_repo`, and `internal_pr` from the normalized PR record. The release JSON converter uses `url` directly; do not invent public PR URLs from PR numbers.
+
 ### Step 8 — Write output files
 
 Write two files to `output_dir`:
@@ -219,6 +232,7 @@ The markdown draft must **not** include "Needs Review" or "Skipped PRs" sections
   "entries": [
     {
       "pr_number": 1234,
+      "url": "https://github.com/warpdotdev/warp/pull/1234",
       "category": "NEW-FEATURE",
       "text": "Added dark mode",
       "source": "explicit",
@@ -226,7 +240,9 @@ The markdown draft must **not** include "Needs Review" or "Skipped PRs" sections
       "is_external": true,
       "confidence": "high",
       "rationale": null,
-      "feature_flag": null
+      "feature_flag": null,
+      "source_repo": "warpdotdev/warp",
+      "internal_pr": null
     }
   ],
   "skipped": [...],

@@ -1,4 +1,5 @@
-use std::{collections::HashMap, ops::Range};
+use std::collections::HashMap;
+use std::ops::Range;
 
 use arborium::tree_sitter::{Node, Query, QueryCursor, Tree};
 use streaming_iterator::StreamingIterator;

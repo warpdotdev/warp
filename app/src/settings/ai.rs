@@ -6,36 +6,32 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use cfg_if::cfg_if;
+use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
-
-use crate::ai::{
-    agent::conversation::AIConversation, blocklist::BlocklistAIHistoryModel,
-    request_usage_model::RequestLimitInfo,
+use lazy_static::lazy_static;
+use regex::Regex;
+use serde::de::Deserializer;
+use serde::{Deserialize, Serialize};
+use settings::{
+    define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
 };
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
+use warp_core::execution_mode::AppExecutionMode;
+use warp_core::features::FeatureFlag;
+use warpui::platform::keyboard::KeyCode;
+use warpui::platform::OperatingSystem;
+use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, UpdateModel};
+
+use crate::ai::agent::conversation::AIConversation;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::request_usage_model::RequestLimitInfo;
 use crate::auth::AuthStateProvider;
 use crate::report_if_error;
 use crate::settings::PrivacySettings;
 use crate::terminal::CLIAgent;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use cfg_if::cfg_if;
-use chrono::{DateTime, Utc};
-use lazy_static::lazy_static;
-use regex::Regex;
-use warpui::platform::OperatingSystem;
-use warpui::{
-    platform::keyboard::KeyCode, AppContext, Entity, EntityId, ModelContext, SingletonEntity,
-    UpdateModel,
-};
-
-use settings::{
-    define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
-};
-use warp_core::execution_mode::AppExecutionMode;
-use warp_core::features::FeatureFlag;
-
-use serde::{de::Deserializer, Deserialize, Serialize};
-use strum::IntoEnumIterator;
-use strum_macros::EnumIter;
 
 pub enum FocusedTerminalInfoEvent {
     TerminalInfoUpdated,
@@ -1918,6 +1914,10 @@ impl AISettings {
     pub fn is_mcp_permission_editable(&self, app: &AppContext) -> bool {
         // TODO: Allow workspace overrides on MCP permissions.
         self.is_any_ai_enabled(app)
+    }
+
+    pub fn is_run_agents_permissions_editable(&self, app: &AppContext) -> bool {
+        self.is_orchestration_enabled(app)
     }
 
     pub fn show_code_suggestion_speedbump(&self, app: &AppContext) -> bool {

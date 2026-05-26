@@ -1,28 +1,8 @@
-#[cfg(not(target_family = "wasm"))]
-use crate::server::datetime_ext::DateTimeExt;
-#[cfg(not(target_family = "wasm"))]
-use chrono::DateTime;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[cfg(not(target_family = "wasm"))]
-use crate::persistence::model::MCPEnvironmentVariables;
-use crate::{
-    cloud_object::{
-        model::{
-            generic_string_model::{GenericStringModel, GenericStringObjectId, StringModel},
-            json_model::{JsonModel, JsonSerializer},
-            persistence::CloudModel,
-        },
-        GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision, ServerCloudObject,
-    },
-    drive::{
-        items::{mcp_server::WarpDriveMCPServer, WarpDriveItem},
-        CloudObjectTypeAndId,
-    },
-    server::{ids::SyncId, sync_queue::QueueItem},
-};
+use chrono::DateTime;
 #[cfg(not(target_family = "wasm"))]
 use diesel::{QueryDsl, RunQueryDsl, SqliteConnection};
 use serde::{Deserialize, Serialize};
@@ -30,6 +10,24 @@ use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon;
+
+use crate::cloud_object::model::generic_string_model::{
+    GenericStringModel, GenericStringObjectId, StringModel,
+};
+use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
+use crate::cloud_object::{
+    CloudObjectUuid, GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
+    JsonObjectType, Revision,
+};
+use crate::drive::items::mcp_server::WarpDriveMCPServer;
+use crate::drive::items::WarpDriveItem;
+use crate::drive::CloudObjectTypeAndId;
+#[cfg(not(target_family = "wasm"))]
+use crate::persistence::model::MCPEnvironmentVariables;
+#[cfg(not(target_family = "wasm"))]
+use crate::server::datetime_ext::DateTimeExt;
+use crate::server::ids::SyncId;
+use crate::server::sync_queue::QueueItem;
 
 pub mod manager;
 pub mod templatable_manager;
@@ -57,10 +55,8 @@ cfg_if::cfg_if! {
 
 pub mod gallery;
 pub use gallery::MCPGalleryManager;
-use warpui::{AppContext, SingletonEntity as _};
 pub mod templatable;
-pub use templatable::JsonTemplate;
-pub use templatable::{TemplatableMCPServer, TemplateVariable};
+pub use templatable::{JsonTemplate, TemplatableMCPServer, TemplateVariable};
 pub mod logs;
 pub mod templatable_installation;
 pub use templatable_installation::TemplatableMCPServerInstallation;
@@ -164,26 +160,9 @@ pub struct ServerSentEvents {
 pub type CloudMCPServer = GenericCloudObject<GenericStringObjectId, CloudMCPServerModel>;
 pub type CloudMCPServerModel = GenericStringModel<MCPServer, JsonSerializer>;
 
-impl CloudMCPServer {
-    pub fn get_all(app: &AppContext) -> Vec<CloudMCPServer> {
-        CloudModel::as_ref(app)
-            .get_all_objects_of_type::<GenericStringObjectId, CloudMCPServerModel>()
-            .cloned()
-            .collect()
-    }
-
-    pub fn get_by_id<'a>(sync_id: &'a SyncId, app: &'a AppContext) -> Option<&'a CloudMCPServer> {
-        CloudModel::as_ref(app)
-            .get_object_of_type::<GenericStringObjectId, CloudMCPServerModel>(sync_id)
-    }
-
-    pub fn get_by_uuid<'a>(
-        uuid: &'a uuid::Uuid,
-        app: &'a AppContext,
-    ) -> Option<&'a CloudMCPServer> {
-        CloudModel::as_ref(app)
-            .get_all_objects_of_type::<GenericStringObjectId, CloudMCPServerModel>()
-            .find(|server| server.model().string_model.uuid == *uuid)
+impl CloudObjectUuid for MCPServer {
+    fn uuid(&self) -> uuid::Uuid {
+        self.uuid
     }
 }
 
@@ -224,13 +203,6 @@ impl StringModel for MCPServer {
             id: object.id,
             revision: revision_ts.or_else(|| object.metadata.revision.clone()),
         }
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::MCPServer(server_mcp_server) = server_cloud_object {
-            return Some(server_mcp_server.model.clone().string_model);
-        }
-        None
     }
 
     fn uniqueness_key(&self) -> Option<GenericStringObjectUniqueKey> {

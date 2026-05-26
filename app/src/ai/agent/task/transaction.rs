@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
-use crate::ai::agent::task::TaskId;
-
 use super::Task;
+use crate::ai::agent::task::TaskId;
 
 /// Keeps track of the state of tasks before they are modified.
 /// Messages are assumed to be only updated during the same transaction

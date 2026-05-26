@@ -2,8 +2,21 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use session_sharing_protocol::common::SessionId;
+use ui_components::lightbox;
 use warp_util::path::LineAndColumnArg;
+use warpui::accessibility::AccessibilityVerbosity;
+use warpui::geometry::rect::RectF;
+use warpui::geometry::vector::Vector2F;
+use warpui::platform::Cursor;
+use warpui::{EntityId, WeakViewHandle, WindowId};
 
+use super::global_actions::{ForkFromExchange, ForkedConversationDestination};
+use super::tab_settings::{
+    VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity, VerticalTabsPrimaryInfo,
+    VerticalTabsTabItemMode, VerticalTabsViewMode,
+};
+use super::view::{OnboardingTutorial, WorkspaceBanner};
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
@@ -29,21 +42,6 @@ use crate::themes::theme::AnsiColorIdentifier;
 use crate::themes::theme_chooser::ThemeChooserMode;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 use crate::workspace::PaneViewLocator;
-use session_sharing_protocol::common::SessionId;
-
-use ui_components::lightbox;
-use warpui::accessibility::AccessibilityVerbosity;
-use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::Vector2F;
-use warpui::platform::Cursor;
-use warpui::{EntityId, WeakViewHandle, WindowId};
-
-use super::global_actions::{ForkFromExchange, ForkedConversationDestination};
-use super::tab_settings::{
-    VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity, VerticalTabsPrimaryInfo,
-    VerticalTabsTabItemMode, VerticalTabsViewMode,
-};
-use super::view::{OnboardingTutorial, WorkspaceBanner};
 
 /// This enum determines how the search query is initialized when opening command search.
 #[derive(Clone, Default, Debug)]
@@ -79,6 +77,27 @@ pub enum RestoreConversationLayout {
 pub enum TabContextMenuAnchor {
     Pointer(Vector2F),
     VerticalTabsKebab,
+}
+
+/// Describes how the new-session dropdown menu was opened so the renderer
+/// can pick the right anchor strategy.
+#[derive(Debug, Clone, Copy)]
+pub enum NewSessionMenuAnchor {
+    /// Menu was opened from the `+` add-tab button. When vertical tabs are
+    /// active, the renderer anchors below the button's save position;
+    /// otherwise the contained position is used directly.
+    AddTabButton(Vector2F),
+    /// Menu was opened by right-clicking the vertical tabs panel.
+    /// Always anchored at the contained pointer position.
+    Pointer(Vector2F),
+}
+
+impl NewSessionMenuAnchor {
+    pub fn position(&self) -> Vector2F {
+        match self {
+            Self::AddTabButton(position) | Self::Pointer(position) => *position,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -165,11 +184,11 @@ pub enum WorkspaceAction {
     /// Add a new tab running a local Docker sandbox via `sbx`.
     AddDockerSandboxTab,
     OpenNewSessionMenu {
-        position: Vector2F,
+        anchor: NewSessionMenuAnchor,
     },
     ToggleTabConfigsMenu,
     ToggleNewSessionMenu {
-        position: Vector2F,
+        anchor: NewSessionMenuAnchor,
     },
     SelectNewSessionMenuItem(NewSessionMenuItem),
     AutoupdateFailureLink,
@@ -338,6 +357,9 @@ pub enum WorkspaceAction {
     },
     CopySharedSessionLinkFromTab {
         tab_index: usize,
+    },
+    OpenSharedSessionQrCode {
+        session_id: SessionId,
     },
     AddWindow,
     AddWindowWithShell {
@@ -915,6 +937,7 @@ impl WorkspaceAction {
             | StopSharingSessionFromTabMenu { .. }
             | StopSharingAllSessionsInTab { .. }
             | CopySharedSessionLinkFromTab { .. }
+            | OpenSharedSessionQrCode { .. }
             | ReopenClosedSession
             | FocusLeftPanel
             | FocusRightPanel

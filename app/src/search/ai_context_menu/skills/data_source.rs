@@ -1,12 +1,13 @@
+use std::path::PathBuf;
+
+use fuzzy_match::FuzzyMatchResult;
+use warpui::{AppContext, Entity, SingletonEntity};
+
 use super::search_item::SkillSearchItem;
 use crate::ai::skills::SkillManager;
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
-use fuzzy_match::FuzzyMatchResult;
-use std::path::PathBuf;
-use warpui::{AppContext, Entity, SingletonEntity};
-
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::ActiveSession;
 

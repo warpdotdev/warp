@@ -1,7 +1,5 @@
-use std::{
-    os::unix::prelude::*,
-    sync::{mpsc, Arc},
-};
+use std::os::unix::prelude::*;
+use std::sync::{mpsc, Arc};
 
 use parking_lot::Mutex;
 

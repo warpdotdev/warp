@@ -1,11 +1,12 @@
 use std::fs;
 
-use crate::repositories::{stub_git_repository, RepoDetectionSource};
-use crate::{repositories::DetectedRepositories, watcher::DirectoryWatcher};
 use virtual_fs::{Stub, VirtualFS};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
+
+use crate::repositories::{stub_git_repository, DetectedRepositories, RepoDetectionSource};
+use crate::watcher::DirectoryWatcher;
 
 #[test]
 fn test_detect_possible_local_git_repo_non_existent_directory() {

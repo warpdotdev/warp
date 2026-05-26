@@ -1,34 +1,29 @@
-use std::{cmp::max, fmt::Debug, mem, ops::RangeInclusive};
+use std::cmp::max;
+use std::fmt::Debug;
+use std::mem;
+use std::ops::RangeInclusive;
 
 use sum_tree::SeekBias;
 use vec1::{vec1, Vec1};
 use warp_core::semantic_selection::SemanticSelection;
 use warp_terminal::model::grid::CellType;
-use warpui::{
-    text::{IsRect, SelectionType},
-    units::{IntoLines as _, Lines},
-    AppContext, EntityId, ViewAsRef as _,
-};
-
-use crate::{
-    ai::blocklist::{block::PendingUserQueryBlock, AIBlock},
-    env_vars::env_var_collection_block::EnvVarCollectionBlock,
-    terminal::{
-        event::Event as TerminalEvent,
-        model::{
-            block::BlockSection,
-            index::{Direction, Point, Side},
-            selection::{ExpandedSelectionRange, Selection, SelectionDirection},
-            terminal_model::{BlockIndex, WithinBlock},
-        },
-        warpify::success_block::WarpifySuccessBlock,
-        GridType,
-    },
-};
+use warpui::text::{IsRect, SelectionType};
+use warpui::units::{IntoLines as _, Lines};
+use warpui::{AppContext, EntityId, ViewAsRef as _};
 
 use super::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, BlockListPoint, RichContentItem,
 };
+use crate::ai::blocklist::block::PendingUserQueryBlock;
+use crate::ai::blocklist::AIBlock;
+use crate::env_vars::env_var_collection_block::EnvVarCollectionBlock;
+use crate::terminal::event::Event as TerminalEvent;
+use crate::terminal::model::block::BlockSection;
+use crate::terminal::model::index::{Direction, Point, Side};
+use crate::terminal::model::selection::{ExpandedSelectionRange, Selection, SelectionDirection};
+use crate::terminal::model::terminal_model::{BlockIndex, WithinBlock};
+use crate::terminal::warpify::success_block::WarpifySuccessBlock;
+use crate::terminal::GridType;
 
 /// A selection that can span multiple blocks (and thus grids). Here row is the number of lines from
 /// the top of all blocks.

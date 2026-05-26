@@ -1,19 +1,20 @@
-use chrono::Local;
 use std::collections::HashSet;
-use warp_core::ui::appearance::Appearance;
-use warpui::{platform::WindowStyle, App};
 
-use crate::ai::blocklist::AIQueryHistory;
-use crate::input_suggestions::{filter_tab_suggestions, HistoryOrder};
-use crate::terminal::model::session::SessionId;
-use crate::terminal::HistoryEntry;
+use chrono::Local;
 use warp_completer::completer::{
     EngineFileType, Match, MatchStrategy, MatchedSuggestion, Priority, Suggestion,
     SuggestionResults, SuggestionType, TopLevelCommandCaseSensitivity,
 };
 use warp_completer::meta::Span;
+use warp_core::ui::appearance::Appearance;
+use warpui::platform::WindowStyle;
+use warpui::App;
 
 use super::{HistoryInputSuggestion, InputSuggestions, TabCompletionsPreselectOption};
+use crate::ai::blocklist::AIQueryHistory;
+use crate::input_suggestions::{filter_tab_suggestions, HistoryOrder};
+use crate::terminal::model::session::SessionId;
+use crate::terminal::HistoryEntry;
 
 fn prefix_matched_suggestion(name: &str) -> MatchedSuggestion {
     let suggestion = Suggestion::with_same_display_and_replacement(

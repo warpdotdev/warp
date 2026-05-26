@@ -1,19 +1,18 @@
-use std::{iter, pin::pin, sync::Once};
+use std::iter;
+use std::pin::pin;
+use std::sync::Once;
 
 use futures_lite::future;
 use itertools::Itertools;
 use rangemap::RangeSet;
+use string_offset::CharOffset;
 use sum_tree::SumTree;
 use warpui::App;
 
-use crate::content::{
-    buffer::Buffer,
-    cursor::BufferSumTree,
-    text::{BufferBlockStyle, BufferText, IndentBehavior},
-};
-use string_offset::CharOffset;
-
 use super::{Engine, Match, SearchConfig};
+use crate::content::buffer::Buffer;
+use crate::content::cursor::BufferSumTree;
+use crate::content::text::{BufferBlockStyle, BufferText, IndentBehavior};
 
 #[test]
 fn test_search_inline_styles() {

@@ -1,3 +1,11 @@
+use std::time::Duration;
+
+use mockall::Sequence;
+use settings::{PrivatePreferences, PublicPreferences};
+use warpui::{AddSingletonModel, App};
+use warpui_extras::user_preferences;
+
+use super::*;
 use crate::ai::llms::LLMModelHost;
 use crate::auth::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -21,14 +29,6 @@ use crate::workspaces::workspace::{
     AdminEnablementSetting, CodebaseContextSettings, HostEnablementSetting, LlmHostSettings,
     Workspace,
 };
-
-use mockall::Sequence;
-use settings::{PrivatePreferences, PublicPreferences};
-use std::time::Duration;
-use warpui::{AddSingletonModel, App};
-use warpui_extras::user_preferences;
-
-use super::*;
 
 #[derive(Default)]
 struct CachedResources {

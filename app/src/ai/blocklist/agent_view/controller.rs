@@ -1,23 +1,20 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
+use std::time::Duration;
 
 use instant::Instant;
-
 use parking_lot::FairMutex;
 use warp_core::ui::appearance::Appearance;
 use warpui::keymap::Keystroke;
-use warpui::AppContext;
-use warpui::{
-    r#async::SpawnedFutureHandle, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity,
-};
-
-use crate::terminal::input::message_bar::{Message, MessageItem};
-use crate::terminal::input::slash_commands::SlashCommandTrigger;
-use crate::util::bindings::keybinding_name_to_keystroke;
-use crate::{
-    ai::agent::conversation::AIConversationId, terminal::TerminalModel, BlocklistAIHistoryModel,
-};
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{DismissalStrategy, EphemeralMessage, EphemeralMessageModel};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::terminal::input::message_bar::{Message, MessageItem};
+use crate::terminal::input::slash_commands::SlashCommandTrigger;
+use crate::terminal::TerminalModel;
+use crate::util::bindings::keybinding_name_to_keystroke;
+use crate::BlocklistAIHistoryModel;
 
 /// Error returned when entering the agent view fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -786,11 +783,8 @@ impl AgentViewController {
             });
             (id, 0)
         };
-        // Non-transferring: don't rip the conversation out of another terminal
-        // view's live list (e.g. a child agent's hidden pane). Explicit
-        // cross-view ownership transfer is handled by callers elsewhere.
         history_model.update(ctx, |history_model, ctx| {
-            history_model.mark_active_conversation_id(conversation_id, self.terminal_view_id, ctx)
+            history_model.set_active_conversation_id(conversation_id, self.terminal_view_id, ctx)
         });
 
         self.agent_view_state = AgentViewState::Active {

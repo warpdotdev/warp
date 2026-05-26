@@ -1,21 +1,17 @@
+use lazy_static::lazy_static;
+
 use crate::color::ColorU;
 use crate::elements::{
-    AnchorPair, ChildAnchor, Empty, Fill, OffsetPositioning, OffsetType, ParentAnchor,
-    ParentOffsetBounds, PositioningAxis, Stack, XAxisAnchor, YAxisAnchor,
+    AnchorPair, ChildAnchor, ConstrainedBox, Container, CornerRadius, Element, Empty, Fill, Flex,
+    Hoverable, MouseState, MouseStateHandle, OffsetPositioning, OffsetType, ParentAnchor,
+    ParentElement, ParentOffsetBounds, PositioningAxis, Rect, Stack, XAxisAnchor, YAxisAnchor,
 };
 use crate::geometry::vector::vec2f;
 use crate::platform::Cursor;
 use crate::scene::{DropShadow, Radius};
-use crate::{
-    elements::{
-        ConstrainedBox, Container, CornerRadius, Element, Flex, Hoverable, MouseState,
-        MouseStateHandle, ParentElement, Rect,
-    },
-    ui_components::components::{UiComponent, UiComponentStyles},
-    ui_components::text::Span,
-    ui_components::tool_tip::Tooltip,
-};
-use lazy_static::lazy_static;
+use crate::ui_components::components::{UiComponent, UiComponentStyles};
+use crate::ui_components::text::Span;
+use crate::ui_components::tool_tip::Tooltip;
 
 const DEFAULT_THUMB_HEIGHT: f32 = 18.;
 

@@ -10,62 +10,56 @@ pub mod referral;
 pub mod team;
 pub mod workspace;
 
+use std::borrow::Cow;
+use std::fmt;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
+
+use ::http::header::CONTENT_LENGTH;
+use ai::AIClient;
+use anyhow::{anyhow, Context, Result};
+use auth::{AuthClient, AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT_ID_HEADER};
+use base64::prelude::BASE64_URL_SAFE;
+use base64::Engine;
+use block::BlockClient;
+use channel_versions::ChannelVersions;
+use chrono::{DateTime, FixedOffset};
+use futures::StreamExt;
+use instant::Instant;
+use object::ObjectClient;
+use parking_lot::{Mutex, RwLock};
+use prost::Message;
+use referral::ReferralsClient;
+use reqwest::StatusCode;
+use serde::{Deserialize, Serialize};
+use team::TeamClient;
+use url::Url;
+use warp_core::context_flag::ContextFlag;
+use warp_core::errors::{register_error, AnyhowErrorExt, ErrorExt};
+use warp_core::telemetry::TelemetryEvent;
+use warp_managed_secrets::client::ManagedSecretsClient;
+use warpui::r#async::BoxFuture;
+use warpui::{Entity, ModelContext, SingletonEntity};
+use workspace::WorkspaceClient;
+
+use super::experiments::{ServerExperiment, ServerExperiments};
+use super::graphql::GraphQLError;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::get_relevant_files::api::{GetRelevantFiles, GetRelevantFilesResponse};
-use crate::ai::predict::generate_ai_input_suggestions;
 use crate::ai::predict::generate_ai_input_suggestions::GenerateAIInputSuggestionsRequest;
-use crate::ai::predict::generate_am_query_suggestions;
 use crate::ai::predict::generate_am_query_suggestions::GenerateAMQuerySuggestionsRequest;
 use crate::ai::predict::predict_am_queries::{PredictAMQueriesRequest, PredictAMQueriesResponse};
+use crate::ai::predict::{generate_ai_input_suggestions, generate_am_query_suggestions};
 use crate::ai::voice::transcribe::{TranscribeRequest, TranscribeResponse};
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::auth_state::AuthState;
 use crate::auth::UserUid;
 use crate::server::graphql::default_request_options;
 use crate::server::server_api::presigned_upload::HttpStatusError;
-use ai::AIClient;
-use auth::{AuthClient, AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT_ID_HEADER};
-use base64::prelude::BASE64_URL_SAFE;
-use base64::Engine;
-use block::BlockClient;
-use channel_versions::ChannelVersions;
-use futures::StreamExt;
-use object::ObjectClient;
-use prost::Message;
-use referral::ReferralsClient;
-use team::TeamClient;
-use url::Url;
-use warp_core::context_flag::ContextFlag;
-use warp_core::errors::{register_error, AnyhowErrorExt, ErrorExt};
-use warp_managed_secrets::client::ManagedSecretsClient;
-use warpui::{r#async::BoxFuture, ModelContext};
-use workspace::WorkspaceClient;
-
 use crate::server::telemetry::TelemetryApi;
 use crate::settings::PrivacySettingsSnapshot;
-use crate::settings_view;
-
-use crate::ChannelState;
-
-use ::http::header::CONTENT_LENGTH;
-use anyhow::{anyhow, Context, Result};
-use chrono::{DateTime, FixedOffset};
-use instant::Instant;
-use parking_lot::{Mutex, RwLock};
-use reqwest::StatusCode;
-use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
-use std::fmt;
-use std::path::Path;
-use std::sync::Arc;
-use std::time::Duration;
-use warp_core::telemetry::TelemetryEvent;
-use warpui::Entity;
-use warpui::SingletonEntity;
-
-use super::experiments::ServerExperiment;
-use super::experiments::ServerExperiments;
-use super::graphql::GraphQLError;
+use crate::{settings_view, ChannelState};
 
 pub const FETCH_CHANNEL_VERSIONS_TIMEOUT: std::time::Duration = Duration::from_secs(60);
 
@@ -932,6 +926,57 @@ impl ServerApi {
             .with_context(|| format!("Failed to deserialize response from {url}"))
     }
 
+    /// Sends a PUT request to a public API endpoint and returns the raw response on success.
+    async fn put_public_api_response<B>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<http_client::Response>
+    where
+        B: Serialize,
+    {
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .context("Failed to get access token for API request")?;
+
+        let url = format!("{}/api/v1/{}", ChannelState::server_root_url(), path);
+
+        let mut request = self.client.put(&url).json(body);
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+
+        for (name, value) in self.ambient_agent_headers().await? {
+            request = request.header(name, value);
+        }
+
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("Failed to send API request to {url}"))?;
+
+        if response.status().is_success() {
+            Ok(response)
+        } else {
+            Err(Self::error_from_response(response).await)
+        }
+    }
+
+    /// Sends a PUT request to a public API endpoint.
+    async fn put_public_api<B, R>(&self, path: &str, body: &B) -> Result<R>
+    where
+        B: Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        let response = self.put_public_api_response(path, body).await?;
+        let url = response.url().clone();
+        response
+            .json::<R>()
+            .await
+            .with_context(|| format!("Failed to deserialize response from {url}"))
+    }
+
     /// Sends a POST request to a public API endpoint that returns no response body.
     async fn post_public_api_unit<B>(&self, path: &str, body: &B) -> Result<()>
     where
@@ -939,6 +984,36 @@ impl ServerApi {
     {
         self.post_public_api_response(path, body).await?;
         Ok(())
+    }
+
+    /// Sends a DELETE request to a public API endpoint that returns no response body.
+    async fn delete_public_api_unit(&self, path: &str) -> Result<()> {
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .context("Failed to get access token for API request")?;
+
+        let url = format!("{}/api/v1/{}", ChannelState::server_root_url(), path);
+
+        let mut request = self.client.delete(&url);
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+
+        for (name, value) in self.ambient_agent_headers().await? {
+            request = request.header(name, value);
+        }
+
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("Failed to send API request to {url}"))?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(Self::error_from_response(response).await)
+        }
     }
 
     /// Sends a PATCH request to a public API endpoint that returns no response body.
@@ -1251,11 +1326,16 @@ impl ServerApi {
             }
         );
 
-        let ambient_workload_token = self
-            .get_or_create_ambient_workload_token()
-            .await
-            .map_err(Into::into)
-            .map_err(Arc::new)?;
+        let ambient_workload_token = if is_passive {
+            // Do not include cloud agent workload metadata in passive suggestion requests - they
+            // read from the main conversation, but cannot modify it.
+            None
+        } else {
+            self.get_or_create_ambient_workload_token()
+                .await
+                .map_err(Into::into)
+                .map_err(Arc::new)?
+        };
 
         let mut request_builder = self
             .client
@@ -1559,13 +1639,14 @@ impl SingletonEntity for ServerApiProvider {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use cynic::{GraphQlError, GraphQlResponse};
-    use futures::executor::block_on;
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use cynic::{GraphQlError, GraphQlResponse};
+    use futures::executor::block_on;
+
+    use super::*;
 
     struct FakeGraphqlOperation {
         expected_auth_token: Option<String>,

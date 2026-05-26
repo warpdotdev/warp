@@ -1,6 +1,5 @@
-use crate::workflows::workflow::Workflow;
-
 use super::FuzzyMatchWorkflowResult;
+use crate::workflows::workflow::Workflow;
 
 #[test]
 fn test_exact_command_before_exact_title() {

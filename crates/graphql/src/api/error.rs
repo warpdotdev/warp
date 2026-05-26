@@ -1,5 +1,6 @@
 use super::object::ObjectType;
-use crate::{response_context::ResponseContext, schema};
+use crate::response_context::ResponseContext;
+use crate::schema;
 
 #[derive(cynic::QueryFragment, Debug)]
 pub struct UserFacingError {

@@ -7,11 +7,10 @@ use tempfile::NamedTempFile;
 use vec1::vec1;
 use warpui::App;
 
+use super::*;
 use crate::ai::agent::{AIIdentifiers, FileEdit};
 use crate::ai::blocklist::SessionContext;
 use crate::auth::auth_state::AuthState;
-
-use super::*;
 
 fn update_deltas(diff: &AIRequestedCodeDiff) -> &[DiffDelta] {
     match &diff.diff_type {

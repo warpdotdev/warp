@@ -26,9 +26,8 @@ pub mod current {
     }
 }
 
-pub use warpui_core::platform::*;
-
 pub use app::AppBuilder;
+pub use warpui_core::platform::*;
 
 /// Returns whether the current device is a mobile device with touch input.
 ///

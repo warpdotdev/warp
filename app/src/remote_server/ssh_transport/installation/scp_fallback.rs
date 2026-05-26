@@ -2,10 +2,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context as _;
-use futures::AsyncWriteExt as _;
-use futures::TryStreamExt as _;
+use futures::{AsyncWriteExt as _, TryStreamExt as _};
 use http_client::StatusCode;
-
 use remote_server::setup::RemotePlatform;
 use remote_server::transport::Error;
 

@@ -1,12 +1,10 @@
 //! Dispatch wrapper that routes between the legacy and v2 billing & usage
 //! pages.
 
-use warp_core::{features::FeatureFlag, ui::appearance::Appearance};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
 use warpui::elements::{ChildView, Container};
 use warpui::{AppContext, Element, Entity, SingletonEntity, View, ViewContext, ViewHandle};
-
-use crate::auth::{AuthManager, AuthStateProvider};
-use crate::workspaces::user_workspaces::UserWorkspaces;
 
 use super::billing_and_usage_page::{BillingAndUsagePageEvent, BillingAndUsagePageView};
 use super::billing_and_usage_page_v2::BillingAndUsagePageV2View;
@@ -14,6 +12,8 @@ use super::settings_page::{
     MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, HEADER_PADDING,
 };
 use super::SettingsSection;
+use crate::auth::{AuthManager, AuthStateProvider};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub struct BillingAndUsageDispatchView {
     page: PageType<Self>,

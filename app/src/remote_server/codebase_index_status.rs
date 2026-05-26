@@ -132,8 +132,9 @@ fn failure_message_from_codebase_index_status(status: &LocalCodebaseIndexStatus)
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ::ai::index::full_source_code_embedding::manager::CodebaseIndexingError;
+
+    use super::*;
 
     #[test]
     fn pending_codebase_index_without_synced_version_maps_to_indexing() {

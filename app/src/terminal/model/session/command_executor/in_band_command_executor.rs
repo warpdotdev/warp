@@ -1,31 +1,29 @@
 use std::any::Any;
 use std::cmp::min;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::fmt;
 use std::sync::Arc;
-use std::{collections::VecDeque, fmt};
 
 use anyhow::Result;
 use async_channel::{self, Receiver, Sender};
 use async_trait::async_trait;
 use chrono::DateTime;
 use parking_lot::{Mutex, MutexGuard};
+use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_core::command::ExitCode;
 use warp_terminal::model::Point;
+use warp_util::on_cancel::OnCancelFutureExt;
 use warpui::r#async::block_on;
 
+use super::ExecuteCommandOptions;
 use crate::safe_info;
 use crate::server::datetime_ext::DateTimeExt;
 use crate::terminal::event::ExecutedExecutorCommandEvent;
-use crate::terminal::shell::{Shell, ShellType};
-use warp_util::on_cancel::OnCancelFutureExt;
-
 use crate::terminal::model::session::command_executor::{
     shared, CommandExecutor, ExecutorCommandEvent,
 };
+use crate::terminal::shell::{Shell, ShellType};
 use crate::terminal::SizeInfo;
-use warp_completer::completer::{CommandExitStatus, CommandOutput};
-
-use super::ExecuteCommandOptions;
 
 #[derive(Clone, Debug)]
 pub struct InBandCommand {

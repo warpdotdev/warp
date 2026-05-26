@@ -1,22 +1,23 @@
-use super::{decode_scrollback, SharedSessionScrollbackType};
+use std::sync::Arc;
 
+use serde_json::Value;
+use session_sharing_protocol::common::{Scrollback, ScrollbackBlock};
+use url::Url;
+use warpui::r#async::executor::Background;
+use warpui::units::Lines;
+
+use super::{decode_scrollback, SharedSessionScrollbackType};
 use crate::ai::blocklist::agent_view::AgentViewState;
 use crate::assert_lines_approx_eq;
 use crate::channel::ChannelState;
 use crate::terminal::color::List;
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::block::SerializedBlock;
 use crate::terminal::model::test_utils::block_size;
-use crate::uri::web_intent_parser::maybe_rewrite_web_url_to_intent;
-
 use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::TerminalModel;
-use crate::terminal::{event_listener::ChannelEventListener, model::block::SerializedBlock};
 use crate::themes::default_themes::dark_theme;
-use serde_json::Value;
-use session_sharing_protocol::common::{Scrollback, ScrollbackBlock};
-use std::sync::Arc;
-use url::Url;
-use warpui::r#async::executor::Background;
-use warpui::units::Lines;
+use crate::uri::web_intent_parser::maybe_rewrite_web_url_to_intent;
 
 pub const MAX_BYTES_SHAREABLE: usize = 5000;
 

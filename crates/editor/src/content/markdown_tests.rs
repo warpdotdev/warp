@@ -6,14 +6,10 @@ use string_offset::CharOffset;
 use vec1::Vec1;
 use warpui::{App, ReadModel};
 
-use crate::content::{
-    buffer::{
-        Buffer, BufferEditAction, EditOrigin, StyledBlockBoundaryBehavior, tests::TestEmbeddedItem,
-    },
-    text::{IndentBehavior, TABLE_BLOCK_MARKDOWN_LANG},
-};
-
 use super::MarkdownStyle;
+use crate::content::buffer::tests::TestEmbeddedItem;
+use crate::content::buffer::{Buffer, BufferEditAction, EditOrigin, StyledBlockBoundaryBehavior};
+use crate::content::text::{IndentBehavior, TABLE_BLOCK_MARKDOWN_LANG};
 
 #[test]
 fn test_export_normalizes_code_languages() {

@@ -1,6 +1,7 @@
 use std::ops::Range;
 use std::sync::Arc;
 
+use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use warp_multi_agent_api::{FileContent, FileContentLineRange};
 
 use crate::ai::agent::{
@@ -9,7 +10,6 @@ use crate::ai::agent::{
     FileContext, FormattedTextWrapper, MessageId, ProgrammingLanguage,
 };
 use crate::terminal::shell::ShellType;
-use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 
 fn to_range(range: Range<u32>) -> Option<FileContentLineRange> {
     Some(FileContentLineRange {

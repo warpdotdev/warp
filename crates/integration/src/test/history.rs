@@ -1,25 +1,27 @@
 use std::collections::HashMap;
 
-use crate::Builder;
 use settings::Setting as _;
-use warp::{
-    integration_testing::{
-        self,
-        command_search::{assert_command_search_is_open, assert_history_filter_is_active},
-        input::assert_workflow_info_box_is_open,
-        step::new_step_with_default_assertions,
-        terminal::{assert_input_editor_contents, wait_until_bootstrapped_single_pane_for_tab},
-        view_getters::single_input_view,
-    },
-    search::command_search::settings::ShowGlobalWorkflowsInUniversalSearch,
-    sqlite_testing::set_user_and_hostname_for_commands,
-    terminal::{input::Input, model::session::get_local_hostname, shell::ShellType},
+use warp::integration_testing::command_search::{
+    assert_command_search_has_results, assert_command_search_is_open,
+    assert_history_filter_is_active,
 };
+use warp::integration_testing::input::assert_workflow_info_box_is_open;
+use warp::integration_testing::step::new_step_with_default_assertions;
+use warp::integration_testing::terminal::{
+    assert_input_editor_contents, wait_until_bootstrapped_single_pane_for_tab,
+};
+use warp::integration_testing::view_getters::single_input_view;
+use warp::integration_testing::{self};
+use warp::search::command_search::settings::ShowGlobalWorkflowsInUniversalSearch;
+use warp::sqlite_testing::set_user_and_hostname_for_commands;
+use warp::terminal::input::Input;
+use warp::terminal::model::session::get_local_hostname;
+use warp::terminal::shell::ShellType;
 use warpui::{async_assert, ViewHandle};
 
-use crate::util::{get_local_user, write_histfiles_for_test};
-
 use super::{new_builder, TEST_ONLY_ASSETS};
+use crate::util::{get_local_user, write_histfiles_for_test};
+use crate::Builder;
 
 /// The `history_with_metadata.sqlite` table looks like the following:
 ///
@@ -239,6 +241,12 @@ pub fn test_command_search_loads_history() -> Builder {
                 ),
         )
         .with_step(
+            new_step_with_default_assertions("Wait for history results").add_named_assertion(
+                "Command search has history results",
+                assert_command_search_has_results(),
+            ),
+        )
+        .with_step(
             new_step_with_default_assertions("Loads history from sqlite")
                 .with_keystrokes(&["up", "up", "enter"])
                 .add_named_assertion(
@@ -287,6 +295,12 @@ pub fn test_command_search_loads_history_from_nondefault_histfile_path() -> Buil
                     "History filter is active",
                     assert_history_filter_is_active(),
                 ),
+        )
+        .with_step(
+            new_step_with_default_assertions("Wait for history results").add_named_assertion(
+                "Command search has history results",
+                assert_command_search_has_results(),
+            ),
         )
         .with_step(
             new_step_with_default_assertions("Loads history from sqlite")
@@ -348,6 +362,12 @@ pub fn test_histfile_left_joined_with_persisted_history() -> Builder {
                 ),
         )
         .with_step(
+            new_step_with_default_assertions("Wait for history results").add_named_assertion(
+                "Command search has history results",
+                assert_command_search_has_results(),
+            ),
+        )
+        .with_step(
             new_step_with_default_assertions("Loads history from sqlite")
                 .with_keystrokes(&["up", "enter"])
                 .add_named_assertion(
@@ -402,6 +422,12 @@ pub fn test_history_command_is_linked_to_local_workflow() -> Builder {
                     "History filter is active",
                     assert_history_filter_is_active(),
                 ),
+        )
+        .with_step(
+            new_step_with_default_assertions("Wait for history results").add_named_assertion(
+                "Command search has history results",
+                assert_command_search_has_results(),
+            ),
         )
         .with_step(
             new_step_with_default_assertions("Loads history from sqlite")

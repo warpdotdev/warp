@@ -1,36 +1,14 @@
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use chrono::{DateTime, Duration, Utc};
 use instant::Instant;
 use parking_lot::Mutex;
 use persistence::model::{AgentConversationData, ConversationUsageMetadata};
-use std::{
-    collections::HashMap,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
+use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId, ModelHandle, SingletonEntity};
-
-use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent::conversation::{
-    AIAgentHarness, AIConversation, AIConversationId, ConversationStatus,
-    ServerAIConversationMetadata,
-};
-use crate::ai::ambient_agents::task::{TaskPrincipalInfo, TaskStatusMessage};
-use crate::ai::ambient_agents::AgentConfigSnapshot;
-use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
-use crate::ai::artifacts::Artifact;
-use crate::ai::blocklist::history_model::{
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
-};
-use crate::ai::conversation_navigation::ConversationNavigationData;
-use crate::auth::AuthStateProvider;
-use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
-use crate::server::ids::ServerId;
-use crate::test_util::ai_agent_tasks::{create_api_task, create_message};
 
 use super::entry::{
     AgentConversationEntryId, AgentConversationNavigationSubject, AgentConversationProvenance,
@@ -41,9 +19,26 @@ use super::{
     ConversationMetadata, ConversationUpdateKind, EnvironmentFilter, HarnessFilter, OwnerFilter,
     RtcTaskRefreshThrottleState, StatusFilter, TaskFetchState, MAX_PERSONAL_TASKS, MAX_TEAM_TASKS,
 };
-use crate::ai::ambient_agents::task::HarnessConfig;
+use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::{
+    AIAgentHarness, AIConversation, AIConversationId, ConversationStatus,
+    ServerAIConversationMetadata,
+};
+use crate::ai::ambient_agents::task::{HarnessConfig, TaskPrincipalInfo, TaskStatusMessage};
+use crate::ai::ambient_agents::{
+    AgentConfigSnapshot, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
+};
+use crate::ai::artifacts::Artifact;
+use crate::ai::blocklist::history_model::{
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
+};
+use crate::ai::conversation_navigation::ConversationNavigationData;
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
+use crate::server::ids::ServerId;
+use crate::test_util::ai_agent_tasks::{create_api_task, create_message};
 use crate::workspace::WorkspaceAction;
-use warp_cli::agent::Harness;
 
 /// Creates a test task with specified creator UID and updated_at time
 fn create_test_task(
@@ -259,6 +254,7 @@ fn test_display_status_uses_matching_conversation_for_in_progress_task() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -315,6 +311,7 @@ fn test_display_status_uses_active_execution_over_previous_conversation_status()
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -378,6 +375,7 @@ fn test_display_status_updates_when_blocked_conversation_resumes() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -457,6 +455,7 @@ fn test_display_status_terminal_task_state_overrides_matching_conversation() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -512,6 +511,7 @@ fn test_status_filter_uses_display_status_for_task_backed_conversations() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -581,6 +581,7 @@ fn create_test_model() -> AgentConversationsModel {
         has_finished_initial_load: false,
         task_fetch_state: Default::default(),
         rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
+        dirty_since: None,
     }
 }
 
@@ -836,6 +837,7 @@ fn test_get_entries_merges_task_and_local_conversation_by_run_id() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -890,6 +892,7 @@ fn test_get_entries_merges_task_and_local_conversation_by_server_token() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: None,
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -1098,6 +1101,7 @@ fn test_resolve_open_action_returns_none_for_active_unattachable_session() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -1383,6 +1387,7 @@ fn test_server_token_assignment_updates_copy_link_resolution() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: None,
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -1545,6 +1550,7 @@ fn test_resolve_copy_link_uses_attached_synced_conversation_for_task_without_tok
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -1872,6 +1878,7 @@ fn test_get_entries_prefers_task_when_task_id_matches_conversation_run_id() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
@@ -1932,6 +1939,7 @@ fn test_get_entries_prefers_task_when_server_token_matches() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                root_task_is_optimistic: None,
                 run_id: None,
                 autoexecute_override: None,
                 last_event_sequence: None,

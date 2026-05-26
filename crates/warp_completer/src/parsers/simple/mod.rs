@@ -6,12 +6,12 @@ mod lexer;
 mod parser;
 mod token;
 
-use crate::parsers::LiteCommand;
 use lexer::Lexer;
 use parser::Parser;
+use string_offset::ByteOffset;
 use warp_util::path::EscapeChar;
 
-use string_offset::ByteOffset;
+use crate::parsers::LiteCommand;
 
 /// Parse the input and return the last unclosed command to complete on using the completions
 /// infrastructure.

@@ -1,4 +1,5 @@
 use std::sync::OnceLock;
+
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 // Global execution mode, for logic that runs outside the UI framework.

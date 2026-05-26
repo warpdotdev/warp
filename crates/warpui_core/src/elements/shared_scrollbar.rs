@@ -1,11 +1,8 @@
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
-};
-
-use crate::units::{IntoPixels, Pixels};
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 
 use super::{Axis, F32Ext, ScrollData, ScrollbarWidth, Vector2FExt};
+use crate::units::{IntoPixels, Pixels};
 
 pub const DEFAULT_SCROLLBAR_PADDING_BETWEEN_CHILD_AND_TRACK: f32 = 2.0;
 pub const DEFAULT_SCROLLBAR_PADDING_AFTER_TRACK: f32 = 2.0;

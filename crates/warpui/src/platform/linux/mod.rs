@@ -1,13 +1,10 @@
 // Re-export a couple winit types and modules as the concrete implementations
 // for the linux platform.
+use super::app::AppBackend;
+use super::AsInnerMut;
 pub use crate::windowing::winit::app::App;
-
-use crate::{
-    windowing::{self, WindowingSystem},
-    AppContext,
-};
-
-use super::{app::AppBackend, AsInnerMut};
+use crate::windowing::{self, WindowingSystem};
+use crate::AppContext;
 
 /// An extension trait defining additional configurability for
 /// applications when running on Linux.

@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 
+use settings::Setting as _;
 use vim::vim::MotionType;
-use warpui::{clipboard::ClipboardContent, AppContext, Entity, ModelContext, SingletonEntity};
+use warpui::clipboard::ClipboardContent;
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use crate::settings::AppEditorSettings;
-use settings::Setting as _;
 
 /// Wraps the actual text that was copied as well as the motion type. That is needed because
 /// linewise motions need to be pasted on their own line, NOT at the cursor position.

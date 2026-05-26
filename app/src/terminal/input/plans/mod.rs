@@ -3,9 +3,8 @@ mod data_source;
 mod search_item;
 mod view;
 
-pub use view::{InlinePlanMenuEvent, InlinePlanMenuView};
-
 use ai::document::AIDocumentId;
+pub use view::{InlinePlanMenuEvent, InlinePlanMenuView};
 use warpui::keymap::Keystroke;
 
 use crate::ai::document::ai_document_model::AIDocumentVersion;

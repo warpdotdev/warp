@@ -1,6 +1,5 @@
-use crate::completer::matchers::match_type_for_case_insensitive;
-
 use super::{Match, MatchStrategy};
+use crate::completer::matchers::match_type_for_case_insensitive;
 
 #[test]
 fn test_match_type_for_case_insensitive() {

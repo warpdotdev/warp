@@ -2,23 +2,21 @@ use std::collections::HashMap;
 
 use anyhow::{anyhow, bail};
 use oauth2::{RefreshToken, TokenResponse as _};
-use rmcp::transport::{
-    auth::{
-        AuthClient, AuthorizationManager, CredentialStore, InMemoryCredentialStore,
-        OAuthClientConfig, OAuthState, StoredCredentials,
-    },
-    AuthError, AuthorizationSession,
+use rmcp::transport::auth::{
+    AuthClient, AuthorizationManager, CredentialStore, InMemoryCredentialStore, OAuthClientConfig,
+    OAuthState, StoredCredentials,
 };
+use rmcp::transport::{AuthError, AuthorizationSession};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
-use warpui::ModelSpawner;
+use warpui::{ModelSpawner, SingletonEntity};
 use warpui_extras::secure_storage::AppContextExt as _;
 
 use super::{MCPServerState, TemplatableMCPServerManager};
-use {crate::ai::mcp::FileBasedMCPManager, warpui::SingletonEntity};
+use crate::ai::mcp::FileBasedMCPManager;
 
 pub(crate) const TEMPLATABLE_MCP_CREDENTIALS_KEY: &str = "TemplatableMcpCredentials";
 pub(crate) const FILE_BASED_MCP_CREDENTIALS_KEY: &str = "FileBasedMcpCredentials";

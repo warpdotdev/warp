@@ -1,20 +1,21 @@
-use crate::server::telemetry::TelemetryEvent;
-use anyhow::anyhow;
-use anyhow::{bail, Result};
+use std::fs::File;
+use std::io::Write as _;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+use std::{fs, io};
+
+use anyhow::{anyhow, bail, Result};
 use channel_versions::VersionInfo;
 use command::blocking::Command;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
-use std::fs::File;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::{fs, io};
-use std::{io::Write as _, time::Duration};
 use tempfile::TempPath;
 use warp_core::channel::{Channel, ChannelState};
 use warpui::AppContext;
 
 use super::{release_assets_directory_url, DownloadReady};
+use crate::server::telemetry::TelemetryEvent;
 use crate::util::windows::install_dir;
 
 lazy_static! {
