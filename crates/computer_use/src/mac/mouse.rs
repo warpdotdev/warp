@@ -306,9 +306,16 @@ impl Mouse {
             if is_down || is_move {
                 self.ensure_window_focused(pid, info.number);
             }
-            if is_down {
+            if is_down && primer_click_enabled() {
                 // Prime Chromium's user-activation gate with a decoy click off-screen so the
                 // real click is treated as a trusted continuation.
+                //
+                // Opt-in (default off): the off-window down/up disrupts AppKit controls that run
+                // a modal tracking loop in `mouseDown:` (e.g. NSToolbar buttons) — it cancels the
+                // button's hover/tracking before the real press, so the click never actions. The
+                // initial exploration posted no primer and toolbar clicks worked; a forgiving
+                // NSTextView is unaffected, which matches what works today. Enable via
+                // COMPUTER_USE_PRIMER_CLICK only when targeting Chromium/Electron.
                 post_primer_click(pid);
             }
 
@@ -437,12 +444,18 @@ fn build_window_targeted_event(
     Some(cg_event)
 }
 
+/// Returns whether the experimental off-window "primer" click is enabled (opt-in, default off).
+fn primer_click_enabled() -> bool {
+    std::env::var_os("COMPUTER_USE_PRIMER_CLICK").is_some()
+}
+
 /// Posts a decoy left click off-screen (at `(-1, -1)`) to the target process via SkyLight.
 ///
 /// Chromium's renderer gates activation-sensitive actions (video play/pause, `window.open`,
 /// fullscreen) behind a recent "trusted user gesture". Posting this decoy first ticks that gate
 /// so the subsequent real click is treated as a trusted continuation. It is off-screen, so it
-/// does not hit any window.
+/// does not hit any window. This is opt-in because it breaks AppKit controls that track in
+/// `mouseDown:`; see the call site for details.
 fn post_primer_click(pid: libc::pid_t) {
     if std::env::var_os("COMPUTER_USE_DEBUG").is_some() {
         eprintln!("[computer_use] primer click pid={pid} global=(-1.0,-1.0)");
