@@ -56,6 +56,7 @@ use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, ConversationStatusUpdate, RequestInput, ResponseStreamId,
     SerializedBlockListItem,
 };
+use crate::ai::llms::LLMPreferences;
 use crate::ai::skills::SkillDescriptor;
 use crate::code_review::CodeReviewTelemetryEvent;
 use crate::notebooks::NotebookId;
@@ -89,11 +90,22 @@ impl TodoStatus {
 
 fn footer_model_token_usage(
     usage_metadata: &stream_finished::ConversationUsageMetadata,
-    custom_endpoint_display_label: impl Fn(&str) -> String,
+    llm_preferences: &LLMPreferences,
 ) -> Vec<ModelTokenUsage> {
-    let mut token_usage: HashMap<_, ModelTokenUsage> = HashMap::new();
+    // warp + byok rows merge on their server-known model id. Custom endpoint
+    // rows live in a separate bucket keyed by their upstream `config_key` so
+    // they never collide with a warp/byok row that happens to share the same
+    // resolved alias. The `config_key` itself is not retained on
+    // `ModelTokenUsage`; it is translated to an alias up front and only the
+    // alias flows downstream (display + shared-session replay).
+    let mut standard_usage: HashMap<String, ModelTokenUsage> = HashMap::new();
     for (model_id, usage) in &usage_metadata.warp_token_usage {
-        let entry = token_usage.entry(model_id.clone()).or_default();
+        let entry = standard_usage
+            .entry(model_id.clone())
+            .or_insert_with(|| ModelTokenUsage {
+                model_id: model_id.clone(),
+                ..Default::default()
+            });
         entry.warp_tokens += usage.total_tokens;
         for (category, tokens) in &usage.token_usage_by_category {
             *entry
@@ -103,7 +115,12 @@ fn footer_model_token_usage(
         }
     }
     for (model_id, usage) in &usage_metadata.byok_token_usage {
-        let entry = token_usage.entry(model_id.clone()).or_default();
+        let entry = standard_usage
+            .entry(model_id.clone())
+            .or_insert_with(|| ModelTokenUsage {
+                model_id: model_id.clone(),
+                ..Default::default()
+            });
         entry.byok_tokens += usage.total_tokens;
         for (category, tokens) in &usage.token_usage_by_category {
             *entry
@@ -112,13 +129,14 @@ fn footer_model_token_usage(
                 .or_default() += *tokens;
         }
     }
+
+    let mut custom_usage: HashMap<String, ModelTokenUsage> = HashMap::new();
     for (config_key, usage) in &usage_metadata.custom_endpoint_token_usage {
-        let label = custom_endpoint_display_label(config_key);
-        let entry = token_usage
+        let label = llm_preferences.custom_endpoint_usage_display_label(config_key);
+        let entry = custom_usage
             .entry(config_key.clone())
             .or_insert_with(|| ModelTokenUsage {
                 model_id: label,
-                custom_endpoint_config_key: Some(config_key.clone()),
                 ..Default::default()
             });
         entry.custom_endpoint_tokens += usage.total_tokens;
@@ -130,14 +148,9 @@ fn footer_model_token_usage(
         }
     }
 
-    token_usage
-        .into_iter()
-        .map(|(name, mut usage)| {
-            if usage.model_id.is_empty() {
-                usage.model_id = name;
-            }
-            usage
-        })
+    standard_usage
+        .into_values()
+        .chain(custom_usage.into_values())
         .collect()
 }
 
@@ -1804,11 +1817,9 @@ impl AIConversation {
             self.conversation_usage_metadata.context_window_usage =
                 usage_metadata.context_window_usage;
             self.conversation_usage_metadata.credits_spent = usage_metadata.credits_spent;
-            let llm_preferences = crate::ai::llms::LLMPreferences::as_ref(ctx);
+            let llm_preferences = LLMPreferences::as_ref(ctx);
             self.conversation_usage_metadata.token_usage =
-                footer_model_token_usage(&usage_metadata, |config_key| {
-                    llm_preferences.custom_endpoint_usage_display_label(config_key)
-                });
+                footer_model_token_usage(&usage_metadata, llm_preferences);
 
             self.conversation_usage_metadata.tool_usage_metadata = usage_metadata
                 .tool_usage_metadata

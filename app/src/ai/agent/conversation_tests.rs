@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use ai::api_keys::ApiKeyManager;
+use std::collections::HashMap;
 
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
@@ -238,10 +238,6 @@ fn update_cost_and_usage_resolves_custom_endpoint_alias_for_footer_usage() {
             .iter()
             .find(|usage| usage.model_id == "Friendly alias")
             .expect("custom endpoint alias should resolve into footer usage");
-        assert_eq!(
-            usage.custom_endpoint_config_key.as_deref(),
-            Some("config-key")
-        );
         assert_eq!(usage.custom_endpoint_tokens, 6);
         assert_eq!(usage.byok_tokens, 0);
         assert_eq!(
@@ -277,10 +273,6 @@ fn update_cost_and_usage_uses_fallback_label_for_unknown_custom_endpoint() {
             .iter()
             .find(|usage| usage.model_id == "Custom endpoint")
             .expect("unknown custom endpoint usage should use the fallback label");
-        assert_eq!(
-            usage.custom_endpoint_config_key.as_deref(),
-            Some("missing-config-key")
-        );
         assert_eq!(usage.custom_endpoint_tokens, 9);
         assert_eq!(usage.byok_tokens, 0);
         assert_eq!(
@@ -295,107 +287,124 @@ fn update_cost_and_usage_uses_fallback_label_for_unknown_custom_endpoint() {
 #[allow(deprecated)]
 #[test]
 fn footer_model_token_usage_keeps_custom_endpoint_usage_distinct_from_same_labeled_models() {
-    let category = "primary_agent".to_string();
-    let usage_metadata = api::response_event::stream_finished::ConversationUsageMetadata {
-        context_window_usage: 0.0,
-        credits_spent: 0.0,
-        platform_credits_spent: 0.0,
-        summarized: false,
-        #[allow(deprecated)]
-        token_usage: vec![],
-        tool_usage_metadata: None,
-        warp_token_usage: HashMap::new(),
-        byok_token_usage: HashMap::from([(
-            "Resolved custom".to_string(),
-            api::response_event::stream_finished::ModelTokenUsage {
-                model_id: "Resolved custom".to_string(),
-                total_tokens: 4,
-                token_usage_by_category: HashMap::from([(category.clone(), 4)]),
-            },
-        )]),
-        custom_endpoint_token_usage: HashMap::from([(
-            "config-key".to_string(),
-            api::response_event::stream_finished::ModelTokenUsage {
-                model_id: "config-key".to_string(),
-                total_tokens: 6,
-                token_usage_by_category: HashMap::from([(category.clone(), 6)]),
-            },
-        )]),
-    };
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.add_custom_endpoint(
+                "Endpoint".to_string(),
+                "https://custom.example".to_string(),
+                "key".to_string(),
+                vec![(
+                    "raw-model".to_string(),
+                    Some("Resolved custom".to_string()),
+                    Some("config-key".to_string()),
+                )],
+                ctx,
+            );
+        });
+        app.add_singleton_model(LLMPreferences::new);
 
-    let model_usage = footer_model_token_usage(&usage_metadata, |_| "Resolved custom".to_string());
-    let byok_usage = model_usage
-        .iter()
-        .find(|usage| usage.model_id == "Resolved custom" && usage.byok_tokens == 4)
-        .expect("existing model usage should be present");
-    let custom_usage = model_usage
-        .iter()
-        .find(|usage| usage.model_id == "Resolved custom" && usage.custom_endpoint_tokens == 6)
-        .expect("custom endpoint usage should remain distinct");
+        let category = "primary_agent".to_string();
+        let usage_metadata = api::response_event::stream_finished::ConversationUsageMetadata {
+            context_window_usage: 0.0,
+            credits_spent: 0.0,
+            platform_credits_spent: 0.0,
+            summarized: false,
+            #[allow(deprecated)]
+            token_usage: vec![],
+            tool_usage_metadata: None,
+            warp_token_usage: HashMap::new(),
+            byok_token_usage: HashMap::from([(
+                "Resolved custom".to_string(),
+                api::response_event::stream_finished::ModelTokenUsage {
+                    model_id: "Resolved custom".to_string(),
+                    total_tokens: 4,
+                    token_usage_by_category: HashMap::from([(category.clone(), 4)]),
+                },
+            )]),
+            custom_endpoint_token_usage: HashMap::from([(
+                "config-key".to_string(),
+                api::response_event::stream_finished::ModelTokenUsage {
+                    model_id: "config-key".to_string(),
+                    total_tokens: 6,
+                    token_usage_by_category: HashMap::from([(category.clone(), 6)]),
+                },
+            )]),
+        };
 
-    assert_eq!(model_usage.len(), 2);
-    assert_eq!(
-        byok_usage.byok_token_usage_by_category.get(&category),
-        Some(&4)
-    );
-    assert_eq!(
-        custom_usage
-            .custom_endpoint_token_usage_by_category
-            .get(&category),
-        Some(&6)
-    );
-    assert_eq!(byok_usage.warp_tokens, 0);
-    assert_eq!(custom_usage.warp_tokens, 0);
-    assert_eq!(custom_usage.byok_tokens, 0);
-    assert_eq!(
-        custom_usage.custom_endpoint_config_key.as_deref(),
-        Some("config-key")
-    );
+        let model_usage =
+            app.read(|ctx| footer_model_token_usage(&usage_metadata, LLMPreferences::as_ref(ctx)));
+        let byok_usage = model_usage
+            .iter()
+            .find(|usage| usage.model_id == "Resolved custom" && usage.byok_tokens == 4)
+            .expect("existing model usage should be present");
+        let custom_usage = model_usage
+            .iter()
+            .find(|usage| usage.model_id == "Resolved custom" && usage.custom_endpoint_tokens == 6)
+            .expect("custom endpoint usage should remain distinct");
+
+        assert_eq!(model_usage.len(), 2);
+        assert_eq!(
+            byok_usage.byok_token_usage_by_category.get(&category),
+            Some(&4)
+        );
+        assert_eq!(
+            custom_usage
+                .custom_endpoint_token_usage_by_category
+                .get(&category),
+            Some(&6)
+        );
+        assert_eq!(byok_usage.warp_tokens, 0);
+        assert_eq!(custom_usage.warp_tokens, 0);
+        assert_eq!(custom_usage.byok_tokens, 0);
+    });
 }
 #[allow(deprecated)]
 #[test]
 fn footer_model_token_usage_preserves_unresolved_custom_endpoint_usage_with_fallback_label() {
-    let category = "primary_agent".to_string();
-    let usage_metadata = api::response_event::stream_finished::ConversationUsageMetadata {
-        context_window_usage: 0.0,
-        credits_spent: 0.0,
-        platform_credits_spent: 0.0,
-        summarized: false,
-        #[allow(deprecated)]
-        token_usage: vec![],
-        tool_usage_metadata: None,
-        warp_token_usage: HashMap::new(),
-        byok_token_usage: HashMap::new(),
-        custom_endpoint_token_usage: HashMap::from([(
-            "missing-config-key".to_string(),
-            api::response_event::stream_finished::ModelTokenUsage {
-                model_id: "missing-config-key".to_string(),
-                total_tokens: 9,
-                token_usage_by_category: HashMap::from([(category.clone(), 9)]),
-            },
-        )]),
-    };
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
 
-    let model_usage = footer_model_token_usage(&usage_metadata, |_| "Custom endpoint".to_string());
-    let custom_usage = model_usage
-        .iter()
-        .find(|usage| usage.model_id == "Custom endpoint")
-        .expect("fallback custom endpoint usage should be present");
+        let category = "primary_agent".to_string();
+        let usage_metadata = api::response_event::stream_finished::ConversationUsageMetadata {
+            context_window_usage: 0.0,
+            credits_spent: 0.0,
+            platform_credits_spent: 0.0,
+            summarized: false,
+            #[allow(deprecated)]
+            token_usage: vec![],
+            tool_usage_metadata: None,
+            warp_token_usage: HashMap::new(),
+            byok_token_usage: HashMap::new(),
+            custom_endpoint_token_usage: HashMap::from([(
+                "missing-config-key".to_string(),
+                api::response_event::stream_finished::ModelTokenUsage {
+                    model_id: "missing-config-key".to_string(),
+                    total_tokens: 9,
+                    token_usage_by_category: HashMap::from([(category.clone(), 9)]),
+                },
+            )]),
+        };
 
-    assert_eq!(model_usage.len(), 1);
-    assert_eq!(custom_usage.custom_endpoint_tokens, 9);
-    assert_eq!(custom_usage.byok_tokens, 0);
-    assert_eq!(
-        custom_usage
-            .custom_endpoint_token_usage_by_category
-            .get(&category),
-        Some(&9)
-    );
-    assert_eq!(custom_usage.warp_tokens, 0);
-    assert_eq!(
-        custom_usage.custom_endpoint_config_key.as_deref(),
-        Some("missing-config-key")
-    );
+        let model_usage =
+            app.read(|ctx| footer_model_token_usage(&usage_metadata, LLMPreferences::as_ref(ctx)));
+        let custom_usage = model_usage
+            .iter()
+            .find(|usage| usage.model_id == "Custom endpoint")
+            .expect("fallback custom endpoint usage should be present");
+
+        assert_eq!(model_usage.len(), 1);
+        assert_eq!(custom_usage.custom_endpoint_tokens, 9);
+        assert_eq!(custom_usage.byok_tokens, 0);
+        assert_eq!(
+            custom_usage
+                .custom_endpoint_token_usage_by_category
+                .get(&category),
+            Some(&9)
+        );
+        assert_eq!(custom_usage.warp_tokens, 0);
+    });
 }
 
 #[test]

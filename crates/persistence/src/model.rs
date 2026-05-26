@@ -1090,10 +1090,11 @@ pub fn token_usage_category_display_name(category: &str) -> String {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ModelTokenUsage {
+    /// Identifier used for both display and replay. For warp/byok rows this is the
+    /// server-known model id; for custom endpoint rows this is the resolved alias
+    /// (or fallback label) — the upstream `config_key` is translated into this
+    /// label once at ingestion time and is not retained separately.
     pub model_id: String,
-    /// Server-side custom endpoint config key used to faithfully replay usage metadata.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub custom_endpoint_config_key: Option<String>,
     /// Alias for backward compat: old persisted data used `total_tokens` for warp usage.
     #[serde(default, alias = "total_tokens")]
     pub warp_tokens: u32,
@@ -1143,14 +1144,13 @@ impl ModelTokenUsage {
     pub fn to_proto_custom_endpoint_usage(
         &self,
     ) -> Option<(String, stream_finished::ModelTokenUsage)> {
-        let config_key = self.custom_endpoint_config_key.clone()?;
         if self.custom_endpoint_tokens == 0 {
             return None;
         }
         Some((
-            config_key.clone(),
+            self.model_id.clone(),
             stream_finished::ModelTokenUsage {
-                model_id: config_key,
+                model_id: self.model_id.clone(),
                 total_tokens: self.custom_endpoint_tokens,
                 token_usage_by_category: self
                     .custom_endpoint_token_usage_by_category
@@ -1573,10 +1573,9 @@ mod tests {
 
     #[allow(deprecated)]
     #[test]
-    fn model_token_usage_replays_custom_endpoint_usage_by_config_key() {
+    fn model_token_usage_replays_custom_endpoint_usage_by_model_id() {
         let usage = ModelTokenUsage {
             model_id: "Friendly alias".to_string(),
-            custom_endpoint_config_key: Some("config-key".to_string()),
             custom_endpoint_tokens: 6,
             custom_endpoint_token_usage_by_category: HashMap::from([(
                 "primary_agent".to_string(),
@@ -1585,14 +1584,25 @@ mod tests {
             ..Default::default()
         };
 
-        let (config_key, proto) = usage
+        let (key, proto) = usage
             .to_proto_custom_endpoint_usage()
             .expect("custom endpoint usage should serialize for replay");
 
-        assert_eq!(config_key, "config-key");
-        assert_eq!(proto.model_id, "config-key");
+        assert_eq!(key, "Friendly alias");
+        assert_eq!(proto.model_id, "Friendly alias");
         assert_eq!(proto.total_tokens, 6);
         assert_eq!(proto.token_usage_by_category.get("primary_agent"), Some(&6));
+    }
+
+    #[allow(deprecated)]
+    #[test]
+    fn model_token_usage_replay_skips_non_custom_endpoint_entries() {
+        let warp_only = ModelTokenUsage {
+            model_id: "warp-model".to_string(),
+            warp_tokens: 4,
+            ..Default::default()
+        };
+        assert!(warp_only.to_proto_custom_endpoint_usage().is_none());
     }
 }
 
