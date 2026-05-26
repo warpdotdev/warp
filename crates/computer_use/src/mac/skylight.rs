@@ -30,6 +30,7 @@ struct ProcessSerialNumber {
 type SLEventPostToPidFn = unsafe extern "C" fn(libc::pid_t, *mut c_void);
 type SLPSPostEventRecordToFn = unsafe extern "C" fn(*mut ProcessSerialNumber, *mut u8) -> i32;
 type GetProcessForPidFn = unsafe extern "C" fn(libc::pid_t, *mut ProcessSerialNumber) -> i32;
+type SetFrontProcessWithOptionsFn = unsafe extern "C" fn(*mut ProcessSerialNumber, u32, u32) -> i32;
 
 fn debug_enabled() -> bool {
     std::env::var_os("COMPUTER_USE_DEBUG").is_some()
@@ -86,6 +87,11 @@ fn slps_post_event_record_to() -> Option<SLPSPostEventRecordToFn> {
 fn get_process_for_pid() -> Option<GetProcessForPidFn> {
     static RESOLVED: OnceLock<Option<GetProcessForPidFn>> = OnceLock::new();
     *RESOLVED.get_or_init(|| unsafe { resolve_symbol(c"GetProcessForPID") })
+}
+
+fn slps_set_front_process_with_options() -> Option<SetFrontProcessWithOptionsFn> {
+    static RESOLVED: OnceLock<Option<SetFrontProcessWithOptionsFn>> = OnceLock::new();
+    *RESOLVED.get_or_init(|| unsafe { resolve_symbol(c"_SLPSSetFrontProcessWithOptions") })
 }
 
 /// Posts an event to a specific process, preferring SkyLight's `SLEventPostToPid` (accepted by
@@ -196,4 +202,35 @@ pub fn focus_window_without_raise(
     }
 
     true
+}
+
+/// Makes `target_window_id` (owned by `target_pid`) the *main* window by bringing its process to
+/// the front without raising, via the private `_SLPSSetFrontProcessWithOptions` (yabai pattern,
+/// using `kCPSUserGenerated`). Some AppKit controls (e.g. toolbar items) consult the main window
+/// rather than just the key window, so this is an experimental toggle for those cases.
+///
+/// Returns `false` when the private symbol or the process serial number is unavailable.
+pub fn make_window_main(target_pid: libc::pid_t, target_window_id: i64) -> bool {
+    // `kCPSUserGenerated` marks the activation as user-initiated so AppKit honors it.
+    const K_CPS_USER_GENERATED: u32 = 0x2;
+    let Some(set_front) = slps_set_front_process_with_options() else {
+        if debug_enabled() {
+            eprintln!("[computer_use] make-main unavailable (_SLPSSetFrontProcessWithOptions)");
+        }
+        return false;
+    };
+    let Some(mut psn) = psn_for_pid(target_pid) else {
+        if debug_enabled() {
+            eprintln!("[computer_use] make-main: no PSN for target pid {target_pid}");
+        }
+        return false;
+    };
+    // SAFETY: `set_front` is the real `_SLPSSetFrontProcessWithOptions`; `psn` is a valid pointer.
+    let status = unsafe { set_front(&mut psn, target_window_id as u32, K_CPS_USER_GENERATED) };
+    if debug_enabled() {
+        eprintln!(
+            "[computer_use] make-main pid={target_pid} window#={target_window_id} status={status}"
+        );
+    }
+    status == 0
 }
