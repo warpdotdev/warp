@@ -61,18 +61,35 @@ fn parses_completion_generation_command() {
 }
 
 #[test]
-fn rejects_future_catalog_commands_not_in_first_slice() {
-    assert!(ControlArgs::try_parse_from(["warpctrl", "window", "list"]).is_err());
-    assert!(ControlArgs::try_parse_from(["warpctrl", "tab", "list"]).is_err());
-    assert!(ControlArgs::try_parse_from(["warpctrl", "setting", "list"]).is_err());
+fn parses_readonly_capability_and_target_commands() {
+    assert!(ControlArgs::try_parse_from(["warpctrl", "instance", "inspect"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "capability", "list"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "capability", "inspect", "tab.create"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "action", "inspect", "drive.inspect"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "window", "list"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "window", "inspect", "--window", "active"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "tab", "inspect", "--tab-index", "0"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "pane", "inspect", "--pane", "active"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "session", "inspect", "--session", "active"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "block", "output", "block_1"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "input", "get"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "history", "list", "--limit", "5"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "theme", "get"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "keybinding", "get", "copy"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "file", "list"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "project", "active"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "drive", "inspect", "drive_1"]).is_ok());
 }
 
 #[test]
-fn generated_bash_completions_include_first_slice_commands() {
+fn generated_bash_completions_include_readonly_commands() {
     let completions =
         generate_completion_string(Shell::Bash).expect("bash completions render to UTF-8");
     assert!(completions.contains("instance"));
-    assert!(completions.contains("tab"));
+    assert!(completions.contains("capability"));
+    assert!(completions.contains("window"));
+    assert!(completions.contains("block"));
+    assert!(completions.contains("drive"));
     assert!(completions.contains("completions"));
 }
 

@@ -1,4 +1,5 @@
 //! Wire protocol envelopes and error types for Warp local control.
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -9,7 +10,8 @@ pub use crate::catalog::{
     PROTOCOL_VERSION, PermissionCategory, RiskTier, StateDataCategory, TargetScope,
 };
 pub use crate::selectors::{
-    PaneSelector, PaneTarget, TabSelector, TabTarget, TargetSelector, WindowSelector, WindowTarget,
+    PaneSelector, PaneTarget, SessionSelector, SessionTarget, TabSelector, TabTarget,
+    TargetSelector, WindowSelector, WindowTarget,
 };
 
 /// Opaque Drive object identifier supplied by Warp metadata.
@@ -78,6 +80,9 @@ pub enum ActionParams {
     None,
     ActionName {
         action: String,
+    },
+    BlockId {
+        block_id: String,
     },
     BindingName {
         binding_name: String,
@@ -272,12 +277,300 @@ pub struct Action {
     pub params: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmptyParams {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActionNameParams {
+    pub action: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LimitParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockIdParams {
+    pub block_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BindingNameParams {
+    pub binding_name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriveObjectListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_type: Option<DriveObjectType>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriveInspectParams {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppActiveParams {}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstanceInspectParams {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettingGetParams {
+    pub key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeybindingGetParams {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriveListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_type: Option<DriveObjectType>,
+}
+
+pub type SettingListParams = EmptyParams;
+pub type KeybindingListParams = EmptyParams;
+pub type FileListParams = EmptyParams;
+pub type ProjectActiveParams = EmptyParams;
+pub type ProjectListParams = EmptyParams;
+pub type InputGetParams = EmptyParams;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActionListResult {
+    pub actions: Vec<ActionMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActionInspectResult {
+    pub action: ActionMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActiveTargetChain {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockSummary {
+    pub block_id: String,
+    pub session_id: String,
+    pub index: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockListResult {
+    pub blocks: Vec<BlockSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockInspectResult {
+    pub block: BlockSummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputStateResult {
+    pub session_id: String,
+    pub text: String,
+    pub cursor_offset: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryEntrySummary {
+    pub entry_id: String,
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryListResult {
+    pub entries: Vec<HistoryEntrySummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeSummary {
+    pub name: String,
+    pub is_current: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeListResult {
+    pub themes: Vec<ThemeSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeStateResult {
+    pub name: String,
+    pub follow_system_theme: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub light_theme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dark_theme: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppearanceStateResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+    pub follow_system_theme: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub light_theme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dark_theme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_zoom_percent: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SettingSummary {
+    pub key: String,
+    pub value: serde_json::Value,
+    pub value_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SettingListResult {
+    pub settings: Vec<SettingSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SettingGetResult {
+    pub setting: SettingSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeybindingSummary {
+    pub name: String,
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keystroke: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalized_keystroke: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeybindingListResult {
+    pub keybindings: Vec<KeybindingSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeybindingGetResult {
+    pub keybinding: KeybindingSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileSummary {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileListResult {
+    pub files: Vec<FileSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectSummary {
+    pub path: String,
+    pub is_active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_opened_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectActiveResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectListResult {
+    pub projects: Vec<ProjectSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriveObjectSummary {
+    pub object_type: DriveObjectType,
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriveListResult {
+    pub objects: Vec<DriveObjectSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DriveInspectResult {
+    pub object: DriveObjectSummary,
+    pub content: serde_json::Value,
+}
+
 impl Action {
     pub fn new(kind: ActionKind) -> Self {
         Self {
             kind,
             params: serde_json::Value::Object(Default::default()),
         }
+    }
+
+    pub fn with_params<T: Serialize>(kind: ActionKind, params: T) -> Result<Self, ControlError> {
+        Ok(Self {
+            kind,
+            params: serde_json::to_value(params).map_err(|err| {
+                ControlError::with_details(
+                    ErrorCode::InvalidParams,
+                    format!("failed to serialize {} parameters", kind.as_str()),
+                    err.to_string(),
+                )
+            })?,
+        })
+    }
+
+    pub fn params_as<T: DeserializeOwned>(&self) -> Result<T, ControlError> {
+        serde_json::from_value(self.params.clone()).map_err(|err| {
+            ControlError::with_details(
+                ErrorCode::InvalidParams,
+                format!("failed to decode {} parameters", self.kind.as_str()),
+                err.to_string(),
+            )
+        })
     }
 }
 
