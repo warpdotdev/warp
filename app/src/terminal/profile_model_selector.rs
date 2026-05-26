@@ -2319,9 +2319,7 @@ impl View for ProfileModelSelector {
         let is_udi_enabled =
             crate::settings::InputSettings::as_ref(app).is_universal_developer_input_enabled(app);
 
-        // The popup overflows the viewport on wasm mobile and can't be dismissed by touch,
-        // so suppress it entirely on mobile web. `is_mobile_device` returns false on native
-        // builds, so this is effectively a wasm-mobile-only gate.
+        // The popup overflows the viewport on wasm mobile.
         let is_wasm_mobile = warpui::platform::is_mobile_device();
 
         if !is_wasm_mobile
