@@ -177,6 +177,10 @@ where
     serializer.serialize_str(public_api_user_query_mode(*mode))
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 impl TaskStatusUpdate {
     /// Create a status update with just a message (no error code).
     pub fn message(message: impl Into<String>) -> Self {
@@ -263,9 +267,9 @@ pub struct SpawnAgentRequest {
 /// relationships no longer reach it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct OrchestrationHandoffInfo {
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(skip_serializing_if = "is_false")]
     pub had_parent: bool,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(skip_serializing_if = "is_false")]
     pub had_children: bool,
 }
 

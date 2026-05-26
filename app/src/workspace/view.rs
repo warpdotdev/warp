@@ -747,24 +747,6 @@ struct LocalToCloudHandoffOpenParams {
     intent: LocalToCloudHandoffIntent,
 }
 
-/// Computes the orchestration handoff annotation for a local-to-cloud handoff
-/// from the source conversation and the local history model. Returns `None`
-/// when the source had no parent agent and no locally-known children, so the
-/// server-side prompt injection only fires when at least one relationship was
-/// severed by the handoff.
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-fn derive_orchestration_handoff_info(
-    source: &AIConversation,
-    history: &BlocklistAIHistoryModel,
-) -> Option<OrchestrationHandoffInfo> {
-    let had_parent = source.has_parent_agent();
-    let had_children = !history.child_conversation_ids_of(&source.id()).is_empty();
-    (had_parent || had_children).then_some(OrchestrationHandoffInfo {
-        had_parent,
-        had_children,
-    })
-}
-
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 impl LocalToCloudHandoffIntent {
     fn entry_point(self) -> HandoffEntryPoint {
@@ -14090,8 +14072,19 @@ impl Workspace {
             });
         }
 
+        // Annotate the handoff when the source conversation had any orchestration
+        // relationships, so the server can inject a first-turn message telling the
+        // cloud agent that those prior relationships no longer reach it.
+        let had_parent = source_conversation.has_parent_agent();
+        let had_children = !history_model
+            .as_ref(ctx)
+            .child_conversation_ids_of(&source_conversation.id())
+            .is_empty();
         let orchestration_handoff =
-            derive_orchestration_handoff_info(&source_conversation, history_model.as_ref(ctx));
+            (had_parent || had_children).then_some(OrchestrationHandoffInfo {
+                had_parent,
+                had_children,
+            });
 
         // Keep handoff state on the cloud model until snapshot prep and submit finish.
         let pending = PendingHandoff {

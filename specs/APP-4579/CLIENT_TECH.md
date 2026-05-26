@@ -39,6 +39,12 @@ In `app/src/workspace/view.rs:13822-13842`, remove the entire per-conversation g
 The toast string itself is removed; there is no replacement copy.
 ### 3. Add `orchestration_handoff` to `SpawnAgentRequest`
 In `app/src/server/server_api/ai.rs`:
+- Add a local `is_false` helper next to `serialize_user_query_mode_for_public_api` so the new struct can use it as a `skip_serializing_if` predicate. This matches the prior art in `crates/persistence/src/model.rs:1009-1011` for omitting `false` bools from JSON.
+  ```rust
+  fn is_false(value: &bool) -> bool {
+      !*value
+  }
+  ```
 - Add a new struct next to `InitialSnapshotToken`:
   ```rust
   /// Records the orchestration relationships the source conversation had at the
@@ -47,15 +53,15 @@ In `app/src/server/server_api/ai.rs`:
   /// `AgentConfigSnapshot` and the runtime reads it at first-turn time to inject
   /// a hidden system message telling the cloud agent that those prior
   /// relationships no longer reach it.
-  #[derive(Debug, Clone, serde::Serialize)]
+  #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
   pub struct OrchestrationHandoffInfo {
-      #[serde(skip_serializing_if = "std::ops::Not::not")]
+      #[serde(skip_serializing_if = "is_false")]
       pub had_parent: bool,
-      #[serde(skip_serializing_if = "std::ops::Not::not")]
+      #[serde(skip_serializing_if = "is_false")]
       pub had_children: bool,
   }
   ```
-  Using `skip_serializing_if = "std::ops::Not::not"` per-field matches the server's `omitempty` semantics, keeping the wire-level JSON minimal (`{}` when both are false) and identical to what the server expects.
+  Using `skip_serializing_if = "is_false"` per-field matches the server's `omitempty` semantics, keeping the wire-level JSON minimal (`{}` when both are false) and identical to what the server expects. `PartialEq, Eq` are derived so tests can compare instances directly.
 - Extend `SpawnAgentRequest` (lines 205-252) with:
   ```rust
   /// Records that the source conversation was part of an orchestration tree at
@@ -92,10 +98,9 @@ orchestration_handoff: self.pending_handoff.as_ref().and_then(|h| h.orchestratio
 ```
 `spawn_agent` (the fresh-launch entry point, lines 1110-1139) keeps `orchestration_handoff: None` — fresh cloud launches have no source orchestration to sever. `spawn_agent_with_request` (lines 1142-1173) is a passthrough and does not need to compute anything; callers that already constructed a request pass it through verbatim.
 ### 6. Tests
-- `app/src/settings/ai_tests.rs` already covers `is_cloud_handoff_enabled_for_conversation`. The test that asserts orchestration conversations are gated out flips to asserting that they are eligible. Add tests for both the "had parent" and "had children" cases so any future re-introduction of an orchestration gate breaks loudly.
-- `app/src/workspace/auto_handoff_tests.rs` exercises `AutoCloudHandoffEligibility::skip_reason`. Add a test that an orchestrated, in-progress, synced conversation with no long-running command returns `None` (i.e. is eligible).
-- `app/src/terminal/view/ambient_agent/model_tests.rs` (or a new colocated test for `build_handoff_spawn_request`) — table-driven: pending handoff with no orchestration info → request omits `orchestration_handoff`; with `{had_parent: true, had_children: false}` → request carries that exact value; both true → request carries both; both false → normalized to `None`. JSON-serialize the request and confirm the wire shape matches the server's expected snake_case (`orchestration_handoff`, `had_parent`, `had_children`).
-- `app/src/workspace/view.rs` does not have direct tests for `complete_local_to_cloud_handoff_open`, but the bit computation is small enough to extract into a free function (`derive_orchestration_handoff_info(source: &AIConversation, history: &BlocklistAIHistoryModel) -> Option<OrchestrationHandoffInfo>`) and table-test directly. Recommend this extraction.
+- `app/src/settings/ai_tests.rs`: any tests that asserted the deleted per-conversation/per-terminal-view helpers gated orchestration conversations out are removed alongside those helpers. The eligibility-after-gate-removal invariant is pinned in `app/src/workspace/auto_handoff_tests.rs` instead (see next bullet) so no replacement is needed in this file.
+- `app/src/workspace/auto_handoff_tests.rs` exercises `AutoCloudHandoffEligibility::skip_reason`. Add a test that an orchestrated, in-progress, synced conversation with no long-running command returns `None` (i.e. is eligible) so any future re-introduction of an orchestration gate breaks loudly here.
+- `app/src/terminal/view/ambient_agent/model_tests.rs`: cover the propagation chain `PendingHandoff.orchestration_handoff` → `SpawnAgentRequest.orchestration_handoff` → JSON. Cases: pending handoff with no orchestration info → request omits `orchestration_handoff` (and the JSON has no key); with `{had_parent: true, had_children: false}` → request carries that value and the JSON omits `had_children` via `skip_serializing_if`; the parent-only and both-bits cases mirror that; fresh `spawn_agent` runs leave `orchestration_handoff` as `None`. These tests also serve as the e2e-style coverage for the bit-computation logic in `complete_local_to_cloud_handoff_open`, so no dedicated helper or unit test for that computation is needed.
 ## Risks and mitigations
 **Auto-handoff fires on an orchestrated parent during macOS sleep, leaving locally-running children orphaned.** The cloud parent will now run; the local children will keep running until they finish on their own. The hidden orchestration message (server side) tells the cloud parent the local children are unreachable, so it should not block waiting for them. Local children that try to message the (now-cloud) parent will write to the server-side messaging inbox; the cloud parent technically receives those messages but is instructed by the orchestration prompt to ignore the prior relationships. We accept this minor leakage; the alternative (cancelling local children on auto-handoff) is out of scope.
 **Loss of the toast removes user signal that orchestration is in play.** Today the toast doubles as a confused-user breadcrumb. After this change, the handoff proceeds silently for orchestration conversations, which is exactly what we want — but it means users may not realize they have severed orchestration. The server-side cloud agent message handles the cloud agent's behavior; the user-facing surface intentionally does not call attention to this.
@@ -103,7 +108,7 @@ orchestration_handoff: self.pending_handoff.as_ref().and_then(|h| h.orchestratio
 **Race: children spawn or finish between gate check and request send.** `complete_local_to_cloud_handoff_open` is `&mut ViewContext<Workspace>` and runs on the main thread, so the computation is atomic with respect to other UI events. Background async child spawns can theoretically race the fork RPC, but the worst-case outcome is the prompt missing a child that was spawned after the computation — again, informational only.
 ## Testing and validation
 - `cargo check -p warp` and `cargo clippy --workspace --all-targets --all-features --tests -- -D warnings` after the change.
-- Run `app/src/settings/ai_tests.rs`, `app/src/workspace/auto_handoff_tests.rs`, and the new `model_tests.rs` cases.
+- Run `app/src/workspace/auto_handoff_tests.rs` and the new `app/src/terminal/view/ambient_agent/model_tests.rs` cases.
 - Manual dogfood end-to-end: start a local orchestration parent, have it spawn at least one local child, then handoff via `&`, `/handoff`, and the footer chip in three separate runs. Verify each opens the handoff pane without a toast, sends a `POST /agent/runs` with `orchestration_handoff: {had_children: true}` in the payload (visible in the network log), and produces a cloud agent that does not try to message the local children. Repeat with the child as the source (handoff a child while it's running) — expect `orchestration_handoff: {had_parent: true}` on the request and a cloud child that runs to completion without waiting for the parent.
 ## Parallelization
 This task is too small for parallel sub-agents. The client diff is ~80 LOC across ~5 files plus tests. The server-side work in `../warp-server/specs/APP-4579/TECH.md` is independent at the implementation level — the wire-level JSON shape is defined once in the server spec and both sides target it. Either order is fine; neither blocks the other behind a wire-incompatible change.
