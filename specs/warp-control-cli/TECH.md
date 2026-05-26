@@ -356,65 +356,33 @@ Naming decision:
 ## Implementation Plan
 ### Branch stack
 Use raw git for the stack; do not use Graphite for these branches.
-The durable review stack should optimize for reviewability rather than mirroring only broad product phases. The bottom review branch now combines specs and the shared foundation so reviewers can see the product/security contract next to the protocol, settings, bridge, and CLI scaffolding that enforce it. The intended stack is:
-1. `zach/warp-cli-core-foundation` — create this branch from `master`. It owns the specs in `specs/warp-control-cli/PRODUCT.md`, `TECH.md`, `SECURITY.md`, and supporting docs, plus the shared implementation foundation: protocol crate shape, discovery/auth scaffolding, selector and error types, action metadata/catalog structure, Scripting settings surface, protected local-control settings, local-control server/bridge skeleton, standalone `warpctrl` binary skeleton, packaging hooks, module split, `WarpCtrlBehavior` scaffolding, and the minimum `tab.create` smoke path if needed to prove the end-to-end architecture.
-2. `zach/warp-cli-readonly-metadata` — create this branch from `zach/warp-cli-core-foundation`. It implements structural metadata reads: instance/app health and active-chain commands, windows, tabs, panes, sessions, capability/action metadata, opaque IDs, metadata target shapes, and metadata-read permission enforcement. It must not expose terminal output, input buffers, history, Drive object contents, or other underlying user data.
-3. `zach/warp-cli-readonly-data-settings` — create this branch from `zach/warp-cli-readonly-metadata`. It implements underlying-data reads and read-only settings/appearance/docs: block listing/inspection/output, input-buffer reads, history reads, theme/settings/keybinding/action reads, project/file app-state reads, authenticated Drive metadata/content reads where present, read-only docs, and the read-only `warpctrl` Agent skill.
-4. `zach/warp-cli-authenticated-scripting` — create this branch from `zach/warp-cli-readonly-data-settings`. It implements authenticated-user grant plumbing, the verified Warp-terminal proof broker, external API-key scripting identity, auth command surface, Settings > Scripting controls for authenticated grants, and tests proving high-risk actions cannot run without authenticated grants. It should not implement broad new action families by itself.
-5. `zach/warp-cli-mutating-layout` — create this branch from `zach/warp-cli-authenticated-scripting`. It implements layout and app-state mutations for app/window/tab/pane behavior: window create/focus/close, tab create/activate/move/close, tab metadata that belongs with layout review if appropriate, pane split/focus/navigate/resize/maximize/close, app-state mutation permission checks, and layout mutation tests.
-6. `zach/warp-cli-mutating-input-settings-surfaces` — create this branch from `zach/warp-cli-mutating-layout`. It implements session activation/cycling/reopen, input insert/replace/clear, input mode switching, theme/system-theme/font/zoom changes, allowlisted setting set/toggle, settings/palette/search/panel/surface commands, file/project/Drive open commands that are app-state-only, mutating docs, and the mutating-command Agent skill updates. It must preserve the prohibition on accepted-command submission and agent-prompt submission.
-7. `zach/warp-cli-mutating-drive-data` — create this branch from `zach/warp-cli-mutating-input-settings-surfaces`. It implements authenticated underlying-data mutations for Warp Drive objects: typed Drive object create/update/delete/insert, the v0 personal-to-team sharing path, permission enforcement, authenticated-user/API-key enforcement, and tests using disposable resources. It must not implement local file content reads, writes, appends, deletes, or other filesystem-content mutations.
-8. `zach/warp-cli-mutating-execution-underlying` — create this branch from `zach/warp-cli-mutating-drive-data`. It implements authenticated execution-underlying actions such as `input.run` and typed workflow execution where supported. It must require underlying-data-mutation permission plus authenticated scripting identity, audit records, explicit target resolution, and tests proving accepted-command submission and agent-prompt submission remain unavailable.
-The previous `zach/warp-cli-specs` branch is retained only as migration-source/history material. It is no longer a separate review PR or an authoritative branch in the active stack.
-The goal is to keep durable review branches close to roughly 2,000 lines of incremental changes where practical while avoiding a one-branch-per-command maintenance burden. Product phases still matter, but they are not the primary PR boundary. The durable branches are the review spine; short-lived shard branches can feed into them during implementation.
-Spec changes are an important part of the stacking strategy. All new spec changes must originate on `zach/warp-cli-core-foundation`, which is the authoritative source for `specs/warp-control-cli/PRODUCT.md`, `TECH.md`, `SECURITY.md`, and supporting docs. After a spec change lands there, propagate it upward through every stacked branch with raw git so the spec files stay synchronized across `zach/warp-cli-readonly-metadata`, `zach/warp-cli-readonly-data-settings`, `zach/warp-cli-authenticated-scripting`, `zach/warp-cli-mutating-layout`, `zach/warp-cli-mutating-input-settings-surfaces`, `zach/warp-cli-mutating-drive-data`, and `zach/warp-cli-mutating-execution-underlying`. Do not make independent spec edits directly on higher implementation branches except as part of resolving a propagation conflict in a way that preserves the authoritative bottom-branch content.
-Recommended raw-git setup after `zach/warp-cli-core-foundation` is ready:
+The active durable review stack is the recovered `zach/warp-cli-v2/*` stack. This stack is the review architecture for the current implementation because it preserves the fan-in work while slicing it into branch-sized review boundaries. The older branch names in the pre-recovery plan are historical source material only and should not be used as the active PR stack.
+Spec ownership is part of the branch architecture. The only v2 branch that may intentionally change `specs/warp-control-cli/PRODUCT.md`, `TECH.md`, `SECURITY.md`, or `README.md` is `zach/warp-cli-v2/contract-spec-sync`. After a spec change lands there, propagate it upward through every higher v2 branch with raw git rebases so those files remain byte-identical across the stack. Higher implementation branches must not make independent spec edits except when resolving a propagation conflict in a way that preserves the bottom-branch content.
+The intended v2 stack is:
+1. `zach/warp-cli-v2/contract-spec-sync` — create from `origin/master`. It owns the product, technical, security, and README specs plus the shared contract/foundation: protocol crate shape, discovery/auth scaffolding, selector and error types, action metadata/catalog structure, Scripting settings surface, protected local-control settings, local-control server/bridge skeleton, standalone `warpctrl` binary skeleton, packaging hooks, module split, `WarpCtrlBehavior` scaffolding, and the minimum first-slice smoke path needed to prove the end-to-end architecture.
+2. `zach/warp-cli-v2/auth-security` — create from `zach/warp-cli-v2/contract-spec-sync`. It owns authentication and security enforcement that applies across command families: scoped grants, execution-context policy, authenticated-user/API-key plumbing, denial paths, Settings > Scripting security controls, and tests proving high-risk actions cannot run without the required identity and permission category.
+3. `zach/warp-cli-v2/readonly-capability-targets` — create from `zach/warp-cli-v2/auth-security`. It owns structural metadata reads, capability/action metadata, target selector parsing and resolution, opaque IDs, active window/tab/pane/session targeting, metadata-read permission checks, and read-only CLI output for these surfaces. It must not expose terminal output, input buffers, history, Drive object contents, or other underlying user data.
+4. `zach/warp-cli-v2/appstate-file-drive-views` — create from `zach/warp-cli-v2/readonly-capability-targets`. It owns read-only app-state, file/project view, Drive view, block/input/history-style underlying-data read surfaces that are approved for the public catalog, along with the required underlying-data-read permission checks. It must keep local filesystem content reads/writes outside the v0 public catalog unless the specs are updated first.
+5. `zach/warp-cli-v2/metadata-config-mutations` — create from `zach/warp-cli-v2/appstate-file-drive-views`. It owns metadata/configuration mutations: allowlisted settings changes, labels/titles/appearance/configuration updates, settings or surface-opening commands that are metadata/configuration rather than underlying-data mutations, and tests proving unallowlisted or private settings are rejected.
+6. `zach/warp-cli-v2/drive-data-mutations` — create from `zach/warp-cli-v2/metadata-config-mutations`. It owns authenticated underlying-data mutations for Warp Drive objects, including typed object create/update/delete/insert and the approved v0 personal-to-team sharing path. It must use disposable resources in tests and must not implement local file content reads, writes, appends, deletes, or other filesystem-content mutations.
+7. `zach/warp-cli-v2/execution-underlying` — create from `zach/warp-cli-v2/drive-data-mutations`. It owns authenticated execution-underlying actions such as `input.run` and typed workflow execution where supported. It must require underlying-data-mutation permission plus authenticated scripting identity, deterministic target resolution, audit records, and tests proving accepted-command submission and agent-prompt submission remain unavailable.
+8. `zach/warp-cli-v2/cli-catalog-docs` — create from `zach/warp-cli-v2/execution-underlying`. It owns the final CLI/catalog/docs integration pass: generated or curated command catalog output, help/completion polish, user-facing docs, Agent skill updates, command-family documentation, and consistency checks that every advertised action has protocol metadata, permission metadata, parser coverage, handler coverage, and tests.
+9. `zach/warp-cli-v2/fanin-finalize` — create from `zach/warp-cli-v2/cli-catalog-docs`. It owns fan-in cleanup only: conflict-resolution preservation, naming/format consistency, final test fixes, validation matrix updates, and integration fixes required for the recovered stack to compile and pass tests. It should not introduce broad new command families.
+Recommended raw-git setup for a clean local reconstruction:
 ```bash
 git fetch origin
-git checkout -b zach/warp-cli-core-foundation origin/master
-git checkout -b zach/warp-cli-readonly-metadata
-git checkout -b zach/warp-cli-readonly-data-settings
-git checkout -b zach/warp-cli-authenticated-scripting
-git checkout -b zach/warp-cli-mutating-layout
-git checkout -b zach/warp-cli-mutating-input-settings-surfaces
-git checkout -b zach/warp-cli-mutating-drive-data
-git checkout -b zach/warp-cli-mutating-execution-underlying
+git checkout -b zach/warp-cli-v2/contract-spec-sync origin/master
+git checkout -b zach/warp-cli-v2/auth-security
+git checkout -b zach/warp-cli-v2/readonly-capability-targets
+git checkout -b zach/warp-cli-v2/appstate-file-drive-views
+git checkout -b zach/warp-cli-v2/metadata-config-mutations
+git checkout -b zach/warp-cli-v2/drive-data-mutations
+git checkout -b zach/warp-cli-v2/execution-underlying
+git checkout -b zach/warp-cli-v2/cli-catalog-docs
+git checkout -b zach/warp-cli-v2/fanin-finalize
 ```
-If a lower branch changes after higher branches exist, rebase each higher branch onto its immediate lower branch with raw git and resolve conflicts by preserving both the lower branch's stable API/permission model and the higher branch's owned behavior.
-### Migrating from the earlier four-branch stack
-The earlier four-branch stack (`zach/warp-cli-specs`, `zach/warp-cli`, `zach/warp-cli-readonly`, `zach/warp-cli-read-write`) should be treated as source material for the expanded eight-PR review stack, not as the final review structure.
-Recommended migration:
-1. Create backup refs before rewriting or replacing anything:
-   - `backup/warp-cli-specs` from `zach/warp-cli-specs`.
-   - `backup/warp-cli` from `zach/warp-cli`.
-   - `backup/warp-cli-readonly` from `zach/warp-cli-readonly`.
-   - `backup/warp-cli-read-write` from `zach/warp-cli-read-write`.
-2. Create `zach/warp-cli-core-foundation` from latest `origin/master` and bring over both the specs from `zach/warp-cli-specs` and only the foundation pieces from `zach/warp-cli`. Prefer path-level checkout followed by selective editing or `git add -p`; do not preserve every old commit if that makes review boundaries worse.
-3. Create `zach/warp-cli-readonly-metadata` from `zach/warp-cli-core-foundation` and bring over only metadata-read pieces from `zach/warp-cli-readonly`.
-4. Create `zach/warp-cli-readonly-data-settings` from `zach/warp-cli-readonly-metadata` and bring over the remaining read-only underlying-data, settings, docs, and skill pieces from `zach/warp-cli-readonly`.
-5. Create `zach/warp-cli-authenticated-scripting` from `zach/warp-cli-readonly-data-settings` and bring over or implement the verified terminal proof broker, external API-key scripting identity, authenticated-user grant plumbing, auth command surface, and related Settings > Scripting controls.
-6. Create `zach/warp-cli-mutating-layout` from `zach/warp-cli-authenticated-scripting` and bring over only layout/app-state mutations from `zach/warp-cli-read-write` and its layout shards.
-7. Create `zach/warp-cli-mutating-input-settings-surfaces` from `zach/warp-cli-mutating-layout` and bring over mutating input/session/settings/surface pieces from `zach/warp-cli-read-write`.
-8. Create `zach/warp-cli-mutating-drive-data` from `zach/warp-cli-mutating-input-settings-surfaces` and bring over the approved `zach/warp-cli-read-write-drive-data` functionality. Do not bring over local file content read/write/delete functionality because it is no longer part of the public catalog.
-9. Create `zach/warp-cli-mutating-execution-underlying` from `zach/warp-cli-mutating-drive-data` and bring over `zach/warp-cli-read-write-execution-underlying` functionality while keeping accepted-command and agent-prompt submission excluded.
-10. Recompute incremental diff sizes, validate compilation/tests for each branch, push the new stack, and retire or close the old broad branches once the new review stack is accepted.
-Before redistributing feature work, prefer landing a mechanical module-split commit in `zach/warp-cli-core-foundation` so later branches do not all expand the same large files. The app-side target should be:
-- `app/src/local_control/mod.rs` for registration and top-level exports.
-- `app/src/local_control/bridge.rs` for the app request bridge.
-- `app/src/local_control/resolver.rs` for target resolution.
-- `app/src/local_control/permissions.rs` for app-side permission/auth checks.
-- `app/src/local_control/handlers/metadata.rs`.
-- `app/src/local_control/handlers/data.rs`.
-- `app/src/local_control/handlers/layout.rs`.
-- `app/src/local_control/handlers/input.rs`.
-- `app/src/local_control/handlers/settings_surfaces.rs`.
-Likewise, split CLI and protocol code if they become review bottlenecks:
-- `crates/warp_cli/src/local_control/mod.rs`.
-- `crates/warp_cli/src/local_control/selectors.rs`.
-- `crates/warp_cli/src/local_control/output.rs`.
-- `crates/warp_cli/src/local_control/commands/{metadata,data,layout,input,settings_surfaces}.rs`.
-- `crates/local_control/src/{protocol,catalog,selectors}.rs`.
-- `crates/local_control/src/actions/{metadata,data,layout,input,settings_surfaces}.rs`.
+If a lower branch changes after higher branches exist, rebase each higher branch onto its immediate lower branch in stack order. Resolve conflicts by preserving the lower branch's shared contracts, permission model, and spec files while also keeping the higher branch's owned behavior.
+The previous `zach/warp-cli-integration-fanin` branch and its backup are preservation/history refs for the integrated implementation work. They are not review branches. Earlier non-v2 proposed branch names and the older broad stacks are migration-source/history material only unless the stack is deliberately renamed in a future explicit reslicing.
 ### Feature flag and rollout gate
 The entire feature should be gated behind a Warp feature flag, proposed as `FeatureFlag::WarpControlCli` with Cargo feature `warp_control_cli`.
 Implementation should follow the existing runtime feature-flag conventions:
@@ -433,16 +401,17 @@ When `FeatureFlag::WarpControlCli` is disabled in the Warp app:
 - tests should cover both enabled and disabled flag states with the repo's normal feature-flag override helpers.
 The standalone `warpctrl` binary can still exist in a build where the app feature is disabled, but it should find no compatible enabled app instance and should return a structured no-instance or feature-disabled error rather than relying on hidden server state.
 ### Merge and review strategy
-Keep PR boundaries aligned with the stack:
-- PR1: `zach/warp-cli-core-foundation` into `master` for the combined specs, shared protocol, CLI, settings, bridge, and module scaffolding.
-- PR2: `zach/warp-cli-readonly-metadata` into `zach/warp-cli-core-foundation` or its merged successor for metadata reads.
-- PR3: `zach/warp-cli-readonly-data-settings` into `zach/warp-cli-readonly-metadata` or its merged successor for underlying-data reads, settings reads, docs, and skill updates.
-- PR4: `zach/warp-cli-authenticated-scripting` into `zach/warp-cli-readonly-data-settings` or its merged successor for verified terminal proofs, external API-key scripting auth, and authenticated-user grants.
-- PR5: `zach/warp-cli-mutating-layout` into `zach/warp-cli-authenticated-scripting` or its merged successor for app/window/tab/pane layout mutations.
-- PR6: `zach/warp-cli-mutating-input-settings-surfaces` into `zach/warp-cli-mutating-layout` or its merged successor for input/session/settings/surface mutations.
-- PR7: `zach/warp-cli-mutating-drive-data` into `zach/warp-cli-mutating-input-settings-surfaces` or its merged successor for authenticated Warp Drive underlying-data mutations.
-- PR8: `zach/warp-cli-mutating-execution-underlying` into `zach/warp-cli-mutating-drive-data` or its merged successor for authenticated execution-underlying actions.
-If a lower PR merges before higher branches are ready, rebase the next branch onto the merged successor of its base and continue upward through the stack. Use raw git for all rebases, conflict resolution, cherry-picks, and pushes.
+Keep PR boundaries aligned with the v2 stack:
+- PR1: `zach/warp-cli-v2/contract-spec-sync` into `master` for specs, shared contracts, protocol, CLI skeleton, settings, bridge, module scaffolding, and first-slice smoke behavior.
+- PR2: `zach/warp-cli-v2/auth-security` into `zach/warp-cli-v2/contract-spec-sync` or its merged successor for auth/security enforcement, execution-context policy, scoped grants, and Settings > Scripting security controls.
+- PR3: `zach/warp-cli-v2/readonly-capability-targets` into `zach/warp-cli-v2/auth-security` or its merged successor for metadata reads, capabilities, target selectors, and read-only structural command output.
+- PR4: `zach/warp-cli-v2/appstate-file-drive-views` into `zach/warp-cli-v2/readonly-capability-targets` or its merged successor for approved underlying-data read surfaces, app-state/file/project/Drive views, and underlying-data-read permission tests.
+- PR5: `zach/warp-cli-v2/metadata-config-mutations` into `zach/warp-cli-v2/appstate-file-drive-views` or its merged successor for metadata/configuration mutations, allowlisted settings changes, and configuration-denial tests.
+- PR6: `zach/warp-cli-v2/drive-data-mutations` into `zach/warp-cli-v2/metadata-config-mutations` or its merged successor for authenticated Warp Drive underlying-data mutations.
+- PR7: `zach/warp-cli-v2/execution-underlying` into `zach/warp-cli-v2/drive-data-mutations` or its merged successor for authenticated execution-underlying actions.
+- PR8: `zach/warp-cli-v2/cli-catalog-docs` into `zach/warp-cli-v2/execution-underlying` or its merged successor for catalog, docs, help/completion, Agent skill, and advertised-action consistency work.
+- PR9: `zach/warp-cli-v2/fanin-finalize` into `zach/warp-cli-v2/cli-catalog-docs` or its merged successor for final cleanup, preserved fan-in conflict resolutions, and validation fixes.
+If a lower PR merges before higher branches are ready, rebase the next branch onto the merged successor of its base and continue upward through the stack. Use raw git for all rebases, conflict resolution, cherry-picks, and pushes. Do not open PRs from `zach/warp-cli-integration-fanin` or the old non-v2 branch names unless a future explicit reslicing replaces the v2 architecture.
 ## End-to-end flow
 ```mermaid
 sequenceDiagram
@@ -523,62 +492,47 @@ The verification matrix should cover every implemented command in `PRODUCT.md` a
 - authenticated-user commands show terminal screenshots for both the logged-out or missing-grant denial path and the enabled authenticated path when a test account/environment is available.
 The verifier should produce a verification manifest checked into or attached to the PR artifacts. The manifest should list each command, branch under test, invocation context, required permission category, expected result, actual result, terminal screenshot artifact path, UI screenshot artifact path when applicable, and any skipped case with a reason. Missing terminal screenshots for any executed `warpctrl` invocation block review readiness. Missing UI screenshots for visible commands also block review readiness.
 ## Parallelization
-The durable review stack should remain linear, but implementation can still happen in parallel with Oz cloud agents. The pattern is contract-first fan-out: land the shared contracts and module boundaries in `zach/warp-cli-core-foundation`, then let cloud agents work on short-lived shard branches that feed the durable review branches.
-Wave 0: foundation:
-- Keep `zach/warp-cli-core-foundation` mostly sequential or use at most one or two tightly scoped agents because protocol envelope, discovery, authentication, feature-flag gating, selector resolution, module boundaries, and `tab.create` smoke behavior need one coherent architecture.
-- Acceptable foundation shards are `core-protocol-cli` for shared protocol/CLI skeleton and `core-app-foundation` for settings, bridge, resolver, permissions, and handler skeletons. These shards should merge into the single durable `zach/warp-cli-core-foundation` branch before feature fan-out begins.
-Wave 1: read-only fan-out:
-- Launch short-lived Oz cloud shard branches from `zach/warp-cli-core-foundation` once the contracts compile.
-- Suggested shards:
-  - `zach/warp-cli-shard/readonly-metadata` owns structural metadata commands and feeds `zach/warp-cli-readonly-metadata`.
-  - `zach/warp-cli-shard/readonly-data` owns block output, input-buffer reads, history reads, and other underlying-data reads, then feeds `zach/warp-cli-readonly-data-settings`.
-  - `zach/warp-cli-shard/readonly-settings-docs` owns theme/settings/keybinding/action reads, docs, and read-only skill updates, then feeds `zach/warp-cli-readonly-data-settings`.
-Wave 2: mutating fan-out:
-- Launch mutating shards only after read-only target resolution and result shapes are stable.
-- Suggested shards:
-  - `zach/warp-cli-shard/mutating-window-tab-pane` owns window/tab/pane layout mutations and feeds `zach/warp-cli-mutating-layout`.
-  - `zach/warp-cli-shard/mutating-input-session` owns session activation/cycling/reopen, input insert/replace/clear, and input mode switching, then feeds `zach/warp-cli-mutating-input-settings-surfaces`.
-  - `zach/warp-cli-shard/authenticated-scripting` owns verified terminal proofs, external API-key auth, authenticated-user grants, and auth command tests, then feeds `zach/warp-cli-authenticated-scripting`.
-  - `zach/warp-cli-shard/mutating-settings-surfaces` owns theme/font/zoom/setting mutations and settings/palette/panel/surface commands, then feeds `zach/warp-cli-mutating-input-settings-surfaces`.
-  - `zach/warp-cli-shard/mutating-drive-data` owns Drive object data mutations, including the v0 personal-to-team sharing path, then feeds `zach/warp-cli-mutating-drive-data`.
-  - `zach/warp-cli-shard/mutating-execution-underlying` owns `input.run` and typed workflow execution, then feeds `zach/warp-cli-mutating-execution-underlying`.
+The durable review stack should remain linear, but implementation can still happen in parallel with Oz cloud agents. For the recovered v2 stack, parallel work should feed short-lived shard branches that are merged or cherry-picked into exactly one v2 review branch by the lead integrator. Shard branches should not become long-lived PRs by default.
+The completed recovery used fan-in shard work as source material, then sliced it into the v2 stack. Future parallel work should use the same contract-first fan-out pattern:
+- Start from the lowest v2 branch that already contains the contracts needed by the shard.
+- Give each shard a single owned command family or permission boundary.
+- Keep `specs/warp-control-cli/*` unchanged on shards unless the shard explicitly starts from and targets `zach/warp-cli-v2/contract-spec-sync` for a spec update.
+- Have the lead integrator merge or cherry-pick shard work into the appropriate v2 branch, then rebase all higher v2 branches upward.
+Suggested shard-to-stack ownership:
+- `zach/warp-cli-shard/auth-security` feeds `zach/warp-cli-v2/auth-security`.
+- `zach/warp-cli-shard/readonly-capability-targets` feeds `zach/warp-cli-v2/readonly-capability-targets`.
+- `zach/warp-cli-shard/appstate-file-drive-views` feeds `zach/warp-cli-v2/appstate-file-drive-views`.
+- `zach/warp-cli-shard/metadata-config-mutations` feeds `zach/warp-cli-v2/metadata-config-mutations`.
+- `zach/warp-cli-shard/drive-data-mutations` feeds `zach/warp-cli-v2/drive-data-mutations`.
+- `zach/warp-cli-shard/execution-underlying` feeds `zach/warp-cli-v2/execution-underlying`.
+- `zach/warp-cli-shard/cli-catalog-docs` feeds `zach/warp-cli-v2/cli-catalog-docs`.
 Each cloud shard prompt should include:
 - The exact base branch and shard branch name.
-- Owned command families.
+- The v2 review branch it is intended to feed.
+- Owned command families and permission categories.
 - Owned files/modules.
 - Files/modules the shard must not edit without calling out the need for integration.
-- Required permission categories and authenticated-user behavior.
 - Selector resolution requirements.
 - Validation commands and expected tests.
 - A handoff requirement: report branch name, changed files, implemented commands, permission decisions, validation results, and any conflicts or follow-ups.
-Default file ownership for shards:
-- Metadata shards own metadata handler/protocol/CLI modules and metadata tests.
-- Data shards own data handler/protocol/CLI modules and underlying-data permission tests.
-- Layout shards own layout handler/protocol/CLI modules and app-state mutation tests.
-- Authenticated-scripting shards own auth broker/protocol/CLI modules, Settings > Scripting authenticated grant controls, API-key storage/exchange tests, and authenticated-user denial tests.
-- Input/session shards own input/session handler/protocol/CLI modules and tests proving staging does not submit or execute unless the branch explicitly owns `input.run`.
-- Settings/surface shards own settings/surface handler/protocol/CLI modules and metadata/configuration mutation tests.
-- Drive data shards own Drive underlying-data handler/protocol/CLI modules, authenticated-user/API-key enforcement tests, personal-to-team sharing tests, and disposable-resource tests.
-- Execution-underlying shards own `input.run` and typed workflow execution handler/protocol/CLI modules, audit tests, and denial tests proving accepted-command and agent-prompt submission remain unavailable.
-The lead integrator merges or cherry-picks accepted shard work into the durable stack with raw git, in review order. Shard branches should not become independent long-lived PRs unless the lead intentionally splits review further; their default purpose is to feed the durable stack while preserving parallel implementation and focused context windows.
+The lead integrator owns the final `zach/warp-cli-v2/fanin-finalize` branch, where cross-shard cleanup, conflict-resolution preservation, validation fixes, and stack-wide consistency checks land.
 ```mermaid
 flowchart LR
-    Core["zach/warp-cli-core-foundation<br/>specs + contracts + bridge"] --> ROMeta["zach/warp-cli-readonly-metadata<br/>structural reads"]
-    ROMeta --> ROData["zach/warp-cli-readonly-data-settings<br/>data/settings reads"]
-    ROData --> Auth["zach/warp-cli-authenticated-scripting<br/>terminal proof + API key auth"]
-    Auth --> MutLayout["zach/warp-cli-mutating-layout<br/>layout mutations"]
-    MutLayout --> MutInput["zach/warp-cli-mutating-input-settings-surfaces<br/>input/settings/surfaces"]
-    MutInput --> MutData["zach/warp-cli-mutating-drive-data<br/>Drive data"]
-    MutData --> MutExec["zach/warp-cli-mutating-execution-underlying<br/>execution actions"]
-    ROMetaShard["shard/readonly-metadata"] --> ROMeta
-    RODataShard["shard/readonly-data"] --> ROData
-    ROSettingsShard["shard/readonly-settings-docs"] --> ROData
-    MutLayoutShard["shard/mutating-window-tab-pane"] --> MutLayout
-    MutInputShard["shard/mutating-input-session"] --> MutInput
-    MutSettingsShard["shard/mutating-settings-surfaces"] --> MutInput
-    AuthShard["shard/authenticated-scripting"] --> Auth
-    MutDataShard["shard/mutating-drive-data"] --> MutData
-    MutExecShard["shard/mutating-execution-underlying"] --> MutExec
+    Contract["zach/warp-cli-v2/contract-spec-sync<br/>specs + contracts + foundation"] --> Auth["zach/warp-cli-v2/auth-security<br/>auth + security gates"]
+    Auth --> Readonly["zach/warp-cli-v2/readonly-capability-targets<br/>metadata + selectors"]
+    Readonly --> Views["zach/warp-cli-v2/appstate-file-drive-views<br/>approved read views"]
+    Views --> MetaMut["zach/warp-cli-v2/metadata-config-mutations<br/>config mutations"]
+    MetaMut --> DriveMut["zach/warp-cli-v2/drive-data-mutations<br/>Drive data mutations"]
+    DriveMut --> Exec["zach/warp-cli-v2/execution-underlying<br/>execution actions"]
+    Exec --> Docs["zach/warp-cli-v2/cli-catalog-docs<br/>CLI catalog + docs"]
+    Docs --> Final["zach/warp-cli-v2/fanin-finalize<br/>cleanup + validation"]
+    AuthShard["shard/auth-security"] --> Auth
+    ReadonlyShard["shard/readonly-capability-targets"] --> Readonly
+    ViewsShard["shard/appstate-file-drive-views"] --> Views
+    MetaShard["shard/metadata-config-mutations"] --> MetaMut
+    DriveShard["shard/drive-data-mutations"] --> DriveMut
+    ExecShard["shard/execution-underlying"] --> Exec
+    DocsShard["shard/cli-catalog-docs"] --> Docs
 ```
 ## Risks and mitigations
 - Fixed-port server assumptions:
@@ -600,7 +554,7 @@ flowchart LR
 - Over-broad settings mutation:
   - Mitigation: allowlisted setting keys only, with private/debug/derived settings rejected.
 - Command execution risk:
-  - Mitigation: keep `input.run`/typed workflow execution in the catalog but implement it only in `zach/warp-cli-mutating-execution-underlying` after authenticated scripting identity, underlying-data-mutation permission, deterministic target resolution, and audit coverage are in place.
+  - Mitigation: keep `input.run`/typed workflow execution in the catalog but implement it only in `zach/warp-cli-v2/execution-underlying` after authenticated scripting identity, underlying-data-mutation permission, deterministic target resolution, and audit coverage are in place.
 - Packaging churn due to provisional executable naming:
   - Mitigation: document `warpctrl` as provisional and settle final aliases before broad release workflow rollout.
 - Heavyweight CLI startup caused by sharing the GUI binary's launch path:
