@@ -1,0 +1,1054 @@
+{
+  "agent_name": "drive-auth-execution",
+  "repository": "git@github.com:warpdotdev/warp.git",
+  "validation_ref": "zach/warpctrl-validation/c4bb6fdc",
+  "validated_sha": "c4bb6fdc670d667e78041a9318eda7c6778a22a8",
+  "expected_sha": "c4bb6fdc670d667e78041a9318eda7c6778a22a8",
+  "sha_match": true,
+  "artifact_root": "validation-artifacts/warpctrl-v2/c4bb6fdc/drive-auth-execution",
+  "build": {
+    "command": "cargo build --manifest-path /workspace/warpctrl-validation/drive-auth-execution/Cargo.toml -p warp --bin warp-oss --bin warpctrl --features warp_control_cli",
+    "status": "pass",
+    "log_path": "logs/build_warp_oss_warpctrl.log"
+  },
+  "gui_environment": {
+    "display": "Xvfb with Openbox",
+    "app_binary": "target/debug/warp-oss",
+    "warpctrl_binary": "target/debug/warpctrl",
+    "screenshot_strategy": "single staggered composition: xterm running warpctrl at upper-left and target Warp GUI visible behind/right when feasible",
+    "notes": [
+      "No real API key values were printed or captured. Fake placeholders were used for API-key/proof denial evidence.",
+      "Warp OSS opened to first-run onboarding; this still provided a real graphical Warp app target and discovery/control server for denial validation."
+    ]
+  },
+  "counts": {
+    "pass": 18,
+    "fail": 0,
+    "skip": 12
+  },
+  "commands": [
+    {
+      "ordinal": "001",
+      "command_string": "$WARPCTRL --output-format json drive list --type workflow",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "outside_warp_control_disabled",
+      "expected_result": "outside-Warp scripting disabled; command must fail before credential issuance with local_control_disabled.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "local_control_disabled",
+          "message": "outside-Warp local control credential broker is disabled for this instance"
+        }
+      },
+      "actual_error_code": "local_control_disabled",
+      "exit_code": 1,
+      "status": "pass",
+      "screenshot_paths": [
+        "screenshots/001__outside-staggered__drive__drive_list_workflow__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/001__outside-staggered__drive__drive_list_workflow.stdout.log",
+        "logs/001__outside-staggered__drive__drive_list_workflow.stderr.log",
+        "logs/001__outside-staggered__drive__drive_list_workflow.exit_code",
+        "logs/001__outside-staggered__drive__drive_list_workflow.xterm.log"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "002",
+      "command_string": "$WARPCTRL --output-format json drive list --type notebook",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "outside_warp_control_disabled",
+      "expected_result": "outside-Warp scripting disabled; command must fail before credential issuance with local_control_disabled.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "local_control_disabled",
+          "message": "outside-Warp local control credential broker is disabled for this instance"
+        }
+      },
+      "actual_error_code": "local_control_disabled",
+      "exit_code": 1,
+      "status": "pass",
+      "screenshot_paths": [
+        "screenshots/002__outside-staggered__drive__drive_list_notebook__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/002__outside-staggered__drive__drive_list_notebook.stdout.log",
+        "logs/002__outside-staggered__drive__drive_list_notebook.stderr.log",
+        "logs/002__outside-staggered__drive__drive_list_notebook.exit_code",
+        "logs/002__outside-staggered__drive__drive_list_notebook.xterm.log"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "003",
+      "command_string": "$WARPCTRL --output-format json drive list --type env-var-collection",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "outside_warp_control_disabled",
+      "expected_result": "outside-Warp scripting disabled; command must fail before credential issuance with local_control_disabled.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "local_control_disabled",
+          "message": "outside-Warp local control credential broker is disabled for this instance"
+        }
+      },
+      "actual_error_code": "local_control_disabled",
+      "exit_code": 1,
+      "status": "pass",
+      "screenshot_paths": [
+        "screenshots/003__outside-staggered__drive__drive_list_env_var_collection__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/003__outside-staggered__drive__drive_list_env_var_collection.stdout.log",
+        "logs/003__outside-staggered__drive__drive_list_env_var_collection.stderr.log",
+        "logs/003__outside-staggered__drive__drive_list_env_var_collection.exit_code",
+        "logs/003__outside-staggered__drive__drive_list_env_var_collection.xterm.log"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "004",
+      "command_string": "$WARPCTRL --output-format json drive inspect placeholder-drive-object-id",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "outside_warp_control_disabled",
+      "expected_result": "outside-Warp scripting disabled; command must fail before credential issuance with local_control_disabled.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "local_control_disabled",
+          "message": "outside-Warp local control credential broker is disabled for this instance"
+        }
+      },
+      "actual_error_code": "local_control_disabled",
+      "exit_code": 1,
+      "status": "pass",
+      "screenshot_paths": [
+        "screenshots/004__outside-staggered__drive__drive_inspect_placeholder__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/004__outside-staggered__drive__drive_inspect_placeholder.stdout.log",
+        "logs/004__outside-staggered__drive__drive_inspect_placeholder.stderr.log",
+        "logs/004__outside-staggered__drive__drive_inspect_placeholder.exit_code",
+        "logs/004__outside-staggered__drive__drive_inspect_placeholder.xterm.log"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "005",
+      "command_string": "$WARPCTRL --output-format json drive workflow run placeholder-workflow-id --arg validation=warpctrl",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "outside_warp_control_disabled",
+      "expected_result": "outside-Warp scripting disabled; command must fail before credential issuance with local_control_disabled.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "local_control_disabled",
+          "message": "outside-Warp local control credential broker is disabled for this instance"
+        }
+      },
+      "actual_error_code": "local_control_disabled",
+      "exit_code": 1,
+      "status": "pass",
+      "screenshot_paths": [
+        "screenshots/005__outside-staggered__drive__drive_workflow_run_placeholder__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/005__outside-staggered__drive__drive_workflow_run_placeholder.stdout.log",
+        "logs/005__outside-staggered__drive__drive_workflow_run_placeholder.stderr.log",
+        "logs/005__outside-staggered__drive__drive_workflow_run_placeholder.exit_code",
+        "logs/005__outside-staggered__drive__drive_workflow_run_placeholder.xterm.log"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "006",
+      "command_string": "$WARPCTRL --output-format json input run \"printf warpctrl-validation\"",
+      "context": "outside-staggered",
+      "command_family": "execution",
+      "permission_state": "outside_warp_control_disabled",
+      "expected_result": "outside-Warp scripting disabled; command must fail before credential issuance with local_control_disabled.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "local_control_disabled",
+          "message": "outside-Warp local control credential broker is disabled for this instance"
+        }
+      },
+      "actual_error_code": "local_control_disabled",
+      "exit_code": 1,
+      "status": "pass",
+      "screenshot_paths": [
+        "screenshots/006__outside-staggered__execution__input_run__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/006__outside-staggered__execution__input_run.stdout.log",
+        "logs/006__outside-staggered__execution__input_run.stderr.log",
+        "logs/006__outside-staggered__execution__input_run.exit_code",
+        "logs/006__outside-staggered__execution__input_run.xterm.log"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "007",
+      "command_string": "$WARPCTRL --output-format json drive list --type workflow",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "harness_preference_path_incorrect",
+      "expected_result": "superseded harness attempt; intended enabled-permission denial but private settings were preloaded to the wrong Linux profile path.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "local_control_disabled",
+          "message": "outside-Warp local control credential broker is disabled for this instance"
+        }
+      },
+      "actual_error_code": "local_control_disabled",
+      "exit_code": 1,
+      "status": "skip",
+      "screenshot_paths": [
+        "screenshots/007__outside-staggered__drive__drive_list_workflow__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/007__outside-staggered__drive__drive_list_workflow.stdout.log",
+        "logs/007__outside-staggered__drive__drive_list_workflow.stderr.log",
+        "logs/007__outside-staggered__drive__drive_list_workflow.exit_code",
+        "logs/007__outside-staggered__drive__drive_list_workflow.xterm.log"
+      ],
+      "skip_or_blocker_reason": "Superseded by corrected enabled-permission captures 015-020 after discovering preferences had been preloaded to /tmp/.../.config/warp/Warp-Oss instead of actual Linux OSS path /tmp/.../.config/warp-oss."
+    },
+    {
+      "ordinal": "008",
+      "command_string": "$WARPCTRL --output-format json drive list --type notebook",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "harness_preference_path_incorrect",
+      "expected_result": "superseded harness attempt; intended enabled-permission denial but private settings were preloaded to the wrong Linux profile path.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "local_control_disabled",
+          "message": "outside-Warp local control credential broker is disabled for this instance"
+        }
+      },
+      "actual_error_code": "local_control_disabled",
+      "exit_code": 1,
+      "status": "skip",
+      "screenshot_paths": [
+        "screenshots/008__outside-staggered__drive__drive_list_notebook__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/008__outside-staggered__drive__drive_list_notebook.stdout.log",
+        "logs/008__outside-staggered__drive__drive_list_notebook.stderr.log",
+        "logs/008__outside-staggered__drive__drive_list_notebook.exit_code",
+        "logs/008__outside-staggered__drive__drive_list_notebook.xterm.log"
+      ],
+      "skip_or_blocker_reason": "Superseded by corrected enabled-permission captures 015-020 after discovering preferences had been preloaded to /tmp/.../.config/warp/Warp-Oss instead of actual Linux OSS path /tmp/.../.config/warp-oss."
+    },
+    {
+      "ordinal": "009",
+      "command_string": "$WARPCTRL --output-format json drive list --type env-var-collection",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "harness_preference_path_incorrect",
+      "expected_result": "superseded harness attempt; intended enabled-permission denial but private settings were preloaded to the wrong Linux profile path.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "local_control_disabled",
+          "message": "outside-Warp local control credential broker is disabled for this instance"
+        }
+      },
+      "actual_error_code": "local_control_disabled",
+      "exit_code": 1,
+      "status": "skip",
+      "screenshot_paths": [
+        "screenshots/009__outside-staggered__drive__drive_list_env_var_collection__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/009__outside-staggered__drive__drive_list_env_var_collection.stdout.log",
+        "logs/009__outside-staggered__drive__drive_list_env_var_collection.stderr.log",
+        "logs/009__outside-staggered__drive__drive_list_env_var_collection.exit_code",
+        "logs/009__outside-staggered__drive__drive_list_env_var_collection.xterm.log"
+      ],
+      "skip_or_blocker_reason": "Superseded by corrected enabled-permission captures 015-020 after discovering preferences had been preloaded to /tmp/.../.config/warp/Warp-Oss instead of actual Linux OSS path /tmp/.../.config/warp-oss."
+    },
+    {
+      "ordinal": "010",
+      "command_string": "$WARPCTRL --output-format json drive inspect placeholder-drive-object-id",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "harness_preference_path_incorrect",
+      "expected_result": "superseded harness attempt; intended enabled-permission denial but private settings were preloaded to the wrong Linux profile path.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "local_control_disabled",
+          "message": "outside-Warp local control credential broker is disabled for this instance"
+        }
+      },
+      "actual_error_code": "local_control_disabled",
+      "exit_code": 1,
+      "status": "skip",
+      "screenshot_paths": [
+        "screenshots/010__outside-staggered__drive__drive_inspect_placeholder__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/010__outside-staggered__drive__drive_inspect_placeholder.stdout.log",
+        "logs/010__outside-staggered__drive__drive_inspect_placeholder.stderr.log",
+        "logs/010__outside-staggered__drive__drive_inspect_placeholder.exit_code",
+        "logs/010__outside-staggered__drive__drive_inspect_placeholder.xterm.log"
+      ],
+      "skip_or_blocker_reason": "Superseded by corrected enabled-permission captures 015-020 after discovering preferences had been preloaded to /tmp/.../.config/warp/Warp-Oss instead of actual Linux OSS path /tmp/.../.config/warp-oss."
+    },
+    {
+      "ordinal": "011",
+      "command_string": "$WARPCTRL --output-format json drive workflow run placeholder-workflow-id --arg validation=warpctrl",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "harness_preference_path_incorrect",
+      "expected_result": "superseded harness attempt; intended enabled-permission denial but private settings were preloaded to the wrong Linux profile path.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "local_control_disabled",
+          "message": "outside-Warp local control credential broker is disabled for this instance"
+        }
+      },
+      "actual_error_code": "local_control_disabled",
+      "exit_code": 1,
+      "status": "skip",
+      "screenshot_paths": [
+        "screenshots/011__outside-staggered__drive__drive_workflow_run_placeholder__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/011__outside-staggered__drive__drive_workflow_run_placeholder.stdout.log",
+        "logs/011__outside-staggered__drive__drive_workflow_run_placeholder.stderr.log",
+        "logs/011__outside-staggered__drive__drive_workflow_run_placeholder.exit_code",
+        "logs/011__outside-staggered__drive__drive_workflow_run_placeholder.xterm.log"
+      ],
+      "skip_or_blocker_reason": "Superseded by corrected enabled-permission captures 015-020 after discovering preferences had been preloaded to /tmp/.../.config/warp/Warp-Oss instead of actual Linux OSS path /tmp/.../.config/warp-oss."
+    },
+    {
+      "ordinal": "012",
+      "command_string": "$WARPCTRL --output-format json input run \"printf warpctrl-validation\"",
+      "context": "outside-staggered",
+      "command_family": "execution",
+      "permission_state": "harness_preference_path_incorrect",
+      "expected_result": "superseded harness attempt; intended enabled-permission denial but private settings were preloaded to the wrong Linux profile path.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "local_control_disabled",
+          "message": "outside-Warp local control credential broker is disabled for this instance"
+        }
+      },
+      "actual_error_code": "local_control_disabled",
+      "exit_code": 1,
+      "status": "skip",
+      "screenshot_paths": [
+        "screenshots/012__outside-staggered__execution__input_run__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/012__outside-staggered__execution__input_run.stdout.log",
+        "logs/012__outside-staggered__execution__input_run.stderr.log",
+        "logs/012__outside-staggered__execution__input_run.exit_code",
+        "logs/012__outside-staggered__execution__input_run.xterm.log"
+      ],
+      "skip_or_blocker_reason": "Superseded by corrected enabled-permission captures 015-020 after discovering preferences had been preloaded to /tmp/.../.config/warp/Warp-Oss instead of actual Linux OSS path /tmp/.../.config/warp-oss."
+    },
+    {
+      "ordinal": "013",
+      "command_string": "WARPCTRL_TERMINAL_PROOF_ID=fake-proof WARPCTRL_TERMINAL_SESSION_ID=fake-session WARPCTRL_TERMINAL_PROOF_SECRET=<redacted-placeholder> $WARPCTRL --output-format json drive list --type workflow",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "harness_preference_path_incorrect",
+      "expected_result": "fake inside-Warp proof env without app-injected endpoint must be rejected with execution_context_not_allowed.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "execution_context_not_allowed",
+          "message": "inside-Warp credentials require an app-injected local-control endpoint"
+        }
+      },
+      "actual_error_code": "execution_context_not_allowed",
+      "exit_code": 1,
+      "status": "pass",
+      "screenshot_paths": [
+        "screenshots/013__outside-staggered__drive__drive_list_workflow_fake_inside__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/013__outside-staggered__drive__drive_list_workflow_fake_inside.stdout.log",
+        "logs/013__outside-staggered__drive__drive_list_workflow_fake_inside.stderr.log",
+        "logs/013__outside-staggered__drive__drive_list_workflow_fake_inside.exit_code",
+        "logs/013__outside-staggered__drive__drive_list_workflow_fake_inside.xterm.log"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "014",
+      "command_string": "WARPCTRL_TERMINAL_PROOF_ID=fake-proof WARPCTRL_TERMINAL_SESSION_ID=fake-session WARPCTRL_TERMINAL_PROOF_SECRET=<redacted-placeholder> $WARPCTRL --output-format json input run \"printf warpctrl-validation\"",
+      "context": "outside-staggered",
+      "command_family": "execution",
+      "permission_state": "harness_preference_path_incorrect",
+      "expected_result": "fake inside-Warp proof env without app-injected endpoint must be rejected with execution_context_not_allowed.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "execution_context_not_allowed",
+          "message": "inside-Warp credentials require an app-injected local-control endpoint"
+        }
+      },
+      "actual_error_code": "execution_context_not_allowed",
+      "exit_code": 1,
+      "status": "pass",
+      "screenshot_paths": [
+        "screenshots/014__outside-staggered__execution__input_run_fake_inside__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/014__outside-staggered__execution__input_run_fake_inside.stdout.log",
+        "logs/014__outside-staggered__execution__input_run_fake_inside.stderr.log",
+        "logs/014__outside-staggered__execution__input_run_fake_inside.exit_code",
+        "logs/014__outside-staggered__execution__input_run_fake_inside.xterm.log"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "015",
+      "command_string": "$WARPCTRL --output-format json drive list --type workflow",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "outside_warp_control_and_all_outside_permissions_enabled",
+      "expected_result": "outside-Warp scripting and all outside permission categories enabled; authenticated-user/inside-Warp-only action must still reject outside invocation with execution_context_not_allowed.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "execution_context_not_allowed",
+          "message": "drive.list cannot run from the requested invocation context"
+        }
+      },
+      "actual_error_code": "execution_context_not_allowed",
+      "exit_code": 1,
+      "status": "pass",
+      "screenshot_paths": [
+        "screenshots/015__outside-staggered__drive__drive_list_workflow_enabled__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/015__outside-staggered__drive__drive_list_workflow_enabled.stdout.log",
+        "logs/015__outside-staggered__drive__drive_list_workflow_enabled.stderr.log",
+        "logs/015__outside-staggered__drive__drive_list_workflow_enabled.exit_code",
+        "logs/015__outside-staggered__drive__drive_list_workflow_enabled.xterm.log"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "016",
+      "command_string": "$WARPCTRL --output-format json drive list --type notebook",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "outside_warp_control_and_all_outside_permissions_enabled",
+      "expected_result": "outside-Warp scripting and all outside permission categories enabled; authenticated-user/inside-Warp-only action must still reject outside invocation with execution_context_not_allowed.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "execution_context_not_allowed",
+          "message": "drive.list cannot run from the requested invocation context"
+        }
+      },
+      "actual_error_code": "execution_context_not_allowed",
+      "exit_code": 1,
+      "status": "pass",
+      "screenshot_paths": [
+        "screenshots/016__outside-staggered__drive__drive_list_notebook_enabled__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/016__outside-staggered__drive__drive_list_notebook_enabled.stdout.log",
+        "logs/016__outside-staggered__drive__drive_list_notebook_enabled.stderr.log",
+        "logs/016__outside-staggered__drive__drive_list_notebook_enabled.exit_code",
+        "logs/016__outside-staggered__drive__drive_list_notebook_enabled.xterm.log"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "017",
+      "command_string": "$WARPCTRL --output-format json drive list --type env-var-collection",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "outside_warp_control_and_all_outside_permissions_enabled",
+      "expected_result": "outside-Warp scripting and all outside permission categories enabled; authenticated-user/inside-Warp-only action must still reject outside invocation with execution_context_not_allowed.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "execution_context_not_allowed",
+          "message": "drive.list cannot run from the requested invocation context"
+        }
+      },
+      "actual_error_code": "execution_context_not_allowed",
+      "exit_code": 1,
+      "status": "pass",
+      "screenshot_paths": [
+        "screenshots/017__outside-staggered__drive__drive_list_env_var_collection_enabled__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/017__outside-staggered__drive__drive_list_env_var_collection_enabled.stdout.log",
+        "logs/017__outside-staggered__drive__drive_list_env_var_collection_enabled.stderr.log",
+        "logs/017__outside-staggered__drive__drive_list_env_var_collection_enabled.exit_code",
+        "logs/017__outside-staggered__drive__drive_list_env_var_collection_enabled.xterm.log"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "018",
+      "command_string": "$WARPCTRL --output-format json drive inspect placeholder-drive-object-id",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "outside_warp_control_and_all_outside_permissions_enabled",
+      "expected_result": "outside-Warp scripting and all outside permission categories enabled; authenticated-user/inside-Warp-only action must still reject outside invocation with execution_context_not_allowed.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "execution_context_not_allowed",
+          "message": "drive.inspect cannot run from the requested invocation context"
+        }
+      },
+      "actual_error_code": "execution_context_not_allowed",
+      "exit_code": 1,
+      "status": "pass",
+      "screenshot_paths": [
+        "screenshots/018__outside-staggered__drive__drive_inspect_placeholder_enabled__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/018__outside-staggered__drive__drive_inspect_placeholder_enabled.stdout.log",
+        "logs/018__outside-staggered__drive__drive_inspect_placeholder_enabled.stderr.log",
+        "logs/018__outside-staggered__drive__drive_inspect_placeholder_enabled.exit_code",
+        "logs/018__outside-staggered__drive__drive_inspect_placeholder_enabled.xterm.log"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "019",
+      "command_string": "$WARPCTRL --output-format json drive workflow run placeholder-workflow-id --arg validation=warpctrl",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "outside_warp_control_and_all_outside_permissions_enabled",
+      "expected_result": "outside-Warp scripting and all outside permission categories enabled; authenticated-user/inside-Warp-only action must still reject outside invocation with execution_context_not_allowed.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "execution_context_not_allowed",
+          "message": "drive.workflow.run cannot run from the requested invocation context"
+        }
+      },
+      "actual_error_code": "execution_context_not_allowed",
+      "exit_code": 1,
+      "status": "pass",
+      "screenshot_paths": [
+        "screenshots/019__outside-staggered__drive__drive_workflow_run_placeholder_enabled__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/019__outside-staggered__drive__drive_workflow_run_placeholder_enabled.stdout.log",
+        "logs/019__outside-staggered__drive__drive_workflow_run_placeholder_enabled.stderr.log",
+        "logs/019__outside-staggered__drive__drive_workflow_run_placeholder_enabled.exit_code",
+        "logs/019__outside-staggered__drive__drive_workflow_run_placeholder_enabled.xterm.log"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "020",
+      "command_string": "$WARPCTRL --output-format json input run \"printf warpctrl-validation\"",
+      "context": "outside-staggered",
+      "command_family": "execution",
+      "permission_state": "outside_warp_control_and_all_outside_permissions_enabled",
+      "expected_result": "outside-Warp scripting and all outside permission categories enabled; authenticated-user/inside-Warp-only action must still reject outside invocation with execution_context_not_allowed.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "execution_context_not_allowed",
+          "message": "input.run cannot run from the requested invocation context"
+        }
+      },
+      "actual_error_code": "execution_context_not_allowed",
+      "exit_code": 1,
+      "status": "pass",
+      "screenshot_paths": [
+        "screenshots/020__outside-staggered__execution__input_run_enabled__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/020__outside-staggered__execution__input_run_enabled.stdout.log",
+        "logs/020__outside-staggered__execution__input_run_enabled.stderr.log",
+        "logs/020__outside-staggered__execution__input_run_enabled.exit_code",
+        "logs/020__outside-staggered__execution__input_run_enabled.xterm.log"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "021",
+      "command_string": "WARPCTRL_TERMINAL_PROOF_ID=fake-proof WARPCTRL_TERMINAL_SESSION_ID=fake-session WARPCTRL_TERMINAL_PROOF_SECRET=<redacted-placeholder> $WARPCTRL --output-format json drive list --type workflow",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "outside_warp_control_and_all_outside_permissions_enabled",
+      "expected_result": "fake inside-Warp proof material with endpoint must be rejected by proof registry with execution_context_not_allowed.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "execution_context_not_allowed",
+          "message": "Warp terminal proof is unknown or has been invalidated"
+        }
+      },
+      "actual_error_code": "execution_context_not_allowed",
+      "exit_code": 1,
+      "status": "pass",
+      "screenshot_paths": [
+        "screenshots/021__outside-staggered__drive__drive_list_workflow_fake_inside_enabled__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/021__outside-staggered__drive__drive_list_workflow_fake_inside_enabled.stdout.log",
+        "logs/021__outside-staggered__drive__drive_list_workflow_fake_inside_enabled.stderr.log",
+        "logs/021__outside-staggered__drive__drive_list_workflow_fake_inside_enabled.exit_code",
+        "logs/021__outside-staggered__drive__drive_list_workflow_fake_inside_enabled.xterm.log"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "022",
+      "command_string": "WARPCTRL_TERMINAL_PROOF_ID=fake-proof WARPCTRL_TERMINAL_SESSION_ID=fake-session WARPCTRL_TERMINAL_PROOF_SECRET=<redacted-placeholder> $WARPCTRL --output-format json input run \"printf warpctrl-validation\"",
+      "context": "outside-staggered",
+      "command_family": "execution",
+      "permission_state": "outside_warp_control_and_all_outside_permissions_enabled",
+      "expected_result": "fake inside-Warp proof material with endpoint must be rejected by proof registry with execution_context_not_allowed.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "execution_context_not_allowed",
+          "message": "Warp terminal proof is unknown or has been invalidated"
+        }
+      },
+      "actual_error_code": "execution_context_not_allowed",
+      "exit_code": 1,
+      "status": "pass",
+      "screenshot_paths": [
+        "screenshots/022__outside-staggered__execution__input_run_fake_inside_enabled__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/022__outside-staggered__execution__input_run_fake_inside_enabled.stdout.log",
+        "logs/022__outside-staggered__execution__input_run_fake_inside_enabled.stderr.log",
+        "logs/022__outside-staggered__execution__input_run_fake_inside_enabled.exit_code",
+        "logs/022__outside-staggered__execution__input_run_fake_inside_enabled.xterm.log"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "023",
+      "command_string": "WARPCTRL_API_KEY=<redacted-nonsecret-placeholder> $WARPCTRL --output-format json drive list --type workflow",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "outside_warp_control_and_all_outside_permissions_enabled",
+      "expected_result": "fake external API key placeholder must not bypass inside-Warp/authenticated-user gate; command must reject with execution_context_not_allowed.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "execution_context_not_allowed",
+          "message": "drive.list cannot run from the requested invocation context"
+        }
+      },
+      "actual_error_code": "execution_context_not_allowed",
+      "exit_code": 1,
+      "status": "pass",
+      "screenshot_paths": [
+        "screenshots/023__outside-staggered__drive__drive_list_workflow_fake_api_key__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/023__outside-staggered__drive__drive_list_workflow_fake_api_key.stdout.log",
+        "logs/023__outside-staggered__drive__drive_list_workflow_fake_api_key.stderr.log",
+        "logs/023__outside-staggered__drive__drive_list_workflow_fake_api_key.exit_code",
+        "logs/023__outside-staggered__drive__drive_list_workflow_fake_api_key.xterm.log"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "024",
+      "command_string": "WARPCTRL_API_KEY=<redacted-nonsecret-placeholder> $WARPCTRL --output-format json input run \"printf warpctrl-validation\"",
+      "context": "outside-staggered",
+      "command_family": "execution",
+      "permission_state": "outside_warp_control_and_all_outside_permissions_enabled",
+      "expected_result": "fake external API key placeholder must not bypass inside-Warp/authenticated-user gate; command must reject with execution_context_not_allowed.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "execution_context_not_allowed",
+          "message": "input.run cannot run from the requested invocation context"
+        }
+      },
+      "actual_error_code": "execution_context_not_allowed",
+      "exit_code": 1,
+      "status": "pass",
+      "screenshot_paths": [
+        "screenshots/024__outside-staggered__execution__input_run_fake_api_key__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/024__outside-staggered__execution__input_run_fake_api_key.stdout.log",
+        "logs/024__outside-staggered__execution__input_run_fake_api_key.stderr.log",
+        "logs/024__outside-staggered__execution__input_run_fake_api_key.exit_code",
+        "logs/024__outside-staggered__execution__input_run_fake_api_key.xterm.log"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "S01",
+      "command_string": "$WARPCTRL --output-format json drive list --type workflow",
+      "context": "inside-warp-success-path",
+      "command_family": "drive",
+      "permission_state": "not_executed_success_path",
+      "expected_result": "Success path may only be run with safe app-issued verified Warp-terminal proof, logged-in authenticated user, and disposable Drive/session resources.",
+      "actual_result": null,
+      "actual_error_code": null,
+      "exit_code": null,
+      "status": "skip",
+      "screenshot_paths": [],
+      "log_paths": [],
+      "skip_or_blocker_reason": "No app-issued verified Warp-terminal proof or disposable Drive object/workflow IDs were available in this remote validation environment. Outside-Warp and fake-proof/API-key denial paths were captured instead; no real secrets were exposed."
+    },
+    {
+      "ordinal": "S02",
+      "command_string": "$WARPCTRL --output-format json drive list --type notebook",
+      "context": "inside-warp-success-path",
+      "command_family": "drive",
+      "permission_state": "not_executed_success_path",
+      "expected_result": "Success path may only be run with safe app-issued verified Warp-terminal proof, logged-in authenticated user, and disposable Drive/session resources.",
+      "actual_result": null,
+      "actual_error_code": null,
+      "exit_code": null,
+      "status": "skip",
+      "screenshot_paths": [],
+      "log_paths": [],
+      "skip_or_blocker_reason": "No app-issued verified Warp-terminal proof or disposable Drive object/workflow IDs were available in this remote validation environment. Outside-Warp and fake-proof/API-key denial paths were captured instead; no real secrets were exposed."
+    },
+    {
+      "ordinal": "S03",
+      "command_string": "$WARPCTRL --output-format json drive list --type env-var-collection",
+      "context": "inside-warp-success-path",
+      "command_family": "drive",
+      "permission_state": "not_executed_success_path",
+      "expected_result": "Success path may only be run with safe app-issued verified Warp-terminal proof, logged-in authenticated user, and disposable Drive/session resources.",
+      "actual_result": null,
+      "actual_error_code": null,
+      "exit_code": null,
+      "status": "skip",
+      "screenshot_paths": [],
+      "log_paths": [],
+      "skip_or_blocker_reason": "No app-issued verified Warp-terminal proof or disposable Drive object/workflow IDs were available in this remote validation environment. Outside-Warp and fake-proof/API-key denial paths were captured instead; no real secrets were exposed."
+    },
+    {
+      "ordinal": "S04",
+      "command_string": "$WARPCTRL --output-format json drive inspect <DRIVE_OBJECT_ID_FROM_DRIVE_LIST>",
+      "context": "inside-warp-success-path",
+      "command_family": "drive",
+      "permission_state": "not_executed_success_path",
+      "expected_result": "Success path may only be run with safe app-issued verified Warp-terminal proof, logged-in authenticated user, and disposable Drive/session resources.",
+      "actual_result": null,
+      "actual_error_code": null,
+      "exit_code": null,
+      "status": "skip",
+      "screenshot_paths": [],
+      "log_paths": [],
+      "skip_or_blocker_reason": "No app-issued verified Warp-terminal proof or disposable Drive object/workflow IDs were available in this remote validation environment. Outside-Warp and fake-proof/API-key denial paths were captured instead; no real secrets were exposed."
+    },
+    {
+      "ordinal": "S05",
+      "command_string": "$WARPCTRL --output-format json drive workflow run <WORKFLOW_ID_FROM_DRIVE_LIST> --arg validation=warpctrl",
+      "context": "inside-warp-success-path",
+      "command_family": "drive",
+      "permission_state": "not_executed_success_path",
+      "expected_result": "Success path may only be run with safe app-issued verified Warp-terminal proof, logged-in authenticated user, and disposable Drive/session resources.",
+      "actual_result": null,
+      "actual_error_code": null,
+      "exit_code": null,
+      "status": "skip",
+      "screenshot_paths": [],
+      "log_paths": [],
+      "skip_or_blocker_reason": "No app-issued verified Warp-terminal proof or disposable Drive object/workflow IDs were available in this remote validation environment. Outside-Warp and fake-proof/API-key denial paths were captured instead; no real secrets were exposed."
+    },
+    {
+      "ordinal": "S06",
+      "command_string": "$WARPCTRL --output-format json input run \"printf warpctrl-validation\"",
+      "context": "inside-warp-success-path",
+      "command_family": "execution",
+      "permission_state": "not_executed_success_path",
+      "expected_result": "Success path may only be run with safe app-issued verified Warp-terminal proof, logged-in authenticated user, and disposable Drive/session resources.",
+      "actual_result": null,
+      "actual_error_code": null,
+      "exit_code": null,
+      "status": "skip",
+      "screenshot_paths": [],
+      "log_paths": [],
+      "skip_or_blocker_reason": "No app-issued verified Warp-terminal proof or disposable Drive object/workflow IDs were available in this remote validation environment. Outside-Warp and fake-proof/API-key denial paths were captured instead; no real secrets were exposed."
+    }
+  ],
+  "blockers": [],
+  "skipped_commands": [
+    {
+      "ordinal": "007",
+      "command_string": "$WARPCTRL --output-format json drive list --type workflow",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "harness_preference_path_incorrect",
+      "expected_result": "superseded harness attempt; intended enabled-permission denial but private settings were preloaded to the wrong Linux profile path.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "local_control_disabled",
+          "message": "outside-Warp local control credential broker is disabled for this instance"
+        }
+      },
+      "actual_error_code": "local_control_disabled",
+      "exit_code": 1,
+      "status": "skip",
+      "screenshot_paths": [
+        "screenshots/007__outside-staggered__drive__drive_list_workflow__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/007__outside-staggered__drive__drive_list_workflow.stdout.log",
+        "logs/007__outside-staggered__drive__drive_list_workflow.stderr.log",
+        "logs/007__outside-staggered__drive__drive_list_workflow.exit_code",
+        "logs/007__outside-staggered__drive__drive_list_workflow.xterm.log"
+      ],
+      "skip_or_blocker_reason": "Superseded by corrected enabled-permission captures 015-020 after discovering preferences had been preloaded to /tmp/.../.config/warp/Warp-Oss instead of actual Linux OSS path /tmp/.../.config/warp-oss."
+    },
+    {
+      "ordinal": "008",
+      "command_string": "$WARPCTRL --output-format json drive list --type notebook",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "harness_preference_path_incorrect",
+      "expected_result": "superseded harness attempt; intended enabled-permission denial but private settings were preloaded to the wrong Linux profile path.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "local_control_disabled",
+          "message": "outside-Warp local control credential broker is disabled for this instance"
+        }
+      },
+      "actual_error_code": "local_control_disabled",
+      "exit_code": 1,
+      "status": "skip",
+      "screenshot_paths": [
+        "screenshots/008__outside-staggered__drive__drive_list_notebook__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/008__outside-staggered__drive__drive_list_notebook.stdout.log",
+        "logs/008__outside-staggered__drive__drive_list_notebook.stderr.log",
+        "logs/008__outside-staggered__drive__drive_list_notebook.exit_code",
+        "logs/008__outside-staggered__drive__drive_list_notebook.xterm.log"
+      ],
+      "skip_or_blocker_reason": "Superseded by corrected enabled-permission captures 015-020 after discovering preferences had been preloaded to /tmp/.../.config/warp/Warp-Oss instead of actual Linux OSS path /tmp/.../.config/warp-oss."
+    },
+    {
+      "ordinal": "009",
+      "command_string": "$WARPCTRL --output-format json drive list --type env-var-collection",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "harness_preference_path_incorrect",
+      "expected_result": "superseded harness attempt; intended enabled-permission denial but private settings were preloaded to the wrong Linux profile path.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "local_control_disabled",
+          "message": "outside-Warp local control credential broker is disabled for this instance"
+        }
+      },
+      "actual_error_code": "local_control_disabled",
+      "exit_code": 1,
+      "status": "skip",
+      "screenshot_paths": [
+        "screenshots/009__outside-staggered__drive__drive_list_env_var_collection__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/009__outside-staggered__drive__drive_list_env_var_collection.stdout.log",
+        "logs/009__outside-staggered__drive__drive_list_env_var_collection.stderr.log",
+        "logs/009__outside-staggered__drive__drive_list_env_var_collection.exit_code",
+        "logs/009__outside-staggered__drive__drive_list_env_var_collection.xterm.log"
+      ],
+      "skip_or_blocker_reason": "Superseded by corrected enabled-permission captures 015-020 after discovering preferences had been preloaded to /tmp/.../.config/warp/Warp-Oss instead of actual Linux OSS path /tmp/.../.config/warp-oss."
+    },
+    {
+      "ordinal": "010",
+      "command_string": "$WARPCTRL --output-format json drive inspect placeholder-drive-object-id",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "harness_preference_path_incorrect",
+      "expected_result": "superseded harness attempt; intended enabled-permission denial but private settings were preloaded to the wrong Linux profile path.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "local_control_disabled",
+          "message": "outside-Warp local control credential broker is disabled for this instance"
+        }
+      },
+      "actual_error_code": "local_control_disabled",
+      "exit_code": 1,
+      "status": "skip",
+      "screenshot_paths": [
+        "screenshots/010__outside-staggered__drive__drive_inspect_placeholder__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/010__outside-staggered__drive__drive_inspect_placeholder.stdout.log",
+        "logs/010__outside-staggered__drive__drive_inspect_placeholder.stderr.log",
+        "logs/010__outside-staggered__drive__drive_inspect_placeholder.exit_code",
+        "logs/010__outside-staggered__drive__drive_inspect_placeholder.xterm.log"
+      ],
+      "skip_or_blocker_reason": "Superseded by corrected enabled-permission captures 015-020 after discovering preferences had been preloaded to /tmp/.../.config/warp/Warp-Oss instead of actual Linux OSS path /tmp/.../.config/warp-oss."
+    },
+    {
+      "ordinal": "011",
+      "command_string": "$WARPCTRL --output-format json drive workflow run placeholder-workflow-id --arg validation=warpctrl",
+      "context": "outside-staggered",
+      "command_family": "drive",
+      "permission_state": "harness_preference_path_incorrect",
+      "expected_result": "superseded harness attempt; intended enabled-permission denial but private settings were preloaded to the wrong Linux profile path.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "local_control_disabled",
+          "message": "outside-Warp local control credential broker is disabled for this instance"
+        }
+      },
+      "actual_error_code": "local_control_disabled",
+      "exit_code": 1,
+      "status": "skip",
+      "screenshot_paths": [
+        "screenshots/011__outside-staggered__drive__drive_workflow_run_placeholder__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/011__outside-staggered__drive__drive_workflow_run_placeholder.stdout.log",
+        "logs/011__outside-staggered__drive__drive_workflow_run_placeholder.stderr.log",
+        "logs/011__outside-staggered__drive__drive_workflow_run_placeholder.exit_code",
+        "logs/011__outside-staggered__drive__drive_workflow_run_placeholder.xterm.log"
+      ],
+      "skip_or_blocker_reason": "Superseded by corrected enabled-permission captures 015-020 after discovering preferences had been preloaded to /tmp/.../.config/warp/Warp-Oss instead of actual Linux OSS path /tmp/.../.config/warp-oss."
+    },
+    {
+      "ordinal": "012",
+      "command_string": "$WARPCTRL --output-format json input run \"printf warpctrl-validation\"",
+      "context": "outside-staggered",
+      "command_family": "execution",
+      "permission_state": "harness_preference_path_incorrect",
+      "expected_result": "superseded harness attempt; intended enabled-permission denial but private settings were preloaded to the wrong Linux profile path.",
+      "actual_result": {
+        "ok": false,
+        "error": {
+          "code": "local_control_disabled",
+          "message": "outside-Warp local control credential broker is disabled for this instance"
+        }
+      },
+      "actual_error_code": "local_control_disabled",
+      "exit_code": 1,
+      "status": "skip",
+      "screenshot_paths": [
+        "screenshots/012__outside-staggered__execution__input_run__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/012__outside-staggered__execution__input_run.stdout.log",
+        "logs/012__outside-staggered__execution__input_run.stderr.log",
+        "logs/012__outside-staggered__execution__input_run.exit_code",
+        "logs/012__outside-staggered__execution__input_run.xterm.log"
+      ],
+      "skip_or_blocker_reason": "Superseded by corrected enabled-permission captures 015-020 after discovering preferences had been preloaded to /tmp/.../.config/warp/Warp-Oss instead of actual Linux OSS path /tmp/.../.config/warp-oss."
+    },
+    {
+      "ordinal": "S01",
+      "command_string": "$WARPCTRL --output-format json drive list --type workflow",
+      "context": "inside-warp-success-path",
+      "command_family": "drive",
+      "permission_state": "not_executed_success_path",
+      "expected_result": "Success path may only be run with safe app-issued verified Warp-terminal proof, logged-in authenticated user, and disposable Drive/session resources.",
+      "actual_result": null,
+      "actual_error_code": null,
+      "exit_code": null,
+      "status": "skip",
+      "screenshot_paths": [],
+      "log_paths": [],
+      "skip_or_blocker_reason": "No app-issued verified Warp-terminal proof or disposable Drive object/workflow IDs were available in this remote validation environment. Outside-Warp and fake-proof/API-key denial paths were captured instead; no real secrets were exposed."
+    },
+    {
+      "ordinal": "S02",
+      "command_string": "$WARPCTRL --output-format json drive list --type notebook",
+      "context": "inside-warp-success-path",
+      "command_family": "drive",
+      "permission_state": "not_executed_success_path",
+      "expected_result": "Success path may only be run with safe app-issued verified Warp-terminal proof, logged-in authenticated user, and disposable Drive/session resources.",
+      "actual_result": null,
+      "actual_error_code": null,
+      "exit_code": null,
+      "status": "skip",
+      "screenshot_paths": [],
+      "log_paths": [],
+      "skip_or_blocker_reason": "No app-issued verified Warp-terminal proof or disposable Drive object/workflow IDs were available in this remote validation environment. Outside-Warp and fake-proof/API-key denial paths were captured instead; no real secrets were exposed."
+    },
+    {
+      "ordinal": "S03",
+      "command_string": "$WARPCTRL --output-format json drive list --type env-var-collection",
+      "context": "inside-warp-success-path",
+      "command_family": "drive",
+      "permission_state": "not_executed_success_path",
+      "expected_result": "Success path may only be run with safe app-issued verified Warp-terminal proof, logged-in authenticated user, and disposable Drive/session resources.",
+      "actual_result": null,
+      "actual_error_code": null,
+      "exit_code": null,
+      "status": "skip",
+      "screenshot_paths": [],
+      "log_paths": [],
+      "skip_or_blocker_reason": "No app-issued verified Warp-terminal proof or disposable Drive object/workflow IDs were available in this remote validation environment. Outside-Warp and fake-proof/API-key denial paths were captured instead; no real secrets were exposed."
+    },
+    {
+      "ordinal": "S04",
+      "command_string": "$WARPCTRL --output-format json drive inspect <DRIVE_OBJECT_ID_FROM_DRIVE_LIST>",
+      "context": "inside-warp-success-path",
+      "command_family": "drive",
+      "permission_state": "not_executed_success_path",
+      "expected_result": "Success path may only be run with safe app-issued verified Warp-terminal proof, logged-in authenticated user, and disposable Drive/session resources.",
+      "actual_result": null,
+      "actual_error_code": null,
+      "exit_code": null,
+      "status": "skip",
+      "screenshot_paths": [],
+      "log_paths": [],
+      "skip_or_blocker_reason": "No app-issued verified Warp-terminal proof or disposable Drive object/workflow IDs were available in this remote validation environment. Outside-Warp and fake-proof/API-key denial paths were captured instead; no real secrets were exposed."
+    },
+    {
+      "ordinal": "S05",
+      "command_string": "$WARPCTRL --output-format json drive workflow run <WORKFLOW_ID_FROM_DRIVE_LIST> --arg validation=warpctrl",
+      "context": "inside-warp-success-path",
+      "command_family": "drive",
+      "permission_state": "not_executed_success_path",
+      "expected_result": "Success path may only be run with safe app-issued verified Warp-terminal proof, logged-in authenticated user, and disposable Drive/session resources.",
+      "actual_result": null,
+      "actual_error_code": null,
+      "exit_code": null,
+      "status": "skip",
+      "screenshot_paths": [],
+      "log_paths": [],
+      "skip_or_blocker_reason": "No app-issued verified Warp-terminal proof or disposable Drive object/workflow IDs were available in this remote validation environment. Outside-Warp and fake-proof/API-key denial paths were captured instead; no real secrets were exposed."
+    },
+    {
+      "ordinal": "S06",
+      "command_string": "$WARPCTRL --output-format json input run \"printf warpctrl-validation\"",
+      "context": "inside-warp-success-path",
+      "command_family": "execution",
+      "permission_state": "not_executed_success_path",
+      "expected_result": "Success path may only be run with safe app-issued verified Warp-terminal proof, logged-in authenticated user, and disposable Drive/session resources.",
+      "actual_result": null,
+      "actual_error_code": null,
+      "exit_code": null,
+      "status": "skip",
+      "screenshot_paths": [],
+      "log_paths": [],
+      "skip_or_blocker_reason": "No app-issued verified Warp-terminal proof or disposable Drive object/workflow IDs were available in this remote validation environment. Outside-Warp and fake-proof/API-key denial paths were captured instead; no real secrets were exposed."
+    }
+  ]
+}

@@ -1,0 +1,1879 @@
+{
+  "protocol_version": 1,
+  "instance_id": "inst_97761e1e998c424fb14861032e629ba9",
+  "pid": 32867,
+  "channel": "warp-oss",
+  "app_id": "dev.warp.WarpOss",
+  "app_version": null,
+  "started_at": "2026-05-26T21:48:16.767463735Z",
+  "executable_path": "/workspace/warpctrl-validation/drive-auth-execution/target/debug/warp-oss",
+  "endpoint": null,
+  "credential_broker": null,
+  "outside_warp_control_enabled": false,
+  "actions": [
+    {
+      "kind": "instance.list",
+      "name": "instance.list",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "instance",
+      "parameter_spec": "none",
+      "result_spec": "instance_list"
+    },
+    {
+      "kind": "instance.inspect",
+      "name": "instance.inspect",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "instance",
+      "parameter_spec": "none",
+      "result_spec": "instance_metadata"
+    },
+    {
+      "kind": "app.ping",
+      "name": "app.ping",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "instance",
+      "parameter_spec": "none",
+      "result_spec": "instance_metadata"
+    },
+    {
+      "kind": "app.version",
+      "name": "app.version",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "instance",
+      "parameter_spec": "none",
+      "result_spec": "instance_metadata"
+    },
+    {
+      "kind": "app.active",
+      "name": "app.active",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "instance",
+      "parameter_spec": "none",
+      "result_spec": "active_target"
+    },
+    {
+      "kind": "app.focus",
+      "name": "app.focus",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "instance",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "capability.list",
+      "name": "capability.list",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "capability",
+      "parameter_spec": "none",
+      "result_spec": "capability_list"
+    },
+    {
+      "kind": "capability.inspect",
+      "name": "capability.inspect",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "capability",
+      "parameter_spec": "action_name",
+      "result_spec": "capability_metadata"
+    },
+    {
+      "kind": "window.list",
+      "name": "window.list",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "window",
+      "parameter_spec": "none",
+      "result_spec": "target_list"
+    },
+    {
+      "kind": "window.inspect",
+      "name": "window.inspect",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "window",
+      "parameter_spec": "none",
+      "result_spec": "target_metadata"
+    },
+    {
+      "kind": "window.create",
+      "name": "window.create",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "window",
+      "parameter_spec": "tab_create",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "window.focus",
+      "name": "window.focus",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "window",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "window.close",
+      "name": "window.close",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "window",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "tab.list",
+      "name": "tab.list",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "tab",
+      "parameter_spec": "none",
+      "result_spec": "target_list"
+    },
+    {
+      "kind": "tab.inspect",
+      "name": "tab.inspect",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "tab",
+      "parameter_spec": "none",
+      "result_spec": "target_metadata"
+    },
+    {
+      "kind": "tab.create",
+      "name": "tab.create",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "tab",
+      "parameter_spec": "tab_create",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "tab.activate",
+      "name": "tab.activate",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "tab",
+      "parameter_spec": "tab_activate",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "tab.move",
+      "name": "tab.move",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "tab",
+      "parameter_spec": "direction",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "tab.close",
+      "name": "tab.close",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "tab",
+      "parameter_spec": "tab_close",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "tab.rename",
+      "name": "tab.rename",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "metadata_configuration_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_metadata_configuration",
+      "target_scope": "tab",
+      "parameter_spec": "rename",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "tab.reset_name",
+      "name": "tab.reset_name",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "metadata_configuration_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_metadata_configuration",
+      "target_scope": "tab",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "tab.color.set",
+      "name": "tab.color.set",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "metadata_configuration_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_metadata_configuration",
+      "target_scope": "tab",
+      "parameter_spec": "color_value",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "tab.color.clear",
+      "name": "tab.color.clear",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "metadata_configuration_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_metadata_configuration",
+      "target_scope": "tab",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "pane.list",
+      "name": "pane.list",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "pane",
+      "parameter_spec": "none",
+      "result_spec": "target_list"
+    },
+    {
+      "kind": "pane.inspect",
+      "name": "pane.inspect",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "pane",
+      "parameter_spec": "none",
+      "result_spec": "target_metadata"
+    },
+    {
+      "kind": "pane.split",
+      "name": "pane.split",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "pane",
+      "parameter_spec": "direction",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "pane.focus",
+      "name": "pane.focus",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "pane",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "pane.navigate",
+      "name": "pane.navigate",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "pane",
+      "parameter_spec": "direction",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "pane.resize",
+      "name": "pane.resize",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "pane",
+      "parameter_spec": "resize",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "pane.maximize",
+      "name": "pane.maximize",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "pane",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "pane.unmaximize",
+      "name": "pane.unmaximize",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "pane",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "pane.close",
+      "name": "pane.close",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "pane",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "pane.rename",
+      "name": "pane.rename",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "metadata_configuration_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_metadata_configuration",
+      "target_scope": "pane",
+      "parameter_spec": "rename",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "pane.reset_name",
+      "name": "pane.reset_name",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "metadata_configuration_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_metadata_configuration",
+      "target_scope": "pane",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "session.list",
+      "name": "session.list",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "session",
+      "parameter_spec": "none",
+      "result_spec": "target_list"
+    },
+    {
+      "kind": "session.inspect",
+      "name": "session.inspect",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "session",
+      "parameter_spec": "none",
+      "result_spec": "target_metadata"
+    },
+    {
+      "kind": "session.activate",
+      "name": "session.activate",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "session",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "session.previous",
+      "name": "session.previous",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "session",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "session.next",
+      "name": "session.next",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "session",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "session.reopen_closed",
+      "name": "session.reopen_closed",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "session",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "block.list",
+      "name": "block.list",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "block",
+      "parameter_spec": "limit",
+      "result_spec": "target_list"
+    },
+    {
+      "kind": "block.inspect",
+      "name": "block.inspect",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_terminal_data",
+      "state_data_category": "underlying_data_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_underlying_data",
+      "target_scope": "block",
+      "parameter_spec": "block_id",
+      "result_spec": "content"
+    },
+    {
+      "kind": "block.output",
+      "name": "block.output",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_terminal_data",
+      "state_data_category": "underlying_data_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_underlying_data",
+      "target_scope": "block",
+      "parameter_spec": "block_id",
+      "result_spec": "content"
+    },
+    {
+      "kind": "input.get",
+      "name": "input.get",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_terminal_data",
+      "state_data_category": "underlying_data_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_underlying_data",
+      "target_scope": "input",
+      "parameter_spec": "none",
+      "result_spec": "content"
+    },
+    {
+      "kind": "input.insert",
+      "name": "input.insert",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "input",
+      "parameter_spec": "text",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "input.replace",
+      "name": "input.replace",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "input",
+      "parameter_spec": "text",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "input.clear",
+      "name": "input.clear",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "input",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "input.mode.set",
+      "name": "input.mode.set",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "input",
+      "parameter_spec": "input_mode",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "input.run",
+      "name": "input.run",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_destructive_or_execution",
+      "state_data_category": "underlying_data_mutation",
+      "requires_authenticated_user": true,
+      "authenticated_user": {
+        "required": true
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp"
+      ],
+      "permission_category": "mutate_underlying_data",
+      "target_scope": "input",
+      "parameter_spec": "text",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "history.list",
+      "name": "history.list",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_terminal_data",
+      "state_data_category": "underlying_data_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_underlying_data",
+      "target_scope": "history",
+      "parameter_spec": "limit",
+      "result_spec": "content"
+    },
+    {
+      "kind": "theme.list",
+      "name": "theme.list",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "appearance",
+      "parameter_spec": "none",
+      "result_spec": "theme_list"
+    },
+    {
+      "kind": "theme.get",
+      "name": "theme.get",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "appearance",
+      "parameter_spec": "none",
+      "result_spec": "theme_state"
+    },
+    {
+      "kind": "theme.set",
+      "name": "theme.set",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "metadata_configuration_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_metadata_configuration",
+      "target_scope": "appearance",
+      "parameter_spec": "theme_name",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "theme.system.set",
+      "name": "theme.system.set",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "metadata_configuration_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_metadata_configuration",
+      "target_scope": "appearance",
+      "parameter_spec": "boolean_value",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "theme.light.set",
+      "name": "theme.light.set",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "metadata_configuration_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_metadata_configuration",
+      "target_scope": "appearance",
+      "parameter_spec": "theme_name",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "theme.dark.set",
+      "name": "theme.dark.set",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "metadata_configuration_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_metadata_configuration",
+      "target_scope": "appearance",
+      "parameter_spec": "theme_name",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "appearance.get",
+      "name": "appearance.get",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "appearance",
+      "parameter_spec": "none",
+      "result_spec": "appearance_state"
+    },
+    {
+      "kind": "appearance.font_size.increase",
+      "name": "appearance.font_size.increase",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "metadata_configuration_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_metadata_configuration",
+      "target_scope": "appearance",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "appearance.font_size.decrease",
+      "name": "appearance.font_size.decrease",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "metadata_configuration_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_metadata_configuration",
+      "target_scope": "appearance",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "appearance.font_size.reset",
+      "name": "appearance.font_size.reset",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "metadata_configuration_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_metadata_configuration",
+      "target_scope": "appearance",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "appearance.zoom.increase",
+      "name": "appearance.zoom.increase",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "metadata_configuration_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_metadata_configuration",
+      "target_scope": "appearance",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "appearance.zoom.decrease",
+      "name": "appearance.zoom.decrease",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "metadata_configuration_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_metadata_configuration",
+      "target_scope": "appearance",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "appearance.zoom.reset",
+      "name": "appearance.zoom.reset",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "metadata_configuration_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_metadata_configuration",
+      "target_scope": "appearance",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "setting.list",
+      "name": "setting.list",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "settings",
+      "parameter_spec": "none",
+      "result_spec": "setting_list"
+    },
+    {
+      "kind": "setting.get",
+      "name": "setting.get",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "settings",
+      "parameter_spec": "key",
+      "result_spec": "setting_value"
+    },
+    {
+      "kind": "setting.set",
+      "name": "setting.set",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "metadata_configuration_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_metadata_configuration",
+      "target_scope": "settings",
+      "parameter_spec": "key_value",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "setting.toggle",
+      "name": "setting.toggle",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "metadata_configuration_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_metadata_configuration",
+      "target_scope": "settings",
+      "parameter_spec": "key",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "keybinding.list",
+      "name": "keybinding.list",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "keybinding",
+      "parameter_spec": "none",
+      "result_spec": "keybinding_list"
+    },
+    {
+      "kind": "keybinding.get",
+      "name": "keybinding.get",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "keybinding",
+      "parameter_spec": "binding_name",
+      "result_spec": "keybinding_metadata"
+    },
+    {
+      "kind": "action.list",
+      "name": "action.list",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "action",
+      "parameter_spec": "none",
+      "result_spec": "capability_list"
+    },
+    {
+      "kind": "action.inspect",
+      "name": "action.inspect",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "action",
+      "parameter_spec": "action_name",
+      "result_spec": "capability_metadata"
+    },
+    {
+      "kind": "surface.settings.open",
+      "name": "surface.settings.open",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "surface",
+      "parameter_spec": "page_query",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "surface.command_palette.open",
+      "name": "surface.command_palette.open",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "surface",
+      "parameter_spec": "query",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "surface.command_search.open",
+      "name": "surface.command_search.open",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "surface",
+      "parameter_spec": "query",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "surface.warp_drive.open",
+      "name": "surface.warp_drive.open",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "surface",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "surface.warp_drive.toggle",
+      "name": "surface.warp_drive.toggle",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "surface",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "surface.resource_center.toggle",
+      "name": "surface.resource_center.toggle",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "surface",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "surface.ai_assistant.toggle",
+      "name": "surface.ai_assistant.toggle",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "surface",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "surface.code_review.toggle",
+      "name": "surface.code_review.toggle",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "surface",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "surface.left_panel.toggle",
+      "name": "surface.left_panel.toggle",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "surface",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "surface.right_panel.toggle",
+      "name": "surface.right_panel.toggle",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "surface",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "surface.vertical_tabs.toggle",
+      "name": "surface.vertical_tabs.toggle",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "surface",
+      "parameter_spec": "none",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "file.list",
+      "name": "file.list",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "file",
+      "parameter_spec": "none",
+      "result_spec": "file_list"
+    },
+    {
+      "kind": "file.open",
+      "name": "file.open",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "file",
+      "parameter_spec": "file_open",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "project.active",
+      "name": "project.active",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "project",
+      "parameter_spec": "none",
+      "result_spec": "project_list"
+    },
+    {
+      "kind": "project.list",
+      "name": "project.list",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "project",
+      "parameter_spec": "none",
+      "result_spec": "project_list"
+    },
+    {
+      "kind": "project.open",
+      "name": "project.open",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": false,
+      "authenticated_user": {
+        "required": false
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp",
+        "outside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "project",
+      "parameter_spec": "path",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "drive.list",
+      "name": "drive.list",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_metadata",
+      "state_data_category": "metadata_read",
+      "requires_authenticated_user": true,
+      "authenticated_user": {
+        "required": true
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp"
+      ],
+      "permission_category": "read_metadata",
+      "target_scope": "drive_object",
+      "parameter_spec": "drive_object_list",
+      "result_spec": "drive_object_list"
+    },
+    {
+      "kind": "drive.inspect",
+      "name": "drive.inspect",
+      "implementation_status": "implemented",
+      "risk_tier": "read_only_terminal_data",
+      "state_data_category": "underlying_data_read",
+      "requires_authenticated_user": true,
+      "authenticated_user": {
+        "required": true
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp"
+      ],
+      "permission_category": "read_underlying_data",
+      "target_scope": "drive_object",
+      "parameter_spec": "drive_object_id",
+      "result_spec": "drive_object_metadata"
+    },
+    {
+      "kind": "drive.open",
+      "name": "drive.open",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": true,
+      "authenticated_user": {
+        "required": true
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "drive_object",
+      "parameter_spec": "drive_object_id",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "drive.notebook.open",
+      "name": "drive.notebook.open",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": true,
+      "authenticated_user": {
+        "required": true
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "drive_object",
+      "parameter_spec": "drive_object_id",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "drive.env_var_collection.open",
+      "name": "drive.env_var_collection.open",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": true,
+      "authenticated_user": {
+        "required": true
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "drive_object",
+      "parameter_spec": "drive_object_id",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "drive.object.share.open",
+      "name": "drive.object.share.open",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_non_destructive",
+      "state_data_category": "app_state_mutation",
+      "requires_authenticated_user": true,
+      "authenticated_user": {
+        "required": true
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp"
+      ],
+      "permission_category": "mutate_app_state",
+      "target_scope": "drive_object",
+      "parameter_spec": "drive_object_id",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "drive.object.create",
+      "name": "drive.object.create",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_destructive_or_execution",
+      "state_data_category": "underlying_data_mutation",
+      "requires_authenticated_user": true,
+      "authenticated_user": {
+        "required": true
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp"
+      ],
+      "permission_category": "mutate_underlying_data",
+      "target_scope": "drive_object",
+      "parameter_spec": "drive_object_create",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "drive.object.update",
+      "name": "drive.object.update",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_destructive_or_execution",
+      "state_data_category": "underlying_data_mutation",
+      "requires_authenticated_user": true,
+      "authenticated_user": {
+        "required": true
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp"
+      ],
+      "permission_category": "mutate_underlying_data",
+      "target_scope": "drive_object",
+      "parameter_spec": "drive_object_update",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "drive.object.delete",
+      "name": "drive.object.delete",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_destructive_or_execution",
+      "state_data_category": "underlying_data_mutation",
+      "requires_authenticated_user": true,
+      "authenticated_user": {
+        "required": true
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp"
+      ],
+      "permission_category": "mutate_underlying_data",
+      "target_scope": "drive_object",
+      "parameter_spec": "drive_object_id",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "drive.object.insert",
+      "name": "drive.object.insert",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_destructive_or_execution",
+      "state_data_category": "underlying_data_mutation",
+      "requires_authenticated_user": true,
+      "authenticated_user": {
+        "required": true
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp"
+      ],
+      "permission_category": "mutate_underlying_data",
+      "target_scope": "drive_object",
+      "parameter_spec": "drive_object_insert",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "drive.object.share_to_team",
+      "name": "drive.object.share_to_team",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_destructive_or_execution",
+      "state_data_category": "underlying_data_mutation",
+      "requires_authenticated_user": true,
+      "authenticated_user": {
+        "required": true
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp"
+      ],
+      "permission_category": "mutate_underlying_data",
+      "target_scope": "drive_object",
+      "parameter_spec": "drive_object_id",
+      "result_spec": "acknowledgement"
+    },
+    {
+      "kind": "drive.workflow.run",
+      "name": "drive.workflow.run",
+      "implementation_status": "implemented",
+      "risk_tier": "mutating_destructive_or_execution",
+      "state_data_category": "underlying_data_mutation",
+      "requires_authenticated_user": true,
+      "authenticated_user": {
+        "required": true
+      },
+      "allowed_invocation_contexts": [
+        "inside_warp"
+      ],
+      "permission_category": "mutate_underlying_data",
+      "target_scope": "drive_object",
+      "parameter_spec": "workflow_run",
+      "result_spec": "acknowledgement"
+    }
+  ]
+}

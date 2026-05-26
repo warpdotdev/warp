@@ -1,0 +1,7 @@
+{
+  "ok": false,
+  "error": {
+    "code": "execution_context_not_allowed",
+    "message": "Warp terminal proof is unknown or has been invalidated"
+  }
+}

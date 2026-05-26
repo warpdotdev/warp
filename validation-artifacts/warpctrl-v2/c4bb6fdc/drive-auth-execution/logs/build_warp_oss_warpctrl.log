@@ -1,0 +1,2172 @@
+    Updating git repository `https://github.com/servo/core-foundation-rs`
+    Updating git repository `https://github.com/warpdotdev/rust-objc.git`
+    Updating git repository `https://github.com/warpdotdev/pathfinder.git`
+    Updating git repository `https://github.com/warpdotdev/jemallocator.git`
+    Updating git submodule `https://github.com/facebook/jemalloc`
+    Updating git repository `https://github.com/warpdotdev/tink-rust`
+    Updating git submodule `https://github.com/google/wycheproof`
+    Updating git repository `https://github.com/warpdotdev/yaml-rust.git`
+    Updating crates.io index
+    Updating git repository `https://github.com/warpdotdev/warp-proto-apis.git`
+    Updating git repository `https://github.com/warpdotdev/notify`
+    Updating git repository `https://github.com/warpdotdev/font-kit`
+    Updating git repository `https://github.com/warpdotdev/cosmic-text.git`
+    Updating git repository `https://github.com/warpdotdev/winit.git`
+    Updating git repository `https://github.com/warpdotdev/dwrote-rs`
+    Updating git repository `https://github.com/warpdotdev/command-corrections.git`
+    Updating git repository `https://github.com/warpdotdev/session-sharing-protocol.git`
+    Updating git repository `https://github.com/warpdotdev/vte.git`
+    Updating git repository `https://github.com/warpdotdev/command-signatures.git`
+    Updating git repository `https://github.com/warpdotdev/mermaid-to-svg.git`
+    Updating git repository `https://github.com/warpdotdev/workflows`
+    Updating git repository `https://github.com/warpdotdev/difflib.git`
+    Updating git repository `https://github.com/warpdotdev/rust-email_address`
+    Updating git repository `https://github.com/warpdotdev/uneval`
+ Downloading crates ...
+  Downloaded aead v0.5.2
+  Downloaded aligned-vec v0.6.1
+  Downloaded aliasable v0.1.3
+  Downloaded aligned v0.4.3
+  Downloaded ab_glyph v0.2.29
+  Downloaded ahash v0.7.8
+  Downloaded assert-json-diff v2.0.2
+  Downloaded aws-smithy-observability v0.2.6
+  Downloaded approx v0.5.1
+  Downloaded async-channel v2.3.1
+  Downloaded as-slice v0.2.1
+  Downloaded aws-smithy-query v0.60.15
+  Downloaded arrayref v0.3.9
+  Downloaded anstyle-query v1.1.5
+  Downloaded base64-simd v0.8.0
+  Downloaded base16ct v0.2.0
+  Downloaded arg_enum_proc_macro v0.3.4
+  Downloaded bit-set v0.5.3
+  Downloaded avif-serialize v0.8.8
+  Downloaded calloop-wayland-source v0.3.0
+  Downloaded bytecheck_derive v0.6.12
+  Downloaded ciborium-ll v0.2.2
+  Downloaded ciborium-io v0.2.2
+  Downloaded census v0.4.2
+  Downloaded cpufeatures v0.2.9
+  Downloaded cpufeatures v0.3.0
+  Downloaded anstream v0.6.21
+  Downloaded colorchoice v1.0.0
+  Downloaded bit-vec v0.9.1
+  Downloaded bit-set v0.9.1
+  Downloaded convert_case v0.4.0
+  Downloaded constant_time_eq v0.3.1
+  Downloaded aws-types v1.3.15
+  Downloaded cstr v0.2.11
+  Downloaded crypto-common v0.2.1
+  Downloaded ctr v0.9.2
+  Downloaded darling_macro v0.20.8
+  Downloaded cursor-icon v1.1.0
+  Downloaded axum-extra v0.10.1
+  Downloaded dlib v0.5.2
+  Downloaded comfy-table v7.2.1
+  Downloaded eventsource-stream v0.2.3
+  Downloaded erased-serde v0.4.10
+  Downloaded enum-iterator v1.4.1
+  Downloaded futf v0.1.5
+  Downloaded darling_core v0.20.8
+  Downloaded icu_locid_transform_data v1.5.0
+  Downloaded hmac v0.12.1
+  Downloaded instant v0.1.12
+  Downloaded jaq-std v3.0.0
+  Downloaded interpolator v0.5.0
+  Downloaded line-span v0.1.5
+  Downloaded levenshtein_automata v0.2.1
+  Downloaded idna_adapter v1.2.0
+  Downloaded infer v0.19.0
+  Downloaded logos-derive v0.14.1
+  Downloaded match_token v0.35.0
+  Downloaded lebe v0.5.3
+  Downloaded lz4_flex v0.13.0
+  Downloaded maybe-rayon v0.1.1
+  Downloaded num-conv v0.2.0
+  Downloaded num-integer v0.1.46
+  Downloaded ordered-stream v0.2.0
+  Downloaded ouroboros_macro v0.18.0
+  Downloaded memoffset v0.9.0
+  Downloaded pharos v0.5.3
+  Downloaded os_pipe v1.2.3
+  Downloaded prost-reflect-build v0.16.0
+  Downloaded radium v0.7.0
+  Downloaded ptr_meta v0.1.4
+  Downloaded quote-use-macros v0.7.2
+  Downloaded quote-use v0.7.2
+  Downloaded rangemap v1.4.0
+  Downloaded renderdoc-sys v1.1.0
+  Downloaded rfc6979 v0.4.0
+  Downloaded rmcp-macros v1.6.0
+  Downloaded ravif v0.12.0
+  Downloaded rustc_version v0.4.0
+  Downloaded serde_derive v1.0.228
+  Downloaded serde_repr v0.1.20
+  Downloaded rust-embed-utils v8.7.2
+  Downloaded resvg v0.47.0
+  Downloaded siphasher v0.3.11
+  Downloaded signal-hook-mio v0.2.5
+  Downloaded rquickjs v0.3.1
+  Downloaded simd_helpers v0.1.0
+  Downloaded strsim v0.10.0
+  Downloaded sys-locale v0.3.2
+  Downloaded tap v1.0.1
+  Downloaded temp-dir v0.1.11
+  Downloaded tantivy-tokenizer-api v0.7.0
+  Downloaded thread_local v1.1.7
+  Downloaded thiserror v1.0.63
+  Downloaded tantivy-sstable v0.7.0
+  Downloaded tink-prf v0.3.0
+  Downloaded tink-aead v0.3.0
+  Downloaded tink-daead v0.3.0
+  Downloaded tokio-rustls v0.26.4
+  Downloaded unindent v0.1.11
+  Downloaded trait-set v0.3.0
+  Downloaded toml-span v0.7.1
+  Downloaded urlocator v0.1.4
+  Downloaded toml_parser v1.1.0+spec-1.1.0
+  Downloaded wasm-bindgen-futures v0.4.67
+  Downloaded wasm-bindgen-shared v0.2.117
+  Downloaded wayland-sys v0.31.7
+  Downloaded wgpu-core-deps-windows-linux-android v29.0.0
+  Downloaded unicode-segmentation v1.11.0
+  Downloaded which v4.4.2
+  Downloaded xkbcommon-dl v0.4.2
+  Downloaded serde_with_macros v2.3.3
+  Downloaded wyz v0.5.1
+  Downloaded zerofrom-derive v0.1.5
+  Downloaded zvariant_utils v3.2.0
+  Downloaded zune-core v0.4.12
+  Downloaded zune-inflate v0.2.54
+  Downloaded zopfli v0.8.3
+  Downloaded winnow v0.5.17
+  Downloaded winnow v1.0.0
+  Downloaded xcursor v0.3.4
+  Downloaded x11rb v0.13.2
+  Downloaded validator v0.19.0
+  Downloaded svgtypes v0.16.1
+  Downloaded spirv v0.4.0+sdk-1.4.341.0
+  Downloaded wgpu-core v29.0.1
+  Downloaded zeroize_derive v1.4.3
+  Downloaded zune-jpeg v0.4.21
+  Downloaded zvariant v5.6.0
+  Downloaded zerocopy v0.7.32
+  Downloaded zerovec-derive v0.10.3
+  Downloaded rquickjs-sys v0.3.1
+  Downloaded tinyvec v1.6.0
+  Downloaded tungstenite v0.24.0
+  Downloaded schemars v1.0.4
+  Downloaded x11rb-protocol v0.13.2
+  Downloaded wasm-bindgen-macro-support v0.2.117
+  Downloaded libgit2-sys v0.18.3+1.9.2
+  Downloaded uuid v1.19.0
+  Downloaded arborium-powershell v2.13.0
+  Downloaded hashbrown v0.16.0
+  Downloaded syntect v5.2.0
+  Downloaded regex-bites v0.1.6
+  Downloaded web-sys v0.3.94
+  Downloaded owned_ttf_parser v0.25.0
+  Downloaded tantivy-columnar v0.7.0
+  Downloaded tokio v1.50.0
+  Downloaded zip v2.4.2
+  Downloaded zerovec v0.10.4
+  Downloaded rust-embed v8.7.2
+  Downloaded icu_properties_data v1.5.0
+  Downloaded curve25519-dalek v4.1.3
+  Downloaded tiny-skia v0.11.4
+  Downloaded ttf-parser v0.25.1
+  Downloaded linux-raw-sys v0.4.15
+  Downloaded arborium-php v2.13.0
+  Downloaded swash v0.1.19
+  Downloaded rav1e v0.8.1
+  Downloaded tiny-skia v0.12.0
+  Downloaded sysinfo v0.37.0
+  Downloaded arborium-tree-sitter v2.13.0
+  Downloaded serde_with v2.3.3
+  Downloaded arborium-typescript v2.13.0
+  Downloaded rmcp v1.6.0
+  Downloaded av-scenechange v0.14.1
+  Downloaded arborium-elixir v2.13.0
+  Downloaded linux-raw-sys v0.11.0
+  Downloaded diesel v2.3.9
+  Downloaded arborium-ruby v2.13.0
+  Downloaded ash v0.38.0+1.3.281
+  Downloaded arborium-bash v2.13.0
+  Downloaded wgpu-hal v29.0.1
+  Downloaded arborium-tsx v2.13.0
+  Downloaded arborium-rust v2.13.0
+  Downloaded arborium-c v2.13.0
+  Downloaded h2 v0.4.12
+  Downloaded aws-lc-rs v1.16.2
+  Downloaded tiff v0.10.3
+  Downloaded rust-embed v6.8.1
+  Downloaded hashbrown v0.15.2
+  Downloaded rand v0.9.4
+  Downloaded tantivy-fst v0.5.0
+  Downloaded zbus v5.9.0
+  Downloaded vec1 v1.10.1
+  Downloaded saphyr-parser v0.0.6
+  Downloaded regex-lite v0.1.6
+  Downloaded hashbrown v0.14.1
+  Downloaded rand v0.8.6
+  Downloaded qrcode v0.14.1
+  Downloaded js-sys v0.3.94
+  Downloaded itertools v0.10.5
+  Downloaded zune-jpeg v0.5.12
+  Downloaded csv v1.3.1
+  Downloaded arborium-swift v2.13.0
+  Downloaded ws_stream_wasm v0.7.4
+  Downloaded writeable v0.5.5
+  Downloaded pxfm v0.1.28
+  Downloaded version-compare v0.1.1
+  Downloaded v_frame v0.3.9
+  Downloaded tracing v0.1.44
+  Downloaded sctk-adwaita v0.10.1
+  Downloaded onig_sys v69.9.1
+  Downloaded hpke v0.13.0
+  Downloaded arborium-c-sharp v2.13.0
+  Downloaded hashbrown v0.12.3
+  Downloaded datasketches v0.2.0
+  Downloaded tantivy v0.26.0
+  Downloaded petgraph v0.8.3
+  Downloaded oauth2 v5.0.0
+  Downloaded arborium-scala v2.13.0
+  Downloaded crossterm v0.29.0
+  Downloaded write16 v1.0.0
+  Downloaded wgpu-naga-bridge v29.0.1
+  Downloaded roxmltree v0.21.1
+  Downloaded wgpu v29.0.1
+  Downloaded waker-fn v1.1.1
+  Downloaded versions v5.0.1
+  Downloaded variant_count v1.1.0
+  Downloaded tinystr v0.7.6
+  Downloaded serde_yaml v0.8.26
+  Downloaded rust-stemmers v1.2.0
+  Downloaded rustls v0.23.39
+  Downloaded pin-project v1.1.3
+  Downloaded miniz_oxide v0.8.8
+  Downloaded arborium-cpp v2.13.0
+  Downloaded arborium-objc v2.13.0
+  Downloaded arborium-python v2.13.0
+  Downloaded wayland-protocols v0.32.9
+  Downloaded xkeysym v0.2.1
+  Downloaded wgpu-types v29.0.1
+  Downloaded rustix v1.1.2
+  Downloaded rustix v0.38.44
+  Downloaded zeno v0.2.3
+  Downloaded arborium-kotlin v2.13.0
+  Downloaded zbus_names v4.2.0
+  Downloaded zbus_macros v5.9.0
+  Downloaded yoke v0.7.5
+  Downloaded x25519-dalek v2.0.1
+  Downloaded x11-dl v2.21.0
+  Downloaded utf-8 v0.7.6
+  Downloaded usvg v0.47.0
+  Downloaded universal-hash v0.5.1
+  Downloaded unindent v0.2.4
+  Downloaded tracing-subscriber v0.3.20
+  Downloaded time v0.3.47
+  Downloaded syn v2.0.117
+  Downloaded deltae v0.3.2
+  Downloaded zvariant_derive v5.6.0
+  Downloaded zune-core v0.5.1
+  Downloaded zeroize v1.8.2
+  Downloaded yazi v0.1.6
+  Downloaded y4m v0.8.0
+  Downloaded wayland-protocols-wlr v0.3.9
+  Downloaded tantivy-bitpacker v0.10.0
+  Downloaded p256 v0.13.2
+  Downloaded zerofrom v0.1.5
+  Downloaded yoke-derive v0.7.5
+  Downloaded yeslogic-fontconfig-sys v5.0.0
+  Downloaded xmlwriter v0.1.0
+  Downloaded xmlparser v0.13.6
+  Downloaded xml5ever v0.35.0
+  Downloaded xdg v2.5.2
+  Downloaded weezl v0.1.12
+  Downloaded wayland-backend v0.3.11
+  Downloaded skrifa v0.22.3
+  Downloaded arborium-sql v2.13.0
+  Downloaded rustybuzz v0.20.1
+  Downloaded diesel_derives v2.3.5
+  Downloaded wl-clipboard-rs v0.9.3
+  Downloaded wayland-protocols-plasma v0.3.9
+  Downloaded polling v3.11.0
+  Downloaded logos v0.14.1
+  Downloaded web_atoms v0.1.3
+  Downloaded wayland-client v0.31.11
+  Downloaded tower-http v0.6.8
+  Downloaded wayland-scanner v0.31.7
+  Downloaded titlecase v1.1.0
+  Downloaded signal-hook-registry v1.4.1
+  Downloaded html5ever v0.35.0
+  Downloaded typenum v1.20.0
+  Downloaded tokio-util v0.7.18
+  Downloaded jiff v0.2.24
+  Downloaded aws-config v1.8.16
+  Downloaded aes-gcm v0.10.3
+  Downloaded wayland-cursor v0.31.8
+  Downloaded wayland-csd-frame v0.3.0
+  Downloaded wasm-bindgen v0.2.117
+  Downloaded unsafe-libyaml v0.2.11
+  Downloaded unicode-script v0.5.5
+  Downloaded unicode-properties v0.1.3
+  Downloaded unicode-general-category v1.1.0
+  Downloaded unicode-bidi v0.3.15
+  Downloaded typed-path v0.10.0
+  Downloaded tracing-core v0.1.36
+  Downloaded toml_edit v0.20.2
+  Downloaded serde_json v1.0.145
+  Downloaded arborium-java v2.13.0
+  Downloaded wasm-bindgen-macro v0.2.117
+  Downloaded walkdir v2.4.0
+  Downloaded vsimd v0.8.0
+  Downloaded utf16_iter v1.0.5
+  Downloaded unicode-ident v1.0.12
+  Downloaded unicode-bidi-mirroring v0.4.0
+  Downloaded unicase v2.7.0
+  Downloaded typetag v0.2.21
+  Downloaded twox-hash v2.1.2
+  Downloaded tracing-attributes v0.1.31
+  Downloaded toml_edit v0.25.6+spec-1.1.0
+  Downloaded toml_datetime v1.1.0+spec-1.1.0
+  Downloaded thiserror-impl v1.0.63
+  Downloaded takecell v0.1.1
+  Downloaded tabwriter v1.4.1
+  Downloaded smithay-client-toolkit v0.19.2
+  Downloaded schemars_derive v1.0.4
+  Downloaded utf8-width v0.1.7
+  Downloaded utf8-ranges v1.0.5
+  Downloaded urlencoding v2.1.3
+  Downloaded libsqlite3-sys v0.33.0
+  Downloaded unicode-vo v0.1.0
+  Downloaded unicode-ccc v0.4.0
+  Downloaded typetag-impl v0.2.21
+  Downloaded typeid v1.0.3
+  Downloaded typed-arena v2.0.2
+  Downloaded try-lock v0.2.4
+  Downloaded tree_magic_mini v3.2.2
+  Downloaded tree-sitter-language v0.1.2
+  Downloaded toml_writer v1.1.0+spec-1.1.0
+  Downloaded toml v0.9.6
+  Downloaded toml v0.5.11
+  Downloaded tar v0.4.45
+  Downloaded icu_properties v1.5.1
+  Downloaded toml_write v0.1.2
+  Downloaded toml v0.8.23
+  Downloaded tokio-macros v2.6.1
+  Downloaded thiserror-impl v2.0.17
+  Downloaded serde_spanned v0.6.9
+  Downloaded litrs v1.0.0
+  Downloaded htmlescape v0.3.1
+  Downloaded toml_datetime v0.7.3
+  Downloaded tiny-skia-path v0.12.0
+  Downloaded tiny-skia-path v0.11.4
+  Downloaded tendril v0.4.3
+  Downloaded serde_spanned v1.0.3
+  Downloaded parking_lot v0.12.5
+  Downloaded to_method v1.1.0
+  Downloaded tink-mac v0.3.0
+  Downloaded thiserror v2.0.17
+  Downloaded tantivy-query-grammar v0.26.0
+  Downloaded object v0.37.3
+  Downloaded tini v1.3.0
+  Downloaded time-macros v0.2.27
+  Downloaded tempfile v3.23.0
+  Downloaded freetype-sys v0.20.1
+  Downloaded tantivy-stacker v0.7.0
+  Downloaded slotmap v1.0.6
+  Downloaded quick-xml v0.30.0
+  Downloaded strum v0.27.1
+  Downloaded serde v1.0.228
+  Downloaded ashpd v0.11.1
+  Downloaded time-core v0.1.8
+  Downloaded thousands v0.2.0
+  Downloaded psl v2.1.4
+  Downloaded arborium-javascript v2.13.0
+  Downloaded serde-bytes-repr v0.3.0
+  Downloaded scoped-tls v1.0.1
+  Downloaded rust-embed-impl v8.7.2
+  Downloaded rust-embed-impl v6.8.1
+  Downloaded raw-window-handle v0.5.2
+  Downloaded parking_lot_core v0.9.12
+  Downloaded litemap v0.7.4
+  Downloaded termcolor v1.4.1
+  Downloaded synstructure v0.13.1
+  Downloaded fancy-regex v0.11.0
+  Downloaded rquickjs-core v0.3.1
+  Downloaded semver v1.0.20
+  Downloaded nu-ansi-term v0.50.3
+  Downloaded euclid v0.22.13
+  Downloaded syn_derive v0.1.8
+  Downloaded similar v2.7.0
+  Downloaded signal-hook v0.3.18
+  Downloaded sha2 v0.11.0
+  Downloaded tantivy-common v0.11.0
+  Downloaded strum_macros v0.27.1
+  Downloaded string_cache v0.8.9
+  Downloaded streaming-iterator v0.1.9
+  Downloaded sse-stream v0.2.1
+  Downloaded spki v0.7.3
+  Downloaded spinning v0.1.0
+  Downloaded slab v0.4.9
+  Downloaded sketches-ddsketch v0.4.0
+  Downloaded serde_yaml v0.9.34+deprecated
+  Downloaded rustls-platform-verifier v0.6.2
+  Downloaded rust_decimal v1.35.0
+  Downloaded poly1305 v0.8.0
+  Downloaded icu_normalizer_data v1.5.0
+  Downloaded sync_wrapper v1.0.1
+  Downloaded simplecss v0.2.1
+  Downloaded simdutf8 v0.1.5
+  Downloaded serde_regex v1.1.0
+  Downloaded serde_path_to_error v0.1.16
+  Downloaded seahash v4.1.0
+  Downloaded string_cache_codegen v0.5.4
+  Downloaded strict-num v0.1.1
+  Downloaded smol_str v0.2.2
+  Downloaded serde_core v1.0.228
+  Downloaded simd-adler32 v0.3.7
+  Downloaded shellexpand v3.1.1
+  Downloaded rustls-webpki v0.103.13
+  Downloaded rustls-native-certs v0.8.2
+  Downloaded prost-types v0.14.3
+  Downloaded signature v2.2.0
+  Downloaded sha-1 v0.10.1
+  Downloaded serde_bytes v0.11.19
+  Downloaded roxmltree v0.18.1
+  Downloaded half v2.6.0
+  Downloaded grep-printer v0.3.1
+  Downloaded async-compression v0.4.22
+  Downloaded rand_chacha v0.3.1
+  Downloaded ptr_meta_derive v0.1.4
+  Downloaded serde_derive_internals v0.29.1
+  Downloaded send_wrapper v0.6.0
+  Downloaded send_wrapper v0.4.0
+  Downloaded self_cell v1.2.1
+  Downloaded sec1 v0.7.3
+  Downloaded safemem v0.3.3
+  Downloaded rust-embed-utils v7.8.1
+  Downloaded rkyv v0.7.46
+  Downloaded read-fonts v0.22.7
+  Downloaded rayon v1.10.0
+  Downloaded log-panics v2.1.0
+  Downloaded keyboard-types v0.7.0
+  Downloaded secret-service v5.0.0
+  Downloaded ryu v1.0.23
+  Downloaded rustversion v1.0.14
+  Downloaded rustc-demangle v0.1.27
+  Downloaded rstar v0.12.2
+  Downloaded rgb v0.8.50
+  Downloaded ref-cast v1.0.23
+  Downloaded quinn-proto v0.11.14
+  Downloaded quick-xml v0.37.4
+  Downloaded process-wrap v9.1.0
+  Downloaded pastey v0.1.1
+  Downloaded nom v8.0.0
+  Downloaded naga v29.0.1
+  Downloaded mio v1.1.1
+  Downloaded lock_api v0.4.14
+  Downloaded locale_config v0.3.0
+  Downloaded derive_more-impl v2.0.1
+  Downloaded derive_more v2.0.1
+  Downloaded derive_more v0.99.17
+  Downloaded reqwest v0.13.3
+  Downloaded rayon-core v1.12.1
+  Downloaded profiling v1.0.11
+  Downloaded precomputed-hash v0.1.1
+  Downloaded parking v2.2.0
+  Downloaded palette_derive v0.6.1
+  Downloaded num-bigint v0.4.6
+  Downloaded quick-error v2.0.1
+  Downloaded prost v0.14.3
+  Downloaded proc-macro-utils v0.8.0
+  Downloaded png v0.18.1
+  Downloaded ordered-float v5.3.0
+  Downloaded mockito v1.7.1
+  Downloaded matchit v0.8.4
+  Downloaded lz4_flex v0.11.6
+  Downloaded grep-searcher v0.1.16
+  Downloaded rkyv_derive v0.7.46
+  Downloaded prost-reflect v0.16.3
+  Downloaded plist v1.5.1
+  Downloaded pkcs8 v0.10.2
+  Downloaded paste v1.0.14
+  Downloaded raw-window-handle v0.6.2
+  Downloaded prost-reflect-derive v0.16.0
+  Downloaded pem-rfc7468 v0.7.0
+  Downloaded pathfinder_color v0.5.0
+  Downloaded migrations_macros v2.3.0
+  Downloaded lru v0.16.3
+  Downloaded logos-codegen v0.14.1
+  Downloaded kmeans_colors v0.5.0
+  Downloaded rend v0.4.2
+  Downloaded ref-cast-impl v1.0.23
+  Downloaded priority-queue v2.5.0
+  Downloaded presser v0.3.1
+  Downloaded ownedbytes v0.9.0
+  Downloaded outref v0.5.2
+  Downloaded ouroboros v0.18.0
+  Downloaded lasso v0.7.3
+  Downloaded khronos-egl v6.0.0
+  Downloaded jobserver v0.1.32
+  Downloaded prettyplease v0.2.37
+  Downloaded num-iter v0.1.45
+  Downloaded new_debug_unreachable v1.0.4
+  Downloaded murmurhash32 v0.3.1
+  Downloaded gettext-sys v0.21.3
+  Downloaded migrations_internals v2.3.0
+  Downloaded measure_time v0.9.0
+  Downloaded markup5ever v0.35.0
+  Downloaded event-listener v5.4.0
+  Downloaded psl-types v2.0.11
+  Downloaded profiling-procmacros v1.0.17
+  Downloaded num_cpus v1.16.0
+  Downloaded num v0.4.3
+  Downloaded linked-hash-map v0.5.6
+  Downloaded line-wrap v0.1.1
+  Downloaded line-ending v1.5.1
+  Downloaded libloading v0.8.9
+  Downloaded inotify v0.11.0
+  Downloaded derivative v2.2.0
+  Downloaded darling_core v0.21.3
+  Downloaded crypto-bigint v0.5.5
+  Downloaded polyval v0.6.2
+  Downloaded piper v0.2.1
+  Downloaded pin-project-internal v1.1.3
+  Downloaded libz-sys v1.1.25
+  Downloaded itertools v0.11.0
+  Downloaded proc-macro-crate v2.0.0
+  Downloaded primeorder v0.13.6
+  Downloaded ppv-lite86 v0.2.17
+  Downloaded pico-args v0.5.0
+  Downloaded pathfinder_geometry v0.5.1
+  Downloaded nix v0.31.2
+  Downloaded nix v0.30.1
+  Downloaded nix v0.26.4
+  Downloaded jaq-all v0.1.0
+  Downloaded hashlink v0.10.0
+  Downloaded fontconfig-parser v0.5.3
+  Downloaded prost-derive v0.14.3
+  Downloaded prost-build v0.14.3
+  Downloaded palette v0.6.1
+  Downloaded moxcms v0.7.11
+  Downloaded jaq-fmts v0.1.0
+  Downloaded addr v0.15.6
+  Downloaded nom v7.1.3
+  Downloaded arborium-yaml v2.13.0
+  Downloaded ordered_hashmap v0.0.3
+  Downloaded ordered-float v3.9.2
+  Downloaded open v5.3.3
+  Downloaded opaque-debug v0.3.1
+  Downloaded oneshot v0.1.13
+  Downloaded minimal-lexical v0.2.1
+  Downloaded lsp-types v0.97.0
+  Downloaded group v0.13.0
+  Downloaded arborium-go v2.13.0
+  Downloaded pbkdf2 v0.12.2
+  Downloaded pathdiff v0.2.1
+  Downloaded pastey v0.2.1
+  Downloaded os_info v3.7.0
+  Downloaded is-docker v0.2.0
+  Downloaded interprocess v1.2.1
+  Downloaded memchr v2.7.6
+  Downloaded markup5ever_rcdom v0.35.0+unofficial
+  Downloaded is_terminal_polyfill v1.70.2
+  Downloaded is_executable v1.0.1
+  Downloaded is-wsl v0.4.0
+  Downloaded onig v6.5.1
+  Downloaded num-rational v0.4.2
+  Downloaded num-derive v0.4.2
+  Downloaded mime_guess v2.0.4
+  Downloaded jaq-core v3.0.0
+  Downloaded inotify-sys v0.1.5
+  Downloaded image v0.25.9
+  Downloaded fs_extra v1.3.0
+  Downloaded derive-where v1.2.7
+  Downloaded noop_proc_macro v0.3.0
+  Downloaded native-dialog v0.7.0
+  Downloaded kurbo v0.13.0
+  Downloaded notify-rust v4.11.7
+  Downloaded multimap v0.10.1
+  Downloaded memmap v0.7.0
+  Downloaded log v0.4.29
+  Downloaded num-complex v0.4.6
+  Downloaded memoffset v0.7.1
+  Downloaded memo-map v0.3.2
+  Downloaded matchers v0.2.0
+  Downloaded mac v0.1.1
+  Downloaded loop9 v0.1.5
+  Downloaded libm v0.2.15
+  Downloaded imara-diff v0.2.0
+  Downloaded hyper v1.8.1
+  Downloaded hkdf v0.12.4
+  Downloaded git2 v0.20.4
+  Downloaded get-size v0.1.4
+  Downloaded font-types v0.7.3
+  Downloaded foldhash v0.2.0
+  Downloaded jiff-static v0.2.24
+  Downloaded imgref v1.12.0
+  Downloaded icu_collections v1.5.0
+  Downloaded arborium-jq v2.13.0
+  Downloaded lalrpop-util v0.20.2
+  Downloaded inventory v0.3.20
+  Downloaded ignore v0.4.24
+  Downloaded http v1.4.0
+  Downloaded http v0.2.12
+  Downloaded grep-cli v0.1.12
+  Downloaded flate2 v1.1.1
+  Downloaded arborium-scss v2.13.0
+  Downloaded gettext-rs v0.7.0
+  Downloaded getset v0.1.2
+  Downloaded encoding_rs_io v0.1.7
+  Downloaded ecdsa v0.16.9
+  Downloaded graphlib_rust v0.0.2
+  Downloaded gpu-descriptor-types v0.2.0
+  Downloaded gpu-descriptor v0.3.2
+  Downloaded funty v2.0.0
+  Downloaded dyn-clone v1.0.20
+  Downloaded jaq-json v2.0.0
+  Downloaded itoa v1.0.18
+  Downloaded itertools v0.13.0
+  Downloaded intmap v0.7.1
+  Downloaded inquire v0.9.1
+  Downloaded indexmap v2.12.0
+  Downloaded image-webp v0.2.4
+  Downloaded iana-time-zone v0.1.64
+  Downloaded heck v0.4.1
+  Downloaded futures-lite v2.6.1
+  Downloaded fontconfig v0.8.0
+  Downloaded cynic v3.8.0
+  Downloaded inout v0.1.4
+  Downloaded icu_provider_macros v1.5.0
+  Downloaded hifijson v0.5.0
+  Downloaded grep-matcher v0.1.8
+  Downloaded futures-timer v3.0.2
+  Downloaded freetype v0.7.2
+  Downloaded fastdivide v0.4.2
+  Downloaded env_logger v0.10.2
+  Downloaded icu_normalizer v1.5.0
+  Downloaded hybrid-array v0.4.11
+  Downloaded humantime v2.1.0
+  Downloaded html-escape v0.2.13
+  Downloaded hexf-parse v0.2.1
+  Downloaded glow v0.17.0
+  Downloaded glob v0.3.1
+  Downloaded ghash v0.5.1
+  Downloaded futures-lite v1.13.0
+  Downloaded ff v0.13.1
+  Downloaded errno v0.3.10
+  Downloaded enumflags2 v0.7.12
+  Downloaded elliptic-curve v0.13.8
+  Downloaded digest v0.11.3
+  Downloaded aws-sdk-signin v1.9.0
+  Downloaded indexmap v1.9.3
+  Downloaded imagesize v0.14.0
+  Downloaded icu_provider v1.5.0
+  Downloaded grep-regex v0.1.14
+  Downloaded global-hotkey v0.7.0
+  Downloaded gimli v0.32.3
+  Downloaded gif v0.14.1
+  Downloaded freedesktop-desktop-entry v0.5.0
+  Downloaded fdeflate v0.3.7
+  Downloaded document-features v0.2.12
+  Downloaded deranged v0.5.5
+  Downloaded hex v0.4.3
+  Downloaded gloo-timers v0.2.6
+  Downloaded getrandom v0.3.4
+  Downloaded gethostname v1.1.0
+  Downloaded get-size-derive v0.1.3
+  Downloaded fontdb v0.23.0
+  Downloaded fluent-uri v0.1.4
+  Downloaded float-ord v0.3.2
+  Downloaded find-msvc-tools v0.1.9
+  Downloaded fax v0.2.6
+  Downloaded fastrand v1.9.0
+  Downloaded exr v1.74.0
+  Downloaded aws-lc-sys v0.39.1
+  Downloaded event-listener-strategy v0.5.2
+  Downloaded enumflags2_derive v0.7.12
+  Downloaded enclose v1.1.8
+  Downloaded downcast-rs v2.0.2
+  Downloaded der v0.7.10
+  Downloaded darling_core v0.23.0
+  Downloaded icu_locid_transform v1.5.0
+  Downloaded icu_locid v1.5.0
+  Downloaded http-body v0.4.6
+  Downloaded home v0.5.12
+  Downloaded hmac v0.13.0
+  Downloaded grep v0.4.1
+  Downloaded graphql-ws-client v0.11.1
+  Downloaded gpu-allocator v0.28.0
+  Downloaded globset v0.4.18
+  Downloaded fuzzy-matcher v0.3.7
+  Downloaded float-cmp v0.9.0
+  Downloaded fixedbitset v0.5.7
+  Downloaded find-crate v0.6.3
+  Downloaded fax_derive v0.2.0
+  Downloaded dunce v1.0.5
+  Downloaded dsl_auto_type v0.2.0
+  Downloaded deflate64 v0.1.10
+  Downloaded dashmap v6.1.0
+  Downloaded darling v0.20.8
+  Downloaded bstr v1.9.0
+  Downloaded cynic-parser v0.4.5
+  Downloaded chrono v0.4.40
+  Downloaded brotli-decompressor v4.0.2
+  Downloaded bitvec v1.0.1
+  Downloaded bindgen v0.70.1
+  Downloaded axum v0.8.4
+  Downloaded aws-sdk-sts v1.103.0
+  Downloaded dirs v3.0.2
+  Downloaded diesel_migrations v2.3.1
+  Downloaded derive-new v0.5.9
+  Downloaded ctutils v0.4.2
+  Downloaded clap_builder v4.5.48
+  Downloaded aws-runtime v1.7.3
+  Downloaded either v1.9.0
+  Downloaded difflib v0.4.0
+  Downloaded data-encoding v2.10.0
+  Downloaded cynic-codegen v3.8.0
+  Downloaded aws-smithy-runtime v1.11.1
+  Downloaded arborium-starlark v2.13.0
+  Downloaded arboard v3.6.1
+  Downloaded equivalent v1.0.1
+  Downloaded equator-macro v0.2.1
+  Downloaded equator v0.2.2
+  Downloaded enum-iterator-derive v1.2.1
+  Downloaded endi v1.1.0
+  Downloaded embed_plist v1.2.2
+  Downloaded downcast-rs v1.2.0
+  Downloaded dirs-sys v0.3.7
+  Downloaded darling v0.23.0
+  Downloaded crossbeam-channel v0.5.8
+  Downloaded aws-smithy-types v1.4.7
+  Downloaded async-lock v3.4.0
+  Downloaded async-io v2.6.0
+  Downloaded arborium v2.13.0
+  Downloaded cc v1.2.56
+  Downloaded bytes v1.11.1
+  Downloaded bumpalo v3.19.1
+  Downloaded borsh v1.3.0
+  Downloaded bon-macros v3.7.1
+  Downloaded base64 v0.21.7
+  Downloaded backtrace v0.3.76
+  Downloaded aws-smithy-runtime-api v1.12.0
+  Downloaded aws-smithy-http-client v1.1.12
+  Downloaded aws-sigv4 v1.4.3
+  Downloaded aws-sdk-sso v1.98.0
+  Downloaded arborium-hcl v2.13.0
+  Downloaded arborium-css v2.13.0
+  Downloaded directories v6.0.0
+  Downloaded diesel_table_macro_syntax v0.3.0
+  Downloaded dbl v0.3.2
+  Downloaded data-url v0.3.1
+  Downloaded darling_macro v0.23.0
+  Downloaded darling_macro v0.21.3
+  Downloaded darling v0.21.3
+  Downloaded cynic-proc-macros v3.8.0
+  Downloaded cvt v0.1.2
+  Downloaded curve25519-dalek-derive v0.1.1
+  Downloaded crossbeam-epoch v0.9.15
+  Downloaded core2 v0.4.0
+  Downloaded const-oid v0.10.2
+  Downloaded clap v4.5.48
+  Downloaded chacha20poly1305 v0.10.1
+  Downloaded calloop v0.13.0
+  Downloaded bytemuck v1.24.0
+  Downloaded aes v0.8.4
+  Downloaded allocator-api2 v0.2.16
+  Downloaded ctrlc v3.4.7
+  Downloaded codespan-reporting v0.13.1
+  Downloaded clap_derive v4.5.47
+  Downloaded bon v3.7.1
+  Downloaded bitstream-io v4.9.0
+  Downloaded arborium-xml v2.13.0
+  Downloaded const-oid v0.9.6
+  Downloaded concurrent-queue v2.5.0
+  Downloaded colored v3.0.0
+  Downloaded color-print-proc-macro v0.3.7
+  Downloaded cmac v0.7.2
+  Downloaded cfb v0.7.3
+  Downloaded byte-unit v5.2.0
+  Downloaded bitflags v2.9.4
+  Downloaded base64 v0.13.1
+  Downloaded async-tungstenite v0.28.2
+  Downloaded async-task v4.7.1
+  Downloaded ascii v1.1.0
+  Downloaded csv-core v0.1.11
+  Downloaded clap_complete v4.5.58
+  Downloaded clang-sys v1.8.1
+  Downloaded built v0.8.0
+  Downloaded bounded-vec-deque v0.1.1
+  Downloaded axum-core v0.5.2
+  Downloaded aws-smithy-json v0.62.5
+  Downloaded aws-sdk-ssooidc v1.100.0
+  Downloaded async-fs v2.1.2
+  Downloaded async-compat v0.2.5
+  Downloaded addr2line v0.25.1
+  Downloaded convert_case v0.7.1
+  Downloaded cmov v0.5.3
+  Downloaded blocking v1.6.2
+  Downloaded av1-grain v0.2.5
+  Downloaded arborium-dockerfile v2.13.0
+  Downloaded anyhow v1.0.79
+  Downloaded crunchy v0.2.2
+  Downloaded crossbeam-deque v0.8.3
+  Downloaded crc v3.4.0
+  Downloaded cmake v0.1.58
+  Downloaded cipher v0.4.4
+  Downloaded chacha20 v0.9.1
+  Downloaded cexpr v0.6.0
+  Downloaded cbc v0.1.2
+  Downloaded bytes-utils v0.1.4
+  Downloaded bytemuck_derive v1.10.2
+  Downloaded borsh-derive v1.3.0
+  Downloaded bitpacking v0.9.3
+  Downloaded bitflags v1.3.2
+  Downloaded aws-smithy-http v0.63.6
+  Downloaded async-executor v1.13.1
+  Downloaded arborium-lua v2.13.0
+  Downloaded ahash v0.8.11
+  Downloaded concat-idents v1.1.5
+  Downloaded collection_literals v1.0.1
+  Downloaded bytecount v0.6.9
+  Downloaded block-padding v0.3.3
+  Downloaded block-buffer v0.12.0
+  Downloaded arborium-toml v2.13.0
+  Downloaded content_inspector v0.2.4
+  Downloaded codesnake v0.3.0
+  Downloaded bincode v1.3.3
+  Downloaded as-raw-xcb-connection v1.0.0
+  Downloaded aes-siv v0.7.0
+  Downloaded bimap v0.6.3
+  Downloaded aws-smithy-xml v0.60.15
+  Downloaded async-broadcast v0.7.2
+  Downloaded arborium-highlight v2.13.0
+  Downloaded anstyle-parse v0.2.3
+  Downloaded aha-reqwest-eventsource v0.1.0
+  Downloaded aes-gcm-siv v0.11.1
+  Downloaded bit-vec v0.6.3
+  Downloaded base64ct v1.8.0
+  Downloaded aws-smithy-async v1.2.14
+  Downloaded async-process v2.5.0
+  Downloaded color_quant v1.1.0
+  Downloaded color-print v0.3.7
+  Downloaded bitflags-serde-legacy v0.1.1
+  Downloaded aws-credential-types v1.2.14
+  Downloaded async-trait v0.1.89
+  Downloaded async-signal v0.2.13
+  Downloaded async-net v2.0.0
+  Downloaded arraydeque v0.5.1
+  Downloaded arborium-theme v2.13.0
+  Downloaded arborium-json v2.13.0
+  Downloaded counter v0.6.0
+  Downloaded counter v0.5.7
+  Downloaded core_maths v0.1.0
+  Downloaded cfg_aliases v0.1.1
+  Downloaded cfg-if v1.0.0
+  Downloaded bit_field v0.10.3
+  Downloaded arborium-vue v2.13.0
+  Downloaded arborium-html v2.13.0
+  Downloaded anstyle v1.0.13
+  Downloaded attribute-derive-macro v0.6.1
+  Downloaded bytecheck v0.6.12
+  Downloaded aws-smithy-runtime-api-macros v1.0.0
+  Downloaded async-recursion v1.1.1
+  Downloaded ab_glyph_rasterizer v0.1.8
+  Downloaded byteorder-lite v0.1.0
+  Downloaded adler2 v2.0.0
+  Downloaded autocfg v1.1.0
+  Downloaded attribute-derive v0.6.1
+  Downloaded async_io_stream v0.3.3
+  Downloaded async-stream-impl v0.3.5
+  Downloaded async-stream v0.3.5
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.12
+   Compiling serde_core v1.0.228
+   Compiling cfg-if v1.0.0
+   Compiling libc v0.2.186
+   Compiling serde v1.0.228
+   Compiling shlex v1.3.0
+   Compiling find-msvc-tools v0.1.9
+   Compiling autocfg v1.1.0
+   Compiling memchr v2.7.6
+   Compiling once_cell v1.21.3
+   Compiling version_check v0.9.5
+   Compiling smallvec v1.15.1
+   Compiling pin-project-lite v0.2.16
+   Compiling equivalent v1.0.1
+   Compiling regex-syntax v0.8.5
+   Compiling libm v0.2.15
+   Compiling futures-core v0.3.31
+   Compiling either v1.9.0
+   Compiling itoa v1.0.18
+   Compiling num-traits v0.2.19
+   Compiling syn v2.0.117
+   Compiling jobserver v0.1.32
+   Compiling scopeguard v1.2.0
+   Compiling cc v1.2.56
+   Compiling pkg-config v0.3.32
+   Compiling aho-corasick v1.1.3
+   Compiling getrandom v0.2.16
+   Compiling fnv v1.0.7
+   Compiling slab v0.4.9
+   Compiling futures-io v0.3.31
+   Compiling typenum v1.20.0
+   Compiling parking_lot_core v0.9.12
+   Compiling log v0.4.29
+   Compiling ryu v1.0.23
+   Compiling rand_core v0.6.4
+   Compiling subtle v2.6.1
+   Compiling signal-hook-registry v1.4.1
+   Compiling anyhow v1.0.79
+   Compiling fastrand v2.3.0
+   Compiling generic-array v0.14.7
+   Compiling pin-utils v0.1.0
+   Compiling allocator-api2 v0.2.16
+   Compiling futures-sink v0.3.31
+   Compiling mio v1.1.1
+   Compiling foldhash v0.2.0
+   Compiling cfg_aliases v0.2.1
+   Compiling futures-channel v0.3.31
+   Compiling socket2 v0.6.0
+   Compiling futures-task v0.3.31
+   Compiling hashbrown v0.16.0
+   Compiling rustix v1.1.2
+   Compiling crossbeam-utils v0.8.21
+   Compiling linux-raw-sys v0.11.0
+   Compiling ppv-lite86 v0.2.17
+   Compiling regex-automata v0.4.9
+   Compiling tracing-core v0.1.36
+   Compiling indexmap v2.12.0
+   Compiling cpufeatures v0.2.9
+   Compiling lazy_static v1.5.0
+   Compiling foldhash v0.1.5
+   Compiling syn v1.0.109
+   Compiling parking v2.2.0
+   Compiling stable_deref_trait v1.2.0
+   Compiling hashbrown v0.15.2
+   Compiling percent-encoding v2.3.1
+   Compiling const-oid v0.9.6
+   Compiling dunce v1.0.5
+   Compiling itertools v0.14.0
+   Compiling libloading v0.8.9
+   Compiling atomic-waker v1.1.2
+   Compiling synstructure v0.13.1
+   Compiling thiserror v1.0.63
+   Compiling base64 v0.22.1
+   Compiling bitflags v2.9.4
+   Compiling serde_json v1.0.145
+   Compiling semver v1.0.20
+   Compiling form_urlencoded v1.2.1
+   Compiling futures-lite v2.6.1
+   Compiling prettyplease v0.2.37
+   Compiling thiserror v2.0.17
+   Compiling fixedbitset v0.5.7
+   Compiling serde_derive v1.0.228
+   Compiling zeroize_derive v1.4.3
+   Compiling tokio-macros v2.6.1
+   Compiling futures-macro v0.3.31
+   Compiling zeroize v1.8.2
+   Compiling tracing-attributes v0.1.31
+   Compiling thiserror-impl v1.0.63
+   Compiling futures-util v0.3.31
+   Compiling crypto-common v0.1.6
+   Compiling block-buffer v0.10.4
+   Compiling digest v0.10.7
+   Compiling zerofrom-derive v0.1.5
+   Compiling yoke-derive v0.7.5
+   Compiling tracing v0.1.44
+   Compiling displaydoc v0.2.5
+   Compiling zerovec-derive v0.10.3
+   Compiling getrandom v0.3.4
+   Compiling thiserror-impl v2.0.17
+   Compiling bytemuck_derive v1.10.2
+   Compiling zerofrom v0.1.5
+   Compiling ident_case v1.0.1
+   Compiling yoke v0.7.5
+   Compiling rustc_version v0.4.0
+   Compiling zerovec v0.10.4
+   Compiling dlib v0.5.2
+   Compiling concurrent-queue v2.5.0
+   Compiling bytes v1.11.1
+   Compiling lock_api v0.4.14
+   Compiling simd-adler32 v0.3.7
+   Compiling parking_lot v0.12.5
+   Compiling bytemuck v1.24.0
+   Compiling writeable v0.5.5
+   Compiling tinystr v0.7.6
+   Compiling litemap v0.7.4
+   Compiling tokio v1.50.0
+   Compiling http v1.4.0
+   Compiling heck v0.4.1
+   Compiling regex v1.11.1
+   Compiling icu_provider_macros v1.5.0
+   Compiling proc-macro-error-attr v1.0.4
+   Compiling icu_locid v1.5.0
+   Compiling async-io v2.6.0
+   Compiling static_assertions v1.1.0
+   Compiling crc32fast v1.5.0
+   Compiling proc-macro-error v1.0.4
+   Compiling winnow v0.7.12
+   Compiling icu_locid_transform_data v1.5.0
+   Compiling adler2 v2.0.0
+   Compiling same-file v1.0.6
+   Compiling async-task v4.7.1
+   Compiling miniz_oxide v0.8.8
+   Compiling http-body v1.0.1
+   Compiling icu_provider v1.5.0
+   Compiling http-body-util v0.1.3
+   Compiling walkdir v2.4.0
+   Compiling icu_locid_transform v1.5.0
+   Compiling icu_collections v1.5.0
+   Compiling wayland-sys v0.31.7
+   Compiling memoffset v0.9.0
+   Compiling minimal-lexical v0.2.1
+   Compiling icu_properties_data v1.5.0
+   Compiling nom v7.1.3
+   Compiling icu_properties v1.5.1
+   Compiling event-listener v5.4.0
+   Compiling rand_chacha v0.3.1
+   Compiling cmake v0.1.58
+   Compiling utf8_iter v1.0.4
+   Compiling utf16_iter v1.0.5
+   Compiling arrayvec v0.7.6
+   Compiling fs_extra v1.3.0
+   Compiling icu_normalizer_data v1.5.0
+   Compiling write16 v1.0.0
+   Compiling byteorder v1.5.0
+   Compiling rand v0.8.6
+   Compiling aws-lc-sys v0.39.1
+   Compiling event-listener-strategy v0.5.2
+   Compiling polling v3.11.0
+   Compiling siphasher v1.0.1
+   Compiling icu_normalizer v1.5.0
+   Compiling hex v0.4.3
+   Compiling flate2 v1.1.1
+   Compiling num-integer v0.1.46
+   Compiling idna_adapter v1.2.0
+   Compiling httparse v1.10.1
+   Compiling idna v1.0.3
+   Compiling uuid v1.19.0
+   Compiling unicase v2.7.0
+   Compiling mime v0.3.17
+   Compiling untrusted v0.9.0
+   Compiling aws-lc-rs v1.16.2
+   Compiling url v2.5.4
+   Compiling tokio-util v0.7.18
+   Compiling async-channel v2.3.1
+   Compiling wayland-backend v0.3.11
+   Compiling phf_shared v0.11.3
+   Compiling rustls-pki-types v1.12.0
+   Compiling memmap2 v0.9.7
+   Compiling scoped-tls v1.0.1
+   Compiling downcast-rs v1.2.0
+   Compiling tower-service v0.3.3
+   Compiling mime_guess v2.0.4
+   Compiling quick-xml v0.37.4
+   Compiling crossbeam-epoch v0.9.15
+   Compiling try-lock v0.2.4
+   Compiling rustls v0.23.39
+   Compiling wayland-client v0.31.11
+   Compiling unicode-segmentation v1.11.0
+   Compiling want v0.3.1
+   Compiling h2 v0.4.12
+   Compiling itertools v0.11.0
+   Compiling wayland-scanner v0.31.7
+   Compiling indexmap v1.9.3
+   Compiling xmlparser v0.13.6
+   Compiling option-ext v0.2.0
+   Compiling iana-time-zone v0.1.64
+   Compiling httpdate v1.0.3
+   Compiling chrono v0.4.40
+   Compiling phf_generator v0.11.3
+   Compiling sha2 v0.10.9
+   Compiling block-padding v0.3.3
+   Compiling core_maths v0.1.0
+   Compiling sync_wrapper v1.0.1
+   Compiling ipnet v2.11.0
+   Compiling tower-layer v0.3.3
+   Compiling utf-8 v0.7.6
+   Compiling dyn-clone v1.0.20
+   Compiling rustversion v1.0.14
+   Compiling ref-cast v1.0.23
+   Compiling ttf-parser v0.25.1
+   Compiling inout v0.1.4
+   Compiling crossbeam-deque v0.8.3
+   Compiling async-lock v3.4.0
+   Compiling pin-project-internal v1.1.3
+   Compiling ref-cast-impl v1.0.23
+   Compiling piper v0.2.1
+   Compiling float-cmp v0.9.0
+   Compiling heck v0.5.0
+   Compiling waker-fn v1.1.1
+   Compiling fastrand v1.9.0
+   Compiling rayon-core v1.12.1
+   Compiling hyper v1.8.1
+   Compiling toml_datetime v0.6.11
+   Compiling new_debug_unreachable v1.0.4
+   Compiling futures-lite v1.13.0
+   Compiling toml_edit v0.22.27
+   Compiling pin-project v1.1.3
+   Compiling strict-num v0.1.1
+   Compiling blocking v1.6.2
+   Compiling cipher v0.4.4
+   Compiling tower v0.5.2
+   Compiling string_cache_codegen v0.5.4
+   Compiling phf_codegen v0.11.3
+   Compiling hyper-util v0.1.16
+   Compiling async-signal v0.2.13
+   Compiling hmac v0.12.1
+   Compiling enumflags2_derive v0.7.12
+   Compiling async-trait v0.1.89
+   Compiling ahash v0.7.8
+   Compiling arrayref v0.3.9
+   Compiling linked-hash-map v0.5.6
+   Compiling rustc-hash v1.1.0
+   Compiling yaml-rust v0.4.5 (https://github.com/warpdotdev/yaml-rust.git?rev=51684719d0102ca85ff4b21cec39877a0c669e19#51684719)
+   Compiling proc-macro-crate v3.3.0
+   Compiling async-process v2.5.0
+   Compiling web_atoms v0.1.3
+   Compiling wayland-protocols v0.32.9
+   Compiling convert_case v0.7.1
+   Compiling zvariant_utils v3.2.0
+   Compiling derive-where v1.2.7
+   Compiling nix v0.30.1
+   Compiling num_cpus v1.16.0
+   Compiling mac v0.1.1
+   Compiling precomputed-hash v0.1.1
+   Compiling rustix v0.38.44
+   Compiling openssl-probe v0.1.6
+   Compiling unicode-width v0.2.1
+   Compiling raw-window-handle v0.6.2
+   Compiling strsim v0.10.0
+   Compiling rustls-native-certs v0.8.2
+   Compiling quote-use-macros v0.7.2
+   Compiling darling_core v0.20.8
+   Compiling string_cache v0.8.9
+   Compiling futf v0.1.5
+   Compiling futures-executor v0.3.31
+   Compiling zvariant_derive v5.6.0
+   Compiling rayon v1.10.0
+   Compiling phf v0.11.3
+   Compiling half v2.6.0
+   Compiling yeslogic-fontconfig-sys v5.0.0
+   Compiling ahash v0.8.11
+   Compiling slotmap v1.0.6
+   Compiling pathdiff v0.2.1
+   Compiling endi v1.1.0
+   Compiling linux-raw-sys v0.4.15
+   Compiling hashbrown v0.12.3
+   Compiling proc-macro-utils v0.8.0
+   Compiling futures v0.3.31
+   Compiling quote-use v0.7.2
+   Compiling tendril v0.4.3
+   Compiling darling_macro v0.20.8
+   Compiling roxmltree v0.18.1
+   Compiling fdeflate v0.3.7
+   Compiling pathfinder_simd v0.5.4 (https://github.com/warpdotdev/pathfinder.git?rev=34128a129ca6aee168fbc5060a4f21b4f7e486a9#34128a12)
+   Compiling serde_derive_internals v0.29.1
+   Compiling content_inspector v0.2.4
+   Compiling zerocopy v0.7.32
+   Compiling typed-path v0.10.0
+   Compiling wayland-protocols-wlr v0.3.9
+   Compiling collection_literals v1.0.1
+   Compiling tinyvec_macros v0.1.1
+   Compiling interpolator v0.5.0
+   Compiling attribute-derive-macro v0.6.1
+   Compiling tinyvec v1.6.0
+   Compiling schemars_derive v1.0.4
+   Compiling png v0.18.1
+   Compiling fontconfig-parser v0.5.3
+   Compiling darling v0.20.8
+   Compiling markup5ever v0.35.0
+   Compiling enumflags2 v0.7.12
+   Compiling hkdf v0.12.4
+   Compiling dirs-sys v0.5.0
+   Compiling gethostname v1.1.0
+   Compiling async-broadcast v0.7.2
+   Compiling async-executor v1.13.1
+   Compiling petgraph v0.8.3
+   Compiling naga v29.0.1
+   Compiling freetype-sys v0.20.1
+   Compiling ash v0.38.0+1.3.281
+   Compiling weezl v0.1.12
+   Compiling convert_case v0.4.0
+   Compiling unicode-ccc v0.4.0
+   Compiling tree-sitter-language v0.1.2
+   Compiling zune-core v0.5.1
+   Compiling urlencoding v2.1.3
+   Compiling color_quant v1.1.0
+   Compiling unicode-bidi-mirroring v0.4.0
+   Compiling unicode-script v0.5.5
+   Compiling x11rb-protocol v0.13.2
+   Compiling unicode-properties v0.1.3
+   Compiling glob v0.3.1
+   Compiling bit-vec v0.9.1
+   Compiling quick-error v2.0.1
+   Compiling byteorder-lite v0.1.0
+   Compiling as-raw-xcb-connection v1.0.0
+   Compiling bit-set v0.9.1
+   Compiling clang-sys v1.8.1
+   Compiling image-webp v0.2.4
+   Compiling rustybuzz v0.20.1
+   Compiling gif v0.14.1
+   Compiling zune-jpeg v0.5.12
+   Compiling schemars v1.0.4
+   Compiling zvariant v5.6.0
+   Compiling fontdb v0.23.0
+   Compiling attribute-derive v0.6.1
+   Compiling codespan-reporting v0.13.1
+   Compiling tiny-skia-path v0.12.0
+   Compiling kurbo v0.13.0
+   Compiling spirv v0.4.0+sdk-1.4.341.0
+   Compiling ptr_meta_derive v0.1.4
+   Compiling enum-iterator-derive v1.2.1
+   Compiling match_token v0.35.0
+   Compiling ordered-float v5.3.0
+   Compiling dirs-sys-next v0.1.2
+   Compiling cstr v0.2.11
+   Compiling nom v8.0.0
+   Compiling heapless v0.8.0
+   Compiling hexf-parse v0.2.1
+   Compiling bytecheck v0.6.12
+   Compiling khronos-egl v6.0.0
+   Compiling pxfm v0.1.28
+   Compiling beef v0.5.2
+   Compiling unicode-bidi v0.3.15
+   Compiling litrs v1.0.0
+   Compiling logos-codegen v0.14.1
+   Compiling document-features v0.2.12
+   Compiling enum-iterator v1.4.1
+   Compiling dirs-next v2.0.0
+   Compiling html5ever v0.35.0
+   Compiling svgtypes v0.16.1
+   Compiling moxcms v0.7.11
+   Compiling zbus_names v4.2.0
+   Compiling ptr_meta v0.1.4
+   Compiling tree_magic_mini v3.2.2
+   Compiling get-size-derive v0.1.3
+   Compiling dirs v6.0.0
+   Compiling xml5ever v0.35.0
+   Compiling hashbrown v0.14.1
+   Compiling wgpu-types v29.0.1
+   Compiling command v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/command)
+   Compiling aes v0.8.4
+   Compiling ouroboros_macro v0.18.0
+   Compiling hash32 v0.3.1
+   Compiling gpu-descriptor-types v0.2.0
+   Compiling bytecheck_derive v0.6.12
+   Compiling x11rb v0.13.2
+   Compiling serde_repr v0.1.20
+   Compiling wgpu-hal v29.0.1
+   Compiling simplecss v0.2.1
+   Compiling os_pipe v1.2.3
+   Compiling roxmltree v0.21.1
+   Compiling presser v0.3.1
+   Compiling bitflags v1.3.2
+   Compiling simdutf8 v0.1.5
+   Compiling aliasable v0.1.3
+   Compiling alloc-no-stdlib v2.0.4
+   Compiling rend v0.4.2
+   Compiling xmlwriter v0.1.0
+   Compiling imagesize v0.14.0
+   Compiling unicode-vo v0.1.0
+   Compiling font-kit v0.12.0 (https://github.com/warpdotdev/font-kit?rev=a04b225ecb639bb850f21d05212cfdc7465000f3#a04b225e)
+   Compiling pico-args v0.5.0
+   Compiling xkeysym v0.2.1
+   Compiling data-url v0.3.1
+   Compiling alloc-stdlib v0.2.2
+   Compiling usvg v0.47.0
+   Compiling ouroboros v0.18.0
+   Compiling wl-clipboard-rs v0.9.3
+   Compiling image v0.25.9
+   Compiling gpu-descriptor v0.3.2
+   Compiling wgpu-naga-bridge v29.0.1
+   Compiling dashmap v6.1.0
+   Compiling markup5ever_rcdom v0.35.0+unofficial
+   Compiling freetype v0.7.2
+   Compiling get-size v0.1.4
+   Compiling zbus_macros v5.9.0
+   Compiling logos-derive v0.14.1
+   Compiling tiny-skia v0.12.0
+   Compiling pathfinder_geometry v0.5.1
+   Compiling serde_yaml v0.8.26
+   Compiling calloop v0.13.0
+   Compiling settings_value_derive v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/settings_value_derive)
+   Compiling async-fs v2.1.2
+   Compiling cfb v0.7.3
+   Compiling xcursor v0.3.4
+   Compiling tempfile v3.23.0
+   Compiling font-types v0.7.3
+   Compiling rgb v0.8.50
+   Compiling warpui_core v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/warpui_core)
+   Compiling ordered-stream v0.2.0
+   Compiling memoffset v0.7.1
+   Compiling instant v0.1.12
+   Compiling smithay-client-toolkit v0.19.2
+   Compiling profiling v1.0.11
+   Compiling rustc-hash v2.1.1
+   Compiling rangemap v1.4.0
+   Compiling rkyv v0.7.46
+   Compiling bindgen v0.70.1
+   Compiling float-ord v0.3.2
+   Compiling cursor-icon v1.1.0
+   Compiling renderdoc-sys v1.1.0
+   Compiling self_cell v1.2.1
+   Compiling glow v0.17.0
+   Compiling wayland-csd-frame v0.3.0
+   Compiling zbus v5.9.0
+   Compiling settings_value v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/settings_value)
+   Compiling resvg v0.47.0
+   Compiling read-fonts v0.22.7
+   Compiling infer v0.19.0
+   Compiling gpu-allocator v0.28.0
+   Compiling wayland-cursor v0.31.8
+   Compiling markdown_parser v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/markdown_parser)
+   Compiling calloop-wayland-source v0.3.0
+   Compiling logos v0.14.1
+   Compiling string-offset v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/string-offset)
+   Compiling arboard v3.6.1
+   Compiling rstar v0.12.2
+   Compiling brotli-decompressor v4.0.2
+   Compiling warp_util v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/warp_util)
+   Compiling pathfinder_color v0.5.0
+   Compiling derive_more v0.99.17
+   Compiling ctrlc v3.4.7
+   Compiling tiny-skia-path v0.11.4
+   Compiling owned_ttf_parser v0.25.0
+   Compiling strum_macros v0.27.1
+   Compiling cexpr v0.6.0
+   Compiling titlecase v1.1.0
+   Compiling sum_tree v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/sum_tree)
+   Compiling ordered-float v3.9.2
+   Compiling vec1 v1.10.1
+   Compiling rkyv_derive v0.7.46
+   Compiling trait-set v0.3.0
+   Compiling derivative v2.2.0
+   Compiling num-derive v0.4.2
+   Compiling prost-derive v0.14.3
+   Compiling wgpu-core v29.0.1
+   Compiling x11-dl v2.21.0
+   Compiling itertools v0.13.0
+   Compiling bounded-vec-deque v0.1.1
+   Compiling ab_glyph_rasterizer v0.1.8
+   Compiling lalrpop-util v0.20.2
+   Compiling similar v2.7.0
+   Compiling seahash v4.1.0
+   Compiling strum v0.27.1
+   Compiling cynic-parser v0.4.5
+   Compiling ab_glyph v0.2.29
+   Compiling tiny-skia v0.11.4
+   Compiling skrifa v0.22.3
+   Compiling wgpu-core-deps-windows-linux-android v29.0.0
+   Compiling brotli v7.0.0
+   Compiling counter v0.5.7
+   Compiling serde_urlencoded v0.7.1
+   Compiling crossbeam-channel v0.5.8
+   Compiling wgpu v29.0.1
+   Compiling winit v0.30.13 (https://github.com/warpdotdev/winit.git?rev=a4e0ecb5f9626ccac9445a73dc28354b52423abc#a4e0ecb5)
+   Compiling is-docker v0.2.0
+   Compiling encoding_rs v0.8.35
+   Compiling home v0.5.12
+   Compiling fontconfig v0.8.0
+   Compiling zeno v0.2.3
+   Compiling yazi v0.1.6
+   Compiling swash v0.1.19
+   Compiling which v4.4.2
+   Compiling async-compression v0.4.22
+   Compiling is-wsl v0.4.0
+   Compiling sctk-adwaita v0.10.1
+   Compiling nix v0.26.4
+   Compiling cynic-codegen v3.8.0
+   Compiling warpui v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/warpui)
+   Compiling xkbcommon-dl v0.4.2
+   Compiling wayland-protocols-plasma v0.3.9
+   Compiling versions v5.0.1
+   Compiling keyboard-types v0.7.0
+   Compiling smol_str v0.2.2
+   Compiling unicode-linebreak v0.1.5
+   Compiling iri-string v0.7.8
+   Compiling version-compare v0.1.1
+   Compiling sys-locale v0.3.2
+   Compiling ascii v1.1.0
+   Compiling raw-window-handle v0.5.2
+   Compiling dpi v0.1.1 (https://github.com/warpdotdev/winit.git?rev=a4e0ecb5f9626ccac9445a73dc28354b52423abc#a4e0ecb5)
+   Compiling native-dialog v0.7.0
+   Compiling tower-http v0.6.8
+   Compiling cosmic-text v0.12.0 (https://github.com/warpdotdev/cosmic-text.git?rev=15198beba692162201c0ea8b15222cf5643ea068#15198beb)
+   Compiling global-hotkey v0.7.0
+   Compiling open v5.3.3
+   Compiling notify-rust v4.11.7
+   Compiling num-bigint v0.4.6
+   Compiling takecell v0.1.1
+   Compiling tini v1.3.0
+   Compiling bimap v0.6.3
+   Compiling winnow v1.0.0
+   Compiling toml_parser v1.1.0+spec-1.1.0
+   Compiling sha1 v0.10.6
+   Compiling strsim v0.11.1
+   Compiling powerfmt v0.2.0
+   Compiling bstr v1.9.0
+   Compiling deranged v0.5.5
+   Compiling num-conv v0.2.0
+   Compiling time-core v0.1.8
+   Compiling num-rational v0.4.2
+   Compiling cynic-proc-macros v3.8.0
+   Compiling serde_with_macros v2.3.3
+   Compiling num-iter v0.1.45
+   Compiling ring v0.17.14
+   Compiling num-complex v0.4.6
+   Compiling time v0.3.47
+   Compiling data-encoding v2.10.0
+   Compiling serde_with v2.3.3
+   Compiling num v0.4.3
+   Compiling prost v0.14.3
+   Compiling cynic v3.8.0
+   Compiling cbc v0.1.2
+   Compiling async-net v2.0.0
+   Compiling itertools v0.10.5
+   Compiling toml_datetime v1.1.0+spec-1.1.0
+   Compiling inventory v0.3.20
+   Compiling futures-timer v3.0.2
+   Compiling toml_writer v1.1.0+spec-1.1.0
+   Compiling secret-service v5.0.0
+   Compiling prost-types v0.14.3
+   Compiling toml_edit v0.25.6+spec-1.1.0
+   Compiling warp_features v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/warp_features)
+   Compiling concat-idents v1.1.5
+   Compiling warp_core v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/warp_core)
+   Compiling difflib v0.4.0
+   Compiling multimap v0.10.1
+   Compiling command-corrections v0.0.0 (https://github.com/warpdotdev/command-corrections.git?rev=eae08c8c51d9bc9741fcb17eef2c21f696aebbeb#eae08c8c)
+   Compiling asset_macro v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/asset_macro)
+   Compiling shellexpand v3.1.1
+   Compiling directories v6.0.0
+   Compiling sysinfo v0.37.0
+   Compiling getset v0.1.2
+   Compiling prost-build v0.14.3
+   Compiling line-ending v1.5.1
+   Compiling globset v0.4.18
+   Compiling http v0.2.12
+   Compiling outref v0.5.2
+   Compiling vcpkg v0.2.15
+   Compiling vsimd v0.8.0
+   Compiling bytes-utils v0.1.4
+   Compiling base64-simd v0.8.0
+   Compiling http-body v0.4.6
+   Compiling darling_core v0.21.3
+   Compiling serde_path_to_error v0.1.16
+   Compiling aws-smithy-types v1.4.7
+   Compiling aws-smithy-async v1.2.14
+   Compiling aws-smithy-runtime-api-macros v1.0.0
+   Compiling async-compat v0.2.5
+   Compiling prost-reflect-derive v0.16.0
+   Compiling zstd-sys v2.0.15+zstd.1.5.7
+   Compiling utf8parse v0.2.2
+   Compiling hybrid-array v0.4.11
+   Compiling anstyle-parse v0.2.3
+   Compiling serde_spanned v1.0.3
+   Compiling aws-smithy-runtime-api v1.12.0
+   Compiling toml_datetime v0.7.3
+   Compiling colorchoice v1.0.0
+   Compiling anstyle-query v1.1.5
+   Compiling anstyle v1.0.13
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling base64ct v1.8.0
+   Compiling typed-arena v2.0.2
+   Compiling jaq-core v3.0.0
+   Compiling anstream v0.6.21
+   Compiling pem-rfc7468 v0.7.0
+   Compiling libsqlite3-sys v0.33.0
+   Compiling arborium-javascript v2.13.0
+   Compiling filetime v0.2.25
+   Compiling regex-bites v0.1.6
+   Compiling cmov v0.5.3
+   Compiling darling_macro v0.21.3
+   Compiling zstd-safe v7.2.4
+   Compiling clap_lex v0.7.5
+   Compiling utf8-width v0.1.7
+   Compiling darling v0.21.3
+   Compiling jiff v0.2.24
+   Compiling clap_builder v4.5.48
+   Compiling ctutils v0.4.2
+   Compiling warpui_extras v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/warpui_extras)
+   Compiling der v0.7.10
+   Compiling rustls-webpki v0.103.13
+   Compiling settings v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/settings)
+   Compiling block-buffer v0.12.0
+   Compiling crypto-common v0.2.1
+   Compiling prost-reflect v0.16.3
+   Compiling jaq-std v3.0.0
+   Compiling oauth2 v5.0.0
+   Compiling clap_derive v4.5.47
+   Compiling universal-hash v0.5.1
+   Compiling hashlink v0.10.0
+   Compiling prevent_sleep v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/prevent_sleep)
+   Compiling arborium-css v2.13.0
+   Compiling arborium-tree-sitter v2.13.0
+   Compiling inotify-sys v0.1.5
+   Compiling thread_local v1.1.7
+   Compiling humantime v2.1.0
+   Compiling downcast-rs v2.0.2
+   Compiling diesel_derives v2.3.5
+   Compiling opaque-debug v0.3.1
+   Compiling hifijson v0.5.0
+   Compiling base16ct v0.2.0
+   Compiling const-oid v0.10.2
+   Compiling arraydeque v0.5.1
+   Compiling ciborium-io v0.2.2
+   Compiling ciborium-ll v0.2.2
+   Compiling digest v0.11.3
+   Compiling jaq-json v2.0.0
+   Compiling saphyr-parser v0.0.6
+   Compiling clap v4.5.48
+   Compiling inotify v0.11.0
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.6.2
+   Compiling hyper-rustls v0.27.7
+   Compiling tungstenite v0.24.0
+   Compiling reqwest v0.13.3
+   Compiling prost-reflect-build v0.16.0
+   Compiling async-tungstenite v0.28.2
+   Compiling graphql-ws-client v0.11.1
+   Compiling spki v0.7.3
+   Compiling toml v0.9.6
+   Compiling dsl_auto_type v0.2.0
+   Compiling tink-proto v0.3.0 (https://github.com/warpdotdev/tink-rust?branch=warpdotdev%2Fmain#0141035f)
+   Compiling websocket v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/websocket)
+   Compiling eventsource-stream v0.2.3
+   Compiling aead v0.5.2
+   Compiling async-stream-impl v0.3.5
+   Compiling diesel_table_macro_syntax v0.3.0
+   Compiling arborium-c v2.13.0
+   Compiling toml-span v0.7.1
+   Compiling notify-types v2.0.0 (https://github.com/warpdotdev/notify?rev=91b719849bc04ef251bcb2cc61076b099204e970#91b71984)
+   Compiling async-stream v0.3.5
+   Compiling notify v8.0.0 (https://github.com/warpdotdev/notify?rev=91b719849bc04ef251bcb2cc61076b099204e970#91b71984)
+   Compiling jaq-fmts v0.1.0
+   Compiling aha-reqwest-eventsource v0.1.0
+   Compiling migrations_internals v2.3.0
+   Compiling pkcs8 v0.10.2
+   Compiling warp_multi_agent_api v0.0.0 (https://github.com/warpdotdev/warp-proto-apis.git?rev=9a2d2425c5d1eb40fb547956e659511906e03f9e#9a2d2425)
+   Compiling aws-credential-types v1.2.14
+   Compiling aws-smithy-http v0.63.6
+   Compiling rust-embed-utils v7.8.1
+   Compiling ctr v0.9.2
+   Compiling color-print-proc-macro v0.3.7
+   Compiling bincode v1.3.3
+   Compiling aws-types v1.3.15
+   Compiling rand_core v0.9.3
+   Compiling dbl v0.3.2
+   Compiling warp_cli v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/warp_cli)
+   Compiling arborium-scss v2.13.0
+   Compiling bzip2-sys v0.1.13+1.0.8
+   Compiling arborium-html v2.13.0
+   Compiling lzma-sys v0.1.20
+   Compiling arborium-typescript v2.13.0
+   Compiling ff v0.13.1
+   Compiling cpufeatures v0.3.0
+   Compiling unicode-width v0.1.14
+   Compiling ordered_hashmap v0.0.3
+   Compiling codesnake v0.3.0
+   Compiling rust_decimal v1.35.0
+   Compiling termcolor v1.4.1
+   Compiling file-id v0.2.2 (https://github.com/warpdotdev/notify?rev=91b719849bc04ef251bcb2cc61076b099204e970#91b71984)
+   Compiling notify-debouncer-full v0.5.0 (https://github.com/warpdotdev/notify?rev=91b719849bc04ef251bcb2cc61076b099204e970#91b71984)
+   Compiling jaq-all v0.1.0
+   Compiling graphlib_rust v0.0.2
+   Compiling group v0.13.0
+   Compiling sha2 v0.11.0
+   Compiling color-print v0.3.7
+   Compiling cmac v0.7.2
+   Compiling zstd v0.13.3
+   Compiling rust-embed-impl v6.8.1
+   Compiling http_client v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/http_client)
+   Compiling migrations_macros v2.3.0
+   Compiling diesel v2.3.9
+   Compiling sec1 v0.7.3
+   Compiling local_control v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/local_control)
+   Compiling aws-smithy-http-client v1.1.12
+   Compiling clap_complete v4.5.58
+   Compiling hmac v0.13.0
+   Compiling polyval v0.6.2
+   Compiling fuzzy-matcher v0.3.7
+   Compiling html-escape v0.2.13
+   Compiling aws-smithy-observability v0.2.6
+   Compiling rust-embed-utils v8.7.2
+   Compiling ignore v0.4.24
+   Compiling darling_core v0.23.0
+   Compiling warp_graphql_schema v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/warp_graphql_schema)
+   Compiling sha-1 v0.10.1
+   Compiling crypto-bigint v0.5.5
+   Compiling repo_metadata v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/repo_metadata)
+   Compiling nix v0.31.2
+   Compiling arborium-hcl v2.13.0
+   Compiling arborium-sql v2.13.0
+   Compiling arborium-bash v2.13.0
+   Compiling arborium-cpp v2.13.0
+   Compiling arborium-toml v2.13.0
+   Compiling arborium-rust v2.13.0
+   Compiling arborium-kotlin v2.13.0
+   Compiling arborium-json v2.13.0
+   Compiling arborium-tsx v2.13.0
+   Compiling arborium-java v2.13.0
+   Compiling arborium-jq v2.13.0
+   Compiling arborium-xml v2.13.0
+   Compiling arborium-ruby v2.13.0
+   Compiling arborium-elixir v2.13.0
+   Compiling arborium-python v2.13.0
+   Compiling arborium-scala v2.13.0
+   Compiling arborium-objc v2.13.0
+   Compiling arborium-swift v2.13.0
+   Compiling arborium-starlark v2.13.0
+   Compiling arborium-go v2.13.0
+   Compiling arborium-yaml v2.13.0
+   Compiling arborium-dockerfile v2.13.0
+   Compiling arborium-c-sharp v2.13.0
+   Compiling arborium-powershell v2.13.0
+   Compiling arborium-vue v2.13.0
+   Compiling arborium-php v2.13.0
+   Compiling arborium-lua v2.13.0
+   Compiling streaming-iterator v0.1.9
+   Compiling crunchy v0.2.2
+   Compiling crc-catalog v2.4.0
+   Compiling persistence v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/persistence)
+   Compiling arborium v2.13.0
+   Compiling unsafe-libyaml v0.2.11
+   Compiling crc v3.4.0
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling darling_macro v0.23.0
+   Compiling diesel_migrations v2.3.1
+   Compiling elliptic-curve v0.13.8
+   Compiling tink-core v0.3.0 (https://github.com/warpdotdev/tink-rust?branch=warpdotdev%2Fmain#0141035f)
+   Compiling warp-completion-metadata v0.0.0 (https://github.com/warpdotdev/command-signatures.git?rev=00a032b8ea0ee5711e2077e39a92dc9ca2051cd3#00a032b8)
+   Compiling aws-smithy-runtime v1.11.1
+   Compiling rust-embed v6.8.1
+   Compiling rust-embed-impl v8.7.2
+   Compiling aws-sigv4 v1.4.3
+   Compiling dagre_rust v0.0.5 (https://github.com/warpdotdev/mermaid-to-svg.git?rev=81551775746cd86bdeec29cb96ba278fd08c9074#81551775)
+   Compiling watcher v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/watcher)
+   Compiling rand_chacha v0.9.0
+   Compiling warp_graphql v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/graphql)
+   Compiling bumpalo v3.19.1
+   Compiling zip v2.4.2
+   Compiling memo-map v0.3.2
+   Compiling object v0.37.3
+   Compiling unindent v0.2.4
+   Compiling arborium-theme v2.13.0
+   Compiling signal-hook v0.3.18
+   Compiling vim v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/vim)
+   Compiling zopfli v0.8.3
+   Compiling arborium-highlight v2.13.0
+   Compiling aws-runtime v1.7.3
+   Compiling rust-embed v8.7.2
+   Compiling rand v0.9.4
+   Compiling byte-unit v5.2.0
+   Compiling mermaid_to_svg v0.1.0 (https://github.com/warpdotdev/mermaid-to-svg.git?rev=81551775746cd86bdeec29cb96ba278fd08c9074#81551775)
+   Compiling bzip2 v0.5.2
+   Compiling warp-command-signatures v0.0.0 (https://github.com/warpdotdev/command-signatures.git?rev=00a032b8ea0ee5711e2077e39a92dc9ca2051cd3#00a032b8)
+   Compiling xz2 v0.1.7
+   Compiling darling v0.23.0
+   Compiling lzma-rs v0.3.0
+   Compiling fuzzy_match v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/fuzzy_match)
+   Compiling ghash v0.5.1
+   Compiling asset_cache v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/asset_cache)
+   Compiling poly1305 v0.8.0
+   Compiling aws-smithy-json v0.62.5
+   Compiling libz-sys v1.1.25
+   Compiling pbkdf2 v0.12.2
+   Compiling rfc6979 v0.4.0
+   Compiling chacha20 v0.9.1
+   Compiling curve25519-dalek v4.1.3
+   Compiling derive-new v0.5.9
+   Compiling signature v2.2.0
+   Compiling async-recursion v1.1.1
+   Compiling imara-diff v0.2.0
+   Compiling ownedbytes v0.9.0
+   Compiling grep-matcher v0.1.8
+   Compiling rmcp v1.6.0
+   Compiling gimli v0.32.3
+   Compiling typeid v1.0.3
+   Compiling regex-lite v0.1.6
+   Compiling urlocator v0.1.4
+   Compiling temp-dir v0.1.11
+   Compiling constant_time_eq v0.3.1
+   Compiling deflate64 v0.1.10
+   Compiling warp_editor v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/editor)
+   Compiling gettext-sys v0.21.3
+   Compiling tantivy-common v0.11.0
+   Compiling ecdsa v0.16.9
+   Compiling chacha20poly1305 v0.10.1
+   Compiling process-wrap v9.1.0
+   Compiling aes-gcm v0.10.3
+   Compiling warp_completer v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/warp_completer)
+   Compiling bitpacking v0.9.3
+   Compiling addr2line v0.25.1
+   Compiling rmcp-macros v1.6.0
+   Compiling session-sharing-protocol v0.0.0 (https://github.com/warpdotdev/session-sharing-protocol.git?rev=5a0ad6135809feee9da2e9efae8bd6b54b89172e#5a0ad613)
+   Compiling tink-prf v0.3.0
+   Compiling primeorder v0.13.6
+   Compiling encoding_rs_io v0.1.7
+   Compiling derive_more-impl v2.0.1
+   Compiling axum-core v0.5.2
+   Compiling tokio-stream v0.1.17
+   Compiling sse-stream v0.2.1
+   Compiling toml v0.5.11
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling computer_use v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/computer_use)
+   Compiling onig_sys v69.9.1
+   Compiling is-terminal v0.4.17
+   Compiling vte_generate_state_changes v0.1.1 (https://github.com/warpdotdev/vte.git?rev=4b399c87b63ba88f45709edaa6383fc519f6c900#4b399c87)
+   Compiling erased-serde v0.4.10
+   Compiling utf8-ranges v1.0.5
+   Compiling rustc-demangle v0.1.27
+   Compiling utf8parse v0.2.1 (https://github.com/warpdotdev/vte.git?rev=4b399c87b63ba88f45709edaa6383fc519f6c900#4b399c87)
+   Compiling matchit v0.8.4
+   Compiling pastey v0.2.1
+   Compiling vte v0.13.0 (https://github.com/warpdotdev/vte.git?rev=4b399c87b63ba88f45709edaa6383fc519f6c900#4b399c87)
+   Compiling axum v0.8.4
+   Compiling backtrace v0.3.76
+   Compiling tantivy-fst v0.5.0
+   Compiling env_logger v0.10.2
+   Compiling languages v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/languages)
+   Compiling find-crate v0.6.3
+   Compiling derive_more v2.0.1
+   Compiling grep-searcher v0.1.16
+   Compiling p256 v0.13.2
+   Compiling tink-mac v0.3.0
+   Compiling signal-hook-mio v0.2.5
+   Compiling tantivy-bitpacker v0.10.0
+   Compiling ashpd v0.11.1
+   Compiling channel_versions v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/channel_versions)
+   Compiling aes-gcm-siv v0.11.1
+   Compiling aes-siv v0.7.0
+   Compiling remote_server v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/remote_server)
+   Compiling xattr v1.5.1
+   Compiling bitflags-serde-legacy v0.1.1
+   Compiling warp-workflows-types v0.1.0 (https://github.com/warpdotdev/workflows?rev=793a98ddda6ef19682aed66364faebd2829f0e01#793a98dd)
+   Compiling uneval v0.2.3 (https://github.com/warpdotdev/uneval?rev=df4d9fad372aedc447e6f93ca0f930fabaf9dd1a#df4d9fad)
+   Compiling rust-stemmers v1.2.0
+   Compiling interprocess v1.2.1
+   Compiling node_runtime v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/node_runtime)
+   Compiling ai v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/ai)
+   Compiling libgit2-sys v0.18.3+1.9.2
+   Compiling memmap v0.7.0
+   Compiling palette v0.6.1
+   Compiling murmurhash32 v0.3.1
+   Compiling safemem v0.3.3
+   Compiling typetag v0.2.21
+   Compiling line-wrap v0.1.1
+   Compiling tantivy-stacker v0.7.0
+   Compiling warp-workflows v0.1.0 (https://github.com/warpdotdev/workflows?rev=793a98ddda6ef19682aed66364faebd2829f0e01#793a98dd)
+   Compiling tar v0.4.45
+   Compiling warp_terminal v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/warp_terminal)
+   Compiling tink-daead v0.3.0
+   Compiling tink-aead v0.3.0
+   Compiling tantivy-sstable v0.7.0
+   Compiling crossterm v0.29.0
+   Compiling grep-printer v0.3.1
+   Compiling syntax_tree v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/syntax_tree)
+   Compiling palette_derive v0.6.1
+   Compiling x25519-dalek v2.0.1
+   Compiling log-panics v2.1.0
+   Compiling grep-regex v0.1.14
+   Compiling grep-cli v0.1.12
+   Compiling bon-macros v3.7.1
+   Compiling aws-smithy-query v0.60.15
+   Compiling fluent-uri v0.1.4
+   Compiling aws-smithy-xml v0.60.15
+   Compiling locale_config v0.3.0
+   Compiling spinning v0.1.0
+   Compiling serde_spanned v0.6.9
+   Compiling matchers v0.2.0
+   Compiling typetag-impl v0.2.21
+   Compiling priority-queue v2.5.0
+   Compiling tracing-log v0.2.0
+   Compiling sharded-slab v0.1.7
+   Compiling lsp v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/lsp)
+   Compiling approx v0.5.1
+   Compiling dirs-sys v0.3.7
+   Compiling quick-xml v0.30.0
+   Compiling to_method v1.1.0
+   Compiling psl-types v2.0.11
+   Compiling nu-ansi-term v0.50.3
+   Compiling fastdivide v0.4.2
+   Compiling paste v1.0.14
+   Compiling toml_write v0.1.2
+   Compiling unicode-general-category v1.1.0
+   Compiling base64 v0.21.7
+   Compiling intmap v0.7.1
+   Compiling line-span v0.1.5
+   Compiling plist v1.5.1
+   Compiling tantivy-columnar v0.7.0
+   Compiling bon v3.7.1
+   Compiling tracing-subscriber v0.3.20
+   Compiling psl v2.1.4
+   Compiling dirs v3.0.2
+   Compiling gettext-rs v0.7.0
+   Compiling aws-sdk-sts v1.103.0
+   Compiling lsp-types v0.97.0
+   Compiling grep v0.4.1
+   Compiling onig v6.5.1
+   Compiling warp_logging v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/warp_logging)
+   Compiling hpke v0.13.0
+   Compiling tink-hybrid v0.3.0 (https://github.com/warpdotdev/tink-rust?branch=warpdotdev%2Fmain#0141035f)
+   Compiling natural_language_detection v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/natural_language_detection)
+   Compiling axum-extra v0.10.1
+   Compiling aws-sdk-sso v1.98.0
+   Compiling aws-sdk-signin v1.9.0
+   Compiling aws-sdk-ssooidc v1.100.0
+   Compiling ui_components v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/ui_components)
+   Compiling simple_logger v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/simple_logger)
+   Compiling warp_isolation_platform v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/isolation_platform)
+   Compiling warp v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/app)
+   Compiling jsonrpc v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/jsonrpc)
+   Compiling lasso v0.7.3
+   Compiling tantivy-query-grammar v0.26.0
+   Compiling fs4 v0.13.1
+   Compiling tantivy-tokenizer-api v0.7.0
+   Compiling sketches-ddsketch v0.4.0
+   Compiling lru v0.16.3
+   Compiling measure_time v0.9.0
+   Compiling csv-core v0.1.11
+   Compiling arc-swap v1.7.1
+   Compiling xdg v2.5.2
+   Compiling lz4_flex v0.13.0
+   Compiling levenshtein_automata v0.2.1
+   Compiling census v0.4.2
+   Compiling datasketches v0.2.0
+   Compiling oneshot v0.1.13
+   Compiling htmlescape v0.3.1
+   Compiling twox-hash v2.1.2
+   Compiling lz4_flex v0.11.6
+   Compiling freedesktop-desktop-entry v0.5.0
+   Compiling csv v1.3.1
+   Compiling tantivy v0.26.0
+   Compiling warp_managed_secrets v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/managed_secrets)
+   Compiling warp_server_client v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/warp_server_client)
+   Compiling warp_files v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/warp_files)
+   Compiling aws-config v1.8.16
+   Compiling app-installation-detection v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/app-installation-detection)
+   Compiling input_classifier v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/input_classifier)
+   Compiling onboarding v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/onboarding)
+   Compiling addr v0.15.6
+   Compiling syntect v5.2.0
+   Compiling warp_ripgrep v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/warp_ripgrep)
+   Compiling kmeans_colors v0.5.0
+   Compiling toml v0.8.23
+   Compiling ipc v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/ipc)
+   Compiling mcp v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/mcp)
+   Compiling comfy-table v7.2.1
+   Compiling inquire v0.9.1
+   Compiling http_server v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/http_server)
+   Compiling warp_assets v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/warp_assets)
+   Compiling field_mask v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/field_mask)
+   Compiling tabwriter v1.4.1
+   Compiling difflib v0.4.0 (https://github.com/warpdotdev/difflib.git?rev=114177e7d8e1f8017baca397f943e11644b14d63#114177e7)
+   Compiling validator v0.19.0
+   Compiling serde-bytes-repr v0.3.0
+   Compiling serde_regex v1.1.0
+   Compiling firebase v0.1.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/firebase)
+   Compiling email_address v0.2.3 (https://github.com/warpdotdev/rust-email_address?branch=main#b3e5205b)
+   Compiling variant_count v1.1.0
+   Compiling os_info v3.7.0
+   Compiling serde_bytes v0.11.19
+   Compiling counter v0.6.0
+   Compiling cvt v0.1.2
+   Compiling thousands v0.2.0
+   Compiling shell-words v1.1.0
+   Compiling handlebars v0.0.0 (/workspace/warpctrl-validation/drive-auth-execution/crates/handlebars)
+   Compiling is_executable v1.0.1
+   Compiling qrcode v0.14.1
+   Compiling embed_plist v1.2.2
+   Compiling siphasher v0.3.11
+   Compiling unindent v0.1.11
+   Compiling enclose v1.1.8
+   Compiling deltae v0.3.2
+   Compiling bytecount v0.6.9
+   Compiling git2 v0.20.4
+warning: unused variable: `e`
+   --> app/src/remote_server/ssh_transport/installation/scp_fallback.rs:196:13
+    |
+196 |         Err(e) if is_valid_cached_tarball(cache_path).await => {
+    |             ^ help: if this is intentional, prefix it with an underscore: `_e`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `add_mcp`
+   --> app/src/terminal/input/slash_commands/mod.rs:391:13
+    |
+391 |             add_mcp if command.name == commands::ADD_MCP.name => {
+    |             ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_add_mcp`
+
+warning: unused variable: `add_prompt`
+   --> app/src/terminal/input/slash_commands/mod.rs:394:13
+    |
+394 |             add_prompt if command.name == commands::ADD_PROMPT.name => {
+    |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_add_prompt`
+
+warning: unused variable: `add_rule`
+   --> app/src/terminal/input/slash_commands/mod.rs:397:13
+    |
+397 |             add_rule if command.name == commands::ADD_RULE.name => {
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_add_rule`
+
+warning: unused variable: `agent_or_new`
+   --> app/src/terminal/input/slash_commands/mod.rs:400:13
+    |
+400 |             agent_or_new
+    |             ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_agent_or_new`
+
+warning: unused variable: `cloud_agent`
+   --> app/src/terminal/input/slash_commands/mod.rs:455:13
+    |
+455 |             cloud_agent if command.name == commands::CLOUD_AGENT.name => {
+    |             ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cloud_agent`
+
+warning: unused variable: `create_docker_sandbox`
+   --> app/src/terminal/input/slash_commands/mod.rs:469:13
+    |
+469 |             create_docker_sandbox if command.name == commands::CREATE_DOCKER_SANDBOX.name => {
+    |             ^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_create_docker_sandbox`
+
+warning: unused variable: `conversations`
+   --> app/src/terminal/input/slash_commands/mod.rs:472:13
+    |
+472 |             conversations if command.name == commands::CONVERSATIONS.name => {
+    |             ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_conversations`
+
+warning: unused variable: `rename_tab`
+   --> app/src/terminal/input/slash_commands/mod.rs:491:13
+    |
+491 |             rename_tab if command.name == commands::RENAME_TAB.name => {
+    |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_rename_tab`
+
+warning: unused variable: `set_tab_color`
+   --> app/src/terminal/input/slash_commands/mod.rs:505:13
+    |
+505 |             set_tab_color if command.name == commands::SET_TAB_COLOR.name => {
+    |             ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_set_tab_color`
+
+warning: unused variable: `create_env`
+   --> app/src/terminal/input/slash_commands/mod.rs:553:13
+    |
+553 |             create_env if command.name == commands::CREATE_ENVIRONMENT.name => {
+    |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_create_env`
+
+warning: unused variable: `create_project`
+   --> app/src/terminal/input/slash_commands/mod.rs:566:13
+    |
+566 |             create_project if command.name == commands::CREATE_NEW_PROJECT.name => {
+    |             ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_create_project`
+
+warning: unused variable: `edit`
+   --> app/src/terminal/input/slash_commands/mod.rs:579:13
+    |
+579 |             edit if command.name == commands::EDIT.name => {
+    |             ^^^^ help: if this is intentional, prefix it with an underscore: `_edit`
+
+warning: unused variable: `export_to_clipboard`
+   --> app/src/terminal/input/slash_commands/mod.rs:663:13
+    |
+663 |             export_to_clipboard if command.name == commands::EXPORT_TO_CLIPBOARD.name => {
+    |             ^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_export_to_clipboard`
+
+warning: unused variable: `export_to_file`
+   --> app/src/terminal/input/slash_commands/mod.rs:688:13
+    |
+688 |             export_to_file if command.name == commands::EXPORT_TO_FILE.name => {
+    |             ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_export_to_file`
+
+warning: unused variable: `index`
+   --> app/src/terminal/input/slash_commands/mod.rs:705:13
+    |
+705 |             index if command.name == commands::INDEX.name => {
+    |             ^^^^^ help: if this is intentional, prefix it with an underscore: `_index`
+
+warning: unused variable: `init`
+   --> app/src/terminal/input/slash_commands/mod.rs:708:13
+    |
+708 |             init if command.name == commands::INIT.name => {
+    |             ^^^^ help: if this is intentional, prefix it with an underscore: `_init`
+
+warning: unused variable: `changelog`
+   --> app/src/terminal/input/slash_commands/mod.rs:711:13
+    |
+711 |             changelog if command.name == commands::CHANGELOG.name => {
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_changelog`
+
+warning: unused variable: `feedback`
+   --> app/src/terminal/input/slash_commands/mod.rs:717:13
+    |
+717 |             feedback if command.name == commands::FEEDBACK.name => {
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_feedback`
+
+warning: unused variable: `open_code_review`
+   --> app/src/terminal/input/slash_commands/mod.rs:720:13
+    |
+720 |             open_code_review if command.name == commands::OPEN_CODE_REVIEW.name => {
+    |             ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_open_code_review`
+
+warning: unused variable: `open_mcp_servers`
+   --> app/src/terminal/input/slash_commands/mod.rs:725:13
+    |
+725 |             open_mcp_servers if command.name == commands::OPEN_MCP_SERVERS.name => {
+    |             ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_open_mcp_servers`
+
+warning: unused variable: `open_settings_file`
+   --> app/src/terminal/input/slash_commands/mod.rs:728:13
+    |
+728 |             open_settings_file if command.name == commands::OPEN_SETTINGS_FILE.name => {
+    |             ^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_open_settings_file`
+
+warning: unused variable: `open_project_rules`
+   --> app/src/terminal/input/slash_commands/mod.rs:734:13
+    |
+734 |             open_project_rules if command.name == commands::OPEN_PROJECT_RULES.name => {
+    |             ^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_open_project_rules`
+
+warning: unused variable: `open_rules`
+   --> app/src/terminal/input/slash_commands/mod.rs:737:13
+    |
+737 |             open_rules if command.name == commands::OPEN_RULES.name => {
+    |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_open_rules`
+
+warning: unused variable: `edit_skill`
+   --> app/src/terminal/input/slash_commands/mod.rs:740:13
+    |
+740 |             edit_skill if command.name == commands::EDIT_SKILL.name => {
+    |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_edit_skill`
+
+warning: unused variable: `invoke_skill`
+   --> app/src/terminal/input/slash_commands/mod.rs:747:13
+    |
+747 |             invoke_skill if command.name == commands::INVOKE_SKILL.name => {
+    |             ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_invoke_skill`
+
+warning: unused variable: `host`
+   --> app/src/terminal/input/slash_commands/mod.rs:758:13
+    |
+758 |             host if command.name == commands::HOST.name => {
+    |             ^^^^ help: if this is intentional, prefix it with an underscore: `_host`
+
+warning: unused variable: `harness`
+   --> app/src/terminal/input/slash_commands/mod.rs:776:13
+    |
+776 |             harness if command.name == commands::HARNESS.name => {
+    |             ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_harness`
+
+warning: unused variable: `environment`
+   --> app/src/terminal/input/slash_commands/mod.rs:789:13
+    |
+789 |             environment if command.name == commands::ENVIRONMENT.name => {
+    |             ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_environment`
+
+warning: unused variable: `models`
+   --> app/src/terminal/input/slash_commands/mod.rs:800:13
+    |
+800 |             models if command.name == commands::MODEL.name => {
+    |             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_models`
+
+warning: unused variable: `profiles`
+   --> app/src/terminal/input/slash_commands/mod.rs:814:13
+    |
+814 |             profiles if command.name == commands::PROFILE.name => {
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_profiles`
+
+warning: unused variable: `prompts`
+   --> app/src/terminal/input/slash_commands/mod.rs:821:13
+    |
+821 |             prompts if command.name == commands::PROMPTS.name => {
+    |             ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_prompts`
+
+warning: unused variable: `rewind`
+   --> app/src/terminal/input/slash_commands/mod.rs:832:13
+    |
+832 |             rewind if command.name == commands::REWIND.name => {
+    |             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_rewind`
+
+warning: unused variable: `pr_comments`
+   --> app/src/terminal/input/slash_commands/mod.rs:835:13
+    |
+835 |             pr_comments if command.name == commands::PR_COMMENTS.name => {
+    |             ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_pr_comments`
+
+warning: unused variable: `usage`
+   --> app/src/terminal/input/slash_commands/mod.rs:856:13
+    |
+856 |             usage if command.name == commands::USAGE.name => {
+    |             ^^^^^ help: if this is intentional, prefix it with an underscore: `_usage`
+
+warning: unused variable: `remote_control`
+   --> app/src/terminal/input/slash_commands/mod.rs:859:13
+    |
+859 |             remote_control if command.name == commands::REMOTE_CONTROL.name => {
+    |             ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_remote_control`
+
+warning: unused variable: `cost`
+   --> app/src/terminal/input/slash_commands/mod.rs:876:13
+    |
+876 |             cost if command.name == commands::COST.name => {
+    |             ^^^^ help: if this is intentional, prefix it with an underscore: `_cost`
+
+warning: unused variable: `move_to_cloud`
+   --> app/src/terminal/input/slash_commands/mod.rs:901:13
+    |
+901 |             move_to_cloud if command.name == commands::MOVE_TO_CLOUD.name => {
+    |             ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_move_to_cloud`
+
+warning: unused variable: `fork`
+   --> app/src/terminal/input/slash_commands/mod.rs:931:13
+    |
+931 |             fork if command.name == commands::FORK.name => {
+    |             ^^^^ help: if this is intentional, prefix it with an underscore: `_fork`
+
+warning: unused variable: `fork_from`
+   --> app/src/terminal/input/slash_commands/mod.rs:956:13
+    |
+956 |             fork_from if command.name == commands::FORK_FROM.name => {
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_fork_from`
+
+warning: unused variable: `continue_locally`
+   --> app/src/terminal/input/slash_commands/mod.rs:961:13
+    |
+961 |             continue_locally if command.name == commands::CONTINUE_LOCALLY.name => {
+    |             ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_continue_locally`
+
+warning: unused variable: `fork_and_compact`
+    --> app/src/terminal/input/slash_commands/mod.rs:1002:13
+     |
+1002 |             fork_and_compact if command.name == commands::FORK_AND_COMPACT.name => {
+     |             ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_fork_and_compact`
+
+warning: unused variable: `compact_and`
+    --> app/src/terminal/input/slash_commands/mod.rs:1030:13
+     |
+1030 |             compact_and if command.name == commands::COMPACT_AND.name => {
+     |             ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_compact_and`
+
+warning: unused variable: `queue`
+    --> app/src/terminal/input/slash_commands/mod.rs:1049:13
+     |
+1049 |             queue if command.name == commands::QUEUE.name => {
+     |             ^^^^^ help: if this is intentional, prefix it with an underscore: `_queue`
+
+warning: unused variable: `open_repo`
+    --> app/src/terminal/input/slash_commands/mod.rs:1078:13
+     |
+1078 |             open_repo if command.name == commands::OPEN_REPO.name => {
+     |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_open_repo`
+
+warning: unused variable: `command_that_just_sends_ai_request_with_prefix`
+    --> app/src/terminal/input/slash_commands/mod.rs:1084:13
+     |
+1084 |             command_that_just_sends_ai_request_with_prefix
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_command_that_just_sends_ai_request_with_prefix`
+
+warning: `warp` (lib) generated 46 warnings (run `cargo fix --lib -p warp` to apply 46 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4m 28s

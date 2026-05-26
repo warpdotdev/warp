@@ -1,0 +1,7 @@
+{
+  "ok": false,
+  "error": {
+    "code": "local_control_disabled",
+    "message": "outside-Warp local control credential broker is disabled for this instance"
+  }
+}

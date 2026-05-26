@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+export HOME="/tmp/warpctrl-validation-drive-auth-execution/home_enabled"
+export XDG_CONFIG_HOME="/tmp/warpctrl-validation-drive-auth-execution/home_enabled/.config"
+export XDG_DATA_HOME="/tmp/warpctrl-validation-drive-auth-execution/home_enabled/.local/share"
+export XDG_STATE_HOME="/tmp/warpctrl-validation-drive-auth-execution/home_enabled/.local/state"
+export XDG_CACHE_HOME="/tmp/warpctrl-validation-drive-auth-execution/home_enabled/.cache"
+export XDG_RUNTIME_DIR="/tmp/warpctrl-validation-drive-auth-execution/runtime_enabled"
+export WARP_LOCAL_CONTROL_DISCOVERY_DIR="/tmp/warpctrl-validation-drive-auth-execution/discovery_enabled"
+export WARPCTRL="/workspace/warpctrl-validation/drive-auth-execution/target/debug/warpctrl"
+cd "/workspace/warpctrl-validation/drive-auth-execution"
+printf '$ %s\n' '$WARPCTRL --output-format json input run "printf warpctrl-validation"'
+ bash -lc '$WARPCTRL --output-format json input run "printf warpctrl-validation"' > >(tee "/workspace/warpctrl-validation/drive-auth-execution/validation-artifacts/warpctrl-v2/c4bb6fdc/drive-auth-execution/logs/012__outside-staggered__execution__input_run.stdout.log") 2> >(tee "/workspace/warpctrl-validation/drive-auth-execution/validation-artifacts/warpctrl-v2/c4bb6fdc/drive-auth-execution/logs/012__outside-staggered__execution__input_run.stderr.log" >&2)
+code=$?
+printf '\nexit_code=%s\n' "$code"
+printf '%s\n' "$code" > "/workspace/warpctrl-validation/drive-auth-execution/validation-artifacts/warpctrl-v2/c4bb6fdc/drive-auth-execution/logs/012__outside-staggered__execution__input_run.exit_code"
+touch "/workspace/warpctrl-validation/drive-auth-execution/validation-artifacts/warpctrl-v2/c4bb6fdc/drive-auth-execution/logs/012__outside-staggered__execution__input_run.done"
+sleep 8

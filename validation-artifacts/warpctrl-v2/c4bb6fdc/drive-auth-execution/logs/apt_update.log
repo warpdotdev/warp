@@ -1,0 +1,18 @@
+Get:1 http://security.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+Hit:2 http://archive.ubuntu.com/ubuntu noble InRelease
+Get:3 http://archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+Get:4 http://security.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [3683 kB]
+Get:5 http://archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+Get:6 http://security.ubuntu.com/ubuntu noble-security/multiverse amd64 Packages [48.4 kB]
+Get:7 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages [2080 kB]
+Get:8 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1509 kB]
+Get:9 http://archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [3920 kB]
+Get:10 http://archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [2151 kB]
+Get:11 http://archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Packages [54.6 kB]
+Get:12 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [2457 kB]
+Get:13 http://archive.ubuntu.com/ubuntu noble-backports/universe amd64 Packages [35.9 kB]
+Get:14 http://packages.cloud.google.com/apt cloud-sdk InRelease [1621 B]
+Get:15 http://packages.cloud.google.com/apt cloud-sdk/main all Packages [2012 kB]
+Get:16 http://packages.cloud.google.com/apt cloud-sdk/main amd64 Packages [4735 kB]
+Fetched 23.1 MB in 1s (20.5 MB/s)
+Reading package lists...

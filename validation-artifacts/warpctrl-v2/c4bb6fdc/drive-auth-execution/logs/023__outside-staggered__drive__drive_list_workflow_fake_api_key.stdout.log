@@ -1,0 +1,7 @@
+{
+  "ok": false,
+  "error": {
+    "code": "execution_context_not_allowed",
+    "message": "drive.list cannot run from the requested invocation context"
+  }
+}
