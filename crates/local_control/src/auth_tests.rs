@@ -117,6 +117,12 @@ fn authenticated_drive_mutation_grant_carries_underlying_data_mutation_metadata(
         Duration::minutes(5),
     );
     grant.authenticated_user.subject = Some("user_123".to_owned());
+    grant.scripting_grant = Some(ScriptingGrant::verified_warp_terminal(
+        "session-1",
+        "user_123",
+        vec![ScriptingScope::MutateUnderlyingData],
+        Duration::minutes(5),
+    ));
     assert_eq!(
         grant.permission_category,
         PermissionCategory::MutateUnderlyingData
