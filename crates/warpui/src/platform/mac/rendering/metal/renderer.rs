@@ -15,8 +15,8 @@ use objc2_metal::{
     MTLCommandEncoder, MTLCommandQueue, MTLDevice, MTLDrawable, MTLFunction, MTLIndexType,
     MTLLibrary, MTLLoadAction, MTLOrigin, MTLPixelFormat, MTLPrimitiveType, MTLRegion,
     MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLRenderPipelineDescriptor,
-    MTLRenderPipelineState, MTLResourceOptions, MTLScissorRect, MTLSize, MTLStoreAction, MTLTexture,
-    MTLTextureDescriptor, MTLViewport,
+    MTLRenderPipelineState, MTLResourceOptions, MTLScissorRect, MTLSize, MTLStoreAction,
+    MTLTexture, MTLTextureDescriptor, MTLViewport,
 };
 use objc2_quartz_core::CAMetalDrawable;
 use pathfinder_color::{ColorF, ColorU};
@@ -82,7 +82,8 @@ impl<'a> RenderPass<'a> {
         // If we're able to do asynchronous presentation, do so - it allows us to avoid
         // blocking on the GPU for the duration of the frame.
         if !should_capture && !presents_with_transaction {
-            self.buffer.presentDrawable(ProtocolObject::from_ref(self.drawable));
+            self.buffer
+                .presentDrawable(ProtocolObject::from_ref(self.drawable));
             self.buffer.commit();
             return None;
         }
@@ -445,8 +446,11 @@ impl<'a> Frame<'a> {
         // SAFETY: the per-rect uniform buffer and `uniforms` value outlive this encoded draw
         // call, and the bound buffer/byte sizes and indices match the shader bindings.
         unsafe {
-            self.command_encoder
-                .setVertexBuffer_offset_atIndex(Some(&per_rect_uniforms_buffer), 0, 1);
+            self.command_encoder.setVertexBuffer_offset_atIndex(
+                Some(&per_rect_uniforms_buffer),
+                0,
+                1,
+            );
             self.command_encoder
                 .setVertexBytes_length_atIndex(uniforms_ptr, uniforms_len, 2);
             self.command_encoder
@@ -524,8 +528,11 @@ impl<'a> Frame<'a> {
             .setRenderPipelineState(&self.resources.draw_images_pipeline_state);
         // SAFETY: index 0 binds the shared quad vertex buffer, which outlives the draw calls.
         unsafe {
-            self.command_encoder
-                .setVertexBuffer_offset_atIndex(Some(&self.resources.quad_vertices), 0, 0);
+            self.command_encoder.setVertexBuffer_offset_atIndex(
+                Some(&self.resources.quad_vertices),
+                0,
+                0,
+            );
         }
 
         for image in &layer.images {
@@ -548,8 +555,11 @@ impl<'a> Frame<'a> {
             .setRenderPipelineState(&self.resources.draw_rects_pipeline_state);
         // SAFETY: index 0 binds the shared quad vertex buffer, which outlives the draw call.
         unsafe {
-            self.command_encoder
-                .setVertexBuffer_offset_atIndex(Some(&self.resources.quad_vertices), 0, 0);
+            self.command_encoder.setVertexBuffer_offset_atIndex(
+                Some(&self.resources.quad_vertices),
+                0,
+                0,
+            );
         }
 
         let mut per_rect_uniforms = Vec::new();
@@ -661,8 +671,11 @@ impl<'a> Frame<'a> {
         // SAFETY: the per-rect uniform buffer and `uniforms` value outlive this encoded draw
         // call, and the bound buffer/byte sizes and indices match the shader bindings.
         unsafe {
-            self.command_encoder
-                .setVertexBuffer_offset_atIndex(Some(&per_rect_uniforms_buffer), 0, 1);
+            self.command_encoder.setVertexBuffer_offset_atIndex(
+                Some(&per_rect_uniforms_buffer),
+                0,
+                1,
+            );
             self.command_encoder
                 .setVertexBytes_length_atIndex(uniforms_ptr, uniforms_len, 2);
             self.command_encoder
@@ -690,8 +703,11 @@ impl<'a> Frame<'a> {
             .setRenderPipelineState(&self.resources.draw_glyphs_pipeline_state);
         // SAFETY: index 0 binds the shared quad vertex buffer, which outlives the draw calls.
         unsafe {
-            self.command_encoder
-                .setVertexBuffer_offset_atIndex(Some(&self.resources.quad_vertices), 0, 0);
+            self.command_encoder.setVertexBuffer_offset_atIndex(
+                Some(&self.resources.quad_vertices),
+                0,
+                0,
+            );
         }
 
         let scale_factor = self.scene.scale_factor();
@@ -792,8 +808,11 @@ impl<'a> Frame<'a> {
             // index buffer outlive this encoded draw call, and the bound sizes/indices match the
             // shader bindings.
             unsafe {
-                self.command_encoder
-                    .setVertexBuffer_offset_atIndex(Some(&per_glyph_uniforms_buffer), 0, 1);
+                self.command_encoder.setVertexBuffer_offset_atIndex(
+                    Some(&per_glyph_uniforms_buffer),
+                    0,
+                    1,
+                );
                 self.command_encoder
                     .setVertexBytes_length_atIndex(uniforms_ptr, uniforms_len, 2);
                 self.command_encoder

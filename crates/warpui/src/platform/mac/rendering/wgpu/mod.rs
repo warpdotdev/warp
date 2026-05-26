@@ -26,8 +26,7 @@ impl Device {
         let view_frame = native_view.frame();
         let surface_size = vec2f(view_frame.size.width as f32, view_frame.size.height as f32);
 
-        let appkit_window_handle =
-            AppKitWindowHandle::new(NonNull::from(native_view).cast());
+        let appkit_window_handle = AppKitWindowHandle::new(NonNull::from(native_view).cast());
         let window_handle =
             unsafe { WindowHandle::borrow_raw(RawWindowHandle::AppKit(appkit_window_handle)) };
         let display_handle = unsafe {
