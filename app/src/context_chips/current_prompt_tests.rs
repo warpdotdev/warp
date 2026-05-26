@@ -1,7 +1,6 @@
 use std::any::Any;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use itertools::Itertools;
@@ -21,11 +20,9 @@ use crate::auth::AuthStateProvider;
 use crate::code_review::diff_state::DiffStats;
 #[cfg(feature = "local_fs")]
 use crate::code_review::git_status_update::{GitRepoStatusModel, GitStatusMetadata};
-use crate::context_chips::context_chip::{ChipFingerprintInput, Environment};
+use crate::context_chips::context_chip::{Environment, PromptGenerator};
 use crate::context_chips::prompt::Prompt;
-use crate::context_chips::{
-    ChipAvailability, ChipDisabledReason, ChipRuntimeCapabilities, ContextChipKind,
-};
+use crate::context_chips::{ChipAvailability, ChipDisabledReason, ContextChipKind};
 use crate::features::FeatureFlag;
 use crate::menu::MenuItem;
 use crate::server::server_api::ServerApiProvider;
@@ -37,7 +34,7 @@ use crate::terminal::model::block::BlockMetadata;
 use crate::terminal::model::session::{
     CommandExecutor, ExecuteCommandOptions, SessionId, SessionInfo, Sessions,
 };
-use crate::terminal::session_settings::{GithubPrPromptChipDefaultValidation, SessionSettings};
+use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::shell::Shell;
 use crate::terminal::view::PromptPosition;
 use crate::terminal::History;
