@@ -1,59 +1,64 @@
 # Queued Prompts UI — Technical Spec
 See `specs/REMOTE-1543/PRODUCT.md` for user-visible behavior. This document covers the implementation that supports that behavior.
 ## Context
-Regular Agent Mode queued prompts are implemented as a terminal-owned queue subsystem rather than as pending-user-query rich content. That architecture keeps the rendered panel close to the input that hosts it, while queue rows remain scoped to the conversation they were filed against.
+Regular Agent Mode queued prompts are stored in an app-wide singleton keyed by conversation id, so queue state outlives the agent-view session that originated it. The rendered panel sits next to the input that hosts it, while queue data is owned globally.
 
 The implementation spans four ownership layers:
-- `app/src/terminal/view.rs (3240-3330, 3707-4370, 5074-5181, 5871-5985)` constructs the terminal-scoped `QueuedQueryModel`, wires it into `Input`, constructs the panel, receives panel events that need input mutation, clears terminal-local queue state from lifecycle events, and drains queued prompts when conversations finish.
-- `app/src/ai/blocklist/queued_query.rs (90-365)` owns queue data, edit/collapse state, row identity, reorder behavior, and auto-fire pop semantics.
-- `app/src/ai/blocklist/queued_prompts_panel.rs (1-284, 485-841)` owns panel rendering and row-level interactions: collapse, edit, delete, drag reorder, and panel telemetry.
-- `app/src/terminal/input.rs (13121-13319)` and `app/src/terminal/input/slash_commands/mod.rs (1032-1085)` route regular queue trigger surfaces into the shared queue model.
+- `app/src/ai/blocklist/queued_query.rs` defines the `QueuedQueryModel` singleton. It owns every conversation's queue rows, edit state, and auto-queue toggle, indexed by `AIConversationId`. It self-manages cleanup by subscribing to `BlocklistAIHistoryModel` lifecycle events.
+- `app/src/terminal/view.rs` wires the input and panel, subscribes to panel events for input mutation, and drains queued prompts when a conversation finishes — using the `conversation_id` carried on `BlocklistAIControllerEvent::FinishedReceivingOutput`.
+- `app/src/terminal/view/queued_prompts_panel.rs` owns panel rendering and row-level interactions: collapse, edit, delete, drag reorder, and panel telemetry. The panel looks up the active conversation for its terminal view via `BlocklistAIHistoryModel` rather than duplicating that state.
+- `app/src/terminal/input.rs` and `app/src/terminal/input/slash_commands/mod.rs` route regular queue trigger surfaces into the singleton, scoped to the conversation each trigger fires against.
 
 Cloud Mode placeholders and compact follow-up placeholders remain on the legacy pending-user-query path. They still use the rich-content machinery in `app/src/terminal/view/pending_user_query.rs`, `app/src/terminal/view/rich_content.rs`, and related terminal selection plumbing because their lifecycle is driven by cloud setup or summarize/fork workflows rather than by regular Agent Mode queue draining.
 ## Proposed changes
 ### Queue ownership and data model
-`TerminalView::new` constructs one `QueuedQueryModel` per terminal view and hands that model to the input and queued-prompts panel (`app/src/terminal/view.rs (3707-4370)`). The model is terminal-owned because the panel and input are terminal-owned UI, and it is implicitly scoped to whichever conversation owns the agent view: lifecycle events on `TerminalView` wipe the entire queue on agent-view exit and on `ClearedConversationsInTerminalView`. `BlocklistAIHistoryModel` remains responsible for conversation history only; queue cleanup reacts to its terminal-scoped events from `TerminalView`.
-
-`QueuedQueryModel` is the source of truth for regular queued prompts (`app/src/ai/blocklist/queued_query.rs (72-110)`):
-- `queue: Vec<QueuedQuery>` stores the FIFO queue for the active conversation.
+`QueuedQueryModel` is an app-wide singleton (`SingletonEntity`) keyed by `AIConversationId`. It is the source of truth for every regular queued prompt anywhere in the app (`app/src/ai/blocklist/queued_query.rs`):
+- `queues: HashMap<AIConversationId, ConversationQueueState>` stores each conversation's per-conversation state. Conversations that have never been touched have no entry; reads against an absent key return empty/false, so a missing entry is indistinguishable from a conversation with an empty queue and toggle off.
+- `ConversationQueueState { queue: Vec<QueuedQuery>, editing: Option<QueuedQueryId>, queue_next_prompt_enabled: bool }` packages all per-conversation state in one struct so a conversation's queue, in-progress edit, and auto-queue toggle live and die together.
 - `QueuedQueryId` gives each row stable identity across edit, delete, and reorder.
 - `QueuedQueryOrigin` distinguishes `/queue` rows from auto-queue rows for telemetry without affecting firing semantics.
-- `editing: Option<QueuedQueryId>` enforces one active inline edit at a time.
-- `collapsed: bool` tracks the panel collapse state and resets whenever the queue becomes empty.
-- `queue_next_prompt_enabled` moves the queue-next toggle state out of `BlocklistAIContextModel` and into the same model that handles regular queued prompt behavior.
 
-The model emits `QueuedQueryEvent`s for append/remove/replace/reorder/edit/collapse/clear transitions. Views consume those events to refresh UI state without owning queue data themselves.
+Every queue/edit/toggle accessor takes the `conversation_id` it applies to, and the singleton emits `QueuedQueryEvent`s whose payload carries that `conversation_id` so subscribers can filter by the conversation they care about. Panel collapse is panel-local UI state and lives on `QueuedPromptsPanelView`, not on the singleton, because no other consumer cares.
+
+`QueuedQueryModel` self-manages cleanup by subscribing to `BlocklistAIHistoryModel`:
+- `RemoveConversation { conversation_id, .. }` and `DeletedConversation { conversation_id, .. }` drop that conversation's `ConversationQueueState`.
+- `ClearedConversationsInTerminalView { cleared_conversation_ids, .. }` drops every entry whose id appears in the cleared list. The history event is extended to include `cleared_conversation_ids: Vec<AIConversationId>` — `BlocklistAIHistoryModel::clear_conversations_in_terminal_view` already collects those ids; the event just needs to carry them.
+
+No subscription is added for `ExitedAgentView`. Conversations outlive their visible session — particularly for cloud agents — so the queue and its toggle state must too.
 ### Trigger routing and enqueue flow
-All regular queue entry points converge on `QueuedQueryModel::append`:
-- The auto-queue path in `Input::maybe_queue_input_for_in_progress_conversation` verifies that the flag is enabled, AI input is active, the selected conversation is in progress or blocked, and the prompt is non-empty before appending an `AutoQueueToggle` row (`app/src/terminal/input.rs (13154-13263)`).
-- `/queue <prompt>` appends a `QueueSlashCommand` row while the conversation is active, and otherwise falls back to normal queued-prompt submission (`app/src/terminal/input/slash_commands/mod.rs (1032-1085)`).
-- `WorkspaceAction::QueuePromptForConversation` routes button/keybinding-driven enqueue requests through `TerminalView::enqueue_prompt`, preserving a single append API at the terminal layer (`app/src/workspace/view.rs (22648-22663)`, `app/src/terminal/view.rs (5074-5099)`).
+All regular queue entry points target `QueuedQueryModel::append(conversation_id, ...)` on the singleton, scoped to the conversation the trigger fires against:
+- The auto-queue path in `Input::maybe_queue_input_for_in_progress_conversation` verifies that the conversation-scoped toggle is enabled, AI input is active, the selected conversation is in progress or blocked, and the prompt is non-empty. It then calls the singleton to append an `AutoQueueToggle` row to that `conversation_id` (`app/src/terminal/input.rs`). The toggle read uses the same conversation id.
+- `/queue <prompt>` appends a `QueueSlashCommand` row to the in-progress conversation's queue, and otherwise falls back to normal submission (`app/src/terminal/input/slash_commands/mod.rs`). The `conversation_id` is the in-progress conversation derived from the same gating check.
+- The `ToggleQueueNextPrompt` action handler in `TerminalView` (`app/src/terminal/view.rs`) looks up the view's active conversation id via `BlocklistAIHistoryModel::active_conversation_id(self.view_id)` and calls `QueuedQueryModel::toggle_queue_next_prompt(conversation_id, ctx)`. When the view has no active conversation, the action is a no-op.
 
 `FeatureFlag::QueueSlashCommand` remains the single gate for the regular queue experience. It covers the trigger surfaces above and the panel attachment/render path; there is no separate panel-specific rollout switch.
 ### Panel composition and interaction ownership
-`TerminalView::new` constructs `QueuedPromptsPanelView` when the regular queue feature is available, subscribes to its emitted events, and stores the panel handle on `Input` (`app/src/terminal/view.rs (4338-4367)`, `app/src/terminal/input.rs (3697-3718)`). The input render tree places the panel between the status bar and the editor (`app/src/terminal/input/agent.rs (329-341)`), matching the product placement contract.
+`Input::new` constructs `QueuedPromptsPanelView` when the regular queue feature is available, passing the parent terminal view's `EntityId` so the panel can look up the active conversation it should render for (`app/src/terminal/input.rs`). The panel handle is stored on `Input`, and the input render tree places the panel between the status bar and the editor (`app/src/terminal/input/agent.rs`), matching the product placement contract. `Input` subscribes to panel events for cross-component side effects.
 
-`QueuedPromptsPanelView` intentionally owns only queue-panel concerns:
-- It renders the queue header, expanded rows, hover controls, inline edit editor, and drag handles (`app/src/ai/blocklist/queued_prompts_panel.rs (485-841)`).
-- Static rows render bounded multiline previews: prompt text is character-trimmed before rendering, then constrained to a compact maximum height so queued prompts remain readable without letting one row dominate the panel (`app/src/ai/blocklist/queued_prompts_panel.rs (722-812)`).
-- Edit mode reuses the multiline editor pattern used elsewhere in the client (`EditorOptions` with autogrow + soft wrap), constrains the editor to the same visual height as the static preview, and wraps it in a clipped outlined scroll surface with a scrollbar so larger edits stay bounded inside the row (`app/src/ai/blocklist/queued_prompts_panel.rs (594-612, 722-832)`).
-- It mutates queue state through model methods such as `enter_edit_mode`, `remove_by_id`, `commit_edit`, `cancel_edit`, `reorder`, and `set_collapsed` (`app/src/ai/blocklist/queued_prompts_panel.rs (157-374)`).
-- It emits higher-level `QueuedPromptsPanelEvent`s when the host view must coordinate with input focus or buffer placement (`app/src/ai/blocklist/queued_prompts_panel.rs (82-112)`).
+`QueuedPromptsPanelView` intentionally owns only queue-panel concerns (`app/src/terminal/view/queued_prompts_panel.rs`):
+- It renders the queue header, expanded rows, hover controls, inline edit editor, and drag handles.
+- Static rows render bounded multiline previews: prompt text is character-trimmed before rendering, then constrained to a compact maximum height so queued prompts remain readable without letting one row dominate the panel.
+- Edit mode reuses the multiline editor pattern used elsewhere in the client (`EditorOptions` with autogrow + soft wrap), constrains the editor to the same visual height as the static preview, and wraps it in a clipped outlined scroll surface with a scrollbar so larger edits stay bounded inside the row.
+- It mutates queue state through `QueuedQueryModel` methods scoped to the panel's current active conversation: `enter_edit_mode`, `remove_by_id`, `commit_edit`, `cancel_edit`, and `reorder`.
+- It emits higher-level `QueuedPromptsPanelEvent`s when the host view must coordinate with input focus or buffer placement.
+- Panel-only UI state — `collapsed`, `row_states`, drag state — lives on the view itself, not on the singleton, because no other consumer cares.
 
-`TerminalView::handle_queued_prompts_panel_event` owns the cross-component consequences the panel should not perform directly: focus restoration and placing deleted text into the main input when the input is empty (`app/src/terminal/view.rs (5103-5130)`).
+The panel resolves "which conversation am I rendering for?" via `BlocklistAIHistoryModel::active_conversation_id(terminal_view_id)`. It subscribes to `BlocklistAIHistoryEvent::SetActiveConversation` filtered to its terminal view so it can re-seed `row_states` and reset `collapsed` when the active conversation changes. It also subscribes to `QueuedQueryModel` events and ignores any whose `conversation_id` does not match the current active conversation.
+
+`TerminalView::handle_queued_prompts_panel_event` (delegated through `Input`) owns the cross-component consequences the panel should not perform directly: focus restoration and placing deleted text into the main input when the input is empty.
 ### Drain behavior and conversation lifecycle
-When the active conversation finishes, `TerminalView` decides how queued prompts advance; the queued prompts panel only renders and edits queued rows. `TerminalView::handle_ai_controller_event` invokes `drain_queued_prompts` before other completion callbacks run (`app/src/terminal/view.rs (4982-5072)`).
+When a conversation finishes, `TerminalView` decides how that conversation's queued prompts advance; the queued prompts panel only renders and edits queued rows. `BlocklistAIControllerEvent::FinishedReceivingOutput` carries the `conversation_id` that just finished, and `TerminalView::handle_ai_controller_event` threads it through `handle_finished_conversation` into `drain_queued_prompts(conversation_id, finish_reason, ctx)` (`app/src/terminal/view.rs`). Explicit threading keeps drain correct when the finishing conversation is not the view's currently-active conversation (e.g. a backgrounded child agent).
 
-`drain_queued_prompts` branches on `FinishReason` (`app/src/terminal/view.rs (5132-5181)`):
-- `Complete`: pop one queued row via `pop_for_autofire`; submit it through `Input::submit_queued_prompt`, or place it into the input if the row was first in queue and in edit mode.
-- `Error`, `Cancelled`, or `CancelledDuringRequestedCommandExecution`: if the input is empty, pop the first row and place its text into the input; otherwise leave the queue untouched.
+`drain_queued_prompts` branches on `FinishReason`:
+- `Complete`: pop one queued row from that conversation via `QueuedQueryModel::pop_for_autofire(conversation_id, ctx)`; submit it through `Input::submit_queued_prompt`, or place it into the input if the row was first in queue and in edit mode.
+- `Error`, `Cancelled`, or `CancelledDuringRequestedCommandExecution`: first gate on `AgentViewController::agent_view_state().active_conversation_id() == Some(conversation_id)` — restore only when the user is currently viewing this conversation in agent view. `AgentViewController::exit_agent_view_internal` flips the state to `Inactive` before emitting `ExitedAgentView`, so cancels driven by agent-view exit reach the drain with the state already cleared and skip the restore. Backgrounded conversations the user isn't viewing also skip on the same check. Once gated past that, if the input is empty, pop the first row of that conversation's queue and place its text into the input; otherwise leave the queue untouched.
 
-The model owns row-removal details and queue-empty cleanup, while the terminal owns submission and input mutation. This division keeps queue semantics testable in `queued_query_tests.rs` while preserving terminal-specific side effects in `queued_prompts_test.rs`.
+The model owns row-removal details and per-conversation state mutation, while the terminal owns submission and input mutation. This division keeps queue semantics testable in `queued_query_tests.rs` while preserving terminal-specific side effects in `queued_prompts_test.rs`.
 
-Queue state is cleared along the same lifecycle boundaries that exit the agent view or wipe the terminal's conversation history:
-- Exiting Agent View calls `QueuedQueryModel::clear_all` from `TerminalView`'s `AgentViewControllerEvent::ExitedAgentView` subscription (`app/src/terminal/view.rs (3199-3206)`).
-- Clearing all conversations in a terminal calls `clear_all` from `TerminalView::handle_ai_history_model_event` (`app/src/terminal/view.rs (5903-5910)`).
-- `RemoveConversation` and `DeletedConversation` are intentional no-ops because agent-view exit already wipes the single per-terminal queue; there is no per-conversation queue to selectively prune (`app/src/terminal/view.rs (5960-5978)`).
+Queue and toggle state are dropped only by `QueuedQueryModel`'s own subscriptions to `BlocklistAIHistoryModel`:
+- `RemoveConversation { conversation_id, .. }` and `DeletedConversation { conversation_id, .. }` drop that conversation's `ConversationQueueState` entry.
+- `ClearedConversationsInTerminalView { cleared_conversation_ids, .. }` drops every entry in the cleared list. The event is extended to carry `cleared_conversation_ids: Vec<AIConversationId>` alongside the existing `active_conversation_id`.
+- `ExitedAgentView` is intentionally not subscribed to. Conversations and their queues outlive the agent-view session that originated them; re-entering the agent view, or switching to the conversation from anywhere else, restores the same queue and toggle state.
 ### Compatibility boundary for legacy pending placeholders
 The regular queue subsystem does not absorb placeholder flows whose lifecycle is unrelated to conversation-completion draining:
 - Cloud Mode initial/follow-up placeholders continue using pending-user-query rich content.
@@ -71,24 +76,23 @@ Panel-only interaction telemetry is emitted from `QueuedPromptsPanelView`, where
 ## End-to-end flow
 ```mermaid
 flowchart LR
-    A["Input auto-queue or /queue"] --> B["QueuedQueryModel::append"]
-    C["WorkspaceAction::QueuePromptForConversation"] --> D["TerminalView::enqueue_prompt"]
-    D --> B
-    B --> E["Queued prompts panel renders queue state"]
-    E --> F["Panel edits / deletes / reorders / collapses rows"]
-    F --> G["QueuedQueryModel updates existing queue state"]
+    A["Input auto-queue or /queue"] --> B["QueuedQueryModel::append(conversation_id, ...)"]
+    B --> E["Panel renders queue for the view's active conversation"]
+    E --> F["Panel edits / deletes / reorders rows"]
+    F --> G["QueuedQueryModel mutates the conversation's state"]
     G --> E
-    H["Conversation finishes"] --> I["TerminalView::drain_queued_prompts"]
-    I --> J["QueuedQueryModel pops the next row"]
-    J --> K["Submit queued prompt"]
+    H["FinishedReceivingOutput { conversation_id }"] --> I["TerminalView::drain_queued_prompts(conversation_id, ...)"]
+    I --> J["QueuedQueryModel::pop_for_autofire(conversation_id)"]
+    J --> K["Submit queued prompt via Input"]
     J --> L["Restore text into input when behavior requires it"]
+    M["RemoveConversation / DeletedConversation / ClearedConversationsInTerminalView"] --> N["QueuedQueryModel drops affected ConversationQueueState entries"]
 ```
 ## Testing and validation
 Map tests directly to the product behavior in `specs/REMOTE-1543/PRODUCT.md`:
-- Behaviors 4-11: regular queue gating, `/queue`, auto-queue, and shell-mode exclusion should stay covered by terminal/input-level tests plus slash-command coverage.
-- Behaviors 12-31: row rendering, collapse/edit/delete/reorder semantics belong in `app/src/terminal/view/queued_prompts_test.rs` and `app/src/ai/blocklist/queued_query_tests.rs`.
-- Behaviors 32-38: sequential firing, edit-mode drain handling, and cancellation/error restoration belong in `TerminalView::drain_queued_prompts` coverage in `app/src/terminal/view/queued_prompts_test.rs`.
-- Behaviors 39-41: conversation/terminal/Agent View cleanup belong in queue-model lifecycle tests plus terminal-view event-handler integration coverage.
+- Behaviors 4-11: regular queue gating, `/queue`, auto-queue, shell-mode exclusion, and per-conversation isolation should stay covered by terminal/input-level tests plus slash-command coverage. Add coverage that appending or toggling on one conversation does not affect another conversation's state.
+- Behaviors 12-31: row rendering, collapse/edit/delete/reorder semantics belong in `app/src/terminal/view/queued_prompts_test.rs` and `app/src/ai/blocklist/queued_query_tests.rs`. Tests construct queues against explicit conversation ids and assert per-conversation isolation.
+- Behaviors 32-38: sequential firing, edit-mode drain handling, and cancellation/error restoration belong in `TerminalView::drain_queued_prompts` coverage in `app/src/terminal/view/queued_prompts_test.rs`. Drain tests construct the queue for a specific conversation id and verify the popped row is from that conversation.
+- Behaviors 39-41: conversation/terminal/Agent View cleanup belong in queue-model lifecycle tests. Specifically cover (a) `ExitedAgentView` does not touch queue state, (b) `RemoveConversation`/`DeletedConversation` drops only the targeted conversation's entry, and (c) `ClearedConversationsInTerminalView` drops every conversation in `cleared_conversation_ids`. Also cover the auto-queue toggle: it persists across agent-view exit and is dropped together with the queue on cleanup.
 - Behavior 44: telemetry payload/origin plumbing should be covered where telemetry event serialization or event wiring already has local test patterns.
 
 Validation for this implementation should use:
@@ -100,7 +104,9 @@ Do not run the app as part of this change.
 ## Parallelization
 Parallel child agents are not especially helpful for implementing this feature because the queue model, panel, input routing, and terminal drain semantics share tight ownership boundaries and must remain consistent across one architectural thread. Review and validation can be parallelized later, but the primary implementation should stay in a single workstream to avoid churn across the same types and event contracts.
 ## Risks and mitigations
-- **Queue lifecycle drifting from conversation lifecycle**: centralize cleanup in `TerminalView`’s history-event and Agent View exit handling rather than relying on panel teardown or expanding history-model ownership.
+- **Queue lifecycle drifting from conversation lifecycle**: centralize cleanup inside `QueuedQueryModel`'s own subscriptions to `BlocklistAIHistoryModel` (deletion + clear-conversations). `TerminalView` is no longer responsible for clearing queue state; agent-view exit is intentionally not a cleanup trigger.
+- **Drain firing against the wrong conversation**: thread `conversation_id` from `BlocklistAIControllerEvent::FinishedReceivingOutput` explicitly into `drain_queued_prompts` rather than relying on the view's "active conversation" being the same as the finished one.
+- **Panel rendering stale rows when active conversation changes**: re-seed `row_states` and reset `collapsed` in the panel's `BlocklistAIHistoryEvent::SetActiveConversation` subscription, and ignore `QueuedQueryEvent`s whose `conversation_id` does not match the current active conversation.
 - **Panel owning terminal/input side effects**: keep focus restoration and input-buffer placement in `TerminalView::handle_queued_prompts_panel_event`.
 - **Drain behavior losing edit-mode or cancellation semantics**: keep firing policy in `TerminalView::drain_queued_prompts` and row-removal mechanics in `QueuedQueryModel`.
 - **Compatibility placeholders leaking into regular queue abstractions**: keep Cloud Mode and compact follow-up placeholders on their existing pending-user-query path because their ownership and removal semantics differ.

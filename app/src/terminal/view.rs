@@ -2664,7 +2664,6 @@ pub struct TerminalView {
     ai_action_model: ModelHandle<BlocklistAIActionModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     ai_context_model: ModelHandle<BlocklistAIContextModel>,
-    queued_query_model: ModelHandle<QueuedQueryModel>,
     get_relevant_files_controller: ModelHandle<GetRelevantFilesController>,
 
     pending_env_var_collection: Option<CloudEnvVarCollection>,
@@ -3219,8 +3218,6 @@ impl TerminalView {
                 } => {
                     // Prompt suggestions should not follow the user back to terminal view.
                     me.clear_prompt_suggestions(ctx);
-                    me.queued_query_model
-                        .update(ctx, |model, ctx| model.clear_all(ctx));
                     // For ambient agent sessions, pop the pane stack to return to the parent terminal.
                     // Skip the pop when this exit is immediately followed by re-entering agent view
                     // for a different conversation (e.g. a restored conversation taking over the
@@ -3684,8 +3681,6 @@ impl TerminalView {
         );
         let terminal_content_element_position_id =
             format!("terminal_content_element_{}", ctx.view_id());
-        let queued_query_model = ctx.add_model(|_| QueuedQueryModel::new());
-        let queued_query_model_for_input = queued_query_model.clone();
 
         let input: ViewHandle<Input> = ctx.add_typed_action_view(|ctx| {
             Input::new(
@@ -3698,7 +3693,6 @@ impl TerminalView {
                 current_prompt.clone(),
                 ai_controller.clone(),
                 ai_context_model.clone(),
-                queued_query_model_for_input.clone(),
                 ai_input_model.clone(),
                 ai_action_model.clone(),
                 cli_subagent_controller.clone(),
@@ -4258,7 +4252,6 @@ impl TerminalView {
             conversation_ended_tombstone_view_id: None,
             ai_input_model,
             ai_context_model,
-            queued_query_model,
             window_id,
             content_element_position_id: terminal_content_element_position_id,
             input_position_id,
@@ -4788,6 +4781,7 @@ impl TerminalView {
 
     fn handle_finished_conversation(
         &mut self,
+        conversation_id: AIConversationId,
         finish_reason: FinishReason,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -4802,7 +4796,7 @@ impl TerminalView {
         if let Some(callback) = queued_prompt {
             callback(self, finish_reason, ctx);
         }
-        self.drain_queued_prompts(finish_reason, ctx);
+        self.drain_queued_prompts(conversation_id, finish_reason, ctx);
     }
 
     #[cfg(feature = "local_fs")]
@@ -5095,7 +5089,7 @@ impl TerminalView {
             }
 
             if let Some(reason) = finish_reason {
-                self.handle_finished_conversation(reason, ctx);
+                self.handle_finished_conversation(*conversation_id, reason, ctx);
             }
 
             // If the most recent action in the current interaction turn created or updated a plan
@@ -5152,22 +5146,26 @@ impl TerminalView {
         }
     }
 
-    /// Drains one prompt from the queued-query model when the active conversation finishes.
-    fn drain_queued_prompts(&mut self, finish_reason: FinishReason, ctx: &mut ViewContext<Self>) {
+    /// Drains one prompt from the queued-query singleton for `conversation_id` when that
+    /// conversation finishes.
+    fn drain_queued_prompts(
+        &mut self,
+        conversation_id: AIConversationId,
+        finish_reason: FinishReason,
+        ctx: &mut ViewContext<Self>,
+    ) {
         match finish_reason {
             FinishReason::Complete => {
                 let input_is_empty = self.input.as_ref(ctx).buffer_text(ctx).is_empty();
-                let first_row_is_in_edit_mode = self
-                    .queued_query_model
-                    .as_ref(ctx)
-                    .first_row_is_in_edit_mode();
+                let first_row_is_in_edit_mode =
+                    QueuedQueryModel::as_ref(ctx).first_row_is_in_edit_mode(conversation_id);
                 if first_row_is_in_edit_mode && !input_is_empty {
                     return;
                 }
 
-                let action = self
-                    .queued_query_model
-                    .update(ctx, |model, ctx| model.pop_for_autofire(ctx));
+                let action = QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.pop_for_autofire(conversation_id, ctx)
+                });
                 match action {
                     Some(AutofireAction::Submit { text }) => {
                         self.input.update(ctx, |input, ctx| {
@@ -5188,13 +5186,29 @@ impl TerminalView {
             FinishReason::Error
             | FinishReason::Cancelled
             | FinishReason::CancelledDuringRequestedCommandExecution => {
+                // Only restore the head into the input when the user is
+                // currently viewing this conversation in agent view. Cancels
+                // triggered by exiting the agent view leave `agent_view_state`
+                // Inactive by the time the cancel fires, so the head stays in
+                // the queue and re-entering the agent view shows the same
+                // queue the user left.
+                let is_active_in_agent_view = self
+                    .agent_view_controller
+                    .as_ref(ctx)
+                    .agent_view_state()
+                    .active_conversation_id()
+                    == Some(conversation_id);
+                if !is_active_in_agent_view {
+                    return;
+                }
+
                 let input_is_empty = self.input.as_ref(ctx).buffer_text(ctx).is_empty();
                 if !input_is_empty {
                     return;
                 }
-                let popped = self
-                    .queued_query_model
-                    .update(ctx, |model, ctx| model.pop_front(ctx));
+
+                let popped = QueuedQueryModel::handle(ctx)
+                    .update(ctx, |model, ctx| model.pop_front(conversation_id, ctx));
                 if let Some(query) = popped {
                     self.input.update(ctx, |input, ctx| {
                         input.replace_buffer_content(query.text(), ctx);
@@ -5969,8 +5983,6 @@ impl TerminalView {
                 active_conversation_id,
                 ..
             } => {
-                self.queued_query_model
-                    .update(ctx, |model, ctx| model.clear_all(ctx));
                 if let Some(active_conversation_id) = active_conversation_id {
                     self.ai_controller.update(ctx, |controller, ctx| {
                         controller.cancel_conversation_progress(
@@ -26321,8 +26333,13 @@ impl TypedActionView for TerminalView {
                 ctx.notify();
             }
             ToggleQueueNextPrompt => {
-                self.queued_query_model.update(ctx, |model, ctx| {
-                    model.toggle_queue_next_prompt(ctx);
+                let Some(conversation_id) =
+                    BlocklistAIHistoryModel::as_ref(ctx).active_conversation_id(self.view_id)
+                else {
+                    return;
+                };
+                QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.toggle_queue_next_prompt(conversation_id, ctx);
                 });
                 ctx.notify();
             }

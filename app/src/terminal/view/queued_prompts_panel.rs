@@ -1,10 +1,11 @@
 //! Multi-prompt queue panel rendered between the warping indicator and the input editor in
 //! [`TerminalView`].
 //!
-//! Reads from [`QueuedQueryModel`] for queue data and tracks its own panel-only UI state
-//! (collapse, hover, drag). Emits two high-level events:
-//! [`QueuedPromptsPanelEvent::RowDeleted`] and [`QueuedPromptsPanelEvent::EditEnded`], which the
-//! host uses to update the input editor.
+//! Reads from the `QueuedQueryModel` singleton (keyed by `AIConversationId`) for the queue of the
+//! currently-active conversation in its parent terminal view, looked up via
+//! [`BlocklistAIHistoryModel::active_conversation_id`]. Tracks panel-only UI state (collapse,
+//! hover, drag) locally. Emits two high-level events: [`QueuedPromptsPanelEvent::RowDeleted`] and
+//! [`QueuedPromptsPanelEvent::EditEnded`], which the host uses to update the input editor.
 use std::collections::HashMap;
 
 use pathfinder_color::ColorU;
@@ -20,11 +21,15 @@ use warpui::elements::{
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::platform::Cursor;
 use warpui::{
-    AppContext, BlurContext, Element, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity,
+    AppContext, BlurContext, Element, Entity, EntityId, FocusContext, SingletonEntity,
     TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::ai::blocklist::{QueuedQueryEvent, QueuedQueryId, QueuedQueryModel};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::{
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, QueuedQueryEvent, QueuedQueryId,
+    QueuedQueryModel,
+};
 use crate::appearance::Appearance;
 use crate::editor::{
     EditorOptions, EditorView, Event as EditorEvent, PropagateAndNoOpEscapeKey,
@@ -86,13 +91,19 @@ struct QueuedPromptRowState {
 /// View for the multi-prompt queue panel.
 pub struct QueuedPromptsPanelView {
     view_id: EntityId,
-    queued_query_model: ModelHandle<QueuedQueryModel>,
+    /// Terminal view this panel belongs to. Used to resolve the active conversation via
+    /// [`BlocklistAIHistoryModel`].
+    terminal_view_id: EntityId,
+    /// Cached active conversation for this panel. `None` means there is no active conversation in
+    /// the parent terminal view; the panel renders nothing in that case.
+    active_conversation_id: Option<AIConversationId>,
     /// Reusable editor for whichever row is currently in edit mode.
     edit_editor: ViewHandle<EditorView>,
     edit_editor_is_single_logical_line: bool,
     edit_editor_scroll_state: ClippedScrollStateHandle,
-    /// Panel-only UI state: whether the body is collapsed. Owned here (not on the model) because
-    /// no other view reads this. Reset on `QueuedQueryEvent::Cleared`.
+    /// Panel-only UI state: whether the body is collapsed. Owned here (not on the singleton)
+    /// because no other view reads this. Reset whenever the active conversation changes or the
+    /// queue is cleared.
     collapsed: bool,
     header_mouse_state: MouseStateHandle,
     row_states: HashMap<QueuedQueryId, QueuedPromptRowState>,
@@ -126,21 +137,31 @@ impl Entity for QueuedPromptsPanelView {
 }
 
 impl QueuedPromptsPanelView {
-    pub fn new(
-        queued_query_model: ModelHandle<QueuedQueryModel>,
-        ctx: &mut ViewContext<Self>,
-    ) -> Self {
+    pub fn new(terminal_view_id: EntityId, ctx: &mut ViewContext<Self>) -> Self {
         let edit_editor = build_edit_editor(ctx);
 
         ctx.subscribe_to_view(&edit_editor, |me, _, event, ctx| {
             me.handle_edit_editor_event(event, ctx);
         });
 
-        ctx.subscribe_to_model(&queued_query_model, Self::handle_queued_query_event);
+        let history_handle = BlocklistAIHistoryModel::handle(ctx);
+        let active_conversation_id = history_handle
+            .as_ref(ctx)
+            .active_conversation_id(terminal_view_id);
 
-        Self {
+        ctx.subscribe_to_model(&history_handle, move |me, _, event, ctx| {
+            me.handle_history_event(event, ctx);
+        });
+
+        ctx.subscribe_to_model(
+            &QueuedQueryModel::handle(ctx),
+            Self::handle_queued_query_event,
+        );
+
+        let mut me = Self {
             view_id: ctx.view_id(),
-            queued_query_model,
+            terminal_view_id,
+            active_conversation_id,
             edit_editor,
             edit_editor_is_single_logical_line: true,
             edit_editor_scroll_state: Default::default(),
@@ -149,7 +170,11 @@ impl QueuedPromptsPanelView {
             row_states: HashMap::new(),
             dragging_query_id: None,
             drag_start_index: None,
+        };
+        if let Some(conv_id) = active_conversation_id {
+            me.seed_row_states_for(conv_id, ctx);
         }
+        me
     }
 
     fn clear_drag_state(&mut self) {
@@ -157,27 +182,93 @@ impl QueuedPromptsPanelView {
         self.drag_start_index = None;
     }
 
+    /// Reseed `row_states` for `conv_id`'s queue, dropping any state for rows not in that queue.
+    fn seed_row_states_for(&mut self, conv_id: AIConversationId, ctx: &mut ViewContext<Self>) {
+        let query_ids: Vec<QueuedQueryId> = QueuedQueryModel::as_ref(ctx)
+            .queue(conv_id)
+            .iter()
+            .map(|q| q.id())
+            .collect();
+        self.row_states.retain(|id, _| query_ids.contains(id));
+        for id in query_ids {
+            self.row_states
+                .entry(id)
+                .or_insert_with(|| build_row_state(id, ctx));
+        }
+    }
+
+    fn handle_history_event(
+        &mut self,
+        event: &BlocklistAIHistoryEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let is_for_this_view = event
+            .terminal_view_id()
+            .is_some_and(|id| id == self.terminal_view_id);
+        if !is_for_this_view {
+            return;
+        }
+        let new_active =
+            BlocklistAIHistoryModel::as_ref(ctx).active_conversation_id(self.terminal_view_id);
+        if new_active != self.active_conversation_id {
+            self.active_conversation_id = new_active;
+            self.row_states.clear();
+            self.clear_drag_state();
+            self.collapsed = false;
+            if let Some(conv_id) = new_active {
+                self.seed_row_states_for(conv_id, ctx);
+            }
+            ctx.notify();
+        }
+    }
+
     fn handle_queued_query_event(
         &mut self,
-        _: ModelHandle<QueuedQueryModel>,
+        _: warpui::ModelHandle<QueuedQueryModel>,
         event: &QueuedQueryEvent,
         ctx: &mut ViewContext<Self>,
     ) {
+        let Some(active_conv_id) = self.active_conversation_id else {
+            return;
+        };
+        // Filter every event to the panel's current active conversation. Other conversations'
+        // events are still emitted on the singleton but are not relevant to this panel.
+        let event_conv_id = match event {
+            QueuedQueryEvent::Appended {
+                conversation_id, ..
+            }
+            | QueuedQueryEvent::Removed {
+                conversation_id, ..
+            }
+            | QueuedQueryEvent::Reordered { conversation_id }
+            | QueuedQueryEvent::EditEntered {
+                conversation_id, ..
+            }
+            | QueuedQueryEvent::EditCommitted {
+                conversation_id, ..
+            }
+            | QueuedQueryEvent::EditCancelled {
+                conversation_id, ..
+            }
+            | QueuedQueryEvent::Cleared { conversation_id }
+            | QueuedQueryEvent::QueueNextPromptToggled { conversation_id } => *conversation_id,
+        };
+        if event_conv_id != active_conv_id {
+            return;
+        }
         match event {
-            QueuedQueryEvent::Removed { query_id } => {
+            QueuedQueryEvent::Removed { query_id, .. } => {
                 self.row_states.remove(query_id);
                 if self.dragging_query_id == Some(*query_id) {
                     self.clear_drag_state();
                 }
-                if !self.queued_query_model.as_ref(ctx).has_queue() {
+                if !QueuedQueryModel::as_ref(ctx).has_queue(active_conv_id) {
                     self.collapsed = false;
                 }
             }
-            QueuedQueryEvent::EditEntered { query_id } => {
-                let initial_text = self
-                    .queued_query_model
-                    .as_ref(ctx)
-                    .queue()
+            QueuedQueryEvent::EditEntered { query_id, .. } => {
+                let initial_text = QueuedQueryModel::as_ref(ctx)
+                    .queue(active_conv_id)
                     .iter()
                     .find(|row| row.id() == *query_id)
                     .map(|row| row.text().to_owned())
@@ -194,17 +285,18 @@ impl QueuedPromptsPanelView {
                     editor.clear_buffer(ctx);
                 });
             }
-            QueuedQueryEvent::Cleared => {
+            QueuedQueryEvent::Cleared { .. } => {
                 self.row_states.clear();
                 self.clear_drag_state();
                 self.collapsed = false;
             }
-            QueuedQueryEvent::Appended { query_id } => {
+            QueuedQueryEvent::Appended { query_id, .. } => {
                 self.row_states
                     .entry(*query_id)
                     .or_insert_with(|| build_row_state(*query_id, ctx));
             }
-            QueuedQueryEvent::Reordered | QueuedQueryEvent::QueueNextPromptToggled => {}
+            QueuedQueryEvent::Reordered { .. }
+            | QueuedQueryEvent::QueueNextPromptToggled { .. } => {}
         }
         ctx.notify();
     }
@@ -233,17 +325,19 @@ impl QueuedPromptsPanelView {
     }
 
     fn editing_row_id(&self, ctx: &AppContext) -> Option<QueuedQueryId> {
-        self.queued_query_model.as_ref(ctx).editing_row()
+        let conv_id = self.active_conversation_id?;
+        QueuedQueryModel::as_ref(ctx).editing_row(conv_id)
     }
 
     fn commit_edit(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(conv_id) = self.active_conversation_id else {
+            return;
+        };
         let Some(query_id) = self.editing_row_id(ctx) else {
             return;
         };
-        let origin = self
-            .queued_query_model
-            .as_ref(ctx)
-            .queue()
+        let origin = QueuedQueryModel::as_ref(ctx)
+            .queue(conv_id)
             .iter()
             .find(|row| row.id() == query_id)
             .map(|row| row.origin());
@@ -251,8 +345,8 @@ impl QueuedPromptsPanelView {
             .edit_editor
             .read(ctx, |editor, ctx| editor.buffer_text(ctx).trim().to_owned());
         let was_empty = new_text.is_empty();
-        self.queued_query_model.update(ctx, |model, ctx| {
-            model.commit_edit(new_text, ctx);
+        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+            model.commit_edit(conv_id, new_text, ctx);
         });
         if let Some(origin) = origin {
             if !was_empty {
@@ -268,11 +362,14 @@ impl QueuedPromptsPanelView {
     }
 
     fn cancel_edit(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(conv_id) = self.active_conversation_id else {
+            return;
+        };
         if self.editing_row_id(ctx).is_none() {
             return;
         }
-        self.queued_query_model.update(ctx, |model, ctx| {
-            model.cancel_edit(ctx);
+        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+            model.cancel_edit(conv_id, ctx);
         });
         ctx.emit(QueuedPromptsPanelEvent::EditEnded);
     }
@@ -282,7 +379,10 @@ impl QueuedPromptsPanelView {
         if !FeatureFlag::QueueSlashCommand.is_enabled() {
             return false;
         }
-        self.queued_query_model.as_ref(ctx).has_queue()
+        let Some(conv_id) = self.active_conversation_id else {
+            return false;
+        };
+        QueuedQueryModel::as_ref(ctx).has_queue(conv_id)
     }
 }
 
@@ -290,6 +390,9 @@ impl TypedActionView for QueuedPromptsPanelView {
     type Action = QueuedPromptsPanelAction;
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        let Some(conv_id) = self.active_conversation_id else {
+            return;
+        };
         match action {
             QueuedPromptsPanelAction::ToggleCollapsed => {
                 self.collapsed = !self.collapsed;
@@ -303,15 +406,14 @@ impl TypedActionView for QueuedPromptsPanelView {
             }
             QueuedPromptsPanelAction::StartEditingRow(query_id) => {
                 let query_id = *query_id;
-                self.queued_query_model.update(ctx, |model, ctx| {
-                    model.enter_edit_mode(query_id, ctx);
+                QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.enter_edit_mode(conv_id, query_id, ctx);
                 });
             }
             QueuedPromptsPanelAction::DeleteRow(query_id) => {
                 let query_id = *query_id;
-                let removed = self
-                    .queued_query_model
-                    .update(ctx, |model, ctx| model.remove_by_id(query_id, ctx));
+                let removed = QueuedQueryModel::handle(ctx)
+                    .update(ctx, |model, ctx| model.remove_by_id(conv_id, query_id, ctx));
                 if let Some(removed) = removed {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::QueuedPromptDeleted {
@@ -327,16 +429,14 @@ impl TypedActionView for QueuedPromptsPanelView {
             QueuedPromptsPanelAction::StartDrag(query_id) => {
                 let query_id = *query_id;
                 // If the row is in edit mode, cancel that edit so dragging is unambiguous.
-                let editing = self.queued_query_model.as_ref(ctx).editing_row();
+                let editing = QueuedQueryModel::as_ref(ctx).editing_row(conv_id);
                 if editing == Some(query_id) {
-                    self.queued_query_model.update(ctx, |model, ctx| {
-                        model.cancel_edit(ctx);
+                    QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                        model.cancel_edit(conv_id, ctx);
                     });
                 }
-                let from_index = self
-                    .queued_query_model
-                    .as_ref(ctx)
-                    .queue()
+                let from_index = QueuedQueryModel::as_ref(ctx)
+                    .queue(conv_id)
                     .iter()
                     .position(|q| q.id() == query_id);
                 self.dragging_query_id = Some(query_id);
@@ -349,11 +449,9 @@ impl TypedActionView for QueuedPromptsPanelView {
                     return;
                 };
                 let panel_view_id = ctx.view_id();
-                let queue_len = self.queued_query_model.as_ref(ctx).queue().len();
-                let Some(current_index) = self
-                    .queued_query_model
-                    .as_ref(ctx)
-                    .queue()
+                let queue_len = QueuedQueryModel::as_ref(ctx).queue(conv_id).len();
+                let Some(current_index) = QueuedQueryModel::as_ref(ctx)
+                    .queue(conv_id)
                     .iter()
                     .position(|q| q.id() == source_id)
                 else {
@@ -364,8 +462,8 @@ impl TypedActionView for QueuedPromptsPanelView {
                 if new_index == current_index {
                     return;
                 }
-                self.queued_query_model.update(ctx, |model, ctx| {
-                    model.reorder(source_id, new_index, ctx);
+                QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.reorder(conv_id, source_id, new_index, ctx);
                 });
                 ctx.notify();
             }
@@ -374,7 +472,8 @@ impl TypedActionView for QueuedPromptsPanelView {
                     return;
                 };
                 let from_index = self.drag_start_index.take();
-                let queue = self.queued_query_model.as_ref(ctx).queue();
+                let model_ref = QueuedQueryModel::as_ref(ctx);
+                let queue = model_ref.queue(conv_id);
                 let to_index = queue.iter().position(|q| q.id() == source_id);
                 let origin = to_index.map(|idx| queue[idx].origin());
                 if let (Some(from_index), Some(to_index), Some(origin)) =
@@ -420,10 +519,14 @@ impl View for QueuedPromptsPanelView {
             return Empty::new().finish();
         }
 
+        let Some(conv_id) = self.active_conversation_id else {
+            return Empty::new().finish();
+        };
+
         let appearance = Appearance::as_ref(app);
-        let queue_model = self.queued_query_model.as_ref(app);
-        let queue: Vec<_> = queue_model.queue().to_vec();
-        let editing_row_id = queue_model.editing_row();
+        let queue_model = QueuedQueryModel::as_ref(app);
+        let queue: Vec<_> = queue_model.queue(conv_id).to_vec();
+        let editing_row_id = queue_model.editing_row(conv_id);
         let collapsed = self.collapsed;
 
         let panel_view_id = self.view_id;

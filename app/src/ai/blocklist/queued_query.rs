@@ -1,5 +1,10 @@
+use std::collections::HashMap;
+
 use uuid::Uuid;
-use warpui::{Entity, ModelContext};
+use warpui::{Entity, ModelContext, SingletonEntity};
+
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 
 /// A globally unique identifier for a single queued prompt row.
 /// Used by the queue panel to address rows across reorder, edit, and delete.
@@ -64,116 +69,226 @@ pub enum AutofireAction {
     PopFromEditMode { text: String },
 }
 
-/// Queue of follow-up prompts for the active conversation in this terminal view, plus the
-/// queue-next-prompt toggle state.
-///
-/// The model is per-terminal-view and implicitly scoped to whichever conversation owns the agent
-/// view; entries are wiped on agent-view exit and on `ClearedConversationsInTerminalView`.
-pub struct QueuedQueryModel {
+/// Per-conversation queue / edit / toggle state.
+/// Lives inside [`QueuedQueryModel::queues`]; a missing key means empty queue, no edit in
+/// progress, and toggle off.
+#[derive(Default)]
+struct ConversationQueueState {
     queue: Vec<QueuedQuery>,
-    /// The row currently in edit mode, if any.
     editing: Option<QueuedQueryId>,
-    /// When true, submitting a prompt while the selected conversation is responding will queue it
-    /// instead of sending it immediately.
     queue_next_prompt_enabled: bool,
 }
 
-/// Events emitted by `QueuedQueryModel` so views can re-render and panels can refocus.
+/// App-wide singleton owning the queued prompts and auto-queue toggle for every conversation,
+/// indexed by [`AIConversationId`]. Queues outlive the agent-view session that originated them;
+/// cleanup is driven by [`BlocklistAIHistoryModel`] lifecycle events that this model subscribes
+/// to in [`QueuedQueryModel::new`].
+pub struct QueuedQueryModel {
+    queues: HashMap<AIConversationId, ConversationQueueState>,
+}
+
+/// Events emitted by [`QueuedQueryModel`]. Every variant carries the `conversation_id` it applies
+/// to so subscribers can filter to the conversation they care about.
 #[derive(Debug, Clone)]
 pub enum QueuedQueryEvent {
-    Appended { query_id: QueuedQueryId },
-    Removed { query_id: QueuedQueryId },
-    Reordered,
-    EditEntered { query_id: QueuedQueryId },
-    EditCommitted { query_id: QueuedQueryId },
-    EditCancelled { query_id: QueuedQueryId },
-    Cleared,
-    QueueNextPromptToggled,
+    Appended {
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+    },
+    Removed {
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+    },
+    Reordered {
+        conversation_id: AIConversationId,
+    },
+    EditEntered {
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+    },
+    EditCommitted {
+        conversation_id: AIConversationId,
+        #[allow(dead_code)]
+        query_id: QueuedQueryId,
+    },
+    EditCancelled {
+        conversation_id: AIConversationId,
+        #[allow(dead_code)]
+        query_id: QueuedQueryId,
+    },
+    Cleared {
+        conversation_id: AIConversationId,
+    },
+    QueueNextPromptToggled {
+        conversation_id: AIConversationId,
+    },
 }
 
 impl Entity for QueuedQueryModel {
     type Event = QueuedQueryEvent;
 }
 
+impl SingletonEntity for QueuedQueryModel {}
+
 impl QueuedQueryModel {
-    pub fn new() -> Self {
+    pub fn new(ctx: &mut ModelContext<Self>) -> Self {
+        // Drop queue/toggle state for any conversation that is removed, deleted, or cleared
+        // from its owning terminal view. Agent-view exit is intentionally NOT subscribed to:
+        // conversations (cloud agents in particular) outlive their visible session.
+        let history_handle = BlocklistAIHistoryModel::handle(ctx);
+        ctx.subscribe_to_model(&history_handle, |this, event, ctx| {
+            this.handle_history_event(event, ctx);
+        });
+
         Self {
-            queue: Vec::new(),
-            editing: None,
-            queue_next_prompt_enabled: false,
+            queues: HashMap::new(),
         }
     }
 
-    /// Returns the current queue.
-    pub fn queue(&self) -> &[QueuedQuery] {
-        &self.queue
+    fn handle_history_event(
+        &mut self,
+        event: &BlocklistAIHistoryEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match event {
+            BlocklistAIHistoryEvent::RemoveConversation {
+                conversation_id, ..
+            }
+            | BlocklistAIHistoryEvent::DeletedConversation {
+                conversation_id, ..
+            } => {
+                self.drop_conversation(*conversation_id, ctx);
+            }
+            BlocklistAIHistoryEvent::ClearedConversationsInTerminalView {
+                cleared_conversation_ids,
+                ..
+            } => {
+                for conversation_id in cleared_conversation_ids.clone() {
+                    self.drop_conversation(conversation_id, ctx);
+                }
+            }
+            _ => {}
+        }
     }
 
-    /// Returns true if there is at least one queued prompt.
-    pub fn has_queue(&self) -> bool {
-        !self.queue.is_empty()
+    fn drop_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.queues.remove(&conversation_id).is_some() {
+            ctx.emit(QueuedQueryEvent::Cleared { conversation_id });
+        }
     }
 
-    /// Returns the row currently in edit mode, if any.
-    pub fn editing_row(&self) -> Option<QueuedQueryId> {
-        self.editing
+    /// Returns the queue for `conversation_id`. Returns an empty slice when no entry exists.
+    pub fn queue(&self, conversation_id: AIConversationId) -> &[QueuedQuery] {
+        self.queues
+            .get(&conversation_id)
+            .map(|state| state.queue.as_slice())
+            .unwrap_or(&[])
     }
 
-    /// Returns true when the first queued row is currently being edited.
-    pub fn first_row_is_in_edit_mode(&self) -> bool {
-        let Some(editing_row_id) = self.editing else {
+    /// Returns true when `conversation_id` has at least one queued prompt.
+    pub fn has_queue(&self, conversation_id: AIConversationId) -> bool {
+        self.queues
+            .get(&conversation_id)
+            .is_some_and(|state| !state.queue.is_empty())
+    }
+
+    /// Returns the row currently in edit mode for `conversation_id`, if any.
+    pub fn editing_row(&self, conversation_id: AIConversationId) -> Option<QueuedQueryId> {
+        self.queues
+            .get(&conversation_id)
+            .and_then(|state| state.editing)
+    }
+
+    /// Returns true when the head row of `conversation_id`'s queue is currently being edited.
+    pub fn first_row_is_in_edit_mode(&self, conversation_id: AIConversationId) -> bool {
+        let Some(state) = self.queues.get(&conversation_id) else {
             return false;
         };
-        self.queue
-            .first()
-            .is_some_and(|query| query.id == editing_row_id)
+        let Some(editing_id) = state.editing else {
+            return false;
+        };
+        state.queue.first().is_some_and(|q| q.id == editing_id)
     }
 
-    pub fn is_queue_next_prompt_enabled(&self) -> bool {
-        self.queue_next_prompt_enabled
+    /// Returns the per-conversation auto-queue toggle state. Defaults to false for conversations
+    /// that have never been touched.
+    pub fn is_queue_next_prompt_enabled(&self, conversation_id: AIConversationId) -> bool {
+        self.queues
+            .get(&conversation_id)
+            .is_some_and(|state| state.queue_next_prompt_enabled)
     }
 
-    pub fn toggle_queue_next_prompt(&mut self, ctx: &mut ModelContext<Self>) {
-        self.queue_next_prompt_enabled = !self.queue_next_prompt_enabled;
-        ctx.emit(QueuedQueryEvent::QueueNextPromptToggled);
+    /// Toggles the per-conversation auto-queue state.
+    pub fn toggle_queue_next_prompt(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let state = self.queues.entry(conversation_id).or_default();
+        state.queue_next_prompt_enabled = !state.queue_next_prompt_enabled;
+        ctx.emit(QueuedQueryEvent::QueueNextPromptToggled { conversation_id });
     }
 
-    /// Appends `query` to the tail of the queue.
-    pub fn append(&mut self, query: QueuedQuery, ctx: &mut ModelContext<Self>) -> QueuedQueryId {
-        let id = query.id;
-        self.queue.push(query);
-        ctx.emit(QueuedQueryEvent::Appended { query_id: id });
-        id
+    /// Appends `query` to the tail of `conversation_id`'s queue.
+    pub fn append(
+        &mut self,
+        conversation_id: AIConversationId,
+        query: QueuedQuery,
+        ctx: &mut ModelContext<Self>,
+    ) -> QueuedQueryId {
+        let query_id = query.id;
+        let state = self.queues.entry(conversation_id).or_default();
+        state.queue.push(query);
+        ctx.emit(QueuedQueryEvent::Appended {
+            conversation_id,
+            query_id,
+        });
+        query_id
     }
 
-    /// Pops the first row in the queue and returns it.
-    /// Used by the error/cancel drain path where the caller restores the popped text to the
-    /// input editor.
-    pub fn pop_front(&mut self, ctx: &mut ModelContext<Self>) -> Option<QueuedQuery> {
-        if self.queue.is_empty() {
+    /// Pops the first row in `conversation_id`'s queue and returns it. Used by the error/cancel
+    /// drain path where the caller restores the popped text to the input editor.
+    pub fn pop_front(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<QueuedQuery> {
+        let state = self.queues.get_mut(&conversation_id)?;
+        if state.queue.is_empty() {
             return None;
         }
-        let popped = self.queue.remove(0);
-        if self.editing == Some(popped.id) {
-            self.editing = None;
+        let popped = state.queue.remove(0);
+        if state.editing == Some(popped.id) {
+            state.editing = None;
         }
         ctx.emit(QueuedQueryEvent::Removed {
+            conversation_id,
             query_id: popped.id,
         });
         Some(popped)
     }
 
-    /// Auto-fire drain entry point. Pops the first row and tells the caller whether to submit
-    /// it normally or treat it as a popped edit-mode row (per the spec, the last-committed text
-    /// is restored to the input box).
-    pub fn pop_for_autofire(&mut self, ctx: &mut ModelContext<Self>) -> Option<AutofireAction> {
-        let first = self.queue.first()?;
-        let first_in_edit_mode = self.editing == Some(first.id);
-        let popped = self.queue.remove(0);
+    /// Auto-fire drain entry point for `conversation_id`. Pops the first row and tells the caller
+    /// whether to submit it normally or treat it as a popped edit-mode row (per the spec, the
+    /// row's last-committed text is restored to the input box).
+    pub fn pop_for_autofire(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<AutofireAction> {
+        let state = self.queues.get_mut(&conversation_id)?;
+        let first = state.queue.first()?;
+        let first_in_edit_mode = state.editing == Some(first.id);
+        let popped = state.queue.remove(0);
         if first_in_edit_mode {
-            self.editing = None;
+            state.editing = None;
         }
         ctx.emit(QueuedQueryEvent::Removed {
+            conversation_id,
             query_id: popped.id,
         });
 
@@ -184,97 +299,120 @@ impl QueuedQueryModel {
         })
     }
 
-    /// Removes a specific row by id, if present. Returns the removed row.
+    /// Removes a specific row by id within `conversation_id`'s queue, if present.
     pub fn remove_by_id(
         &mut self,
+        conversation_id: AIConversationId,
         query_id: QueuedQueryId,
         ctx: &mut ModelContext<Self>,
     ) -> Option<QueuedQuery> {
-        let idx = self.queue.iter().position(|q| q.id == query_id)?;
-        let removed = self.queue.remove(idx);
-        if self.editing == Some(query_id) {
-            self.editing = None;
+        let state = self.queues.get_mut(&conversation_id)?;
+        let idx = state.queue.iter().position(|q| q.id == query_id)?;
+        let removed = state.queue.remove(idx);
+        if state.editing == Some(query_id) {
+            state.editing = None;
         }
-        ctx.emit(QueuedQueryEvent::Removed { query_id });
+        ctx.emit(QueuedQueryEvent::Removed {
+            conversation_id,
+            query_id,
+        });
         Some(removed)
     }
 
-    /// Moves the row identified by `source_id` to position `target_index` within the queue.
-    /// `target_index` is interpreted as the index in the post-removal list.
+    /// Moves the row identified by `source_id` to position `target_index` within
+    /// `conversation_id`'s queue. `target_index` is interpreted as the index in the post-removal
+    /// list and is clamped to the queue length.
     pub fn reorder(
         &mut self,
+        conversation_id: AIConversationId,
         source_id: QueuedQueryId,
         target_index: usize,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some(source_idx) = self.queue.iter().position(|q| q.id == source_id) else {
+        let Some(state) = self.queues.get_mut(&conversation_id) else {
             return;
         };
-        let row = self.queue.remove(source_idx);
-        let clamped = target_index.min(self.queue.len());
-        self.queue.insert(clamped, row);
-        ctx.emit(QueuedQueryEvent::Reordered);
+        let Some(source_idx) = state.queue.iter().position(|q| q.id == source_id) else {
+            return;
+        };
+        let row = state.queue.remove(source_idx);
+        let clamped = target_index.min(state.queue.len());
+        state.queue.insert(clamped, row);
+        ctx.emit(QueuedQueryEvent::Reordered { conversation_id });
     }
 
-    /// Enters edit mode for `query_id`. If another row was being edited, that edit is cancelled
-    /// (its text is unchanged, per the spec).
-    pub fn enter_edit_mode(&mut self, query_id: QueuedQueryId, ctx: &mut ModelContext<Self>) {
-        let row_exists = self.queue.iter().any(|r| r.id == query_id);
-        if !row_exists {
+    /// Enters edit mode for `query_id` in `conversation_id`'s queue. If another row was being
+    /// edited, that edit is cancelled (its text is unchanged, per the spec).
+    pub fn enter_edit_mode(
+        &mut self,
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(state) = self.queues.get_mut(&conversation_id) else {
+            return;
+        };
+        if !state.queue.iter().any(|q| q.id == query_id) {
             return;
         }
-
-        if let Some(prev) = self.editing.take() {
+        let prev_edit = state.editing.replace(query_id);
+        if let Some(prev) = prev_edit {
             if prev != query_id {
-                ctx.emit(QueuedQueryEvent::EditCancelled { query_id: prev });
+                ctx.emit(QueuedQueryEvent::EditCancelled {
+                    conversation_id,
+                    query_id: prev,
+                });
             }
         }
-
-        self.editing = Some(query_id);
-        ctx.emit(QueuedQueryEvent::EditEntered { query_id });
+        ctx.emit(QueuedQueryEvent::EditEntered {
+            conversation_id,
+            query_id,
+        });
     }
 
-    /// Commits the in-progress edit by replacing the row's text with `new_text` and clearing
-    /// edit state. If `new_text` is empty, the edit is cancelled and the original row text stays.
-    pub fn commit_edit(&mut self, new_text: String, ctx: &mut ModelContext<Self>) {
-        let Some(query_id) = self.editing.take() else {
+    /// Commits the in-progress edit in `conversation_id` by replacing the row's text with
+    /// `new_text` and clearing edit state. An empty `new_text` cancels the edit and leaves the
+    /// original row text untouched.
+    pub fn commit_edit(
+        &mut self,
+        conversation_id: AIConversationId,
+        new_text: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(state) = self.queues.get_mut(&conversation_id) else {
             return;
         };
-
+        let Some(query_id) = state.editing.take() else {
+            return;
+        };
         if new_text.is_empty() {
-            ctx.emit(QueuedQueryEvent::EditCancelled { query_id });
+            ctx.emit(QueuedQueryEvent::EditCancelled {
+                conversation_id,
+                query_id,
+            });
             return;
         }
-
-        if let Some(row) = self.queue.iter_mut().find(|q| q.id == query_id) {
+        if let Some(row) = state.queue.iter_mut().find(|q| q.id == query_id) {
             row.text = new_text;
         }
-        ctx.emit(QueuedQueryEvent::EditCommitted { query_id });
+        ctx.emit(QueuedQueryEvent::EditCommitted {
+            conversation_id,
+            query_id,
+        });
     }
 
-    /// Cancels the in-progress edit without modifying the row's text.
-    pub fn cancel_edit(&mut self, ctx: &mut ModelContext<Self>) {
-        let Some(query_id) = self.editing.take() else {
+    /// Cancels the in-progress edit in `conversation_id` without modifying the row's text.
+    pub fn cancel_edit(&mut self, conversation_id: AIConversationId, ctx: &mut ModelContext<Self>) {
+        let Some(state) = self.queues.get_mut(&conversation_id) else {
             return;
         };
-        ctx.emit(QueuedQueryEvent::EditCancelled { query_id });
-    }
-
-    /// Removes all queue and edit state.
-    /// Used when the agent view is exited or all conversations in the terminal view are cleared.
-    pub fn clear_all(&mut self, ctx: &mut ModelContext<Self>) {
-        let had_state = !self.queue.is_empty() || self.editing.is_some();
-        self.queue.clear();
-        self.editing = None;
-        if had_state {
-            ctx.emit(QueuedQueryEvent::Cleared);
-        }
-    }
-}
-
-impl Default for QueuedQueryModel {
-    fn default() -> Self {
-        Self::new()
+        let Some(query_id) = state.editing.take() else {
+            return;
+        };
+        ctx.emit(QueuedQueryEvent::EditCancelled {
+            conversation_id,
+            query_id,
+        });
     }
 }
 

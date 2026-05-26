@@ -93,7 +93,6 @@ pub struct BlocklistAIStatusBar {
     controller: ModelHandle<BlocklistAIController>,
     cli_subagent_controller: ModelHandle<CLISubagentController>,
     context_model: ModelHandle<BlocklistAIContextModel>,
-    queued_query_model: ModelHandle<QueuedQueryModel>,
     input_model: ModelHandle<BlocklistAIInputModel>,
     agent_view_controller: ModelHandle<AgentViewController>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
@@ -136,7 +135,6 @@ impl BlocklistAIStatusBar {
         cli_subagent_controller: ModelHandle<CLISubagentController>,
         action_model: ModelHandle<BlocklistAIActionModel>,
         context_model: ModelHandle<BlocklistAIContextModel>,
-        queued_query_model: ModelHandle<QueuedQueryModel>,
         input_model: ModelHandle<BlocklistAIInputModel>,
         input_buffer_model: ModelHandle<InputBufferModel>,
         model_event_dispatcher: &ModelHandle<ModelEventDispatcher>,
@@ -217,8 +215,8 @@ impl BlocklistAIStatusBar {
                 ctx.notify();
             }
         });
-        ctx.subscribe_to_model(&queued_query_model, |_, _, event, ctx| {
-            if matches!(event, QueuedQueryEvent::QueueNextPromptToggled) {
+        ctx.subscribe_to_model(&QueuedQueryModel::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, QueuedQueryEvent::QueueNextPromptToggled { .. }) {
                 ctx.notify();
             }
         });
@@ -373,7 +371,6 @@ impl BlocklistAIStatusBar {
             shimmering_text_handle: ShimmeringTextStateHandle::new(),
             action_model,
             context_model,
-            queued_query_model,
             input_model,
             terminal_model,
             controller,
@@ -839,10 +836,8 @@ impl BlocklistAIStatusBar {
                     ButtonProps {
                         button_handle: &self.state_handles.queue_next_prompt_button,
                         keystroke: self.queue_next_prompt_keystroke.as_ref(),
-                        is_active: self
-                            .queued_query_model
-                            .as_ref(app)
-                            .is_queue_next_prompt_enabled(),
+                        is_active: QueuedQueryModel::as_ref(app)
+                            .is_queue_next_prompt_enabled(conversation.id()),
                     },
                 ),
                 stop_button: Some(ButtonProps {

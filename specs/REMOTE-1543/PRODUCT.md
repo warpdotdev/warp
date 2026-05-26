@@ -24,13 +24,13 @@ Re-queueing replaces the previous prompt, the user can't reorder or edit what's 
 3. The panel has a header `"<N> queued"` with a chevron icon. The body of the panel (everything below the header) is what collapses, not the header itself. Clicking the chevron (or anywhere on the header) toggles the panel between expanded (header + rows visible) and collapsed (only the header is visible). Default state is expanded. The collapsed state persists for the lifetime of the queue (across re-orderings, edits, deletions, additions). Adding a new prompt while collapsed does not auto-expand.
 4. `/queue`, the auto-queue toggle, and the visual queue panel continue to be gated by `QueueSlashCommand`. `/compact-and` continues to be gated by `SummarizationConversationCommand`, and `/fork-and-compact` follows the existing fork-command availability. `PendingUserQueryIndicator` remains compatibility infrastructure for legacy pending-user-query placeholders, not a rollout switch for the regular queue panel.
 ### What gets queued
-5. The auto-queue toggle in the warping indicator keeps the same semantics: when on, any prompt the user submits while the active conversation is in progress (`InProgress` or `Blocked`) is appended to the queue rather than sent. When off, regular submits still cancel-and-resend (existing behavior).
+5. The auto-queue toggle in the warping indicator is per-conversation. When on for the active conversation, any prompt the user submits while that conversation is in progress (`InProgress` or `Blocked`) is appended to that conversation's queue rather than sent. When off, regular submits still cancel-and-resend (existing behavior). Toggling the button toggles the state for the active conversation only; switching to a different conversation shows that conversation's own toggle state. New conversations default the toggle to off.
 6. `/queue <prompt>` appends `<prompt>` to the queue when the active conversation is in progress, and behaves like a normal send when the conversation is idle (existing semantics).
 7. `/compact-and <prompt>` and `/fork-and-compact <prompt>` do not create queued-prompts panel rows. Their follow-up prompts stay on the legacy pending-user-query UI while summarization or fork-then-summarization runs.
 8. Cloud Mode prompts (both Oz and third-party harness flows) do not create queued-prompts panel rows. Their placeholders stay on the legacy pending-user-query UI and remain lifecycle-owned by the cloud setup / shared-session flow.
 9. Submitting in shell mode (input type is Shell, not AI) is never queued — it runs in the terminal as today, regardless of toggle state or in-progress AI status.
 10. `/queue` with an empty argument shows an error toast and does not modify the queue (existing behavior).
-11. The queue is owned by the terminal view and implicitly scoped to whichever conversation owns the agent view; it is cleared on agent-view exit and when conversations in the terminal view are cleared, so switching into a different conversation always starts with an empty queue.
+11. Queues and the auto-queue toggle state are owned per-conversation app-wide. Each conversation has its own queue and its own toggle state, both of which persist across agent-view exit, switching between conversations, and re-entry into the agent view. Switching to a different conversation shows that conversation's queue and toggle state; switching back restores the prior conversation's state. Queue and toggle state are dropped only when the conversation itself is deleted, or when its owning terminal view's conversations are cleared.
 ### Queue rows
 12. Each queue row shows, left to right:
    - A drag handle icon (six-dot grid).
@@ -67,15 +67,17 @@ Re-queueing replaces the previous prompt, the user can't reorder or edit what's 
 34. The cycle continues until either the queue is empty or one of the abort conditions in (35) fires.
 ### Cancellation and error handling
 35. When the active conversation finishes for any non-`Complete` reason — `Error`, `Cancelled`, `CancelledDuringRequestedCommandExecution` — auto-fire pauses immediately. The queue is not flushed.
-36. When auto-fire pauses for one of those reasons:
-   - If the input is currently empty, the first queued prompt is removed from the queue and its text is placed in the input box. The row is removed in this case so that re-submitting the input does not also re-fire the same prompt from the queue.
-   - If the input is non-empty, the first prompt's text is not placed in the input and the queue is left intact (the first prompt remains in the queue at position 0).
-   - In both cases all queue rows beyond the first remain intact in the panel, so the user can review, edit, reorder, delete, or send further prompts.
+36. When auto-fire pauses for one of those reasons, the head-restore behavior depends on whether the user is currently viewing the cancelled conversation in agent view:
+   - If the user is **not** viewing this conversation in agent view (e.g. they triggered the cancel by exiting the agent view, or the conversation was running in the background), the queue is left fully intact — neither the head nor any other row is placed into the input.
+   - If the user **is** viewing this conversation in agent view (e.g. stop button or `Ctrl-C` while in agent view):
+     - If the input is currently empty, the first queued prompt is removed from the queue and its text is placed in the input box. The row is removed in this case so that re-submitting the input does not also re-fire the same prompt from the queue.
+     - If the input is non-empty, the first prompt's text is not placed in the input and the queue is left intact (the first prompt remains in the queue at position 0).
+   - In all cases all queue rows beyond the first remain intact in the panel, so the user can review, edit, reorder, delete, or send further prompts.
 37. Auto-fire resumes naturally the next time the active conversation reaches `FinishReason::Complete` — i.e. the user re-runs or sends a new prompt that succeeds, and from that completion onward the queue resumes draining from the top.
 38. Manually cancelling the in-progress agent (stop button or `Ctrl-C` shortcut) is treated as `Cancelled` for the purposes of (35)–(36).
 ### Conversation lifecycle interactions
-39. Exiting the agent view (Esc to terminal, closing the tab/pane) discards the queue for that conversation; switching back later does not restore it.
-40. Starting a new conversation clears the queue.
+39. Exiting the agent view (Esc to terminal, closing the tab/pane) does not discard the queue for that conversation. Re-entering the agent view for that conversation later restores its queue and auto-queue toggle. This matters especially for cloud agents, whose conversations continue running in the background after the user leaves the agent view; their queues continue to drain when the conversation eventually finishes, even if the user has navigated away.
+40. Starting a new conversation begins with an empty queue and the auto-queue toggle defaulted off — each conversation has its own queue and toggle, so prior conversations' state is unaffected.
 41. The queue belongs to a conversation; if the agent splits the conversation (`/fork`, `/fork-and-compact`), regular queued-prompts panel rows do not carry into the new conversation. Any summarize/fork follow-up placeholder behavior remains separate legacy pending-user-query UI, not queue-panel state.
 ### Focus
 42. The auto-queue toggle keybinding (`Cmd-Shift-J` / `Ctrl-Shift-J`) is unchanged.

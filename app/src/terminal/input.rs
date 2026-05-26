@@ -1527,7 +1527,6 @@ pub struct Input {
 
     ai_controller: ModelHandle<BlocklistAIController>,
     ai_context_model: ModelHandle<BlocklistAIContextModel>,
-    queued_query_model: ModelHandle<QueuedQueryModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     ai_action_model: ModelHandle<BlocklistAIActionModel>,
     /// The input is responsible for managing the lifetime
@@ -2069,7 +2068,6 @@ impl Input {
         current_prompt: ModelHandle<PromptType>,
         ai_controller: ModelHandle<BlocklistAIController>,
         ai_context_model: ModelHandle<BlocklistAIContextModel>,
-        queued_query_model: ModelHandle<QueuedQueryModel>,
         ai_input_model: ModelHandle<BlocklistAIInputModel>,
         ai_action_model: ModelHandle<BlocklistAIActionModel>,
         cli_subagent_controller: ModelHandle<CLISubagentController>,
@@ -3481,7 +3479,6 @@ impl Input {
                 cli_subagent_controller,
                 ai_action_model.clone(),
                 ai_context_model.clone(),
-                queued_query_model.clone(),
                 ai_input_model.clone(),
                 buffer_model,
                 &model_events,
@@ -3498,9 +3495,8 @@ impl Input {
         });
 
         let queued_prompts_panel = FeatureFlag::QueueSlashCommand.is_enabled().then(|| {
-            let panel = ctx.add_typed_action_view(|ctx| {
-                QueuedPromptsPanelView::new(queued_query_model.clone(), ctx)
-            });
+            let panel =
+                ctx.add_typed_action_view(|ctx| QueuedPromptsPanelView::new(terminal_view_id, ctx));
             ctx.subscribe_to_view(&panel, |me, _, event, ctx| {
                 me.handle_queued_prompts_panel_event(event, ctx);
             });
@@ -3550,7 +3546,6 @@ impl Input {
             prompt_type: current_prompt,
             ai_controller,
             ai_context_model,
-            queued_query_model,
             ai_input_model,
             ai_action_model,
             ai_follow_up_icon_mouse_state: MouseStateHandle::default(),
@@ -13233,14 +13228,6 @@ impl Input {
             return false;
         }
 
-        if !self
-            .queued_query_model
-            .as_ref(ctx)
-            .is_queue_next_prompt_enabled()
-        {
-            return false;
-        }
-
         if !self.ai_input_model.as_ref(ctx).is_ai_input_enabled() {
             return false;
         }
@@ -13252,6 +13239,10 @@ impl Input {
         else {
             return false;
         };
+
+        if !QueuedQueryModel::as_ref(ctx).is_queue_next_prompt_enabled(conversation_id) {
+            return false;
+        }
 
         let should_queue = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
@@ -13297,8 +13288,9 @@ impl Input {
             editor.clear_buffer(ctx);
         });
 
-        self.queued_query_model.update(ctx, |model, ctx| {
+        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
             model.append(
+                conversation_id,
                 QueuedQuery::new(prompt, QueuedQueryOrigin::AutoQueueToggle),
                 ctx,
             );
