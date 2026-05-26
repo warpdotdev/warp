@@ -12,6 +12,13 @@ pub struct Keyboard {
     cache: HashMap<char, CGKeyCode>,
     /// Where synthesized events are delivered.
     target: PostTarget,
+    /// The currently-held modifier flags, accumulated from modifier key-down/up events.
+    ///
+    /// Synthetic modifier key events posted via `CGEventPostToPid` do not update the session's
+    /// modifier state, so we track it ourselves and stamp it onto every key event. Without this,
+    /// a shortcut sent as discrete events (e.g. Command-down, n-down, n-up, Command-up) arrives as
+    /// a plain "n" and is treated as text rather than as Cmd+N.
+    current_flags: CGEventFlags,
 }
 
 impl Keyboard {
@@ -19,6 +26,7 @@ impl Keyboard {
         Self {
             cache: keycode_cache::build_cache(),
             target,
+            current_flags: CGEventFlags::empty(),
         }
     }
 
@@ -29,13 +37,27 @@ impl Keyboard {
     }
 
     /// Sends a key down event for the given key.
-    pub fn key_down(&self, key: &Key) -> Result<(), String> {
-        post_key_down(self.resolve_keycode(key)?, self.target)
+    ///
+    /// If the key is a modifier, its mask is folded into the held-modifier flags first so the
+    /// key-down itself carries the now-active modifier; the flags are then stamped on the event.
+    pub fn key_down(&mut self, key: &Key) -> Result<(), String> {
+        let keycode = self.resolve_keycode(key)?;
+        if let Some(mask) = modifier_mask(keycode) {
+            self.current_flags |= mask;
+        }
+        post_key_event(keycode, true, self.current_flags, self.target)
     }
 
     /// Sends a key up event for the given key.
-    pub fn key_up(&self, key: &Key) -> Result<(), String> {
-        post_key_up(self.resolve_keycode(key)?, self.target)
+    ///
+    /// If the key is a modifier, its mask is removed from the held-modifier flags so the key-up
+    /// reflects the modifier being released; the updated flags are then stamped on the event.
+    pub fn key_up(&mut self, key: &Key) -> Result<(), String> {
+        let keycode = self.resolve_keycode(key)?;
+        if let Some(mask) = modifier_mask(keycode) {
+            self.current_flags &= !mask;
+        }
+        post_key_event(keycode, false, self.current_flags, self.target)
     }
 
     /// Simulates typing text by sending Quartz events.
@@ -77,20 +99,41 @@ impl Keyboard {
     }
 }
 
-/// Posts a key down event for the given virtual keycode.
-fn post_key_down(keycode: CGKeyCode, target: PostTarget) -> Result<(), String> {
-    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState);
-    let event = CGEvent::new_keyboard_event(source.as_deref(), keycode, true)
-        .ok_or_else(|| format!("Failed to create key down event for keycode {}", keycode))?;
-    target.post(&event);
-    Ok(())
+/// Maps a modifier virtual keycode to its `CGEventFlags` mask, handling both the left and right
+/// variants. Returns `None` for non-modifier keys.
+fn modifier_mask(keycode: CGKeyCode) -> Option<CGEventFlags> {
+    Some(match keycode {
+        // Command: left 0x37 (55), right 0x36 (54).
+        54 | 55 => CGEventFlags::MaskCommand,
+        // Shift: left 0x38 (56), right 0x3C (60).
+        56 | 60 => CGEventFlags::MaskShift,
+        // Control: left 0x3B (59), right 0x3E (62).
+        59 | 62 => CGEventFlags::MaskControl,
+        // Option/Alt: left 0x3A (58), right 0x3D (61).
+        58 | 61 => CGEventFlags::MaskAlternate,
+        // Fn: 0x3F (63).
+        63 => CGEventFlags::MaskSecondaryFn,
+        // Caps Lock: 0x39 (57).
+        57 => CGEventFlags::MaskAlphaShift,
+        _ => return None,
+    })
 }
 
-/// Posts a key up event for the given virtual keycode.
-fn post_key_up(keycode: CGKeyCode, target: PostTarget) -> Result<(), String> {
+/// Posts a key event (down or up) for the given virtual keycode, stamping the currently-held
+/// modifier flags so shortcuts route through the app's key-equivalent handling.
+fn post_key_event(
+    keycode: CGKeyCode,
+    is_down: bool,
+    flags: CGEventFlags,
+    target: PostTarget,
+) -> Result<(), String> {
     let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState);
-    let event = CGEvent::new_keyboard_event(source.as_deref(), keycode, false)
-        .ok_or_else(|| format!("Failed to create key up event for keycode {}", keycode))?;
+    let event =
+        CGEvent::new_keyboard_event(source.as_deref(), keycode, is_down).ok_or_else(|| {
+            let direction = if is_down { "down" } else { "up" };
+            format!("Failed to create key {direction} event for keycode {keycode}")
+        })?;
+    CGEvent::set_flags(Some(&event), flags);
     target.post(&event);
     Ok(())
 }
