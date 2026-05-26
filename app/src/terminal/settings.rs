@@ -143,8 +143,8 @@ define_settings_group!(TerminalSettings, settings: [
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
-        toml_path: "terminal.async_find_enabled",
-        description: "Whether terminal find runs asynchronously on a background thread.",
+        toml_path: "experimental.async_find_enabled",
+        description: "Use an improved implementation of find to keep the UI responsive while searching for matches on large outputs.",
     },
 ]);
 

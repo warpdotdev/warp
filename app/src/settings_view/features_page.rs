@@ -43,7 +43,8 @@ use super::settings_page::{
     HEADER_PADDING, TOGGLE_BUTTON_RIGHT_PADDING,
 };
 use super::{
-    features, flags, DisplayCount, SettingsAction, SettingsSection, ToggleSettingActionPair,
+    features, flags, render_beta_chip, DisplayCount, SettingsAction, SettingsSection,
+    ToggleSettingActionPair,
 };
 use crate::appearance::Appearance;
 use crate::default_terminal::DefaultTerminal;
@@ -7284,10 +7285,12 @@ impl SettingsWidget for AsyncFindWidget {
     type View = FeaturesPageView;
 
     fn search_terms(&self) -> &str {
-        "async asynchronous find search terminal ai background"
+        "async asynchronous fast find search"
     }
 
     fn should_render(&self, _app: &AppContext) -> bool {
+        // Here, the feature flag being enabled means the feature is force-enabled,
+        // so we don't need to render the toggle.
         !FeatureFlag::AsyncFind.is_enabled()
     }
 
@@ -7336,26 +7339,9 @@ impl SettingsWidget for AsyncFindWidget {
             switch,
             appearance,
             Some(
-                "Run find on a background thread to keep the UI responsive on large outputs."
+                "Use an improved implementation of find to keep the UI responsive while searching for matches on large outputs."
                     .into(),
             ),
         )
     }
-}
-
-/// Small inline pill rendered next to a settings label to mark a feature as beta.
-fn render_beta_chip(appearance: &Appearance) -> Box<dyn Element> {
-    let theme = appearance.theme();
-    let chip_color = theme.sub_text_color(theme.surface_3()).into_solid();
-    Container::new(
-        Text::new_inline("BETA", appearance.ui_font_family(), 10.)
-            .with_color(chip_color)
-            .finish(),
-    )
-    .with_background(theme.surface_3())
-    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.)))
-    .with_horizontal_padding(4.)
-    .with_vertical_padding(1.)
-    .with_margin_left(8.)
-    .finish()
 }
