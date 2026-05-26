@@ -25,8 +25,13 @@ pub use discovery::{
     discovery_dir,
 };
 pub use protocol::{
-    Action, ControlError, ControlResponse, ErrorCode, ErrorResponseEnvelope, ExecutionContextProof,
-    PROTOCOL_VERSION, RequestEnvelope, ResponseEnvelope,
+    Action, ActionNameParams, BindingNameParams, BlockIdParams, BlockInspectResult, BlockListParams,
+    BlockListResult, BlockSummary, ControlError, ControlResponse, DriveInspectParams,
+    DriveInspectResult, DriveObjectListParams, DriveObjectSummary, DriveObjectType, EmptyParams,
+    ErrorCode, ErrorResponseEnvelope, ExecutionContextProof, HistoryListParams, HistoryListResult, InputStateResult,
+    KeybindingGetParams, LimitParams, PROTOCOL_VERSION, RequestEnvelope, ResponseEnvelope, SettingGetParams, ThemeStateResult,
+};
+pub use selectors::{
+    PaneSelector, SessionSelector, TabSelector, TargetSelector, WindowSelector,
 };
 pub use scripting::{ScriptingGrant, ScriptingIdentitySource, ScriptingScope};
-pub use selectors::{PaneSelector, TabSelector, TargetSelector, WindowSelector};

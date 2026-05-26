@@ -142,6 +142,74 @@ fn logged_out_safe_stub_actions_can_advertise_external_context() {
         .contains(&InvocationContext::OutsideWarp));
 }
 
+
+#[test]
+fn readonly_capability_targets_are_implemented_with_expected_categories() {
+    for action in [
+        ActionKind::InstanceInspect,
+        ActionKind::CapabilityList,
+        ActionKind::CapabilityInspect,
+        ActionKind::ActionList,
+        ActionKind::ActionInspect,
+        ActionKind::WindowList,
+        ActionKind::WindowInspect,
+        ActionKind::TabList,
+        ActionKind::TabInspect,
+        ActionKind::PaneList,
+        ActionKind::PaneInspect,
+        ActionKind::SessionList,
+        ActionKind::SessionInspect,
+        ActionKind::ThemeGet,
+        ActionKind::KeybindingList,
+        ActionKind::KeybindingGet,
+        ActionKind::FileList,
+        ActionKind::ProjectActive,
+        ActionKind::ProjectList,
+    ] {
+        let metadata = action.metadata();
+        assert_eq!(
+            metadata.implementation_status,
+            ActionImplementationStatus::Implemented
+        );
+        assert_eq!(metadata.permission_category, PermissionCategory::ReadMetadata);
+        assert!(!metadata.authenticated_user.required);
+    }
+
+    for action in [
+        ActionKind::BlockInspect,
+        ActionKind::BlockOutput,
+        ActionKind::InputGet,
+        ActionKind::HistoryList,
+    ] {
+        let metadata = action.metadata();
+        assert_eq!(
+            metadata.implementation_status,
+            ActionImplementationStatus::Implemented
+        );
+        assert_eq!(
+            metadata.permission_category,
+            PermissionCategory::ReadUnderlyingData
+        );
+        assert!(!metadata.authenticated_user.required);
+    }
+}
+
+#[test]
+fn block_output_uses_block_id_params() {
+    assert_eq!(
+        ActionKind::BlockOutput.metadata().parameter_spec,
+        ActionParameterSpec::BlockId
+    );
+    let action = Action::with_params(
+        ActionKind::BlockOutput,
+        BlockIdParams {
+            block_id: "block_1".to_owned(),
+        },
+    )
+    .expect("params serialize");
+    assert_eq!(action.params["block_id"], "block_1");
+}
+
 #[test]
 fn authenticated_actions_are_warp_terminal_only_in_the_contract() {
     for action in [

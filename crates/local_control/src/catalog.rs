@@ -115,6 +115,7 @@ pub enum ActionImplementationStatus {
 pub enum ActionParameterSpec {
     None,
     ActionName,
+    BlockId,
     BindingName,
     BooleanValue,
     ColorValue,
@@ -541,23 +542,47 @@ impl ActionKind {
 
     fn implementation_status(self) -> ActionImplementationStatus {
         match self {
-            Self::InstanceList | Self::AppPing | Self::AppVersion | Self::TabCreate => {
-                ActionImplementationStatus::Implemented
-            }
-            Self::InstanceInspect
+            Self::InstanceList
+            | Self::InstanceInspect
+            | Self::AppPing
+            | Self::AppVersion
             | Self::AppActive
-            | Self::AppFocus
-            | Self::AuthStatus
-            | Self::AuthLogin
             | Self::CapabilityList
             | Self::CapabilityInspect
             | Self::WindowList
             | Self::WindowInspect
+            | Self::TabList
+            | Self::TabInspect
+            | Self::TabCreate
+            | Self::PaneList
+            | Self::PaneInspect
+            | Self::SessionList
+            | Self::SessionInspect
+            | Self::BlockList
+            | Self::BlockInspect
+            | Self::BlockOutput
+            | Self::InputGet
+            | Self::HistoryList
+            | Self::ThemeList
+            | Self::ThemeGet
+            | Self::AppearanceGet
+            | Self::SettingList
+            | Self::SettingGet
+            | Self::KeybindingList
+            | Self::KeybindingGet
+            | Self::ActionList
+            | Self::ActionInspect
+            | Self::FileList
+            | Self::ProjectActive
+            | Self::ProjectList
+            | Self::DriveList
+            | Self::DriveInspect => ActionImplementationStatus::Implemented,
+            Self::AppFocus
+            | Self::AuthStatus
+            | Self::AuthLogin
             | Self::WindowCreate
             | Self::WindowFocus
             | Self::WindowClose
-            | Self::TabList
-            | Self::TabInspect
             | Self::TabActivate
             | Self::TabMove
             | Self::TabClose
@@ -565,8 +590,6 @@ impl ActionKind {
             | Self::TabResetName
             | Self::TabColorSet
             | Self::TabColorClear
-            | Self::PaneList
-            | Self::PaneInspect
             | Self::PaneSplit
             | Self::PaneFocus
             | Self::PaneNavigate
@@ -576,43 +599,27 @@ impl ActionKind {
             | Self::PaneClose
             | Self::PaneRename
             | Self::PaneResetName
-            | Self::SessionList
-            | Self::SessionInspect
             | Self::SessionActivate
             | Self::SessionPrevious
             | Self::SessionNext
             | Self::SessionReopenClosed
-            | Self::BlockList
-            | Self::BlockInspect
-            | Self::BlockOutput
-            | Self::InputGet
             | Self::InputInsert
             | Self::InputReplace
             | Self::InputClear
             | Self::InputModeSet
             | Self::InputRun
-            | Self::HistoryList
-            | Self::ThemeList
-            | Self::ThemeGet
             | Self::ThemeSet
             | Self::ThemeSystemSet
             | Self::ThemeLightSet
             | Self::ThemeDarkSet
-            | Self::AppearanceGet
             | Self::AppearanceFontSizeIncrease
             | Self::AppearanceFontSizeDecrease
             | Self::AppearanceFontSizeReset
             | Self::AppearanceZoomIncrease
             | Self::AppearanceZoomDecrease
             | Self::AppearanceZoomReset
-            | Self::SettingList
-            | Self::SettingGet
             | Self::SettingSet
             | Self::SettingToggle
-            | Self::KeybindingList
-            | Self::KeybindingGet
-            | Self::ActionList
-            | Self::ActionInspect
             | Self::SurfaceSettingsOpen
             | Self::SurfaceCommandPaletteOpen
             | Self::SurfaceCommandSearchOpen
@@ -624,13 +631,8 @@ impl ActionKind {
             | Self::SurfaceLeftPanelToggle
             | Self::SurfaceRightPanelToggle
             | Self::SurfaceVerticalTabsToggle
-            | Self::FileList
             | Self::FileOpen
-            | Self::ProjectActive
-            | Self::ProjectList
             | Self::ProjectOpen
-            | Self::DriveList
-            | Self::DriveInspect
             | Self::DriveOpen
             | Self::DriveNotebookOpen
             | Self::DriveEnvVarCollectionOpen
@@ -729,15 +731,12 @@ impl ActionKind {
             | Self::ThemeSystemSet
             | Self::ThemeLightSet
             | Self::ThemeDarkSet
-            | Self::AppearanceGet
             | Self::AppearanceFontSizeIncrease
             | Self::AppearanceFontSizeDecrease
             | Self::AppearanceFontSizeReset
             | Self::AppearanceZoomIncrease
             | Self::AppearanceZoomDecrease
             | Self::AppearanceZoomReset
-            | Self::SettingList
-            | Self::SettingGet
             | Self::SettingSet
             | Self::SettingToggle
             | Self::KeybindingList
@@ -947,7 +946,6 @@ impl ActionKind {
             | Self::ThemeSystemSet
             | Self::ThemeLightSet
             | Self::ThemeDarkSet
-            | Self::AppearanceGet
             | Self::AppearanceFontSizeIncrease
             | Self::AppearanceFontSizeDecrease
             | Self::AppearanceFontSizeReset
@@ -1036,7 +1034,7 @@ impl ActionKind {
                 ActionParameterSpec::None
             }
             Self::BlockList | Self::HistoryList => ActionParameterSpec::Limit,
-            Self::BlockInspect | Self::BlockOutput => ActionParameterSpec::None,
+            Self::BlockInspect | Self::BlockOutput => ActionParameterSpec::BlockId,
             Self::InputGet => ActionParameterSpec::None,
             Self::InputInsert | Self::InputReplace | Self::InputRun => ActionParameterSpec::Text,
             Self::InputClear => ActionParameterSpec::None,
@@ -1051,7 +1049,7 @@ impl ActionKind {
             | Self::AppearanceZoomIncrease
             | Self::AppearanceZoomDecrease
             | Self::AppearanceZoomReset => ActionParameterSpec::None,
-            Self::SettingList => ActionParameterSpec::Namespace,
+            Self::SettingList => ActionParameterSpec::None,
             Self::SettingGet => ActionParameterSpec::Key,
             Self::SettingSet => ActionParameterSpec::KeyValue,
             Self::SettingToggle => ActionParameterSpec::Key,
