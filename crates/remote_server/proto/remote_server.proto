@@ -577,3 +577,4 @@ message ResolveConflictSuccess {}
 message BufferConflictDetected {
   string path = 1;
 }
+
