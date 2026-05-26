@@ -782,6 +782,62 @@ fn test_diff_merkle_node_new_file() {
 }
 
 #[test]
+fn test_diff_merkle_node_does_not_apply_sibling_gitignore_rules() {
+    VirtualFS::test(
+        "test_diff_merkle_node_does_not_apply_sibling_gitignore_rules",
+        |dirs, mut sandbox| {
+            let repo_name = "warp-virtual";
+            sandbox.mkdir(repo_name);
+            sandbox.mkdir(format!("{repo_name}/left").as_str());
+            sandbox.mkdir(format!("{repo_name}/right").as_str());
+            sandbox.with_files(vec![
+                Stub::FileWithContent(
+                    format!("{repo_name}/left/existing.txt").as_str(),
+                    "left existing",
+                ),
+                Stub::FileWithContent(
+                    format!("{repo_name}/right/existing.txt").as_str(),
+                    "right existing",
+                ),
+            ]);
+
+            let repo_path = dunce::canonicalize(dirs.tests().join(repo_name)).unwrap();
+            let build_file_tree_result =
+                block_on(CodebaseIndex::build_file_tree(repo_path.clone(), None)).unwrap();
+            let (tree, _) =
+                block_on(MerkleTree::try_new(build_file_tree_result.file_tree)).unwrap();
+
+            sandbox.with_files(vec![
+                Stub::FileWithContent(format!("{repo_name}/left/.gitignore").as_str(), "new.txt\n"),
+                Stub::FileWithContent(format!("{repo_name}/left/new.txt").as_str(), "ignored"),
+                Stub::FileWithContent(format!("{repo_name}/right/new.txt").as_str(), "visible"),
+            ]);
+
+            let mut changed_files = ChangedFiles::default();
+            let mut gitignores = vec![];
+            let result = CodebaseIndex::diff_merkle_node(
+                &mut changed_files,
+                &tree.root_node(),
+                repo_path.clone(),
+                &mut gitignores,
+                None,
+                MAX_DEPTH,
+                0,
+            );
+
+            assert!(result.is_ok(), "Should not error when diffing siblings");
+            assert!(changed_files
+                .upsertions
+                .contains(&repo_path.join("right/new.txt")));
+            assert!(!changed_files
+                .upsertions
+                .contains(&repo_path.join("left/new.txt")));
+            assert_eq!(gitignores.len(), 1);
+        },
+    );
+}
+
+#[test]
 fn test_diff_merkle_node_new_empty_subdirectory() {
     VirtualFS::test(
         "test_diff_merkle_node_new_empty_subdirectory",

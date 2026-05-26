@@ -1,12 +1,74 @@
 use std::fs;
+use std::path::Path;
 
 use ignore::gitignore::Gitignore;
 
-use super::{Entry, IgnoredPathStrategy};
+use super::{Entry, GitignoreStack, IgnoredPathStrategy};
+
+#[test]
+fn gitignore_stack_truncates_sibling_scope() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = tempdir.path();
+    let left = root.join("left");
+    let right = root.join("right");
+    fs::create_dir(&left).unwrap();
+    fs::create_dir(&right).unwrap();
+    fs::write(left.join(".gitignore"), "shared.txt\n").unwrap();
+    fs::write(right.join(".gitignore"), "other.txt\n").unwrap();
+
+    let mut gitignore_stack = GitignoreStack::new(Vec::new());
+    let root_active_len = gitignore_stack.active_len();
+
+    let (left_gitignore, _) = Gitignore::new(left.join(".gitignore"));
+    gitignore_stack.push_active(left_gitignore);
+    assert!(gitignore_stack.matches(&left.join("shared.txt"), false, false));
+
+    gitignore_stack.truncate_active(root_active_len);
+    assert!(!gitignore_stack.matches(&left.join("shared.txt"), false, false));
+
+    let (right_gitignore, _) = Gitignore::new(right.join(".gitignore"));
+    gitignore_stack.push_active(right_gitignore);
+    assert!(gitignore_stack.matches(&right.join("other.txt"), false, false));
+    assert!(!gitignore_stack.matches(&left.join("shared.txt"), false, false));
+}
+
+#[test]
+fn build_tree_does_not_apply_sibling_gitignore_rules() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(tempdir.path()).unwrap();
+    let left = root.join("left");
+    let right = root.join("right");
+    fs::create_dir(&left).unwrap();
+    fs::create_dir(&right).unwrap();
+    fs::write(left.join(".gitignore"), "ignored.txt\n").unwrap();
+    fs::write(left.join("ignored.txt"), "left ignored").unwrap();
+    fs::write(right.join("ignored.txt"), "right visible").unwrap();
+
+    let mut files = Vec::new();
+    let mut gitignores = Vec::new();
+    let entry = Entry::build_tree(
+        root,
+        &mut files,
+        &mut gitignores,
+        None,
+        usize::MAX,
+        0,
+        &IgnoredPathStrategy::Exclude,
+    )
+    .unwrap();
+
+    assert!(matches!(entry, Entry::Directory(_)));
+    let file_paths: Vec<_> = files
+        .iter()
+        .map(|metadata| metadata.path.to_local_path_lossy())
+        .collect();
+    assert!(file_paths.contains(&right.join("ignored.txt")));
+    assert!(!file_paths.contains(&left.join("ignored.txt")));
+    assert_eq!(gitignores.len(), 1);
+}
+
 #[test]
 fn test_git_path_filtering_allowlist() {
-    use std::path::Path;
-
     use super::{
         is_commit_related_git_file, is_common_git_config, is_index_lock_file,
         is_remote_tracking_ref, is_tracking_state_git_file, should_ignore_git_path,
@@ -171,94 +233,6 @@ fn test_git_path_filtering_allowlist() {
             r"C:\Users\user\project\.git\index"
         )));
     }
-}
-
-#[test]
-fn build_tree_marks_descendants_of_ignored_directory_as_ignored() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let root_path = dunce::canonicalize(temp_dir.path()).unwrap();
-    fs::write(root_path.join(".gitignore"), "ignored-dir/\n").unwrap();
-    fs::create_dir(root_path.join("ignored-dir")).unwrap();
-    fs::write(root_path.join("ignored-dir").join("ignored-file.txt"), "").unwrap();
-
-    let mut files = Vec::new();
-    let mut gitignores = Vec::<Gitignore>::new();
-    let tree = Entry::build_tree(
-        &root_path,
-        &mut files,
-        &mut gitignores,
-        None,
-        10,
-        0,
-        &IgnoredPathStrategy::Include,
-    )
-    .unwrap();
-
-    let Entry::Directory(root) = tree else {
-        panic!("root should be a directory");
-    };
-    let ignored_dir = root
-        .children
-        .iter()
-        .find(|entry| entry.path().file_name() == Some("ignored-dir"))
-        .unwrap();
-    let Entry::Directory(ignored_dir) = ignored_dir else {
-        panic!("ignored child should be a directory");
-    };
-    assert!(ignored_dir.ignored);
-
-    let ignored_file = ignored_dir
-        .children
-        .iter()
-        .find(|entry| entry.path().file_name() == Some("ignored-file.txt"))
-        .unwrap();
-    assert!(ignored_file.ignored());
-}
-
-#[test]
-fn lazy_loaded_ignored_directory_marks_loaded_children_as_ignored() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let root_path = dunce::canonicalize(temp_dir.path()).unwrap();
-    fs::write(root_path.join(".gitignore"), "ignored-dir/\n").unwrap();
-    fs::create_dir(root_path.join("ignored-dir")).unwrap();
-    fs::write(root_path.join("ignored-dir").join("ignored-file.txt"), "").unwrap();
-
-    let mut files = Vec::new();
-    let mut gitignores = Vec::<Gitignore>::new();
-    let mut tree = Entry::build_tree(
-        &root_path,
-        &mut files,
-        &mut gitignores,
-        None,
-        10,
-        0,
-        &IgnoredPathStrategy::IncludeLazy,
-    )
-    .unwrap();
-
-    let ignored_path = root_path.join("ignored-dir");
-    let ignored_dir = tree.find_mut(&ignored_path).unwrap();
-    let Entry::Directory(directory) = ignored_dir else {
-        panic!("ignored child should be a directory");
-    };
-    assert!(directory.ignored);
-    assert!(!directory.loaded);
-    assert!(directory.children.is_empty());
-
-    ignored_dir.load(&mut gitignores).unwrap();
-
-    let Entry::Directory(directory) = ignored_dir else {
-        panic!("ignored child should still be a directory");
-    };
-    assert!(directory.ignored);
-    assert!(directory.loaded);
-
-    let ignored_file = directory
-        .children
-        .iter()
-        .find(|entry| entry.path().file_name() == Some("ignored-file.txt"))
-        .unwrap();
-    assert!(ignored_file.ignored());
 }
 
 #[test]

@@ -12,7 +12,7 @@ use futures::stream::AbortHandle;
 use ignore::gitignore::Gitignore;
 use instant::Instant;
 #[cfg(feature = "local_fs")]
-use repo_metadata::entry::IgnoredPathStrategy;
+use repo_metadata::entry::{GitignoreStack, IgnoredPathStrategy};
 use repo_metadata::Repository;
 use warp_core::safe_error;
 use warpui::{Entity, ModelContext, ModelHandle};
@@ -44,7 +44,6 @@ cfg_if::cfg_if! {
         };
         use crate::index::{
             Entry,
-            matches_gitignores,
             full_source_code_embedding::sync_client::CodebaseIndexSyncOperation,
             full_source_code_embedding::FragmentLocation
         };
@@ -1993,6 +1992,32 @@ impl CodebaseIndex {
         Ok((changed_files, gitignores))
     }
 
+    /// Initializes scoped `.gitignore` traversal state, then diffs a merkle node
+    /// against the filesystem and restores the collected `.gitignore` matchers.
+    #[cfg(feature = "local_fs")]
+    fn diff_merkle_node(
+        changed_files: &mut ChangedFiles,
+        node: &NodeLens<'_>,
+        curr_path: PathBuf,
+        gitignores: &mut Vec<Gitignore>,
+        remaining_file_quota: Option<&mut usize>,
+        max_depth: usize,
+        current_depth: usize,
+    ) -> Result<(), Error> {
+        let mut gitignore_stack = GitignoreStack::new(std::mem::take(gitignores));
+        let result = CodebaseIndex::diff_merkle_node_inner(
+            changed_files,
+            node,
+            curr_path,
+            &mut gitignore_stack,
+            remaining_file_quota,
+            max_depth,
+            current_depth,
+        );
+        *gitignores = gitignore_stack.into_gitignores();
+        result
+    }
+
     /// For a given merkle node and path:
     ///   - we assume that the node is either a file or a directory
     ///   - the file / directory is not in gitignore and is not a symlink
@@ -2012,11 +2037,11 @@ impl CodebaseIndex {
     ///  - check if file has been modified
     ///  - if it has been modified, add the file to the list of files to update
     #[cfg(feature = "local_fs")]
-    fn diff_merkle_node(
+    fn diff_merkle_node_inner(
         changed_files: &mut ChangedFiles,
         node: &NodeLens<'_>,
         curr_path: PathBuf,
-        gitignores: &mut Vec<Gitignore>,
+        gitignore_stack: &mut GitignoreStack,
         mut remaining_file_quota: Option<&mut usize>,
         max_depth: usize,
         current_depth: usize,
@@ -2045,10 +2070,10 @@ impl CodebaseIndex {
                     // to the list of files to delete and recurse down the directory to add any children
                     // to the list of files to add
                     changed_files.deletions.insert(curr_path.clone());
-                    CodebaseIndex::add_merkle_node(
+                    CodebaseIndex::add_merkle_node_inner(
                         changed_files,
                         &curr_path,
-                        gitignores,
+                        gitignore_stack,
                         remaining_file_quota.as_deref_mut(),
                         max_depth,
                         current_depth, // Pass current depth without incrementing it because we haven't traversed down a level yet.
@@ -2135,87 +2160,91 @@ impl CodebaseIndex {
                     return Ok(());
                 }
 
-                // Populate gitignores if there is a .gitignore file in the current directory
-                let gitignore_path = curr_path.join(".gitignore");
-                if gitignore_path.exists() {
-                    let (gitignore, _) = Gitignore::new(gitignore_path);
-                    gitignores.push(gitignore);
-                }
+                let active_len = gitignore_stack.active_len();
+                let result: Result<(), Error> = (|| {
+                    let gitignore_path = curr_path.join(".gitignore");
+                    if gitignore_path.exists() {
+                        let (gitignore, _) = Gitignore::new(gitignore_path);
+                        gitignore_stack.push_active(gitignore);
+                    }
 
-                let entries = std::fs::read_dir(&curr_path)?;
+                    let entries = std::fs::read_dir(&curr_path)?;
 
-                // Get the set of children from the filesystem.
-                let mut filesystem_children = HashSet::new();
-                for entry in entries {
-                    match entry.and_then(|entry| dunce::canonicalize(entry.path())) {
-                        Ok(child_path) => {
-                            // Ignore paths that are excluded by .gitignore, end with .git, or are symlinks.
-                            if child_path.ends_with(".git")
-                                || child_path.is_symlink()
-                                || matches_gitignores(
+                    // Get the set of children from the filesystem.
+                    let mut filesystem_children = HashSet::new();
+                    for entry in entries {
+                        match entry.and_then(|entry| dunce::canonicalize(entry.path())) {
+                            Ok(child_path) => {
+                                // Ignore paths that are excluded by .gitignore, end with .git, or are symlinks.
+                                if gitignore_stack.matches(
                                     &child_path,
                                     child_path.is_dir(),
-                                    &*gitignores,
                                     false, /* check_ancestors */
-                                )
-                            {
-                                continue;
+                                ) || child_path.ends_with(".git")
+                                    || child_path.is_symlink()
+                                {
+                                    continue;
+                                }
+
+                                // At this point, we know that the child path is a file or directory that
+                                // is not in gitignore, not a symlink, and not a .git directory.
+                                filesystem_children.insert(child_path);
                             }
-
-                            // At this point, we know that the child path is a file or directory that
-                            // is not in gitignore, not a symlink, and not a .git directory.
-                            filesystem_children.insert(child_path);
-                        }
-                        Err(err) => {
-                            log::trace!("Failed to canonicalize path: {err:?}");
+                            Err(err) => {
+                                log::trace!("Failed to canonicalize path: {err:?}");
+                            }
                         }
                     }
-                }
 
-                // Get the map of children from the merkle tree.
-                let mut merkle_tree_children_map = HashMap::new();
-                let mut merkle_tree_paths = HashSet::new();
-                for child in node.children() {
-                    let path = child.path().to_path_buf();
-                    merkle_tree_children_map.insert(path.clone(), child);
-                    merkle_tree_paths.insert(path);
-                }
-
-                // Process deletions (in merkle tree but not in filesystem)
-                for path in merkle_tree_paths.difference(&filesystem_children) {
-                    if let Some(node) = merkle_tree_children_map.get(path) {
-                        CodebaseIndex::delete_merkle_node(changed_files, node)?;
+                    // Get the map of children from the merkle tree.
+                    let mut merkle_tree_children_map = HashMap::new();
+                    let mut merkle_tree_paths = HashSet::new();
+                    for child in node.children() {
+                        let path = child.path().to_path_buf();
+                        merkle_tree_children_map.insert(path.clone(), child);
+                        merkle_tree_paths.insert(path);
                     }
-                }
 
-                // Process additions (in filesystem but not in merkle tree)
-                for path in filesystem_children.difference(&merkle_tree_paths) {
-                    CodebaseIndex::add_merkle_node(
-                        changed_files,
-                        path,
-                        gitignores,
-                        remaining_file_quota.as_deref_mut(),
-                        max_depth,
-                        current_depth + 1,
-                    )?;
-                }
+                    // Process deletions (in merkle tree but not in filesystem)
+                    for path in merkle_tree_paths.difference(&filesystem_children) {
+                        if let Some(node) = merkle_tree_children_map.get(path) {
+                            CodebaseIndex::delete_merkle_node(changed_files, node)?;
+                        }
+                    }
 
-                // Get the set of children that are in both the merkle tree and the filesystem.
-                let in_both = merkle_tree_paths.intersection(&filesystem_children);
-                for path in in_both {
-                    if let Some(node) = merkle_tree_children_map.get(path) {
-                        // Recursively diff any children that are in both the merkle tree and the filesystem.
-                        CodebaseIndex::diff_merkle_node(
+                    // Process additions (in filesystem but not in merkle tree)
+                    for path in filesystem_children.difference(&merkle_tree_paths) {
+                        CodebaseIndex::add_merkle_node_inner(
                             changed_files,
-                            node,
-                            path.clone(),
-                            gitignores,
+                            path,
+                            gitignore_stack,
                             remaining_file_quota.as_deref_mut(),
                             max_depth,
                             current_depth + 1,
                         )?;
                     }
-                }
+
+                    // Get the set of children that are in both the merkle tree and the filesystem.
+                    let in_both = merkle_tree_paths.intersection(&filesystem_children);
+                    for path in in_both {
+                        if let Some(node) = merkle_tree_children_map.get(path) {
+                            // Recursively diff any children that are in both the merkle tree and the filesystem.
+                            CodebaseIndex::diff_merkle_node_inner(
+                                changed_files,
+                                node,
+                                path.clone(),
+                                gitignore_stack,
+                                remaining_file_quota.as_deref_mut(),
+                                max_depth,
+                                current_depth + 1,
+                            )?;
+                        }
+                    }
+
+                    Ok(())
+                })();
+                gitignore_stack.truncate_active(active_len);
+                result?;
             }
             NodeId::Fragment { .. } => {
                 // We should never see a fragment node in the diffing process.
@@ -2247,7 +2276,7 @@ impl CodebaseIndex {
                 NodeId::File { absolute_path, .. } => {
                     changed_files.deletions.insert(absolute_path.to_path_buf());
                 }
-                _ => {}
+                NodeId::Fragment { .. } => {}
             }
             Ok(())
         }
@@ -2268,25 +2297,41 @@ impl CodebaseIndex {
         max_depth: usize,
         current_depth: usize,
     ) -> Result<(), Error> {
-        fn add_merkle_node_internal(
-            changed_files: &mut ChangedFiles,
-            path: &PathBuf,
-            gitignores: &mut Vec<Gitignore>,
-            mut remaining_file_quota: Option<&mut usize>,
-            max_depth: usize,
-            current_depth: usize,
-        ) -> Result<(), Error> {
-            if current_depth > max_depth {
-                return Err(Error::DiffMerkleTreeError(MaxDepthExceeded));
-            }
+        let mut gitignore_stack = GitignoreStack::new(std::mem::take(gitignores));
+        let result = CodebaseIndex::add_merkle_node_inner(
+            changed_files,
+            path,
+            &mut gitignore_stack,
+            remaining_file_quota,
+            max_depth,
+            current_depth,
+        );
+        *gitignores = gitignore_stack.into_gitignores();
+        result
+    }
 
-            let is_dir = path.is_dir();
+    #[cfg(feature = "local_fs")]
+    fn add_merkle_node_inner(
+        changed_files: &mut ChangedFiles,
+        path: &PathBuf,
+        gitignore_stack: &mut GitignoreStack,
+        mut remaining_file_quota: Option<&mut usize>,
+        max_depth: usize,
+        current_depth: usize,
+    ) -> Result<(), Error> {
+        if current_depth > max_depth {
+            return Err(Error::DiffMerkleTreeError(MaxDepthExceeded));
+        }
 
-            if is_dir {
+        let is_dir = path.is_dir();
+
+        if is_dir {
+            let active_len = gitignore_stack.active_len();
+            let result: Result<(), Error> = (|| {
                 let gitignore_path = path.join(".gitignore");
                 if gitignore_path.exists() {
                     let (gitignore, _) = Gitignore::new(gitignore_path);
-                    gitignores.push(gitignore);
+                    gitignore_stack.push_active(gitignore);
                 }
 
                 let entries = std::fs::read_dir(path)?;
@@ -2295,14 +2340,12 @@ impl CodebaseIndex {
                     match entry.and_then(|entry| dunce::canonicalize(entry.path())) {
                         Ok(child_path) => {
                             // Ignore paths that are excluded by .gitignore, end with .git, or are symlinks.
-                            if child_path.ends_with(".git")
+                            if gitignore_stack.matches(
+                                &child_path,
+                                child_path.is_dir(),
+                                false, /* check_ancestors */
+                            ) || child_path.ends_with(".git")
                                 || child_path.is_symlink()
-                                || matches_gitignores(
-                                    &child_path,
-                                    child_path.is_dir(),
-                                    &*gitignores,
-                                    false, /* check_ancestors */
-                                )
                             {
                                 continue;
                             }
@@ -2314,38 +2357,33 @@ impl CodebaseIndex {
                     }
                 }
                 for child_path in filesystem_children {
-                    add_merkle_node_internal(
+                    CodebaseIndex::add_merkle_node_inner(
                         changed_files,
                         &child_path,
-                        gitignores,
+                        gitignore_stack,
                         remaining_file_quota.as_deref_mut(),
                         max_depth,
                         current_depth + 1,
                     )?;
                 }
-            } else if path.is_file() {
-                if let Some(remaining_file_quota) = remaining_file_quota {
-                    if *remaining_file_quota == 0 {
-                        return Err(Error::DiffMerkleTreeError(ExceededMaxFileLimit));
-                    }
-
-                    *remaining_file_quota -= 1
+                Ok(())
+            })();
+            gitignore_stack.truncate_active(active_len);
+            result?;
+        } else if path.is_file() {
+            if let Some(remaining_file_quota) = remaining_file_quota {
+                if *remaining_file_quota == 0 {
+                    return Err(Error::DiffMerkleTreeError(ExceededMaxFileLimit));
                 }
 
-                changed_files.upsertions.insert(path.to_path_buf());
-            } else {
-                return Err(Error::DiffMerkleTreeError(Symlink));
+                *remaining_file_quota -= 1
             }
-            Ok(())
+
+            changed_files.upsertions.insert(path.to_path_buf());
+        } else {
+            return Err(Error::DiffMerkleTreeError(Symlink));
         }
-        add_merkle_node_internal(
-            changed_files,
-            path,
-            gitignores,
-            remaining_file_quota,
-            max_depth,
-            current_depth,
-        )
+        Ok(())
     }
 
     fn on_modification(&mut self, ctx: &mut ModelContext<Self>) {
