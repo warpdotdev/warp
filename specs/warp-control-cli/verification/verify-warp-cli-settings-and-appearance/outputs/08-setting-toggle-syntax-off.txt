@@ -1,0 +1,1 @@
+{"setting":{"key":"terminal.input.syntax_highlighting","value":false,"value_type":"bool"}}

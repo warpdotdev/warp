@@ -1,0 +1,1 @@
+{"dark_theme":"Warp New Bright","follow_system_theme":false,"font_size":13,"light_theme":"Dracula","theme":"Dark","ui_zoom_percent":100}

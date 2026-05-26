@@ -1,0 +1,1 @@
+{"ok":false,"error":{"code":"missing_target","message":"surface.command_search.open requires an active Warp window"}}

@@ -1,0 +1,1 @@
+{"action":"surface.command_search.open","handled":true,"window_id":"0"}

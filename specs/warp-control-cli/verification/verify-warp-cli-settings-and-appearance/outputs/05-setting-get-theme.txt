@@ -1,0 +1,1 @@
+{"setting":{"key":"appearance.themes.theme","value":"Light","value_type":"string"}}

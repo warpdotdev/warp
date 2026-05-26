@@ -1,0 +1,1 @@
+{"ok":false,"error":{"code":"missing_target","message":"surface.vertical_tabs.toggle requires an active Warp window"}}
