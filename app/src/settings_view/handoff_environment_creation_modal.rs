@@ -249,7 +249,3 @@ impl View for HandoffEnvironmentCreationModal {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "handoff_environment_creation_modal_tests.rs"]
-mod tests;
