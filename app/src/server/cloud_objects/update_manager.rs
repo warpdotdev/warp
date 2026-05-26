@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::future::Future;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
