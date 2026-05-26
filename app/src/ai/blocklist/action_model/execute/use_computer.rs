@@ -44,12 +44,39 @@ impl UseComputerExecutor {
         let screenshot_params = request.screenshot_params;
         ActionExecution::new_async(
             async move {
+                // Diagnostics for the agent-driven coordinate-conversion investigation. Gated on
+                // COMPUTER_USE_DEBUG; routed through `log` so it lands in the app's log file.
+                let debug = std::env::var_os("COMPUTER_USE_DEBUG").is_some();
+                if debug {
+                    log::info!(
+                        "[computer_use] executor: {} action(s), screenshot_params={screenshot_params:?}",
+                        actions.len(),
+                    );
+                }
                 let mut actor = computer_use::create_actor();
                 match actor
                     .perform_actions(&actions, computer_use::Options { screenshot_params })
                     .await
                 {
-                    Ok(result) => UseComputerResult::Success(result),
+                    Ok(result) => {
+                        if debug {
+                            // The model is shown the `sent` image; the agent's coordinates are
+                            // remapped as if they were `native` window pixels. Log both so a
+                            // missing downscale-inverse is visible.
+                            let screenshot_sent_native = result
+                                .screenshot
+                                .as_ref()
+                                .map(|s| (s.width, s.height, s.original_width, s.original_height));
+                            log::info!(
+                                "[computer_use] executor result: \
+                                 screenshot(sent_wxh,native_wxh)={screenshot_sent_native:?} \
+                                 captured_window={:?} windows={}",
+                                result.captured_window,
+                                result.windows.len(),
+                            );
+                        }
+                        UseComputerResult::Success(result)
+                    }
                     Err(error) => UseComputerResult::Error(error),
                 }
             },

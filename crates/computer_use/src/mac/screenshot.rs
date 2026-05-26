@@ -83,10 +83,33 @@ fn take_window(
     // Derive the scale factor (pixels per point) from the native capture dimensions and the
     // window's point bounds. This assumes the window lives on the main display and shares its
     // backing scale; multi-display / mixed-scale handling is a follow-up.
-    let scale_factor = window::window_by_id(window_id)
+    let window = window::window_by_id(window_id);
+    let scale_factor = window
         .filter(|info| info.width > 0.0)
         .map(|info| screenshot.original_width as f64 / info.width)
         .unwrap_or_else(main_display_scale_factor);
+
+    // Diagnostics for the agent-driven coordinate-conversion investigation. The model is shown the
+    // `sent` image (post-resize to the screenshot size limits), but the agent's coordinates are
+    // currently remapped as if they were `native` (pre-resize) window pixels. Logging both sizes
+    // makes any missing downscale-inverse obvious. Gated on COMPUTER_USE_DEBUG, via `log`.
+    if std::env::var_os("COMPUTER_USE_DEBUG").is_some() {
+        let (pt_w, pt_h) = window
+            .map(|info| (info.width, info.height))
+            .unwrap_or((0.0, 0.0));
+        let downscale = screenshot.width as f64 / (screenshot.original_width.max(1) as f64);
+        log::info!(
+            "[computer_use] window capture window#={window_id} native_px={}x{} sent_px={}x{} \
+             downscale={downscale:.4} window_pt={pt_w:.1}x{pt_h:.1} scale_factor={scale_factor:.3} \
+             (max_long_edge_px={:?} max_total_px={:?})",
+            screenshot.original_width,
+            screenshot.original_height,
+            screenshot.width,
+            screenshot.height,
+            params.max_long_edge_px,
+            params.max_total_px,
+        );
+    }
 
     // The captured metadata refers to the native (pre-downscale) capture, so window-local pixel
     // coordinates sent by the agent map directly onto the captured window image.

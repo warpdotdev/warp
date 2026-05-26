@@ -54,11 +54,34 @@ fn remap_action_for_target(action: &Action, target: Target) -> Action {
         return action.clone();
     };
     let scale = main_display_scale_factor();
+    // Diagnostics for the agent-driven coordinate-conversion investigation. Gated on
+    // COMPUTER_USE_DEBUG and routed through `log` so it lands in the app's log file. The incoming
+    // coordinate is treated as a window-local pixel in the captured-window image's space; note we
+    // do NOT apply any inverse of the screenshot downscale here (that is the suspected gap).
+    let log_remap = std::env::var_os("COMPUTER_USE_DEBUG").is_some();
     let remap = |p: Vector2I| {
-        Vector2I::new(
+        let global = Vector2I::new(
             (info.x * scale) as i32 + p.x(),
             (info.y * scale) as i32 + p.y(),
-        )
+        );
+        if log_remap {
+            log::info!(
+                "[computer_use] remap window#={window_id} in_coord=({},{}) \
+                 window_bounds_pt=({:.1},{:.1},{:.1},{:.1}) display_scale={scale:.3} \
+                 window_local_px=({},{}) -> global_px=({},{}) [no downscale inverse applied]",
+                p.x(),
+                p.y(),
+                info.x,
+                info.y,
+                info.width,
+                info.height,
+                p.x(),
+                p.y(),
+                global.x(),
+                global.y(),
+            );
+        }
+        global
     };
     match action {
         Action::MouseMove { to } => Action::MouseMove { to: remap(*to) },

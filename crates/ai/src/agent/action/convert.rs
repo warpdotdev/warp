@@ -478,6 +478,7 @@ impl TryFrom<api::message::tool_call::UseComputer> for AIAgentActionType {
                         Ok(computer_use::Action::KeyUp { key })
                     }
                 }?;
+                log_window_target_coord(&action, target);
                 Ok(computer_use::TargetedAction { action, target })
             })
             .try_collect()?;
@@ -544,6 +545,29 @@ fn convert_computer_use_target(
             pid: window.pid,
         },
         Some(ApiTarget::Screen(_)) | None => computer_use::Target::Screen,
+    }
+}
+
+/// Logs the raw server-provided coordinates for a window-targeted computer-use action, so the
+/// agent-driven coordinate conversion can be compared against where the click actually lands.
+/// Gated on COMPUTER_USE_DEBUG and routed through `log` so it surfaces in the app's log file.
+fn log_window_target_coord(action: &computer_use::Action, target: computer_use::Target) {
+    if std::env::var_os("COMPUTER_USE_DEBUG").is_none() {
+        return;
+    }
+    let computer_use::Target::Window { window_id, pid } = target else {
+        return;
+    };
+    let coord = match action {
+        computer_use::Action::MouseMove { to } => Some(("mouse_move", to.x(), to.y())),
+        computer_use::Action::MouseDown { at, .. } => Some(("mouse_down", at.x(), at.y())),
+        computer_use::Action::MouseWheel { at, .. } => Some(("mouse_wheel", at.x(), at.y())),
+        _ => None,
+    };
+    if let Some((kind, x, y)) = coord {
+        log::info!(
+            "[computer_use] server->client {kind} window#={window_id} pid={pid} raw_coord=({x},{y})"
+        );
     }
 }
 
