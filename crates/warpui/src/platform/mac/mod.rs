@@ -35,8 +35,7 @@ where
 {
     // `NSString::from_str` returns a +1-retained `Retained<NSString>`.
     // `autorelease_ptr` hands that retain count to the innermost autorelease
-    // pool and returns the raw pointer, preserving the autoreleased semantics
-    // of the original `NSString::alloc(nil).init_str(...).autorelease()`.
+    // pool and returns the raw pointer.
     Retained::autorelease_ptr(NSString::from_str(s.as_ref())).cast()
 }
 

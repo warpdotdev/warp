@@ -2,11 +2,10 @@ use objc2_app_kit::{NSAlert, NSApplication, NSModalResponse};
 
 /// Configures and runs an `NSAlert` modally, returning its response.
 ///
-/// This is the Rust replacement for the former `configureAndRunModal` in
-/// `objc/alert.m`. It keeps the original C symbol (via `#[no_mangle]`) so the
-/// AppKit `showModal:modalId:` dispatch path in `app.m` keeps calling it
-/// unchanged; `app.m` invokes it inside a main-queue block, so this runs on the
-/// main thread and `runModal` stays synchronous.
+/// Exported via `#[no_mangle]` so the AppKit `showModal:modalId:` dispatch path
+/// in `app.m` can call it by its C symbol; `app.m` invokes it inside a
+/// main-queue block, so this runs on the main thread and `runModal` stays
+/// synchronous.
 #[no_mangle]
 pub extern "C-unwind" fn configureAndRunModal(
     alert: &NSAlert,
