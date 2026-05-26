@@ -3789,8 +3789,7 @@ impl PaneGroup {
             .collect();
 
         for task_id in ready_tasks {
-            let Some((child_id, _pane_id)) =
-                self.pending_remote_child_hydrations.remove(&task_id)
+            let Some((child_id, _pane_id)) = self.pending_remote_child_hydrations.remove(&task_id)
             else {
                 continue;
             };
@@ -3900,7 +3899,12 @@ impl PaneGroup {
             self.pending_remote_child_hydrations
                 .insert(task_id, (child_id, new_pane_id.into()));
             self.ensure_pending_ambient_restoration_subscription(ctx);
-            self.enter_remote_child_existing_session_in_place(new_pane_id.into(), child_id, task_id, ctx);
+            self.enter_remote_child_existing_session_in_place(
+                new_pane_id.into(),
+                child_id,
+                task_id,
+                ctx,
+            );
             return;
         }
 

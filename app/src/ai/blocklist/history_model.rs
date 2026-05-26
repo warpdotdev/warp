@@ -2379,10 +2379,7 @@ impl BlocklistAIHistoryModel {
         // identity (parent linkage, run_id/task_id, remote-child flag,
         // agent name) authoritative; the cloud transcript only supplies
         // tasks/title/server metadata.
-        let placeholder = self
-            .conversations_by_id
-            .get(&local_placeholder_id)
-            .cloned();
+        let placeholder = self.conversations_by_id.get(&local_placeholder_id).cloned();
 
         // Build the cloud conversation_data so `new_restored` reconstructs
         // server-side metadata (token, run_id, artifacts, etc.) directly.
@@ -2397,9 +2394,11 @@ impl BlocklistAIHistoryModel {
                 .map(|t| t.as_str().to_string()),
             artifacts_json: serde_json::to_string(cloud_conversation.artifacts()).ok(),
             parent_agent_id: placeholder.as_ref().and_then(|p| {
-                p.parent_agent_id()
-                    .map(ToString::to_string)
-                    .or_else(|| cloud_conversation.parent_agent_id().map(ToString::to_string))
+                p.parent_agent_id().map(ToString::to_string).or_else(|| {
+                    cloud_conversation
+                        .parent_agent_id()
+                        .map(ToString::to_string)
+                })
             }),
             agent_name: placeholder
                 .as_ref()

@@ -962,9 +962,7 @@ fn test_restored_remote_hidden_child_pane_enters_existing_ambient_session() {
             // key so the orchestration pill bar and topology indexes can
             // still find the pane.
             assert!(
-                panes
-                    .child_agent_panes
-                    .contains_key(&child_conversation_id),
+                panes.child_agent_panes.contains_key(&child_conversation_id),
                 "placeholder AIConversationId must stay the child_agent_panes key after Fix B \
                  hydration",
             );
@@ -1028,9 +1026,7 @@ fn test_restored_remote_hidden_child_pane_fallback_when_task_data_unavailable() 
 
             // The placeholder local AIConversationId remains the canonical key.
             assert!(
-                panes
-                    .child_agent_panes
-                    .contains_key(&child_conversation_id),
+                panes.child_agent_panes.contains_key(&child_conversation_id),
                 "placeholder AIConversationId must stay the child_agent_panes key in fallback path",
             );
 
@@ -1051,12 +1047,9 @@ fn test_restored_remote_hidden_child_pane_fallback_when_task_data_unavailable() 
             // can re-run hydration when task data lands. The tuple value is
             // (placeholder_conversation_id, hidden_pane_id); the placeholder
             // id must match the conversation we just restored.
-            let pending_entry = panes
-                .pending_remote_child_hydrations
-                .get(&task_id)
-                .expect(
-                    "task-data-unavailable hydration must register a pending entry keyed by task id",
-                );
+            let pending_entry = panes.pending_remote_child_hydrations.get(&task_id).expect(
+                "task-data-unavailable hydration must register a pending entry keyed by task id",
+            );
             assert_eq!(
                 pending_entry.0, child_conversation_id,
                 "pending hydration must record the placeholder's local AIConversationId",
