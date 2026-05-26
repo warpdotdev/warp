@@ -843,6 +843,42 @@ fn test_set_github_auth_redirect_target_updates_form() {
 }
 
 #[test]
+fn test_copy_env_id_action_writes_clipboard_and_sets_feedback() {
+    App::test((), |mut app| async move {
+        init_env_page_view_test_models(&mut app);
+        let window_id = create_test_window(&mut app);
+
+        let mut view_handle = None;
+        app.update(|ctx| {
+            view_handle = Some(ctx.add_typed_action_view(window_id, EnvironmentsPageView::new));
+        });
+        let view_handle = view_handle.expect("EnvironmentsPageView handle should be created");
+
+        let env_id = SyncId::ClientId(ClientId::new());
+        let env_id_string = "env-id-123".to_string();
+
+        app.update(|ctx| {
+            view_handle.update(ctx, |view, ctx| {
+                view.handle_action(
+                    &EnvironmentsPageAction::CopyEnvId(env_id, env_id_string.clone()),
+                    ctx,
+                );
+            });
+
+            assert_eq!(ctx.clipboard().read().plain_text, env_id_string);
+        });
+
+        app.update(|ctx| {
+            let view = view_handle.as_ref(ctx);
+            assert!(
+                view.copy_feedback_times.contains_key(&env_id),
+                "Expected copy feedback to be tracked for copied environment ID"
+            );
+        });
+    })
+}
+
+#[test]
 fn test_render_empty_state_shows_github_remote_and_local_rows() {
     // Empty-state UI should include GitHub-remote (suggested) and agent-assisted local repos paths.
     App::test((), |mut app| async move {

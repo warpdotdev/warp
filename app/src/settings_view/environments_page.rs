@@ -1448,8 +1448,7 @@ impl EnvironmentsPageWidget {
                 icon: Icon::Github,
                 title: "Quick setup",
                 badge: Some("Suggested"),
-                subtitle:
-                    "Select the GitHub repositories you’d like to work with and we’ll suggest a base image and config",
+                subtitle: "Select the GitHub repositories you’d like to work with and we’ll suggest a base image and config",
                 action_button: github_button,
                 compact_action_button: github_button_compact,
                 icon_size,
@@ -1462,8 +1461,7 @@ impl EnvironmentsPageWidget {
                 icon: Icon::Terminal,
                 title: "Use the agent",
                 badge: None,
-                subtitle:
-                    "Choose a locally set up project and we’ll help you set up an environment based on it",
+                subtitle: "Choose a locally set up project and we’ll help you set up an environment based on it",
                 action_button: local_repos_button,
                 compact_action_button: local_repos_button_compact,
                 icon_size,
@@ -1766,6 +1764,12 @@ impl EnvironmentsPageWidget {
                 move |ctx| {
                     ctx.dispatch_typed_action(EnvironmentsPageAction::CopyEnvId(
                         env_id,
+                        env_id_str_copy.clone(),
+                    ));
+                    // Also dispatch through the workspace so copying still works when this view is
+                    // hosted in an Environments pane whose click responder chain does not reach the
+                    // page view.
+                    ctx.dispatch_typed_action(WorkspaceAction::CopyTextToClipboard(
                         env_id_str_copy.clone(),
                     ));
                 },
