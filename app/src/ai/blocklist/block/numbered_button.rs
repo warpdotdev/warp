@@ -107,7 +107,7 @@ pub(super) fn build_numbered_button(
     let badge = render_number_badge(number, is_checked, appearance);
 
     let row = Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_child(badge)
         .with_child(
             Shrinkable::new(1., Container::new(content).with_margin_left(8.).finish()).finish(),
