@@ -1,97 +1,81 @@
-use std::{
-    collections::HashSet,
-    ops::Range,
-    path::PathBuf,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use std::collections::HashSet;
+use std::ops::Range;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use markdown_parser::{parse_html, parse_markdown, FormattedText};
 use pathfinder_geometry::vector::vec2f;
 use string_offset::CharOffset;
-use warp_editor::{
-    content::{
-        anchor::Anchor,
-        text::{BufferTextStyle, CodeBlockType, TextStyles},
-        version::BufferVersion,
-    },
-    editor::{EmbeddedItemModel, NavigationKey, RunnableCommandModel, TextDecoration},
-    model::{CoreEditorModel, RichTextEditorModel},
-    render::{
-        element::{
-            DisplayOptions, DisplayStateHandle, RichTextAction, RichTextElement,
-            VerticalExpansionBehavior,
-        },
-        model::{BlockItem, HitTestBlockType, Location, RenderState},
-    },
-    selection::{TextDirection, TextUnit},
+use warp_editor::content::anchor::Anchor;
+use warp_editor::content::text::{BufferTextStyle, CodeBlockType, TextStyles};
+use warp_editor::content::version::BufferVersion;
+use warp_editor::editor::{EmbeddedItemModel, NavigationKey, RunnableCommandModel, TextDecoration};
+use warp_editor::model::{CoreEditorModel, RichTextEditorModel};
+use warp_editor::render::element::{
+    DisplayOptions, DisplayStateHandle, RichTextAction, RichTextElement, VerticalExpansionBehavior,
 };
-
-use warp_util::{path::LineAndColumnArg, user_input::UserInput};
+use warp_editor::render::model::{BlockItem, HitTestBlockType, Location, RenderState};
+use warp_editor::selection::{TextDirection, TextUnit};
+use warp_util::path::LineAndColumnArg;
+use warp_util::user_input::UserInput;
+use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
+use warpui::actions::StandardAction;
+use warpui::assets::asset_cache::{AssetCache, AssetHandle, AssetState};
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::{
+    AnchorPair, Axis, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
+    Dismiss, Fill, Flex, Hoverable, Icon, MouseStateHandle, OffsetPositioning, OffsetType,
+    ParentAnchor, ParentElement, PositionedElementOffsetBounds, PositioningAxis, Radius,
+    ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth, Stack, XAxisAnchor,
+    YAxisAnchor,
+};
+use warpui::event::ModifiersState;
+use warpui::fonts::{FallbackFontEvent, FallbackFontModel};
+use warpui::image_cache::ImageType;
+use warpui::keymap::{EditableBinding, FixedBinding, PerPlatformKeystroke};
+use warpui::platform::{Cursor, OperatingSystem};
+use warpui::presenter::ChildView;
+use warpui::r#async::SpawnedFutureHandle;
+#[cfg(feature = "local_fs")]
+use warpui::text::word_boundaries::WordBoundariesPolicy;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::units::Pixels;
+use warpui::windowing::WindowManager;
 use warpui::{
-    accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole},
-    assets::asset_cache::{AssetCache, AssetHandle, AssetState},
-    clipboard::ClipboardContent,
-    elements::{
-        AnchorPair, Axis, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
-        Dismiss, Fill, Flex, Icon, MouseStateHandle, OffsetPositioning, OffsetType, ParentAnchor,
-        ParentElement, PositionedElementOffsetBounds, PositioningAxis, Radius, ScrollStateHandle,
-        Scrollable, ScrollableElement, ScrollbarWidth, Stack, XAxisAnchor, YAxisAnchor,
-    },
-    event::ModifiersState,
-    fonts::{FallbackFontEvent, FallbackFontModel},
-    image_cache::ImageType,
-    keymap::{EditableBinding, FixedBinding},
-    platform::{Cursor, OperatingSystem},
-    presenter::ChildView,
-    r#async::SpawnedFutureHandle,
-    ui_components::{
-        button::ButtonVariant,
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    units::Pixels,
     windowing, AppContext, BlurContext, CursorInfo, Element, Entity, FocusContext, ModelHandle,
     SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle,
 };
-use warpui::{actions::StandardAction, elements::Hoverable};
-use warpui::{keymap::PerPlatformKeystroke, windowing::WindowManager};
 
-use crate::{
-    appearance::Appearance,
-    cmd_or_ctrl_shift,
-    editor::InteractionState,
-    features::FeatureFlag,
-    notebooks::{
-        editor::{find_bar::FindBarAction, model::word_unit},
-        file::MarkdownDisplayMode,
-        link::{LinkTarget, NotebookLinks, ResolveError},
-        telemetry::{ActionEntrypoint, BlockInfo, EmbeddedObjectInfo, SelectionMode},
-    },
-    server::ids::SyncId,
-    settings::{AppEditorSettings, FontSettings, SelectionSettings},
-    terminal::{grid_renderer::URL_COLOR, links::directly_open_link_keybinding_string},
-    ui_components::icons::ICON_DIMENSIONS,
-    util::{
-        bindings::CustomAction,
-        tooltips::{render_tooltip, should_show_open_in_warp_link, TooltipLink, TooltipRedaction},
-    },
-    view_components::DismissibleToast,
-};
-
+use super::block_insertion_menu::{BlockInsertionMenuState, BlockInsertionSource};
+use super::find_bar::{FindBar, FindBarEvent, FindBarState};
+use super::keys::NotebookKeybindings;
+use super::link_editor::{LinkEditor, LinkEditorEvent};
+use super::model::{NotebooksEditorModel, RichTextEditorModelEvent};
+use super::omnibar::{Omnibar, OmnibarEvent};
+use super::{rich_text_styles, BlockType, NotebookWorkflow};
+use crate::appearance::Appearance;
+use crate::cmd_or_ctrl_shift;
+use crate::editor::InteractionState;
+use crate::features::FeatureFlag;
+use crate::notebooks::editor::find_bar::FindBarAction;
+use crate::notebooks::editor::model::word_unit;
+use crate::notebooks::file::MarkdownDisplayMode;
+use crate::notebooks::link::{LinkTarget, NotebookLinks, ResolveError};
+use crate::notebooks::telemetry::{ActionEntrypoint, BlockInfo, EmbeddedObjectInfo, SelectionMode};
+use crate::server::ids::SyncId;
+use crate::settings::{AppEditorSettings, FontSettings, SelectionSettings};
+use crate::terminal::grid_renderer::URL_COLOR;
+use crate::terminal::links::directly_open_link_keybinding_string;
+use crate::ui_components::icons::ICON_DIMENSIONS;
+use crate::util::bindings::CustomAction;
 #[cfg(feature = "local_fs")]
 use crate::util::link_detection::{detect_file_paths, get_word_range_at_offset, DetectedLinkType};
-
-#[cfg(feature = "local_fs")]
-use warpui::text::word_boundaries::WordBoundariesPolicy;
-
-use super::{
-    block_insertion_menu::{BlockInsertionMenuState, BlockInsertionSource},
-    find_bar::{FindBar, FindBarEvent, FindBarState},
-    keys::NotebookKeybindings,
-    link_editor::{LinkEditor, LinkEditorEvent},
-    model::{NotebooksEditorModel, RichTextEditorModelEvent},
-    omnibar::{Omnibar, OmnibarEvent},
-    rich_text_styles, BlockType, NotebookWorkflow,
+use crate::util::tooltips::{
+    render_tooltip, should_show_open_in_warp_link, TooltipLink, TooltipRedaction,
 };
+use crate::view_components::DismissibleToast;
+use crate::workspace::WorkspaceAction;
 
 #[cfg(test)]
 #[path = "view_tests.rs"]
@@ -889,6 +873,9 @@ pub enum EditorViewAction {
     MermaidDisplayModeSelected {
         start_anchor: Anchor,
         mode: MarkdownDisplayMode,
+    },
+    OpenMermaidDiagramLightbox {
+        block_start: CharOffset,
     },
 }
 
@@ -1890,6 +1877,26 @@ impl RichTextEditorView {
         self.focus(ctx);
         self.model
             .update(ctx, |model, ctx| model.select_command_at(block_start, ctx))
+    }
+    fn open_mermaid_lightbox(&self, block_start: CharOffset, ctx: &mut ViewContext<Self>) {
+        let asset_source = {
+            let render_state = self.model.as_ref(ctx).render_state().clone();
+            let content = render_state.as_ref(ctx).content();
+            let block = content.block_at_offset(block_start);
+            block.and_then(|b| match b.item {
+                BlockItem::MermaidDiagram { asset_source, .. } => Some(asset_source.clone()),
+                _ => None,
+            })
+        };
+        if let Some(asset_source) = asset_source {
+            ctx.dispatch_typed_action(&WorkspaceAction::OpenLightbox {
+                images: vec![ui_components::lightbox::LightboxImage {
+                    source: ui_components::lightbox::LightboxImageSource::Resolved { asset_source },
+                    description: None,
+                }],
+                initial_index: 0,
+            });
+        }
     }
 
     fn maybe_open_file_or_url(
@@ -3082,6 +3089,9 @@ impl TypedActionView for RichTextEditorView {
                 .model
                 .update(ctx, |model, ctx| model.remove_embedding_at(*offset, ctx)),
             MiddleClickPaste => self.middle_click_paste(ctx),
+            OpenMermaidDiagramLightbox { block_start } => {
+                self.open_mermaid_lightbox(*block_start, ctx);
+            }
             OpenFile {
                 path,
                 line_and_column_num,
@@ -3320,6 +3330,7 @@ impl TypedActionView for RichTextEditorView {
             | EditorViewAction::RemoveEmbeddingAt(_)
             | EditorViewAction::OpenFile { .. }
             | EditorViewAction::MermaidDisplayModeSelected { .. }
+            | EditorViewAction::OpenMermaidDiagramLightbox { .. }
             | EditorViewAction::VimUserTyped(_) => ActionAccessibilityContent::Empty,
         }
     }
@@ -3456,10 +3467,7 @@ impl RichTextAction<RichTextEditorView> for EditorViewAction {
             Location::Block {
                 start_offset,
                 end_offset,
-                block_type:
-                    HitTestBlockType::Code
-                    | HitTestBlockType::MermaidDiagram
-                    | HitTestBlockType::Embedding,
+                block_type: HitTestBlockType::MermaidDiagram,
                 ..
             } => match click_count {
                 1 if modifiers.shift => view
@@ -3475,6 +3483,17 @@ impl RichTextAction<RichTextEditorView> for EditorViewAction {
                     .or(Some(EditorViewAction::SelectBlock {
                         block_start: start_offset,
                     })),
+                1 => Some(EditorViewAction::OpenMermaidDiagramLightbox {
+                    block_start: start_offset,
+                }),
+                2 => Some(EditorViewAction::ExitCommandSelection),
+                _ => None,
+            },
+            Location::Block {
+                start_offset,
+                block_type: HitTestBlockType::Code | HitTestBlockType::Embedding,
+                ..
+            } => match click_count {
                 1 => Some(EditorViewAction::SelectBlock {
                     block_start: start_offset,
                 }),

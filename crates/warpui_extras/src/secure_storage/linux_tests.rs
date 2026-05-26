@@ -1,5 +1,4 @@
-use super::Error;
-use super::SecureStorage;
+use super::{Error, SecureStorage};
 
 #[test]
 fn test_encrypt_decrypt_returns_same_value() {

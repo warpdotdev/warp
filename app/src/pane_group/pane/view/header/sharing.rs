@@ -3,29 +3,21 @@
 //! This is tightly coupled to the pane header so that different overlays (context menus, the
 //! sharing dialog, and so on) are correctly displayed.
 
-use warp_core::{features::FeatureFlag, ui::appearance::Appearance};
-use warpui::{
-    elements::{MouseStateHandle, ParentElement},
-    platform::Cursor,
-    ui_components::components::UiComponent,
-    AppContext, Element, ViewContext, ViewHandle,
-};
-
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
-use warpui::elements::ConstrainedBox;
-
-use crate::{
-    drive::sharing::{
-        dialog::{SharingDialog, SharingDialogEvent},
-        ContentEditability, ShareableObject,
-    },
-    pane_group::BackingView,
-    server::telemetry::SharingDialogSource,
-    ui_components::buttons::{icon_button, icon_button_with_color},
-    ui_components::icons::Icon,
-};
+use warpui::elements::{ConstrainedBox, MouseStateHandle, ParentElement};
+use warpui::platform::Cursor;
+use warpui::ui_components::components::UiComponent;
+use warpui::{AppContext, Element, ViewContext, ViewHandle};
 
 use super::{Event, OpenOverlay, PaneHeader, PaneHeaderAction};
+use crate::drive::sharing::dialog::{SharingDialog, SharingDialogEvent};
+use crate::drive::sharing::{ContentEditability, ShareableObject};
+use crate::pane_group::BackingView;
+use crate::server::telemetry::SharingDialogSource;
+use crate::ui_components::buttons::{icon_button, icon_button_with_color};
+use crate::ui_components::icons::Icon;
 
 const UNSHARABLE_CONVERSATION_TOOLTIP: &str =
     "This conversation cannot be shared because it is not \

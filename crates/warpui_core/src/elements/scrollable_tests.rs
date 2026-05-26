@@ -1,21 +1,18 @@
-use std::{
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-    rc::Rc,
-};
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use itertools::Itertools;
 
 use super::*;
-use crate::{
-    elements::{ClippedScrollStateHandle, ClippedScrollable, DispatchEventResult, Flex},
-    platform::WindowStyle,
-    TypedActionView,
+use crate::elements::{
+    ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, DispatchEventResult, EventHandler,
+    Flex, ParentElement, Rect, Stack,
 };
+use crate::platform::WindowStyle;
+use crate::presenter::DispatchedActionKind;
 use crate::{
-    elements::{ConstrainedBox, EventHandler, ParentElement, Rect, Stack},
-    presenter::DispatchedActionKind,
-    App, AppContext, Entity, Event, Presenter, ViewContext, WindowInvalidation,
+    App, AppContext, Entity, Event, Presenter, TypedActionView, ViewContext, WindowInvalidation,
 };
 
 /// Since we support scrolling in both vertical and horizontal directions,

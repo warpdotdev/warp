@@ -1,10 +1,11 @@
-use anyhow::anyhow;
-use parking_lot::Mutex;
 use std::sync::Arc;
 
+use anyhow::anyhow;
+use parking_lot::Mutex;
 use warpui::text_layout;
 
-use crate::editor::{view::DisplayPoint, Point};
+use crate::editor::view::DisplayPoint;
+use crate::editor::Point;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
 pub struct SoftWrapPoint(Point);

@@ -1,22 +1,51 @@
 use std::borrow::Cow;
 
+use email_address::EmailAddress;
+use inheritance::{InheritanceDetails, InheritanceState};
+use itertools::Itertools;
+use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::vec2f;
+use session_sharing_protocol::common::{Guest, PendingGuest, SessionId, TeamAclData};
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::Fill as ThemeFill;
+use warp_editor::editor::NavigationKey;
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::{
+    Align, Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Dismiss, Empty, Fill, Flex, Highlight, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, SavePosition, ScrollStateHandle, Scrollable,
+    ScrollableElement, ScrollbarWidth, Shrinkable, Stack, UniformList, UniformListState,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::FixedBinding;
+use warpui::platform::{Cursor, SaveFilePickerConfiguration};
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{
+    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle, WeakViewHandle,
+};
+
+use super::qr_code::{qr_matrix_for_url, qr_png_for_url, QrMatrix, QUIET_ZONE_MODULES};
+use super::{
+    style, ContentEditability, LinkSharingSubjectType, ShareableObject, SharingAccessLevel,
+    Subject, SubjectExt, TeamKind, UserKind,
+};
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::auth::AuthStateProvider;
-use crate::cloud_object::model::persistence::CloudModel;
-use crate::cloud_object::model::persistence::CloudModelEvent;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::model::view::CloudViewModel;
-use crate::cloud_object::Owner;
-use crate::cloud_object::{CloudObject, ServerGuestSubject};
+use crate::cloud_object::{CloudObject, Owner, ServerGuestSubject};
 use crate::editor::PropagateAndNoOpNavigationKeys;
 use crate::menu::{self, Menu, MenuItem, MenuItemFields};
-use crate::send_telemetry_from_ctx;
 use crate::server::cloud_objects::update_manager::{
     ObjectOperation, UpdateManager, UpdateManagerEvent,
 };
 use crate::server::ids::ServerId;
-use crate::server::telemetry::CloudObjectTelemetryMetadata;
-use crate::server::telemetry::OpenedSharingDialogEvent;
-use crate::server::telemetry::SharingDialogSource;
+use crate::server::telemetry::{
+    CloudObjectTelemetryMetadata, OpenedSharingDialogEvent, SharingDialogSource,
+};
 use crate::terminal::shared_session::permissions_manager::{
     SessionPermissionsEvent, SessionPermissionsManager,
 };
@@ -31,44 +60,7 @@ use crate::word_block_editor::{
 };
 use crate::workspace::{ToastStack, WorkspaceAction};
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::TelemetryEvent;
-use email_address::EmailAddress;
-use inheritance::{InheritanceDetails, InheritanceState};
-use itertools::Itertools;
-use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::vec2f;
-use session_sharing_protocol::common::{Guest, PendingGuest, SessionId, TeamAclData};
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::Fill as ThemeFill;
-use warp_editor::editor::NavigationKey;
-use warpui::elements::{
-    Align, ChildAnchor, ChildView, Fill, Highlight, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, ParentAnchor, PositionedElementAnchor, PositionedElementOffsetBounds,
-    SavePosition, ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth, Shrinkable,
-    Stack, UniformList, UniformListState,
-};
-use warpui::fonts::{Properties, Weight};
-use warpui::platform::{Cursor, SaveFilePickerConfiguration};
-use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
-use warpui::ui_components::components::Coords;
-use warpui::FocusContext;
-use warpui::WeakViewHandle;
-use warpui::{
-    clipboard::ClipboardContent,
-    elements::{
-        Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Empty, Flex,
-        MainAxisAlignment, ParentElement, Radius,
-    },
-    keymap::FixedBinding,
-    ui_components::components::{UiComponent, UiComponentStyles},
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
-};
-
-use super::{
-    qr_code::{qr_matrix_for_url, qr_png_for_url, QrMatrix, QUIET_ZONE_MODULES},
-    style, ContentEditability, LinkSharingSubjectType, ShareableObject, SharingAccessLevel,
-    Subject, SubjectExt, TeamKind, UserKind,
-};
+use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 mod inheritance;
 

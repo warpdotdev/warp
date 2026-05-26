@@ -1,12 +1,9 @@
-use crate::context_chips::{
-    display_chip::{DisplayChip, GitLineChanges, PromptDisplayChipEvent},
-    git_line_changes_from_chips,
-    prompt_type::PromptType,
-    ChipResult,
-};
 use warpui::{ModelHandle, ViewContext, ViewHandle};
 
 use super::{AgentInputFooter, AgentInputFooterEvent};
+use crate::context_chips::display_chip::{DisplayChip, GitLineChanges, PromptDisplayChipEvent};
+use crate::context_chips::prompt_type::PromptType;
+use crate::context_chips::{git_line_changes_from_chips, ChipResult};
 
 impl AgentInputFooter {
     /// Returns `true` if `DisplayChip`s should be recreated based on updated metadata values.

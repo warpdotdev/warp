@@ -4,10 +4,8 @@ use lazy_static::lazy_static;
 use warpui::keymap::Keystroke;
 use warpui::platform::OperatingSystem;
 
-use super::{
-    mouse::{MouseAction, MouseButton, MouseState},
-    TermMode,
-};
+use super::mouse::{MouseAction, MouseButton, MouseState};
+use super::TermMode;
 
 mod kitty_keyboard_protocol;
 

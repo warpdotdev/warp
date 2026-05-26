@@ -1,45 +1,35 @@
+use warp_core::context_flag::ContextFlag;
+use warpui::keymap::{
+    BindingDescription, ContextPredicate, EditableBinding, FixedBinding, PerPlatformKeystroke,
+};
+use warpui::platform::OperatingSystem;
+use warpui::units::IntoLines;
+use warpui::AppContext;
+
 use super::{
     AgentOnboardingVersion, AskAISource, ContextMenuAction, OnboardingIntention, OnboardingVersion,
     TerminalAction,
 };
-
 use crate::ai::predict::prompt_suggestions::ACCEPT_PROMPT_SUGGESTION_KEYBINDING;
-use crate::server::telemetry::ToggleBlockFilterSource;
-
-use crate::server::telemetry::InteractionSource;
+use crate::channel::{Channel, ChannelState};
+use crate::features::FeatureFlag;
+use crate::server::telemetry::{InteractionSource, ToggleBlockFilterSource};
 use crate::settings_view::flags;
 use crate::terminal::input::{
     SET_INPUT_MODE_AGENT_ACTION_NAME, SET_INPUT_MODE_TERMINAL_ACTION_NAME,
 };
-use crate::terminal::shared_session::SharedSessionActionSource;
+use crate::terminal::model::escape_sequences::{self, EscCodes};
+use crate::terminal::model::selection::SelectionDirection;
+use crate::terminal::shared_session::{SharedSessionActionSource, SharedSessionStatus};
 use crate::terminal::ssh::error::{SshErrorBlockAction, SSH_ERROR_BLOCK_VISIBLE_KEY};
 use crate::terminal::view::passive_suggestions::PromptSuggestionResolution;
 use crate::terminal::view::{
     LONG_RUNNING_AGENT_REQUESTED_COMMAND_CONTEXT_KEY,
     LONG_RUNNING_AGENT_REQUESTED_COMMAND_USER_TOOK_OVER_CONTEXT_KEY,
 };
+use crate::terminal::TerminalView;
 use crate::util::bindings;
-use crate::util::bindings::{cmd_or_ctrl_shift, is_binding_pty_compliant};
-use crate::{
-    channel::{Channel, ChannelState},
-    features::FeatureFlag,
-    terminal::model::{
-        escape_sequences::{self, EscCodes},
-        selection::SelectionDirection,
-    },
-    terminal::shared_session::SharedSessionStatus,
-    terminal::TerminalView,
-    util::bindings::CustomAction,
-};
-use warp_core::context_flag::ContextFlag;
-use warpui::keymap::ContextPredicate;
-use warpui::keymap::{BindingDescription, PerPlatformKeystroke};
-use warpui::platform::OperatingSystem;
-use warpui::{
-    keymap::{EditableBinding, FixedBinding},
-    units::IntoLines,
-    AppContext,
-};
+use crate::util::bindings::{cmd_or_ctrl_shift, is_binding_pty_compliant, CustomAction};
 
 pub const TOGGLE_BLOCK_FILTER_KEYBINDING: &str =
     "terminal:toggle_block_filter_on_selected_or_last_block";

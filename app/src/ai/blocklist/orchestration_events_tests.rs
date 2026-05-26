@@ -1,11 +1,13 @@
 #![allow(deprecated)]
-use super::*;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::test_util::settings::initialize_history_persistence_for_tests;
 use std::collections::HashSet;
+
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, EntityId};
+
+use super::*;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::test_util::settings::initialize_history_persistence_for_tests;
 // Helper for constructing lifecycle pending events with minimal boilerplate.
 // Tests use this to focus on queue/coalescing behavior rather than payload setup.
 

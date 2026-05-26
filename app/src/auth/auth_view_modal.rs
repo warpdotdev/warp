@@ -1,45 +1,34 @@
-use crate::appearance::Appearance;
-use crate::root_view::unthemed_window_border;
+use std::collections::HashMap;
 
-use crate::server::server_api::auth::UserAuthenticationError;
-use crate::util::bindings::CustomAction;
 use anyhow::{anyhow, Result};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use url::Url;
 use warp_core::errors::ErrorExt;
 use warp_core::features::FeatureFlag;
-use warpui::elements::ChildAnchor;
-use warpui::elements::Container;
-use warpui::elements::Fill;
-use warpui::elements::HighlightedHyperlink;
-use warpui::elements::MouseStateHandle;
-use warpui::elements::OffsetPositioning;
-use warpui::elements::ParentAnchor;
-use warpui::elements::ParentElement;
-use warpui::elements::ParentOffsetBounds;
-use warpui::elements::Stack;
+use warpui::actions::StandardAction;
+use warpui::elements::{
+    ChildAnchor, ChildView, Container, Fill, HighlightedHyperlink, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Stack,
+};
 use warpui::keymap::FixedBinding;
-use warpui::AppContext;
-use warpui::FocusContext;
-use warpui::SingletonEntity;
-use warpui::TypedActionView;
-
-use crate::auth::auth_view_body::AuthViewBody;
-use crate::modal::Modal;
-use std::collections::HashMap;
-use warpui::elements::ChildView;
 use warpui::ui_components::components::{Coords, UiComponentStyles};
-use warpui::{Element, Entity, View, ViewContext, ViewHandle};
+use warpui::{
+    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
 
-use super::auth_manager::AuthManager;
-use super::auth_manager::AuthManagerEvent;
-use super::auth_view_body::AuthStep;
-use super::auth_view_body::AuthViewBodyEvent;
+use super::auth_manager::{AuthManager, AuthManagerEvent};
+use super::auth_view_body::{AuthStep, AuthViewBodyEvent};
 use super::credentials::RefreshToken;
 use super::login_failure_notification::{self, LoginFailureReason};
 use super::UserUid;
-use warpui::actions::StandardAction;
+use crate::appearance::Appearance;
+use crate::auth::auth_view_body::AuthViewBody;
+use crate::modal::Modal;
+use crate::root_view::unthemed_window_border;
+use crate::server::server_api::auth::UserAuthenticationError;
+use crate::util::bindings::CustomAction;
 
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;

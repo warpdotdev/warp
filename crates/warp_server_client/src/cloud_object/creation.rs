@@ -1,11 +1,10 @@
 use warp_graphql::scalars::time::ServerTimestamp;
 
-use crate::ids::{ClientId, FolderId, ServerIdAndType};
-
 use super::{
     CloudObjectEventEntrypoint, GenericStringObjectFormat, GenericStringObjectUniqueKey, Owner,
     RevisionAndLastEditor, SerializedModel, ServerPermissions,
 };
+use crate::ids::{ClientId, FolderId, ServerIdAndType};
 
 /// Helper struct that contains all the info needed to create an object on the server.
 pub struct CreateObjectRequest {

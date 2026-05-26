@@ -1,17 +1,17 @@
-use futures::channel::oneshot;
 use std::path::Path;
+
+use futures::channel::oneshot;
 use vec1::vec1;
 use warp_editor::content::buffer::{InitialBufferState, SelectionOffsets};
 use warp_editor::multiline::MultilineString;
 use warp_util::content_version::ContentVersion;
 use warpui::App;
 
-use crate::{
-    code::editor::line::EditorLineLocation, code::editor::view::code_text_styles,
-    settings::FontSettings, test_util::settings::initialize_settings_for_tests,
-};
-
 use super::*;
+use crate::code::editor::line::EditorLineLocation;
+use crate::code::editor::view::code_text_styles;
+use crate::settings::FontSettings;
+use crate::test_util::settings::initialize_settings_for_tests;
 
 fn initialize_deps(app: &mut App) {
     app.add_singleton_model(|_| Appearance::mock());

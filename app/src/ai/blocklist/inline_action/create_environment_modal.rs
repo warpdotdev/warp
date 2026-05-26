@@ -1,14 +1,11 @@
-use crate::{
-    settings_view::handoff_environment_creation_modal::{
-        HandoffEnvironmentCreationModal, HandoffEnvironmentCreationModalEvent,
-    },
-    view_components::DismissibleToast,
-    workspace::ToastStack,
+use warpui::elements::{ChildView, Element, Empty};
+use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+
+use crate::settings_view::handoff_environment_creation_modal::{
+    HandoffEnvironmentCreationModal, HandoffEnvironmentCreationModalEvent,
 };
-use warpui::{
-    elements::{ChildView, Element, Empty},
-    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
-};
+use crate::view_components::DismissibleToast;
+use crate::workspace::ToastStack;
 
 #[derive(Debug, Clone)]
 pub enum CreateEnvironmentModalEvent {

@@ -1,7 +1,3 @@
-use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
-use crate::ai::agent::{StartAgentExecutionMode, StartAgentResult};
-use crate::test_util::settings::initialize_history_persistence_for_tests;
-use crate::BlocklistAIHistoryModel;
 use ai::agent::action_result::StartAgentVersion;
 use warp_cli::agent::Harness;
 use warp_core::ui::appearance::Appearance;
@@ -14,6 +10,10 @@ use super::{
     start_agent_error_prefix, start_agent_in_progress_prefix, start_agent_success_suffix,
     transcript_metadata, ChildConversationCardData, OrchestrationAvatar, OrchestrationParticipant,
 };
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::agent::{StartAgentExecutionMode, StartAgentResult};
+use crate::test_util::settings::initialize_history_persistence_for_tests;
+use crate::BlocklistAIHistoryModel;
 
 #[test]
 fn child_conversation_card_data_for_success_result_returns_conversation_id_and_title() {

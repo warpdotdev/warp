@@ -1,48 +1,37 @@
-use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    sync::Arc,
-    sync::Mutex,
-    time::Duration,
-};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use warp_core::settings::macros::define_settings_group;
+use warp_core::settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
+use warp_core::user_preferences::GetUserPreferences;
 use warpui::{App, SingletonEntity};
-
-use crate::{
-    auth::auth_state::AuthState,
-    cloud_object::{
-        model::generic_string_model::GenericStringObjectId, BulkCreateCloudObjectResult,
-        CreatedCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, ObjectDeleteResult, ObjectIdType, Owner, Revision, RevisionAndLastEditor,
-        ServerMetadata, ServerObject, ServerPermissions, ServerPreference, UniquePer,
-        UpdateCloudObjectResult,
-    },
-    server::{
-        cloud_objects::{
-            fake_object_client::FakeObjectClient,
-            test_utils::{create_update_manager_struct, initialize_app, UpdateManagerStruct},
-            update_manager::{InitialLoadResponse, UpdateManager},
-        },
-        ids::{ClientId, ServerId, ServerIdAndType, SyncId},
-        server_api::object::MockObjectClient,
-        sync_queue::SyncQueue,
-    },
-    settings::cloud_preferences::{CloudPreferenceModel, CloudPreferencesSettings, Platform},
-    ASSETS,
-};
-
-use warp_core::{
-    settings::{
-        macros::define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms,
-        SyncToCloud,
-    },
-    user_preferences::GetUserPreferences,
-};
 
 use super::{
     initialize_cloud_preferences_syncer, ClientIdProvider, CloudPreferencesSyncer,
     ForceCloudToMatchLocal, SETTINGS_FILE_LAST_SYNCED_HASH_KEY,
 };
+use crate::auth::auth_state::AuthState;
+use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
+use crate::cloud_object::{
+    BulkCreateCloudObjectResult, CreatedCloudObject, GenericStringObjectFormat,
+    GenericStringObjectUniqueKey, JsonObjectType, ObjectDeleteResult, ObjectIdType, Owner,
+    Revision, RevisionAndLastEditor, ServerMetadata, ServerObject, ServerPermissions,
+    ServerPreference, UniquePer, UpdateCloudObjectResult,
+};
+use crate::server::cloud_objects::fake_object_client::FakeObjectClient;
+use crate::server::cloud_objects::test_utils::{
+    create_update_manager_struct, initialize_app, UpdateManagerStruct,
+};
+use crate::server::cloud_objects::update_manager::{InitialLoadResponse, UpdateManager};
+use crate::server::ids::{ClientId, ServerId, ServerIdAndType, SyncId};
+use crate::server::server_api::object::MockObjectClient;
+use crate::server::sync_queue::SyncQueue;
+use crate::settings::cloud_preferences::{
+    CloudPreferenceModel, CloudPreferencesSettings, Platform,
+};
+use crate::ASSETS;
 
 define_settings_group!(TestSettings, settings: [
     all_platforms_cloud_setting: AllPlatforms {
@@ -170,18 +159,18 @@ fn initial_load_response_with_cloud_settings(
                 current_editor_uid: None,
             };
 
-            let cloud_setting = ServerPreference {
-                id: SyncId::ServerId(id.into()),
+            let cloud_setting = ServerPreference::new(
+                SyncId::ServerId(id.into()),
+                CloudPreferenceModel::deserialize_owned(&setting.serialized_preference)
+                    .expect("error creating preference"),
                 metadata,
-                permissions: ServerPermissions {
+                ServerPermissions {
                     space: Owner::mock_current_user(),
                     guests: Vec::new(),
                     anyone_link_sharing: None,
                     permissions_last_updated_ts: Utc::now().into(),
                 },
-                model: CloudPreferenceModel::deserialize_owned(&setting.serialized_preference)
-                    .expect("error creating preference"),
-            };
+            );
             Box::new(cloud_setting) as Box<dyn ServerObject>
         })
         .collect::<Vec<Box<dyn ServerObject>>>();

@@ -1,10 +1,10 @@
-use crate::fonts::RasterizedGlyph;
-
-use crate::rendering::atlas::AllocatedRegion;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupLayout, Extent3d, Queue, Sampler,
     TexelCopyBufferLayout, Texture, TextureDescriptor, TextureFormat, TextureUsages,
 };
+
+use crate::fonts::RasterizedGlyph;
+use crate::rendering::atlas::AllocatedRegion;
 
 /// Helper struct that includes a [`Texture`] and its corresponding [`BindGroup`] for use in the
 /// `GlyphCache`.

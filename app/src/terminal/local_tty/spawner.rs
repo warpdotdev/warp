@@ -1,15 +1,5 @@
 use anyhow::Result;
 use warpui::{AppContext, Entity, SingletonEntity};
-
-use crate::{
-    send_telemetry_from_app_ctx,
-    server::telemetry::{PtySpawnMode, TelemetryEvent},
-    terminal::local_tty::{self},
-};
-
-#[cfg(target_os = "windows")]
-use super::PseudoConsoleChild;
-use super::{PtyOptions, PtySpawnResult};
 #[cfg(unix)]
 use {
     crate::report_error,
@@ -17,6 +7,13 @@ use {
     anyhow::{bail, Context},
     std::process::Child,
 };
+
+#[cfg(target_os = "windows")]
+use super::PseudoConsoleChild;
+use super::{PtyOptions, PtySpawnResult};
+use crate::send_telemetry_from_app_ctx;
+use crate::server::telemetry::{PtySpawnMode, TelemetryEvent};
+use crate::terminal::local_tty::{self};
 /// A handle that can be used to interact with a pty process.
 pub trait PtyHandle: Send + Sync {
     /// Returns the pty's process ID.

@@ -4,45 +4,40 @@ use std::time::Duration;
 
 use chrono::{DateTime, Local, Utc};
 use itertools::Itertools;
+use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId};
-
-use crate::{
-    ai::{
-        agent::{
-            api::ServerConversationToken,
-            conversation::{AIAgentHarness, AIConversationId, ServerAIConversationMetadata},
-            AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus,
-            FinishedAIAgentOutput, Shared, UserQueryMode,
-        },
-        ambient_agents::AmbientAgentTaskId,
-        blocklist::{controller::RequestInput, ResponseStreamId},
-        llms::LLMId,
-    },
-    cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions},
-    input_suggestions::HistoryInputSuggestion,
-    persistence::{
-        model::{
-            AgentConversation, AgentConversationData, AgentConversationRecord,
-            PersistedAutoexecuteMode,
-        },
-        ModelEvent,
-    },
-    server::ids::ServerId,
-    terminal::model::session::SessionId,
-    test_util::settings::{
-        initialize_history_persistence_for_tests, initialize_settings_for_tests,
-    },
-    GlobalResourceHandles, GlobalResourceHandlesProvider,
-};
 
 use super::{
     convert_persisted_conversation_to_ai_conversation_with_metadata, AIConversationMetadata,
     AIQueryHistoryOutputStatus, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PersistedAIInput,
     PersistedAIInputType,
 };
-use uuid::Uuid;
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::{
+    AIAgentHarness, AIConversationId, ServerAIConversationMetadata,
+};
+use crate::ai::agent::{
+    AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, FinishedAIAgentOutput,
+    Shared, UserQueryMode,
+};
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::controller::RequestInput;
+use crate::ai::blocklist::ResponseStreamId;
+use crate::ai::llms::LLMId;
+use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
+use crate::input_suggestions::HistoryInputSuggestion;
+use crate::persistence::model::{
+    AgentConversation, AgentConversationData, AgentConversationRecord, PersistedAutoexecuteMode,
+};
+use crate::persistence::ModelEvent;
+use crate::server::ids::ServerId;
+use crate::terminal::model::session::SessionId;
+use crate::test_util::settings::{
+    initialize_history_persistence_for_tests, initialize_settings_for_tests,
+};
+use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
 
 /// Helper function to create a PersistedAIInput for testing
 fn create_persisted_query(
@@ -1026,8 +1021,9 @@ fn test_ambient_agent_conversations_excluded_from_list_but_accessible_by_id() {
 
 #[test]
 fn test_initialize_historical_conversations_indexes_child_conversations() {
-    use crate::persistence::model::{AgentConversation, AgentConversationRecord};
     use chrono::NaiveDateTime;
+
+    use crate::persistence::model::{AgentConversation, AgentConversationRecord};
 
     App::test((), |app| async move {
         let parent_id = AIConversationId::new();

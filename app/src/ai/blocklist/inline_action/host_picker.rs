@@ -7,6 +7,7 @@
 //! then connected worker hosts, then the user's most recent custom slug,
 //! then a "Custom host…" entry.
 
+use warp_core::ui::theme::Fill;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
@@ -16,8 +17,6 @@ use warpui::platform::Cursor;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
-
-use warp_core::ui::theme::Fill;
 
 use crate::ai::blocklist::inline_action::orchestration_controls::{
     self as oc, ORCHESTRATION_PICKER_BORDER_WIDTH, ORCHESTRATION_PICKER_FONT_SIZE,

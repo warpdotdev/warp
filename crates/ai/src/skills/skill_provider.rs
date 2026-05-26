@@ -3,12 +3,11 @@
 //! This module defines the supported skill providers (i.e. Agents, Claude, Codex, Warp) and their
 //! associated skills directory paths. It provides utilities for looking up providers
 //! from paths and vice versa.
-use dirs::home_dir;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
+use dirs::home_dir;
 use serde::{Deserialize, Serialize};
-
 use strum_macros::{Display, EnumString, VariantNames};
 use warp_core::ui::color::CLAUDE_ORANGE;
 use warp_core::ui::icons::Icon;

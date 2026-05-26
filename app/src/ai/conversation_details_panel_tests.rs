@@ -7,12 +7,11 @@ use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, EntityId, SingletonEntity};
 
+use super::{ConversationDetailsData, PanelMode};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::ambient_agents::task::{AgentConfigSnapshot, HarnessConfig, TaskPrincipalInfo};
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
-
-use super::{ConversationDetailsData, PanelMode};
 
 fn create_test_task(task_id: &str) -> AmbientAgentTask {
     let now = Utc::now();

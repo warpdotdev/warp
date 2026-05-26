@@ -1,7 +1,8 @@
 //! Conversion between remote codebase indexing domain types and proto-generated types.
 
-use crate::proto;
 use serde::Serialize;
+
+use crate::proto;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteCodebaseIndexStatus {

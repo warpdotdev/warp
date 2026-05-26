@@ -1,7 +1,10 @@
-use std::{collections::HashMap, marker::PhantomData, sync::Arc};
+use std::collections::HashMap;
+use std::marker::PhantomData;
+use std::sync::Arc;
 
 use rquickjs::{Ctx, Function, Persistent};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 use crate::{FromWarpJs, IntoWarpJs, JsFunctionId, SerializedJsValue, TypedJsFunctionRef};
 

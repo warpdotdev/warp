@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 use std::future::Future;
+#[cfg(feature = "local_fs")]
+use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
-#[cfg(feature = "local_fs")]
-use std::path::{Component, Path, PathBuf};
 
 use futures::future::ready;
 #[cfg(feature = "local_fs")]
@@ -18,12 +17,13 @@ use warpui::{Entity, ModelContext, ModelHandle};
 
 #[cfg(feature = "local_fs")]
 use crate::watcher::DirectoryWatcher;
+use crate::watcher::TaskQueue;
 #[cfg(feature = "local_fs")]
 use crate::{
     entry::{matches_gitignores, should_ignore_git_path},
     gitignores_for_directory,
 };
-use crate::{watcher::TaskQueue, RepoMetadataError, RepositoryUpdate};
+use crate::{RepoMetadataError, RepositoryUpdate};
 
 /// Trait for entities that want to subscribe to repository file changes.
 pub trait RepositorySubscriber: Send + Sync {

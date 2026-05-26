@@ -1,21 +1,21 @@
 //! Integration tests for pane restoration functionality.
 //! Tests the ability to restore closed panes using cmd+shift+t.
 
-use super::{new_builder, Builder};
-use std::{collections::HashMap, time::Duration};
-use warp::{
-    cmd_or_ctrl_shift,
-    features::FeatureFlag,
-    integration_testing::{
-        pane_group::assert_focused_pane_index,
-        step::new_step_with_default_assertions,
-        terminal::{
-            execute_command, util::ExpectedExitStatus, validate_block_output_on_finished_block,
-            wait_until_bootstrapped_pane, wait_until_bootstrapped_single_pane_for_tab,
-        },
-        workspace::{assert_tab_count, trigger_undo_close},
-    },
+use std::collections::HashMap;
+use std::time::Duration;
+
+use warp::cmd_or_ctrl_shift;
+use warp::features::FeatureFlag;
+use warp::integration_testing::pane_group::assert_focused_pane_index;
+use warp::integration_testing::step::new_step_with_default_assertions;
+use warp::integration_testing::terminal::util::ExpectedExitStatus;
+use warp::integration_testing::terminal::{
+    execute_command, validate_block_output_on_finished_block, wait_until_bootstrapped_pane,
+    wait_until_bootstrapped_single_pane_for_tab,
 };
+use warp::integration_testing::workspace::{assert_tab_count, trigger_undo_close};
+
+use super::{new_builder, Builder};
 
 /// Tests the basic pane restoration workflow:
 /// 1. Split off a pane

@@ -1,26 +1,20 @@
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
-};
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 
+use super::util::{scroll_clipped_scrollable_handle_with_delta, scroll_delta_for_axis};
+use super::{NewScrollableElement, SingleAxisConfig};
+use crate::elements::new_scrollable::util::child_constraint_for_axis;
+use crate::elements::new_scrollable::ScrollableAxis;
+use crate::elements::{
+    Axis, ClippedScrollStateHandle, ScrollData, ScrollStateHandle, ScrollTarget, SelectableElement,
+    Vector2FExt,
+};
+use crate::event::DispatchedEvent;
+use crate::units::{IntoPixels, Pixels};
 use crate::{
-    elements::{
-        new_scrollable::{util::child_constraint_for_axis, ScrollableAxis},
-        Axis, ClippedScrollStateHandle, ScrollData, ScrollStateHandle, SelectableElement,
-        Vector2FExt,
-    },
-    event::DispatchedEvent,
-    units::{IntoPixels, Pixels},
     AfterLayoutContext, AppContext, Element, EventContext, LayoutContext, PaintContext,
     SizeConstraint,
 };
-
-use super::{
-    util::{scroll_clipped_scrollable_handle_with_delta, scroll_delta_for_axis},
-    NewScrollableElement, SingleAxisConfig,
-};
-
-use crate::elements::ScrollTarget;
 
 /// Holds different scroll state handle type that depends on
 /// whether the caller wants automatic or manual scrolling.

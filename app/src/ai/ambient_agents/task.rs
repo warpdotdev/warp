@@ -9,15 +9,14 @@ use warp_cli::agent::Harness;
 use warp_core::report_error;
 use warp_core::ui::theme::WarpTheme;
 use warpui::color::ColorU;
+use warpui::{SingletonEntity, View, ViewContext};
 
+use super::AmbientAgentTaskId;
 use crate::ai::artifacts::{deserialize_artifacts, Artifact};
 use crate::server::server_api::ServerApiProvider;
 use crate::ui_components::icons::Icon;
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
-use warpui::{SingletonEntity, View, ViewContext};
-
-use super::AmbientAgentTaskId;
 
 /// Runtime configuration snapshot for agent execution.
 ///
