@@ -73,26 +73,36 @@ struct SseForwardingConsumer {
     hydrate_new_messages: bool,
 }
 
-/// Per-event item delivered from the ancestor (viewer-mode) SSE background
-/// task to the entity. Unlike [`SseStreamItem`], the ancestor consumer does
-/// not hydrate `new_message` events: viewer-mode subscribers do not surface
-/// inter-agent messages (only lifecycle transitions). The raw event is still
-/// forwarded so the drain pipeline can advance the cursor uniformly.
+/// Per-event item delivered from the ancestor SSE background task to the
+/// entity. Mirrors [`SseStreamItem`] but does not currently carry a
+/// hydrated message: the only ancestor consumer today is viewer mode,
+/// which surfaces only lifecycle transitions and so skips message
+/// hydration. If/when the ancestor path picks up a non-viewer caller
+/// (e.g. a local orchestrator subscribing to its own `ancestor_run_id`
+/// stream in lieu of N per-run-ids streams for its children — see
+/// [`AncestorForwardingConsumer`]), this struct would gain a hydrated-
+/// message field analogous to [`SseStreamItem`].
 struct AncestorSseStreamItem {
     event: AgentRunEvent,
 }
 
 /// Forwarding consumer used by the ancestor SSE driver. Mirrors
-/// [`SseForwardingConsumer`] but never hydrates messages because viewer-mode
-/// consumers (the shared-session viewer's pill bar) only care about lifecycle
-/// events.
+/// [`SseForwardingConsumer`] but does no message hydration: the only
+/// current caller is the shared-session viewer's pill bar, which only
+/// surfaces lifecycle events.
+///
+/// Future direction: a local orchestrator could subscribe to its own
+/// `ancestor_run_id` stream (one SSE per parent family) instead of
+/// having each local child open its own per-run-ids stream. At that
+/// point this consumer would gain an opt-in hydrate flag analogous to
+/// [`SseForwardingConsumer::hydrate_new_messages`].
 struct AncestorForwardingConsumer {
     tx: mpsc::UnboundedSender<AncestorSseStreamItem>,
 }
 
-/// State for the ancestor (viewer-mode) SSE connection. Mirrors
-/// [`SseConnectionState`] but parameterised on [`AncestorSseStreamItem`]
-/// because the ancestor stream skips message hydration.
+/// State for an ancestor SSE connection. Mirrors [`SseConnectionState`]
+/// but parameterised on [`AncestorSseStreamItem`] because the only
+/// current caller (viewer mode) does not hydrate messages.
 struct AncestorSseConnectionState {
     event_receiver: mpsc::UnboundedReceiver<AncestorSseStreamItem>,
     generation: u64,
@@ -220,13 +230,20 @@ struct ConversationStreamState {
     restore_fetch_failures: usize,
 }
 
-/// Per-orchestrator state for the viewer-mode SSE consumer added by
-/// `specs/orch-viewer-polling/TECH.md`. Keyed on the orchestrator's
-/// `AmbientAgentTaskId` and reference-counted across viewer-mode consumer
-/// registrations so multiple viewer panes for the same orchestrator share a
-/// single ancestor-scoped SSE connection.
+/// Per-orchestrator SSE stream state. Parallels [`ConversationStreamState`]
+/// but keyed on the orchestrator's `AmbientAgentTaskId` instead of on a
+/// specific conversation, so a single ancestor-scoped SSE connection can
+/// serve every consumer interested in that orchestrator's direct children.
+///
+/// Today the only consumers are shared-session viewer panes (registered via
+/// [`Self::register_viewer_mode_consumer`]), which is why hydration and
+/// server-cursor push are absent on the ancestor path; if/when a local
+/// orchestrator subscribes to its own ancestor stream (replacing N
+/// per-run-ids streams for its children) it would register here too. See
+/// `specs/orch-viewer-polling/TECH.md` and the note on
+/// [`AncestorForwardingConsumer`].
 #[derive(Default)]
-struct ViewerModeOrchestratorEntry {
+struct OrchestratorStreamState {
     /// Active viewer-mode consumers. Keyed on the consumer's `EntityId`
     /// (typically the viewer pane's `terminal_view_id`); the value is that
     /// pane's local orchestrator-placeholder `AIConversationId`. Multiple
@@ -274,7 +291,7 @@ pub struct OrchestrationEventStreamer {
     /// `parent_task_id`, shared across viewer panes). Pure-additive in PR 1;
     /// PR 2 wires the SSE driver to this map. See
     /// `specs/orch-viewer-polling/TECH.md`.
-    viewer_mode_orchestrators: HashMap<AmbientAgentTaskId, ViewerModeOrchestratorEntry>,
+    viewer_mode_orchestrators: HashMap<AmbientAgentTaskId, OrchestratorStreamState>,
     /// Monotonic counter for SSE connection generations. Ensures stale
     /// callbacks from replaced connections are discarded.
     next_sse_generation: u64,
@@ -995,23 +1012,9 @@ impl OrchestrationEventStreamer {
             // lifecycle transitions. We still advance the cursor so the
             // SSE replay on reconnect doesn't re-deliver them.
             cursor = cursor.max(event.sequence);
-            if event.event_type == "new_message" {
+            let Some(lifecycle_type) = lifecycle_event_type_from_wire(event.event_type.as_str())
+            else {
                 continue;
-            }
-            let lifecycle_type = match event.event_type.as_str() {
-                "run_in_progress" => api::LifecycleEventType::InProgress,
-                "run_succeeded" => api::LifecycleEventType::Succeeded,
-                "run_failed" => api::LifecycleEventType::Failed,
-                #[allow(deprecated)]
-                "run_started" => api::LifecycleEventType::InProgress,
-                #[allow(deprecated)]
-                "run_idle" => api::LifecycleEventType::Succeeded,
-                #[allow(deprecated)]
-                "run_restarted" => api::LifecycleEventType::InProgress,
-                "run_errored" => api::LifecycleEventType::Errored,
-                "run_cancelled" => api::LifecycleEventType::Cancelled,
-                "run_blocked" => api::LifecycleEventType::Blocked,
-                _ => continue,
             };
             let run_id = event.run_id.clone();
             // First observation of a child run_id under this parent: emit
@@ -2181,10 +2184,7 @@ fn parse_occurred_at(s: &str) -> prost_types::Timestamp {
 /// currently does not carry a `blocked_action` payload, matching the REST
 /// path. See `specs/orch-viewer-polling/TECH.md`,
 /// § `Risks and mitigations: Blocked payload`.
-///
-/// PR 1 only adds the helper; the call site lives in PR 2's ancestor SSE
-/// emission logic.
-#[allow(dead_code, deprecated)]
+#[allow(deprecated)]
 pub(super) fn conversation_status_from_lifecycle_event_type(
     event_type: api::LifecycleEventType,
 ) -> ConversationStatus {
@@ -2215,28 +2215,43 @@ pub(super) fn conversation_status_from_lifecycle_event_type(
     }
 }
 
+/// Maps a wire `event_type` string from the server's `AgentRunEvent`
+/// payload onto the corresponding [`api::LifecycleEventType`]. Returns
+/// `None` for `new_message` (a message event, handled separately) and for
+/// unrecognised event types (forward-compat).
+///
+/// Shared by [`OrchestrationEventStreamer::drain_ancestor_events`] (which
+/// dispatches events to viewer-mode subscribers) and
+/// [`convert_lifecycle_events`] (which builds owner-side
+/// `PendingEventDetail::Lifecycle` items). Keeping the wire-string table
+/// in one place ensures both paths agree on which legacy variants are
+/// recognised.
+fn lifecycle_event_type_from_wire(event_type: &str) -> Option<api::LifecycleEventType> {
+    match event_type {
+        // New canonical event types aligned with task states.
+        "run_in_progress" => Some(api::LifecycleEventType::InProgress),
+        "run_succeeded" => Some(api::LifecycleEventType::Succeeded),
+        "run_failed" => Some(api::LifecycleEventType::Failed),
+        // Legacy event types mapped to new variants for backward compat.
+        #[allow(deprecated)]
+        "run_started" => Some(api::LifecycleEventType::InProgress),
+        #[allow(deprecated)]
+        "run_idle" => Some(api::LifecycleEventType::Succeeded),
+        #[allow(deprecated)]
+        "run_restarted" => Some(api::LifecycleEventType::InProgress),
+        "run_errored" => Some(api::LifecycleEventType::Errored),
+        "run_cancelled" => Some(api::LifecycleEventType::Cancelled),
+        "run_blocked" => Some(api::LifecycleEventType::Blocked),
+        _ => None,
+    }
+}
+
 fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<api::AgentEvent> {
     events
         .iter()
         .filter(|e| e.event_type != "new_message" && e.run_id != self_run_id)
         .filter_map(|event| {
-            let lifecycle_type = match event.event_type.as_str() {
-                // New canonical event types aligned with task states.
-                "run_in_progress" => api::LifecycleEventType::InProgress,
-                "run_succeeded" => api::LifecycleEventType::Succeeded,
-                "run_failed" => api::LifecycleEventType::Failed,
-                // Legacy event types mapped to new variants for backward compat.
-                #[allow(deprecated)]
-                "run_started" => api::LifecycleEventType::InProgress,
-                #[allow(deprecated)]
-                "run_idle" => api::LifecycleEventType::Succeeded,
-                #[allow(deprecated)]
-                "run_restarted" => api::LifecycleEventType::InProgress,
-                "run_errored" => api::LifecycleEventType::Errored,
-                "run_cancelled" => api::LifecycleEventType::Cancelled,
-                "run_blocked" => api::LifecycleEventType::Blocked,
-                _ => return None,
-            };
+            let lifecycle_type = lifecycle_event_type_from_wire(event.event_type.as_str())?;
             let timestamp = parse_occurred_at(&event.occurred_at);
             // TODO: Parse richer detail payloads (reason, error_message) from
             // the server event log once the schema supports them.
