@@ -10,7 +10,9 @@ use crate::agent::OutputFormat;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use clap_complete::aot::Shell;
 
-use commands::{run_app_command, run_instance_command, run_tab_command};
+use commands::{
+    run_app_command, run_drive_command, run_input_command, run_instance_command, run_tab_command,
+};
 use completions::generate_completions_to_stdout;
 use output::write_control_error;
 
@@ -75,6 +77,14 @@ pub enum ControlCommand {
     #[command(subcommand)]
     Tab(TabCommand),
 
+    /// Execute terminal input actions.
+    #[command(subcommand)]
+    Input(InputCommand),
+
+    /// Run approved Warp Drive actions.
+    #[command(subcommand)]
+    Drive(DriveCommand),
+
     /// Generate shell completions for your shell to stdout.
     ///
     /// For bash, add the following to ~/.bashrc:
@@ -122,6 +132,52 @@ pub enum TabCommand {
     Create(TargetArgs),
 }
 
+/// Commands that operate on terminal input.
+#[derive(Debug, Clone, Subcommand)]
+pub enum InputCommand {
+    /// Run text in the targeted terminal session.
+    Run(InputRunArgs),
+}
+
+/// Commands that operate on Warp Drive.
+#[derive(Debug, Clone, Subcommand)]
+pub enum DriveCommand {
+    /// Operate on Warp Drive workflows.
+    #[command(subcommand)]
+    Workflow(DriveWorkflowCommand),
+}
+
+/// Commands that operate on Warp Drive workflows.
+#[derive(Debug, Clone, Subcommand)]
+pub enum DriveWorkflowCommand {
+    /// Run a Warp Drive workflow by ID.
+    Run(DriveWorkflowRunArgs),
+}
+
+/// Arguments for `input run`.
+#[derive(Debug, Clone, Args)]
+pub struct InputRunArgs {
+    /// Text to run in the target terminal.
+    pub text: String,
+
+    #[command(flatten)]
+    pub target: TargetArgs,
+}
+
+/// Arguments for `drive workflow run`.
+#[derive(Debug, Clone, Args)]
+pub struct DriveWorkflowRunArgs {
+    /// Workflow object ID to run.
+    pub id: String,
+
+    /// Name=value workflow argument. Repeat for multiple arguments.
+    #[arg(long = "arg", value_parser = parse_workflow_argument)]
+    pub args: Vec<local_control::protocol::WorkflowArgument>,
+
+    #[command(flatten)]
+    pub target: TargetArgs,
+}
+
 /// Common flags for selecting which running Warp instance receives a command.
 #[derive(Debug, Clone, Args, Default)]
 pub struct TargetArgs {
@@ -156,8 +212,25 @@ fn run_inner(args: ControlArgs) -> Result<(), local_control::protocol::ControlEr
         ControlCommand::Instance(command) => run_instance_command(command, output_format),
         ControlCommand::App(command) => run_app_command(command, output_format),
         ControlCommand::Tab(command) => run_tab_command(command, output_format),
+        ControlCommand::Input(command) => run_input_command(command, output_format),
+        ControlCommand::Drive(command) => run_drive_command(command, output_format),
         ControlCommand::Completions { shell } => generate_completions_to_stdout(shell),
     }
+}
+
+fn parse_workflow_argument(
+    value: &str,
+) -> Result<local_control::protocol::WorkflowArgument, String> {
+    let Some((name, argument_value)) = value.split_once('=') else {
+        return Err("workflow arguments must be formatted as name=value".to_owned());
+    };
+    if name.trim().is_empty() {
+        return Err("workflow argument names must be non-empty".to_owned());
+    }
+    Ok(local_control::protocol::WorkflowArgument {
+        name: name.to_owned(),
+        value: argument_value.to_owned(),
+    })
 }
 
 #[cfg(test)]

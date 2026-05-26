@@ -1,12 +1,14 @@
 //! Wire protocol envelopes and error types for Warp local control.
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub use crate::catalog::{
     ActionImplementationStatus, ActionKind, ActionMetadata, ActionParameterSpec, ActionResultSpec,
-    AuthenticatedUserRequirement, EXCLUDED_LOCAL_FILE_MUTATION_ACTION_NAMES,
-    EXCLUDED_STANDALONE_SECRET_AUTH_ACTION_NAMES, ExecutionContextProof, InvocationContext,
-    PROTOCOL_VERSION, PermissionCategory, RiskTier, StateDataCategory, TargetScope,
+    AuthenticatedUserRequirement, EXCLUDED_EXECUTION_SUBMISSION_ACTION_NAMES,
+    EXCLUDED_LOCAL_FILE_MUTATION_ACTION_NAMES, EXCLUDED_STANDALONE_SECRET_AUTH_ACTION_NAMES,
+    ExecutionContextProof, InvocationContext, PROTOCOL_VERSION, PermissionCategory, RiskTier,
+    StateDataCategory, TargetScope,
 };
 pub use crate::selectors::{
     PaneSelector, PaneTarget, TabSelector, TabTarget, TargetSelector, WindowSelector, WindowTarget,
@@ -242,6 +244,14 @@ pub enum ControlResult {
     Metadata { data: serde_json::Value },
     Content { data: serde_json::Value },
 }
+/// Structured audit payload for local-control execution attempts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalControlAuditRecord {
+    pub action: String,
+    pub target_scope: TargetScope,
+    pub permission_category: PermissionCategory,
+    pub authenticated_user_subject: String,
+}
 
 /// Top-level request sent by a local-control client to a Warp instance.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -278,6 +288,30 @@ impl Action {
             kind,
             params: serde_json::Value::Object(Default::default()),
         }
+    }
+
+    pub fn with_params<T: Serialize>(
+        kind: ActionKind,
+        params: T,
+    ) -> Result<Self, ControlError> {
+        let params = serde_json::to_value(params).map_err(|err| {
+            ControlError::with_details(
+                ErrorCode::InvalidParams,
+                format!("failed to encode {} parameters", kind.as_str()),
+                err.to_string(),
+            )
+        })?;
+        Ok(Self { kind, params })
+    }
+
+    pub fn params_as<T: DeserializeOwned>(&self) -> Result<T, ControlError> {
+        serde_json::from_value(self.params.clone()).map_err(|err| {
+            ControlError::with_details(
+                ErrorCode::InvalidParams,
+                format!("invalid {} parameters", self.kind.as_str()),
+                err.to_string(),
+            )
+        })
     }
 }
 

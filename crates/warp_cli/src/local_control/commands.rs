@@ -1,6 +1,7 @@
 //! Implementations for user-facing `warpctrl` command groups.
 use local_control::protocol::{
-    Action, ActionKind, ActionMetadata, ControlError, ErrorCode, RequestEnvelope,
+    Action, ActionKind, ActionMetadata, ActionParams, ControlError, DriveObjectId, ErrorCode,
+    RequestEnvelope, WorkflowRunParams,
 };
 use local_control::selection::select_instance;
 use serde::Serialize;
@@ -9,7 +10,10 @@ use serde_json::json;
 use crate::agent::OutputFormat;
 use crate::local_control::output::{write_json, write_json_line};
 use crate::local_control::selectors::instance_selector;
-use crate::local_control::{AppCommand, InstanceCommand, TabCommand, TargetArgs};
+use crate::local_control::{
+    AppCommand, DriveCommand, DriveWorkflowCommand, InputCommand, InstanceCommand, TabCommand,
+    TargetArgs,
+};
 
 /// Display-oriented projection of a discoverable Warp instance.
 #[derive(Serialize)]
@@ -98,6 +102,49 @@ pub(super) fn run_tab_command(
             run_action(args, ActionKind::TabCreate, json!({}), output_format)
         }
     }
+}
+
+pub(super) fn run_input_command(
+    command: InputCommand,
+    output_format: OutputFormat,
+) -> Result<(), ControlError> {
+    match command {
+        InputCommand::Run(args) => run_action(
+            args.target,
+            ActionKind::InputRun,
+            action_params(ActionParams::Text { text: args.text })?,
+            output_format,
+        ),
+    }
+}
+
+pub(super) fn run_drive_command(
+    command: DriveCommand,
+    output_format: OutputFormat,
+) -> Result<(), ControlError> {
+    match command {
+        DriveCommand::Workflow(command) => match command {
+            DriveWorkflowCommand::Run(args) => run_action(
+                args.target,
+                ActionKind::DriveWorkflowRun,
+                action_params(ActionParams::WorkflowRun(WorkflowRunParams {
+                    id: DriveObjectId(args.id),
+                    args: args.args,
+                }))?,
+                output_format,
+            ),
+        },
+    }
+}
+
+fn action_params(params: ActionParams) -> Result<serde_json::Value, ControlError> {
+    serde_json::to_value(params).map_err(|err| {
+        ControlError::with_details(
+            ErrorCode::InvalidParams,
+            "failed to encode local-control action parameters",
+            err.to_string(),
+        )
+    })
 }
 
 fn run_action(

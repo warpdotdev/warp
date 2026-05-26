@@ -1,4 +1,5 @@
 //! Permission checks that map protocol action metadata onto local settings.
+use crate::auth::AuthStateProvider;
 use crate::features::FeatureFlag;
 use crate::settings::{LocalControlPermissionCategory, LocalControlSettings};
 use ::local_control::{ActionKind, ControlError, ErrorCode, InvocationContext, PermissionCategory};
@@ -75,6 +76,9 @@ pub(crate) fn ensure_settings_allow_action(
     action: ActionKind,
 ) -> Result<(), ControlError> {
     if context == InvocationContext::InsideWarp {
+        if action.metadata().requires_authenticated_user && action.is_implemented() {
+            return Ok(());
+        }
         return Err(ControlError::new(
             ErrorCode::ExecutionContextNotAllowed,
             "inside-Warp local-control grants are not implemented",
@@ -97,4 +101,23 @@ pub(crate) fn ensure_settings_allow_action(
         ));
     }
     Ok(())
+}
+
+pub(super) fn authenticated_user_subject_for_action(
+    action: ActionKind,
+    ctx: &mut ModelContext<LocalControlBridge>,
+) -> Result<Option<String>, ControlError> {
+    if !action.metadata().requires_authenticated_user {
+        return Ok(None);
+    }
+    AuthStateProvider::as_ref(ctx)
+        .get()
+        .user_id()
+        .map(|uid| Some(uid.as_string()))
+        .ok_or_else(|| {
+            ControlError::new(
+                ErrorCode::AuthenticatedUserUnavailable,
+                format!("{} requires a logged-in Warp user", action.as_str()),
+            )
+        })
 }

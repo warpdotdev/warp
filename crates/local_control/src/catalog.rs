@@ -18,6 +18,13 @@ pub const EXCLUDED_STANDALONE_SECRET_AUTH_ACTION_NAMES: &[&str] = &[
     "auth.api_key.status",
     "auth.api_key.revoke",
 ];
+pub const EXCLUDED_EXECUTION_SUBMISSION_ACTION_NAMES: &[&str] = &[
+    "accepted_command.submit",
+    "accepted-command.submit",
+    "agent_prompt.submit",
+    "agent-prompt.submit",
+    "internal.dispatch",
+];
 
 /// Runtime context from which a control request was initiated.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -541,9 +548,12 @@ impl ActionKind {
 
     fn implementation_status(self) -> ActionImplementationStatus {
         match self {
-            Self::InstanceList | Self::AppPing | Self::AppVersion | Self::TabCreate => {
-                ActionImplementationStatus::Implemented
-            }
+            Self::InstanceList
+            | Self::AppPing
+            | Self::AppVersion
+            | Self::TabCreate
+            | Self::InputRun
+            | Self::DriveWorkflowRun => ActionImplementationStatus::Implemented,
             Self::InstanceInspect
             | Self::AppActive
             | Self::AppFocus
@@ -590,7 +600,6 @@ impl ActionKind {
             | Self::InputReplace
             | Self::InputClear
             | Self::InputModeSet
-            | Self::InputRun
             | Self::HistoryList
             | Self::ThemeList
             | Self::ThemeGet
@@ -640,7 +649,7 @@ impl ActionKind {
             | Self::DriveObjectDelete
             | Self::DriveObjectInsert
             | Self::DriveObjectShareToTeam
-            | Self::DriveWorkflowRun => ActionImplementationStatus::Stub,
+            => ActionImplementationStatus::Stub,
         }
     }
 

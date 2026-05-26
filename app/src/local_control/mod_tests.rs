@@ -1,9 +1,10 @@
 use ::local_control::protocol::ActionKind;
 use ::local_control::protocol::{
-    Action, PaneSelector, PaneTarget, TabSelector, TabTarget, TargetSelector, WindowSelector,
-    WindowTarget,
+    Action, ActionParams, DriveObjectId, PaneSelector, PaneTarget, TabSelector, TabTarget,
+    RequestEnvelope, TargetSelector, WindowSelector, WindowTarget, WorkflowArgument,
+    WorkflowRunParams,
 };
-use ::local_control::{ErrorCode, InvocationContext};
+use ::local_control::{ErrorCode, InvocationContext, PermissionCategory};
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 
@@ -12,6 +13,7 @@ use super::{
     outside_warp_action_enabled_for_settings, require_active_window_id, validate_action_params,
     validate_tab_create_target,
 };
+use crate::local_control::handlers::execution;
 use crate::settings::{
     AllowOutsideWarpAppStateMutations, AllowOutsideWarpControl,
     AllowOutsideWarpMetadataConfigurationMutations, AllowOutsideWarpMetadataReads,
@@ -123,6 +125,8 @@ fn capabilities_advertises_only_first_slice_core_actions() {
             ActionKind::AppPing,
             ActionKind::AppVersion,
             ActionKind::TabCreate,
+            ActionKind::InputRun,
+            ActionKind::DriveWorkflowRun,
         ]
     );
 }
@@ -199,6 +203,106 @@ fn disabled_granular_permission_denies_with_insufficient_permissions() {
     )
     .expect_err("read-write permission is disabled");
     assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+}
+
+#[test]
+fn execution_underlying_actions_require_mutate_underlying_data_permission() {
+    let settings = settings_with_values(true, true, true);
+
+    for action in [ActionKind::InputRun, ActionKind::DriveWorkflowRun] {
+        assert_eq!(
+            action.metadata().permission_category,
+            PermissionCategory::MutateUnderlyingData
+        );
+        let err = ensure_settings_allow_action(&settings, InvocationContext::OutsideWarp, action)
+            .expect_err("underlying data mutation permission is disabled");
+        assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+    }
+}
+
+#[test]
+fn execution_mutations_reject_malformed_params() {
+    validate_action_params(
+        &Action::with_params(
+            ActionKind::InputRun,
+            ActionParams::Text {
+                text: "cargo check".to_owned(),
+            },
+        )
+        .expect("input.run params serialize"),
+    )
+    .expect("input.run accepts non-empty text");
+
+    let err = validate_action_params(
+        &Action::with_params(
+            ActionKind::InputRun,
+            ActionParams::Text {
+                text: "   ".to_owned(),
+            },
+        )
+        .expect("input.run params serialize"),
+    )
+    .expect_err("input.run requires non-empty text");
+    assert_eq!(err.code, ErrorCode::InvalidParams);
+
+    let err = validate_action_params(
+        &Action::with_params(
+            ActionKind::DriveWorkflowRun,
+            ActionParams::WorkflowRun(WorkflowRunParams {
+                id: DriveObjectId("".to_owned()),
+                args: vec![],
+            }),
+        )
+        .expect("drive.workflow.run params serialize"),
+    )
+    .expect_err("drive.workflow.run requires non-empty id");
+    assert_eq!(err.code, ErrorCode::InvalidParams);
+}
+
+#[test]
+fn drive_workflow_run_rejects_excluded_submission_arguments() {
+    for name in ["accepted_command", "accepted-command", "agent_prompt", "agent-prompt"] {
+        let err = validate_action_params(
+            &Action::with_params(
+                ActionKind::DriveWorkflowRun,
+                ActionParams::WorkflowRun(WorkflowRunParams {
+                    id: DriveObjectId("workflow_123".to_owned()),
+                    args: vec![WorkflowArgument {
+                        name: name.to_owned(),
+                        value: "payload".to_owned(),
+                    }],
+                }),
+            )
+            .expect("drive.workflow.run params serialize"),
+        )
+        .expect_err("excluded submissions are rejected");
+        assert_eq!(err.code, ErrorCode::UnsupportedAction);
+    }
+}
+
+#[test]
+fn execution_attempts_fail_closed_without_approval_policy_and_include_audit() {
+    let request = RequestEnvelope::new(
+        Action::with_params(
+            ActionKind::InputRun,
+            ActionParams::Text {
+                text: "cargo check".to_owned(),
+            },
+        )
+        .expect("input.run params serialize"),
+    );
+    let err = execution::run_input(&request, "user_123")
+        .expect_err("input.run fails closed without policy");
+    assert_eq!(err.code, ErrorCode::ExecutionContextNotAllowed);
+    let details = err.details.expect("audit details are attached");
+    let audit: ::local_control::LocalControlAuditRecord =
+        serde_json::from_str(&details).expect("audit decodes");
+    assert_eq!(audit.action, "input.run");
+    assert_eq!(
+        audit.permission_category,
+        PermissionCategory::MutateUnderlyingData
+    );
+    assert_eq!(audit.authenticated_user_subject, "user_123");
 }
 
 #[test]

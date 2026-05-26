@@ -49,6 +49,43 @@ fn parses_first_slice_app_smoke_metadata_commands() {
 }
 
 #[test]
+fn parses_execution_underlying_commands() {
+    let args = ControlArgs::try_parse_from([
+        "warpctrl",
+        "input",
+        "run",
+        "cargo check",
+        "--instance",
+        "inst_123",
+    ])
+    .expect("input run parses");
+    let ControlCommand::Input(InputCommand::Run(input_args)) = args.command else {
+        panic!("expected input run command");
+    };
+    assert_eq!(input_args.text, "cargo check");
+    assert_eq!(input_args.target.instance.as_deref(), Some("inst_123"));
+
+    let args = ControlArgs::try_parse_from([
+        "warpctrl",
+        "drive",
+        "workflow",
+        "run",
+        "workflow_123",
+        "--arg",
+        "name=value",
+    ])
+    .expect("drive workflow run parses");
+    let ControlCommand::Drive(DriveCommand::Workflow(DriveWorkflowCommand::Run(workflow_args))) =
+        args.command
+    else {
+        panic!("expected drive workflow run command");
+    };
+    assert_eq!(workflow_args.id, "workflow_123");
+    assert_eq!(workflow_args.args[0].name, "name");
+    assert_eq!(workflow_args.args[0].value, "value");
+}
+
+#[test]
 fn parses_completion_generation_command() {
     let args = ControlArgs::try_parse_from(["warpctrl", "completions", "bash"])
         .expect("completions parses");
@@ -73,6 +110,8 @@ fn generated_bash_completions_include_first_slice_commands() {
         generate_completion_string(Shell::Bash).expect("bash completions render to UTF-8");
     assert!(completions.contains("instance"));
     assert!(completions.contains("tab"));
+    assert!(completions.contains("input"));
+    assert!(completions.contains("drive"));
     assert!(completions.contains("completions"));
 }
 

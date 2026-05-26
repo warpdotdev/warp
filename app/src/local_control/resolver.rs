@@ -1,5 +1,5 @@
 //! Target and parameter validation for the first local-control action slice.
-use ::local_control::protocol::{PaneTarget, TabTarget, TargetSelector, WindowTarget};
+use ::local_control::protocol::{ActionParams, PaneTarget, TabTarget, TargetSelector, WindowTarget};
 use ::local_control::{ActionKind, ControlError, ErrorCode};
 use warpui::ModelContext;
 
@@ -51,9 +51,51 @@ pub(crate) fn validate_tab_create_target(target: &TargetSelector) -> Result<(), 
 /// bottom branch of the stack: later branches add their own params and expand
 /// this validation alongside the corresponding action handlers.
 pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result<(), ControlError> {
-    if action.kind != ActionKind::TabCreate {
-        return Ok(());
+    match action.kind {
+        ActionKind::TabCreate => validate_empty_action_params(action),
+        ActionKind::InputRun => {
+            let ActionParams::Text { text } = action.params_as::<ActionParams>()? else {
+                return Err(ControlError::new(
+                    ErrorCode::InvalidParams,
+                    "input.run requires text parameters",
+                ));
+            };
+            if text.trim().is_empty() {
+                return Err(ControlError::new(
+                    ErrorCode::InvalidParams,
+                    "input.run requires non-empty text",
+                ));
+            }
+            Ok(())
+        }
+        ActionKind::DriveWorkflowRun => {
+            let ActionParams::WorkflowRun(params) = action.params_as::<ActionParams>()? else {
+                return Err(ControlError::new(
+                    ErrorCode::InvalidParams,
+                    "drive.workflow.run requires workflow run parameters",
+                ));
+            };
+            if params.id.0.trim().is_empty() {
+                return Err(ControlError::new(
+                    ErrorCode::InvalidParams,
+                    "drive.workflow.run requires a non-empty workflow id",
+                ));
+            }
+            for arg in &params.args {
+                if excluded_submission_argument_name(&arg.name) {
+                    return Err(ControlError::new(
+                        ErrorCode::UnsupportedAction,
+                        "drive.workflow.run does not accept accepted-command or agent-prompt submissions",
+                    ));
+                }
+            }
+            Ok(())
+        }
+        _ => Ok(()),
     }
+}
+
+fn validate_empty_action_params(action: &::local_control::Action) -> Result<(), ControlError> {
     if action
         .params
         .as_object()
@@ -63,8 +105,20 @@ pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result
     }
     Err(ControlError::new(
         ErrorCode::InvalidParams,
-        "tab.create does not accept parameters in the first implementation slice",
+        format!("{} does not accept parameters", action.kind.as_str()),
     ))
+}
+
+fn excluded_submission_argument_name(name: &str) -> bool {
+    matches!(
+        name,
+        "accepted_command"
+            | "accepted-command"
+            | "agent_prompt"
+            | "agent-prompt"
+            | "internal_dispatch"
+            | "internal-dispatch"
+    )
 }
 
 pub(super) fn target_window_id(

@@ -50,7 +50,9 @@ use warp_core::channel::ChannelState;
 use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
 
 pub use bridge::LocalControlBridge;
-use permissions::{ensure_action_allowed, ensure_feature_enabled};
+use permissions::{
+    authenticated_user_subject_for_action, ensure_action_allowed, ensure_feature_enabled,
+};
 
 /// Shared state made available to Axum handlers for one localhost server
 /// running inside Warp.
@@ -300,13 +302,43 @@ async fn handle_credential_request(
                 .into_response();
         }
     }
+    let authenticated_user_subject = match state
+        .bridge_spawner
+        .spawn({
+            let action = request.action;
+            move |_, ctx| authenticated_user_subject_for_action(action, ctx)
+        })
+        .await
+    {
+        Ok(Ok(subject)) => subject,
+        Ok(Err(error)) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponseEnvelope::new(error)),
+            )
+                .into_response();
+        }
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponseEnvelope::new(ControlError::new(
+                    ErrorCode::BridgeUnavailable,
+                    "local-control app bridge is unavailable",
+                ))),
+            )
+                .into_response();
+        }
+    };
     let auth_token = AuthToken::generate();
-    let grant = CredentialGrant::new(
+    let mut grant = CredentialGrant::new(
         state.instance_id.clone(),
         request.action,
         request.invocation_context,
         Duration::minutes(5),
     );
+    if let Some(subject) = authenticated_user_subject {
+        grant = grant.with_authenticated_user_subject(subject);
+    }
     let mut credentials = match state.credentials.lock() {
         Ok(credentials) => credentials,
         Err(_) => {

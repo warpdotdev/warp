@@ -36,15 +36,76 @@ fn malformed_action_name_is_not_deserialized() {
 
 #[test]
 fn excluded_action_names_are_not_deserialized() {
-    for action in [
-        "file.write",
-        "file.delete",
-        "auth.api_key.set",
-        "auth.api_key.status",
-        "auth.api_key.revoke",
-    ] {
-        assert!(serde_json::from_value::<ActionKind>(serde_json::json!(action)).is_err());
+    for action in EXCLUDED_LOCAL_FILE_MUTATION_ACTION_NAMES
+        .iter()
+        .chain(EXCLUDED_STANDALONE_SECRET_AUTH_ACTION_NAMES)
+        .chain(EXCLUDED_EXECUTION_SUBMISSION_ACTION_NAMES)
+    {
+        assert!(serde_json::from_value::<ActionKind>(serde_json::json!(*action)).is_err());
     }
+}
+
+#[test]
+fn execution_actions_are_implemented_underlying_data_mutations() {
+    for action in [ActionKind::InputRun, ActionKind::DriveWorkflowRun] {
+        let metadata = action.metadata();
+        assert_eq!(
+            metadata.implementation_status,
+            ActionImplementationStatus::Implemented
+        );
+        assert_eq!(
+            metadata.risk_tier,
+            RiskTier::MutatingDestructiveOrExecution
+        );
+        assert_eq!(
+            metadata.state_data_category,
+            StateDataCategory::UnderlyingDataMutation
+        );
+        assert_eq!(
+            metadata.permission_category,
+            PermissionCategory::MutateUnderlyingData
+        );
+        assert!(metadata.authenticated_user.required);
+        assert_eq!(
+            metadata.allowed_invocation_contexts,
+            vec![InvocationContext::InsideWarp]
+        );
+    }
+}
+
+#[test]
+fn execution_action_params_roundtrip() {
+    let action = Action::with_params(
+        ActionKind::InputRun,
+        ActionParams::Text {
+            text: "cargo check".to_owned(),
+        },
+    )
+    .expect("input.run params serialize");
+    let ActionParams::Text { text } = action.params_as::<ActionParams>().expect("params decode")
+    else {
+        panic!("expected text params");
+    };
+    assert_eq!(text, "cargo check");
+
+    let workflow = Action::with_params(
+        ActionKind::DriveWorkflowRun,
+        ActionParams::WorkflowRun(WorkflowRunParams {
+            id: DriveObjectId("workflow_123".to_owned()),
+            args: vec![WorkflowArgument {
+                name: "name".to_owned(),
+                value: "value".to_owned(),
+            }],
+        }),
+    )
+    .expect("drive.workflow.run params serialize");
+    let ActionParams::WorkflowRun(params) =
+        workflow.params_as::<ActionParams>().expect("params decode")
+    else {
+        panic!("expected workflow run params");
+    };
+    assert_eq!(params.id.0, "workflow_123");
+    assert_eq!(params.args[0].name, "name");
 }
 
 #[test]

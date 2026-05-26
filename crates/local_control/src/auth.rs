@@ -175,6 +175,11 @@ impl CredentialGrant {
         }
     }
 
+    pub fn with_authenticated_user_subject(mut self, subject: impl Into<String>) -> Self {
+        self.authenticated_user.subject = Some(subject.into());
+        self
+    }
+
     pub fn verify_for_action(&self, action: ActionKind) -> Result<(), ControlError> {
         if Utc::now() >= self.expires_at {
             return Err(ControlError::new(
