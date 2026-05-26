@@ -1,25 +1,25 @@
-use crate::actions::StandardAction;
-use crate::AppContext;
-use crate::{Action, Tracked};
+use std::any::Any;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
 use anyhow::anyhow;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{
-    any::Any,
-    collections::{HashMap, HashSet},
-    fmt,
-    sync::Arc,
-};
 use titlecase::titlecase;
+
+use crate::actions::StandardAction;
+use crate::{Action, AppContext, Tracked};
 
 mod context;
 mod matcher;
 
-use crate::platform::OperatingSystem;
 pub use context::{macros, Context, ContextPredicate};
 pub use matcher::{IsBindingValid, MatchResult, Matcher};
+
+use crate::platform::OperatingSystem;
 
 #[derive(Default)]
 pub struct Keymap {

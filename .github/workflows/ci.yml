@@ -93,11 +93,13 @@ jobs:
       # Federation provider is configured to only trust the base repository.
       # We skip the auth + gcloud install steps in those runs and exclude SSH
       # integration tests (which require gcloud to tunnel into a GCP test VM)
-      # via the filter suffix below. Tests that need gcloud all have `_ssh_`
-      # in their name. Fork PRs lose SSH integration test coverage; those
-      # tests still run post-merge against `master`.
+      # via the filter suffix below. Tests that need gcloud either have
+      # `_ssh_` in their name or exercise the remote-server SSH path. Fork PRs
+      # lose SSH integration test coverage; those tests still run post-merge
+      # against `master`.
       HAS_GCP_AUTH: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-      EXCLUDE_SSH_TESTS_FILTER: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && ' and not test(/_ssh_/)' || '' }}
+      EXCLUDE_SSH_TESTS_FILTER: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && ' and not test(/(_ssh_|remote_server)/)' || '' }}
+      EXCLUDE_REMOTE_SERVER_TESTS_FILTER: " and not test(/remote_server/)"
     strategy:
       fail-fast: false
       matrix:
@@ -282,7 +284,7 @@ jobs:
         if: matrix.os != 'windows' && (success() || failure())
         uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
         with:
-          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} -E "package(integration) and not test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}"
+          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} -E "package(integration) and not test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
         env:
           # We run shell-agnostic tests against zsh, as it has the shortest
           # bootstrap times and tends to be the most reliable.
@@ -307,7 +309,7 @@ jobs:
         if: matrix.os != 'windows' && (success() || failure())
         uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
         with:
-          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}"
+          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
         env:
           WARP_SHELL_PATH: ${{ steps.echo_shells_unix.outputs.default_bash_path }}
 
@@ -333,7 +335,7 @@ jobs:
         if: (success() || failure()) && runner.os == 'macos'
         uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
         with:
-          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}"
+          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
         env:
           WARP_SHELL_PATH: ${{ steps.echo_shells_unix.outputs.latest_bash_path }}
 
@@ -356,7 +358,7 @@ jobs:
         if: matrix.os != 'windows' && (success() || failure())
         uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
         with:
-          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}"
+          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
         env:
           WARP_SHELL_PATH: ${{ steps.echo_shells_unix.outputs.fish_path }}
 
@@ -379,7 +381,7 @@ jobs:
         if: matrix.os != 'windows' && (success() || failure())
         uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
         with:
-          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}"
+          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
         env:
           WARP_SHELL_PATH: ${{ steps.echo_shells_unix.outputs.zsh_path }}
 
@@ -402,7 +404,7 @@ jobs:
         if: matrix.os != 'windows' && (success() || failure())
         uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
         with:
-          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}"
+          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
         env:
           WARP_SHELL_PATH: ${{ steps.echo_shells_unix.outputs.powershell_path }}
 
@@ -440,6 +442,103 @@ jobs:
     # This is longer than we like and temporary until we speed up integration tests
     # The maximum timeout for the entire job is 6 hours:
     # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#jobsjob_idstepstimeout-minutes
+
+  remote-server-tests:
+    name: Run Linux remote-server integration tests
+    # Temporarily disabled while reconsidering the approach.
+    if: false
+    timeout-minutes: 25
+    runs-on: ubuntu-latest-large
+    needs: params
+    concurrency:
+      # The dedicated VM uses a fixed binary path, so serialize remote-server
+      # deploy/test jobs across workflow runs to avoid cross-run clobbering.
+      group: remote-server-test-vm
+      cancel-in-progress: false
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: linux
+          is_self_hosted: false
+          install_test_deps: true
+
+      - name: Install Shells
+        uses: ConorMacBride/install-package@3e7ad059e07782ee54fa35f827df52aae0626f30 # v1
+        with:
+          apt: zsh fish
+
+      - name: Echo default Bash
+        id: echo_bash
+        shell: bash
+        run: |
+          DEFAULT_BASH_PATH="$(command -pv bash)"
+          echo "default_bash_path=$DEFAULT_BASH_PATH" >> $GITHUB_OUTPUT
+          DEFAULT_BASH_VERSION="$($DEFAULT_BASH_PATH --version)"
+          echo "::notice title=Remote Server Tests - Default Bash Version::$DEFAULT_BASH_VERSION"
+
+      - name: Install cargo nextest
+        uses: taiki-e/install-action@9a29ce630c67077a359246f3e4f84941e05f28b5 # v1
+        with:
+          tool: nextest
+
+      - name: Set up gcloud authentication for remote-server tests
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: projects/63595664881/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-ci-workflow@warp-ssh-integration-testing.iam.gserviceaccount.com
+
+      - name: Install gcloud CLI tool
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        with:
+          version: '>= 397.0.0'
+
+      - name: Install remote server deploy dependencies
+        shell: bash
+        run: |
+          sudo apt-get install -y curl sshpass xz-utils
+          MUSL_CROSS_TAG="20250929"
+          MUSL_CROSS_TARGET="x86_64-unknown-linux-musl"
+          MUSL_CROSS_SHA256="6534870abd7dc327fd2e14cc53972d0552b21f47db5769505534f788537e3544"
+          MUSL_CROSS_ARCHIVE="$MUSL_CROSS_TARGET.tar.xz"
+          curl -fsSLO "https://github.com/cross-tools/musl-cross/releases/download/$MUSL_CROSS_TAG/$MUSL_CROSS_ARCHIVE"
+          echo "$MUSL_CROSS_SHA256  $MUSL_CROSS_ARCHIVE" | sha256sum -c -
+          sudo mkdir -p /opt/x-tools
+          sudo tar -xf "$MUSL_CROSS_ARCHIVE" -C /opt/x-tools
+          MUSL_CROSS_BIN="/opt/x-tools/$MUSL_CROSS_TARGET/bin"
+          echo "$MUSL_CROSS_BIN" >> "$GITHUB_PATH"
+          export PATH="$MUSL_CROSS_BIN:$PATH"
+          command -v "$MUSL_CROSS_TARGET-gcc"
+          command -v "$MUSL_CROSS_TARGET-g++"
+          rustup target add x86_64-unknown-linux-musl
+
+      - name: Deploy remote server binary to test VM
+        run: script/deploy_remote_server_to_test_vm
+
+      - name: Run remote-server integration tests
+        uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
+        with:
+          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} -E "package(integration) and test(/remote_server/)"
+        env:
+          WARP_SHELL_PATH: ${{ steps.echo_bash.outputs.default_bash_path }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload results of remote-server integration tests to trunk.io
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: trunk-io/analytics-uploader@95a0fb8b29e45b6068304261fb518644b426a803 # v2.0.8
+        with:
+          junit-paths: target/nextest/ci/junit.xml
+          cli-version: 0.12.5
+          org-slug: warp
+          token: ${{ secrets.TRUNK_API_TOKEN }}
+          tags: type=integration,category=remote-server
+          variant: linux
+          use-cache: true
 
   database-migration:
     name: Database Migration (Diesel)

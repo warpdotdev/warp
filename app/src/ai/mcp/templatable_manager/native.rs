@@ -1,70 +1,66 @@
-use crate::ai::mcp::file_based_manager::FileBasedMCPManagerEvent;
-use crate::ai::mcp::templatable_manager::oauth::{
-    load_credentials_from_secure_storage, write_to_secure_storage, FILE_BASED_MCP_CREDENTIALS_KEY,
-    TEMPLATABLE_MCP_CREDENTIALS_KEY,
-};
-use crate::ai::mcp::FileBasedMCPManager;
 use core::fmt;
-use itertools::Itertools;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::sync::Arc;
-use std::{collections::HashMap, future::Future};
 
-use crate::ai::mcp::http_client::build_client_with_headers;
-use crate::ai::mcp::templatable::GalleryData;
-use crate::ai::mcp::templatable_manager::FigmaMcpStatus;
-use crate::ai::mcp::{
-    Author, CloudMCPServer, JsonTemplate, MCPGalleryManager, MCPServerUpdate,
-    ParsedTemplatableMCPServerResult,
-};
-
-use crate::ai::mcp::parsing::resolve_json;
-use crate::ai::mcp::TemplatableMCPServer;
-use crate::auth::AuthStateProvider;
-use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
-use crate::cloud_object::{CloudObject, CloudObjectLocation, CloudObjectMetadataExt, Space};
-use crate::server::cloud_objects::update_manager::InitiatedBy;
-use crate::server::ids::{ClientId, ServerId};
-use crate::server::telemetry::{
-    MCPServerModel, MCPServerTelemetryTransportType, MCPTemplateCreationSource,
-};
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{
-    ai::mcp::{
-        logs, templatable::CloudTemplatableMCPServer, templatable_installation::VariableValue,
-        MCPServer, StaticEnvVar, TemplatableMCPServerInstallation, TransportType,
-    },
-    cloud_object::{GenericStringObjectFormat, JsonObjectType},
-    drive::CloudObjectTypeAndId,
-    persistence::ModelEvent,
-    send_telemetry_from_ctx,
-    server::{
-        cloud_objects::update_manager::UpdateManager, ids::SyncId, telemetry::TelemetryEvent,
-    },
-    settings::AISettings,
-    view_components::DismissibleToast,
-    workspace::ToastStack,
-    GlobalResourceHandlesProvider,
-};
 use async_compat::CompatExt as _;
 use cfg_if::cfg_if;
 use futures::FutureExt as _;
 use parking_lot::Mutex;
-use rmcp::{transport::ConfigureCommandExt as _, ServiceExt as _};
+use rmcp::transport::ConfigureCommandExt as _;
+use rmcp::ServiceExt as _;
 use simple_logger::manager::LogManager;
 use simple_logger::SimpleLogger;
 use tokio::io::AsyncBufReadExt as _;
 use uuid::Uuid;
+use warp_core::execution_mode::AppExecutionMode;
+use warp_core::features::FeatureFlag;
 use warp_core::safe_error;
-use warp_core::{execution_mode::AppExecutionMode, features::FeatureFlag, settings::Setting as _};
-use warpui::AppContext;
-use warpui::{windowing::WindowManager, ModelContext, SingletonEntity};
+use warp_core::settings::Setting as _;
+use warpui::windowing::WindowManager;
+use warpui::{AppContext, ModelContext, SingletonEntity};
 
+use super::oauth::{self, AuthContext, FileBasedPersistedCredentialsMap, PersistedCredentialsMap};
+use super::utils::{query_resources_for, query_tools_for};
 use super::{
-    oauth::{self, AuthContext, FileBasedPersistedCredentialsMap, PersistedCredentialsMap},
     MCPServerState, SpawnedServerInfo, TemplatableMCPServerInfo, TemplatableMCPServerManager,
     TemplatableMCPServerManagerEvent,
 };
+use crate::ai::mcp::file_based_manager::FileBasedMCPManagerEvent;
+use crate::ai::mcp::http_client::build_client_with_headers;
+use crate::ai::mcp::parsing::resolve_json;
+use crate::ai::mcp::templatable::{CloudTemplatableMCPServer, GalleryData};
+use crate::ai::mcp::templatable_installation::VariableValue;
+use crate::ai::mcp::templatable_manager::oauth::{
+    load_credentials_from_secure_storage, write_to_secure_storage, FILE_BASED_MCP_CREDENTIALS_KEY,
+    TEMPLATABLE_MCP_CREDENTIALS_KEY,
+};
+use crate::ai::mcp::templatable_manager::FigmaMcpStatus;
+use crate::ai::mcp::{
+    logs, Author, CloudMCPServer, FileBasedMCPManager, JsonTemplate, MCPGalleryManager, MCPServer,
+    MCPServerUpdate, ParsedTemplatableMCPServerResult, StaticEnvVar, TemplatableMCPServer,
+    TemplatableMCPServerInstallation, TransportType,
+};
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
+use crate::cloud_object::{
+    CloudObject, CloudObjectLocation, CloudObjectLookup as _, CloudObjectMetadataExt,
+    CloudObjectUuidLookup as _, GenericStringObjectFormat, JsonObjectType, Space,
+};
+use crate::drive::CloudObjectTypeAndId;
+use crate::persistence::{
+    database_file_path_for_scope, establish_ro_connection, ModelEvent, PersistenceScope,
+};
+use crate::server::cloud_objects::update_manager::{InitiatedBy, UpdateManager};
+use crate::server::ids::{ClientId, ServerId, SyncId};
+use crate::server::telemetry::{
+    MCPServerModel, MCPServerTelemetryTransportType, MCPTemplateCreationSource, TelemetryEvent,
+};
+use crate::settings::AISettings;
+use crate::view_components::DismissibleToast;
+use crate::workspace::ToastStack;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{send_telemetry_from_ctx, GlobalResourceHandlesProvider};
 
 /// Controls the behavior of `spawn_server_impl`.
 enum SpawnMode {
@@ -157,6 +153,10 @@ fn error_to_user_message(error: &rmcp::RmcpError) -> String {
             }
             _ => format!("Service error: {}", err),
         },
+        // The enum is marked as non-exhaustive, so we need a catch-all.
+        _ => {
+            format!("Error: {error}")
+        }
     }
 }
 
@@ -284,14 +284,13 @@ impl TemplatableMCPServerManager {
             _ => {}
         });
 
-        let database_connection =
-            crate::persistence::database_file_path()
-                .to_str()
-                .and_then(|db_url| {
-                    crate::persistence::establish_ro_connection(db_url)
-                        .ok()
-                        .map(|conn| Arc::new(Mutex::new(conn)))
-                });
+        let database_connection = database_file_path_for_scope(&PersistenceScope::App)
+            .to_str()
+            .and_then(|db_url| {
+                establish_ro_connection(db_url)
+                    .ok()
+                    .map(|conn| Arc::new(Mutex::new(conn)))
+            });
 
         let mut me = Self {
             cloud_templatable_mcp_servers: Default::default(),
@@ -1417,8 +1416,6 @@ impl TemplatableMCPServerManager {
         servers_to_restart: HashSet<Uuid>,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Import inline because of circular dependencies
-        use crate::ai::mcp::CloudMCPServer;
         let cloud_legacy_servers = CloudMCPServer::get_all(ctx);
         log::info!(
             "Converting {} legacy MCP servers into templatable MCP servers",
@@ -1673,15 +1670,25 @@ impl TemplatableMCPServerManager {
         ctx: &mut ModelContext<Self>,
     ) {
         // First, check if the servers are already spawned.
-        let new_installations = installations
-            .iter()
-            .filter(|installation| {
-                let uuid = installation.uuid();
-                !self.active_servers.contains_key(&uuid)
-                    && !self.spawned_servers.contains_key(&uuid)
-            })
-            .cloned()
-            .collect_vec();
+        let mut new_installations = Vec::new();
+        for installation in installations {
+            let uuid = installation.uuid();
+            let server_name = &installation.templatable_mcp_server().name;
+            if self.active_servers.contains_key(&uuid) {
+                log::info!(
+                    "Skipping file-based MCP server '{server_name}' ({uuid}); already running"
+                );
+                continue;
+            }
+            if self.spawned_servers.contains_key(&uuid) {
+                log::info!(
+                    "Skipping file-based MCP server '{server_name}' ({uuid}); already starting"
+                );
+                continue;
+            }
+            log::info!("Spawning file-based MCP server '{server_name}' ({uuid})");
+            new_installations.push(installation.clone());
+        }
 
         // If not, spawn them.
         for installation in new_installations {
@@ -1721,7 +1728,7 @@ impl TemplatableMCPServerManager {
 }
 
 type ReqwestHttpTransport = rmcp::transport::StreamableHttpClientTransport<reqwest::Client>;
-type ReqwestSseTransport = rmcp::transport::SseClientTransport<reqwest::Client>;
+type ReqwestSseTransport = mcp::sse_transport::SseClientTransport<reqwest::Client>;
 
 /// Spawns a new MCP server from a given [`TransportType`].
 async fn spawn_server(
@@ -1889,9 +1896,9 @@ async fn spawn_server(
                     is_authenticated_transport = true;
 
                     logger.log("[info] MCP: Using (legacy) SSE transport (due to preflight failing with a 404)".to_string());
-                    let transport = rmcp::transport::SseClientTransport::start_with_client(
+                    let transport = mcp::sse_transport::SseClientTransport::start_with_client(
                         client,
-                        rmcp::transport::sse_client::SseClientConfig {
+                        mcp::sse_transport::SseClientConfig {
                             sse_endpoint: sse_server.url.into(),
                             ..Default::default()
                         },
@@ -1907,16 +1914,16 @@ async fn spawn_server(
                 Ok(Transport::Sse(None)) => {
                     logger.log("[info] MCP: Using (legacy) SSE transport (due to preflight failing with a 404)".to_string());
                     let transport = if headers.is_empty() {
-                        rmcp::transport::SseClientTransport::start(sse_server.url.clone())
+                        mcp::sse_transport::SseClientTransport::start(sse_server.url.clone())
                             .await
                             .map_err(|e| {
                                 rmcp::RmcpError::transport_creation::<ReqwestSseTransport>(e)
                             })?
                     } else {
                         let client = build_client_with_headers(&headers)?;
-                        rmcp::transport::SseClientTransport::start_with_client(
+                        mcp::sse_transport::SseClientTransport::start_with_client(
                             client,
-                            rmcp::transport::sse_client::SseClientConfig {
+                            mcp::sse_transport::SseClientConfig {
                                 sse_endpoint: sse_server.url.clone().into(),
                                 ..Default::default()
                             },
@@ -1943,28 +1950,11 @@ async fn spawn_server(
     let server_info = service.peer_info();
     logger.log(format!("[info] MCP: Connected to server: {server_info:#?}"));
 
-    let resources = if server_info.is_some_and(|info| info.capabilities.resources.is_some()) {
-        match service.list_all_resources().await {
-            Ok(result) => result,
-            Err(err) => {
-                log::warn!("Failed to list resources for MCP server '{server_name}': {err}");
-                vec![]
-            }
-        }
-    } else {
-        vec![]
-    };
-    let tools = match service.list_all_tools().await {
-        Ok(result) => result,
-        Err(rmcp::ServiceError::McpError(rmcp::model::ErrorData { code, .. }))
-            if code == rmcp::model::ErrorCode::METHOD_NOT_FOUND =>
-        {
-            vec![]
-        }
-        Err(err) => {
-            return Err(err.into());
-        }
-    };
+    let capabilities = server_info.map(|info| &info.capabilities);
+
+    let resources =
+        query_resources_for(capabilities, &server_name, || service.list_all_resources()).await;
+    let tools = query_tools_for(capabilities, &server_name, || service.list_all_tools()).await;
 
     Ok(TemplatableMCPServerInfo {
         name: server_name,
@@ -2093,19 +2083,15 @@ async fn send_initialize_request(
 ///
 /// This tells the MCP server who we are and what capabilities we have.
 fn make_client_info() -> rmcp::model::ClientInfo {
-    rmcp::model::ClientInfo {
-        protocol_version: Default::default(),
-        capabilities: Default::default(),
-        client_info: rmcp::model::Implementation {
-            name: warp_core::channel::ChannelState::app_id().to_string(),
-            version: warp_core::channel::ChannelState::app_version()
+    rmcp::model::ClientInfo::new(
+        Default::default(),
+        rmcp::model::Implementation::new(
+            warp_core::channel::ChannelState::app_id().to_string(),
+            warp_core::channel::ChannelState::app_version()
                 .map(|v| v.to_string())
                 .unwrap_or_default(),
-            title: None,
-            icons: None,
-            website_url: None,
-        },
-    }
+        ),
+    )
 }
 
 /// A wrapper around a [`rmcp::transport::Transport`] that logs all requests and responses.

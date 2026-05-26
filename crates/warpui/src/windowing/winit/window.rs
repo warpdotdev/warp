@@ -4,14 +4,12 @@ mod x11;
 #[cfg(windows)]
 mod windows_wm;
 
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 #[cfg(windows)]
 use std::sync::LazyLock;
-use std::{
-    cell::{Cell, OnceCell, RefCell},
-    rc::Rc,
-};
 
 use anyhow::{Context as _, Result};
 use itertools::Itertools;
@@ -21,42 +19,33 @@ use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use wgpu::rwh::HasDisplayHandle;
 use wgpu::{AdapterInfo, CompositeAlphaMode};
-use winit::dpi::PhysicalPosition;
+#[cfg(windows)]
+use windows::Win32::Graphics::Dwm;
+use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position, Size};
 use winit::error::ExternalError;
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy, OwnedDisplayHandle};
 #[cfg(not(target_family = "wasm"))]
 use winit::monitor::MonitorHandle;
 #[cfg(windows)]
 use winit::platform::windows::{BackdropType, WindowExtWindows};
-use winit::window::{CursorIcon, ResizeDirection, UserAttentionType, WindowLevel};
-use winit::{
-    dpi::{LogicalPosition, LogicalSize, PhysicalSize, Position, Size},
-    window::Fullscreen,
-};
+use winit::window::{CursorIcon, Fullscreen, ResizeDirection, UserAttentionType, WindowLevel};
 
+use super::app::CustomEvent;
+#[cfg(windows)]
+use super::windows::{get_system_caption_button_bounds, set_window_attribute, WindowAttributeErr};
 #[cfg(not(target_family = "wasm"))]
 use crate::platform::WindowBounds;
 use crate::platform::{
     self, Cursor, FullscreenState, GraphicsBackend, TerminationMode, WindowFocusBehavior,
     WindowOptions, WindowStyle,
 };
-use crate::rendering::{
-    wgpu::{
-        adapter_has_rendering_offset_bug, from_wgpu_backend, renderer, to_wgpu_backend, Renderer,
-        Resources,
-    },
-    GPUPowerPreference, GlyphConfig, OnGPUDeviceSelected,
+use crate::rendering::wgpu::{
+    adapter_has_rendering_offset_bug, from_wgpu_backend, renderer, to_wgpu_backend, Renderer,
+    Resources,
 };
+use crate::rendering::{GPUPowerPreference, GlyphConfig, OnGPUDeviceSelected};
 use crate::windowing::WindowCallbacks;
-use crate::{fonts, geometry, Scene};
-use crate::{DisplayId, DisplayIdx, OptionalPlatformWindow, WindowId};
-
-use super::app::CustomEvent;
-
-#[cfg(windows)]
-use super::windows::{get_system_caption_button_bounds, set_window_attribute, WindowAttributeErr};
-#[cfg(windows)]
-use windows::Win32::Graphics::Dwm;
+use crate::{fonts, geometry, DisplayId, DisplayIdx, OptionalPlatformWindow, Scene, WindowId};
 
 /// The inner margin from the edges of the window within which the mouse can drag to resize the
 /// window. Note that this value is a logical size, not a physical size. It can be converted to a
@@ -67,20 +56,11 @@ const DRAG_RESIZE_MARGIN: f32 = 4.0;
 #[cfg(windows)]
 const IDI_ICON: u16 = 0x101;
 
-cfg_if::cfg_if! {
-    if #[cfg(any(test, feature = "integration_tests"))] {
-        /// The window cannot be resized smaller than this.
-        /// TODO(CORE-1891) Instead of being hard-coded, this should be configurable by the user via
-        /// [`crate::platform::WindowOptions`].
-        #[cfg_attr(target_family = "wasm", allow(dead_code))]
-        pub(in crate::windowing::winit) const MIN_WINDOW_SIZE: LogicalSize<f64> =
-            LogicalSize::new(124., 34.);
-    } else {
-        #[cfg_attr(target_family = "wasm", allow(dead_code))]
-        pub(in crate::windowing::winit) const MIN_WINDOW_SIZE: LogicalSize<f64> =
-            LogicalSize::new(480., 192.);
-    }
-}
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+pub(in crate::windowing::winit) const MIN_WINDOW_SIZE: LogicalSize<f64> = LogicalSize::new(
+    crate::windowing::MIN_WINDOW_WIDTH as f64,
+    crate::windowing::MIN_WINDOW_HEIGHT as f64,
+);
 
 lazy_static! {
     static ref DEFAULT_WINDOW_SIZE: Vector2F = Vector2F::new(1280., 800.);
@@ -1263,8 +1243,7 @@ fn create_window(
     _window_class: &Option<String>,
     _tiling_window_manager: bool,
 ) -> Result<winit::window::Window> {
-    use winit::platform::web::WindowAttributesExtWebSys;
-    use winit::platform::web::WindowExtWebSys;
+    use winit::platform::web::{WindowAttributesExtWebSys, WindowExtWebSys};
 
     use crate::platform::current::add_prevent_default_listener;
 
@@ -1500,13 +1479,6 @@ fn create_window(
                 }
             };
         }
-    }
-
-    #[cfg(target_os = "linux")]
-    if let Ok(window) = created_window.as_ref() {
-        // On Linux/Wayland, winit only sends `zwp_text_input_v3.enable()` when IME is allowed,
-        // so without this call IME stays inactive and non-Latin input (CJK, etc.) is unusable.
-        window.set_ime_allowed(true);
     }
 
     created_window

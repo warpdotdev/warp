@@ -1,21 +1,22 @@
-use crate::ai::blocklist::agent_view::AgentViewState;
-use crate::terminal::model::block::{BlockId, SerializedBlock};
-use crate::terminal::shared_session::tests::terminal_model_for_viewer;
-use crate::terminal::TerminalView;
-use crate::terminal::{
-    event_listener::ChannelEventListener,
-    shared_session::viewer::event_loop::{EventLoop, SharedSessionInitialLoadMode},
-};
-use crate::test_util::add_window_with_terminal;
-use crate::test_util::terminal::initialize_app_for_terminal_view;
+use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::{
     OrderedTerminalEvent, OrderedTerminalEventType, Scrollback, ScrollbackBlock, WindowSize,
 };
-use std::sync::Arc;
 use warpui::units::Lines;
 use warpui::{App, ViewHandle};
+
+use crate::ai::blocklist::agent_view::AgentViewState;
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::block::{BlockId, SerializedBlock};
+use crate::terminal::shared_session::tests::terminal_model_for_viewer;
+use crate::terminal::shared_session::viewer::event_loop::{
+    EventLoop, SharedSessionInitialLoadMode,
+};
+use crate::terminal::TerminalView;
+use crate::test_util::add_window_with_terminal;
+use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 fn ordered_terminal_event_from_bytes(
     bytes: impl Into<Vec<u8>>,
@@ -277,6 +278,96 @@ fn test_append_followup_scrollback_skips_duplicates() {
                 1
             );
         }
+    })
+}
+
+#[test]
+fn test_append_followup_scrollback_with_completed_last_block_creates_active_block() {
+    App::test((), |mut app| async move {
+        let channel_event_proxy = ChannelEventListener::new_for_test();
+        let model = Arc::new(FairMutex::new(terminal_model_for_viewer(
+            channel_event_proxy.clone(),
+        )));
+
+        let terminal_view = terminal_view(&mut app);
+        let initial_completed = completed_block("initial-command", "initial-output");
+        let initial_active = active_block();
+        app.add_model(|ctx| {
+            EventLoop::new(
+                model.clone(),
+                terminal_view.downgrade(),
+                channel_event_proxy.clone(),
+                WindowSize {
+                    num_rows: 0,
+                    num_cols: 0,
+                },
+                Scrollback {
+                    blocks: vec![
+                        scrollback_block(&initial_completed),
+                        scrollback_block(&initial_active),
+                    ],
+                    is_alt_screen_active: false,
+                },
+                None,
+                SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                ctx,
+            )
+        });
+
+        let followup_completed = completed_block("followup-command", "followup-output");
+        app.add_model(|ctx| {
+            EventLoop::new(
+                model.clone(),
+                terminal_view.downgrade(),
+                channel_event_proxy.clone(),
+                WindowSize {
+                    num_rows: 0,
+                    num_cols: 0,
+                },
+                Scrollback {
+                    blocks: vec![
+                        scrollback_block(&initial_completed),
+                        scrollback_block(&followup_completed),
+                    ],
+                    is_alt_screen_active: false,
+                },
+                None,
+                SharedSessionInitialLoadMode::AppendFollowupScrollback,
+                ctx,
+            )
+        });
+
+        let model = model.lock();
+        let commands = model
+            .block_list()
+            .blocks()
+            .iter()
+            .map(|block| block.command_to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(model.block_list().blocks().len(), 5);
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| command.as_str() == "initial-command")
+                .count(),
+            1
+        );
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| command.as_str() == "followup-command")
+                .count(),
+            1
+        );
+        assert_eq!(model.block_list().active_block_index(), 4.into());
+        assert_eq!(
+            model
+                .block_list()
+                .active_block()
+                .height(&AgentViewState::Inactive),
+            Lines::zero()
+        );
+        assert!(!model.block_list().active_block().started());
     })
 }
 

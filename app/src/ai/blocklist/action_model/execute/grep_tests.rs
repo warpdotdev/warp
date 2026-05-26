@@ -1,5 +1,6 @@
 use super::*;
-use crate::terminal::{model::secrets::regexes::FIREBASE_AUTH_DOMAIN, shell::ShellType};
+use crate::terminal::model::secrets::regexes::FIREBASE_AUTH_DOMAIN;
+use crate::terminal::shell::ShellType;
 
 #[test]
 fn test_create_redacted_grep_error_event() {

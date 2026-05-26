@@ -1,8 +1,9 @@
 use warpui::{EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{CLIAgentEvent, CLIAgentSessionsModel};
-use crate::terminal::cli_agent_sessions::event::parse_event;
-use crate::terminal::cli_agent_sessions::event::{CLIAgentEventPayload, CLIAgentEventType};
+use crate::terminal::cli_agent_sessions::event::{
+    parse_event, CLIAgentEventPayload, CLIAgentEventType,
+};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::CLIAgent;
 

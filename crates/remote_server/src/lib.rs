@@ -12,6 +12,7 @@ pub mod transport;
 
 pub use host_id::HostId;
 
+#[allow(clippy::large_enum_variant)]
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/remote_server.rs"));
 }

@@ -1,27 +1,20 @@
 //! Grid tooltips for the terminal view
 
 use pathfinder_geometry::vector::vec2f;
-
-use warpui::{
-    elements::{
-        ChildAnchor, Dismiss, MouseStateHandle, OffsetPositioning, PositionedElementAnchor,
-        PositionedElementOffsetBounds, Stack,
-    },
-    AppContext, Element, EventContext,
+use warpui::elements::{
+    ChildAnchor, Dismiss, MouseStateHandle, OffsetPositioning, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Stack,
 };
+use warpui::{AppContext, Element, EventContext};
 
 use super::{TerminalAction, TerminalView};
+use crate::appearance::Appearance;
+use crate::terminal::links::directly_open_link_keybinding_string;
+use crate::terminal::model::{ObfuscateSecrets, Secret};
+use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
+use crate::terminal::view::SecretTooltip;
+use crate::terminal::TerminalModel;
 use crate::util::tooltips::{TooltipLink, TooltipRedaction};
-use crate::{
-    appearance::Appearance,
-    terminal::{
-        links::directly_open_link_keybinding_string,
-        model::{ObfuscateSecrets, Secret},
-        safe_mode_settings::get_secret_obfuscation_mode,
-        view::SecretTooltip,
-        TerminalModel,
-    },
-};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -49,12 +42,12 @@ fn open_in_warp_tooltip(
     mouse_state: MouseStateHandle,
     app: &AppContext,
 ) -> Option<GridTooltipLink> {
-    use crate::{
-        settings::CodeSettings, util::file::external_editor::EditorSettings,
-        util::tooltips::should_show_open_in_warp_link,
-    };
     use settings::Setting as _;
     use warpui::SingletonEntity;
+
+    use crate::settings::CodeSettings;
+    use crate::util::file::external_editor::EditorSettings;
+    use crate::util::tooltips::should_show_open_in_warp_link;
 
     if !should_show_open_in_warp_link(&path, app) {
         return None;

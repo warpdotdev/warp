@@ -5,14 +5,12 @@ use anyhow::anyhow;
 use chrono::{DateTime, Local, Timelike};
 use warp_multi_agent_api as api;
 
-use crate::ai::{
-    agent::{
-        AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentContext,
-        AIAgentInput, DriveObjectPayload, MCPContext, PassiveSuggestionResultType,
-        PassiveSuggestionTrigger, RunningCommand, StaticQueryType, Suggestions, UserQueryMode,
-    },
-    block_context::BlockContext,
+use crate::ai::agent::{
+    AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentContext, AIAgentInput,
+    DriveObjectPayload, MCPContext, PassiveSuggestionResultType, PassiveSuggestionTrigger,
+    RunningCommand, StaticQueryType, Suggestions, UserQueryMode,
 };
+use crate::ai::block_context::BlockContext;
 
 fn local_datetime_to_timestamp(timestamp: DateTime<Local>) -> prost_types::Timestamp {
     prost_types::Timestamp {
@@ -961,9 +959,10 @@ impl From<BlockContext> for api::ExecutedShellCommand {
 /// Tries to convert a [`serde_json::Value`] to a [`prost_types::Value`].
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 fn serde_json_to_prost(value: serde_json::Value) -> Result<prost_types::Value, String> {
+    use std::collections::BTreeMap;
+
     use prost_types::value::Kind::*;
     use serde_json::Value::*;
-    use std::collections::BTreeMap;
 
     Ok(prost_types::Value {
         kind: Some(match value {

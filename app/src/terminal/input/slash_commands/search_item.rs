@@ -6,14 +6,13 @@ use warpui::fonts::{Properties, Weight};
 use warpui::prelude::{ConstrainedBox, Container, CrossAxisAlignment, Empty, Flex, Text};
 use warpui::{AppContext, Element, SingletonEntity};
 
+use super::{AcceptSlashCommandOrSavedPrompt, InlineItem};
 use crate::ai::blocklist::agent_view::shortcuts::render_keystroke_with_color_overrides;
 use crate::search::item::SearchItemDetail;
 use crate::search::slash_command_menu::static_commands::commands::COMMAND_REGISTRY;
 use crate::search::{ItemHighlightState, SearchItem};
 use crate::terminal::input::inline_menu::styles as inline_styles;
 use crate::util::bindings::keybinding_name_to_keystroke;
-
-use super::{AcceptSlashCommandOrSavedPrompt, InlineItem};
 
 fn inline_width_for_name_column(app: &AppContext) -> f32 {
     let appearance = Appearance::as_ref(app);

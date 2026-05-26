@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use futures_util::FutureExt as _;
 use itertools::Itertools as _;
-use warpui::{r#async::executor::BackgroundTask, AppContext, SingletonEntity};
+use warpui::r#async::executor::BackgroundTask;
+use warpui::{AppContext, SingletonEntity};
 use zbus::{interface, proxy, zvariant};
 
 use crate::channel::ChannelState;

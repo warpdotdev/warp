@@ -2,12 +2,10 @@
 #[cfg(feature = "v2")]
 mod v2;
 
-use std::{
-    collections::{HashMap, HashSet},
-    ops::Deref,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
+use std::ops::Deref;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use smol_str::SmolStr;
@@ -16,18 +14,15 @@ use warp_command_signatures::IconType;
 use warp_core::command::ExitCode;
 use warp_util::path::{EscapeChar, ShellFamily, TEST_SESSION_HOME_DIR};
 
-use crate::{
-    completer::{
-        CommandOutput, CompletionContext, Description, EngineDirEntry, EngineFileType,
-        GeneratorContext, PathCompletionContext, Suggestion, TopLevelCommandCaseSensitivity,
-    },
-    signatures::{
-        testing::{TEST_ALIAS_COMMAND, TEST_GENERATOR_1_COMMAND, TEST_GENERATOR_2_COMMAND},
-        CommandRegistry,
-    },
-};
-
 use super::{CommandExitStatus, MatchedSuggestion, PathSeparators};
+use crate::completer::{
+    CommandOutput, CompletionContext, Description, EngineDirEntry, EngineFileType,
+    GeneratorContext, PathCompletionContext, Suggestion, TopLevelCommandCaseSensitivity,
+};
+use crate::signatures::testing::{
+    TEST_ALIAS_COMMAND, TEST_GENERATOR_1_COMMAND, TEST_GENERATOR_2_COMMAND,
+};
+use crate::signatures::CommandRegistry;
 
 impl EngineDirEntry {
     pub fn test_file(file_name: &str) -> Self {
@@ -141,6 +136,7 @@ impl GeneratorContext for MockGeneratorContext {
 #[derive(Debug, Clone)]
 pub struct MockPathCompletionContext {
     home_directory: Option<String>,
+    cdpath: Option<String>,
     pwd: TypedPathBuf,
     directory_to_entries: HashMap<PathBuf, Vec<EngineDirEntry>>,
 }
@@ -149,6 +145,7 @@ impl MockPathCompletionContext {
     pub fn new(pwd: TypedPathBuf) -> Self {
         Self {
             home_directory: TEST_SESSION_HOME_DIR.clone(),
+            cdpath: None,
             pwd,
             directory_to_entries: HashMap::new(),
         }
@@ -156,6 +153,11 @@ impl MockPathCompletionContext {
 
     pub fn with_home_directory(mut self, home_directory: String) -> Self {
         self.home_directory = Some(home_directory);
+        self
+    }
+
+    pub fn with_cdpath(mut self, cdpath: String) -> Self {
+        self.cdpath = Some(cdpath);
         self
     }
 
@@ -231,6 +233,10 @@ impl PathCompletionContext for MockPathCompletionContext {
 
     fn home_directory(&self) -> Option<&str> {
         self.home_directory.as_deref()
+    }
+
+    fn cdpath(&self) -> Option<&str> {
+        self.cdpath.as_deref()
     }
 
     fn pwd(&self) -> TypedPath<'_> {

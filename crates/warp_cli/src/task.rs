@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand, ValueEnum};
 
+use crate::SortOrderArg;
+use crate::date_time::parse_rfc3339;
 use crate::json_filter::JsonOutput;
 
 /// Task-related subcommands.
@@ -141,8 +143,8 @@ pub struct ListTasksArgs {
     #[arg(long = "environment", value_name = "ENV_ID")]
     pub environment: Option<String>,
 
-    /// Filter by skill specification (e.g. `owner/repo:path/to/SKILL.md`).
-    #[arg(long = "skill", value_name = "SPEC")]
+    /// Filter by skill (e.g. `owner/repo:path/to/SKILL.md`).
+    #[arg(long = "skill", value_name = "SKILL")]
     pub skill: Option<String>,
 
     /// Filter to runs created by a specific scheduled agent.
@@ -187,7 +189,7 @@ pub struct ListTasksArgs {
 
     /// Sort direction.
     #[arg(long = "sort-order", value_enum, value_name = "DIR")]
-    pub sort_order: Option<RunSortOrderArg>,
+    pub sort_order: Option<SortOrderArg>,
 
     /// Opaque pagination cursor from a previous list response.
     ///
@@ -199,13 +201,6 @@ pub struct ListTasksArgs {
     /// JSON formatting configuration.
     #[command(flatten)]
     pub json_output: JsonOutput,
-}
-
-/// Parse an RFC 3339 timestamp into a UTC `DateTime`.
-fn parse_rfc3339(s: &str) -> Result<DateTime<Utc>, String> {
-    DateTime::parse_from_rfc3339(s)
-        .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|e| format!("invalid RFC 3339 timestamp '{s}': {e}"))
 }
 
 /// Run state values accepted by `--state`. Repeatable; multiple values match any of them.
@@ -287,15 +282,6 @@ pub enum RunSortByArg {
     Title,
     #[value(name = "agent")]
     Agent,
-}
-
-/// Sort-order values accepted by `--sort-order`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum RunSortOrderArg {
-    #[value(name = "asc")]
-    Asc,
-    #[value(name = "desc")]
-    Desc,
 }
 
 #[derive(Debug, Clone, Args)]

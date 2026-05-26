@@ -1,4 +1,5 @@
-use std::{result::Result as StdResult, sync::Arc};
+use std::result::Result as StdResult;
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use async_trait::async_trait;
@@ -12,13 +13,16 @@ use oauth2::TokenResponse;
 use thiserror::Error;
 use warp_core::errors::{AnyhowErrorExt, ErrorExt};
 use warp_graphql::client::Operation;
+use warp_graphql::mutations::create_anonymous_user::{
+    AnonymousUserType, CreateAnonymousUser, CreateAnonymousUserResult, CreateAnonymousUserVariables,
+};
 use warp_graphql::mutations::expire_api_key::{
     ExpireApiKey, ExpireApiKeyResult, ExpireApiKeyVariables,
 };
-use warp_graphql::queries::get_conversation_usage::{
-    ConversationUsage, GetConversationUsage, GetConversationUsageVariables, UserResult,
+use warp_graphql::mutations::generate_api_key::{
+    GenerateApiKey, GenerateApiKeyInput, GenerateApiKeyResult, GenerateApiKeyVariables,
 };
-
+use warp_graphql::mutations::mint_custom_token::{MintCustomTokenResult, MintCustomTokenVariables};
 use warp_graphql::mutations::set_user_is_onboarded::{
     SetUserIsOnboarded, SetUserIsOnboardedResult, SetUserIsOnboardedVariables,
 };
@@ -26,45 +30,31 @@ use warp_graphql::mutations::update_user_settings::{
     UpdateUserSettings, UpdateUserSettingsInput, UpdateUserSettingsResult,
     UpdateUserSettingsVariables,
 };
-use warp_graphql::mutations::{
-    create_anonymous_user::{
-        AnonymousUserType, CreateAnonymousUser, CreateAnonymousUserResult,
-        CreateAnonymousUserVariables,
-    },
-    generate_api_key::{
-        GenerateApiKey, GenerateApiKeyInput, GenerateApiKeyResult, GenerateApiKeyVariables,
-    },
-    mint_custom_token::{MintCustomTokenResult, MintCustomTokenVariables},
-};
 use warp_graphql::object_permissions::OwnerType;
 use warp_graphql::queries::api_keys::{
     ApiKeyProperties, ApiKeyPropertiesResult, ApiKeys, ApiKeysVariables,
+};
+use warp_graphql::queries::get_conversation_usage::{
+    ConversationUsage, GetConversationUsage, GetConversationUsageVariables, UserResult,
 };
 use warp_graphql::queries::get_user::{GetUser, GetUserVariables, UserOutput as GqlUserOutput};
 use warp_graphql::queries::get_user_settings::{GetUserSettings, GetUserSettingsVariables};
 use warpui::r#async::BoxFuture;
 
-use crate::auth::UserUid;
-use crate::server::graphql::{default_request_options, get_user_facing_error_message};
-use crate::server::ids::ApiKeyUid;
-use crate::server::server_api::register_error;
-use crate::server::server_api::EXPERIMENT_ID_HEADER;
-use crate::settings::PrivacySettingsSnapshot;
-use crate::{
-    auth::{
-        credentials::{AuthToken, Credentials, FirebaseToken, LoginToken, RefreshToken},
-        user::FirebaseAuthTokens,
-        user::User,
-    },
-    channel::ChannelState,
-    convert_to_server_experiment,
-    server::{
-        datetime_ext::DateTimeExt as _, experiments::ServerExperiment,
-        graphql::get_request_context, server_api::ServerApiEvent,
-    },
-};
-
 use super::ServerApi;
+use crate::auth::credentials::{AuthToken, Credentials, FirebaseToken, LoginToken, RefreshToken};
+use crate::auth::user::{FirebaseAuthTokens, User};
+use crate::auth::UserUid;
+use crate::channel::ChannelState;
+use crate::convert_to_server_experiment;
+use crate::server::datetime_ext::DateTimeExt as _;
+use crate::server::experiments::ServerExperiment;
+use crate::server::graphql::{
+    default_request_options, get_request_context, get_user_facing_error_message,
+};
+use crate::server::ids::ApiKeyUid;
+use crate::server::server_api::{register_error, ServerApiEvent, EXPERIMENT_ID_HEADER};
+use crate::settings::PrivacySettingsSnapshot;
 
 /// A named agent identity from the public API.
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -818,6 +808,7 @@ impl From<GqlUserOutput> for UserProperties {
 
         let is_on_work_domain = user_properties.is_on_work_domain;
         let is_onboarded = user_properties.is_onboarded;
+        let global_skills = user_properties.global_skills;
         let api_key_owner_type = user_output.api_key_owner_type;
 
         let linked_at = user_properties
@@ -854,6 +845,7 @@ impl From<GqlUserOutput> for UserProperties {
             linked_at,
             personal_object_limits: personal_object_limits.and_then(|t| t.try_into().ok()),
             principal_type,
+            global_skills,
         };
 
         UserProperties {

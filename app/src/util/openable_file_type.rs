@@ -1,10 +1,12 @@
 //! File type detection utilities for determining if files can be opened in Warp.
 
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+pub use warp_util::file_type::{is_binary_file, is_file_content_binary, is_markdown_file};
+
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::{settings::EditorChoice, Editor, EditorSettings};
-use serde::{Deserialize, Serialize};
-use std::path::Path;
-pub use warp_util::file_type::{is_binary_file, is_file_content_binary, is_markdown_file};
 
 #[derive(
     Debug,
@@ -59,8 +61,7 @@ pub enum FileTarget {
 /// Checks if a file is a code file with language support.
 #[cfg(feature = "local_fs")]
 pub fn is_supported_code_file(path: impl AsRef<Path>) -> bool {
-    let path = path.as_ref();
-    languages::language_by_filename(path).is_some()
+    languages::language_by_local_filename(path.as_ref()).is_some()
 }
 
 #[cfg(not(feature = "local_fs"))]
@@ -119,7 +120,7 @@ pub fn is_runnable_shell_script(path: &Path) -> bool {
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase());
     if let Some(ext) = ext.as_deref() {
-        return matches!(ext, "sh" | "bash" | "zsh" | "fish" | "ksh");
+        return matches!(ext, "sh" | "bash" | "zsh" | "fish" | "ksh" | "command");
     }
     starts_with_shebang(path)
 }
@@ -234,10 +235,12 @@ pub fn resolve_file_target_with_editor_choice(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::path::Path;
+
     #[cfg(feature = "local_fs")]
     use settings::Setting as _;
-    use std::path::Path;
+
+    use super::*;
 
     #[test]
     fn test_binary_files_not_openable() {
@@ -445,7 +448,7 @@ mod tests {
     fn test_is_runnable_shell_script_other_shell_extensions() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
-        for name in ["run.bash", "run.zsh", "run.fish", "run.ksh"] {
+        for name in ["run.bash", "run.zsh", "run.fish", "run.ksh", "run.command"] {
             let p = dir.path().join(name);
             std::fs::write(&p, b"#!/bin/sh\n:\n").unwrap();
             std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();

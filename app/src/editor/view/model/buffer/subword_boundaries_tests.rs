@@ -1,5 +1,6 @@
-use super::super::Buffer;
 use warpui::text::point::Point;
+
+use super::super::Buffer;
 
 #[test]
 fn test_subword_boundaries_forward_starts() {

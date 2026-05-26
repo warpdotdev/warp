@@ -1,15 +1,14 @@
-use std::{
-    borrow::Cow,
-    collections::HashMap,
-    path::Path,
-    sync::{Arc, Mutex},
-};
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use arborium::tree_sitter::{Language as ParserGrammar, Query};
 use lazy_static::lazy_static;
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use warp_editor::content::text::IndentUnit;
+use warp_util::standardized_path::StandardizedPath;
 
 #[derive(RustEmbed)]
 #[folder = "grammars"]
@@ -19,7 +18,7 @@ lazy_static! {
     static ref LANGUAGE_REGISTRY: LanguageRegistry = LanguageRegistry::new();
 }
 
-pub const SUPPORTED_LANGUAGES: [&str; 32] = [
+pub const SUPPORTED_LANGUAGES: [&str; 33] = [
     "rust",
     "golang",
     "yaml",
@@ -36,6 +35,7 @@ pub const SUPPORTED_LANGUAGES: [&str; 32] = [
     "css",
     "c",
     "json",
+    "jq",
     "hcl",
     "lua",
     "ruby",
@@ -85,6 +85,19 @@ impl LanguageRegistry {
     }
 }
 
+/// Find the corresponding language entry by a standardized filename.
+pub fn language_by_filename(path: &StandardizedPath) -> Option<Arc<Language>> {
+    language_by_filename_parts(path.file_name(), path.extension())
+}
+
+/// Find the corresponding language entry by a local filesystem filename.
+pub fn language_by_local_filename(path: &Path) -> Option<Arc<Language>> {
+    language_by_filename_parts(
+        path.file_name().and_then(|file_name| file_name.to_str()),
+        path.extension().and_then(|extension| extension.to_str()),
+    )
+}
+
 /// Normalizes common markdown language aliases to their internal names.
 /// For example, "go" -> "golang", "bash" -> "shell", etc.
 fn normalize_language_name(name: &str) -> &str {
@@ -111,10 +124,12 @@ pub fn language_by_name(name: &str) -> Option<Arc<Language>> {
     LANGUAGE_REGISTRY.language_by_name(normalized)
 }
 
-/// Find the corresponding language entry by the filename.
-pub fn language_by_filename(path: &Path) -> Option<Arc<Language>> {
+fn language_by_filename_parts(
+    filename: Option<&str>,
+    extension: Option<&str>,
+) -> Option<Arc<Language>> {
     // First check for specific filenames that don't use extensions.
-    if let Some(filename) = path.file_name().and_then(|name| name.to_str()) {
+    if let Some(filename) = filename {
         match filename {
             // Bash config files
             ".bashrc" | ".bash_profile" => {
@@ -141,7 +156,7 @@ pub fn language_by_filename(path: &Path) -> Option<Arc<Language>> {
         }
     }
 
-    let extension = path.extension()?.to_str()?;
+    let extension = extension?;
     match extension {
         "rs" => language_by_name("rust"),
         "go" => language_by_name("golang"),
@@ -159,6 +174,7 @@ pub fn language_by_filename(path: &Path) -> Option<Arc<Language>> {
         "css" => language_by_name("css"),
         "c" => language_by_name("c"),
         "json" => language_by_name("json"),
+        "jq" => language_by_name("jq"),
         "tf" | "hcl" | "tfvars" => language_by_name("hcl"),
         "lua" => language_by_name("lua"),
         "rb" => language_by_name("ruby"),
@@ -254,6 +270,7 @@ fn get_arborium_highlight_query(lang: &str) -> Option<&str> {
         "css" => Some(arborium::lang_css::HIGHLIGHTS_QUERY),
         "c" => Some(arborium::lang_c::HIGHLIGHTS_QUERY),
         "json" => Some(arborium::lang_json::HIGHLIGHTS_QUERY),
+        "jq" => Some(arborium::lang_jq::HIGHLIGHTS_QUERY),
         "hcl" => Some(arborium::lang_hcl::HIGHLIGHTS_QUERY),
         "lua" => Some(arborium::lang_lua::HIGHLIGHTS_QUERY),
         "ruby" => Some(arborium::lang_ruby::HIGHLIGHTS_QUERY),

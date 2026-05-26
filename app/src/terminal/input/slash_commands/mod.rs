@@ -3,14 +3,15 @@ mod data_source;
 mod search_item;
 pub(super) mod view;
 
-pub use cloud_mode_v2_view::{CloudModeV2SlashCommandView, Section as CloudModeV2Section};
-pub use data_source::*;
-pub use view::{CloseReason, InlineSlashCommandView, SlashCommandsEvent};
-
 #[cfg(feature = "local_fs")]
 use std::path::PathBuf;
 
 use ai::skills::SkillReference;
+pub use cloud_mode_v2_view::{CloudModeV2SlashCommandView, Section as CloudModeV2Section};
+pub use data_source::*;
+pub use view::{CloseReason, InlineSlashCommandView, SlashCommandsEvent};
+#[cfg(not(target_family = "wasm"))]
+use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
@@ -26,12 +27,16 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_management::telemetry::AgentManagementTelemetryEvent;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::ai::blocklist::agent_view::{
     AgentViewEntryOrigin, DismissalStrategy, EphemeralMessage, ENTER_OR_EXIT_CONFIRMATION_WINDOW,
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::PendingCloudLaunch;
-use crate::ai::blocklist::{BlocklistAIHistoryModel, SlashCommandRequest};
+use crate::ai::blocklist::{
+    BlocklistAIHistoryModel, InputTypeAutoDetectionSource, SlashCommandRequest,
+};
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
 use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};
@@ -58,8 +63,6 @@ use crate::view_components::DismissibleToast;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 use crate::workspace::{ForkedConversationDestination, ToastStack, WorkspaceAction};
 use crate::TelemetryEvent;
-#[cfg(not(target_family = "wasm"))]
-use warp_cli::agent::Harness;
 
 #[derive(Debug, Clone)]
 pub enum AcceptSlashCommandOrSavedPrompt {
@@ -253,7 +256,7 @@ impl Input {
                 if detected_command.command.auto_enter_ai_mode
                     || !FeatureFlag::AgentView.is_enabled()
                 {
-                    self.enter_ai_mode(ctx);
+                    self.enter_ai_mode(Some(InputTypeAutoDetectionSource::SlashCommand), ctx);
                 }
 
                 if detected_command.command.name == commands::EDIT.name
@@ -280,7 +283,7 @@ impl Input {
                 }
 
                 // Skill commands always require AI mode
-                self.enter_ai_mode(ctx);
+                self.enter_ai_mode(Some(InputTypeAutoDetectionSource::SlashCommand), ctx);
             }
         }
     }
@@ -896,8 +899,8 @@ impl Input {
             }
             #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
             move_to_cloud if command.name == commands::MOVE_TO_CLOUD.name => {
-                if !FeatureFlag::OzHandoff.is_enabled()
-                    || !FeatureFlag::HandoffLocalCloud.is_enabled()
+                if !AISettings::as_ref(ctx)
+                    .is_cloud_handoff_enabled_for_terminal_view(self.terminal_view_id, ctx)
                 {
                     return false;
                 }
@@ -915,13 +918,14 @@ impl Input {
                     ctx.dispatch_typed_action_deferred(
                         WorkspaceAction::OpenLocalToCloudHandoffPane {
                             launch: Some(launch),
-                            explicit_environment_id: None,
+                            environment_id: None,
+                            entry_point: HandoffEntryPoint::SlashCommand,
                         },
                     );
                 } else {
                     // `/handoff` with no query enters `&` compose mode,
                     // same as the footer chip.
-                    self.activate_cloud_handoff_compose(ctx);
+                    self.activate_cloud_handoff_compose(HandoffEntryPoint::SlashCommand, ctx);
                 }
             }
             fork if command.name == commands::FORK.name => {

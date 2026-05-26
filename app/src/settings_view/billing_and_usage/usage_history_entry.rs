@@ -1,23 +1,20 @@
-use crate::{
-    ai::blocklist::format_credits,
-    ai::blocklist::usage::conversation_usage_view::{
-        ConversationUsageInfo, ConversationUsageView, DisplayMode,
-    },
-    settings_view::billing_and_usage_page::BillingAndUsagePageAction,
-    ui_components::{blended_colors, icons::Icon},
-};
 use chrono::Local;
 use warp_core::ui::appearance::Appearance;
 use warp_graphql::queries::get_conversation_usage::ConversationUsage;
-use warpui::{
-    elements::{
-        Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex,
-        Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
-        Shrinkable, Text,
-    },
-    platform::Cursor,
-    AppContext, Element, View,
+use warpui::elements::{
+    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
 };
+use warpui::platform::Cursor;
+use warpui::{AppContext, Element, View};
+
+use crate::ai::blocklist::format_credits;
+use crate::ai::blocklist::usage::conversation_usage_view::{
+    ConversationUsageInfo, ConversationUsageView, DisplayMode,
+};
+use crate::settings_view::billing_and_usage_page::BillingAndUsagePageAction;
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
 
 pub struct UsageHistoryEntry {
     // If no entry is provided, we will assume that this is a placeholder entry

@@ -413,3 +413,20 @@ impl From<FolderId> for SyncId {
         Self::ServerId(id.into())
     }
 }
+
+/// Object ID type that is common for all generic string objects.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
+pub struct GenericStringObjectId(ServerId);
+crate::server_id_traits! { GenericStringObjectId, "GenericStringObject" }
+
+impl From<GenericStringObjectId> for SyncId {
+    fn from(id: GenericStringObjectId) -> Self {
+        Self::ServerId(id.into())
+    }
+}
+
+impl GenericStringObjectId {
+    pub fn uid(&self) -> ObjectUid {
+        self.0.uid()
+    }
+}

@@ -3,10 +3,9 @@ pub(crate) mod glyph_cache;
 #[cfg(wgpu)]
 pub mod wgpu;
 
+pub(crate) use glyph_cache::{GlyphCache, GlyphRasterBoundsFn, RasterizeGlyphFn};
 pub use warpui_core::rendering::*;
 use warpui_core::scene::Dash;
-
-pub(crate) use glyph_cache::{GlyphCache, GlyphRasterBoundsFn, RasterizeGlyphFn};
 
 /// Cache for the result of calling [`is_low_power_gpu_available`], as the
 /// check can be expensive.

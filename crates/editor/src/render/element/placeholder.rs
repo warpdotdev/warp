@@ -1,21 +1,15 @@
 use std::sync::Arc;
 
-use warpui::{
-    AppContext, LayoutContext,
-    geometry::vector::{Vector2F, vec2f},
-    text_layout::Line,
-};
-
-use crate::{
-    content::text::BufferBlockStyle,
-    render::{
-        element::paint::CursorDisplayType,
-        layout::{TextLayout, line_height},
-        model::{BlockItem, RenderState, viewport::ViewportItem},
-    },
-};
+use warpui::geometry::vector::{Vector2F, vec2f};
+use warpui::text_layout::Line;
+use warpui::{AppContext, LayoutContext};
 
 use super::{CursorData, RenderContext};
+use crate::content::text::BufferBlockStyle;
+use crate::render::element::paint::CursorDisplayType;
+use crate::render::layout::{TextLayout, line_height};
+use crate::render::model::viewport::ViewportItem;
+use crate::render::model::{BlockItem, RenderState};
 
 /// Ghost/placeholder text that's shown in an empty block to provide context.
 pub struct BlockPlaceholder {

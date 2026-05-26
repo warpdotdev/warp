@@ -1,7 +1,9 @@
-use crate::{
-    api::object_permissions::OwnerType, error::UserFacingError, request_context::RequestContext,
-    response_context::ResponseContext, scalars::Time, schema,
-};
+use crate::api::object_permissions::OwnerType;
+use crate::error::UserFacingError;
+use crate::request_context::RequestContext;
+use crate::response_context::ResponseContext;
+use crate::scalars::Time;
+use crate::schema;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct ApiKeysVariables {
@@ -22,9 +24,16 @@ pub struct ApiKeyProperties {
     pub name: String,
     pub key_suffix: String,
     pub owner_type: OwnerType,
+    pub agent_info: Option<ApiKeyAgentInfo>,
     pub expires_at: Option<Time>,
     pub last_used_at: Option<Time>,
     pub created_at: Time,
+}
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "APIKeyAgentInfo")]
+pub struct ApiKeyAgentInfo {
+    pub name: String,
+    pub uid: cynic::Id,
 }
 
 #[derive(cynic::InlineFragments, Debug)]

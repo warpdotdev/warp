@@ -3,10 +3,11 @@
 //! Currently there is no way to share a session from wasm.
 #![cfg_attr(target_family = "wasm", allow(dead_code))]
 
-use crate::auth::{AuthStateProvider, UserUid};
-use crate::editor::ReplicaId;
-use crate::terminal::shared_session::network::heartbeat::{Event as HeartbeatEvent, Heartbeat};
-use crate::terminal::shared_session::{connect_endpoint, max_session_size};
+use std::collections::HashMap;
+use std::pin::pin;
+use std::sync::Arc;
+use std::time::Duration;
+
 use async_channel::Receiver;
 use byte_unit::{Byte, UnitType};
 use futures_util::stream::AbortHandle;
@@ -24,39 +25,34 @@ use session_sharing_protocol::common::{
     WriteToPtyRequestId,
 };
 use session_sharing_protocol::sharer::{
-    AddGuestsResponse, DownstreamMessage, FailedToAddGuestsReason, LinkAccessLevelUpdateResponse,
-    ReconnectPayload, ReconnectToken, RemoveGuestResponse, RoleUpdateReason,
-    SessionTerminatedReason, TeamAccessLevelUpdateResponse, UpdatePendingUserRoleResponse,
-    UpstreamMessage,
+    AddGuestsResponse, DownstreamMessage, FailedToAddGuestsReason, FailedToInitializeSessionReason,
+    LinkAccessLevelUpdateResponse, ReconnectPayload, ReconnectToken, RemoveGuestResponse,
+    RoleUpdateReason, SessionEndedReason, SessionTerminatedReason, TeamAccessLevelUpdateResponse,
+    UpdatePendingUserRoleResponse, UpstreamMessage,
 };
-use session_sharing_protocol::sharer::{FailedToInitializeSessionReason, SessionEndedReason};
-use std::collections::HashMap;
 use warp_core::features::FeatureFlag;
-
-use std::pin::pin;
-use std::sync::Arc;
-use std::time::Duration;
-
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, ModelHandle, RequestState, RetryOption, SingletonEntity};
 use websocket::{Message, Sink, Stream, WebSocket, WebsocketMessage as _};
+#[cfg(not(any(test, feature = "integration_tests")))]
+use {
+    crate::terminal::shared_session::SharedSessionSource,
+    crate::{report_error, server::telemetry::telemetry_context},
+    session_sharing_protocol::common::{Scrollback, TelemetryContext},
+    session_sharing_protocol::sharer::{InitPayload, Lifetime},
+};
 
-use crate::editor::CrdtOperation;
+use crate::auth::{AuthStateProvider, UserUid};
+use crate::editor::{CrdtOperation, ReplicaId};
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::BlockId;
+use crate::terminal::shared_session::network::heartbeat::{Event as HeartbeatEvent, Heartbeat};
 use crate::terminal::shared_session::{
-    EventNumber, SharedSessionScrollbackType, SELECTION_THROTTLE_PERIOD,
+    connect_endpoint, max_session_size, EventNumber, SharedSessionScrollbackType,
+    SELECTION_THROTTLE_PERIOD,
 };
 use crate::terminal::TerminalModel;
 use crate::throttle::throttle;
-
-#[cfg(not(any(test, feature = "integration_tests")))]
-use {
-    crate::{report_error, server::telemetry::telemetry_context},
-    session_sharing_protocol::common::{Scrollback, TelemetryContext},
-    session_sharing_protocol::sharer::SessionSourceType,
-    session_sharing_protocol::sharer::{InitPayload, Lifetime},
-};
 
 /// The amount of time we will wait to batch consecutive PTY read events before sending an event to the server
 const PTY_READS_BATCH_THRESHOLD: Duration = Duration::from_millis(50);
@@ -228,12 +224,13 @@ impl Network {
         terminal_view_id: warpui::EntityId,
         universal_developer_input_context: UniversalDeveloperInputContext,
         lifetime: Lifetime,
-        source_type: SessionSourceType,
+        source: SharedSessionSource,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
         let scrollback = scrollback_type.to_scrollback(&model.lock());
         let num_bytes_scrollback = scrollback.num_bytes();
+        let max_session_size = max_session_size(ctx);
         let (selection_throttled_tx, selection_rx) = async_channel::unbounded();
         let selection_throttled_rx = throttle(SELECTION_THROTTLE_PERIOD, selection_rx);
         let init_block_id = model.lock().block_list().active_block_id().clone();
@@ -249,7 +246,7 @@ impl Network {
             ws_proxy_rx: ws_proxy_rx.clone(),
             selection_throttled_tx,
             num_bytes_shared: num_bytes_scrollback,
-            max_session_size: max_session_size(ctx),
+            max_session_size,
             pty_bytes_batch_status: PtyBytesBatchStatus::NotBatching {
                 last_sent_at: Instant::now(),
             },
@@ -276,6 +273,7 @@ impl Network {
 
         // We should validate the scrollback is under the limit before creating the Network, but check here just to be safe.
         if num_bytes_scrollback > network.max_session_size {
+            log::warn!("Session sharing scrollback exceeds max session size; failing startup");
             ctx.emit(NetworkEvent::FailedToCreateSharedSession {
                 reason: FailedToInitializeSessionReason::ScrollbackTooLarge {},
                 cause: None,
@@ -293,7 +291,7 @@ impl Network {
                 terminal_view_id,
                 universal_developer_input_context,
                 lifetime,
-                source_type,
+                source,
                 ctx,
             );
         }
@@ -589,7 +587,7 @@ impl Network {
         terminal_view_id: warpui::EntityId,
         universal_developer_input_context: UniversalDeveloperInputContext,
         lifetime: Lifetime,
-        source_type: SessionSourceType,
+        source: SharedSessionSource,
         ctx: &mut ModelContext<Self>,
     ) {
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
@@ -605,6 +603,7 @@ impl Network {
 
         ctx.spawn(
             async move {
+                log::info!("Connecting to session sharing server");
                 let Some(create_endpoint) = connect_endpoint("/sessions/create".to_owned()) else {
                     anyhow::bail!("This channel does not support session-sharing.");
                 };
@@ -617,6 +616,7 @@ impl Network {
                         .and_then(|token| token.bearer_token()),
                 };
                 let socket = WebSocket::connect(create_endpoint, None).await?;
+                log::info!("Connected to session sharing server; preparing initialization");
                 anyhow::Ok((socket.split().await, user_id))
             },
             move |network, conn, ctx| match conn {
@@ -640,7 +640,8 @@ impl Network {
                             ..universal_developer_input_context
                         }),
                         lifetime,
-                        source_type,
+                        source_type: source.source_type,
+                        source_task_id: source.source_task_id,
                         feature_support: FeatureSupport {
                             supports_agent_view: FeatureFlag::AgentView.is_enabled(),
                             supports_full_role: true,
@@ -651,6 +652,7 @@ impl Network {
                         log::error!("Sharer failed to send initialization message: {e}");
                         return;
                     }
+                    log::info!("Sent session sharing initialization message");
 
                     network.on_websocket_connected(ws_proxy_rx, sink, stream, ctx);
                 }

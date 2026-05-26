@@ -1,20 +1,13 @@
 use itertools::Itertools;
 use warp_util::path::EscapeChar;
 
-use crate::{
-    parsers::{
-        classify_command,
-        hir::{CommandCallInfo, Flags, ShellCommand},
-        simple::parse_for_completions,
-        ClassifiedCommand,
-    },
-    signatures::testing::{create_test_command_registry, test_signature},
-};
-
+use super::*;
+use crate::parsers::hir::{CommandCallInfo, Flags, ShellCommand};
 #[cfg(not(feature = "v2"))]
 use crate::parsers::hir::{Flag, FlagType};
-
-use super::*;
+use crate::parsers::simple::parse_for_completions;
+use crate::parsers::{classify_command, ClassifiedCommand};
+use crate::signatures::testing::{create_test_command_registry, test_signature};
 
 #[test]
 pub fn test_classify_command_classifies_known_command() {

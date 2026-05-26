@@ -1,30 +1,27 @@
 use warp_core::ui::appearance::Appearance;
-use warpui::{platform::WindowStyle, App};
-
-use crate::{
-    ai::blocklist::BlocklistAIHistoryModel,
-    auth::{auth_manager::AuthManager, AuthStateProvider},
-    cloud_object::{
-        model::{persistence::CloudModel, view::CloudViewModel},
-        Space,
-    },
-    drive::index::DriveIndexSection,
-    network::NetworkStatus,
-    server::{
-        cloud_objects::update_manager::UpdateManager, server_api::ServerApiProvider,
-        sync_queue::SyncQueue, telemetry::context_provider::AppTelemetryContextProvider,
-    },
-    settings_view::keybindings::KeybindingChangedNotifier,
-    terminal::{
-        resizable_data::ResizableData,
-        shared_session::permissions_manager::SessionPermissionsManager,
-    },
-    test_util::settings::initialize_settings_for_tests,
-    workspaces::{team_tester::TeamTesterStatus, user_workspaces::UserWorkspaces},
-    Assets, ObjectActions,
-};
+use warpui::platform::WindowStyle;
+use warpui::App;
 
 use super::DrivePanel;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::auth::auth_manager::AuthManager;
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::model::view::CloudViewModel;
+use crate::cloud_object::Space;
+use crate::drive::index::DriveIndexSection;
+use crate::network::NetworkStatus;
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::server_api::ServerApiProvider;
+use crate::server::sync_queue::SyncQueue;
+use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
+use crate::terminal::resizable_data::ResizableData;
+use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{ObjectActions, ASSETS};
 
 fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
@@ -52,7 +49,7 @@ fn initialize_app(app: &mut App) {
 
 #[test]
 fn test_warp_drive_sections_with_no_team() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
 
         // Instead of being in the panel module and depending on DrivePanel, this test should be in the index module.

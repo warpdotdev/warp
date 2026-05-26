@@ -1,16 +1,22 @@
+use std::collections::HashSet;
+use std::io;
+use std::io::Write;
+use std::path::PathBuf;
+
 use hex;
 use warp_core::command::ExitCode;
 use warpui::color::ColorU;
 
 use super::*;
+use crate::terminal::model::ansi::InputBufferValue;
 use crate::terminal::model::index::VisibleRow;
+use crate::terminal::model::selection::ScrollDelta;
 use crate::terminal::model::session::SessionId;
-use crate::terminal::model::{ansi::InputBufferValue, selection::ScrollDelta};
-use std::{collections::HashSet, io, io::Write, path::PathBuf};
 
 const HEX_ENCODED_JSON_DCS_START: &[u8] = &[0x1b, 0x50, 0x24, 0x64];
 const UNENCODED_JSON_DCS_START: &[u8] = &[0x1b, 0x50, 0x24, 0x66];
 const DCS_END: &[u8] = &[0x9c];
+const DCS_END_7BIT: &[u8] = &[0x1b, 0x5c];
 
 struct MockHandler {
     index: CharsetIndex,
@@ -19,6 +25,7 @@ struct MockHandler {
     identity_reported: bool,
     d_proto_hooks: Vec<DProtoHook>,
     pluggable_notifications: Vec<(Option<String>, String)>,
+    cwd_updates: Vec<String>,
 }
 
 impl Handler for MockHandler {
@@ -221,6 +228,10 @@ impl Handler for MockHandler {
         self.pluggable_notifications.push((title, body));
     }
 
+    fn set_current_working_directory(&mut self, path: String) {
+        self.cwd_updates.push(path);
+    }
+
     fn set_keyboard_enhancement_flags(
         &mut self,
         _mode: KeyboardModes,
@@ -244,6 +255,7 @@ impl Default for MockHandler {
             identity_reported: false,
             d_proto_hooks: Vec::new(),
             pluggable_notifications: Vec::new(),
+            cwd_updates: Vec::new(),
         }
     }
 }
@@ -600,6 +612,7 @@ fn parse_dcs_bootstrapped() {
                 shell: "bash".to_string(),
                 home_dir: Some("/Users/andy".to_string()),
                 path: Some("/usr/sbin:/usr/bin".to_string()),
+                cdpath: None,
                 editor: Some("vim".to_string()),
                 aliases: Some("vi=nvim\nvim=nvim".to_string()),
                 abbreviations: Some("abbr -a -- vi nvim\nabbr -a -- gc 'git checkout'".to_string()),
@@ -653,6 +666,37 @@ fn parse_dcs_init_shell() {
                 user: "andy".to_owned(),
                 hostname: "ubuntu-test".to_owned(),
                 shell: "zsh".to_string(),
+                ..Default::default()
+            }
+        ),
+        _ => panic!("incorrect dcs value"),
+    };
+}
+
+#[test]
+fn parse_dcs_init_shell_7bit_st() {
+    let payload = r#"{
+                "hook": "InitShell",
+                "value": {
+                    "session_id": 167303092612201,
+                    "user": "andy",
+                    "hostname": "ubuntu-test",
+                    "shell": "bash"
+                }
+            }"#;
+    let encoded = hex::encode(payload).into_bytes();
+    let bytes = [HEX_ENCODED_JSON_DCS_START, &encoded, DCS_END_7BIT].concat();
+    let (_, handler) = parse_bytes(&bytes);
+
+    assert_eq!(handler.d_proto_hooks.len(), 1);
+    match handler.d_proto_hooks.first().unwrap() {
+        DProtoHook::InitShell { value } => assert_eq!(
+            *value,
+            InitShellValue {
+                session_id: SessionId::from(167303092612201),
+                user: "andy".to_owned(),
+                hostname: "ubuntu-test".to_owned(),
+                shell: "bash".to_string(),
                 ..Default::default()
             }
         ),
@@ -843,6 +887,142 @@ fn parse_osc777_missing_parts_ignored() {
     let (_, handler) = parse_bytes(bytes);
 
     assert_eq!(handler.pluggable_notifications.len(), 0);
+}
+
+#[test]
+fn parse_osc7_local_hostname() {
+    // Happy path: payload host matches the running machine's hostname.
+    let local = crate::terminal::model::session::get_local_hostname()
+        .expect("test requires a real local hostname");
+    let payload = format!("\x1b]7;file://{local}/Users/foo/bar\x07");
+    let (_, handler) = parse_bytes(payload.as_bytes());
+
+    assert_eq!(handler.cwd_updates, vec!["/Users/foo/bar".to_string()]);
+}
+
+#[test]
+fn parse_osc7_with_st_terminator() {
+    let local = crate::terminal::model::session::get_local_hostname()
+        .expect("test requires a real local hostname");
+    let payload = format!("\x1b]7;file://{local}/Users/foo/bar\x1b\\");
+    let (_, handler) = parse_bytes(payload.as_bytes());
+
+    assert_eq!(handler.cwd_updates, vec!["/Users/foo/bar".to_string()]);
+}
+
+#[test]
+fn parse_osc7_percent_encoded() {
+    let local = crate::terminal::model::session::get_local_hostname()
+        .expect("test requires a real local hostname");
+    let payload = format!("\x1b]7;file://{local}/Users/foo%20bar/baz%2Fqux\x07");
+    let (_, handler) = parse_bytes(payload.as_bytes());
+
+    assert_eq!(
+        handler.cwd_updates,
+        vec!["/Users/foo bar/baz/qux".to_string()]
+    );
+}
+
+#[test]
+fn parse_osc7_path_with_unescaped_semicolons_preserved() {
+    // OSC parameters split on `;`, so a URI path with a literal semicolon
+    // arrives as multiple params. Rejoining preserves the full path instead
+    // of truncating at the first semicolon.
+    let local = crate::terminal::model::session::get_local_hostname()
+        .expect("test requires a real local hostname");
+    let payload = format!("\x1b]7;file://{local}/Users/foo;bar/baz\x07");
+    let (_, handler) = parse_bytes(payload.as_bytes());
+
+    assert_eq!(handler.cwd_updates, vec!["/Users/foo;bar/baz".to_string()]);
+}
+
+#[test]
+fn parse_osc7_empty_host_ignored() {
+    // Hostless payload (`file:///path`) is terminal-controlled and a remote
+    // shell over legacy SSH can emit it just as easily as a local one; reject.
+    let bytes: &[u8] = b"\x1b]7;file:///Users/foo/bar\x07";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert!(handler.cwd_updates.is_empty());
+}
+
+#[test]
+fn parse_osc7_localhost_host_ignored() {
+    // `localhost` is also untrustworthy from a remote shell — reject.
+    let bytes: &[u8] = b"\x1b]7;file://localhost/Users/foo\x07";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert!(handler.cwd_updates.is_empty());
+}
+
+#[test]
+fn parse_osc7_uppercase_localhost_host_ignored() {
+    let bytes: &[u8] = b"\x1b]7;file://LOCALHOST/Users/foo\x07";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert!(handler.cwd_updates.is_empty());
+}
+
+#[test]
+fn parse_osc7_non_local_host_ignored() {
+    // `.invalid` is reserved (RFC 2606) and is guaranteed never to match the
+    // local hostname, so this exercises the SSH-spoofing guard.
+    let bytes: &[u8] = b"\x1b]7;file://not-this-machine.invalid/Users/foo\x07";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert!(handler.cwd_updates.is_empty());
+}
+
+#[test]
+fn parse_osc7_non_file_scheme_ignored() {
+    let bytes: &[u8] = b"\x1b]7;http://example.com/foo\x07";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert!(handler.cwd_updates.is_empty());
+}
+
+#[test]
+fn parse_osc7_missing_path_ignored() {
+    // Host is present but no path segment — should be rejected, not panic.
+    let bytes: &[u8] = b"\x1b]7;file://localhost\x07";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert!(handler.cwd_updates.is_empty());
+}
+
+#[test]
+fn parse_osc7_malformed_percent_escape_ignored() {
+    let bytes: &[u8] = b"\x1b]7;file:///Users/foo%2/bar\x07";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert!(handler.cwd_updates.is_empty());
+}
+
+#[test]
+fn parse_osc7_truncated_percent_at_end_ignored() {
+    // A trailing `%` with no following digits must be rejected, not accepted
+    // as a literal byte.
+    let bytes: &[u8] = b"\x1b]7;file:///Users/foo%\x07";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert!(handler.cwd_updates.is_empty());
+}
+
+#[test]
+fn parse_osc7_truncated_percent_with_one_hex_digit_ignored() {
+    // A `%` with only one following hex digit must be rejected.
+    let bytes: &[u8] = b"\x1b]7;file:///Users/foo%2\x07";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert!(handler.cwd_updates.is_empty());
+}
+
+#[test]
+fn parse_osc7_empty_payload_ignored() {
+    let bytes: &[u8] = b"\x1b]7;\x07";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert!(handler.cwd_updates.is_empty());
 }
 
 #[test]

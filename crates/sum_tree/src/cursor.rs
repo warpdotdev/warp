@@ -1,4 +1,5 @@
-use std::{cmp::Ordering, sync::Arc};
+use std::cmp::Ordering;
+use std::sync::Arc;
 
 use arrayvec::ArrayVec;
 

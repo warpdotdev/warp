@@ -6,51 +6,39 @@ mod drag_drop_tests;
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
-use crate::notification::RequestPermissionsOutcome;
-
 use futures_util::future::LocalBoxFuture;
 use futures_util::stream::AbortHandle;
 use instant::{Duration, Instant};
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
+#[cfg(target_family = "wasm")]
+use wasm_bindgen::JsCast;
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition};
-use winit::event::Ime as ImeEvent;
-use winit::event_loop::EventLoopProxy;
+use winit::event::{
+    ElementState, Event, Ime as ImeEvent, MouseButton, StartCause, Touch, TouchPhase, WindowEvent,
+};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::{self, KeyCode};
 use winit::window::WindowId as WinitWindowId;
-use winit::{
-    event::{ElementState, Event, MouseButton, StartCause, Touch, TouchPhase, WindowEvent},
-    event_loop::{ActiveEventLoop, ControlFlow},
-};
 
+use self::key_events::convert_keyboard_input_event;
+use super::app::ClipboardEvent;
+use super::window::DEFAULT_TITLEBAR_HEIGHT;
+#[cfg(windows)]
+use super::windows::{add_network_connection_listener, WindowsNetworkConnectionPoint};
+use super::CustomEvent;
 use crate::actions::StandardAction;
 use crate::event::ModifiersState;
-use crate::platform::NotificationInfo;
-use crate::platform::OperatingSystem;
-use crate::platform::{
-    self,
-    app::{AppCallbackDispatcher, ApproveTerminateResult},
-    TerminationMode, WindowContext,
-};
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+use crate::notification::RequestPermissionsOutcome;
+use crate::platform::app::{AppCallbackDispatcher, ApproveTerminateResult};
+use crate::platform::{self, NotificationInfo, OperatingSystem, TerminationMode, WindowContext};
 use crate::r#async::Timer;
 use crate::rendering::wgpu::renderer;
 use crate::windowing::winit::app::RequestPermissionsCallback;
 use crate::windowing::winit::window::MIN_WINDOW_SIZE;
 use crate::Event::{ClearMarkedText, SetMarkedText, TypedCharacters};
 use crate::{AppContext, WindowId};
-
-#[cfg(target_family = "wasm")]
-use wasm_bindgen::JsCast;
-
-use super::app::ClipboardEvent;
-use super::window::DEFAULT_TITLEBAR_HEIGHT;
-use super::CustomEvent;
-
-#[cfg(windows)]
-use super::windows::{add_network_connection_listener, WindowsNetworkConnectionPoint};
-
-use self::key_events::convert_keyboard_input_event;
 
 /// This is the time duration beyond which clicks get treated as separate single clicks instead of
 /// double-click, triple-click, etc.
@@ -1298,12 +1286,28 @@ impl EventLoop {
                 }
 
                 let event_text = event.text.as_ref().map(|text| text.to_string());
-                let warp_ui_event =
-                    convert_keyboard_input_event(event, window_state, is_synthetic)?;
-                Some(ConvertedEvent::KeyDownWithTypedCharacters {
-                    chars: event_text,
-                    event: warp_ui_event,
-                })
+                let event_state = event.state;
+                let is_unidentified_key =
+                    matches!(event.logical_key, keyboard::Key::Unidentified(_));
+                match convert_keyboard_input_event(event, window_state, is_synthetic) {
+                    Some(warp_ui_event) => Some(ConvertedEvent::KeyDownWithTypedCharacters {
+                        chars: event_text,
+                        event: warp_ui_event,
+                    }),
+                    None if is_unidentified_key
+                        && !is_synthetic
+                        && event_state == ElementState::Pressed =>
+                    {
+                        // Fallback for synthetic WM_CHAR messages injected by non-IME input methods
+                        // (e.g. Unikey/EVKey on Windows for Vietnamese Telex/VNI). These input
+                        // methods hook the keyboard at a low level and inject pre-composed
+                        // characters via `SendInput` instead of going through the standard IME
+                        // pipeline. The resulting key event has
+                        // `logical_key == Key::Unidentified(...)`
+                        event_text.map(|chars| ConvertedEvent::Event(TypedCharacters { chars }))
+                    }
+                    None => None,
+                }
             }
             WindowEvent::Resized(_) => Some(ConvertedEvent::Resize),
             WindowEvent::Focused(is_focused) => {
@@ -1902,7 +1906,8 @@ impl EventLoop {
     /// synchronously during event processing may not work reliably on iOS Safari.
     #[cfg(target_family = "wasm")]
     fn refocus_canvas() {
-        use wasm_bindgen::{prelude::Closure, JsCast};
+        use wasm_bindgen::prelude::Closure;
+        use wasm_bindgen::JsCast;
 
         // Defer focus to next frame to ensure we're outside the current event processing.
         let callback = Closure::once(Box::new(|| {

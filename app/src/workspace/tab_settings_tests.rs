@@ -1,8 +1,9 @@
+use settings::Setting;
+use warpui::{App, SingletonEntity};
+
 use super::*;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
-use settings::Setting;
-use warpui::{App, SingletonEntity};
 
 #[test]
 fn use_latest_user_prompt_as_conversation_title_in_tab_names_defaults_to_false() {

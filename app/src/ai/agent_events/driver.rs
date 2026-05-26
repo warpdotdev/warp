@@ -83,6 +83,27 @@ pub(crate) enum AgentEventDriverState {
     ProactiveReconnect,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AgentMessageEventMetadata {
+    pub sequence: i64,
+    pub message_id: String,
+    pub occurred_at: String,
+}
+
+impl AgentMessageEventMetadata {
+    pub(crate) fn from_event(event: &AgentRunEvent) -> Option<Self> {
+        if event.event_type != "new_message" {
+            return None;
+        }
+
+        Some(Self {
+            sequence: event.sequence,
+            message_id: event.ref_id.clone()?,
+            occurred_at: event.occurred_at.clone(),
+        })
+    }
+}
+
 /// Parsed items emitted by an [`AgentEventSource`].
 pub(crate) enum AgentEventSourceItem {
     Open,

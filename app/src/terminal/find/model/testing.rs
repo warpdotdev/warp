@@ -1,9 +1,9 @@
 //! Exports helper test-only methods for use in unit and integration tests.
 use itertools::Itertools;
 
+use super::block_list::BlockListMatch;
+use super::{BlockListFindRun, TerminalFindModel};
 use crate::terminal::model::terminal_model::BlockIndex;
-
-use super::{block_list::BlockListMatch, BlockListFindRun, TerminalFindModel};
 
 impl TerminalFindModel {
     pub fn visible_block_list_match_count(&self) -> usize {

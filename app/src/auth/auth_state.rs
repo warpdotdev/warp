@@ -1,7 +1,5 @@
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Duration, Utc};
@@ -11,21 +9,17 @@ use warp_core::channel::{Channel, ChannelState};
 use warp_graphql::object_permissions::OwnerType;
 use warpui::{AppContext, Entity, SingletonEntity};
 
-use crate::{
-    cloud_object::{GenericStringObjectFormat, JsonObjectType, ObjectType},
-    report_error,
-};
-
-use super::{
-    anonymous_id::get_or_create_anonymous_id,
-    auth_manager::user_persistence::PersistedUser,
-    credentials::Credentials,
-    user::{AnonymousUserType, FirebaseAuthTokens, PersonalObjectLimits, PrincipalType, User},
-    UserUid, API_KEY_PREFIX,
-};
-
+use super::anonymous_id::get_or_create_anonymous_id;
+use super::auth_manager::user_persistence::PersistedUser;
+use super::credentials::Credentials;
 #[cfg(any(not(target_family = "wasm"), test))]
 use super::user::UserMetadata;
+use super::user::{
+    AnonymousUserType, FirebaseAuthTokens, PersonalObjectLimits, PrincipalType, User,
+};
+use super::{UserUid, API_KEY_PREFIX};
+use crate::cloud_object::{GenericStringObjectFormat, JsonObjectType, ObjectType};
+use crate::report_error;
 
 const ANONYMOUS_USER_NOTIFICATION_BLOCK_TIMER: Duration = Duration::days(7);
 
@@ -82,6 +76,20 @@ impl AuthState {
             anonymous_id: Uuid::new_v4(),
             needs_reauth: AtomicBool::new(false),
             credentials: RwLock::new(None),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn new_anonymous_for_test() -> Self {
+        use super::user::AnonymousUserType;
+        Self {
+            user: RwLock::new(Some(User {
+                anonymous_user_type: Some(AnonymousUserType::NativeClientAnonymousUserFeatureGated),
+                ..User::test()
+            })),
+            anonymous_id: Uuid::new_v4(),
+            needs_reauth: AtomicBool::new(false),
+            credentials: RwLock::new(Some(Credentials::Test)),
         }
     }
 
@@ -201,6 +209,7 @@ impl AuthState {
             linked_at: persisted.linked_at,
             personal_object_limits: persisted.personal_object_limits,
             principal_type: PrincipalType::default(),
+            global_skills: Vec::new(),
         };
         *self.user.write() = Some(user);
 
@@ -279,6 +288,7 @@ impl AuthState {
                     linked_at: None,
                     personal_object_limits: None,
                     principal_type: PrincipalType::default(),
+                    global_skills: Vec::new(),
                 });
             }
         }
@@ -529,6 +539,15 @@ impl AuthState {
         matches!(self.principal_type(), Some(PrincipalType::ServiceAccount))
     }
 
+    /// Returns the cached global skill specs for the current user.
+    pub fn global_skills(&self) -> Vec<String> {
+        self.user
+            .read()
+            .as_ref()
+            .map(|user| user.global_skills.clone())
+            .unwrap_or_default()
+    }
+
     /// Returns the owner type of the currently-authenticated API key.
     pub fn api_key_owner_type(&self) -> Option<OwnerType> {
         self.credentials.read().as_ref()?.api_key_owner_type()
@@ -567,6 +586,13 @@ impl AuthStateProvider {
     pub fn new_logged_out_for_test() -> Self {
         Self {
             auth_state: Arc::new(AuthState::new_logged_out_for_test()),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn new_anonymous_for_test() -> Self {
+        Self {
+            auth_state: Arc::new(AuthState::new_anonymous_for_test()),
         }
     }
 

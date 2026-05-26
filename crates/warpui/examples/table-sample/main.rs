@@ -1,11 +1,13 @@
+use std::borrow::Cow;
+
 use anyhow::{anyhow, Result};
 use pathfinder_geometry::vector::vec2f;
-use std::borrow::Cow;
 pub mod root_view;
 
 extern crate warpui;
 use rust_embed::RustEmbed;
-use warpui::{platform, platform::WindowBounds, AssetProvider};
+use warpui::platform::WindowBounds;
+use warpui::{platform, AssetProvider};
 
 #[derive(Clone, Copy, RustEmbed)]
 #[folder = "examples/assets"]

@@ -1,18 +1,15 @@
 use std::cmp::Ordering;
 
+use string_offset::CharOffset;
 use sum_tree::SumTree;
 use warpui::App;
 
 use super::{AnchorSide, Anchors};
-
-use crate::content::{
-    anchor::{Anchor, AnchorUpdate},
-    buffer::Buffer,
-    cursor::BufferSumTree,
-    selection_model::BufferSelectionModel,
-    text::IndentBehavior,
-};
-use string_offset::CharOffset;
+use crate::content::anchor::{Anchor, AnchorUpdate};
+use crate::content::buffer::Buffer;
+use crate::content::cursor::BufferSumTree;
+use crate::content::selection_model::BufferSelectionModel;
+use crate::content::text::IndentBehavior;
 
 #[test]
 fn test_anchor_cleanup() {

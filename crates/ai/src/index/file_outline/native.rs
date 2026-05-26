@@ -1,21 +1,21 @@
-use futures::channel::oneshot;
-use ignore::gitignore::Gitignore;
-use rayon::prelude::*;
-use repo_metadata::entry::is_file_parsable;
-use repo_metadata::RepositoryUpdate;
 use std::collections::HashMap;
-use std::{fs, path::Path};
+use std::fs;
+use std::path::Path;
 
 use anyhow::anyhow;
 use arborium::tree_sitter::{Parser, Query, QueryCursor, Tree};
+use futures::channel::oneshot;
+use ignore::gitignore::Gitignore;
 use itertools::Itertools;
+use rayon::prelude::*;
+use repo_metadata::entry::{is_file_parsable, IgnoredPathStrategy};
+use repo_metadata::RepositoryUpdate;
 use streaming_iterator::StreamingIterator;
 use syntax_tree::TextSlice;
+use warp_util::standardized_path::StandardizedPath;
 
 use crate::index::file_outline::{FileOutline, Outline, Symbol};
-use crate::index::THREADPOOL;
-use crate::index::{Entry, FileId, FileMetadata};
-use repo_metadata::entry::IgnoredPathStrategy;
+use crate::index::{Entry, FileId, FileMetadata, THREADPOOL};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -231,7 +231,8 @@ fn parse_file_outline(path: &Path) -> anyhow::Result<FileOutline> {
     if !is_file_parsable(path)? {
         return Err(anyhow!("File exceeds max file size limit for parsing"));
     }
-    let Some(language) = languages::language_by_filename(path) else {
+    let standardized_path = StandardizedPath::try_from_local(path)?;
+    let Some(language) = languages::language_by_filename(&standardized_path) else {
         return Err(anyhow!("Language unsupported for file {:?}", path));
     };
     let content = fs::read_to_string(path)?;
@@ -338,11 +339,13 @@ fn get_symbols<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs::File;
     use std::io::Write;
     use std::path::PathBuf;
+
     use tempfile::TempDir;
+
+    use super::*;
 
     fn create_test_file(dir: &TempDir, filename: &str, content: &str) -> PathBuf {
         let file_path = dir.path().join(filename);

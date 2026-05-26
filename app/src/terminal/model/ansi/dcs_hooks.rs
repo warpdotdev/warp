@@ -1,12 +1,14 @@
 //! This module defines the schema for DCS hooks sent from the shell to the Rust
 //! app -- for example, the payloads sent from shell precmd and preexec.
-use crate::terminal::model::block::BlockId;
-use crate::terminal::model::session::SessionId;
-use ordered_float::OrderedFloat;
-use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
+
+use ordered_float::OrderedFloat;
+use serde::{Deserialize, Deserializer, Serialize};
 use warp_core::command::ExitCode;
+
+use crate::terminal::model::block::BlockId;
+use crate::terminal::model::session::SessionId;
 
 /// Indicates that the following JSON-encoded message is hex-encoded for Warp's lifecycle hooks.
 /// In DCS, it is used as the final char in the DCS start sequence.
@@ -254,6 +256,9 @@ impl DProtoHook {
                 "home_dir" => value.home_dir = map_empty_to_none(v),
                 "path" => {
                     value.path = map_empty_to_none(v);
+                }
+                "cdpath" => {
+                    value.cdpath = map_empty_to_none(v);
                 }
                 "editor" => {
                     value.editor = map_empty_to_none(v);
@@ -510,6 +515,10 @@ pub struct BootstrappedValue {
 
     #[serde(deserialize_with = "empty_string_is_none")]
     pub path: Option<String>,
+
+    /// `CDPATH` from the shell, colon-separated.
+    #[serde(deserialize_with = "empty_string_is_none", default)]
+    pub cdpath: Option<String>,
 
     #[serde(deserialize_with = "empty_string_is_none", default)]
     pub editor: Option<String>,

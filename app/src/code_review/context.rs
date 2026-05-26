@@ -1,20 +1,19 @@
+use std::collections::HashMap;
+
+use warp_editor::render::model::LineCount;
+
 use crate::ai::agent::DiffSetHunk;
 use crate::code_review::diff_state::{DiffLineType, FileDiff};
-use std::collections::HashMap;
-use warp_editor::render::model::LineCount;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
-        use std::path::Path;
         use crate::ai::agent::{AIAgentAttachment, CurrentHead, DiffBase};
         use crate::ai::blocklist::BlocklistAIContextModel;
         use crate::code_review::{diff_state::DiffMode, DiffSetScope};
         use warpui::{AppContext, ModelHandle};
     }
 }
-
-/// Converts file diffs into a HashMap of file paths to DiffSetHunks
-/// If repo_path is provided, file paths will be relative to the repo root
+/// Converts file diffs into a map keyed by repo-relative path strings.
 pub fn convert_file_diffs_to_diffset_hunks<'a, I>(files: I) -> HashMap<String, Vec<DiffSetHunk>>
 where
     I: Iterator<Item = &'a FileDiff>,
@@ -22,7 +21,7 @@ where
     let mut file_diffs: HashMap<String, Vec<DiffSetHunk>> = HashMap::new();
 
     for file_diff in files {
-        let file_path = file_diff.file_path.display().to_string();
+        let repo_relative_path = file_diff.file_path.clone();
 
         let mut file_hunks = Vec::new();
         for hunk in file_diff.hunks.iter() {
@@ -60,7 +59,7 @@ where
         }
 
         if !file_hunks.is_empty() {
-            file_diffs.insert(file_path, file_hunks);
+            file_diffs.insert(repo_relative_path, file_hunks);
         }
     }
 
@@ -73,7 +72,6 @@ pub fn create_attachment_reference_and_key(
     scope: &DiffSetScope,
     diff_mode: &DiffMode,
     main_branch_name: Option<&str>,
-    repo_path: &Path,
 ) -> (String, String) {
     match scope {
         DiffSetScope::All => {
@@ -90,16 +88,9 @@ pub fn create_attachment_reference_and_key(
             let key = diff_set_description.clone();
             (format!("<change:{key}>"), key)
         }
-        DiffSetScope::File(file_path) => {
-            let relative_path = if file_path.is_absolute() {
-                file_path
-                    .strip_prefix(repo_path)
-                    .unwrap_or(file_path)
-                    .to_path_buf()
-            } else {
-                file_path.clone()
-            };
-            let key = relative_path.display().to_string();
+        DiffSetScope::File(repo_relative_path) => {
+            debug_assert!(!std::path::Path::new(repo_relative_path).is_absolute());
+            let key = repo_relative_path.clone();
             (format!("<change:{key}>"), key)
         }
     }

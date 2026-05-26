@@ -1,12 +1,13 @@
+use pathfinder_color::ColorU;
+use warp_core::ui::theme::Fill;
+use warpui::elements::{Align, ConstrainedBox, Container, Empty};
+use warpui::Element;
+
 use crate::appearance::Appearance;
 use crate::search::result_renderer::ItemHighlightState;
 use crate::themes::theme::Blend;
 use crate::ui_components::icons::Icon;
 use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
-use pathfinder_color::ColorU;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{Align, ConstrainedBox, Container, Empty};
-use warpui::Element;
 
 /// Helper function to render an icon for any search item within the command palette with consistent
 /// styling.

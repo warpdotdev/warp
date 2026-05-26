@@ -1,45 +1,17 @@
-use crate::ai::aws_credentials::AwsCredentialRefresher as _;
-use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
-use crate::auth::auth_state::AuthState;
-use crate::auth::AuthStateProvider;
-use crate::terminal::model::terminal_model::ExitReason;
-use crate::terminal::shared_session::replay_agent_conversations::reconstruct_response_events_from_conversations;
-use crate::terminal::shared_session::shared_handlers::{
-    apply_auto_approve_agent_actions_update, apply_cli_agent_state_update, apply_input_mode_update,
-    apply_selected_agent_model_update, apply_selected_conversation_update,
-    build_selected_conversation_update, RemoteUpdateGuard,
-};
-use crate::terminal::shell::ShellName;
-use crate::terminal::warpify::settings::WarpifySettings;
-use crate::terminal::TerminalManager as _;
-use anyhow::Context as _;
-use async_broadcast::InactiveReceiver;
 use std::any::Any;
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{SendError, SyncSender};
-use std::{collections::HashMap, ffi::OsString, path::PathBuf, sync::Arc, thread::JoinHandle};
+use std::sync::Arc;
+use std::thread::JoinHandle;
 
-use session_sharing_protocol::sharer::{
-    AddGuestsResponse, FailedToInitializeSessionReason, Lifetime, LinkAccessLevelUpdateResponse,
-    QuotaType, RemoveGuestResponse, SessionEndedReason, SessionSourceType,
-    TeamAccessLevelUpdateResponse, UpdatePendingUserRoleResponse,
-};
-
-use crate::editor::CrdtOperation;
-use crate::network::{NetworkStatusEvent, NetworkStatusKind};
-use crate::terminal::available_shells::{AvailableShell, AvailableShells};
-use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
-use crate::terminal::ShellLaunchData;
-use crate::terminal::ShellLaunchState;
-use crate::view_components::ToastFlavor;
-
+use anyhow::Context as _;
+use async_broadcast::InactiveReceiver;
 use parking_lot::{FairMutex, Mutex};
 use pathfinder_geometry::vector::Vector2F;
-
-use crate::terminal::cli_agent_sessions::{
-    CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
-};
 use session_sharing_protocol::common::{
     ActivePrompt, AgentPromptFailureReason, CLIAgentSessionState, CommandExecutionFailureReason,
     ControlAction, ControlActionFailureReason, SelectedAgentModel,
@@ -49,71 +21,16 @@ use session_sharing_protocol::common::{
 use session_sharing_protocol::common::{
     LongRunningCommandAgentInteractionState, SelectedConversation, UniversalDeveloperInputContext,
 };
+use session_sharing_protocol::sharer::{
+    AddGuestsResponse, FailedToInitializeSessionReason, Lifetime, LinkAccessLevelUpdateResponse,
+    QuotaType, RemoveGuestResponse, SessionEndedReason, SessionSourceType,
+    TeamAccessLevelUpdateResponse, UpdatePendingUserRoleResponse,
+};
 use settings::Setting as _;
+use warp_core::execution_mode::AppExecutionMode;
+use warp_core::send_telemetry_from_ctx;
 use warpui::r#async::executor::Background;
 use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity, ViewHandle, WindowId};
-
-use warp_core::execution_mode::AppExecutionMode;
-
-use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-use crate::ai::agent::conversation::AIConversation;
-use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
-use crate::ai::blocklist::{
-    BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIControllerEvent,
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, InputConfig, SerializedBlockListItem,
-};
-use crate::terminal::view::ConversationRestorationInNewPaneType;
-
-use crate::banner::BannerState;
-use crate::context_chips::current_prompt::CurrentPrompt;
-use crate::context_chips::prompt_snapshot::PromptSnapshot;
-use crate::context_chips::prompt_type::PromptType;
-use crate::features::FeatureFlag;
-use crate::pane_group::TerminalViewResources;
-use crate::persistence::ModelEvent;
-
-use crate::send_telemetry_on_executor;
-use crate::server::telemetry::{TelemetryAgentViewEntryOrigin, TelemetryEvent};
-use crate::settings::DebugSettings;
-use crate::settings::{PrivacySettings, SshSettings};
-use warp_core::send_telemetry_from_ctx;
-
-use crate::terminal::model::session::Sessions;
-
-use crate::terminal::model_events::ModelEventDispatcher;
-use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
-use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
-use crate::terminal::shared_session::manager::Manager;
-use crate::terminal::shared_session::settings::SharedSessionSettings;
-use crate::terminal::shared_session::sharer::network::{
-    failed_to_add_guests_user_error, failed_to_initialize_session_user_error,
-    session_terminated_reason_string, Network, NetworkEvent,
-};
-use crate::terminal::shared_session::{
-    IsSharedSessionCreator, SharedSessionActionSource, SharedSessionScrollbackType,
-    SharedSessionStatus,
-};
-use crate::terminal::view::Event as TerminalViewEvent;
-use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
-use crate::terminal::writeable_pty::terminal_manager_util::{
-    init_pty_controller_model, init_remote_server_controller, wire_up_pty_controller_with_view,
-    wire_up_remote_server_controller_with_view,
-};
-use crate::terminal::writeable_pty::{self, Message};
-use crate::terminal::{
-    event_listener::ChannelEventListener,
-    local_tty::{Pty, PtyOptions},
-    TerminalModel,
-};
-use crate::terminal::{terminal_manager, TerminalView, PTY_READS_BROADCAST_CHANNEL_SIZE};
-use crate::NetworkStatus;
-
-use super::mio_channel;
-use super::recorder;
-use super::shell::ShellStarter;
-use super::{event_loop::EventLoop, shell::ShellStarterSource};
-
-use crate::server::server_api::ServerApiProvider;
 #[cfg(unix)]
 use {
     super::terminal_attributes::TerminalAttributesPoller,
@@ -122,11 +39,90 @@ use {
     crate::terminal::session_settings::NotificationsMode, nix::sys::termios::LocalFlags,
 };
 
+use super::event_loop::EventLoop;
+use super::shell::{ShellStarter, ShellStarterSource};
+use super::{mio_channel, recorder};
+use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent::conversation::AIConversation;
+use crate::ai::aws_credentials::AwsCredentialRefresher as _;
+use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
+use crate::ai::blocklist::{
+    BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIControllerEvent,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, InputConfig, SerializedBlockListItem,
+};
+use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
+use crate::auth::auth_state::AuthState;
+use crate::auth::AuthStateProvider;
+use crate::banner::BannerState;
+use crate::context_chips::current_prompt::CurrentPrompt;
+use crate::context_chips::prompt_snapshot::PromptSnapshot;
+use crate::context_chips::prompt_type::PromptType;
+use crate::editor::CrdtOperation;
+use crate::features::FeatureFlag;
+use crate::network::{NetworkStatusEvent, NetworkStatusKind};
+use crate::pane_group::TerminalViewResources;
+use crate::persistence::ModelEvent;
+use crate::server::telemetry::{TelemetryAgentViewEntryOrigin, TelemetryEvent};
+use crate::settings::{DebugSettings, PrivacySettings, SshSettings};
+use crate::terminal::available_shells::{AvailableShell, AvailableShells};
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
+};
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::local_tty::{Pty, PtyOptions};
+use crate::terminal::model::session::Sessions;
+use crate::terminal::model::terminal_model::ExitReason;
+use crate::terminal::model_events::ModelEventDispatcher;
+use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
+use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
+use crate::terminal::shared_session::manager::Manager;
+use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
+use crate::terminal::shared_session::presence_manager::PresenceManager;
+use crate::terminal::shared_session::replay_agent_conversations::reconstruct_response_events_from_conversations;
+use crate::terminal::shared_session::settings::SharedSessionSettings;
+use crate::terminal::shared_session::shared_handlers::{
+    apply_auto_approve_agent_actions_update, apply_cli_agent_state_update, apply_input_mode_update,
+    apply_selected_agent_model_update, apply_selected_conversation_update,
+    build_selected_conversation_update, RemoteUpdateGuard,
+};
+use crate::terminal::shared_session::sharer::network::{
+    failed_to_add_guests_user_error, failed_to_initialize_session_user_error,
+    session_terminated_reason_string, Network, NetworkEvent,
+};
+use crate::terminal::shared_session::{
+    IsSharedSessionCreator, SharedSessionActionSource, SharedSessionScrollbackType,
+    SharedSessionSource, SharedSessionStatus,
+};
+use crate::terminal::shell::ShellName;
+use crate::terminal::view::{ConversationRestorationInNewPaneType, Event as TerminalViewEvent};
+use crate::terminal::warpify::settings::WarpifySettings;
+use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
+use crate::terminal::writeable_pty::terminal_manager_util::{
+    init_pty_controller_model, init_remote_server_controller, wire_up_pty_controller_with_view,
+    wire_up_remote_server_controller_with_view,
+};
+use crate::terminal::writeable_pty::{self, Message};
+use crate::terminal::{
+    terminal_manager, ShellLaunchData, ShellLaunchState, TerminalManager as _, TerminalModel,
+    TerminalView, PTY_READS_BROADCAST_CHANNEL_SIZE,
+};
+use crate::view_components::ToastFlavor;
+use crate::{send_telemetry_on_executor, NetworkStatus};
+
 type PtyController = writeable_pty::PtyController<mio_channel::Sender<Message>>;
 type RemoteServerController =
     writeable_pty::remote_server_controller::RemoteServerController<mio_channel::Sender<Message>>;
 
 const ACL_UPDATE_FAILURE_RESPONSE: &str = "Something went wrong. Please try again.";
+
+/// Whether the given CRDT operation should be dropped when broadcasting
+/// sharer input to viewers. In ambient agent sessions the sharer is a
+/// headless worker — forwarding its selection ops would produce a phantom
+/// cursor on the viewer side. Content ops (Edit / Undo) are kept so the
+/// buffer stays in sync.
+fn should_skip_sharer_op(is_ambient_session: bool, op: &CrdtOperation) -> bool {
+    is_ambient_session && matches!(op, CrdtOperation::UpdateSelections(_))
+}
 
 /// The TerminalManager is responsible for
 /// - creating the terminal model
@@ -263,22 +259,41 @@ impl TerminalManager {
         let session_sharer: Rc<RefCell<Option<ModelHandle<Network>>>> = Rc::new(RefCell::new(None));
         let wsl_name_or_shell_starter = ShellStarter::init(preferred_shell.clone());
 
-        // If we have explicit restored_blocks, prioritize those (these come from db on startup).
-        // Otherwise if there's a conversation we're restoring, get blocks from those.
-        let all_restored_blocks =
-            restored_blocks
-                .cloned()
-                .or_else(|| match &conversation_restoration {
-                    Some(ConversationRestorationInNewPaneType::Historical {
-                        conversation, ..
-                    })
-                    | Some(ConversationRestorationInNewPaneType::Forked { conversation, .. }) => {
-                        Some(conversation.to_serialized_blocklist_items())
+        // If we have explicit non-empty restored_blocks, prioritize those (these come from db on startup).
+        // Otherwise if there's a conversation we're restoring, get blocks from those (including when
+        // restored_blocks is missing or an empty vec).
+        let all_restored_blocks = restored_blocks
+            .filter(|blocks| !blocks.is_empty())
+            .cloned()
+            .or_else(|| match &conversation_restoration {
+                Some(ConversationRestorationInNewPaneType::Historical { conversation, .. })
+                | Some(ConversationRestorationInNewPaneType::Forked { conversation, .. }) => {
+                    Some(conversation.to_serialized_blocklist_items())
+                }
+                Some(ConversationRestorationInNewPaneType::Startup { conversations, .. }) => {
+                    let mut items: Vec<_> = conversations
+                        .iter()
+                        .flat_map(|c| c.to_serialized_blocklist_items())
+                        .collect();
+                    // Because there are multiple conversations that may have interleaved timestamps, we need to sort by start_ts
+                    items.sort_by_key(|item| item.start_ts());
+                    if items.is_empty() {
+                        None
+                    } else {
+                        Some(items)
                     }
-                    _ => None,
-                });
+                }
+                _ => None,
+            });
 
         // Create the terminal model with all restored blocks
+        log::info!(
+            "Creating terminal model with {} restored blocks",
+            all_restored_blocks
+                .as_ref()
+                .map(|blocks| blocks.len())
+                .unwrap_or(0)
+        );
         let model = terminal_manager::create_terminal_model(
             startup_directory.clone(),
             all_restored_blocks.as_ref(),
@@ -305,12 +320,22 @@ impl TerminalManager {
         // If this session should be a shared-session creator, configure its initial
         // shared-session state before we construct the view, so that bootstrap
         // events can observe the correct pending status and source type.
-        if FeatureFlag::CreatingSharedSessions.is_enabled() {
-            if let IsSharedSessionCreator::Yes { source_type } = is_shared_session_creator {
+        match is_shared_session_creator {
+            IsSharedSessionCreator::Yes { source }
+                if FeatureFlag::CreatingSharedSessions.is_enabled() =>
+            {
                 model.lock().set_shared_session_status(
-                    SharedSessionStatus::SharePendingPreBootstrap { source_type },
+                    SharedSessionStatus::SharePendingPreBootstrap { source },
+                );
+                log::info!("Configured terminal to start sharing after bootstrap");
+            }
+            IsSharedSessionCreator::Yes { .. } => {
+                log::warn!(
+                    "Session sharing was requested, but CreatingSharedSessions is disabled; \
+                     skipping shared-session startup"
                 );
             }
+            IsSharedSessionCreator::No => {}
         }
 
         // Initialize the PtyController.
@@ -419,7 +444,7 @@ impl TerminalManager {
                 view.attempt_to_share_session(
                     SharedSessionScrollbackType::All,
                     None,
-                    SessionSourceType::default(),
+                    SharedSessionSource::user(None),
                     false,
                     ctx,
                 )
@@ -710,6 +735,48 @@ impl TerminalManager {
                                 );
                             });
                         }
+                    }
+                    // Upgrade a manual `User` share's sidecar `source_task_id`
+                    // from `None` to `Some(_)` once the active conversation
+                    // gets its `task_id`, so inherited child shares can
+                    // discover the orchestrator task. Existing viewers stay
+                    // on the old value (the protocol has no
+                    // `UpdateSourceType` upstream message) until they
+                    // reconnect.
+                    BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
+                        terminal_view_id,
+                        conversation_id,
+                    } => {
+                        if *terminal_view_id != view_id_for_stream_init {
+                            return;
+                        }
+
+                        let Some(view) = weak_view_for_stream_init.upgrade(ctx) else {
+                            return;
+                        };
+
+                        let model = view.as_ref(ctx).model.clone();
+                        let needs_upgrade = {
+                            let model_lock = model.lock();
+                            model_lock.shared_session_source().is_some_and(|s| {
+                                matches!(s.source_type, SessionSourceType::User)
+                                    && s.source_task_id.is_none()
+                            })
+                        };
+                        if !needs_upgrade {
+                            return;
+                        }
+
+                        let task_id = BlocklistAIHistoryModel::as_ref(ctx)
+                            .conversation(conversation_id)
+                            .and_then(|c| c.task_id());
+                        let Some(task_id) = task_id else {
+                            return;
+                        };
+
+                        model
+                            .lock()
+                            .set_shared_session_source_task_id(Some(task_id.to_string()));
                     }
                     _ => {}
                 }
@@ -1270,7 +1337,7 @@ impl TerminalManager {
         shared_session_model: Rc<RefCell<Option<ModelHandle<Network>>>>,
         scrollback_type: SharedSessionScrollbackType,
         lifetime: Lifetime,
-        source_type: SessionSourceType,
+        source: SharedSessionSource,
         model: Arc<FairMutex<TerminalModel>>,
         window_id: WindowId,
         sharer_remote_update_guard: RemoteUpdateGuard,
@@ -1284,13 +1351,14 @@ impl TerminalManager {
             log::warn!("Tried to share a session that's already being shared.");
             return;
         }
+        log::info!("Starting shared session");
 
-        // Record the source type on the model so we can distinguish ambient agent
-        // sessions from user-initiated shared sessions in the UI logic.
-        model
-            .lock()
-            .set_shared_session_source_type(source_type.clone());
-        if matches!(source_type, SessionSourceType::AmbientAgent { .. }) {
+        // Record the source on the model so we can distinguish ambient agent
+        // sessions from user-initiated shared sessions in the UI logic, and so
+        // the orchestrator task id is discoverable regardless of which variant
+        // the share is.
+        model.lock().set_shared_session_source(source.clone());
+        if matches!(source.source_type, SessionSourceType::AmbientAgent { .. }) {
             let terminal_view_id = terminal_view.id();
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _ctx| {
                 history.mark_terminal_view_as_ambient_agent_session_view(terminal_view_id);
@@ -1339,7 +1407,6 @@ impl TerminalManager {
         cfg_if::cfg_if! {
             if #[cfg(any(test, feature = "integration_tests"))] {
                 let _ = lifetime;
-                let _ = source_type;
                 let network = ctx.add_model(|ctx| Network::new_for_test(
                     model.clone(),
                     events_rx,
@@ -1422,7 +1489,7 @@ impl TerminalManager {
                         terminal_view.id(),
                         universal_developer_input_context,
                         lifetime,
-                        source_type.clone(),
+                        source.clone(),
                         ctx,
                     )
                 });
@@ -1459,7 +1526,7 @@ impl TerminalManager {
                         *sharer_firebase_uid,
                         scrollback_type,
                         *session_id,
-                        source_type.clone(),
+                        source.source_type.clone(),
                         ctx,
                     );
 
@@ -1474,60 +1541,43 @@ impl TerminalManager {
                     manager.started_share(terminal_view.downgrade(), *session_id, window_id, ctx);
                 });
 
+                // Lifecycle event for downstream subscribers.
+                if let Some(conversation_id) = selected_conversation_id {
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |_, ctx| {
+                        ctx.emit(BlocklistAIHistoryEvent::LocalSharedSessionEstablished {
+                            conversation_id,
+                            session_id: *session_id,
+                        });
+                    });
+                }
+
                 // Flush the initial input operations that the sharer performed
                 // in the latest buffer before the share was started.
+                let is_ambient = model.lock().is_shared_ambient_agent_session();
                 let init_input_ops: Vec<CrdtOperation> = terminal_view
                     .as_ref(ctx)
                     .input()
                     .as_ref(ctx)
                     .latest_buffer_operations()
+                    .filter(|op| !should_skip_sharer_op(is_ambient, op))
                     .cloned()
                     .collect();
-                network.update(ctx, |network, _ctx| {
-                    network.send_input_update(
-                        model.lock().block_list().active_block_id(),
-                        init_input_ops.iter(),
-                    );
-                });
+                if !init_input_ops.is_empty() {
+                    network.update(ctx, |network, _ctx| {
+                        network.send_input_update(
+                            model.lock().block_list().active_block_id(),
+                            init_input_ops.iter(),
+                        );
+                    });
+                }
 
                 // Stream historical agent conversations so viewers have conversation and task context.
                 if FeatureFlag::AgentSharedSessions.is_enabled() {
                     Self::stream_historical_agent_conversations(&terminal_view, &model, ctx);
                 }
 
-                let session_id_for_link = *session_id;
-
-                // Read task_id lazily so we still pick up a server-assigned
-                // task_id that arrived after the user clicked share.
-                let task_id = selected_conversation_id.and_then(|conversation_id| {
-                    BlocklistAIHistoryModel::as_ref(ctx)
-                        .conversation(&conversation_id)
-                        .and_then(|c| c.task_id())
-                });
-
-                if let Some(task_id) = task_id {
-                    let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-                    terminal_view.update(ctx, |_view, ctx| {
-                        ctx.spawn(
-                            async move {
-                                ai_client
-                                    .update_agent_task(
-                                        task_id,
-                                        None,
-                                        Some(session_id_for_link),
-                                        None,
-                                        None,
-                                    )
-                                    .await
-                            },
-                            move |_view, result, _ctx| {
-                                if let Err(e) = result {
-                                    log::warn!("Failed to link shared session to Oz task: {e}");
-                                }
-                            },
-                        );
-                    });
-                }
+                // `LocalSharedSessionLinkModel` fires the (task_id,
+                // session_id) link in response to the event emitted above.
             }
             NetworkEvent::FailedToCreateSharedSession {
                 reason,
@@ -1671,23 +1721,25 @@ impl TerminalManager {
                 // Check eligibility from the incoming participant list directly,
                 // since the presence manager processes new viewers asynchronously.
                 if was_viewer_driven_sizing_eligible {
-                    let sharer_uid = &participant_list.sharer.info.profile_data.firebase_uid;
                     let is_ambient_agent = terminal_view
                         .as_ref(ctx)
                         .is_shared_session_for_ambient_agent();
-                    let present_viewers: Vec<_> = participant_list
-                        .viewers
-                        .iter()
-                        .filter(|v| v.is_present)
-                        .collect();
-                    let still_eligible = present_viewers.len() == 1
-                        && (is_ambient_agent
-                            || present_viewers[0].info.profile_data.firebase_uid
-                                == *sharer_uid);
-                    if !still_eligible {
-                        terminal_view.update(ctx, |view, ctx| {
-                            view.restore_pty_to_sharer_size(ctx);
-                        });
+                    // We never want to reset back to the sharer size if we are a cloud agent,
+                    // since it was a default. Prefer to keep the viewer-set size for transcript
+                    // persistence.
+                    if !is_ambient_agent {
+                        let sharer_uid =
+                            participant_list.sharer.info.profile_data.firebase_uid.as_str();
+                        let still_eligible =
+                            PresenceManager::single_distinct_present_viewer_uid_from_viewers(
+                                participant_list.viewers.iter(),
+                            )
+                            .is_some_and(|viewer_uid| viewer_uid == sharer_uid);
+                        if !still_eligible {
+                            terminal_view.update(ctx, |view, ctx| {
+                                view.restore_pty_to_sharer_size(ctx);
+                            });
+                        }
                     }
                 }
 
@@ -2112,6 +2164,10 @@ impl TerminalManager {
                     if let Some(interaction_state) =
                         context_update.long_running_command_agent_interaction_state
                     {
+                        log::info!(
+                            "[sharer] UniversalDeveloperInputContextUpdated: \
+                             applying LRC interaction_state={interaction_state:?}"
+                        );
                         terminal_view.update(ctx, |view, ctx| {
                             view.apply_long_running_command_agent_interaction_state(
                                 interaction_state,
@@ -2214,7 +2270,7 @@ impl TerminalManager {
         ctx.subscribe_to_view(terminal_view, move |view, event, ctx| match event {
             TerminalViewEvent::StartSharingCurrentSession {
                 scrollback_type,
-                source_type,
+                source,
             } if FeatureFlag::CreatingSharedSessions.is_enabled() => {
                 Self::start_sharing_session(
                     view.clone(),
@@ -2222,11 +2278,17 @@ impl TerminalManager {
                     session_sharer.clone(),
                     *scrollback_type,
                     session_lifetime,
-                    source_type.clone(),
+                    source.clone(),
                     model.clone(),
                     window_id,
                     sharer_remote_update_guard.clone(),
                     ctx,
+                );
+            }
+            TerminalViewEvent::StartSharingCurrentSession { .. } => {
+                log::warn!(
+                    "Ignoring request to start sharing current session because \
+                     CreatingSharedSessions is disabled"
                 );
             }
             TerminalViewEvent::StopSharingCurrentSession { reason } => {
@@ -2319,9 +2381,17 @@ impl TerminalManager {
                     return;
                 }
 
+                let is_ambient = model.lock().is_shared_ambient_agent_session();
+                let filtered: Vec<_> = operations
+                    .iter()
+                    .filter(|op| !should_skip_sharer_op(is_ambient, op))
+                    .collect();
+                if filtered.is_empty() {
+                    return;
+                }
                 if let Some(network) = session_sharer.borrow().as_ref() {
                     network.update(ctx, |network, _| {
-                        network.send_input_update(block_id, operations.iter());
+                        network.send_input_update(block_id, filtered.into_iter());
                     });
                 }
             }

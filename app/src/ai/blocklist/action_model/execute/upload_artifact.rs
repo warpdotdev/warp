@@ -5,9 +5,13 @@ use std::path::PathBuf;
 #[path = "upload_artifact_tests.rs"]
 mod tests;
 
-use futures::{future::BoxFuture, FutureExt};
+use futures::future::BoxFuture;
+use futures::FutureExt;
+#[cfg(not(target_family = "wasm"))]
+use warpui::SingletonEntity;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle};
 
+use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::terminal::model::session::active_session::ActiveSession;
 #[cfg(not(target_family = "wasm"))]
 use crate::{
@@ -19,10 +23,6 @@ use crate::{
     },
     server::server_api::ServerApiProvider,
 };
-#[cfg(not(target_family = "wasm"))]
-use warpui::SingletonEntity;
-
-use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 
 pub struct UploadArtifactExecutor {
     #[cfg_attr(target_family = "wasm", allow(dead_code))]

@@ -2,62 +2,55 @@
 //! connect to and communicate with the shared session.
 //! Adheres to the [`session-sharing-protocol`].
 
+use std::pin::pin;
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::bail;
 use async_channel::Receiver;
+use futures_util::stream::AbortHandle;
+use futures_util::{SinkExt, StreamExt};
 use instant::Instant;
-use std::{pin::pin, sync::Arc};
-use warpui::r#async::{SpawnedFutureHandle, Timer};
-
-use futures_util::{stream::AbortHandle, SinkExt, StreamExt};
-
 use parking_lot::FairMutex;
-use session_sharing_protocol::{
-    common::{
-        ActivePrompt, ActivePromptUpdate, AddGuestsResponse, AgentAttachment,
-        AgentPromptFailureReason, AgentPromptRequest, AgentPromptRequestId,
-        CommandExecutionFailureReason, ControlAction, ControlActionFailureReason, FeatureSupport,
-        InputOperationId, InputOperationSeqNo, InputUpdate, LinkAccessLevelUpdateResponse,
-        ParticipantId, ParticipantList, ParticipantPresenceUpdate, RemoveGuestResponse, Role,
-        RoleRequestId, RoleRequestResponse, Selection, SelectionUpdate, ServerConversationToken,
-        SessionId, TeamAccessLevelUpdateResponse, TeamAclData, TelemetryContext,
-        UniversalDeveloperInputContext, UniversalDeveloperInputContextUpdate,
-        UpdatePendingUserRoleResponse, UserID, WindowSize, WriteToPtyFailureReason,
-        WriteToPtyRequestId, WriteToPtySeqNo,
-    },
-    sharer::SessionSourceType,
-    viewer::{
-        DownstreamMessage, InitPayload, RoleUpdatedReason, SessionEndedReason, UpstreamMessage,
-        ViewerRemovedReason,
-    },
+use session_sharing_protocol::common::{
+    ActivePrompt, ActivePromptUpdate, AddGuestsResponse, AgentAttachment, AgentPromptFailureReason,
+    AgentPromptRequest, AgentPromptRequestId, CommandExecutionFailureReason, ControlAction,
+    ControlActionFailureReason, FeatureSupport, InputOperationId, InputOperationSeqNo, InputUpdate,
+    LinkAccessLevelUpdateResponse, ParticipantId, ParticipantList, ParticipantPresenceUpdate,
+    RemoveGuestResponse, Role, RoleRequestId, RoleRequestResponse, Selection, SelectionUpdate,
+    ServerConversationToken, SessionId, TeamAccessLevelUpdateResponse, TeamAclData,
+    TelemetryContext, UniversalDeveloperInputContext, UniversalDeveloperInputContextUpdate,
+    UpdatePendingUserRoleResponse, UserID, WindowSize, WriteToPtyFailureReason,
+    WriteToPtyRequestId, WriteToPtySeqNo,
 };
-
-use std::time::Duration;
+use session_sharing_protocol::viewer::{
+    DownstreamMessage, InitPayload, RoleUpdatedReason, SessionEndedReason, UpstreamMessage,
+    ViewerRemovedReason,
+};
 use warp_core::features::FeatureFlag;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
     Entity, ModelContext, ModelHandle, RequestState, RetryOption, SingletonEntity, WeakViewHandle,
 };
 use websocket::{Message, Sink, Stream, WebsocketMessage as _};
 
-use crate::{
-    auth::{auth_state::AuthState, AuthStateProvider, UserUid},
-    editor::{CrdtOperation, ReplicaId},
-    server::{
-        server_api::{auth::AuthClient, ServerApiProvider},
-        telemetry::telemetry_context,
-    },
-    terminal::{
-        event_listener::ChannelEventListener,
-        model::block::BlockId,
-        shared_session::{
-            connect_endpoint,
-            network::heartbeat::{Event as HeartbeatEvent, Heartbeat},
-            viewer::event_loop::{EventLoop, SharedSessionInitialLoadMode},
-            EventNumber, SELECTION_THROTTLE_PERIOD,
-        },
-        TerminalModel, TerminalView,
-    },
-    throttle::throttle,
+use crate::auth::auth_state::AuthState;
+use crate::auth::{AuthStateProvider, UserUid};
+use crate::editor::{CrdtOperation, ReplicaId};
+use crate::server::server_api::auth::AuthClient;
+use crate::server::server_api::ServerApiProvider;
+use crate::server::telemetry::telemetry_context;
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::block::BlockId;
+use crate::terminal::shared_session::network::heartbeat::{Event as HeartbeatEvent, Heartbeat};
+use crate::terminal::shared_session::viewer::event_loop::{
+    EventLoop, SharedSessionInitialLoadMode,
 };
+use crate::terminal::shared_session::{
+    connect_endpoint, EventNumber, SharedSessionSource, SELECTION_THROTTLE_PERIOD,
+};
+use crate::terminal::{TerminalModel, TerminalView};
+use crate::throttle::throttle;
 
 /// The amount of time we will wait to batch consecutive write to pty requests before sending an event to the server.
 const PTY_WRITES_BATCH_THRESHOLD: Duration = if cfg!(test) {
@@ -264,7 +257,7 @@ impl Network {
             participant_list: Default::default(),
             input_replica_id: ReplicaId::random(),
             universal_developer_input_context: None,
-            source_type: SessionSourceType::default(),
+            source: SharedSessionSource::default(),
         });
 
         model.start_write_to_pty_events_listener(write_to_pty_events_rx, ctx);
@@ -533,8 +526,13 @@ impl Network {
                 // We use the more detailed source type here,
                 // ignoring the legacy source_type field (which was kept around for backwards compatibility).
                 detailed_source_type: source_type,
+                source_task_id,
                 ..
             } => {
+                let source = SharedSessionSource {
+                    source_type,
+                    source_task_id,
+                };
                 if matches!(self.stage, Stage::JoinedSuccessfully) {
                     log::warn!(
                         "Received unexpected JoinedSuccessfully message when we've already joined"
@@ -571,7 +569,7 @@ impl Network {
                     participant_list: Box::new(*participant_list),
                     input_replica_id: input_replica_id.into(),
                     universal_developer_input_context,
-                    source_type,
+                    source,
                 });
             }
             DownstreamMessage::RejoinedSuccessfully { participant_list } => {
@@ -1114,7 +1112,7 @@ pub enum NetworkEvent {
         participant_list: Box<ParticipantList>,
         input_replica_id: ReplicaId,
         universal_developer_input_context: Option<UniversalDeveloperInputContext>,
-        source_type: SessionSourceType,
+        source: SharedSessionSource,
     },
     FailedToJoin {
         reason: FailedToJoinReason,

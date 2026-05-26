@@ -1,35 +1,29 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
-};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
-use super::{
-    subscribers::{
-        HomeSkillSubscriber, ProjectSkillSubscriber, SkillRepositoryMessage, SymlinkSkillSubscriber,
-    },
-    utils::{
-        find_skill_directories_in_tree, is_home_provider_path, is_home_skill_directory,
-        is_skill_file, read_skills_from_directories,
-    },
-};
-use watcher::{BulkFilesystemWatcherEvent, HomeDirectoryWatcher, HomeDirectoryWatcherEvent};
-
-use crate::server::datetime_ext::DateTimeExt;
-use crate::warp_managed_paths_watcher::{
-    filter_repository_update_by_prefix, warp_managed_skill_dirs, WarpManagedPathsWatcher,
-    WarpManagedPathsWatcherEvent,
-};
 use ai::skills::{
     home_skills_path, parse_skill, ParsedSkill, SkillProvider, SKILL_PROVIDER_DEFINITIONS,
 };
 use async_channel::Sender;
 use chrono::{DateTime, Duration, Utc};
-use repo_metadata::{
-    repositories::{DetectedRepositories, RepoDetectionSource},
-    repository::{Repository, SubscriberId},
-    DirectoryWatcher, RepoMetadataModel, RepositoryUpdate,
-};
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::repository::{Repository, SubscriberId};
+use repo_metadata::{DirectoryWatcher, RepoMetadataModel, RepositoryUpdate};
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+use watcher::{BulkFilesystemWatcherEvent, HomeDirectoryWatcher, HomeDirectoryWatcherEvent};
+
+use super::subscribers::{
+    HomeSkillSubscriber, ProjectSkillSubscriber, SkillRepositoryMessage, SymlinkSkillSubscriber,
+};
+use super::utils::{
+    find_skill_directories_in_tree, is_home_provider_path, is_home_skill_directory, is_skill_file,
+    read_skills_from_directories,
+};
+use crate::server::datetime_ext::DateTimeExt;
+use crate::warp_managed_paths_watcher::{
+    filter_repository_update_by_prefix, warp_managed_skill_dirs, WarpManagedPathsWatcher,
+    WarpManagedPathsWatcherEvent,
+};
 
 #[derive(Debug, PartialEq)]
 pub enum SkillWatcherEvent {
@@ -159,15 +153,11 @@ impl SkillWatcher {
             }
         }
 
-        // Two subscriptions handle different aspects of skill loading:
-        //
-        // 1. RepositoryMetadataEvent::RepositoryUpdated - Loads initial skills from the file tree.
-        //    This fires after the tree is built, so we can query it for skill directories.
-        //
-        // 2. DetectedRepositoriesEvent::DetectedGitRepo - Sets up file watchers for incremental
-        //    updates (add/delete/move). This handles changes after initial load.
-        //
-        // The order of these events doesn't matter - both are idempotent and serve different purposes.
+        // RepositoryMetadataEvent::RepositoryUpdated fires after the file tree is
+        // built, so we can query it for skill directories. This covers both local
+        // project repos and environment repos registered via CloudEnvironmentPrep
+        // (which flow through DetectedRepositories -> DirectoryWatcher ->
+        // RepoMetadataModel).
         ctx.subscribe_to_model(&RepoMetadataModel::handle(ctx), |me, event, ctx| {
             use repo_metadata::wrapper_model::RepoMetadataEvent;
             use repo_metadata::RepositoryIdentifier;
@@ -191,27 +181,6 @@ impl SkillWatcher {
             }
         });
 
-        // Subscribe to DetectedRepositories to watch repos registered via CloudEnvironmentPrep.
-        // This fires when AgentDriver calls prepare_environment (for any run with a configured
-        // environment, Warp-hosted or self-hosted). The CloudEnvironmentPrep source filter means
-        // this is a no-op on local runs where no environment is configured.
-        ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), |me, event, ctx| {
-            use repo_metadata::repositories::DetectedRepositoriesEvent;
-            match event {
-                DetectedRepositoriesEvent::DetectedGitRepo { source, .. }
-                    if *source == RepoDetectionSource::CloudEnvironmentPrep =>
-                {
-                    // The repo root is already registered in DirectoryWatcher by the time
-                    // this event fires. Extract its path from the repository handle.
-                    let DetectedRepositoriesEvent::DetectedGitRepo { repository, .. } = event;
-                    let repo_path = repository.as_ref(ctx).root_dir().to_local_path_lossy();
-                    me.watch_repo(repo_path.clone(), ctx);
-                    me.scan_repository_for_skills(&repo_path, ctx);
-                }
-                DetectedRepositoriesEvent::DetectedGitRepo { .. } => {}
-            }
-        });
-
         Self {
             repository_message_tx,
             watched_repos: HashSet::new(),
@@ -231,7 +200,7 @@ impl SkillWatcher {
 
         // Get the repository handle from DetectedRepositories.
         if let Some(repo_handle) =
-            DetectedRepositories::as_ref(ctx).get_watched_repo_for_path(&repo_path, ctx)
+            DetectedRepositories::as_ref(ctx).get_local_watched_repo_for_path(&repo_path, ctx)
         {
             // Optimistically add the repository to the set of watched repositories to prevent duplicate subscriptions
             self.watched_repos.insert(repo_path.clone());

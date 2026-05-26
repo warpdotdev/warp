@@ -8,10 +8,8 @@ use warpui::keymap::Keystroke;
 use warpui::{AppContext, Entity, ModelHandle, SingletonEntity, View, ViewContext};
 
 use super::buffer_model::InputBufferModel;
-use super::message_bar::{
-    common::render_terminal_message, truncated_command_for_block, Message, MessageItem,
-    MessageProvider,
-};
+use super::message_bar::common::render_terminal_message;
+use super::message_bar::{truncated_command_for_block, Message, MessageItem, MessageProvider};
 use crate::ai::blocklist::{
     BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIInputModel,
 };
@@ -263,10 +261,10 @@ impl MessageProvider<TerminalMessageArgs<'_>> for ContinueConversationMessagePro
 }
 
 mod internal {
-    use crate::terminal::{
-        model::blocks::{BlockHeight, BlockHeightItem, BlockHeightSummary, RichContentItem},
-        TerminalModel,
+    use crate::terminal::model::blocks::{
+        BlockHeight, BlockHeightItem, BlockHeightSummary, RichContentItem,
     };
+    use crate::terminal::TerminalModel;
 
     impl TerminalModel {
         pub(super) fn is_last_visible_item_agent_view_block(&self) -> bool {

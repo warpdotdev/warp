@@ -1,61 +1,54 @@
-use crate::ui_components::blended_colors;
 use core::fmt::{self, Display};
-use itertools::Itertools as _;
-use pathfinder_color::ColorU;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use super::{
-    about_page::AboutPageView,
-    ai_page::{AISettingsPageAction, AISettingsPageView},
-    appearance_page::AppearanceSettingsPageView,
-    billing_and_usage_page::BillingAndUsagePageView,
-    code_page::CodeSettingsPageView,
-    environments_page::EnvironmentsPageView,
-    features_page::FeaturesPageView,
-    keybindings::KeybindingsView,
-    main_page::MainSettingsPageView,
-    mcp_servers_page::MCPServersSettingsPageView,
-    privacy_page::PrivacyPageView,
-    referrals_page::ReferralsPageView,
-    show_blocks_view::ShowBlocksView,
-    teams_page::TeamsPageView,
-    warp_drive_page::WarpDriveSettingsPageView,
-    warpify_page::WarpifyPageView,
-    SettingsSection,
-};
-use crate::{
-    appearance::Appearance,
-    settings::CloudPreferencesSettings,
-    themes::theme::Fill,
-    ui_components::icons::Icon,
-    view_components::{Dropdown, SubmittableTextInput},
-};
+use itertools::Itertools as _;
+use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting;
-use warp_core::{
-    settings::SyncToCloud,
-    ui::{color::blend::Blend, theme::color::internal_colors},
+use warp_core::settings::SyncToCloud;
+use warp_core::ui::color::blend::Blend;
+use warp_core::ui::theme::color::internal_colors;
+use warpui::elements::new_scrollable::{
+    ClippedAxisConfiguration, DualAxisConfig, SingleAxisConfig,
 };
-use warpui::{
-    elements::{
-        new_scrollable::{ClippedAxisConfiguration, DualAxisConfig, SingleAxisConfig},
-        Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
-        CornerRadius, CrossAxisAlignment, Element, Empty, Expanded, Flex, Hoverable,
-        MainAxisAlignment, MainAxisSize, MouseStateHandle, NewScrollable, OffsetPositioning,
-        ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollTarget,
-        ScrollToPositionMode, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Stack,
-        Text,
-    },
-    fonts::{Properties, Weight},
-    platform::Cursor,
-    ui_components::{
-        button::{Button, ButtonVariant},
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    units::Pixels,
-    Action, AppContext, SingletonEntity, ViewContext, ViewHandle,
+use warpui::elements::{
+    Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Element, Empty, Expanded, Flex, Hoverable, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, NewScrollable, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, SavePosition, ScrollTarget, ScrollToPositionMode, Shrinkable,
+    SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
 };
+use warpui::fonts::{Properties, Weight};
+use warpui::platform::Cursor;
+use warpui::ui_components::button::{Button, ButtonVariant};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::units::Pixels;
+use warpui::{Action, AppContext, SingletonEntity, ViewContext, ViewHandle};
+
+use super::about_page::AboutPageView;
+use super::ai_page::{AISettingsPageAction, AISettingsPageView};
+use super::appearance_page::AppearanceSettingsPageView;
+use super::billing_and_usage_dispatch::BillingAndUsageDispatchView;
+use super::code_page::CodeSettingsPageView;
+use super::environments_page::EnvironmentsPageView;
+use super::features_page::FeaturesPageView;
+use super::keybindings::KeybindingsView;
+use super::main_page::MainSettingsPageView;
+use super::mcp_servers_page::MCPServersSettingsPageView;
+use super::privacy_page::PrivacyPageView;
+use super::referrals_page::ReferralsPageView;
+use super::show_blocks_view::ShowBlocksView;
+use super::teams_page::TeamsPageView;
+use super::warp_drive_page::WarpDriveSettingsPageView;
+use super::warpify_page::WarpifyPageView;
+use super::SettingsSection;
+use crate::appearance::Appearance;
+use crate::settings::CloudPreferencesSettings;
+use crate::themes::theme::Fill;
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
+use crate::view_components::{Dropdown, SubmittableTextInput};
 
 pub const TOGGLE_BUTTON_RIGHT_PADDING: f32 = 5.;
 pub const HEADER_PADDING: f32 = 15.;
@@ -70,6 +63,7 @@ const ALTERNATING_LIST_ITEM_PADDING: f32 = 8.0;
 const GREY_TEXT_OPACITY: u8 = 60;
 const MIN_PAGE_WIDTH: f32 = 520.;
 const MAX_PAGE_WIDTH: f32 = 800.;
+const INFO_TOOLTIP_MAX_WIDTH: f32 = 320.;
 
 /// Left margin for top-level sidebar nav items (pages and umbrella labels).
 pub(super) const NAV_ITEM_LEFT_MARGIN: f32 = 12.;
@@ -119,7 +113,7 @@ pub enum SettingsPageViewHandle {
     Referrals(ViewHandle<ReferralsPageView>),
     AI(ViewHandle<AISettingsPageView>),
     CloudEnvironments(ViewHandle<EnvironmentsPageView>),
-    BillingAndUsage(ViewHandle<BillingAndUsagePageView>),
+    BillingAndUsage(ViewHandle<BillingAndUsageDispatchView>),
     MCPServers(ViewHandle<MCPServersSettingsPageView>),
     WarpDrive(ViewHandle<WarpDriveSettingsPageView>),
 }
@@ -551,26 +545,54 @@ pub fn render_info_icon<T: Clone + Action>(
     appearance: &Appearance,
     additional_info: AdditionalInfo<T>,
 ) -> Box<dyn Element> {
-    let info_button = appearance
-        .ui_builder()
-        .info_button_with_tooltip(
-            13.,
-            additional_info
-                .tooltip_override_text
-                .unwrap_or("Click to learn more in docs".to_owned()),
-            additional_info.mouse_state.clone(),
+    let tooltip_text = additional_info
+        .tooltip_override_text
+        .unwrap_or("Click to learn more in docs".to_owned());
+    let icon = Container::new(
+        ConstrainedBox::new(
+            Icon::Info
+                .to_warpui_icon(appearance.theme().active_ui_text_color())
+                .finish(),
         )
-        .on_click(move |ctx, _, _| {
-            if let Some(on_click_action) = &additional_info.on_click_action {
-                ctx.dispatch_typed_action(on_click_action.clone());
-            }
-        })
-        .finish();
+        .with_width(13.)
+        .with_height(13.)
+        .finish(),
+    )
+    .finish();
 
-    Container::new(info_button)
+    let mut info_button = Hoverable::new(additional_info.mouse_state.clone(), move |state| {
+        let mut stack = Stack::new().with_child(icon);
+        if state.is_hovered() {
+            let tool_tip = ConstrainedBox::new(
+                appearance
+                    .ui_builder()
+                    .tool_tip(tooltip_text)
+                    .build()
+                    .finish(),
+            )
+            .with_max_width(INFO_TOOLTIP_MAX_WIDTH)
+            .finish();
+            stack.add_positioned_child(
+                tool_tip,
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., -3.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::TopMiddle,
+                    ChildAnchor::BottomMiddle,
+                ),
+            );
+        }
+        stack.finish()
+    })
+    .with_cursor(Cursor::PointingHand);
+
+    if let Some(on_click_action) = additional_info.on_click_action {
+        info_button = info_button
+            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(on_click_action.clone()));
+    }
+
+    Container::new(Box::new(info_button))
         .with_margin_left(4.)
-        // Since the icon is smaller than the font, we need some margin to be in alignment.
-        .with_margin_top(1.5)
         .finish()
 }
 
@@ -588,11 +610,7 @@ pub fn render_local_only_icon(
         )
         .finish();
 
-    Container::new(info_button)
-        .with_margin_left(4.)
-        // Since the icon is smaller than the font, we need some margin to be in alignment.
-        .with_margin_top(1.5)
-        .finish()
+    Container::new(info_button).with_margin_left(4.).finish()
 }
 
 pub fn render_body_item_label<T: Clone + Action>(

@@ -1,4 +1,6 @@
-use std::{env, path::PathBuf};
+use std::env;
+use std::path::PathBuf;
+
 use tini::Ini;
 
 static CURSOR_DIR_NAME: &'static &str = &"cursors";

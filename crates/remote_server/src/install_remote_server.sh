@@ -14,7 +14,7 @@ set -e
 
 arch=$(uname -m)
 case "$arch" in
-  x86_64)        arch_name=x86_64 ;;
+  x86_64|amd64)  arch_name=x86_64 ;;
   aarch64|arm64) arch_name=aarch64 ;;
   *) echo "unsupported arch: $arch" >&2; exit 2 ;;
 esac
@@ -68,7 +68,7 @@ else
   url="{download_base_url}?package=tar&os=$os_name&arch=$arch_name&channel={channel}{version_query}"
 
   if command -v curl >/dev/null 2>&1; then
-    curl -fSL "$url" -o "$tmpdir/oz.tar.gz"
+    curl -fSL --connect-timeout 15 "$url" -o "$tmpdir/oz.tar.gz"
   elif command -v wget >/dev/null 2>&1; then
     wget -q -O "$tmpdir/oz.tar.gz" "$url"
   else

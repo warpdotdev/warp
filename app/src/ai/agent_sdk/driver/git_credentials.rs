@@ -1,7 +1,7 @@
 /// Git credentials management for cloud agent sandboxes.
 ///
 /// This module handles:
-/// - Writing `~/.git-credentials` and `~/.config/gh/hosts.yaml` so that `git`
+/// - Writing `~/.git-credentials` and `~/.config/gh/hosts.yml` so that `git`
 ///   and the `gh` CLI can authenticate to GitHub without requiring environment
 ///   variables.
 /// - One-time git configuration (`credential.helper store`, SSH→HTTPS URL
@@ -13,12 +13,11 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
-
-use crate::server::server_api::ai::{AIClient, GitCredential};
-
 // Use the project's allowed Command wrapper (not std::process::Command, which is
 // disallowed by clippy rules because it flashes a terminal window on Windows).
 use command::blocking::Command as BlockingCommand;
+
+use crate::server::server_api::ai::{AIClient, GitCredential};
 
 /// How long to wait between credential refresh attempts (~50 minutes, staying
 /// well ahead of the one-hour GitHub token expiry).
@@ -26,6 +25,7 @@ pub(crate) const GIT_CREDENTIALS_REFRESH_INTERVAL: Duration = Duration::from_sec
 
 const DEFAULT_GIT_NAME: &str = "Oz";
 const DEFAULT_GIT_EMAIL: &str = "oz-agent@warp.dev";
+const GH_HOSTS_FILENAME: &str = "hosts.yml";
 
 fn home_dir() -> Result<PathBuf> {
     dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
@@ -40,8 +40,7 @@ fn write_secret_file(path: &std::path::Path, content: &str) -> Result<()> {
     #[cfg(unix)]
     {
         use std::io::Write as _;
-        use std::os::unix::fs::OpenOptionsExt as _;
-        use std::os::unix::fs::PermissionsExt as _;
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -99,7 +98,7 @@ fn write_git_credentials_file(credentials: &[GitCredential]) -> Result<()> {
     Ok(())
 }
 
-/// Write `~/.config/gh/hosts.yaml` so the `gh` CLI is authenticated.
+/// Write `~/.config/gh/hosts.yml` so the `gh` CLI is authenticated.
 ///
 /// The YAML format is stable for `gh` v2+:
 /// ```yaml
@@ -110,18 +109,15 @@ fn write_git_credentials_file(credentials: &[GitCredential]) -> Result<()> {
 /// ```
 ///
 /// The write is atomic: a temporary file is written then renamed.
-fn write_gh_hosts_yaml(credentials: &[GitCredential]) -> Result<()> {
+fn write_gh_hosts_yml(credentials: &[GitCredential], home: &std::path::Path) -> Result<()> {
     if credentials.is_empty() {
         return Ok(());
     }
-
-    let home = home_dir()?;
     let gh_config_dir = home.join(".config").join("gh");
     std::fs::create_dir_all(&gh_config_dir)
         .with_context(|| format!("Failed to create {}", gh_config_dir.display()))?;
-
-    let path = gh_config_dir.join("hosts.yaml");
-    let tmp_path = gh_config_dir.join("hosts.yaml.tmp");
+    let path = gh_config_dir.join(GH_HOSTS_FILENAME);
+    let tmp_path = gh_config_dir.join(format!("{GH_HOSTS_FILENAME}.tmp"));
 
     let mut yaml = String::new();
     for cred in credentials {
@@ -146,8 +142,12 @@ fn write_gh_hosts_yaml(credentials: &[GitCredential]) -> Result<()> {
 }
 
 pub(crate) fn write_git_credentials(credentials: &[GitCredential]) -> Result<()> {
+    if credentials.is_empty() {
+        return Ok(());
+    }
     write_git_credentials_file(credentials)?;
-    write_gh_hosts_yaml(credentials)?;
+    let home = home_dir()?;
+    write_gh_hosts_yml(credentials, &home)?;
     Ok(())
 }
 
@@ -270,7 +270,7 @@ async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<()>
 /// On each iteration:
 /// 1. Issue a short-lived workload token.
 /// 2. Call `taskGitCredentials` to get a fresh token from the server.
-/// 3. Overwrite `~/.git-credentials` and `~/.config/gh/hosts.yaml`.
+/// 3. Overwrite `~/.git-credentials` and `~/.config/gh/hosts.yml`.
 ///
 /// On transient failure, the refresh is retried up to three times with
 /// exponential backoff (1 min, 2 min, 4 min), keeping all retries within the
@@ -318,3 +318,7 @@ pub(crate) async fn refresh_loop(task_id: String, ai_client: Arc<dyn AIClient>) 
         }
     }
 }
+
+#[cfg(test)]
+#[path = "git_credentials_tests.rs"]
+mod tests;

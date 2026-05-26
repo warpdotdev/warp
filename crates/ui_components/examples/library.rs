@@ -1,24 +1,22 @@
-use std::{borrow::Cow, sync::Arc, time::Duration};
+use std::borrow::Cow;
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use pathfinder_geometry::vector::Vector2F;
 use rust_embed::RustEmbed;
-use ui_components::{
-    Component as _, Options, button, dialog,
-    lightbox::{self, LightboxImage, LightboxImageSource, NavigationDirection},
-    switch, tooltip,
-};
-use warp_core::ui::{Icon, appearance::Appearance, theme::color::internal_colors};
-use warpui::{
-    AssetProvider, SingletonEntity, Tracked,
-    assets::asset_cache::{AssetCache, AssetSource, AssetState},
-    r#async::Timer,
-    elements::Stack,
-    image_cache::ImageType,
-    keymap::FixedBinding,
-    platform,
-    prelude::*,
-};
+use ui_components::lightbox::{self, LightboxImage, LightboxImageSource, NavigationDirection};
+use ui_components::{Component as _, Options, button, dialog, switch, tooltip};
+use warp_core::ui::Icon;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::color::internal_colors;
+use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
+use warpui::r#async::Timer;
+use warpui::elements::Stack;
+use warpui::image_cache::ImageType;
+use warpui::keymap::FixedBinding;
+use warpui::prelude::*;
+use warpui::{AssetProvider, SingletonEntity, Tracked, platform};
 
 #[derive(Clone, Copy, RustEmbed)]
 #[folder = "../../app/assets"]

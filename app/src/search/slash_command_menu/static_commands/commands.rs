@@ -1,13 +1,14 @@
-use std::{collections::HashMap, sync::LazyLock};
+use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 
-use crate::search::slash_command_menu::{static_commands::Argument, StaticCommand};
-use crate::ui_components::color_dot;
-
 use super::Availability;
+use crate::search::slash_command_menu::static_commands::Argument;
+use crate::search::slash_command_menu::StaticCommand;
+use crate::ui_components::color_dot;
 
 pub static AGENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/agent",
@@ -722,7 +723,7 @@ fn all_commands() -> Vec<StaticCommand> {
         commands.push(OPEN_REPO);
     }
 
-    if FeatureFlag::Orchestration.is_enabled() {
+    if FeatureFlag::OrchestrationV2.is_enabled() {
         commands.push(ORCHESTRATE.clone());
     }
 

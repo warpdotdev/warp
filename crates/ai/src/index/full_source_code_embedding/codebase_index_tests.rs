@@ -1,34 +1,32 @@
 #![allow(clippy::single_range_in_vec_init)]
+use std::collections::HashMap;
+use std::ops::Range;
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use chrono::Utc;
+use futures::executor::block_on;
+use repo_metadata::DirectoryWatcher;
 use string_offset::ByteOffset;
 use virtual_fs::{Stub, VirtualFS};
+use warp_util::standardized_path::StandardizedPath;
+use warpui::{App, SingletonEntity};
 
+use super::{
+    CodebaseIndex, CodebaseIndexTimeStampMetadata, ServerSyncResult, TreeSourceSyncState,
+    DEFAULT_INCREMENAL_SYNC_FLUSH_INTERVAL,
+};
 use crate::index::full_source_code_embedding::changed_files::ChangedFiles;
 use crate::index::full_source_code_embedding::codebase_index::MAX_DEPTH;
 use crate::index::full_source_code_embedding::fragment_metadata::{
     FragmentLocation, LeafToFragmentMetadata,
 };
-
-use crate::index::full_source_code_embedding::merkle_tree::MerkleHash;
-use crate::index::full_source_code_embedding::merkle_tree::MerkleTree;
+use crate::index::full_source_code_embedding::merkle_tree::{MerkleHash, MerkleTree};
 use crate::index::full_source_code_embedding::store_client::MockStoreClient;
 use crate::index::full_source_code_embedding::{
     ContentHash, EmbeddingConfig, Fragment, FragmentMetadata,
 };
 use crate::index::locations::{CodeContextLocation, FileFragmentLocation};
-use futures::executor::block_on;
-use repo_metadata::DirectoryWatcher;
-use std::collections::HashMap;
-use std::ops::Range;
-use std::path::PathBuf;
-use std::sync::Arc;
-use warp_util::standardized_path::StandardizedPath;
-use warpui::{App, SingletonEntity};
-
-use super::{
-    CodebaseIndex, CodebaseIndexTimeStampMetadata, TreeSourceSyncState,
-    DEFAULT_INCREMENAL_SYNC_FLUSH_INTERVAL,
-};
 
 impl CodebaseIndex {
     fn new_for_test(
@@ -104,6 +102,86 @@ fn create_test_metadata(
     }
 }
 
+#[test]
+fn synced_index_with_queued_file_changes_reports_pending_status() {
+    VirtualFS::test(
+        "synced_index_with_queued_file_changes_reports_pending_status",
+        |dirs, mut sandbox| {
+            App::test((), |mut app| async move {
+                app.add_singleton_model(DirectoryWatcher::new);
+
+                let repo_name = "warp-virtual";
+                sandbox.mkdir(repo_name);
+                sandbox.with_files(vec![Stub::FileWithContent(
+                    format!("{repo_name}/existing_file").as_str(),
+                    "existing content",
+                )]);
+
+                let repo_path = dunce::canonicalize(dirs.tests().join(repo_name)).unwrap();
+                let build_file_tree_result =
+                    block_on(CodebaseIndex::build_file_tree(repo_path.clone(), None)).unwrap();
+                let (tree, _) =
+                    block_on(MerkleTree::try_new(build_file_tree_result.file_tree)).unwrap();
+
+                let mut index = CodebaseIndex::new_for_test(Default::default(), &mut app);
+                index.tree_sync_state = TreeSourceSyncState::Synced {
+                    tree,
+                    server_sync_result: ServerSyncResult::Success,
+                };
+
+                let mut changed_files = ChangedFiles::default();
+                changed_files.upsertions.insert(repo_path.join("new_file"));
+                index.pending_file_changes = Some(changed_files);
+
+                let status = index.codebase_index_status();
+                assert!(status.has_pending());
+                assert!(status.has_synced_version());
+                assert_eq!(status.last_sync_successful(), Some(true));
+            });
+        },
+    );
+}
+
+#[test]
+fn synced_index_without_pending_file_changes_stays_ready_after_flush() {
+    VirtualFS::test(
+        "synced_index_without_pending_file_changes_stays_ready_after_flush",
+        |dirs, mut sandbox| {
+            App::test((), |mut app| async move {
+                app.add_singleton_model(DirectoryWatcher::new);
+
+                let repo_name = "warp-virtual";
+                sandbox.mkdir(repo_name);
+                sandbox.with_files(vec![Stub::FileWithContent(
+                    format!("{repo_name}/existing_file").as_str(),
+                    "existing content",
+                )]);
+
+                let repo_path = dunce::canonicalize(dirs.tests().join(repo_name)).unwrap();
+                let build_file_tree_result =
+                    block_on(CodebaseIndex::build_file_tree(repo_path, None)).unwrap();
+                let (tree, _) =
+                    block_on(MerkleTree::try_new(build_file_tree_result.file_tree)).unwrap();
+
+                let mut test_index = CodebaseIndex::new_for_test(Default::default(), &mut app);
+                test_index.tree_sync_state = TreeSourceSyncState::Synced {
+                    tree,
+                    server_sync_result: ServerSyncResult::Success,
+                };
+                let index = app.add_model(|_| test_index);
+
+                index.update(&mut app, |index, ctx| {
+                    index.flush_pending_file_changes(ctx);
+
+                    let status = index.codebase_index_status();
+                    assert!(!status.has_pending());
+                    assert!(status.has_synced_version());
+                    assert_eq!(status.last_sync_successful(), Some(true));
+                });
+            });
+        },
+    );
+}
 #[test]
 fn test_empty_fragments() {
     App::test((), |mut app| async move {

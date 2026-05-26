@@ -1,48 +1,37 @@
 //! This module contains state management logic for pending context, where "pending context"
 //! is defined as additional context to be attached to the next AI query.
 
-use std::{
-    collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::sync::Arc;
 
-use crate::ai::{
-    agent::{AnyFileContent, FileContext},
-    block_context::BlockContext,
-};
-
-use super::agent_view::{AgentViewController, AgentViewEntryOrigin, EnterAgentViewError};
 use ai::project_context::model::ProjectContextModel;
 use parking_lot::FairMutex;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-use crate::ai::agent::conversation::{AIConversationAutoexecuteMode, ConversationStatus};
-use crate::{
-    ai::{
-        agent::todos::AIAgentTodoList,
-        agent::{
-            conversation::{AIConversation, AIConversationId},
-            AIAgentAttachment, AIAgentContext, ImageContext,
-        },
-        document::ai_document_model::AIDocumentId,
-        llms::{LLMPreferences, LLMPreferencesEvent},
-        outline::RepoOutlines,
-    },
-    terminal::{
-        event::{BlockCompletedEvent, BlockType},
-        model::{block::BlockId, session::Sessions},
-        model_events::{ModelEvent, ModelEventDispatcher},
-        TerminalModel,
-    },
-    workspaces::user_workspaces::UserWorkspaces,
+use super::agent_view::{AgentViewController, AgentViewEntryOrigin, EnterAgentViewError};
+use super::block::DirectoryContext;
+use super::history_model::BlocklistAIHistoryModel;
+use super::BlocklistAIHistoryEvent;
+use crate::ai::agent::conversation::{
+    AIConversation, AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
 };
-
-use super::{
-    block::DirectoryContext, history_model::BlocklistAIHistoryModel, BlocklistAIHistoryEvent,
+use crate::ai::agent::todos::AIAgentTodoList;
+use crate::ai::agent::{
+    AIAgentAttachment, AIAgentContext, AnyFileContent, FileContext, ImageContext,
 };
+use crate::ai::block_context::BlockContext;
+use crate::ai::document::ai_document_model::AIDocumentId;
+use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
+use crate::ai::outline::RepoOutlines;
+use crate::terminal::event::{BlockCompletedEvent, BlockType};
+use crate::terminal::model::block::{BlockId, BlockMetadata};
+use crate::terminal::model::session::Sessions;
+use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::terminal::TerminalModel;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// A non-image file picked via the "attach file" button, stored until query submission.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -217,23 +206,11 @@ impl BlocklistAIContextModel {
                     me.reset_context_to_default(ctx);
                 }
             }
-            ModelEvent::BlockMetadataReceived(block_metadata_received) => {
-                let pwd = block_metadata_received
-                    .block_metadata
-                    .current_working_directory()
-                    .map(|s| PathBuf::from(s.to_owned()));
-                let session_id = block_metadata_received.block_metadata.session_id();
-
-                if let Some(session_id) = session_id {
-                    let active_session = sessions.as_ref(ctx).get(session_id);
-                    if let Some(active_session) = active_session {
-                        me.update_directory_context(
-                            pwd.map(|p| p.to_string_lossy().to_string()),
-                            active_session.home_dir().map(|sq| sq.to_owned()),
-                            ctx,
-                        );
-                    }
-                }
+            ModelEvent::BlockMetadataReceived(e) => {
+                me.apply_block_metadata_directory_context(&e.block_metadata, &sessions, ctx);
+            }
+            ModelEvent::BlockWorkingDirectoryUpdated(e) => {
+                me.apply_block_metadata_directory_context(&e.block_metadata, &sessions, ctx);
             }
             _ => {}
         });
@@ -544,6 +521,26 @@ impl BlocklistAIContextModel {
             requires_block_resync: true,
             requires_text_resync: false,
         });
+    }
+
+    fn apply_block_metadata_directory_context(
+        &mut self,
+        block_metadata: &BlockMetadata,
+        sessions: &ModelHandle<Sessions>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let pwd = block_metadata
+            .current_working_directory()
+            .map(|s| PathBuf::from(s.to_owned()));
+        if let Some(session_id) = block_metadata.session_id() {
+            if let Some(active_session) = sessions.as_ref(ctx).get(session_id) {
+                self.update_directory_context(
+                    pwd.map(|p| p.to_string_lossy().to_string()),
+                    active_session.home_dir().map(|sq| sq.to_owned()),
+                    ctx,
+                );
+            }
+        }
     }
 
     /// Set `requires_visual_resync` to `false` only if the pending context was modified as a result

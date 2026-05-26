@@ -9,10 +9,6 @@ mod linux;
 
 #[cfg(target_os = "windows")]
 mod windows;
-use warpui_core::fonts::{Style, Weight};
-#[cfg(target_os = "windows")]
-use windows::loader;
-
 use std::any::Any;
 use std::collections::HashMap;
 use std::ops::{DerefMut, Range};
@@ -22,38 +18,33 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Result};
 use bimap::BiMap;
-use pathfinder_geometry::{
-    rect::{RectF, RectI},
-    vector::Vector2F,
-};
-use resvg::usvg::fontdb;
-use resvg::usvg::fontdb::Query;
-use vec1::Vec1;
-
 use cosmic_text::{
     Align, Attrs, AttrsList, BidiParagraphs, LayoutGlyph, LayoutLine, ShapeLine, Shaping, Wrap,
 };
-use dashmap::{mapref::entry::Entry, DashMap};
+use dashmap::mapref::entry::Entry;
+use dashmap::DashMap;
 use fontdb::Source;
 use itertools::Itertools;
 use parking_lot::RwLock;
-use pathfinder_geometry::vector::{vec2f, vec2i, Vector2I};
+use pathfinder_geometry::rect::{RectF, RectI};
+use pathfinder_geometry::vector::{vec2f, vec2i, Vector2F, Vector2I};
+use resvg::usvg::fontdb;
+use resvg::usvg::fontdb::Query;
+use vec1::Vec1;
+use warpui_core::fonts::{Style, Weight};
+#[cfg(target_os = "windows")]
+use windows::loader;
 
 use self::font_handle::{FontData, FontHandle};
 use self::str_index_map::StrIndexMap;
 use self::text_layout::{RunBuilder, TextStylesMap};
-use crate::fonts::Metrics;
-use crate::platform::{self};
-use crate::text_layout::{CaretPosition, TextAlignment};
-use crate::{
-    fonts::{
-        canvas::RasterFormat, FamilyId, FontId, GlyphId, Properties, RasterizedGlyph,
-        SubpixelAlignment,
-    },
-    platform::LineStyle,
-    rendering::GlyphConfig,
-    text_layout::{ClipConfig, Line, StyleAndFont, TextFrame},
+use crate::fonts::canvas::RasterFormat;
+use crate::fonts::{
+    FamilyId, FontId, GlyphId, Metrics, Properties, RasterizedGlyph, SubpixelAlignment,
 };
+use crate::platform::{self, LineStyle};
+use crate::rendering::GlyphConfig;
+use crate::text_layout::{CaretPosition, ClipConfig, Line, StyleAndFont, TextAlignment, TextFrame};
 
 struct FontFamily {
     name: String,
@@ -62,9 +53,10 @@ struct FontFamily {
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod loader {
+    use anyhow::Result;
+
     use super::*;
     use crate::windowing::winit::fonts::linux::{Error, FontconfigLoader};
-    use anyhow::Result;
 
     pub fn load_all_system_fonts() -> LoadedSystemFonts {
         let manager = match FontconfigLoader::new() {
@@ -586,17 +578,20 @@ impl TextLayoutSystem {
             );
             total_height += line.height();
 
-            // We add 1 to the last caret position here to skip the newline character.
-            // Since we're working with separate lines within a text frame, there is guaranteed
-            // to be a newline to skip at the end of each iteration of the loop.
-            // The only exception is on the last iteration; in that case, we don't use this
-            // value later anyway.
-            line_glyph_start_index = line
-                .caret_positions
-                .last()
-                .map(|position| position.last_offset)
-                .unwrap_or(line_glyph_start_index)
-                + 1;
+            // Only update line_glyph_start_index at paragraph boundaries (when there's a trailing
+            // newline). For soft-wrapped lines within the same paragraph, glyph.start values from
+            // cosmic-text are always byte offsets relative to the paragraph start, so
+            // line_glyph_start_index must stay at the paragraph's starting byte offset in the full
+            // text.
+            if has_trailing_newline {
+                // Convert the last caret's char index back to a byte index, then advance past the
+                // newline separator to get the next paragraph's byte offset.
+                line_glyph_start_index = line
+                    .caret_positions
+                    .last()
+                    .and_then(|position| str_index_map.byte_index(position.last_offset + 1))
+                    .unwrap_or(line_glyph_start_index);
+            }
 
             // TODO(alokedesai): Properly clip multi-line text using the same strategy we use on mac.
             // See https://github.com/warpdotdev/warp-internal/blob/91dfe429074c6129a6b5c1c57c55c1daf6d274a9/ui/src/platform/mac/text_layout.rs#L318-L359.

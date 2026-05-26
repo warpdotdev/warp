@@ -1,20 +1,20 @@
 mod entry;
+mod harness_session_header;
 mod setup_command;
 mod setup_command_text;
 
 pub use entry::*;
+pub use harness_session_header::*;
 pub use setup_command::*;
 pub use setup_command_text::*;
-
 use warpui::prelude::Container;
 use warpui::{AppContext, Element, ModelHandle};
 
+use super::AmbientAgentViewModel;
 use crate::ai::blocklist::block::view_impl::{
     WithContentItemSpacing, CONTENT_ITEM_VERTICAL_MARGIN,
 };
 use crate::terminal::view::PADDING_LEFT;
-
-use super::AmbientAgentViewModel;
 const SETUP_TEXT_BOTTOM_MARGIN: f32 = 8.;
 
 /// Wraps a cloud-mode setup row with spacing appropriate for the run's harness: non-oz

@@ -1,60 +1,53 @@
-use crate::appearance::Appearance;
-use crate::drive::CloudObjectTypeAndId;
-use crate::search::binding_source::{BindingFilterFn, BindingSource};
-use crate::search::command_palette::mixer::CommandPaletteItemAction;
-use crate::search::command_palette::SelectedItems;
-use crate::search::result_renderer::QueryResultRenderer;
-use crate::search::search_bar::SelectionUpdate;
-use crate::search::search_bar::{SearchBar, SearchBarEvent, SearchBarState, SearchResultOrdering};
-use crate::search::QueryFilter;
-use crate::send_telemetry_from_ctx;
-use crate::server::telemetry::LaunchConfigUiLocation;
-use crate::server::telemetry::TelemetryEvent;
-use crate::settings::CtrlTabBehavior;
-use crate::terminal::keys_settings::KeysSettings;
-use crate::themes::theme::WarpTheme;
-use crate::view_components::DismissibleToast;
-use crate::ToastStack;
-use lazy_static::lazy_static;
-use warp_core::send_telemetry_from_app_ctx;
-use warp_util::path::LineAndColumnArg;
-
-use crate::search::action::search_item::MatchedBinding;
-use itertools::Itertools;
-use warpui::elements::DispatchEventResult;
-use warpui::elements::EventHandler;
-use warpui::event::KeyState;
-use warpui::platform::keyboard::KeyCode;
-use warpui::FocusContext;
-
-use crate::search::command_palette::zero_state::{self, Event as ZeroStateEvent, ZeroState};
-use crate::search::data_source::QueryResult;
-
 use std::collections::HashSet;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::features::FeatureFlag;
-use crate::palette::PaletteMode;
-use crate::root_view::OpenLaunchConfigArg;
-use crate::search::command_palette::data_sources::DataSourceStore;
-use crate::server::ids::SyncId;
-use crate::session_management::SessionSource;
-use crate::workspace::{active_terminal_in_window, ForkedConversationDestination, WorkspaceAction};
+use itertools::Itertools;
+use lazy_static::lazy_static;
+use warp_core::send_telemetry_from_app_ctx;
+use warp_util::path::LineAndColumnArg;
 use warpui::elements::{
     Align, Border, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
-    Container, CornerRadius, Dismiss, Empty, Fill, Flex, ParentElement, Radius, SavePosition,
-    Shrinkable,
+    Container, CornerRadius, Dismiss, DispatchEventResult, Empty, EventHandler, Fill, Flex,
+    ParentElement, Radius, SavePosition, Shrinkable,
 };
+use warpui::event::KeyState;
 use warpui::keymap::BindingId;
+use warpui::platform::keyboard::KeyCode;
 use warpui::units::{IntoPixels, Pixels};
 use warpui::{
-    AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView,
-    ViewContext, ViewHandle, WindowId,
+    AppContext, Element, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity,
+    TypedActionView, ViewContext, ViewHandle, WindowId,
 };
 
 use super::super::palette_styles as styles;
 use super::CommandPaletteMixer;
+use crate::appearance::Appearance;
+use crate::drive::CloudObjectTypeAndId;
+use crate::features::FeatureFlag;
+use crate::palette::PaletteMode;
+use crate::root_view::OpenLaunchConfigArg;
+use crate::search::action::search_item::MatchedBinding;
+use crate::search::binding_source::{BindingFilterFn, BindingSource};
+use crate::search::command_palette::data_sources::DataSourceStore;
+use crate::search::command_palette::mixer::CommandPaletteItemAction;
+use crate::search::command_palette::zero_state::{self, Event as ZeroStateEvent, ZeroState};
+use crate::search::command_palette::SelectedItems;
+use crate::search::data_source::QueryResult;
+use crate::search::result_renderer::QueryResultRenderer;
+use crate::search::search_bar::{
+    SearchBar, SearchBarEvent, SearchBarState, SearchResultOrdering, SelectionUpdate,
+};
+use crate::search::QueryFilter;
+use crate::server::ids::SyncId;
+use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
+use crate::session_management::SessionSource;
+use crate::settings::CtrlTabBehavior;
+use crate::terminal::keys_settings::KeysSettings;
+use crate::themes::theme::WarpTheme;
+use crate::view_components::DismissibleToast;
+use crate::workspace::{active_terminal_in_window, ForkedConversationDestination, WorkspaceAction};
+use crate::{send_telemetry_from_ctx, ToastStack};
 
 lazy_static! {
     /// Set of hardcoded action names that we want to show in the command palette zero state.
@@ -179,7 +172,7 @@ impl warpui::View for View {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
 
-        let body = if self.search_bar_state.as_ref(app).should_show_zero_state() {
+        let body = if self.search_bar.as_ref(app).should_show_zero_state(app) {
             ChildView::new(&self.zero_state_handle).finish()
         } else {
             self.render_palette_list(theme, app)
@@ -337,22 +330,10 @@ impl View {
             .map(|item| &item.search_result)
     }
 
-    pub fn set_fixed_query_filters(
-        &mut self,
-        title: String,
-        filters: Vec<QueryFilter>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.search_bar.update(ctx, |search_bar, ctx| {
-            search_bar.set_fixed_filters(title, filters, ctx);
-        });
-        ctx.notify();
-    }
-
     /// Set the active query filter in the search bar to be `filter`.
     pub fn set_active_query_filter(&mut self, filter: QueryFilter, ctx: &mut ViewContext<Self>) {
         self.search_bar.update(ctx, |view, ctx| {
-            view.set_visible_query_filter(Some((filter, filter.filter_atom().primary_text)), ctx)
+            view.set_query_filter(Some((filter, filter.filter_atom().primary_text)), ctx)
         });
         ctx.notify();
     }
@@ -364,15 +345,15 @@ impl View {
     }
 
     pub fn select_next_item(&mut self, ctx: &mut ViewContext<Self>) {
-        self.search_bar_state.update(ctx, |state, ctx| {
-            state.handle_selection_update(SelectionUpdate::Down, ctx);
+        self.search_bar.update(ctx, |search_bar, ctx| {
+            search_bar.handle_selection_update(SelectionUpdate::Down, ctx);
         });
         ctx.notify();
     }
 
     pub fn select_prev_item(&mut self, ctx: &mut ViewContext<Self>) {
-        self.search_bar_state.update(ctx, |state, ctx| {
-            state.handle_selection_update(SelectionUpdate::Up, ctx);
+        self.search_bar.update(ctx, |search_bar, ctx| {
+            search_bar.handle_selection_update(SelectionUpdate::Up, ctx);
         });
         ctx.notify();
     }
@@ -385,9 +366,7 @@ impl View {
 
     /// Returns the active query filters
     pub fn active_query_filter(&self, app: &AppContext) -> Option<QueryFilter> {
-        self.search_bar_state
-            .as_ref(app)
-            .active_visible_query_filter()
+        self.search_bar_state.as_ref(app).active_query_filter()
     }
 
     pub fn is_mode_enabled(&self, mode: PaletteMode, app: &AppContext) -> bool {

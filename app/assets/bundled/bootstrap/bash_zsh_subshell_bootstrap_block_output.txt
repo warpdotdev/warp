@@ -1,1 +1,1 @@
-echo -e '\n# Auto-Warpify\n[[ "$-" == *i* ]] && printf '\''\eP$f{"hook": "SourcedRcFileForWarp", "value": { "shell": "%", "uname": "'$(uname)'"% }}\x9c'\'' ' >> %
+echo -e '\n# Auto-Warpify\n[[ "$-" == *i* ]] && printf '\''\eP$f{"hook": "SourcedRcFileForWarp", "value": { "shell": "%", "uname": "'$(uname)'"% }}\x1b\x5c'\'' ' >> %

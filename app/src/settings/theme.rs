@@ -1,9 +1,9 @@
-use warpui::{platform::SystemTheme, AppContext};
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
+use warpui::platform::SystemTheme;
+use warpui::AppContext;
 
 use crate::themes::theme::{RespectSystemTheme, SelectedSystemThemes, ThemeKind};
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
-};
 
 // Settings group for themes related settings.
 // Note that we store just the information needed to derive the current

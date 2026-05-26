@@ -1,54 +1,46 @@
 mod saved_prompts;
 mod zero_state;
 
-use ai::skills::SkillProvider;
-pub(crate) use saved_prompts::*;
-use warp_core::features::FeatureFlag;
-pub use zero_state::*;
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use ai::skills::SkillProvider;
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
+pub(crate) use saved_prompts::*;
+#[cfg(not(target_family = "wasm"))]
+use warp_cli::agent::Harness;
+use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
+use warp_core::ui::Icon as WarpIcon;
 use warpui::fonts::FamilyId;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+pub use zero_state::*;
 
+use super::AcceptSlashCommandOrSavedPrompt;
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
-use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
+use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISubagentEvent};
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::skills::{SkillDescriptor, SkillManager};
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::slash_command_menu::fuzzy_match::SlashCommandFuzzyMatchResult;
+use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};
 use crate::search::slash_command_menu::static_commands::Availability;
+use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
+use crate::search::SyncDataSource;
+use crate::settings::{
+    AISettings, AISettingsChangedEvent, InputSettings, InputSettingsChangedEvent, PrivacySettings,
+    PrivacySettingsChangedEvent,
+};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
+use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
 use crate::terminal::model::session::SessionType;
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
-#[cfg(not(target_family = "wasm"))]
-use warp_cli::agent::Harness;
-use warp_core::ui::Icon as WarpIcon;
-
-use super::AcceptSlashCommandOrSavedPrompt;
-use crate::{
-    ai::blocklist::{
-        agent_view::{AgentViewController, AgentViewControllerEvent},
-        block::cli_controller::{CLISubagentController, CLISubagentEvent},
-        BlocklistAIHistoryEvent,
-    },
-    search::{
-        slash_command_menu::{
-            static_commands::commands::{self, COMMAND_REGISTRY},
-            SlashCommandId, StaticCommand,
-        },
-        SyncDataSource,
-    },
-    settings::{AISettings, AISettingsChangedEvent, InputSettings, InputSettingsChangedEvent},
-    terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent},
-    workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent},
-};
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 pub struct DataSourceArgs {
     pub active_session: ModelHandle<ActiveSession>,
@@ -62,6 +54,7 @@ pub struct DataSourceArgs {
 struct ActiveCommandsContext {
     session_context: Availability,
     is_orchestration_enabled: bool,
+    is_cloud_handoff_enabled: bool,
     is_feedback_skill_available: bool,
     #[cfg(not(target_family = "wasm"))]
     active_conversation_is_cloud_oz: bool,
@@ -121,7 +114,15 @@ impl SlashCommandDataSource {
             if matches!(
                 event,
                 AISettingsChangedEvent::IsAnyAIEnabled { .. }
-                    | AISettingsChangedEvent::OrchestrationEnabled { .. }
+                    | AISettingsChangedEvent::ShouldForceDisableCloudHandoff { .. }
+            ) {
+                me.recompute_active_commands(ctx);
+            }
+        });
+        ctx.subscribe_to_model(&PrivacySettings::handle(ctx), |me, event, ctx| {
+            if matches!(
+                event,
+                PrivacySettingsChangedEvent::UpdateIsCloudConversationStorageEnabled { .. }
             ) {
                 me.recompute_active_commands(ctx);
             }
@@ -303,9 +304,12 @@ impl SlashCommandDataSource {
             .is_some()
             || UserWorkspaces::as_ref(ctx).default_host_slug().is_some();
 
+        let ai_settings = AISettings::as_ref(ctx);
         ActiveCommandsContext {
             session_context,
-            is_orchestration_enabled: AISettings::as_ref(ctx).is_orchestration_enabled(ctx),
+            is_orchestration_enabled: ai_settings.is_orchestration_enabled(ctx),
+            is_cloud_handoff_enabled: ai_settings
+                .is_cloud_handoff_enabled_for_terminal_view(self.terminal_view_id, ctx),
             is_feedback_skill_available: crate::workspace::is_feedback_skill_available(ctx),
             #[cfg(not(target_family = "wasm"))]
             active_conversation_is_cloud_oz: self.active_conversation_is_cloud_oz(ctx),
@@ -323,6 +327,9 @@ impl SlashCommandDataSource {
             return false;
         }
         if command.name == commands::ORCHESTRATE_NAME && !context.is_orchestration_enabled {
+            return false;
+        }
+        if command.name == commands::MOVE_TO_CLOUD.name && !context.is_cloud_handoff_enabled {
             return false;
         }
         // The static `/feedback` command is an AI-off fallback for the richer bundled

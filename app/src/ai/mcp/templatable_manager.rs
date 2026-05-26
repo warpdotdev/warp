@@ -4,26 +4,32 @@ mod native;
 pub use native::McpIntegration;
 #[cfg(not(target_family = "wasm"))]
 mod oauth;
+#[cfg(not(target_family = "wasm"))]
+mod utils;
 #[cfg(target_family = "wasm")]
 mod wasm;
 
-#[cfg(not(target_family = "wasm"))]
-use diesel::SqliteConnection;
-#[cfg(not(target_family = "wasm"))]
-use parking_lot::Mutex;
+#[cfg(all(test, not(target_family = "wasm")))]
+mod utils_tests;
+
 use std::collections::{HashMap, HashSet};
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 #[cfg(not(target_family = "wasm"))]
-use crate::ai::mcp::templatable::CloudTemplatableMCPServer;
-use crate::ai::mcp::FileBasedMCPManager;
-use crate::ai::mcp::{templatable_installation::TemplatableMCPServerInstallation, MCPServerState};
+use diesel::SqliteConnection;
 use futures_util::stream::AbortHandle;
+#[cfg(not(target_family = "wasm"))]
+use parking_lot::Mutex;
 use uuid::Uuid;
 #[cfg(not(target_family = "wasm"))]
 use warpui::ModelSpawner;
 use warpui::{Entity, SingletonEntity};
+
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::mcp::templatable::CloudTemplatableMCPServer;
+use crate::ai::mcp::templatable_installation::TemplatableMCPServerInstallation;
+use crate::ai::mcp::{FileBasedMCPManager, MCPServerState};
 
 #[cfg(not(target_family = "wasm"))]
 type ReconnectResultSender =

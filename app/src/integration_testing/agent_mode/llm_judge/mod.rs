@@ -4,9 +4,8 @@ use anyhow::Result;
 use llm_generate::LLMGenerateRequest;
 use reqwest::blocking::Client;
 use serde::Deserialize;
-use warp_multi_agent_api::{
-    apply_file_diffs_result::success::UpdatedFileContent, message, Message,
-};
+use warp_multi_agent_api::apply_file_diffs_result::success::UpdatedFileContent;
+use warp_multi_agent_api::{message, Message};
 
 use crate::ai::agent::conversation::AIConversation;
 
@@ -87,6 +86,8 @@ pub fn filter_tool_call_result(result: &message::ToolCallResult) -> message::Too
                             command_id: "command_id".to_string(),
                             output: "[OUTPUT OMITTED]".to_string(),
                             exit_code: cmd_result.exit_code,
+                            start_ts: None,
+                            finish_ts: None,
                         },
                     ),
                 ),
