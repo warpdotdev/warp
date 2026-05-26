@@ -538,10 +538,7 @@ impl super::TerminalView {
                         ShellPathType::ShellNative(working_directory.to_string()),
                         shell_launch_data.as_ref(),
                     ) {
-                        let new_end_point = possible_path
-                            .range
-                            .end()
-                            .wrapping_sub(max_columns, 1);
+                        let new_end_point = possible_path.range.end().wrapping_sub(max_columns, 1);
                         link = Some(Self::create_valid_link(
                             stripped_absolute_path,
                             stripped_clean_path.line_and_column_num,
@@ -678,19 +675,23 @@ mod tests {
     use warp_util::path::CleanPathResult;
 
     use crate::terminal::model::{
-        grid::grid_handler::PossiblePath,
-        index::Point,
-        terminal_model::WithinModel,
+        grid::grid_handler::PossiblePath, index::Point, terminal_model::WithinModel,
     };
 
-    use super::{GridHighlightedLink, super::TerminalView};
+    use super::{super::TerminalView, GridHighlightedLink};
 
     /// Build a minimal `PossiblePath` wrapping the given path string with a trivial
-    /// grid range (row 0, col 0 → col len).
+    /// grid range (row 0, col 0 → col len-1).
+    ///
+    /// The inclusive end is `path.len() - 1`, i.e. the index of the last character,
+    /// which is the canonical representation of a grid range.  Using `path.len()`
+    /// (one past the end) was off-by-one: it produced a non-canonical range whose
+    /// synthetic "extra" column masked how the highlight-shrink assertions were
+    /// computed and could hide future regressions.
     fn make_possible_path(path: &str) -> WithinModel<PossiblePath> {
         let range: RangeInclusive<Point> = Point { row: 0, col: 0 }..=Point {
             row: 0,
-            col: path.len(),
+            col: path.len().saturating_sub(1),
         };
         WithinModel::AltScreen(PossiblePath {
             path: CleanPathResult {
@@ -733,10 +734,7 @@ mod tests {
         let file_path = dir.path().join("foo.md");
         std::fs::write(&file_path, "").expect("write temp file");
 
-        let working_directory = dir
-            .path()
-            .to_str()
-            .expect("temp dir path is valid UTF-8");
+        let working_directory = dir.path().to_str().expect("temp dir path is valid UTF-8");
 
         // "foo.md." — the path as it would appear at the end of a sentence.
         let possible_paths = vec![make_possible_path("foo.md.")];
@@ -748,9 +746,8 @@ mod tests {
             None,
         );
 
-        let file_link = result.expect(
-            "expected a file link for 'foo.md.' after stripping trailing period, got None",
-        );
+        let file_link = result
+            .expect("expected a file link for 'foo.md.' after stripping trailing period, got None");
         let GridHighlightedLink::File(within_model) = file_link else {
             panic!("expected GridHighlightedLink::File, got a URL link");
         };
@@ -793,10 +790,7 @@ mod tests {
         let file_path = dir.path().join("foo.md");
         std::fs::write(&file_path, "").expect("write temp file");
 
-        let working_directory = dir
-            .path()
-            .to_str()
-            .expect("temp dir path is valid UTF-8");
+        let working_directory = dir.path().to_str().expect("temp dir path is valid UTF-8");
 
         // "foo.md." — the captured token including the trailing sentence period.
         let token = "foo.md.";
@@ -809,20 +803,19 @@ mod tests {
             None,
         );
 
-        let file_link = result.expect(
-            "expected a file link for 'foo.md.' on Windows, got None",
-        );
+        let file_link = result.expect("expected a file link for 'foo.md.' on Windows, got None");
         let GridHighlightedLink::File(within_model) = file_link else {
             panic!("expected GridHighlightedLink::File, got a URL link");
         };
         let inner = within_model.get_inner();
 
-        // The highlight end column must exclude the trailing '.': len - 1.
-        let expected_end_col = token.len() - 1;
+        // The input range's inclusive end is now token.len()-1 (the last character,
+        // the trailing '.').  The Windows highlight-parity branch strips that dot,
+        // so end_point is shrunk by 1 → token.len()-2 (the last character of "foo.md").
+        let expected_end_col = token.len() - 2;
         let actual_end_col = inner.link.range.end().col;
         assert_eq!(
-            actual_end_col,
-            expected_end_col,
+            actual_end_col, expected_end_col,
             "highlight end column should exclude trailing '.': expected col {expected_end_col}, \
              got col {actual_end_col}"
         );
