@@ -1,3 +1,8 @@
+use std::fs;
+
+use ignore::gitignore::Gitignore;
+
+use super::{Entry, IgnoredPathStrategy};
 #[test]
 fn test_git_path_filtering_allowlist() {
     use std::path::Path;
@@ -170,12 +175,6 @@ fn test_git_path_filtering_allowlist() {
 
 #[test]
 fn build_tree_marks_descendants_of_ignored_directory_as_ignored() {
-    use std::fs;
-
-    use ignore::gitignore::Gitignore;
-
-    use super::{Entry, IgnoredPathStrategy};
-
     let temp_dir = tempfile::tempdir().unwrap();
     let root_path = dunce::canonicalize(temp_dir.path()).unwrap();
     fs::write(root_path.join(".gitignore"), "ignored-dir/\n").unwrap();
@@ -218,12 +217,6 @@ fn build_tree_marks_descendants_of_ignored_directory_as_ignored() {
 
 #[test]
 fn lazy_loaded_ignored_directory_marks_loaded_children_as_ignored() {
-    use std::fs;
-
-    use ignore::gitignore::Gitignore;
-
-    use super::{Entry, IgnoredPathStrategy};
-
     let temp_dir = tempfile::tempdir().unwrap();
     let root_path = dunce::canonicalize(temp_dir.path()).unwrap();
     fs::write(root_path.join(".gitignore"), "ignored-dir/\n").unwrap();
