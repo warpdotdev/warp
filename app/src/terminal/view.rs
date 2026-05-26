@@ -26869,37 +26869,6 @@ impl View for TerminalView {
                     let is_loading_transcript = model.is_loading_conversation_transcript();
                     let should_show_loading = is_view_pending_clause || is_loading_transcript;
                     let output_area = if should_show_loading {
-                        // Throttled to once per second per render thread so we get
-                        // a periodic confirmation that the Loading UI is on screen
-                        // without flooding the log at frame rate.
-                        thread_local! {
-                            static LAST_LOADING_GATE_LOG_AT: std::cell::Cell<Option<Instant>> =
-                                const { std::cell::Cell::new(None) };
-                        }
-                        LAST_LOADING_GATE_LOG_AT.with(|cell| {
-                            let now = Instant::now();
-                            let should_log = match cell.get() {
-                                None => true,
-                                Some(prev) => now.duration_since(prev) >= Duration::from_secs(1),
-                            };
-                            if should_log {
-                                cell.set(Some(now));
-                                log::debug!(
-                                    "[orch-viewer] TerminalView::render: rendering \
-                                     Loading UI view_addr={:p} view_id={:?} \
-                                     is_view_pending_clause={is_view_pending_clause} \
-                                     is_loading_transcript={is_loading_transcript} \
-                                     shared_session_status={:?} \
-                                     is_ambient_agent_session={} \
-                                     conversation_transcript_viewer_status={:?}",
-                                    self as *const _,
-                                    self.view_handle.id(),
-                                    model.shared_session_status(),
-                                    self.is_ambient_agent_session(app),
-                                    model.conversation_transcript_viewer_status(),
-                                );
-                            }
-                        });
                         self.render_viewer_loading(app)
                     } else if is_alt_screen_active {
                         did_wrap_terminal_size = true;

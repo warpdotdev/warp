@@ -3480,14 +3480,6 @@ impl PaneGroup {
         child_session_id: SessionId,
         ctx: &mut ViewContext<Self>,
     ) {
-        log::debug!(
-            "[orch-viewer] ensure_shared_session_viewer_child_pane: entering for \
-             conversation_id={child_conversation_id:?} session_id={child_session_id} \
-             pre_visible={:?} pre_focused={:?} child_agent_panes[conv]={:?}",
-            self.panes.visible_pane_ids(),
-            self.focused_pane_id(ctx),
-            self.child_agent_panes.get(&child_conversation_id).copied(),
-        );
         // Race recovery: a pill click before materialization had a
         // `session_id` falls through to `create_hidden_child_agent_pane`,
         // which leaves a loading placeholder in `child_agent_panes`. The
@@ -3501,18 +3493,7 @@ impl PaneGroup {
             .filter(|pane_id| self.has_pane_id(*pane_id))
         {
             let anchor = self.panes.original_pane_for_replacement(prior_pane_id);
-            log::debug!(
-                "[orch-viewer] ensure_shared_session_viewer_child_pane: discarding prior \
-                 fallback pane for conversation_id={child_conversation_id:?} \
-                 prior_pane_id={prior_pane_id:?} anchor={anchor:?}"
-            );
             self.discard_child_agent_pane_for_conversation(child_conversation_id, ctx);
-            log::debug!(
-                "[orch-viewer] ensure_shared_session_viewer_child_pane: after discard \
-                 visible={:?} focused={:?}",
-                self.panes.visible_pane_ids(),
-                self.focused_pane_id(ctx),
-            );
             anchor
         } else {
             None
@@ -3596,31 +3577,11 @@ impl PaneGroup {
 
         self.child_agent_panes
             .insert(child_conversation_id, new_pane_id.into());
-        log::debug!(
-            "[orch-viewer] ensure_shared_session_viewer_child_pane: after attach \
-             conversation_id={child_conversation_id:?} new_pane_id={new_pane_id:?} \
-             visible={:?} focused={:?} fallback_was_swapped_anchor={fallback_was_swapped_anchor:?}",
-            self.panes.visible_pane_ids(),
-            self.focused_pane_id(ctx),
-        );
-
         // If the discarded fallback was occupying a tree slot via temporary
         // replacement, re-swap so the user lands on the new pane.
         if let Some(anchor) = fallback_was_swapped_anchor {
             self.swap_active_pane_to_conversation(anchor, child_conversation_id, ctx);
-            log::debug!(
-                "[orch-viewer] ensure_shared_session_viewer_child_pane: after re-swap \
-                 conversation_id={child_conversation_id:?} \
-                 visible={:?} focused={:?}",
-                self.panes.visible_pane_ids(),
-                self.focused_pane_id(ctx),
-            );
         }
-        log::debug!(
-            "[orch-viewer] ensure_shared_session_viewer_child_pane: attached viewer pane \
-             conversation_id={child_conversation_id:?} session_id={child_session_id} \
-             new_pane_id={new_pane_id:?} (pane will sit in ViewPending until Network::start_websocket completes)"
-        );
     }
 
     /// Helper that creates the initial [`PaneData`] and [`InitialFocus`] given a terminal view.
@@ -5192,21 +5153,8 @@ impl PaneGroup {
             .or(split_off_child_pane)
             .or_else(|| self.pane_id_for_conversation_owner(conversation_id, ctx));
         let Some(child_pane_id) = owner_child_pane else {
-            log::debug!(
-                "[orch-viewer] discard_child_agent_pane_for_conversation: no owner pane \
-                 found for conversation_id={conversation_id:?}"
-            );
             return false;
         };
-        let pre_focused = self.focused_pane_id(ctx);
-        let pre_visible = self.panes.visible_pane_ids();
-        log::debug!(
-            "[orch-viewer] discard_child_agent_pane_for_conversation: discarding \
-             conversation_id={conversation_id:?} child_pane_id={child_pane_id:?} \
-             tracked={tracked_child_pane:?} split_off={split_off_child_pane:?} \
-             pre_focused={pre_focused:?} pre_visible_leaves={pre_visible:?}"
-        );
-
         if self
             .child_agent_origin
             .as_ref()
@@ -5226,39 +5174,18 @@ impl PaneGroup {
         }
 
         let revert_target = self.panes.original_pane_for_replacement(child_pane_id);
-        log::debug!(
-            "[orch-viewer] discard_child_agent_pane_for_conversation: \
-             was_focused={was_focused} original_pane_for_replacement(child_pane_id)={revert_target:?}"
-        );
         if let Some(original_pane_id) = revert_target {
             self.panes.revert_temporary_replacement(child_pane_id);
-            log::debug!(
-                "[orch-viewer] discard_child_agent_pane_for_conversation: reverted swap \
-                 original={original_pane_id:?} replacement={child_pane_id:?}"
-            );
             if was_focused {
                 self.focus_pane(original_pane_id, true, ctx);
-                log::debug!(
-                    "[orch-viewer] discard_child_agent_pane_for_conversation: refocused \
-                     after revert to original={original_pane_id:?} now_focused={:?}",
-                    self.focused_pane_id(ctx)
-                );
             }
         } else {
             // Drop any hidden entry that could restore the killed pane.
             self.panes.remove_hidden_pane(child_pane_id);
-            log::debug!(
-                "[orch-viewer] discard_child_agent_pane_for_conversation: \
-                 no swap entry; removed any leftover hidden entries for child_pane_id={child_pane_id:?}"
-            );
         }
 
         let is_in_tree = self.panes.is_pane_in_tree(child_pane_id);
         if is_in_tree && self.panes.visible_pane_count() <= 1 {
-            log::debug!(
-                "[orch-viewer] discard_child_agent_pane_for_conversation: lone tree leaf \
-                 child_pane_id={child_pane_id:?}; emitting Exited"
-            );
             // A lone split-off child closes by removing its tab.
             ctx.emit(Event::Exited {
                 add_to_undo_stack: false,
@@ -5267,10 +5194,6 @@ impl PaneGroup {
         }
 
         if is_in_tree {
-            log::debug!(
-                "[orch-viewer] discard_child_agent_pane_for_conversation: still in tree; \
-                 focusing next pane after child_pane_id={child_pane_id:?}"
-            );
             self.focus_next_terminal_pane_and_activate_session(
                 child_pane_id,
                 PaneRemovalReason::Close,
@@ -5279,12 +5202,6 @@ impl PaneGroup {
         }
 
         let discarded = self.cleanup_closed_pane(child_pane_id, ctx);
-        let post_focused = self.focused_pane_id(ctx);
-        let post_visible = self.panes.visible_pane_ids();
-        log::debug!(
-            "[orch-viewer] discard_child_agent_pane_for_conversation: cleanup_closed_pane \
-             discarded={discarded} post_focused={post_focused:?} post_visible_leaves={post_visible:?}"
-        );
         self.handle_pane_count_change(ctx);
         discarded
     }
@@ -7510,39 +7427,23 @@ impl PaneGroup {
             .map(PaneId::from);
         let from_owner_lookup = self.pane_id_for_conversation_owner(conversation_id, ctx);
         let target_pane_id = from_child_panes.or(from_visible_pane).or(from_owner_lookup);
-        log::debug!(
-            "[orch-viewer] swap_active_pane_to_conversation: entering for \
-             focused_pane_id={focused_pane_id:?} conversation_id={conversation_id:?} \
-             from_child_panes={from_child_panes:?} from_visible_pane={from_visible_pane:?} \
-             from_owner_lookup={from_owner_lookup:?} chosen_target={target_pane_id:?}"
-        );
-
         let Some(target_pane_id) = target_pane_id else {
             // No owning pane in this group (e.g. the conversation lives
             // in another tab). Fall back to workspace-level navigation.
             if let Some(owner_view_id) = BlocklistAIHistoryModel::as_ref(ctx)
                 .terminal_view_id_for_conversation(&conversation_id)
             {
-                log::debug!(
-                    "[orch-viewer] swap_active_pane_to_conversation: no in-group pane; \
-                     dispatching FocusTerminalViewInWorkspace owner_view_id={owner_view_id:?}"
-                );
                 ctx.dispatch_typed_action(&WorkspaceAction::FocusTerminalViewInWorkspace {
                     terminal_view_id: owner_view_id,
                 });
                 return;
             }
-            log::debug!(
-                "[orch-viewer] swap_active_pane_to_conversation: no target pane and no \
-                 workspace owner; falling through to log_swap_resolution_failure"
-            );
             self.log_swap_resolution_failure(focused_pane_id, conversation_id, ctx);
             return;
         };
 
         // No-op when the active pill is clicked.
         if target_pane_id == focused_pane_id {
-            log::debug!("[orch-viewer] swap_active_pane_to_conversation: target == focused; no-op");
             return;
         }
 
@@ -7551,11 +7452,6 @@ impl PaneGroup {
         // this would put the target in two tree positions and corrupt the
         // layout on a later revert.
         if let Some(replacement_id) = self.panes.replacement_pane_for_original(target_pane_id) {
-            log::debug!(
-                "[orch-viewer] swap_active_pane_to_conversation: target was swapped out; \
-                 reverting replacement={replacement_id:?} to restore target={target_pane_id:?} \
-                 conversation_id={conversation_id:?}"
-            );
             self.revert_swap_clearing_split_off(replacement_id, ctx);
             self.handle_pane_count_change(ctx);
             self.focus_pane_preserving_maximized_state(target_pane_id, true, ctx);
@@ -7573,25 +7469,16 @@ impl PaneGroup {
 
         // If a swap is already active in this slot, revert it first; the
         // anchor for the new operation becomes the original pane.
-        let anchor = if let Some(original) =
-            self.panes.original_pane_for_replacement(focused_pane_id)
-        {
-            log::debug!(
-                    "[orch-viewer] swap_active_pane_to_conversation: focused pane is a \
-                     replacement; reverting focused_pane_id={focused_pane_id:?} to original={original:?}"
-                );
-            self.revert_swap_clearing_split_off(focused_pane_id, ctx);
-            original
-        } else {
-            focused_pane_id
-        };
+        let anchor =
+            if let Some(original) = self.panes.original_pane_for_replacement(focused_pane_id) {
+                self.revert_swap_clearing_split_off(focused_pane_id, ctx);
+                original
+            } else {
+                focused_pane_id
+            };
 
         // If revert landed us on the target, just focus and return.
         if anchor == target_pane_id {
-            log::debug!(
-                "[orch-viewer] swap_active_pane_to_conversation: anchor == target after \
-                 focused-revert; focusing anchor={anchor:?}"
-            );
             self.handle_pane_count_change(ctx);
             self.focus_pane_preserving_maximized_state(anchor, true, ctx);
             if let Some(terminal_view) = self.terminal_view_from_pane_id(anchor, ctx) {
@@ -7607,10 +7494,6 @@ impl PaneGroup {
         // If the target is already a visible sibling, just focus it.
         if self.panes.is_pane_in_tree(target_pane_id) && !self.panes.is_pane_hidden(&target_pane_id)
         {
-            log::debug!(
-                "[orch-viewer] swap_active_pane_to_conversation: target already a visible \
-                 sibling target={target_pane_id:?}; focusing without replace_pane"
-            );
             self.handle_pane_count_change(ctx);
             self.focus_pane_preserving_maximized_state(target_pane_id, true, ctx);
             if let Some(terminal_view) = self.terminal_view_from_pane_id(target_pane_id, ctx) {
@@ -7625,14 +7508,6 @@ impl PaneGroup {
 
         // Substitute the target into the anchor's slot via temporary
         // replacement; revert restores the anchor.
-        let pre_replace_visible = self.panes.visible_pane_ids();
-        let pre_replace_focused = self.focused_pane_id(ctx);
-        log::debug!(
-            "[orch-viewer] swap_active_pane_to_conversation: about to replace_pane \
-             anchor={anchor:?} target={target_pane_id:?} target_in_tree={} \
-             pre_visible={pre_replace_visible:?} pre_focused={pre_replace_focused:?}",
-            self.panes.is_pane_in_tree(target_pane_id)
-        );
         let success = self.panes.replace_pane(anchor, target_pane_id, true);
         if !success {
             log::warn!(
@@ -7640,16 +7515,8 @@ impl PaneGroup {
             );
             return;
         }
-        log::debug!(
-            "[orch-viewer] swap_active_pane_to_conversation: replace_pane succeeded \
-             anchor={anchor:?} target={target_pane_id:?} conversation_id={conversation_id:?} \
-             post_visible={:?}",
-            self.panes.visible_pane_ids()
-        );
-
         self.handle_pane_count_change(ctx);
         self.focus_pane_preserving_maximized_state(target_pane_id, true, ctx);
-
         // Refresh the back-button label on both swapped panes; otherwise
         // a stale label would persist until the next agent-view entry.
         for pane_id in [anchor, target_pane_id] {

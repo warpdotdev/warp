@@ -111,10 +111,6 @@ impl EventLoop {
             });
         }
 
-        log::debug!(
-            "[orch-viewer] EventLoop::new \
-             catching_up_to_event_no={catching_up_to_event_no:?} load_mode={load_mode:?}"
-        );
         if catching_up_to_event_no.is_none() {
             terminal_model
                 .lock()
@@ -166,16 +162,6 @@ impl EventLoop {
         event: OrderedTerminalEvent,
         ctx: &mut ModelContext<Self>,
     ) {
-        log::trace!(
-            "[orch-viewer] EventLoop received OrderedTerminalEvent \
-             event_no={} event_type={:?} (next_event_no={} \
-             catching_up_to_event_no={:?} buffer_len_before={})",
-            event.event_no,
-            event.event_type,
-            self.next_event_no,
-            self.catching_up_to_event_no,
-            self.buffer.len(),
-        );
         // Add the event to the buffer.
         self.buffer.insert(event.event_no, event.event_type);
 

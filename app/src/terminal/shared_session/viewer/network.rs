@@ -384,11 +384,6 @@ impl Network {
         ws_proxy_rx: async_channel::Receiver<UpstreamMessage>,
         ctx: &mut ModelContext<Self>,
     ) {
-        log::debug!(
-            "[orch-viewer] viewer Network::start_websocket: dispatching initial join \
-             session_id={session_id} (no automatic retry on FailedToJoin; reconnect_websocket \
-             only runs after a successful first JoinedSuccessfully)"
-        );
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
         // Open a websocket to the server to join the session.
@@ -396,10 +391,6 @@ impl Network {
             Self::connect_websocket_and_get_user_id(session_id, auth_client, auth_state.clone()),
             move |network, conn, ctx| match conn {
                 Ok(((sink, stream), user_id)) => {
-                    log::debug!(
-                        "[orch-viewer] viewer Network::start_websocket: WS connected for \
-                         session_id={session_id}; sending Initialize"
-                    );
                     let initialize_message = UpstreamMessage::Initialize(InitPayload {
                         viewer_id: network.id.clone(),
                         user_id,
@@ -551,12 +542,6 @@ impl Network {
                     );
                     return;
                 }
-                log::debug!(
-                    "[orch-viewer] viewer Network: JoinedSuccessfully session_id={} \
-                     viewer_id={viewer_id:?} latest_event_no={latest_event_no:?} (EventLoop will \
-                     transition ViewPending → ActiveViewer once catch-up completes)",
-                    self.session_id,
-                );
                 self.id = Some(viewer_id.clone());
                 self.stage = Stage::JoinedSuccessfully;
 

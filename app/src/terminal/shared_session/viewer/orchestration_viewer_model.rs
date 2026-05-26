@@ -165,10 +165,6 @@ impl OrchestrationViewerModel {
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         if FeatureFlag::OrchestrationViewerStreamer.is_enabled() {
-            log::debug!(
-                "[orch-viewer] constructing OrchestrationViewerModel (streamer path) \
-                 parent_task_id={parent_task_id} terminal_view_id={terminal_view_id:?}"
-            );
             // Streamer-driven path. Subscribe to broadcast events filtered
             // on `parent_task_id`; the streamer handles SSE open/teardown,
             // cold-start seed, and cursor persistence on our behalf.
@@ -197,10 +193,6 @@ impl OrchestrationViewerModel {
             return model;
         }
 
-        log::debug!(
-            "[orch-viewer] constructing OrchestrationViewerModel (legacy poll path) \
-             parent_task_id={parent_task_id} terminal_view_id={terminal_view_id:?}"
-        );
         // Legacy polling path. Kick to fast cadence on `AppendedExchange` so
         // follow-up input that spawns new children surfaces without waiting
         // for the next 30s idle poll.
@@ -242,11 +234,6 @@ impl OrchestrationViewerModel {
             | BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
                 terminal_view_id, ..
             } if *terminal_view_id == self.terminal_view_id => {
-                log::debug!(
-                    "[orch-viewer] history event for terminal_view_id={terminal_view_id:?} \
-                     parent_task_id={} triggers register-retry",
-                    self.parent_task_id
-                );
                 self.register_viewer_mode_consumer_if_possible(ctx);
             }
             _ => {}
@@ -302,10 +289,6 @@ impl OrchestrationViewerModel {
 
         let parent_task_id = self.parent_task_id;
         let consumer_id = ctx.model_id();
-        log::debug!(
-            "[orch-viewer] registering viewer-mode consumer parent_task_id={parent_task_id} \
-             placeholder_conv_id={parent_conversation_id:?} consumer_id={consumer_id:?}"
-        );
         OrchestrationEventStreamer::handle(ctx).update(ctx, move |streamer, ctx| {
             streamer.register_viewer_mode_consumer(
                 parent_task_id,
@@ -329,10 +312,6 @@ impl OrchestrationViewerModel {
                 parent_task_id,
                 run_id,
             } if *parent_task_id == self.parent_task_id => {
-                log::debug!(
-                    "[orch-viewer] received ChildSpawned parent_task_id={parent_task_id} \
-                     run_id={run_id:?}"
-                );
                 self.handle_child_spawned(run_id.clone(), ctx);
             }
             OrchestrationEventStreamerEvent::ChildStatusChanged {
@@ -340,10 +319,6 @@ impl OrchestrationViewerModel {
                 run_id,
                 status,
             } if *parent_task_id == self.parent_task_id => {
-                log::debug!(
-                    "[orch-viewer] received ChildStatusChanged parent_task_id={parent_task_id} \
-                     run_id={run_id:?} status={status:?}"
-                );
                 self.handle_child_status_changed(run_id, status.clone(), ctx);
             }
             // Events for other orchestrators (or non-viewer-mode variants)
@@ -367,19 +342,9 @@ impl OrchestrationViewerModel {
         };
         if self.children.contains_key(&task_id) {
             // Already materialized (e.g. re-registered after reconnect).
-            log::debug!(
-                "[orch-viewer] ChildSpawned for already-known task_id={task_id} \
-                 parent_task_id={}; skipping",
-                self.parent_task_id
-            );
             return;
         }
 
-        log::debug!(
-            "[orch-viewer] fetching pill metadata for new child task_id={task_id} \
-             parent_task_id={}",
-            self.parent_task_id
-        );
         self.spawn_task_metadata_fetch(task_id, "ChildSpawned", ctx);
     }
 
@@ -409,28 +374,15 @@ impl OrchestrationViewerModel {
         let Some(task_id) = self.children_by_run_id.get(run_id).copied() else {
             // No placeholder yet; the corresponding ChildSpawned handler
             // will create one on first observation.
-            log::debug!(
-                "[orch-viewer] ChildStatusChanged for unknown run_id={run_id:?} \
-                 parent_task_id={}; awaiting matching ChildSpawned",
-                self.parent_task_id
-            );
             return;
         };
         let Some(entry) = self.children.get(&task_id) else {
-            log::debug!(
-                "[orch-viewer] ChildStatusChanged: children_by_run_id has run_id={run_id:?} \
-                 but children map missing task_id={task_id}; skipping"
-            );
             return;
         };
         let conversation_id = entry.conversation_id;
         let needs_metadata_refetch =
             entry.session_id.is_none() || !entry.pane_materialization_requested;
         let terminal_view_id = self.terminal_view_id;
-        log::debug!(
-            "[orch-viewer] applying child status conversation_id={conversation_id:?} \
-             task_id={task_id} status={status:?} needs_metadata_refetch={needs_metadata_refetch}"
-        );
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
             history.update_conversation_status(terminal_view_id, conversation_id, status, ctx);
         });
@@ -442,11 +394,6 @@ impl OrchestrationViewerModel {
             // cue that the server has more to tell us about this run —
             // refetch and re-register so the existing-entry branch of
             // `register_child` can flip `pane_materialization_requested`.
-            log::debug!(
-                "[orch-viewer] refetching metadata for child task_id={task_id} \
-                 parent_task_id={} (still pending materialization)",
-                self.parent_task_id
-            );
             self.spawn_task_metadata_fetch(task_id, "ChildStatusChanged", ctx);
         }
     }
@@ -499,10 +446,6 @@ impl OrchestrationViewerModel {
         // The server-side ancestor endpoint includes the parent itself in
         // the response; skip it.
         if task.task_id == self.parent_task_id {
-            log::debug!(
-                "[orch-viewer] register_child skipping parent self-entry task_id={}",
-                task.task_id
-            );
             return;
         }
 
@@ -714,13 +657,6 @@ impl OrchestrationViewerModel {
             // child; nothing left to do.
             return;
         }
-
-        log::debug!(
-            "[orch-viewer] PendingSessionIdPoll: refetching {} pending child(ren) \
-             parent_task_id={}",
-            pending.len(),
-            self.parent_task_id,
-        );
 
         for task_id in pending {
             self.spawn_task_metadata_fetch(task_id, "PendingSessionIdPoll", ctx);
@@ -966,12 +902,6 @@ impl OrchestrationViewerModel {
         session_id: SessionId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let child_task_id = self.children_by_run_id.iter().find_map(|(_, task_id)| {
-            self.children
-                .get(task_id)
-                .filter(|entry| entry.conversation_id == conversation_id)
-                .map(|_| *task_id)
-        });
         let Some(view) = self.terminal_view.upgrade(ctx) else {
             log::warn!(
                 "[orch-viewer] cannot request child pane materialization for conv={conversation_id:?}: \
@@ -979,12 +909,6 @@ impl OrchestrationViewerModel {
             );
             return;
         };
-        log::debug!(
-            "[orch-viewer] dispatching EnsureSharedSessionViewerChildPane \
-             conversation_id={conversation_id:?} session_id={session_id} \
-             child_task_id={child_task_id:?} parent_task_id={}",
-            self.parent_task_id,
-        );
         view.update(ctx, |_view, ctx| {
             ctx.emit(TerminalViewEvent::EnsureSharedSessionViewerChildPane {
                 conversation_id,

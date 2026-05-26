@@ -1557,22 +1557,6 @@ impl TerminalModel {
         &mut self,
         status: Option<ConversationTranscriptViewerStatus>,
     ) {
-        let prev_is_loading = matches!(
-            self.conversation_transcript_viewer_status,
-            Some(ConversationTranscriptViewerStatus::Loading)
-        );
-        let next_is_loading = matches!(status, Some(ConversationTranscriptViewerStatus::Loading));
-        if prev_is_loading != next_is_loading
-            || self.conversation_transcript_viewer_status.is_some() != status.is_some()
-        {
-            log::debug!(
-                "[orch-viewer] TerminalModel::set_conversation_transcript_viewer_status \
-                 model_addr={:p} {:?} → {:?}",
-                self as *const _,
-                self.conversation_transcript_viewer_status,
-                status,
-            );
-        }
         self.conversation_transcript_viewer_status = status;
     }
 
@@ -1972,17 +1956,6 @@ impl TerminalModel {
     }
 
     pub fn set_shared_session_status(&mut self, shared_session_status: SharedSessionStatus) {
-        if std::mem::discriminant(&self.shared_session_status)
-            != std::mem::discriminant(&shared_session_status)
-        {
-            log::debug!(
-                "[orch-viewer] TerminalModel::set_shared_session_status \
-                 model_addr={:p} {:?} → {:?}",
-                self as *const _,
-                self.shared_session_status,
-                shared_session_status,
-            );
-        }
         self.shared_session_status = shared_session_status;
     }
 

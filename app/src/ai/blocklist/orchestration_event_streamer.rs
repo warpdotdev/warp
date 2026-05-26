@@ -488,14 +488,7 @@ impl OrchestrationEventStreamer {
         ctx: &mut ModelContext<Self>,
     ) {
         let stream = self.streams.entry(conversation_id).or_default();
-        let inserted = stream.consumers.insert(consumer_id);
-        if inserted {
-            log::debug!(
-                "register_consumer for {conversation_id:?}: {consumer_id:?} \
-                 (total={})",
-                stream.consumers.len()
-            );
-        }
+        stream.consumers.insert(consumer_id);
         // If the server-token event fired before this registration, pick
         // up the now-available child role here.
         self.ensure_self_run_id_watched(conversation_id, ctx);
@@ -512,22 +505,9 @@ impl OrchestrationEventStreamer {
         consumer_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let removed = self
-            .streams
+        self.streams
             .get_mut(&conversation_id)
-            .map(|s| s.consumers.remove(&consumer_id))
-            .unwrap_or(false);
-        if removed {
-            let remaining = self
-                .streams
-                .get(&conversation_id)
-                .map(|s| s.consumers.len())
-                .unwrap_or(0);
-            log::debug!(
-                "unregister_consumer for {conversation_id:?}: {consumer_id:?} \
-                 (remaining={remaining})"
-            );
-        }
+            .map(|s| s.consumers.remove(&consumer_id));
         self.reevaluate_eligibility(conversation_id, ctx);
     }
 
@@ -592,15 +572,9 @@ impl OrchestrationEventStreamer {
                 .viewer_mode_orchestrators
                 .entry(parent_task_id)
                 .or_default();
-            let was_present = entry
+            entry
                 .consumers
-                .insert(consumer_id, orchestrator_placeholder_conv_id)
-                .is_some();
-            log::debug!(
-                "register_viewer_mode_consumer for parent_task_id={parent_task_id}: \
-                 consumer_id={consumer_id:?} (refcount={}, was_present={was_present})",
-                entry.consumers.len()
-            );
+                .insert(consumer_id, orchestrator_placeholder_conv_id);
             needs_seed = !entry.seeded && entry.sse_connection.is_none();
         }
         // Hydrate the orchestrator placeholder's persisted cursor into the
@@ -640,14 +614,8 @@ impl OrchestrationEventStreamer {
             // after the entry was already torn down. Just no-op.
             return;
         };
-        let removed = entry.consumers.remove(&consumer_id).is_some();
+        entry.consumers.remove(&consumer_id);
         let remaining = entry.consumers.len();
-        if removed {
-            log::debug!(
-                "unregister_viewer_mode_consumer for parent_task_id={parent_task_id}: \
-                 consumer_id={consumer_id:?} (remaining={remaining})"
-            );
-        }
         if remaining == 0 {
             // Tear down the ancestor SSE for `parent_task_id` (last viewer
             // pane closed) before dropping the bookkeeping entry.
@@ -695,13 +663,6 @@ impl OrchestrationEventStreamer {
             .get(&parent_task_id)
             .map(|entry| entry.known_children.iter().cloned().collect::<Vec<_>>())
             .unwrap_or_default();
-        if !run_ids.is_empty() {
-            log::debug!(
-                "[orch-viewer-streamer] replaying known children for parent_task_id={parent_task_id}: \
-                 count={}",
-                run_ids.len()
-            );
-        }
         self.emit_viewer_mode_child_spawns(parent_task_id, run_ids, ctx);
     }
 
@@ -712,10 +673,6 @@ impl OrchestrationEventStreamer {
         ctx: &mut ModelContext<Self>,
     ) {
         for run_id in run_ids {
-            log::debug!(
-                "[orch-viewer-streamer] emit ChildSpawned parent_task_id={parent_task_id} \
-                 run_id={run_id:?}"
-            );
             ctx.emit(OrchestrationEventStreamerEvent::ChildSpawned {
                 parent_task_id,
                 run_id,
@@ -747,10 +704,6 @@ impl OrchestrationEventStreamer {
         parent_task_id: AmbientAgentTaskId,
         ctx: &mut ModelContext<Self>,
     ) {
-        log::debug!(
-            "[orch-viewer-streamer] spawning ancestor seed fetch for parent_task_id={parent_task_id} \
-             (limit={VIEWER_MODE_SEED_FETCH_LIMIT})"
-        );
         let ai_client = self.ai_client.clone();
         let filter = TaskListFilter {
             ancestor_run_id: Some(parent_task_id.to_string()),
@@ -845,20 +798,9 @@ impl OrchestrationEventStreamer {
         ctx: &mut ModelContext<Self>,
     ) {
         let Some(entry) = self.viewer_mode_orchestrators.get(&parent_task_id) else {
-            log::debug!(
-                "[orch-viewer-streamer] start_ancestor_sse_if_seeded: no entry for \
-                 parent_task_id={parent_task_id}"
-            );
             return;
         };
         if !entry.seeded || entry.consumers.is_empty() || entry.sse_connection.is_some() {
-            log::debug!(
-                "[orch-viewer-streamer] start_ancestor_sse_if_seeded: skipping \
-                 parent_task_id={parent_task_id} (seeded={}, consumers={}, sse_open={})",
-                entry.seeded,
-                entry.consumers.len(),
-                entry.sse_connection.is_some(),
-            );
             return;
         }
         let cursor = entry.event_cursor;
@@ -986,11 +928,6 @@ impl OrchestrationEventStreamer {
         if events.is_empty() {
             return;
         }
-        log::debug!(
-            "[orch-viewer-streamer] draining {} ancestor events for parent_task_id={parent_task_id} \
-             (cursor_before={cursor})",
-            events.len(),
-        );
 
         for event in events {
             // Drop `new_message` events: viewer-mode consumers only surface
