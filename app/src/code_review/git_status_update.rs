@@ -127,6 +127,17 @@ impl SingletonEntity for GitStatusUpdateModel {}
 
 // ── GitRepoStatusModel ──────────────────────────────────────────────────────
 
+/// State for an in-flight `gh pr view` lookup. The branch and abort handle
+/// are always set together: a non-`None` value means a fetch is currently
+/// running for that branch.
+#[cfg(feature = "local_fs")]
+struct RefreshingPrInfo {
+    /// Branch name that the in-flight `refresh_pr_info` is fetching for.
+    branch: String,
+    /// Handle to abort the in-flight fetch.
+    abort_handle: SpawnedFutureHandle,
+}
+
 /// Per-repository model that owns the filesystem watcher and exposes git status
 /// metadata.  Consumers hold a `ModelHandle<GitRepoStatusModel>` and subscribe
 /// to its events directly — no path-filtering required.
@@ -140,11 +151,10 @@ pub struct GitRepoStatusModel {
     subscriber_id: Option<SubscriberId>,
     metadata: Option<GitStatusMetadata>,
     computing_metadata_abort_handle: Option<SpawnedFutureHandle>,
-    computing_pr_info_abort_handle: Option<SpawnedFutureHandle>,
-    /// Branch name that the in-flight `refresh_pr_info` is fetching for.
-    /// Used to make `refresh_pr_info` idempotent: while a fetch for the
-    /// current branch is in flight, additional calls are no-ops.
-    refreshing_pr_info_branch: Option<String>,
+    /// In-flight PR info fetch state. Used to make `refresh_pr_info`
+    /// idempotent: while a fetch for the current branch is in flight,
+    /// additional calls are no-ops.
+    refreshing_pr_info: Option<RefreshingPrInfo>,
     /// Consumers that currently need PR info. Git diff/branch consumers can
     /// share this model without paying for `gh pr view`.
     pr_info_consumers: HashSet<EntityId>,
@@ -181,8 +191,7 @@ impl GitRepoStatusModel {
             subscriber_id: None,
             metadata: None,
             computing_metadata_abort_handle: None,
-            computing_pr_info_abort_handle: None,
-            refreshing_pr_info_branch: None,
+            refreshing_pr_info: None,
             pr_info_consumers: HashSet::new(),
             pr_info: None,
         };
@@ -277,7 +286,7 @@ impl GitRepoStatusModel {
 
     /// Whether a PR info fetch is currently in flight.
     pub fn is_refreshing_pr_info(&self) -> bool {
-        self.computing_pr_info_abort_handle.is_some()
+        self.refreshing_pr_info.is_some()
     }
 
     /// PR info for the current branch.
@@ -305,10 +314,9 @@ impl GitRepoStatusModel {
         if self.should_refresh_pr_info() && !was_enabled {
             self.refresh_pr_info(ctx);
         } else if !self.should_refresh_pr_info() {
-            if let Some(handle) = self.computing_pr_info_abort_handle.take() {
-                handle.abort();
+            if let Some(refreshing) = self.refreshing_pr_info.take() {
+                refreshing.abort_handle.abort();
             }
-            self.refreshing_pr_info_branch = None;
         }
     }
 
@@ -357,15 +365,16 @@ impl GitRepoStatusModel {
 
         // If we're already fetching for the current branch, let that fetch
         // complete. Otherwise, abort the stale fetch and start a fresh one.
-        if self.computing_pr_info_abort_handle.is_some()
-            && self.refreshing_pr_info_branch.as_deref() == Some(branch.as_str())
+        if self
+            .refreshing_pr_info
+            .as_ref()
+            .is_some_and(|r| r.branch == branch)
         {
             return;
         }
-        if let Some(handle) = self.computing_pr_info_abort_handle.take() {
-            handle.abort();
+        if let Some(refreshing) = self.refreshing_pr_info.take() {
+            refreshing.abort_handle.abort();
         }
-        self.refreshing_pr_info_branch = Some(branch.clone());
         let repo_path = self.repo_path.clone();
         #[cfg(feature = "local_tty")]
         let path_future = {
@@ -378,7 +387,8 @@ impl GitRepoStatusModel {
         };
         #[cfg(not(feature = "local_tty"))]
         let path_future = futures::future::ready(None);
-        self.computing_pr_info_abort_handle = Some(ctx.spawn(
+        let branch_for_callback = branch.clone();
+        let abort_handle = ctx.spawn(
             async move {
                 let path_env = path_future.await;
                 let fetch = get_pr_for_branch(&repo_path, path_env.as_deref());
@@ -392,8 +402,7 @@ impl GitRepoStatusModel {
                 }
             },
             move |me, result, ctx| {
-                me.computing_pr_info_abort_handle = None;
-                me.refreshing_pr_info_branch = None;
+                me.refreshing_pr_info = None;
                 match result {
                     Ok(pr_info) => {
                         Self::maybe_validate_github_pr_default(ctx);
@@ -401,7 +410,7 @@ impl GitRepoStatusModel {
                         if me
                             .metadata
                             .as_ref()
-                            .is_some_and(|m| m.current_branch_name == branch)
+                            .is_some_and(|m| m.current_branch_name == branch_for_callback)
                         {
                             let changed = me.pr_info.as_ref() != pr_info.as_ref();
                             me.pr_info = pr_info;
@@ -427,7 +436,11 @@ impl GitRepoStatusModel {
                     }
                 }
             },
-        ));
+        );
+        self.refreshing_pr_info = Some(RefreshingPrInfo {
+            branch,
+            abort_handle,
+        });
     }
 
     fn handle_metadata_result(
@@ -549,8 +562,7 @@ impl GitRepoStatusModel {
             subscriber_id: None,
             metadata,
             computing_metadata_abort_handle: None,
-            computing_pr_info_abort_handle: None,
-            refreshing_pr_info_branch: None,
+            refreshing_pr_info: None,
             pr_info_consumers: HashSet::new(),
             pr_info: None,
         }
@@ -573,6 +585,7 @@ impl GitRepoStatusModel {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn set_pr_info_for_test(
         &mut self,
         pr_info: Option<PrInfo>,
@@ -596,8 +609,8 @@ impl Drop for GitRepoStatusModel {
         if let Some(handle) = self.computing_metadata_abort_handle.take() {
             handle.abort();
         }
-        if let Some(handle) = self.computing_pr_info_abort_handle.take() {
-            handle.abort();
+        if let Some(refreshing) = self.refreshing_pr_info.take() {
+            refreshing.abort_handle.abort();
         }
     }
 }
