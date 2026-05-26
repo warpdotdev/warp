@@ -177,6 +177,8 @@ pub struct FileOpenParams {
 pub struct DriveObjectCreateParams {
     pub object_type: DriveObjectType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_file: Option<String>,
@@ -213,6 +215,30 @@ pub struct WorkflowRunParams {
 pub struct WorkflowArgument {
     pub name: String,
     pub value: String,
+}
+
+/// Stable summary returned after a Drive object mutation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriveObjectSummary {
+    pub object_type: DriveObjectType,
+    pub id: DriveObjectId,
+    pub name: String,
+}
+
+/// Structured audit payload attached to high-risk Drive mutation responses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriveMutationAudit {
+    pub action: String,
+    pub authenticated_user_subject: String,
+    pub permission_category: PermissionCategory,
+}
+
+/// Result payload for high-risk Drive object mutations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriveMutationResult {
+    pub object: DriveObjectSummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit: Option<DriveMutationAudit>,
 }
 
 /// Mode accepted by `tab.activate`.
@@ -305,7 +331,7 @@ pub struct DriveObjectListParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DriveInspectParams {
-    pub id: String,
+    pub id: DriveObjectId,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -497,13 +523,6 @@ pub struct FileSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileListResult {
     pub files: Vec<FileSummary>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DriveObjectSummary {
-    pub object_type: DriveObjectType,
-    pub id: String,
-    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

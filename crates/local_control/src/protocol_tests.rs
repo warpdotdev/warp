@@ -91,6 +91,59 @@ fn non_allowlisted_action_names_are_not_deserialized() {
     }
 }
 #[test]
+fn drive_mutation_metadata_is_high_risk_authenticated_and_implemented() {
+    for action in [
+        ActionKind::DriveObjectCreate,
+        ActionKind::DriveObjectUpdate,
+        ActionKind::DriveObjectDelete,
+        ActionKind::DriveObjectInsert,
+        ActionKind::DriveObjectShareToTeam,
+    ] {
+        let metadata = action.metadata();
+        assert_eq!(
+            metadata.implementation_status,
+            ActionImplementationStatus::Implemented
+        );
+        assert_eq!(metadata.risk_tier, RiskTier::MutatingDestructiveOrExecution);
+        assert_eq!(
+            metadata.state_data_category,
+            StateDataCategory::UnderlyingDataMutation
+        );
+        assert_eq!(
+            metadata.permission_category,
+            PermissionCategory::MutateUnderlyingData
+        );
+        assert!(metadata.authenticated_user.required);
+        assert_eq!(
+            metadata.allowed_invocation_contexts,
+            vec![InvocationContext::InsideWarp]
+        );
+    }
+}
+
+#[test]
+fn drive_mutation_audit_payload_serializes_permission_category() {
+    let payload = DriveMutationResult {
+        object: DriveObjectSummary {
+            object_type: DriveObjectType::Folder,
+            id: DriveObjectId("folder_123".to_owned()),
+            name: "Runbooks".to_owned(),
+        },
+        audit: Some(DriveMutationAudit {
+            action: ActionKind::DriveObjectCreate.as_str().to_owned(),
+            authenticated_user_subject: "user_123".to_owned(),
+            permission_category: PermissionCategory::MutateUnderlyingData,
+        }),
+    };
+    let value = serde_json::to_value(payload).expect("payload serializes");
+    assert_eq!(value["object"]["object_type"], "folder");
+    assert_eq!(
+        value["audit"]["permission_category"],
+        "mutate_underlying_data"
+    );
+}
+
+#[test]
 fn tab_create_metadata_is_first_slice_logged_out_safe_mutation() {
     let metadata = ActionKind::TabCreate.metadata();
     assert_eq!(

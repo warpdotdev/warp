@@ -1,7 +1,7 @@
 use ::local_control::protocol::{FileListResult, FileSummary, TargetSelector};
 use ::local_control::{ActionKind, ControlError, ErrorCode};
 use serde::Serialize;
-use warpui::{ModelContext, SingletonEntity};
+use warpui::ModelContext;
 
 use crate::code::view::CodeView;
 use crate::local_control::LocalControlBridge;

@@ -463,11 +463,11 @@ define_action_catalog! {
         DriveNotebookOpen => { name: "drive.notebook.open", status: Implemented, authenticated_user: true, contexts: InsideWarpOnly, state: AppStateMutation, target: DriveObject, params: DriveObjectId, result: Acknowledgement },
         DriveEnvVarCollectionOpen => { name: "drive.env_var_collection.open", status: Implemented, authenticated_user: true, contexts: InsideWarpOnly, state: AppStateMutation, target: DriveObject, params: DriveObjectId, result: Acknowledgement },
         DriveObjectShareOpen => { name: "drive.object.share.open", status: Implemented, authenticated_user: true, contexts: InsideWarpOnly, state: AppStateMutation, target: DriveObject, params: DriveObjectId, result: Acknowledgement },
-        DriveObjectCreate => { name: "drive.object.create", status: Stub, authenticated_user: true, contexts: InsideWarpOnly, state: UnderlyingDataMutation, target: DriveObject, params: DriveObjectCreate, result: Acknowledgement },
-        DriveObjectUpdate => { name: "drive.object.update", status: Stub, authenticated_user: true, contexts: InsideWarpOnly, state: UnderlyingDataMutation, target: DriveObject, params: DriveObjectUpdate, result: Acknowledgement },
-        DriveObjectDelete => { name: "drive.object.delete", status: Stub, authenticated_user: true, contexts: InsideWarpOnly, state: UnderlyingDataMutation, target: DriveObject, params: DriveObjectId, result: Acknowledgement },
-        DriveObjectInsert => { name: "drive.object.insert", status: Stub, authenticated_user: true, contexts: InsideWarpOnly, state: UnderlyingDataMutation, target: DriveObject, params: DriveObjectInsert, result: Acknowledgement },
-        DriveObjectShareToTeam => { name: "drive.object.share_to_team", status: Stub, authenticated_user: true, contexts: InsideWarpOnly, state: UnderlyingDataMutation, target: DriveObject, params: DriveObjectId, result: Acknowledgement },
+        DriveObjectCreate => { name: "drive.object.create", status: Implemented, authenticated_user: true, contexts: InsideWarpOnly, state: UnderlyingDataMutation, target: DriveObject, params: DriveObjectCreate, result: Acknowledgement },
+        DriveObjectUpdate => { name: "drive.object.update", status: Implemented, authenticated_user: true, contexts: InsideWarpOnly, state: UnderlyingDataMutation, target: DriveObject, params: DriveObjectUpdate, result: Acknowledgement },
+        DriveObjectDelete => { name: "drive.object.delete", status: Implemented, authenticated_user: true, contexts: InsideWarpOnly, state: UnderlyingDataMutation, target: DriveObject, params: DriveObjectId, result: Acknowledgement },
+        DriveObjectInsert => { name: "drive.object.insert", status: Implemented, authenticated_user: true, contexts: InsideWarpOnly, state: UnderlyingDataMutation, target: DriveObject, params: DriveObjectInsert, result: Acknowledgement },
+        DriveObjectShareToTeam => { name: "drive.object.share_to_team", status: Implemented, authenticated_user: true, contexts: InsideWarpOnly, state: UnderlyingDataMutation, target: DriveObject, params: DriveObjectId, result: Acknowledgement },
         DriveWorkflowRun => { name: "drive.workflow.run", status: Stub, authenticated_user: true, contexts: InsideWarpOnly, state: UnderlyingDataMutation, target: DriveObject, params: WorkflowRun, result: Acknowledgement },
     }
 }

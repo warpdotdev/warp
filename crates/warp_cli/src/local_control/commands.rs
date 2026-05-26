@@ -1,7 +1,7 @@
 //! Implementations for user-facing `warpctrl` command groups.
 use local_control::protocol::{
-    Action, ActionKind, ActionMetadata, ActionNameParams, ActionParams, ControlError, EmptyParams,
-    ErrorCode, RequestEnvelope,
+    Action, ActionKind, ActionMetadata, ActionNameParams, ActionParams, ControlError,
+    DriveObjectId, EmptyParams, ErrorCode, RequestEnvelope,
 };
 use local_control::selection::select_instance;
 use serde::Serialize;
@@ -452,7 +452,9 @@ pub(super) fn run_drive_command(
         DriveCommand::Inspect(args) => run_action_with_params(
             args.target,
             ActionKind::DriveInspect,
-            local_control::DriveInspectParams { id: args.id },
+            local_control::DriveInspectParams {
+                id: DriveObjectId(args.id),
+            },
             output_format,
         ),
     }

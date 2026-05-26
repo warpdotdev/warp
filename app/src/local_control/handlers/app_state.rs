@@ -11,7 +11,6 @@ use warp_util::path::LineAndColumnArg;
 use warpui::{ModelContext, SingletonEntity, TypedActionView, ViewHandle};
 
 use crate::cloud_object::model::persistence::CloudModel;
-use crate::cloud_object::CloudObject as _;
 use crate::drive::items::WarpDriveItemId;
 use crate::local_control::resolver::target_window_id_for_target;
 use crate::local_control::LocalControlBridge;

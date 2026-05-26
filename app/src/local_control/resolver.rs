@@ -110,7 +110,7 @@ pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result
         ActionKind::HistoryList => action.params_as::<HistoryListParams>().map(|_| ()),
         ActionKind::DriveList => action.params_as::<DriveListParams>().map(|_| ()),
         ActionKind::DriveInspect => action.params_as::<DriveInspectParams>().and_then(|params| {
-            if params.id.is_empty() {
+            if params.id.0.is_empty() {
                 return Err(ControlError::new(
                     ErrorCode::InvalidParams,
                     "drive.inspect requires a non-empty Drive object id",

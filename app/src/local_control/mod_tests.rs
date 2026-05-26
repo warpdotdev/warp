@@ -98,7 +98,7 @@ fn tab_create_rejects_unsupported_selector_forms() {
 }
 
 #[test]
-fn capabilities_advertises_implemented_readonly_app_state_and_metadata_config_actions() {
+fn capabilities_advertises_implemented_readonly_app_state_metadata_config_and_drive_actions() {
     let actions = capabilities();
 
     for action in [
@@ -186,17 +186,16 @@ fn capabilities_advertises_implemented_readonly_app_state_and_metadata_config_ac
         ActionKind::DriveNotebookOpen,
         ActionKind::DriveEnvVarCollectionOpen,
         ActionKind::DriveObjectShareOpen,
+        ActionKind::DriveObjectCreate,
+        ActionKind::DriveObjectUpdate,
+        ActionKind::DriveObjectDelete,
+        ActionKind::DriveObjectInsert,
+        ActionKind::DriveObjectShareToTeam,
     ] {
         assert!(actions.contains(&action), "missing {}", action.as_str());
     }
 
-    for action in [
-        ActionKind::InputRun,
-        ActionKind::DriveWorkflowRun,
-        ActionKind::DriveObjectCreate,
-        ActionKind::DriveObjectUpdate,
-        ActionKind::DriveObjectDelete,
-    ] {
+    for action in [ActionKind::InputRun, ActionKind::DriveWorkflowRun] {
         assert!(!actions.contains(&action), "unexpected {}", action.as_str());
     }
 }
