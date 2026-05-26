@@ -10,6 +10,7 @@ use anyhow::Error;
 use regex::Regex;
 use repo_metadata::local_model::GetContentsArgs;
 use repo_metadata::{RepoContent, RepoMetadataModel, RepositoryIdentifier};
+use walkdir::{DirEntry, WalkDir};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
@@ -64,6 +65,29 @@ pub fn find_skill_files_in_tree(
             RepoContent::Directory(_) => None,
         })
         .collect()
+}
+
+/// Finds local project skill files by walking the filesystem directly.
+///
+/// This is a local-only fallback for repositories whose repo metadata indexing fails. Successful
+/// local and remote repos should use [`find_skill_files_in_tree`] so the normal metadata-backed
+/// path remains shared.
+pub(super) fn find_local_skill_files_on_filesystem(repo_path: &Path) -> Vec<PathBuf> {
+    let mut skill_files = WalkDir::new(repo_path)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| !is_ignored_fallback_scan_entry(entry))
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .map(|entry| entry.into_path())
+        .filter(|path| is_skill_file(path))
+        .collect::<Vec<_>>();
+    skill_files.sort();
+    skill_files
+}
+
+fn is_ignored_fallback_scan_entry(entry: &DirEntry) -> bool {
+    entry.file_name().to_str() == Some(".git")
 }
 
 /// Finds symlinked skill directories under loaded local provider directories in a repository.

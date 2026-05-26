@@ -11,10 +11,45 @@ use warpui::ModelContext;
 pub enum SkillRepositoryMessage {
     /// Initial scan of a home skills directory (e.g., `~/.agents`).
     HomeInitialScan { skills: Vec<ParsedSkill> },
+    /// Incremental file system updates from a local project fallback watcher.
+    ProjectRepositoryUpdate { update: RepositoryUpdate },
     /// Incremental file system updates from a home provider directory.
-    RepositoryUpdate { update: RepositoryUpdate },
+    HomeRepositoryUpdate { update: RepositoryUpdate },
     /// File changes detected in a resolved symlink target directory.
     SymlinkTargetUpdate { update: RepositoryUpdate },
+}
+
+/// A repository subscriber for project directories that forwards file change events to [`SkillManager`].
+pub struct ProjectSkillSubscriber {
+    pub message_tx: Sender<SkillRepositoryMessage>,
+}
+
+impl RepositorySubscriber for ProjectSkillSubscriber {
+    fn on_scan(
+        &mut self,
+        _repository: &Repository,
+        _ctx: &mut ModelContext<Repository>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        // Initial fallback scans are triggered directly when repo metadata indexing fails.
+        // This subscriber only keeps failed local repos hot-reloaded afterward.
+        Box::pin(async {})
+    }
+
+    fn on_files_updated(
+        &mut self,
+        _repository: &Repository,
+        update: &RepositoryUpdate,
+        _ctx: &mut ModelContext<Repository>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        let tx = self.message_tx.clone();
+        let update = update.clone();
+
+        Box::pin(async move {
+            let _ = tx
+                .send(SkillRepositoryMessage::ProjectRepositoryUpdate { update })
+                .await;
+        })
+    }
 }
 
 /// A repository subscriber for resolved symlink target directories.
@@ -98,7 +133,7 @@ impl RepositorySubscriber for HomeSkillSubscriber {
 
         Box::pin(async move {
             let _ = tx
-                .send(SkillRepositoryMessage::RepositoryUpdate { update })
+                .send(SkillRepositoryMessage::HomeRepositoryUpdate { update })
                 .await;
         })
     }

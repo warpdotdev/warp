@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 
+use super::super::subscribers::SkillRepositoryMessage;
+use super::SkillWatcher;
+use crate::ai::skills::skill_manager::SkillWatcherEvent;
 use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
 use repo_metadata::entry::{DirectoryEntry, Entry, FileMetadata};
 use repo_metadata::file_tree_store::FileTreeState;
@@ -12,11 +15,17 @@ use tempfile::TempDir;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 
-use super::SkillWatcher;
-use crate::ai::skills::skill_manager::SkillWatcherEvent;
-
 /// Helper function for creating a single skill file
 fn create_skill_file(dir: &TempDir, name: &str, description: &str, content: &str) -> ParsedSkill {
+    create_skill_file_in_directory(dir.path(), name, description, content)
+}
+
+fn create_skill_file_in_directory(
+    parent_dir: &std::path::Path,
+    name: &str,
+    description: &str,
+    content: &str,
+) -> ParsedSkill {
     let skill_content = format!(
         r#"---
 name: {}
@@ -26,7 +35,7 @@ description: {}
 "#,
         name, description, content
     );
-    let skills_path = dir.path().join(".agents").join("skills");
+    let skills_path = parent_dir.join(".agents").join("skills");
     let skill_dir_path = skills_path.join(name);
     let skill_file_path = skill_dir_path.join("SKILL.md");
 
@@ -134,6 +143,150 @@ fn test_refresh_project_skills_for_repo_loads_symlinked_project_skill_directory(
     });
 }
 
+#[test]
+fn test_refresh_project_skills_for_repo_uses_repo_metadata_without_fallback_watcher() {
+    let (tx, rx) = async_channel::unbounded();
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new_for_testing);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        let repo_metadata_handle = app.add_singleton_model(RepoMetadataModel::new);
+        let skill_watcher_handle = app.add_model(|ctx| SkillWatcher::new_for_testing(ctx, tx));
+
+        let temp_dir = TempDir::new().unwrap();
+        let skill = create_skill_file(&temp_dir, "metadata-skill", "Metadata skill", "Content");
+        let repo = temp_dir.path().to_path_buf();
+        let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
+        let repo_key = StandardizedPath::try_from_local(&repo).unwrap();
+
+        repo_metadata_handle.update(&mut app, |model, ctx| {
+            model.insert_test_state(repo_key, project_state(&repo, Some(&skill)), ctx);
+        });
+        skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
+            skill_watcher.refresh_project_skills_for_repo(&repo_id, ctx);
+            assert!(skill_watcher.failed_local_project_watchers.is_empty());
+        });
+
+        assert_eq!(
+            rx.recv().await.unwrap(),
+            SkillWatcherEvent::SkillsAdded {
+                skills: vec![skill]
+            }
+        );
+    });
+}
+
+#[test]
+fn test_local_project_fallback_scans_filesystem_when_repo_metadata_fails() {
+    let (tx, rx) = async_channel::unbounded();
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new_for_testing);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        let skill_watcher_handle = app.add_model(|ctx| SkillWatcher::new_for_testing(ctx, tx));
+
+        let temp_dir = TempDir::new().unwrap();
+        let repo = dunce::canonicalize(temp_dir.path()).unwrap();
+        let root_skill =
+            create_skill_file_in_directory(&repo, "root-skill", "Root skill", "Root content");
+        let subdir = repo.join("packages/frontend");
+        let subdir_skill =
+            create_skill_file_in_directory(&subdir, "frontend-skill", "Frontend skill", "Content");
+
+        let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
+        skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
+            skill_watcher.fallback_to_local_project_watcher(&repo_id, ctx);
+            assert!(skill_watcher.failed_local_project_watchers.is_empty());
+        });
+
+        let SkillWatcherEvent::SkillsAdded { mut skills } = rx.recv().await.unwrap() else {
+            panic!("Expected SkillsAdded event");
+        };
+        skills.sort_by(|a, b| a.path.cmp(&b.path));
+        let mut expected = vec![root_skill, subdir_skill];
+        expected.sort_by(|a, b| a.path.cmp(&b.path));
+        assert_eq!(skills, expected);
+    });
+}
+
+#[test]
+fn test_local_project_fallback_update_reuses_repository_update_handler() {
+    let (tx, rx) = async_channel::unbounded();
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new_for_testing);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        let skill_watcher_handle = app.add_model(|ctx| SkillWatcher::new_for_testing(ctx, tx));
+
+        let temp_dir = TempDir::new().unwrap();
+        let skill = create_skill_file(&temp_dir, "fallback-update", "Fallback update", "Content");
+        let update = RepositoryUpdate {
+            added: HashSet::new(),
+            modified: HashSet::from([TargetFile::new(skill.path.clone(), false)]),
+            deleted: HashSet::new(),
+            moved: HashMap::new(),
+            commit_updated: false,
+            index_lock_detected: false,
+            remote_ref_updated: false,
+        };
+
+        skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
+            skill_watcher.handle_message(
+                SkillRepositoryMessage::ProjectRepositoryUpdate { update },
+                ctx,
+            );
+        });
+
+        assert_eq!(
+            rx.recv().await.unwrap(),
+            SkillWatcherEvent::SkillsAdded {
+                skills: vec![skill]
+            }
+        );
+    });
+}
+
+#[test]
+fn test_local_project_fallback_directory_addition_scans_filesystem() {
+    let (tx, rx) = async_channel::unbounded();
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new_for_testing);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        let skill_watcher_handle = app.add_model(|ctx| SkillWatcher::new_for_testing(ctx, tx));
+
+        let temp_dir = TempDir::new().unwrap();
+        let new_dir = temp_dir.path().join("packages/frontend");
+        let skill =
+            create_skill_file_in_directory(&new_dir, "fallback-dir", "Fallback dir", "Content");
+        let update = RepositoryUpdate {
+            added: HashSet::from([TargetFile::new(new_dir, false)]),
+            modified: HashSet::new(),
+            deleted: HashSet::new(),
+            moved: HashMap::new(),
+            commit_updated: false,
+            index_lock_detected: false,
+            remote_ref_updated: false,
+        };
+
+        skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
+            skill_watcher.handle_message(
+                SkillRepositoryMessage::ProjectRepositoryUpdate { update },
+                ctx,
+            );
+        });
+
+        assert_eq!(
+            rx.recv().await.unwrap(),
+            SkillWatcherEvent::SkillsAdded {
+                skills: vec![skill]
+            }
+        );
+    });
+}
 #[test]
 fn test_handle_repository_update_skill_modified() {
     let (tx, rx) = async_channel::unbounded();
