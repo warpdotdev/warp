@@ -126,7 +126,7 @@ impl App {
         self.init_fn = Some(Box::new(init_fn));
 
         // The autorelease pool stays open for the whole app lifetime (`run` blocks
-        // until termination), matching the original `NSAutoreleasePool` wrapper.
+        // until termination).
         autoreleasepool(|_| {
             // Get (and create, if necessary) the underlying NSApplication.
             // SAFETY: `get_warp_app()` returns the warp NSApplication subclass instance.
@@ -135,8 +135,7 @@ impl App {
 
             // When running without an application bundle (dev builds), install the
             // provided dev icon as the app icon. This is a dev-only path: if the icon
-            // bytes fail to decode we skip the call below and leave the default icon,
-            // which is equivalent to the prior behavior.
+            // bytes fail to decode we skip the call below and leave the default icon.
             let running_app = NSRunningApplication::currentApplication();
             let dev_icon: Option<Retained<NSImage>> = if running_app.bundleIdentifier().is_none() {
                 self.dev_icon.as_ref().and_then(|dev_icon| {

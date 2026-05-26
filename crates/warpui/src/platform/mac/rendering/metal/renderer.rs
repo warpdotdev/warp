@@ -166,8 +166,8 @@ impl Renderer {
                 file.write_all(METAL_LIB_BYTES).unwrap();
             });
             let path = NSString::from_str(temp_lib_path.to_str().unwrap());
-            // `newLibraryWithURL:` is the non-deprecated replacement, but we preserve the
-            // original file-path loading behavior exactly.
+            // `newLibraryWithURL:` is the non-deprecated replacement, but we
+            // load the shader library from a file path here.
             #[allow(deprecated)]
             let library = device.newLibraryWithFile_error(&path).unwrap();
             library

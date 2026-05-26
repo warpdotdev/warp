@@ -502,8 +502,7 @@ impl Window {
         renderer_manager: Rc<RefCell<RendererManager>>,
     ) -> Result<Self> {
         log::info!("Opening window with id {window_id}");
-        // Wrap window creation in an autorelease pool, matching the original
-        // `NSAutoreleasePool` around `Window::open`. AppKit produces many
+        // Wrap window creation in an autorelease pool. AppKit produces many
         // autoreleased temporaries here; the window itself survives the drain
         // because it is retained by being shown.
         autoreleasepool(move |_| {
@@ -524,7 +523,7 @@ impl Window {
             let test_mode = cfg!(feature = "integration_tests")
                 && std::env::var("WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS").is_err();
 
-            // Pick the GPU exactly as before: for `LowPower`, scan all devices for
+            // Pick the GPU: for `LowPower`, scan all devices for
             // an integrated GPU and fall back to the system default; otherwise use
             // the system default. No device is created in test mode.
             // TODO: device appears to be leaked here.
@@ -625,7 +624,7 @@ impl Window {
             });
 
             // Store a +1 reference to the window state in the window, its content
-            // view, and its delegate ivars (matching the original `set_ivar` calls).
+            // view, and its delegate ivars.
             // SAFETY: the window, content view, and delegate are freshly created and
             // each declares the `windowState` ivar.
             unsafe {
