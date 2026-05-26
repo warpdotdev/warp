@@ -1,4 +1,3 @@
-use crate::appearance::Appearance;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use warpui::elements::{
     ChildAnchor, ChildView, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
@@ -10,6 +9,7 @@ use warpui::{AppContext, Element, EventContext, View, ViewHandle};
 
 use super::buttons::{highlight, icon_button};
 use super::icons::Icon;
+use crate::appearance::Appearance;
 
 #[derive(Clone, Copy)]
 pub enum MenuDirection {

@@ -1,24 +1,25 @@
-use crate::auth;
-use crate::network::NetworkStatus;
-use crate::persistence::ModelEvent;
-use crate::server::server_api::auth::AuthClient;
-use crate::terminal::alt_screen_reporting::AltScreenReporting;
-use crate::terminal::general_settings::GeneralSettings;
-use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
-use crate::{app_state::get_app_state, server::server_api::ServerApiProvider};
+use std::path::PathBuf;
+
 use ::settings::ToggleableSetting;
 use warp_core::execution_mode::AppExecutionMode;
-
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::AIAgentExchangeId;
-use crate::root_view::OpenPath;
-use crate::undo_close::UndoCloseStack;
-use crate::workspace::{Workspace, WorkspaceAction};
-use crate::GlobalResourceHandlesProvider;
-use std::path::PathBuf;
 use warp_graphql::mutations::create_anonymous_user::AnonymousUserType;
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, SingletonEntity, TypedActionView};
+
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::AIAgentExchangeId;
+use crate::app_state::get_app_state;
+use crate::network::NetworkStatus;
+use crate::persistence::ModelEvent;
+use crate::root_view::OpenPath;
+use crate::server::server_api::auth::AuthClient;
+use crate::server::server_api::ServerApiProvider;
+use crate::terminal::alt_screen_reporting::AltScreenReporting;
+use crate::terminal::general_settings::GeneralSettings;
+use crate::undo_close::UndoCloseStack;
+use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
+use crate::workspace::{Workspace, WorkspaceAction};
+use crate::{auth, GlobalResourceHandlesProvider};
 
 /// Specifies where a forked conversation should be opened.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

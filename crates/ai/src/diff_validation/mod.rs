@@ -1,14 +1,13 @@
+use std::cmp::Ordering;
+use std::fmt::{self, Display};
+use std::ops::Range;
+use std::path::PathBuf;
+use std::sync::LazyLock;
+
 use itertools::{EitherOrBoth, Itertools};
 use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::{
-    cmp::Ordering,
-    fmt::{self, Display},
-    ops::Range,
-    path::PathBuf,
-    sync::LazyLock,
-};
 use strsim::jaro_winkler;
 lazy_static! {
     /// Regex to parse a line number from a string in the format "{number}|{line}"

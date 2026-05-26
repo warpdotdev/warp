@@ -1,13 +1,11 @@
 use clap::{Args, Subcommand};
 
-use crate::{
-    config_file::ConfigFileArgs,
-    environment::{EnvironmentCreateArgs, EnvironmentUpdateArgs},
-    mcp::MCPSpec,
-    model::ModelArgs,
-    scope::ObjectScope,
-    skill::SkillSpec,
-};
+use crate::config_file::ConfigFileArgs;
+use crate::environment::{EnvironmentCreateArgs, EnvironmentUpdateArgs};
+use crate::mcp::MCPSpec;
+use crate::model::ModelArgs;
+use crate::scope::ObjectScope;
+use crate::skill::SkillSpec;
 
 /// `ScheduleCommand` has a slightly unusual definition because we allow `oz schedule` as
 // a shorthand for `oz schedule create`.
@@ -116,7 +114,7 @@ pub struct CreateScheduleArgs {
     ///
     /// When used with --prompt, the skill provides the base context and the prompt is the user task.
     /// This is useful for running recurring workflows like code reviews, dependency updates, or reports.
-    #[arg(long = "skill", value_name = "SPEC")]
+    #[arg(long = "skill", value_name = "SKILL")]
     pub skill: Option<SkillSpec>,
 
     /// Where this job should be hosted.
@@ -188,7 +186,7 @@ pub struct UpdateScheduleArgs {
     ///
     /// Skills are searched in `.agents/skills/`, `.warp/skills/`, `.claude/skills/`, and `.codex/skills/` directories.
     /// The skill is resolved at runtime in the agent's cloud environment.
-    #[arg(long = "skill", value_name = "SPEC", conflicts_with = "remove_skill")]
+    #[arg(long = "skill", value_name = "SKILL", conflicts_with = "remove_skill")]
     pub skill: Option<SkillSpec>,
 
     /// Remove the skill from this scheduled agent.

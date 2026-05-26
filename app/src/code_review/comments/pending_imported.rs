@@ -1,8 +1,9 @@
-use crate::code::editor::line::EditorLineLocation;
-use chrono::{DateTime, Local};
 use std::path::PathBuf;
 
+use chrono::{DateTime, Local};
+
 use super::comment::{ImportedCommentDetails, LineDiffContent};
+use crate::code::editor::line::EditorLineLocation;
 
 /// Pending imported GitHub review comment.
 ///

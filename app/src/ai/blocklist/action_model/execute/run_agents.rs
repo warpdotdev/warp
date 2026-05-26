@@ -12,13 +12,12 @@ use ai::agent::action_result::{
 };
 use ai::agent::orchestration_config::OrchestrationConfig;
 use ai::skills::SkillReference;
-
-use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationEditState;
-use futures::{future::BoxFuture, FutureExt};
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use settings::Setting;
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
-use warpui::{Entity, EntityId, ModelContext, ModelHandle};
+use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::start_agent::{StartAgentExecutor, StartAgentOutcome};
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
@@ -28,10 +27,10 @@ use crate::ai::agent::{
     StartAgentExecutionMode,
 };
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
+use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationEditState;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::local_child_harnesses::local_child_harness_disabled_message;
-use warpui::SingletonEntity;
 
 /// Per-child spawn timeout. If a child agent doesn't report back within
 /// this window (e.g. binary not found, server error), the slot is failed

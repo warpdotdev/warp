@@ -1,9 +1,9 @@
-use mockall::predicate::eq;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
+use mockall::predicate::eq;
 use tempfile::TempDir;
 use uuid::Uuid;
 use warp_cli::{OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV};

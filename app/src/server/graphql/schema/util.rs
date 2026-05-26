@@ -1,8 +1,7 @@
 use crate::anyhow;
-
-use crate::cloud_object::model::actions::ObjectActionHistory;
-use crate::cloud_object::model::actions::ObjectActionType;
-use crate::cloud_object::model::actions::{ObjectAction, ObjectActionSubtype};
+use crate::cloud_object::model::actions::{
+    ObjectAction, ObjectActionHistory, ObjectActionSubtype, ObjectActionType,
+};
 use crate::server::ids::{HashedSqliteId, ObjectUid, ServerId, SyncId};
 
 impl From<ObjectActionType> for warp_graphql::object_actions::ActionType {

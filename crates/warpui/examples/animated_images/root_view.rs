@@ -1,12 +1,9 @@
 use instant::Instant;
-use warpui::{
-    assets::asset_cache::AssetSource,
-    elements::{
-        CacheOption, ConstrainedBox, CrossAxisAlignment, Flex, Image, ParentElement, Shrinkable,
-        Stack,
-    },
-    AppContext, Element, Entity, TypedActionView, View,
+use warpui::assets::asset_cache::AssetSource;
+use warpui::elements::{
+    CacheOption, ConstrainedBox, CrossAxisAlignment, Flex, Image, ParentElement, Shrinkable, Stack,
 };
+use warpui::{AppContext, Element, Entity, TypedActionView, View};
 
 pub struct RootView {
     animation_start_time: Instant,

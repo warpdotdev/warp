@@ -1,3 +1,22 @@
+use pathfinder_color::ColorU;
+use serde::Serialize;
+pub use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
+use warpui::elements::{
+    Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, DropShadow, Element, Flex, Hoverable, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentOffsetBounds, Radius, SavePosition, Shrinkable, Text,
+};
+pub use warpui::elements::{ParentElement as _, Stack};
+pub use warpui::geometry::vector::vec2f;
+use warpui::keymap::EditableBinding;
+use warpui::presenter::ChildView;
+use warpui::ui_components::components::UiComponent;
+pub use warpui::AppContext;
+use warpui::{
+    Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
+
 use crate::appearance::Appearance;
 use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
@@ -6,30 +25,9 @@ use crate::editor::{
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{FindOption, TelemetryEvent};
 use crate::settings::InputModeSettings;
-use crate::ui_components::{blended_colors, icons::Icon};
-use serde::Serialize;
-
 use crate::themes::theme::Fill;
-use pathfinder_color::ColorU;
-use warpui::elements::{ChildAnchor, OffsetPositioning, Radius, SavePosition, Shrinkable};
-use warpui::keymap::EditableBinding;
-use warpui::ui_components::components::UiComponent;
-pub use warpui::{
-    accessibility::{AccessibilityContent, WarpA11yRole},
-    elements::{ParentElement as _, Stack},
-    geometry::vector::vec2f,
-    AppContext,
-};
-use warpui::{
-    elements::{
-        Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        DropShadow, Element, Flex, Hoverable, MouseStateHandle, ParentAnchor, ParentOffsetBounds,
-        Text,
-    },
-    Entity, SingletonEntity, TypedActionView, View,
-};
-use warpui::{presenter::ChildView, ViewContext, ViewHandle};
-use warpui::{FocusContext, ModelHandle};
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
 
 pub const FIND_BAR_WIDTH: f32 = 500.;
 const ICON_PADDING: f32 = 4.;

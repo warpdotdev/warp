@@ -16,9 +16,10 @@
 //! on the canvas to reposition the cursor. This is a known limitation of the hidden input
 //! approach.
 
-use gloo::events::EventListener;
 use std::cell::RefCell;
 use std::rc::Rc;
+
+use gloo::events::EventListener;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{HtmlInputElement, InputEvent, KeyboardEvent};
 

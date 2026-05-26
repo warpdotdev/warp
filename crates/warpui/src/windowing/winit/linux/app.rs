@@ -3,8 +3,9 @@
 //! For more information about X11 extensions and request codes/opcodes,
 //! see: https://www.x.org/wiki/Development/Documentation/Protocol/OpCodes.
 
-use lazy_static::lazy_static;
 use std::sync::{Arc, Mutex};
+
+use lazy_static::lazy_static;
 use wgpu::rwh::{HasDisplayHandle, RawDisplayHandle};
 use winit::event_loop::EventLoop;
 use x11rb::protocol::xproto::ConnectionExt as _;

@@ -1,27 +1,23 @@
 //! Warp input editor logic related to decorating the input's text, such as
 //! applying syntax highlighting and error underlining.
 
-use std::{collections::HashMap, ops::Range};
+use std::collections::HashMap;
+use std::ops::Range;
 
 use settings::Setting as _;
 use string_offset::{ByteOffset, CharOffset};
+pub use warp_completer::completer::SuggestionTypeName;
+pub use warp_completer::util::parse_current_commands_and_tokens;
+pub use warp_completer::{ParsedTokenData, ParsedTokensSnapshot};
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity, ViewContext};
 
-use crate::{
-    appearance::Appearance,
-    completer::{EmptyCompletionContext, SessionContext},
-    editor::TextStyleOperation,
-    settings::InputSettings,
-    themes::theme::{AnsiColorIdentifier, AnsiColors},
-};
-
 use super::Input;
-
-pub use warp_completer::{
-    completer::SuggestionTypeName, util::parse_current_commands_and_tokens, ParsedTokenData,
-    ParsedTokensSnapshot,
-};
+use crate::appearance::Appearance;
+use crate::completer::{EmptyCompletionContext, SessionContext};
+use crate::editor::TextStyleOperation;
+use crate::settings::InputSettings;
+use crate::themes::theme::{AnsiColorIdentifier, AnsiColors};
 
 /// Options to enable/disable command decoration and/or AI input background tasks spawned on input
 /// edits.

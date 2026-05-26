@@ -1,64 +1,15 @@
 pub mod telemetry;
 
-use crate::ai::agent::conversation::{ConversationStatus, StatusColorStyle};
-use crate::ai::agent_management::AgentNotificationsModel;
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
-use crate::ai::conversation_status_ui::render_status_element;
-use crate::cloud_object::model::generic_string_model::StringModel;
-use crate::code::editor::{add_color, remove_color};
-use crate::code::icon_from_file_path;
-use crate::safe_triangle::SafeTriangle;
-use crate::send_telemetry_from_app_ctx;
-use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
-use crate::terminal::view::TerminalViewState;
-use crate::terminal::CLIAgent;
-use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
-use crate::ui_components::icon_with_status::{render_icon_with_status, IconWithStatusVariant};
-use crate::workspace::view::vertical_tabs::telemetry::{
-    VerticalTabsChipEntrypoint, VerticalTabsTelemetryEvent,
-};
-use crate::FeatureFlag;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::appearance::Appearance;
-use crate::context_chips::display_chip::GitLineChanges;
-use crate::context_chips::github_pr_display_text_from_url;
-use crate::drive::{cloud_object_styling::warp_drive_icon_color, DriveObjectType};
-use crate::editor::EditorView;
-use crate::pane_group::pane::IPaneType;
-use crate::pane_group::TerminalPane;
-use crate::pane_group::{
-    CodePane, NotebookPane, PaneGroup, PaneId, TabBarHoverIndex, WorkflowPane,
-};
-use crate::tab::{tab_position_id, SelectedTabColor, TabData};
-use crate::terminal::session_settings::SessionSettings;
-use crate::terminal::TerminalView;
-use crate::themes::theme::Fill as ThemeFill;
-use crate::ui_components::buttons::combo_inner_button;
-use crate::ui_components::icons::Icon as UiIcon;
-use crate::util::bindings::keybinding_name_to_display_string;
-use crate::util::color::Opacity;
-use crate::workspace::action::WorkspaceAction;
-use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
-use crate::workspace::hoa_onboarding::HoaOnboardingStep;
-use crate::workspace::tab_settings::{
-    TabSettings, VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity,
-    VerticalTabsPrimaryInfo, VerticalTabsTabItemMode, VerticalTabsViewMode,
-};
-use crate::workspace::{
-    PaneViewLocator, TabBarLocation, TabContextMenuAnchor, VerticalTabsPaneContextMenuTarget,
-    VerticalTabsPaneDropTargetData, Workspace,
-};
 use languages::language_by_local_filename;
-
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use settings::Setting as _;
-use std::path::{Path, PathBuf};
 use warp_core::context_flag::ContextFlag;
 use warp_core::telemetry::TelemetryEvent as _;
 use warp_core::ui::color::blend::Blend;
@@ -66,13 +17,12 @@ use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill as WarpThemeFill, WarpTheme};
 use warp_core::ui::Icon as WarpIcon;
-use warpui::elements::DispatchEventResult;
 use warpui::elements::{
     resizable_state_handle, Border, ChildAnchor, Clipped, ClippedScrollStateHandle,
-    ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DragAxis,
-    DragBarSide, Draggable, DropShadow, DropTarget, Element, Empty, EventHandler, Expanded,
-    Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
+    ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    DispatchEventResult, DragAxis, DragBarSide, Draggable, DropShadow, DropTarget, Element, Empty,
+    EventHandler, Expanded, Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
     PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Resizable,
     ResizableStateHandle, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth,
     Shrinkable, Stack, Text,
@@ -84,6 +34,54 @@ use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::ui_components::text_input::TextInput;
 use warpui::{AppContext, EntityId, SingletonEntity, ViewHandle, WindowId};
+
+use crate::ai::agent::conversation::{ConversationStatus, StatusColorStyle};
+use crate::ai::agent_management::AgentNotificationsModel;
+use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::conversation_status_ui::render_status_element;
+use crate::appearance::Appearance;
+use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::cloud_object::CloudObjectLookup as _;
+use crate::code::editor::{add_color, remove_color};
+use crate::code::icon_from_file_path;
+use crate::context_chips::display_chip::GitLineChanges;
+use crate::context_chips::github_pr_display_text_from_url;
+use crate::drive::cloud_object_styling::warp_drive_icon_color;
+use crate::drive::DriveObjectType;
+use crate::editor::EditorView;
+use crate::pane_group::pane::IPaneType;
+use crate::pane_group::{
+    CodePane, NotebookPane, PaneGroup, PaneId, TabBarHoverIndex, TerminalPane, WorkflowPane,
+};
+use crate::safe_triangle::SafeTriangle;
+use crate::tab::{tab_position_id, SelectedTabColor, TabData};
+use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::session_settings::SessionSettings;
+use crate::terminal::view::TerminalViewState;
+use crate::terminal::{CLIAgent, TerminalView};
+use crate::themes::theme::Fill as ThemeFill;
+use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
+use crate::ui_components::buttons::combo_inner_button;
+use crate::ui_components::icon_with_status::{render_icon_with_status, IconWithStatusVariant};
+use crate::ui_components::icons::Icon as UiIcon;
+use crate::util::bindings::keybinding_name_to_display_string;
+use crate::util::color::Opacity;
+use crate::workspace::action::{NewSessionMenuAnchor, WorkspaceAction};
+use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
+use crate::workspace::hoa_onboarding::HoaOnboardingStep;
+use crate::workspace::tab_settings::{
+    TabSettings, VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity,
+    VerticalTabsPrimaryInfo, VerticalTabsTabItemMode, VerticalTabsViewMode,
+};
+use crate::workspace::view::vertical_tabs::telemetry::{
+    VerticalTabsChipEntrypoint, VerticalTabsTelemetryEvent,
+};
+use crate::workspace::{
+    PaneViewLocator, TabBarLocation, TabContextMenuAnchor, VerticalTabsPaneContextMenuTarget,
+    VerticalTabsPaneDropTargetData, Workspace,
+};
+use crate::{send_telemetry_from_app_ctx, FeatureFlag};
 
 const PANEL_WIDTH: f32 = 248.;
 const MIN_PANEL_WIDTH: f32 = 200.;
@@ -584,6 +582,7 @@ pub(super) struct VerticalTabsPanelState {
     show_pr_link_info_tooltip_mouse_state: MouseStateHandle,
     show_diff_stats_mouse_state: MouseStateHandle,
     show_details_on_hover_mouse_state: MouseStateHandle,
+    panel_right_click_mouse_state: MouseStateHandle,
     pub(super) show_settings_popup: bool,
 }
 
@@ -619,6 +618,7 @@ impl Default for VerticalTabsPanelState {
             show_pr_link_info_tooltip_mouse_state: Default::default(),
             show_diff_stats_mouse_state: Default::default(),
             show_details_on_hover_mouse_state: Default::default(),
+            panel_right_click_mouse_state: Default::default(),
             show_settings_popup: false,
         }
     }
@@ -784,6 +784,7 @@ struct VerticalTabsSummaryData {
     primary_labels: Vec<VerticalTabsSummaryPrimaryLabel>,
     working_directories: Vec<String>,
     branch_entries: Vec<VerticalTabsSummaryBranchEntry>,
+    has_unread_activity: bool,
 }
 
 impl TabGroupColorMode {
@@ -1410,11 +1411,16 @@ fn render_new_tab_button(
     let ui_builder = appearance.ui_builder().clone();
     let tab_configs_keybinding =
         keybinding_name_to_display_string(super::TOGGLE_TAB_CONFIGS_MENU_BINDING_NAME, app);
-    let is_active = workspace.show_new_session_dropdown_menu.is_some()
-        || workspace
-            .hoa_onboarding_flow
-            .as_ref()
-            .is_some_and(|flow| flow.as_ref(app).step() == HoaOnboardingStep::TabConfig);
+    // Only highlight the `+` button when the menu was opened from it, not when
+    // it was opened via right-click on the panel chrome (which floats at the
+    // pointer and isn't anchored to the button).
+    let is_active = matches!(
+        workspace.show_new_session_dropdown_menu,
+        Some(NewSessionMenuAnchor::AddTabButton(_))
+    ) || workspace
+        .hoa_onboarding_flow
+        .as_ref()
+        .is_some_and(|flow| flow.as_ref(app).step() == HoaOnboardingStep::TabConfig);
 
     Hoverable::new(state.new_tab_hover_state.clone(), move |hover_state| {
         let plus_button = combo_inner_button(
@@ -1434,7 +1440,9 @@ fn render_new_tab_button(
         )
         .build()
         .on_click(|ctx, _, position| {
-            ctx.dispatch_typed_action(WorkspaceAction::ToggleNewSessionMenu { position });
+            ctx.dispatch_typed_action(WorkspaceAction::ToggleNewSessionMenu {
+                anchor: NewSessionMenuAnchor::AddTabButton(position),
+            });
         })
         .finish();
 
@@ -1526,9 +1534,22 @@ fn render_vertical_tabs_panel(
         super::PanelPosition::Left => DragBarSide::Right,
         super::PanelPosition::Right => DragBarSide::Left,
     };
-    let inner = Container::new(panel_with_popup)
-        .with_background(internal_colors::fg_overlay_1(theme))
-        .finish();
+    // Wrap the panel in a `Hoverable` so right-clicking the empty area of the
+    // vertical tabs panel opens the tab configs dropdown.
+    let inner = Hoverable::new(state.panel_right_click_mouse_state.clone(), |_| {
+        Container::new(panel_with_popup)
+            .with_background(internal_colors::fg_overlay_1(theme))
+            .finish()
+    })
+    .on_right_click(|ctx, _, position| {
+        if FeatureFlag::GroupedTabs.is_enabled() {
+            ctx.dispatch_typed_action(WorkspaceAction::OpenNewSessionMenu {
+                anchor: NewSessionMenuAnchor::Pointer(position),
+            });
+        }
+    })
+    .with_defer_events_to_children()
+    .finish();
 
     Resizable::new(state.resizable_state.clone(), inner)
         .with_dragbar_side(drag_side)
@@ -2436,7 +2457,10 @@ fn has_unread_activity(typed: &TypedPane<'_>, app: &AppContext) -> bool {
         return false;
     };
     let terminal_view = terminal_pane.terminal_view(app);
-    let terminal_view_id = terminal_view.as_ref(app).id();
+    has_unread_activity_for_terminal_view(terminal_view.as_ref(app).id(), app)
+}
+
+fn has_unread_activity_for_terminal_view(terminal_view_id: EntityId, app: &AppContext) -> bool {
     AgentNotificationsModel::as_ref(app)
         .notifications()
         .has_unread_for_terminal_view(terminal_view_id)
@@ -2715,6 +2739,7 @@ fn build_vertical_tabs_summary_data(
     let mut working_directories = Vec::new();
     let mut working_directory_seen = HashMap::new();
     let mut branch_entries = Vec::new();
+    let mut has_unread_activity = false;
 
     for pane_id in visible_pane_ids {
         let Some(pane) = pane_group.pane_by_id(*pane_id) else {
@@ -2733,6 +2758,8 @@ fn build_vertical_tabs_summary_data(
             TypedPane::Terminal(terminal_pane) => {
                 let terminal_view = terminal_pane.terminal_view(app);
                 let terminal_view = terminal_view.as_ref(app);
+                has_unread_activity |=
+                    has_unread_activity_for_terminal_view(terminal_view.id(), app);
                 let title_text = terminal_view.terminal_title_from_shell();
                 let working_directory = resolved_terminal_working_directory(terminal_view, app);
                 let working_directory_text = working_directory
@@ -2828,6 +2855,7 @@ fn build_vertical_tabs_summary_data(
         primary_labels,
         working_directories,
         branch_entries: coalesce_summary_branch_entries(branch_entries),
+        has_unread_activity,
     }
 }
 
@@ -3639,6 +3667,9 @@ fn render_summary_tab_item(
 
     // Title region. A custom-title or rename override short-circuits the per-label list and
     // renders as a single line (no prefix slot, no overflow line).
+    let mut title_region = Flex::column()
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_cross_axis_alignment(CrossAxisAlignment::Start);
     if let Some(title_override) = render_title_override(
         &props,
         12.,
@@ -3647,9 +3678,9 @@ fn render_summary_tab_item(
         appearance,
         app,
     ) {
-        text_col.add_child(title_override);
+        title_region.add_child(title_override);
     } else if summary.primary_labels.is_empty() {
-        text_col.add_child(render_text_line(
+        title_region.add_child(render_text_line(
             &props.title,
             main_text_color,
             ClipConfig::end(),
@@ -3670,7 +3701,7 @@ fn render_summary_tab_item(
                 main_text_color,
                 appearance,
             );
-            text_col.add_child(if idx == 0 {
+            title_region.add_child(if idx == 0 {
                 line
             } else {
                 Container::new(line)
@@ -3682,7 +3713,7 @@ fn render_summary_tab_item(
         let hidden_label_count =
             summary_overflow_count(summary.primary_labels.len(), MAX_VISIBLE_PRIMARY_LABELS);
         if hidden_label_count > 0 {
-            text_col.add_child(
+            title_region.add_child(
                 Container::new(render_summary_overflow_line(
                     hidden_label_count,
                     sub_text_color,
@@ -3692,6 +3723,24 @@ fn render_summary_tab_item(
                 .finish(),
             );
         }
+    }
+    let title_region = title_region.finish();
+    if summary.has_unread_activity {
+        text_col.add_child(
+            Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(Shrinkable::new(1., title_region).finish())
+                .with_child(
+                    Container::new(render_title_indicator(theme))
+                        .with_margin_left(4.)
+                        .finish(),
+                )
+                .finish(),
+        );
+    } else {
+        text_col.add_child(title_region);
     }
 
     // Working-directory region.

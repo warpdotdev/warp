@@ -1,12 +1,10 @@
 use clap::{Args, Subcommand};
 
-use crate::{
-    config_file::ConfigFileArgs,
-    environment::{EnvironmentCreateArgs, EnvironmentUpdateArgs},
-    mcp::MCPSpec,
-    model::ModelArgs,
-    provider::ProviderType,
-};
+use crate::config_file::ConfigFileArgs;
+use crate::environment::{EnvironmentCreateArgs, EnvironmentUpdateArgs};
+use crate::mcp::MCPSpec;
+use crate::model::ModelArgs;
+use crate::provider::ProviderType;
 
 /// Integration-related subcommands.
 #[derive(Debug, Clone, Subcommand)]

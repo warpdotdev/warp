@@ -1,8 +1,9 @@
 //! Tips for cloud mode loading screen.
 
-use crate::ai::agent_tips::AITip;
 use warpui::keymap::Keystroke;
 use warpui::AppContext;
+
+use crate::ai::agent_tips::AITip;
 
 /// A cloud mode tip with text and optional link.
 #[derive(Clone, Debug)]

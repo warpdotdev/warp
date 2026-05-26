@@ -108,13 +108,14 @@ pub(crate) async fn download_artifact_bytes(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "local_fs")]
+    use chrono::{TimeZone, Utc};
+
     use super::*;
     #[cfg(feature = "local_fs")]
     use crate::server::server_api::ai::{
         ArtifactDownloadCommonFields, FileArtifactResponseData, ScreenshotArtifactResponseData,
     };
-    #[cfg(feature = "local_fs")]
-    use chrono::{TimeZone, Utc};
 
     #[cfg(feature = "local_fs")]
     fn sample_file_download_response(filename: &str, filepath: &str) -> ArtifactDownloadResponse {

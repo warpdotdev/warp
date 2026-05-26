@@ -169,6 +169,7 @@ image = { version = "0.25.9", default-features = false, features = [
   "webp",
 ] }
 instant = { version = "0.1.12", features = ["wasm-bindgen"] }
+iso8601-duration = { version = "0.2.0", features = ["chrono", "serde"] }
 itertools = "0.14.0"
 jaq-json = { version = "2.0", features = ["serde"] }
 # Disabling the default `formats` feature is intended to avoid pulling in
@@ -186,7 +187,7 @@ mermaid_to_svg = { git = "https://github.com/warpdotdev/mermaid-to-svg.git", rev
 mime_guess = "2.0"
 minimp4 = "0.1.2"
 nix = { version = "0.26.4", default-features = false, features = ["signal"] }
-notify-debouncer-full = { git = "https://github.com/warpdotdev/notify", rev = "f3afcda3058941e17e09689afea40e2a2db057e0" }
+notify-debouncer-full = { git = "https://github.com/warpdotdev/notify", rev = "91b719849bc04ef251bcb2cc61076b099204e970" }
 nom = "7.1.1"
 num-traits = "0.2"
 oauth2 = { version = "5.0.0", default-features = false }
@@ -248,7 +249,7 @@ serde_json = { version = "1.0", features = ["raw_value"] }
 serde_urlencoded = "0.7"
 serde_with = "2.0.1"
 serde_yaml = "0.8"
-session-sharing-protocol = { git = "https://github.com/warpdotdev/session-sharing-protocol.git", rev = "3a12b871dfd1019a66057e4d9b7d5c812b73ee8c" }
+session-sharing-protocol = { git = "https://github.com/warpdotdev/session-sharing-protocol.git", rev = "5a0ad6135809feee9da2e9efae8bd6b54b89172e" }
 similar = { version = "2.7", features = ["inline"] }
 simplelog = "0.12.2"
 smallvec = "1.6.1"

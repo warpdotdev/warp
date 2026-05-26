@@ -2,6 +2,22 @@ use std::borrow::Cow;
 use std::fs::File;
 use std::path::PathBuf;
 
+use ai::workspace::WorkspaceMetadata;
+use csv::Writer;
+use enclose::enclose;
+use itertools::Itertools;
+use settings::manager::SettingsManager;
+use settings::Setting as _;
+use warp_core::context_flag::ContextFlag;
+use warp_util::path::user_friendly_path;
+use warpui::actions::StandardAction;
+use warpui::keymap::{Keystroke, Trigger};
+use warpui::platform::menu::{
+    CustomMenuItem, Menu, MenuBar, MenuItem, MenuItemProperties, MenuItemPropertyChanges,
+};
+use warpui::windowing::WindowManager;
+use warpui::{AppContext, SingletonEntity};
+
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::auth::AuthStateProvider;
 use crate::default_terminal::DefaultTerminal;
@@ -20,21 +36,6 @@ use crate::util::bindings::{self, trigger_to_keystroke, CustomAction};
 use crate::util::links;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::{auth, report_if_error};
-use ai::workspace::WorkspaceMetadata;
-use csv::Writer;
-use enclose::enclose;
-use itertools::Itertools;
-use settings::manager::SettingsManager;
-use settings::Setting as _;
-use warp_core::context_flag::ContextFlag;
-use warp_util::path::user_friendly_path;
-use warpui::actions::StandardAction;
-use warpui::keymap::{Keystroke, Trigger};
-use warpui::platform::menu::{
-    CustomMenuItem, Menu, MenuBar, MenuItem, MenuItemProperties, MenuItemPropertyChanges,
-};
-use warpui::windowing::WindowManager;
-use warpui::{AppContext, SingletonEntity};
 
 type CheckmarkStatusGetter = dyn 'static + Fn(&mut AppContext) -> bool;
 

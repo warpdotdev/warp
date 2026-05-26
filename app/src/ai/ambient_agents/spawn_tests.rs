@@ -1,20 +1,17 @@
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use chrono::Utc;
 use session_sharing_protocol::common::SessionId;
-
-use crate::ai::agent::UserQueryMode;
-use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
-use crate::server::server_api::ai::{MockAIClient, SpawnAgentResponse, TaskStatusMessage};
-use crate::terminal::shared_session;
 
 use super::{
     spawn_task, submit_run_followup, AmbientAgentEvent, SessionJoinInfo,
     MAX_STALE_POLLS_BEFORE_FAILURE,
 };
+use crate::ai::agent::UserQueryMode;
+use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
+use crate::server::server_api::ai::{MockAIClient, SpawnAgentResponse, TaskStatusMessage};
+use crate::terminal::shared_session;
 
 fn task_with(
     state: AmbientAgentTaskState,
@@ -30,6 +27,7 @@ fn task_with(
         created_at: Utc::now(),
         started_at: Some(Utc::now()),
         updated_at: Utc::now(),
+        run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: None,
         session_id,
@@ -671,8 +669,9 @@ fn permanent_http_error() -> anyhow::Error {
 
 #[tokio::test]
 async fn poll_retries_transient_429_errors() {
-    use crate::server::retry_strategies::MAX_ATTEMPTS;
     use futures::StreamExt;
+
+    use crate::server::retry_strategies::MAX_ATTEMPTS;
 
     let mut mock = MockAIClient::new();
     let call_count = Arc::new(AtomicUsize::new(0));
@@ -811,8 +810,9 @@ async fn poll_fails_on_permanent_http_error() {
 
 #[tokio::test]
 async fn poll_gives_up_after_max_transient_retries() {
-    use crate::server::retry_strategies::MAX_ATTEMPTS;
     use futures::StreamExt;
+
+    use crate::server::retry_strategies::MAX_ATTEMPTS;
 
     let mut mock = MockAIClient::new();
     let call_count = Arc::new(AtomicUsize::new(0));

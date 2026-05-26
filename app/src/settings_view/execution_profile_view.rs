@@ -1,3 +1,16 @@
+use std::path::PathBuf;
+
+use uuid::Uuid;
+use warp_core::features::FeatureFlag;
+use warpui::elements::{
+    ConstrainedBox, Container, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize,
+    ParentElement, Shrinkable, Text, Wrap,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+};
+
 use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::execution_profiles::profiles::{
     AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId,
@@ -12,19 +25,6 @@ use crate::settings::AISettings;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
 use crate::TemplatableMCPServerManager;
-use std::path::PathBuf;
-use uuid::Uuid;
-use warp_core::features::FeatureFlag;
-use warpui::elements::ParentElement;
-use warpui::SingletonEntity;
-use warpui::{
-    elements::{
-        ConstrainedBox, Container, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize,
-        Shrinkable, Text, Wrap,
-    },
-    fonts::{Properties, Weight},
-    AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle,
-};
 
 #[derive(Debug, Clone)]
 pub enum ExecutionProfileViewAction {

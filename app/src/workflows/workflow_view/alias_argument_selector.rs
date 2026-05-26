@@ -2,24 +2,23 @@ use std::collections::HashMap;
 
 use warp_core::ui::appearance::Appearance;
 use warp_editor::editor::NavigationKey;
+use warpui::elements::ChildView;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    elements::ChildView,
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
-use crate::{
-    cloud_object::model::persistence::CloudModel,
-    drive::workflows::enum_creation_dialog::WorkflowEnumData,
-    editor::{
-        EditOrigin, EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys,
-        SingleLineEditorOptions, TextOptions,
-    },
-    server::ids::SyncId,
-    view_components::{Dropdown, DropdownItem},
-    workflows::{workflow::ArgumentType, workflow_enum::EnumVariants},
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::drive::workflows::enum_creation_dialog::WorkflowEnumData;
+use crate::editor::{
+    EditOrigin, EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys,
+    SingleLineEditorOptions, TextOptions,
 };
+use crate::server::ids::SyncId;
+use crate::view_components::{Dropdown, DropdownItem};
+use crate::workflows::workflow::ArgumentType;
+use crate::workflows::workflow_enum::EnumVariants;
 
 /// Width of the argument editor in alias mode.
 pub const ALIAS_ARGUMENT_EDITOR_WIDTH: f32 = 300.;

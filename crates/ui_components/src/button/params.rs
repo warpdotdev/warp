@@ -2,11 +2,12 @@ use std::borrow::Cow;
 
 use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
-use warpui::{fonts, keymap::Keystroke, prelude::stack};
-
-use crate::{keyboard_shortcut, tooltip};
+use warpui::fonts;
+use warpui::keymap::Keystroke;
+use warpui::prelude::stack;
 
 use super::Theme;
+use crate::{keyboard_shortcut, tooltip};
 
 /// The parameters for rendering a button.
 pub struct Params<'a> {

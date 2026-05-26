@@ -1,12 +1,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::language_server_candidate::{LanguageServerCandidate, LanguageServerMetadata};
-use crate::CommandBuilder;
 use async_trait::async_trait;
 
 #[cfg(feature = "local_fs")]
 use crate::install::fetch_latest_metadata_from_github;
+use crate::language_server_candidate::{LanguageServerCandidate, LanguageServerMetadata};
+use crate::CommandBuilder;
 
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 pub struct GoPlsCandidate {

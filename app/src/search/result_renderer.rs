@@ -1,19 +1,18 @@
 use std::sync::Arc;
-use warpui::elements::{Border, DispatchEventResult, DropShadow, Fill as ElementFill};
-use warpui::{
-    elements::{
-        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, EventHandler, Flex,
-        Hoverable, MainAxisSize, MouseState, MouseStateHandle, ParentElement, Radius, Shrinkable,
-        SizeConstraintCondition, SizeConstraintSwitch,
-    },
-    platform::Cursor,
-    Action, AppContext, Element, EventContext, SingletonEntity,
-};
 
-use crate::search::item::IconLocation;
-use crate::{appearance::Appearance, themes::theme::Fill};
+use warpui::elements::{
+    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult,
+    DropShadow, Empty, EventHandler, Fill as ElementFill, Flex, Hoverable, MainAxisSize,
+    MouseState, MouseStateHandle, ParentElement, Radius, Shrinkable, SizeConstraintCondition,
+    SizeConstraintSwitch,
+};
+use warpui::platform::Cursor;
+use warpui::{Action, AppContext, Element, EventContext, SingletonEntity};
 
 use super::data_source::QueryResult;
+use crate::appearance::Appearance;
+use crate::search::item::IconLocation;
+use crate::themes::theme::Fill;
 
 const DETAILS_MIN_WIDTH: f32 = 180.;
 const DETAILS_MAX_WIDTH: f32 = 480.;

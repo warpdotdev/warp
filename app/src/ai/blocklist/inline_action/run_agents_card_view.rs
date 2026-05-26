@@ -4,21 +4,13 @@
 //! `AIBlock` via `ChildView`. Keybindings and Accept dispatch live on
 //! the view; only `RejectRequested` flows back to the parent.
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
 use ai::agent::action_result::{RunAgentsAgentOutcomeKind, RunAgentsResult};
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
-
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::blocklist::telemetry::{
-    orchestration_modified_field, BlocklistOrchestrationTelemetryEvent,
-    OrchestrationApprovalStatus, OrchestrationEnteredEvent, OrchestrationEntrySource,
-    OrchestrationExecutionModeKind, OrchestrationHarnessKind, RunAgentsCardDecision,
-    RunAgentsCardDecisionEvent,
-};
 use ai::skills::SkillReference;
 use pathfinder_geometry::vector::vec2f;
-use std::rc::Rc;
 use warp_core::send_telemetry_from_ctx;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Container, CornerRadius, CrossAxisAlignment, Empty, Flex,
@@ -31,8 +23,8 @@ use warpui::{
     ViewHandle,
 };
 
-use crate::ai::agent::icons;
-use crate::ai::agent::{AIAgentActionId, AIAgentActionResultType};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{icons, AIAgentActionId, AIAgentActionResultType};
 use crate::ai::blocklist::action_model::{
     AIActionStatus, BlocklistAIActionEvent, BlocklistAIActionModel, RunAgentsExecutor,
     RunAgentsExecutorEvent, RunAgentsSpawningSnapshot,
@@ -52,6 +44,12 @@ use crate::ai::blocklist::inline_action::orchestration_controls::{
 };
 use crate::ai::blocklist::inline_action::requested_action::{
     render_requested_action_row_for_text, CTRL_C_KEYSTROKE, ENTER_KEYSTROKE,
+};
+use crate::ai::blocklist::telemetry::{
+    orchestration_modified_field, BlocklistOrchestrationTelemetryEvent,
+    OrchestrationApprovalStatus, OrchestrationEnteredEvent, OrchestrationEntrySource,
+    OrchestrationExecutionModeKind, OrchestrationHarnessKind, RunAgentsCardDecision,
+    RunAgentsCardDecisionEvent,
 };
 use crate::ai::connected_self_hosted_workers::{
     ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,

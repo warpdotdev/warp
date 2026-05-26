@@ -3,9 +3,8 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 
-use crate::completer::suggest::SuggestionTypeName;
-
 use super::suggest::{MatchedSuggestion, Priority};
+use crate::completer::suggest::SuggestionTypeName;
 
 /// Given a map of computed, unordered suggestion vectors keyed by `SuggestionType`, returns a
 /// single vector of suggestions in order.

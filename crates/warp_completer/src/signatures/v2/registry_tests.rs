@@ -1,6 +1,5 @@
-use crate::signatures::{Command, Priority};
-
 use super::*;
+use crate::signatures::{Command, Priority};
 
 fn test_signature() -> CommandSignature {
     CommandSignature {

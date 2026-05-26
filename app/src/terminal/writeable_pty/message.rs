@@ -1,5 +1,6 @@
-use crate::terminal::SizeInfo;
 use std::borrow::Cow;
+
+use crate::terminal::SizeInfo;
 
 /// Messages that may be sent to the `EventLoop`.
 #[derive(Debug)]

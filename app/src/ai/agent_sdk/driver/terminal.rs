@@ -1,53 +1,40 @@
-use std::{
-    collections::HashMap,
-    ffi::OsString,
-    future::Future,
-    path::PathBuf,
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-    time::Duration,
-};
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::future::Future;
+use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::time::Duration;
 
 use futures::channel::oneshot;
 use session_sharing_protocol::common::{Role, SessionId};
-use session_sharing_protocol::sharer::SessionSourceType;
 use warp_cli::share::{ShareAccessLevel, ShareRequest, ShareSubject};
 use warp_completer::completer::CommandOutput;
 use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
-use warp_util::{path::ShellFamily, sync::Condition};
-use warpui::{
-    r#async::FutureExt, AppContext, Entity, ModelContext, ModelHandle, SingletonEntity as _,
-    ViewHandle,
-};
-
-use crate::terminal::model::session::ExecuteCommandOptions;
 use warp_terminal::model::grid::Dimensions;
-
-use crate::{
-    ai::ambient_agents::AmbientAgentTaskId,
-    pane_group::NewTerminalOptions,
-    root_view::{open_new_with_workspace_source, NewWorkspaceSource},
-    terminal::{
-        model::{
-            block::{BlockId, SerializedBlock},
-            find::RegexDFAs,
-            grid::RespectDisplayedOutput,
-            index::Point,
-            RespectObfuscatedSecrets,
-        },
-        shared_session::{self, IsSharedSessionCreator},
-        shell::ShellType,
-        view::ConversationRestorationInNewPaneType,
-        TerminalView,
-    },
-    workspaces::user_workspaces::UserWorkspaces,
-};
-
-use crate::ai::attachment_utils::attachments_download_dir;
+use warp_util::path::ShellFamily;
+use warp_util::sync::Condition;
+use warpui::r#async::FutureExt;
+use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity as _, ViewHandle};
 
 use super::AgentDriverError;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::attachment_utils::attachments_download_dir;
+use crate::pane_group::NewTerminalOptions;
+use crate::root_view::{open_new_with_workspace_source, NewWorkspaceSource};
+use crate::terminal::model::block::{BlockId, SerializedBlock};
+use crate::terminal::model::find::RegexDFAs;
+use crate::terminal::model::grid::RespectDisplayedOutput;
+use crate::terminal::model::index::Point;
+use crate::terminal::model::session::ExecuteCommandOptions;
+use crate::terminal::model::RespectObfuscatedSecrets;
+use crate::terminal::shared_session::{self, IsSharedSessionCreator, SharedSessionSource};
+use crate::terminal::shell::ShellType;
+use crate::terminal::view::ConversationRestorationInNewPaneType;
+use crate::terminal::TerminalView;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// Describes why an agent's session-sharing request failed.
 #[derive(Debug, thiserror::Error)]
@@ -132,9 +119,7 @@ fn create_terminal_view(
 ) -> Result<ViewHandle<TerminalView>, AgentDriverError> {
     let is_shared_session_creator = if options.should_share {
         IsSharedSessionCreator::Yes {
-            source_type: SessionSourceType::AmbientAgent {
-                task_id: options.task_id.map(|t| t.to_string()),
-            },
+            source: SharedSessionSource::ambient_agent(options.task_id.map(|t| t.to_string())),
         }
     } else {
         IsSharedSessionCreator::No

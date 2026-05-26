@@ -1,4 +1,15 @@
 #![cfg_attr(not(feature = "local_fs"), allow(dead_code))]
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use futures_lite::future::yield_now;
+use fuzzy_match::FuzzyMatchResult;
+use itertools::Itertools;
+#[cfg(feature = "local_fs")]
+use repo_metadata::repositories::DetectedRepositories;
+use warpui::{AppContext, SingletonEntity};
+
 use super::search_item::FileSearchItem;
 #[cfg(feature = "local_fs")]
 use crate::code::opened_files::OpenedFilesModel;
@@ -10,16 +21,6 @@ use crate::search::files::search_item::FileSearchResult;
 use crate::search::mixer::{BoxFuture, DataSourceRunErrorWrapper};
 #[cfg(feature = "local_fs")]
 use crate::workspace::ActiveSession;
-use futures_lite::future::yield_now;
-use fuzzy_match::FuzzyMatchResult;
-use itertools::Itertools;
-#[cfg(feature = "local_fs")]
-use repo_metadata::repositories::DetectedRepositories;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::path::PathBuf;
-use std::sync::Arc;
-use warpui::{AppContext, SingletonEntity};
 
 const MAX_RESULTS: usize = 200;
 

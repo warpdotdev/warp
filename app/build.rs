@@ -3,12 +3,13 @@
 // Windows).
 #![allow(clippy::disallowed_types)]
 
-use cfg_aliases::cfg_aliases;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::{env, fs};
 
 use anyhow::Result;
+use cfg_aliases::cfg_aliases;
 use sha2::Digest;
-use std::path::{Path, PathBuf};
-use std::{env, fs, process::Command};
 use walkdir::WalkDir;
 use warp_util::assets::{
     ASSETS_DIR, ASYNC_ASSETS_DIR, CONPTY_DLL_FILE, DXCOMPILER_DLL_FILE, DXIL_DLL_FILE,

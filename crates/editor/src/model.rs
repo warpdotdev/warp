@@ -2,27 +2,24 @@ use std::ops::Range;
 
 use itertools::{Either, Itertools};
 use line_ending::LineEnding;
-use vec1::{Vec1, vec1};
-use warpui::{
-    AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, clipboard::ClipboardContent,
-};
-
-use crate::{
-    content::{
-        anchor::Anchor,
-        buffer::{
-            AutoScrollBehavior, Buffer, BufferEditAction, BufferSelectAction, EditOrigin,
-            InitialBufferState, SelectionOffsets, ShouldAutoscroll, ToBufferCharOffset,
-        },
-        selection_model::BufferSelectionModel,
-        text::{BlockType, BufferBlockItem, BufferBlockStyle, CodeBlockType, TextStyles},
-        version::BufferVersion,
-    },
-    render::model::RenderState,
-    selection::{SelectionMode, SelectionModel, TextDirection, TextUnit},
-};
 use string_offset::{ByteOffset, CharOffset};
+use vec1::{Vec1, vec1};
+use warpui::clipboard::ClipboardContent;
 use warpui::elements::ListIndentLevel;
+use warpui::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle};
+
+use crate::content::anchor::Anchor;
+use crate::content::buffer::{
+    AutoScrollBehavior, Buffer, BufferEditAction, BufferSelectAction, EditOrigin,
+    InitialBufferState, SelectionOffsets, ShouldAutoscroll, ToBufferCharOffset,
+};
+use crate::content::selection_model::BufferSelectionModel;
+use crate::content::text::{
+    BlockType, BufferBlockItem, BufferBlockStyle, CodeBlockType, TextStyles,
+};
+use crate::content::version::BufferVersion;
+use crate::render::model::RenderState;
+use crate::selection::{SelectionMode, SelectionModel, TextDirection, TextUnit};
 
 /// A wrapper for a buffer that provides access to its internal update_content method.
 /// It's important this is only returned from `CoreEditorModel::update_content` method
@@ -918,8 +915,9 @@ pub trait RichTextEditorModel: CoreEditorModel {
     }
 
     fn update_to_new_markdown(&mut self, markdown: &str, ctx: &mut ModelContext<Self::T>) {
-        use crate::content::buffer::StyledBlockBoundaryBehavior;
         use markdown_parser::{compute_formatted_text_delta, parse_markdown};
+
+        use crate::content::buffer::StyledBlockBoundaryBehavior;
 
         // Try to obtain the current formatted-text view from the buffer and
         // compute both the `FormattedText` delta and the common prefix length in

@@ -1,19 +1,15 @@
-use std::{
-    collections::{HashMap, HashSet},
-    fs,
-};
+use std::collections::{HashMap, HashSet};
+use std::fs;
 
-use crate::ai::skills::skill_manager::SkillWatcherEvent;
 use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
-use repo_metadata::{
-    repositories::DetectedRepositories, DirectoryWatcher, RepoMetadataModel, RepositoryUpdate,
-    TargetFile,
-};
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::{DirectoryWatcher, RepoMetadataModel, RepositoryUpdate, TargetFile};
 use tempfile::TempDir;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 
 use super::SkillWatcher;
+use crate::ai::skills::skill_manager::SkillWatcherEvent;
 
 /// Helper function for creating a single skill file
 fn create_skill_file(dir: &TempDir, name: &str, description: &str, content: &str) -> ParsedSkill {

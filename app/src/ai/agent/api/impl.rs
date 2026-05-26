@@ -1,13 +1,15 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use crate::{ai::agent::redaction, terminal::model::session::SessionType};
 use futures_util::StreamExt;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 
+use super::convert_to::convert_input;
+use super::{ConvertToAPITypeError, RequestParams, ResponseStream};
+use crate::ai::agent::redaction;
 use crate::server::server_api::ServerApi;
-
-use super::{convert_to::convert_input, ConvertToAPITypeError, RequestParams, ResponseStream};
+use crate::terminal::model::session::SessionType;
 
 pub async fn generate_multi_agent_output(
     server_api: Arc<ServerApi>,

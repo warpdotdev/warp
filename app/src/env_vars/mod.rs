@@ -8,21 +8,21 @@ pub mod env_var_collection_block;
 pub mod manager;
 pub mod view;
 
-use crate::{
-    cloud_object::{
-        model::{
-            generic_string_model::{GenericStringModel, GenericStringObjectId, StringModel},
-            json_model::{JsonModel, JsonSerializer},
-        },
-        GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision,
-    },
-    drive::items::{env_var_collection::WarpDriveEnvVarCollection, WarpDriveItem},
-    external_secrets::ExternalSecret,
-    server::{ids::SyncId, sync_queue::QueueItem},
-    terminal::shell::ShellType,
-    Appearance, CloudObjectTypeAndId,
+use crate::cloud_object::model::generic_string_model::{
+    GenericStringModel, GenericStringObjectId, StringModel,
 };
+use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
+use crate::cloud_object::{
+    GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType,
+    Revision,
+};
+use crate::drive::items::env_var_collection::WarpDriveEnvVarCollection;
+use crate::drive::items::WarpDriveItem;
+use crate::external_secrets::ExternalSecret;
+use crate::server::ids::SyncId;
+use crate::server::sync_queue::QueueItem;
+use crate::terminal::shell::ShellType;
+use crate::{Appearance, CloudObjectTypeAndId};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum EnvVarCollectionType {
@@ -227,12 +227,6 @@ impl StringModel for EnvVarCollection {
 impl JsonModel for EnvVarCollection {
     fn json_object_type() -> JsonObjectType {
         JsonObjectType::EnvVarCollection
-    }
-}
-
-impl PartialEq<CloudEnvVarCollection> for CloudEnvVarCollection {
-    fn eq(&self, other: &CloudEnvVarCollection) -> bool {
-        self.model().string_model == other.model().string_model && self.id == other.id
     }
 }
 

@@ -8,21 +8,19 @@ use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
-use crate::ai::blocklist::SessionContext;
-use crate::ai::codebase_auto_indexing::{
-    auto_index_candidate_roots, should_auto_index_codebase, CodebaseAutoIndexingSurface,
-};
-use crate::send_telemetry_from_ctx;
-use crate::server::telemetry::{
-    RemoteCodebaseAutoIndexTrigger, RemoteCodebaseIndexStatusTelemetrySource,
-};
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
-use crate::TelemetryEvent;
-
 use super::manager::{
     RemoteCodebaseIndexStatusWithPath, RemoteCodebaseIndexUpdateOperation, RemoteServerManager,
     RemoteServerManagerEvent,
 };
+use crate::ai::blocklist::SessionContext;
+use crate::ai::codebase_auto_indexing::{
+    auto_index_candidate_roots, should_auto_index_codebase, CodebaseAutoIndexingSurface,
+};
+use crate::server::telemetry::{
+    RemoteCodebaseAutoIndexTrigger, RemoteCodebaseIndexStatusTelemetrySource,
+};
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 #[derive(Clone, Debug)]
 pub struct RemoteCodebaseSearchContext {

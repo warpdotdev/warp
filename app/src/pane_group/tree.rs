@@ -1,27 +1,22 @@
-use crate::app_state;
-use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::Vector2F;
 use std::collections::HashSet;
 use std::{fmt, iter, mem};
+
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::Vector2F;
+use warp_core::features::FeatureFlag;
 use warpui::elements::{
-    ChildAnchor, Container, DispatchEventResult, Empty, OffsetPositioning, ParentAnchor,
-    ParentOffsetBounds, PositionedElementAnchor, PositionedElementOffsetBounds, SavePosition,
-    Stack,
+    ChildAnchor, ConstrainedBox, Container, DispatchEventResult, Element, Empty, EventHandler,
+    Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, PositionedElementAnchor, PositionedElementOffsetBounds, Rect, SavePosition,
+    Shrinkable, Stack,
 };
-use warpui::AppContext;
-use warpui::{
-    elements::{
-        ConstrainedBox, Element, EventHandler, Flex, Hoverable, MouseStateHandle, ParentElement,
-        Rect, Shrinkable,
-    },
-    platform::Cursor,
-    EntityId, ViewContext,
-};
+use warpui::platform::Cursor;
+use warpui::{AppContext, EntityId, ViewContext};
 
 use super::{ActivationReason, PaneGroup, PaneId};
+use crate::app_state;
 use crate::pane_group::{get_minimum_pane_size, DraggedBorder, PaneGroupAction};
 use crate::themes::theme::WarpTheme;
-use warp_core::features::FeatureFlag;
 
 #[cfg(test)]
 #[path = "tree_tests.rs"]

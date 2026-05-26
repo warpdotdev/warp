@@ -4,27 +4,27 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::codebase_index_proto::{
-    proto_to_codebase_index_status_updated, proto_to_codebase_index_statuses_snapshot,
-    RemoteCodebaseIndexStatus,
-};
-use crate::proto::CodebaseIndexLimits;
 use dashmap::DashMap;
 use futures::channel::oneshot;
 use futures::io::{AsyncRead, AsyncWrite};
 use warpui::r#async::{executor, FutureExt as _};
 
+use crate::codebase_index_proto::{
+    proto_to_codebase_index_status_updated, proto_to_codebase_index_statuses_snapshot,
+    RemoteCodebaseIndexStatus,
+};
 use crate::proto::{
     client_message, get_branches_response, get_fragment_metadata_from_hash_response,
     server_message, Abort, Authenticate, BranchInfo, BufferEdit, ClientMessage, CloseBuffer,
-    CodebaseResyncMode, DeleteFile, DiffMode, DiffStateFileDelta, DiffStateMetadataUpdate,
-    DiffStateSnapshot, DiscardFilesRequest, DropCodebaseIndex, ErrorCode, FileStatusInfo,
-    FragmentMetadataLookupErrorCode, GetBranches, GetDiffState, GetDiffStateResponse,
-    GetFragmentMetadataFromHash, GetFragmentMetadataFromHashSuccess, IndexCodebase, Initialize,
-    InitializeResponse, LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse,
-    OpenBuffer, OpenBufferResponse, ReadFileContextRequest, ReadFileContextResponse,
-    ResyncCodebase, RunCommandRequest, RunCommandResponse, SaveBuffer, ServerMessage,
-    SessionBootstrapped, TextEdit, UnsubscribeDiffState, WriteFile,
+    CodebaseIndexLimits, CodebaseResyncMode, DeleteFile, DiffMode, DiffStateFileDelta,
+    DiffStateMetadataUpdate, DiffStateSnapshot, DiscardFilesRequest, DropCodebaseIndex, ErrorCode,
+    FileStatusInfo, FragmentMetadataLookupErrorCode, GetBranches, GetDiffState,
+    GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashSuccess,
+    IndexCodebase, Initialize, InitializeResponse, LoadRepoMetadataDirectoryResponse,
+    NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, ReadFileContextRequest,
+    ReadFileContextResponse, ResyncCodebase, RunCommandRequest, RunCommandResponse, SaveBuffer,
+    ServerMessage, SessionBootstrapped, TextEdit, UnsubscribeDiffState, UploadHandoffSnapshot,
+    UploadHandoffSnapshotResponse, WriteFile,
 };
 use crate::repo_metadata_proto::{proto_snapshot_to_update, proto_to_repo_metadata_update};
 
@@ -32,11 +32,11 @@ use crate::repo_metadata_proto::{proto_snapshot_to_update, proto_to_repo_metadat
 mod remote_server_log;
 #[cfg(not(target_family = "wasm"))]
 pub use remote_server_log::RemoteServerLog;
-
-use crate::protocol::{self, ProtocolError, RequestId};
 use warp_core::{safe_error, safe_warn, SessionId};
 use warp_util::standardized_path::StandardizedPath;
 use warpui::r#async::TransportStream;
+
+use crate::protocol::{self, ProtocolError, RequestId};
 
 /// Default request timeout (2 minutes).
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -280,6 +280,20 @@ impl RemoteServerClient {
             event_rx,
             failure_rx,
         )
+    }
+
+    /// Returns `true` once the reader task has detected that the underlying
+    /// connection is gone (EOF or fatal error). The flag is one-way: a
+    /// client never transitions back to connected, since reconnection
+    /// produces a brand-new client instance.
+    ///
+    /// Callers can use this as a cheap, non-blocking gate to skip work
+    /// that would otherwise fail with [`ClientError::Disconnected`] and
+    /// fire a `RequestFailed` telemetry event. Returning `false` does
+    /// not guarantee the next request will succeed — it just means the
+    /// reader task has not yet observed a disconnect.
+    pub fn is_disconnected(&self) -> bool {
+        self.disconnected.load(Ordering::Acquire)
     }
 
     /// Sends an `Initialize` request and awaits the `InitializeResponse`.
@@ -1126,6 +1140,42 @@ impl RemoteServerClient {
                 safe_error!(
                     safe: ("Remote server unexpected response for RunCommand"),
                     full: ("Remote server unexpected response for RunCommand: response={other:?}")
+                );
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Sends an `UploadHandoffSnapshot` request to the remote server and
+    /// awaits the `UploadHandoffSnapshotResponse`.
+    pub async fn upload_handoff_snapshot(
+        &self,
+        paths: Vec<StandardizedPath>,
+    ) -> Result<UploadHandoffSnapshotResponse, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::UploadHandoffSnapshot(
+                UploadHandoffSnapshot {
+                    paths: paths.into_iter().map(|p| p.to_string()).collect(),
+                },
+            )),
+        };
+
+        let response = self
+            .send_request(
+                request_id,
+                msg,
+                crate::manager::RemoteServerOperation::UploadHandoffSnapshot,
+            )
+            .await?;
+
+        match response.message {
+            Some(server_message::Message::UploadHandoffSnapshotResponse(resp)) => Ok(resp),
+            other => {
+                safe_error!(
+                    safe: ("Remote server unexpected response for UploadHandoffSnapshot"),
+                    full: ("Remote server unexpected response for UploadHandoffSnapshot: response={other:?}")
                 );
                 Err(ClientError::UnexpectedResponse)
             }

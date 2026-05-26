@@ -1,19 +1,16 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use crate::index::full_source_code_embedding::store_client::MockStoreClient;
-#[cfg(feature = "local_fs")]
-use crate::index::full_source_code_embedding::SnapshotStorage;
 use warpui::App;
-
-use crate::workspace::WorkspaceMetadata;
 
 use super::{
     BuildSource, CodebaseIndexFinishedStatus, CodebaseIndexManager, CodebaseIndexManagerConfig,
     CodebaseIndexStatus, CodebaseIndexStatusEventKey, CodebaseIndexingError, SyncProgress,
 };
+use crate::index::full_source_code_embedding::store_client::MockStoreClient;
+#[cfg(feature = "local_fs")]
+use crate::index::full_source_code_embedding::SnapshotStorage;
+use crate::workspace::WorkspaceMetadata;
 
 fn workspace_metadata(path: impl Into<PathBuf>) -> WorkspaceMetadata {
     WorkspaceMetadata {

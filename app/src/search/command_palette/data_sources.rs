@@ -1,28 +1,25 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use warp_core::context_flag::ContextFlag;
+use warp_core::features::FeatureFlag;
+use warpui::keymap::BindingId;
+use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+
+use super::{conversations, warp_drive};
 use crate::drive::settings::WarpDriveSettings;
 use crate::search::action::CommandBindingDataSource;
 use crate::search::binding_source::BindingSource;
-use crate::search::command_palette::files;
-use crate::search::command_palette::launch_config;
 use crate::search::command_palette::mixer::{CommandPaletteItemAction, ItemSummary};
 use crate::search::command_palette::new_session::NewSessionDataSource;
 use crate::search::command_palette::repos::RepoDataSource;
-use crate::search::command_palette::{navigation, tabs, CommandPaletteMixer};
+use crate::search::command_palette::{files, launch_config, navigation, tabs, CommandPaletteMixer};
 use crate::search::data_source::QueryResult;
 use crate::search::files::model::FileSearchModel;
 use crate::search::mixer::AddAsyncSourceOptions;
 use crate::search::QueryFilter;
 use crate::session_management::SessionSource;
 use crate::settings::AISettings;
-use warp_core::context_flag::ContextFlag;
-use warp_core::features::FeatureFlag;
-use warpui::keymap::BindingId;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
-
-use super::conversations;
-use super::warp_drive;
 
 /// Store of all of the [`crate::search::DataSource`]s for the command palette.
 pub struct DataSourceStore {
@@ -249,8 +246,9 @@ impl DataSourceStore {
                 line_and_column_arg,
             } => {
                 // Create a file search item from the summary
-                use crate::search::command_palette::files::search_item::FileSearchItem;
                 use fuzzy_match::FuzzyMatchResult;
+
+                use crate::search::command_palette::files::search_item::FileSearchItem;
 
                 let search_item = FileSearchItem {
                     path: PathBuf::from(path),
@@ -266,8 +264,9 @@ impl DataSourceStore {
                 project_directory,
             } => {
                 // Create a directory search item from the summary
-                use crate::search::command_palette::files::search_item::FileSearchItem;
                 use fuzzy_match::FuzzyMatchResult;
+
+                use crate::search::command_palette::files::search_item::FileSearchItem;
 
                 let search_item = FileSearchItem {
                     path: PathBuf::from(path),

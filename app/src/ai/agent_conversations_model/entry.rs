@@ -1,13 +1,3 @@
-use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
-use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::ambient_agents::{AgentSource, AmbientAgentTask, AmbientAgentTaskId};
-use crate::ai::artifacts::Artifact;
-use crate::ai::blocklist::history_model::{AIConversationMetadata, BlocklistAIHistoryModel};
-use crate::ai::conversation_navigation::ConversationNavigationData;
-use crate::auth::{AuthStateProvider, UserUid};
-use crate::workspace::RestoreConversationLayout;
-use crate::workspaces::user_profiles::UserProfiles;
 use chrono::{DateTime, Utc};
 use session_sharing_protocol::common::SessionId;
 use warp_cli::agent::Harness;
@@ -19,6 +9,17 @@ use super::{
     ConversationMetadata, CreatedOnFilter, CreatorFilter, EnvironmentFilter, HarnessFilter,
     OwnerFilter, SessionStatus, SourceFilter, StatusFilter,
 };
+use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::ambient_agents::{AgentSource, AmbientAgentTask, AmbientAgentTaskId};
+use crate::ai::artifacts::Artifact;
+use crate::ai::blocklist::history_model::{AIConversationMetadata, BlocklistAIHistoryModel};
+use crate::ai::conversation_navigation::ConversationNavigationData;
+use crate::auth::{AuthStateProvider, UserUid};
+use crate::util::time_format::human_readable_precise_duration;
+use crate::workspace::RestoreConversationLayout;
+use crate::workspaces::user_profiles::UserProfiles;
 
 const SESSION_EXPIRATION_TIME: chrono::Duration = chrono::Duration::weeks(1);
 
@@ -342,14 +343,7 @@ fn task_session_status(task: &AmbientAgentTask) -> SessionStatus {
 }
 
 fn task_run_time(task: &AmbientAgentTask) -> Option<String> {
-    let Some(duration) = task.run_time() else {
-        return Some("Not started".to_string());
-    };
-    if duration.num_minutes() < 1 {
-        Some(format!("{} seconds", duration.num_seconds()))
-    } else {
-        Some(format!("{} minutes", duration.num_minutes()))
-    }
+    task.run_time().map(human_readable_precise_duration)
 }
 
 fn task_harness(task: &AmbientAgentTask) -> Option<Harness> {

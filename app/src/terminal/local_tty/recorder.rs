@@ -1,13 +1,15 @@
-use crate::{
-    auth::auth_state::AuthState, send_telemetry_on_executor, server::telemetry::TelemetryEvent,
-    terminal::TerminalModel,
-};
+use std::sync::{Arc, Mutex};
+
 use async_broadcast::Receiver;
 use futures_lite::StreamExt;
 use instant::{Duration, Instant};
 use parking_lot::FairMutex;
-use std::sync::{Arc, Mutex};
 use warpui::r#async::executor::Background;
+
+use crate::auth::auth_state::AuthState;
+use crate::send_telemetry_on_executor;
+use crate::server::telemetry::TelemetryEvent;
+use crate::terminal::TerminalModel;
 
 /// We want to measure throughput as bytes / sec.
 const PTY_THROUGHPUT_TIME_INTERVAL: Duration = Duration::from_secs(1);

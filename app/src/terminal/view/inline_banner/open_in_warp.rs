@@ -1,21 +1,19 @@
 use std::sync::Arc;
 
-use warpui::{elements::MouseStateHandle, fonts::Weight, Element, EntityId};
-
-use crate::{
-    appearance::Appearance,
-    terminal::{
-        model::session::Session,
-        view::{open_in_warp::OpenablePath, InlineBannerId, TerminalAction},
-    },
-    util::openable_file_type::OpenableFileType,
-};
+use warpui::elements::MouseStateHandle;
+use warpui::fonts::Weight;
+use warpui::{Element, EntityId};
 
 use super::{
     render_inline_block_list_banner, InlineBannerButtonState, InlineBannerCloseButton,
     InlineBannerContent, InlineBannerStyle, InlineBannerTextButton, InlineBannerTextButtonFont,
     InlineBannerTextButtonVariant,
 };
+use crate::appearance::Appearance;
+use crate::terminal::model::session::Session;
+use crate::terminal::view::open_in_warp::OpenablePath;
+use crate::terminal::view::{InlineBannerId, TerminalAction};
+use crate::util::openable_file_type::OpenableFileType;
 
 #[derive(Clone, Copy, Debug)]
 pub enum OpenInWarpBannerAction {

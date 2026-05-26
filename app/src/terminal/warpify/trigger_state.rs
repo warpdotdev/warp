@@ -1,25 +1,22 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use parking_lot::FairMutex;
 use warp_core::ui::appearance::Appearance;
-use warpui::{
-    r#async::SpawnedFutureHandle, AppContext, EntityId, SingletonEntity as _, ViewContext,
-    ViewHandle,
-};
-
-use crate::terminal::{
-    model::{
-        ansi::SystemDetails,
-        block::BlockId,
-        session::SessionId,
-        terminal_model::{SubshellInitializationInfo, TmuxInstallationState},
-    },
-    settings::TerminalSettings,
-    shell::ShellType,
-    ssh::{error::SshErrorBlock, install_tmux::SshInstallTmuxBlock, warpify::SshWarpifyBlock},
-    TerminalModel, TerminalView,
-};
-use std::{collections::HashMap, sync::Arc};
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::{AppContext, EntityId, SingletonEntity as _, ViewContext, ViewHandle};
 
 use super::success_block::WarpifySuccessBlock;
+use crate::terminal::model::ansi::SystemDetails;
+use crate::terminal::model::block::BlockId;
+use crate::terminal::model::session::SessionId;
+use crate::terminal::model::terminal_model::{SubshellInitializationInfo, TmuxInstallationState};
+use crate::terminal::settings::TerminalSettings;
+use crate::terminal::shell::ShellType;
+use crate::terminal::ssh::error::SshErrorBlock;
+use crate::terminal::ssh::install_tmux::SshInstallTmuxBlock;
+use crate::terminal::ssh::warpify::SshWarpifyBlock;
+use crate::terminal::{TerminalModel, TerminalView};
 
 /// A unique identifier for a subshell separator.
 pub type SeparatorId = usize;

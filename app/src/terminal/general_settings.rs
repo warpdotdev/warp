@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 
-use crate::{banner::BannerState, resource_center::Tip};
-use warp_core::settings::{
-    macros::define_settings_group, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud,
-};
+use warp_core::settings::macros::define_settings_group;
+use warp_core::settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
+
+use crate::banner::BannerState;
+use crate::resource_center::Tip;
 
 define_settings_group!(GeneralSettings, settings: [
     show_warning_before_quitting: ShowWarningBeforeQuitting {

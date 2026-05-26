@@ -1,15 +1,12 @@
-use futures::{future::BoxFuture, FutureExt};
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
-use crate::ai::{
-    agent::{
-        AIAgentAction, AIAgentActionType, DocumentContext, ReadDocumentsRequest,
-        ReadDocumentsResult,
-    },
-    document::ai_document_model::AIDocumentModel,
-};
-
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionType, DocumentContext, ReadDocumentsRequest, ReadDocumentsResult,
+};
+use crate::ai::document::ai_document_model::AIDocumentModel;
 
 pub struct ReadDocumentsExecutor;
 

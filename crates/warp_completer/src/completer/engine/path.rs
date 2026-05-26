@@ -11,13 +11,9 @@ use typed_path::{TypedPath, TypedPathBuf};
 use warp_command_signatures::{IconType, PathSuggestionType};
 use warp_util::path::{ShellFamily, HOME_DIR_ENV_VAR_PREFIX};
 
-use crate::completer::context::PathSeparators;
-use crate::completer::suggest::Priority;
-use crate::completer::{
-    context::PathCompletionContext,
-    matchers::MatchStrategy,
-    suggest::{MatchedSuggestion, Suggestion, SuggestionType},
-};
+use crate::completer::context::{PathCompletionContext, PathSeparators};
+use crate::completer::matchers::MatchStrategy;
+use crate::completer::suggest::{MatchedSuggestion, Priority, Suggestion, SuggestionType};
 use crate::parsers::ParsedToken;
 
 /// TODO(CORE-3074): This only applies to Unix.
