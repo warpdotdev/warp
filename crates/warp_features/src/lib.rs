@@ -951,7 +951,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
 pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::BlocklistMarkdownTableRendering,
     FeatureFlag::MarkdownTables,
-    FeatureFlag::GitOperationsInCodeReview,
 ];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
