@@ -158,3 +158,49 @@ fn authenticated_actions_are_warp_terminal_only_in_the_contract() {
         );
     }
 }
+
+#[test]
+fn metadata_configuration_mutation_metadata_is_isolated() {
+    for action in [
+        ActionKind::TabRename,
+        ActionKind::TabResetName,
+        ActionKind::TabColorSet,
+        ActionKind::TabColorClear,
+        ActionKind::PaneRename,
+        ActionKind::PaneResetName,
+        ActionKind::ThemeSet,
+        ActionKind::ThemeSystemSet,
+        ActionKind::ThemeLightSet,
+        ActionKind::ThemeDarkSet,
+        ActionKind::AppearanceFontSizeIncrease,
+        ActionKind::AppearanceFontSizeDecrease,
+        ActionKind::AppearanceFontSizeReset,
+        ActionKind::AppearanceZoomIncrease,
+        ActionKind::AppearanceZoomDecrease,
+        ActionKind::AppearanceZoomReset,
+        ActionKind::SettingSet,
+        ActionKind::SettingToggle,
+    ] {
+        let metadata = action.metadata();
+        assert_eq!(
+            metadata.implementation_status,
+            ActionImplementationStatus::Implemented
+        );
+        assert_eq!(metadata.risk_tier, RiskTier::MutatingNonDestructive);
+        assert_eq!(
+            metadata.state_data_category,
+            StateDataCategory::MetadataConfigurationMutation
+        );
+        assert_eq!(
+            metadata.permission_category,
+            PermissionCategory::MutateMetadataConfiguration
+        );
+        assert_ne!(metadata.permission_category, PermissionCategory::MutateAppState);
+        assert_ne!(
+            metadata.permission_category,
+            PermissionCategory::MutateUnderlyingData
+        );
+        assert!(!metadata.requires_authenticated_user);
+        assert!(!metadata.authenticated_user.required);
+    }
+}

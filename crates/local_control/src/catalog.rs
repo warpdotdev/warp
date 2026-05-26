@@ -541,9 +541,28 @@ impl ActionKind {
 
     fn implementation_status(self) -> ActionImplementationStatus {
         match self {
-            Self::InstanceList | Self::AppPing | Self::AppVersion | Self::TabCreate => {
-                ActionImplementationStatus::Implemented
-            }
+            Self::InstanceList
+            | Self::AppPing
+            | Self::AppVersion
+            | Self::TabCreate
+            | Self::TabRename
+            | Self::TabResetName
+            | Self::TabColorSet
+            | Self::TabColorClear
+            | Self::PaneRename
+            | Self::PaneResetName
+            | Self::ThemeSet
+            | Self::ThemeSystemSet
+            | Self::ThemeLightSet
+            | Self::ThemeDarkSet
+            | Self::AppearanceFontSizeIncrease
+            | Self::AppearanceFontSizeDecrease
+            | Self::AppearanceFontSizeReset
+            | Self::AppearanceZoomIncrease
+            | Self::AppearanceZoomDecrease
+            | Self::AppearanceZoomReset
+            | Self::SettingSet
+            | Self::SettingToggle => ActionImplementationStatus::Implemented,
             Self::InstanceInspect
             | Self::AppActive
             | Self::AppFocus
@@ -561,10 +580,6 @@ impl ActionKind {
             | Self::TabActivate
             | Self::TabMove
             | Self::TabClose
-            | Self::TabRename
-            | Self::TabResetName
-            | Self::TabColorSet
-            | Self::TabColorClear
             | Self::PaneList
             | Self::PaneInspect
             | Self::PaneSplit
@@ -574,8 +589,6 @@ impl ActionKind {
             | Self::PaneMaximize
             | Self::PaneUnmaximize
             | Self::PaneClose
-            | Self::PaneRename
-            | Self::PaneResetName
             | Self::SessionList
             | Self::SessionInspect
             | Self::SessionActivate
@@ -594,21 +607,9 @@ impl ActionKind {
             | Self::HistoryList
             | Self::ThemeList
             | Self::ThemeGet
-            | Self::ThemeSet
-            | Self::ThemeSystemSet
-            | Self::ThemeLightSet
-            | Self::ThemeDarkSet
             | Self::AppearanceGet
-            | Self::AppearanceFontSizeIncrease
-            | Self::AppearanceFontSizeDecrease
-            | Self::AppearanceFontSizeReset
-            | Self::AppearanceZoomIncrease
-            | Self::AppearanceZoomDecrease
-            | Self::AppearanceZoomReset
             | Self::SettingList
             | Self::SettingGet
-            | Self::SettingSet
-            | Self::SettingToggle
             | Self::KeybindingList
             | Self::KeybindingGet
             | Self::ActionList

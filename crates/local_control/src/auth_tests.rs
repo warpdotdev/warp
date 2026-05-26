@@ -123,3 +123,29 @@ fn credential_request_rejects_terminal_proof_for_external_client() {
         .expect_err("terminal proof is rejected for external context");
     assert_eq!(err.code, ErrorCode::ExecutionContextNotAllowed);
 }
+
+#[test]
+fn scoped_credential_carries_metadata_configuration_permission() {
+    let grant = CredentialGrant::new(
+        InstanceId("inst_test".to_owned()),
+        ActionKind::SettingSet,
+        InvocationContext::OutsideWarp,
+        Duration::minutes(5),
+    );
+    assert_eq!(grant.risk_tier, RiskTier::MutatingNonDestructive);
+    assert_eq!(
+        grant.state_data_category,
+        StateDataCategory::MetadataConfigurationMutation
+    );
+    assert_eq!(
+        grant.permission_category,
+        PermissionCategory::MutateMetadataConfiguration
+    );
+    assert_ne!(grant.permission_category, PermissionCategory::MutateAppState);
+    assert_ne!(
+        grant.permission_category,
+        PermissionCategory::MutateUnderlyingData
+    );
+    assert!(!grant.authenticated_user.required);
+    assert!(grant.authenticated_user.subject.is_none());
+}
