@@ -9,6 +9,7 @@ use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessA
 use crate::ai::agent::{AIAgentActionId, AIAgentActionType};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::features::FeatureFlag;
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
 
@@ -88,13 +89,21 @@ impl RequestComputerUseExecutor {
         let screenshot_params = request.screenshot_params;
         let mut actor = computer_use::create_actor();
         let platform = actor.platform();
-        // Advertise whether background per-window control is available on this client/OS so the
-        // agent knows whether it can target specific windows.
-        let background_supported = computer_use::background_supported();
+        // Background per-window control requires both the client feature flag and OS-level
+        // support. When the flag is off this is false, so the agent treats the session as the
+        // legacy full-screen path.
+        let background_enabled = FeatureFlag::BackgroundComputerUse.is_enabled();
+        let background_supported = background_enabled && computer_use::background_supported();
         ActionExecution::Async {
             execute_future: Box::pin(async move {
                 let result = actor
-                    .perform_actions(&[], computer_use::Options { screenshot_params })
+                    .perform_actions(
+                        &[],
+                        computer_use::Options {
+                            screenshot_params,
+                            background_enabled,
+                        },
+                    )
                     .await;
                 (result, platform, background_supported)
             }),

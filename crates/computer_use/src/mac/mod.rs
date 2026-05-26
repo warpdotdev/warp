@@ -149,15 +149,25 @@ impl super::Actor for Actor {
         actions: &[TargetedAction],
         options: Options,
     ) -> Result<ActionResult, String> {
+        // When background computer use is disabled, force the legacy full-screen path: ignore any
+        // window target, deliver events through the HID tap, and treat coordinates as global
+        // pixels. This keeps behavior byte-identical to the pre-existing implementation.
+        let background = options.background_enabled;
         for targeted in actions {
+            let target = if background {
+                targeted.target
+            } else {
+                Target::Screen
+            };
+
             // Route this action to its target: the HID tap for screen actions, or directly to the
             // owning process for a window action (without raising it or moving the cursor).
-            let post_target = post_target_for(targeted.target);
+            let post_target = post_target_for(target);
             self.mouse.set_target(post_target);
             self.keyboard.set_target(post_target);
 
             // For a window target, translate window-local coordinates to global physical pixels.
-            let action = remap_action_for_target(&targeted.action, targeted.target);
+            let action = remap_action_for_target(&targeted.action, target);
             match &action {
                 Action::Wait(duration) => {
                     Timer::after(*duration).await;
@@ -196,7 +206,12 @@ impl super::Actor for Actor {
         }
 
         let (screenshot, captured_window) = match options.screenshot_params {
-            Some(params) => {
+            Some(mut params) => {
+                // With background computer use disabled, never capture a specific window: force the
+                // legacy main-display capture, which returns no captured-window metadata.
+                if !background {
+                    params.target = Target::Screen;
+                }
                 let (screenshot, captured) = screenshot::take(params)?;
                 (Some(screenshot), captured)
             }
@@ -206,8 +221,13 @@ impl super::Actor for Actor {
         Ok(ActionResult {
             screenshot,
             cursor_position: Some(self.mouse.current_position()?),
-            // Always refresh the window list so the caller has up-to-date targets to choose from.
-            windows: window::enumerate_windows(),
+            // Refresh the window list so the caller has up-to-date targets to choose from. When
+            // background computer use is disabled, omit it so the result matches the legacy shape.
+            windows: if background {
+                window::enumerate_windows()
+            } else {
+                Vec::new()
+            },
             captured_window,
         })
     }

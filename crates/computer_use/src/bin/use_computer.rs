@@ -207,7 +207,12 @@ async fn main() {
         .into_iter()
         .map(|action| TargetedAction { action, target })
         .collect();
-    let options = Options { screenshot_params };
+    // The CLI is a developer tool for exercising window targeting, so background per-window
+    // control is always enabled here.
+    let options = Options {
+        screenshot_params,
+        background_enabled: true,
+    };
 
     match actor.perform_actions(&actions, options).await {
         Ok(result) => {

@@ -302,6 +302,10 @@ pub struct Options {
     /// If set, a screenshot will be captured after the actions are executed.
     /// The parameters specify what constraints, if any, to apply to the screenshot.
     pub screenshot_params: Option<ScreenshotParams>,
+    /// Whether background, per-window computer use is enabled. When false, actors must behave
+    /// exactly like the legacy full-screen path: any window target is ignored, only the main
+    /// display is captured, and no window list or captured-window metadata is returned.
+    pub background_enabled: bool,
 }
 
 /// The buttons of a mouse.

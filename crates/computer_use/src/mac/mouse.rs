@@ -5,8 +5,8 @@ use objc2::rc::Retained;
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
 use objc2_core_foundation::CGPoint;
 use objc2_core_graphics::{
-    CGEvent, CGEventField, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGEventType,
-    CGMouseButton, CGScrollEventUnit,
+    CGEvent, CGEventField, CGEventSource, CGEventSourceStateID, CGEventType, CGMouseButton,
+    CGScrollEventUnit,
 };
 use pathfinder_geometry::vector::Vector2I;
 use warpui_core::r#async::Timer;
@@ -286,10 +286,10 @@ impl Mouse {
         button: CGMouseButton,
         click_state: i64,
     ) -> Result<(), String> {
-        // For a PID target with an owned window under the point, deliver via the selected
-        // mechanism (COMPUTER_USE_POST). Falls back to a plain CGEvent via the configured target
-        // when there is no PID target or no owned window.
-        let mechanism = post_mechanism();
+        // For a PID target with an owned window under the point, deliver a window-targeted event
+        // directly to the process via SkyLight, without raising the window or moving the cursor.
+        // Falls back to a plain CGEvent via the configured target when there is no PID target or
+        // no owned window under the point.
         if let Some(pid) = self.target.pid()
             && let Some(info) = window::window_at(pid, point.x, point.y)
         {
@@ -300,20 +300,12 @@ impl Mouse {
                     | CGEventType::OtherMouseDown
             );
             let is_move = matches!(event_type, CGEventType::MouseMoved);
-            // The HID-tap path emulates real hardware against the frontmost app, so skip the
-            // background-only focus/primer hacks; skylight and cgpost are background delivery.
-            let background = matches!(mechanism, PostMechanism::Skylight | PostMechanism::CgPost);
             // Establish focus-without-raise on a hover or a press (not on drags) so the pre-click
             // mouse-moved and the press both land on a key window, which toolbar buttons require.
-            if background && (is_down || is_move) {
+            if is_down || is_move {
                 self.ensure_window_focused(pid, info.number);
-                // Optionally also make the window main (not just key); some AppKit controls
-                // consult the main window. Opt-in via COMPUTER_USE_MAKE_MAIN.
-                if make_main_enabled() {
-                    super::skylight::make_window_main(pid, info.number);
-                }
             }
-            if background && is_down && primer_click_enabled() {
+            if is_down && primer_click_enabled() {
                 // Prime Chromium's user-activation gate with a decoy off-screen click. Opt-in
                 // (default off): the off-window down/up disrupts AppKit controls that run a modal
                 // tracking loop in `mouseDown:` (e.g. NSToolbar buttons). Enable via
@@ -321,36 +313,15 @@ impl Mouse {
                 post_primer_click(pid);
             }
 
-            match mechanism {
-                PostMechanism::Skylight => {
-                    // Window-targeted NSEvent bridged to a CGEvent, delivered via SkyLight's
-                    // SLEventPostToPid (accepted by Chromium/Electron renderers).
-                    if let Some(event) =
-                        build_window_targeted_event(pid, info, event_type, point, click_state)
-                    {
-                        debug_deliver("skylight", event_type, point);
-                        super::skylight::post_event_to_pid(pid, &event);
-                        return Ok(());
-                    }
-                    // Non-mouse event type: fall through to the generic path below.
-                }
-                PostMechanism::CgPost => {
-                    // Plain CGEvent at the global location via CGEventPostToPid, mirroring the
-                    // first exploration commit (no window number / subtype / window fields).
-                    let event = build_plain_mouse_event(event_type, point, button, click_state)?;
-                    debug_deliver("cgpost", event_type, point);
-                    CGEvent::post_to_pid(pid, Some(&event));
-                    return Ok(());
-                }
-                PostMechanism::HidTap => {
-                    // Plain CGEvent at the global location via the HID tap (real-hardware
-                    // emulation; moves the cursor and hits the frontmost app). Control path.
-                    let event = build_plain_mouse_event(event_type, point, button, click_state)?;
-                    debug_deliver("hidtap", event_type, point);
-                    CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
-                    return Ok(());
-                }
+            // Window-targeted NSEvent bridged to a CGEvent, delivered via SkyLight's
+            // SLEventPostToPid (accepted by Chromium/Electron renderers).
+            if let Some(event) =
+                build_window_targeted_event(pid, info, event_type, point, click_state)
+            {
+                super::skylight::post_event_to_pid(pid, &event);
+                return Ok(());
             }
+            // Non-mouse event type: fall through to the generic path below.
         }
 
         // Fallback: no PID target, or no owned window under the point. Post a plain event via the
@@ -457,47 +428,8 @@ fn primer_click_enabled() -> bool {
     std::env::var_os("COMPUTER_USE_PRIMER_CLICK").is_some()
 }
 
-/// Selects how synthesized window-target mouse events are delivered, for A/B testing background
-/// click delivery against AppKit controls. Read from `COMPUTER_USE_POST`; defaults to `Skylight`.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum PostMechanism {
-    /// Window-targeted NSEvent bridged to a CGEvent, delivered via SkyLight's `SLEventPostToPid`.
-    Skylight,
-    /// Plain CGEvent at the global location, delivered via `CGEventPostToPid` (mirrors the first
-    /// exploration commit): no NSEvent window number, subtype, window-under-pointer fields, or
-    /// `CGEventSetWindowLocation`.
-    CgPost,
-    /// Plain CGEvent at the global location, delivered via the HID event tap (real-hardware
-    /// emulation; moves the cursor and hits the frontmost app). A control path.
-    HidTap,
-}
-
-/// Reads the delivery mechanism from `COMPUTER_USE_POST` (skylight | cgpost | hidtap).
-fn post_mechanism() -> PostMechanism {
-    match std::env::var("COMPUTER_USE_POST").ok().as_deref() {
-        Some("cgpost") => PostMechanism::CgPost,
-        Some("hidtap") => PostMechanism::HidTap,
-        _ => PostMechanism::Skylight,
-    }
-}
-
-/// Returns whether the experimental make-window-main toggle is enabled (opt-in, default off).
-fn make_main_enabled() -> bool {
-    std::env::var_os("COMPUTER_USE_MAKE_MAIN").is_some()
-}
-
-/// Logs the chosen delivery mechanism for a posted event when `COMPUTER_USE_DEBUG` is set.
-fn debug_deliver(mechanism: &str, event_type: CGEventType, point: CGPoint) {
-    if std::env::var_os("COMPUTER_USE_DEBUG").is_some() {
-        eprintln!(
-            "[computer_use] deliver via={mechanism} type={event_type:?} global=({:.1},{:.1})",
-            point.x, point.y
-        );
-    }
-}
-
 /// Builds a plain CGEvent mouse event at the global `point`, stamping the click state. Used by the
-/// cgpost/hidtap delivery paths and the non-window fallback.
+/// non-window fallback delivery path.
 fn build_plain_mouse_event(
     event_type: CGEventType,
     point: CGPoint,

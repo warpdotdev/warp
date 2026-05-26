@@ -5,6 +5,7 @@ use warpui::{Entity, ModelContext};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::{AIAgentActionType, UseComputerResult};
+use crate::features::FeatureFlag;
 
 pub struct UseComputerExecutor;
 
@@ -42,6 +43,9 @@ impl UseComputerExecutor {
 
         let actions = request.actions.clone();
         let screenshot_params = request.screenshot_params;
+        // Gate per-window targeting behind the client feature flag. When off, the actor forces the
+        // legacy full-screen path so results are identical to the pre-existing implementation.
+        let background_enabled = FeatureFlag::BackgroundComputerUse.is_enabled();
         ActionExecution::new_async(
             async move {
                 // Diagnostics for the agent-driven coordinate-conversion investigation. Gated on
@@ -55,7 +59,13 @@ impl UseComputerExecutor {
                 }
                 let mut actor = computer_use::create_actor();
                 match actor
-                    .perform_actions(&actions, computer_use::Options { screenshot_params })
+                    .perform_actions(
+                        &actions,
+                        computer_use::Options {
+                            screenshot_params,
+                            background_enabled,
+                        },
+                    )
                     .await
                 {
                     Ok(result) => {
