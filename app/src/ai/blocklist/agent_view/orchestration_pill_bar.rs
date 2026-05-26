@@ -479,20 +479,13 @@ impl OrchestrationPillBar {
     /// the pane-specific font-size override. Called from
     /// `TerminalView::set_focus_handle` because the pill bar is constructed in
     /// `TerminalView::new`, before the pane group hands the focus handle down.
-    pub fn set_focus_handle(
-        &mut self,
-        focus_handle: PaneFocusHandle,
-        ctx: &mut ViewContext<Self>,
-    ) {
+    pub fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, ctx: &mut ViewContext<Self>) {
         self.focus_handle = Some(focus_handle.clone());
         Self::subscribe_to_font_size_overrides(focus_handle, ctx);
         ctx.notify();
     }
 
-    fn subscribe_to_font_size_overrides(
-        handle: PaneFocusHandle,
-        ctx: &mut ViewContext<Self>,
-    ) {
+    fn subscribe_to_font_size_overrides(handle: PaneFocusHandle, ctx: &mut ViewContext<Self>) {
         let focus_state = handle.focus_state_handle().clone();
         ctx.subscribe_to_model(&focus_state, move |_, _, event, ctx| {
             if matches!(event, PaneGroupFocusEvent::FontSizeOverrideChanged { .. })
@@ -1438,10 +1431,14 @@ fn render_hover_card(
     } else {
         conversation.status()
     };
-    let status_badge =
-        ConstrainedBox::new(render_status_badge(badge_status, theme, appearance, font_size))
-            .with_max_width(HOVER_CARD_STATUS_BADGE_MAX_WIDTH)
-            .finish();
+    let status_badge = ConstrainedBox::new(render_status_badge(
+        badge_status,
+        theme,
+        appearance,
+        font_size,
+    ))
+    .with_max_width(HOVER_CARD_STATUS_BADGE_MAX_WIDTH)
+    .finish();
     // Reserve fixed space for the badge so long names ellipsize instead of
     // pushing it off the card.
     let name_max_width = HOVER_CARD_CONTENT_WIDTH
@@ -1776,6 +1773,7 @@ fn render_pin_glyph_centered(is_pinned: bool, icon_color: ColorU) -> Box<dyn Ele
         .finish()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_pill(
     spec: PillSpec,
     mouse_state: MouseStateHandle,
