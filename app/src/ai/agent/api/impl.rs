@@ -101,7 +101,8 @@ pub async fn generate_multi_agent_output(
             supports_bundled_skills: FeatureFlag::BundledSkills.is_enabled(),
             supports_research_agent: params.research_agent_enabled,
             supports_orchestration_v2: supports_orchestration_v2(params.orchestration_enabled),
-            supports_background_computer_use: FeatureFlag::BackgroundComputerUse.is_enabled(),
+            supports_background_computer_use: FeatureFlag::BackgroundComputerUse.is_enabled()
+                && computer_use::background_supported(),
             custom_model_providers: params.custom_model_providers,
             custom_model_routers: params.custom_model_routers,
         }),

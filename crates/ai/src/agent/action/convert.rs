@@ -540,9 +540,15 @@ fn convert_computer_use_target(
 ) -> computer_use::Target {
     use api::message::tool_call::computer_use_target::Target as ApiTarget;
     match target.and_then(|t| t.target) {
-        Some(ApiTarget::Window(window)) => computer_use::Target::Window {
-            window_id: window.window_id,
-            pid: window.pid,
+        // The proto window id is an opaque string; on macOS it is a CGWindowID, so parse it back
+        // to a u32. An unparseable id is treated as no valid window target and falls back to the
+        // legacy whole-screen behavior rather than panicking.
+        Some(ApiTarget::Window(window)) => match window.window_id.parse::<u32>() {
+            Ok(window_id) => computer_use::Target::Window {
+                window_id,
+                pid: window.pid,
+            },
+            Err(_) => computer_use::Target::Screen,
         },
         Some(ApiTarget::Screen(_)) | None => computer_use::Target::Screen,
     }

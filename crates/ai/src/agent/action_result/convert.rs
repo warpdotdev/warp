@@ -974,7 +974,6 @@ impl TryFrom<RequestComputerUseResult> for api::request::input::tool_call_result
                 screenshot,
                 platform,
                 windows,
-                background_supported,
             } => Ok(
                 api::request::input::tool_call_result::Result::RequestComputerUse(
                     api::RequestComputerUseResult {
@@ -992,7 +991,6 @@ impl TryFrom<RequestComputerUseResult> for api::request::input::tool_call_result
                                 }),
                                 platform: convert_platform(platform).into(),
                                 windows: windows.into_iter().map(convert_window_info).collect(),
-                                background_supported,
                             },
                         )),
                     },
@@ -1045,10 +1043,16 @@ impl TryFrom<UseComputerResult> for api::request::input::tool_call_result::Resul
                                     .into_iter()
                                     .map(convert_window_info)
                                     .collect(),
-                                captured_window_id: captured.map_or(0, |c| c.window_id),
-                                captured_width_px: captured.map_or(0, |c| c.width_px),
-                                captured_height_px: captured.map_or(0, |c| c.height_px),
-                                captured_scale_factor: captured.map_or(0.0, |c| c.scale_factor),
+                                // The window id is an opaque string on the wire; on macOS it is a
+                                // CGWindowID, so format the u32 back to a string at the boundary.
+                                captured_window: captured.map(|c| {
+                                    api::use_computer_result::success::CapturedWindow {
+                                        window_id: c.window_id.to_string(),
+                                        width_px: c.width_px,
+                                        height_px: c.height_px,
+                                        scale_factor: c.scale_factor,
+                                    }
+                                }),
                             },
                         )),
                     },
@@ -1078,7 +1082,8 @@ fn vec_to_coordinates(vec: computer_use::Vector2I) -> api::Coordinates {
 /// Converts a computer_use window record into the API `WindowInfo` message.
 fn convert_window_info(window: computer_use::WindowInfo) -> api::WindowInfo {
     api::WindowInfo {
-        window_id: window.window_id,
+        // The window id travels as an opaque string; on macOS it is a CGWindowID (u32).
+        window_id: window.window_id.to_string(),
         pid: window.pid,
         app_name: window.app_name,
         title: window.title,

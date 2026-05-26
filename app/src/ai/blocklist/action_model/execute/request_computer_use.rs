@@ -89,11 +89,10 @@ impl RequestComputerUseExecutor {
         let screenshot_params = request.screenshot_params;
         let mut actor = computer_use::create_actor();
         let platform = actor.platform();
-        // Background per-window control requires both the client feature flag and OS-level
-        // support. When the flag is off this is false, so the agent treats the session as the
-        // legacy full-screen path.
+        // Gate per-window targeting behind the client feature flag. When off, the actor forces the
+        // legacy full-screen path so results are identical to the pre-existing implementation. The
+        // OS-capability check is folded into the request setting rather than reported in the result.
         let background_enabled = FeatureFlag::BackgroundComputerUse.is_enabled();
-        let background_supported = background_enabled && computer_use::background_supported();
         ActionExecution::Async {
             execute_future: Box::pin(async move {
                 let result = actor
@@ -105,7 +104,7 @@ impl RequestComputerUseExecutor {
                         },
                     )
                     .await;
-                (result, platform, background_supported)
+                (result, platform)
             }),
             on_complete: Box::new(|action_result, _ctx| match action_result {
                 (
@@ -115,13 +114,11 @@ impl RequestComputerUseExecutor {
                         ..
                     }),
                     Some(platform),
-                    background_supported,
                 ) => AIAgentActionResultType::RequestComputerUse(
                     RequestComputerUseResult::Approved {
                         screenshot,
                         platform,
                         windows,
-                        background_supported,
                     },
                 ),
                 (
@@ -130,16 +127,15 @@ impl RequestComputerUseExecutor {
                         ..
                     }),
                     None,
-                    _,
                 ) => AIAgentActionResultType::RequestComputerUse(RequestComputerUseResult::Error(
                     "Unknown platform".to_string(),
                 )),
-                (Ok(_), _, _) => {
+                (Ok(_), _) => {
                     AIAgentActionResultType::RequestComputerUse(RequestComputerUseResult::Error(
                         "Failed to capture initial screenshot".to_string(),
                     ))
                 }
-                (Err(err), _, _) => AIAgentActionResultType::RequestComputerUse(
+                (Err(err), _) => AIAgentActionResultType::RequestComputerUse(
                     RequestComputerUseResult::Error(err),
                 ),
             }),

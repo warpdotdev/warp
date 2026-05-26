@@ -1174,8 +1174,6 @@ pub enum RequestComputerUseResult {
         platform: computer_use::Platform,
         /// The on-screen windows the agent may target.
         windows: Vec<computer_use::WindowInfo>,
-        /// Whether background, per-window control is available on this client/OS.
-        background_supported: bool,
     },
     /// Request errored.
     Error(String),
