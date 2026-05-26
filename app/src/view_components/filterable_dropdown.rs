@@ -2,17 +2,17 @@ use std::marker::PhantomData;
 use warp_editor::editor::NavigationKey;
 use warpui::elements::{
     Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Dismiss, Element, EventHandler, Flex, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
-    PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable, Stack,
+    CrossAxisAlignment, Dismiss, DispatchEventResult, Element, EventHandler, Flex,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement,
+    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable,
+    Stack,
 };
 use warpui::geometry::vector::vec2f;
-use warpui::keymap::{Context, FixedBinding};
 use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, BlurContext, Entity, FocusContext, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
+    ViewContext, ViewHandle, WeakViewHandle,
 };
 
 use super::dropdown::{
@@ -28,17 +28,6 @@ use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuVariant};
 use crate::ui_components::icons;
 
 const EMPTY_DROPDOWN_HEIGHT: f32 = 50.0;
-const FILTERABLE_DROPDOWN_COLLAPSED: &str = "FilterableDropdownCollapsed";
-
-pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
-
-    app.register_fixed_bindings([FixedBinding::new(
-        "space",
-        DropdownAction::ToggleExpanded,
-        id!(FilterableDropdown::<()>::ui_name()) & id!(FILTERABLE_DROPDOWN_COLLAPSED),
-    )]);
-}
 
 pub enum FilterableDropdownEvent {
     ToggleExpanded,
@@ -60,6 +49,7 @@ pub struct FilterableDropdown<A: DropdownItemAction = ()> {
     main_axis_size: MainAxisSize,
     dropdown: ViewHandle<Menu<DropdownAction>>,
     filter_editor: ViewHandle<EditorView>,
+    self_handle: WeakViewHandle<Self>,
     selected_item: Option<MenuItem<DropdownAction>>,
     items: Vec<MenuItem<DropdownAction>>,
     orientation: FilterableDropdownOrientation,
@@ -127,6 +117,7 @@ where
             disabled: false,
             dropdown,
             filter_editor,
+            self_handle: ctx.handle(),
             top_bar_mouse_state: Default::default(),
             top_bar_max_width: TOP_MENU_BAR_MAX_WIDTH,
             main_axis_size: MainAxisSize::Max,
@@ -488,11 +479,30 @@ where
             top_bar =
                 top_bar.with_style(UiComponentStyles::default().set_font_family_id(font_family_id))
         }
-
-        top_bar
+        let disabled = self.disabled;
+        let self_handle = self.self_handle.clone();
+        let dropdown = self.dropdown.clone();
+        let filter_editor = self.filter_editor.clone();
+        let top_bar_element = top_bar
             .build()
             .on_click(|ctx, _, _| {
                 ctx.dispatch_typed_action(DropdownAction::ToggleExpanded);
+            })
+            .finish();
+
+        EventHandler::new(top_bar_element)
+            .on_keydown(move |ctx, app, keystroke| {
+                let is_focused = self_handle
+                    .upgrade(app)
+                    .is_some_and(|handle| handle.is_focused(app))
+                    || dropdown.is_focused(app)
+                    || filter_editor.is_focused(app);
+                if !disabled && is_focused && keystroke.is_unmodified_key(" ") {
+                    ctx.dispatch_typed_action(DropdownAction::ToggleExpanded);
+                    DispatchEventResult::StopPropagation
+                } else {
+                    DispatchEventResult::PropagateToParent
+                }
             })
             .finish()
     }
@@ -757,14 +767,6 @@ where
         if focus_ctx.is_self_focused() && self.is_expanded {
             self.focus(0, ctx)
         }
-    }
-
-    fn keymap_context(&self, _app: &AppContext) -> Context {
-        let mut context = Self::default_keymap_context();
-        if !self.is_expanded && !self.disabled {
-            context.set.insert(FILTERABLE_DROPDOWN_COLLAPSED);
-        }
-        context
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {

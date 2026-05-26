@@ -32,7 +32,3 @@ pub use filterable_dropdown::{
 pub use markdown_toggle_view::{MarkdownToggleEvent, MarkdownToggleView};
 pub use submittable_text_input::*;
 pub use warning_box::*;
-
-pub fn init(app: &mut warpui::AppContext) {
-    filterable_dropdown::init(app);
-}
