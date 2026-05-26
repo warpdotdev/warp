@@ -1,9 +1,7 @@
-use crate::{
-    color::ColorU,
-    elements::{Element, Fill},
-    fonts::{FamilyId, Properties, Weight},
-    scene::CornerRadius,
-};
+use crate::color::ColorU;
+use crate::elements::{Element, Fill};
+use crate::fonts::{FamilyId, Properties, Weight};
+use crate::scene::CornerRadius;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum BorderStyle {

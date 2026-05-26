@@ -1,15 +1,20 @@
+use std::collections::{HashMap, HashSet};
+use std::fs;
+
+use ai::skills::{ParsedSkill, SkillProvider, SkillReference, SkillScope};
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::{DirectoryWatcher, RepoMetadataModel};
+use settings::Setting as _;
+use tempfile::TempDir;
+use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
+use warp_core::ui::icons::Icon;
+use warpui::App;
+use watcher::HomeDirectoryWatcher;
+
 use super::*;
 use crate::settings::AISettings;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
-use ai::skills::{ParsedSkill, SkillProvider, SkillReference, SkillScope};
-use repo_metadata::{repositories::DetectedRepositories, DirectoryWatcher, RepoMetadataModel};
-use settings::Setting as _;
-use std::collections::{HashMap, HashSet};
-use std::fs;
-use tempfile::TempDir;
-use warp_core::{channel::ChannelState, features::FeatureFlag, ui::icons::Icon};
-use warpui::App;
-use watcher::HomeDirectoryWatcher;
 
 // ============================================================================
 // Tests for get_skills_for_working_directory subdirectory scoping

@@ -3,14 +3,9 @@ pub mod uniforms;
 
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
-use crate::rendering::OnGPUDeviceSelected;
-use crate::windowing;
-use crate::{r#async::block_on, rendering::GPUPowerPreference};
 use anyhow::{anyhow, Result};
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -22,6 +17,10 @@ use wgpu::{
     Adapter, Backend, CompositeAlphaMode, CurrentSurfaceTexture, Device, DeviceType, PresentMode,
     Queue, Surface, SurfaceConfiguration,
 };
+
+use crate::r#async::block_on;
+use crate::rendering::{GPUPowerPreference, OnGPUDeviceSelected};
+use crate::windowing;
 
 /// A mostly-arbitrary value to use as the height/width of a surface when
 /// creating a default surface configuration.

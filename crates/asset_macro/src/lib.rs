@@ -22,15 +22,14 @@
 extern crate quote;
 extern crate proc_macro;
 
+use std::env;
+use std::path::{Path, PathBuf};
+
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use sha2::Digest;
-use std::{
-    env,
-    path::{Path, PathBuf},
-};
-use syn::{parse::Parse, Token};
-use syn::{parse_macro_input, LitStr};
+use syn::parse::Parse;
+use syn::{parse_macro_input, LitStr, Token};
 use warp_util::assets::{ASSETS_DIR, ASYNC_ASSETS_DIR, BUNDLED_ASSETS_DIR, REMOTE_ASSETS_DIR};
 
 struct MacroArgs {

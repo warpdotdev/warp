@@ -5,30 +5,27 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::channel::ChannelState;
 use warp_core::ui::appearance::Appearance;
-use warpui::{
-    elements::{
-        Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        DropShadow, Empty, Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-        MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
-        Radius, Shrinkable, Stack, Text,
-    },
-    platform::Cursor,
-    ui_components::components::UiComponent,
-    AppContext, Element, EventContext, SingletonEntity,
+use warpui::elements::{
+    Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow,
+    Empty, Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack,
+    Text,
 };
+use warpui::platform::Cursor;
+use warpui::ui_components::components::UiComponent;
+use warpui::{AppContext, Element, EventContext, SingletonEntity};
 
-use crate::{
-    auth::AuthStateProvider,
-    settings_view::billing_and_usage::billing_cycle_usage_common::{
-        aggregate_segments, cost_type_color, format_cost_cents, format_credits,
-        render_breakdown_tooltip, render_section_subheader, BarSegment, BillingUsageMouseStates,
-        ROW_BORDER_RADIUS, ROW_BORDER_WIDTH, TOOLTIP_GAP,
-    },
-    ui_components::{blended_colors, icons::Icon},
-    workspaces::workspace::{
-        AiCreditsUsageAndCostSubjectType, AiCreditsUsageSource, BillingCycleUsageEntry,
-        UsageVisibility, UsageVisibilityGranularity, Workspace, WorkspaceMember,
-    },
+use crate::auth::AuthStateProvider;
+use crate::settings_view::billing_and_usage::billing_cycle_usage_common::{
+    aggregate_segments, cost_type_color, format_cost_cents, format_credits,
+    render_breakdown_tooltip, render_section_subheader, BarSegment, BillingUsageMouseStates,
+    ROW_BORDER_RADIUS, ROW_BORDER_WIDTH, TOOLTIP_GAP,
+};
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
+use crate::workspaces::workspace::{
+    AiCreditsUsageAndCostSubjectType, AiCreditsUsageSource, BillingCycleUsageEntry,
+    UsageVisibility, UsageVisibilityGranularity, Workspace, WorkspaceMember,
 };
 
 const BAR_HEIGHT: f32 = 8.;

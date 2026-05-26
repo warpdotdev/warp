@@ -2,33 +2,32 @@ use std::rc::Rc;
 
 use strum::IntoEnumIterator;
 use strum_macros::{EnumIter, IntoStaticStr};
-use warp_core::{features::FeatureFlag, ui::appearance::Appearance};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
 use warp_editor::editor::NavigationKey;
+use warpui::elements::{
+    Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Empty, Fill, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    ParentElement, Radius, ScrollbarWidth, Shrinkable,
+};
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::ui_components::toggle_menu::{ToggleMenuItem, ToggleMenuStateHandle};
 use warpui::{
-    elements::{
-        Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
-        CornerRadius, CrossAxisAlignment, Empty, Fill, Flex, MainAxisAlignment, MainAxisSize,
-        MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Shrinkable,
-    },
-    ui_components::{
-        button::ButtonVariant,
-        components::{UiComponent, UiComponentStyles},
-        toggle_menu::{ToggleMenuItem, ToggleMenuStateHandle},
-    },
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
-use crate::{
-    cloud_object::{model::persistence::CloudModel, Revision},
-    editor::{
-        EditorOptions, EditorView, Event, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
-        TextOptions,
-    },
-    server::ids::{ClientId, SyncId},
-    ui_components::{buttons::icon_button, icons::Icon},
-    workflows::workflow_enum::EnumVariants,
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::Revision;
+use crate::editor::{
+    EditorOptions, EditorView, Event, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
+    TextOptions,
 };
+use crate::server::ids::{ClientId, SyncId};
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::workflows::workflow_enum::EnumVariants;
 
 const CONTAINER_PADDING: f32 = 16.;
 const CORE_WIDTH: f32 = 400.;

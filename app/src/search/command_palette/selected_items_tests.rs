@@ -1,6 +1,7 @@
-use super::*;
 use itertools::Itertools;
 use warpui::keymap::BindingId;
+
+use super::*;
 
 #[test]
 fn test_enqueue_new_item() {

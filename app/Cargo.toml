@@ -652,6 +652,7 @@ default = [
     "solo_user_byok",
     "custom_inference_endpoints",
     "billing_and_usage_page_v2",
+    "remote_code_review",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -946,6 +947,7 @@ hoa_code_review = []
 vertical_tabs = []
 vertical_tabs_summary_mode = []
 tab_configs = []
+grouped_tabs = []
 agent_harness = []
 oz_handoff = []
 handoff_local_cloud = []

@@ -1,51 +1,50 @@
+use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
 use float_cmp::ApproxEq;
 use instant::Instant;
 use parking_lot::Mutex;
-use std::{
-    fmt,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
+use string_offset::CharOffset;
 use temporary_block::RenderableTemporaryBlock;
 use vim::vim::VimMode;
 use warp_core::ui::theme::Fill as ThemeFill;
+use warpui::color::ColorU;
+use warpui::elements::new_scrollable::{NewScrollableElement, ScrollableAxis};
+use warpui::elements::{
+    Axis, Border, Dash, Point, ScrollData, ScrollableElement, Vector2FExt, ZIndex,
+};
+use warpui::event::{DispatchedEvent, ModifiersState};
+use warpui::geometry::rect::RectF;
+use warpui::geometry::vector::{Vector2F, vec2f};
+use warpui::platform::Cursor;
+use warpui::units::{IntoPixels, Pixels};
 use warpui::{
     AfterLayoutContext, AppContext, Element, Event, EventContext, LayoutContext, ModelHandle,
     PaintContext, SizeConstraint, WeakViewHandle,
-    color::ColorU,
-    elements::{
-        Axis, Border, Dash, Point, ScrollData, ScrollableElement, Vector2FExt, ZIndex,
-        new_scrollable::{NewScrollableElement, ScrollableAxis},
-    },
-    event::{DispatchedEvent, ModifiersState},
-    geometry::{
-        rect::RectF,
-        vector::{Vector2F, vec2f},
-    },
-    platform::Cursor,
-    units::{IntoPixels, Pixels},
 };
 
+use self::empty::Empty;
+use self::header::RenderableHeader;
+use self::hidden_section::RenderableHiddenSection;
+use self::horizontal_rule::HorizontalRule;
+use self::image::RenderableImage;
+use self::mermaid::RenderableMermaidDiagram;
+use self::ordered_list::RenderableOrderedListItem;
+pub use self::paint::{CursorData, CursorDisplayType, RenderContext};
+use self::paragraph::RenderableParagraph;
+use self::runnable_command::RenderableRunnableCommand;
+use self::table::RenderableTable;
+use self::task_list::RenderableTaskList;
+use self::text_block::RenderableTextBlock;
+use self::unordered_list::RenderableBulletList;
+use super::model::viewport::{SizeInfo, ViewportItem};
 use super::model::{
     BlockItem, ElementUpdate, HitTestOptions, Location, RenderState, RichTextStyles, UNIT_MARGIN,
-    viewport::{SizeInfo, ViewportItem},
 };
-use crate::{content::version::BufferVersion, editor::EditorView};
-use string_offset::CharOffset;
-
-use self::{
-    empty::Empty, header::RenderableHeader, hidden_section::RenderableHiddenSection,
-    horizontal_rule::HorizontalRule, image::RenderableImage, mermaid::RenderableMermaidDiagram,
-    ordered_list::RenderableOrderedListItem, paragraph::RenderableParagraph,
-    runnable_command::RenderableRunnableCommand, table::RenderableTable,
-    task_list::RenderableTaskList, text_block::RenderableTextBlock,
-    unordered_list::RenderableBulletList,
-};
-
-pub use self::paint::{CursorData, CursorDisplayType, RenderContext};
+use crate::content::version::BufferVersion;
+use crate::editor::EditorView;
 
 pub mod broken_embedding;
 mod empty;

@@ -1,16 +1,15 @@
 //! A UI sample demonstrating how the SelectableArea element can be used.
 
-use warpui::fonts::FamilyId;
-use warpui::SingletonEntity as _;
-use warpui::{
-    elements::{
-        Border, ChildView, ConstrainedBox, Container, Flex, ParentElement, Rect, SelectableArea,
-        SelectionHandle, Stack, Text,
-    },
-    AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle,
-};
-
 use warpui::color::ColorU;
+use warpui::elements::{
+    Border, ChildView, ConstrainedBox, Container, Flex, ParentElement, Rect, SelectableArea,
+    SelectionHandle, Stack, Text,
+};
+use warpui::fonts::FamilyId;
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity as _, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
 
 pub struct RootView {
     sub_view: ViewHandle<SelectableExampleView>,

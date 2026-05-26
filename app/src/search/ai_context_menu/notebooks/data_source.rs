@@ -1,3 +1,6 @@
+use fuzzy_match::FuzzyMatchResult;
+use warpui::{AppContext, SingletonEntity};
+
 use super::search_item::NotebookSearchItem;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::CloudModelType;
@@ -6,8 +9,6 @@ use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use fuzzy_match::FuzzyMatchResult;
-use warpui::{AppContext, SingletonEntity};
 
 const MAX_RESULTS: usize = 50;
 /// Base score for zero-state results. Each item gets an additional bonus based on

@@ -1,36 +1,32 @@
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 use settings::Setting;
-use warp_core::ui::{appearance::Appearance, Icon};
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::Icon;
+use warpui::elements::{
+    ConstrainedBox, Container, CrossAxisAlignment, Empty, Expanded, Flex, Hoverable, MainAxisSize,
+    MouseStateHandle, ParentElement, SavePosition, Shrinkable, Text,
+};
+use warpui::fonts::Weight::Bold;
+use warpui::fonts::{Properties, Style};
+use warpui::platform::Cursor;
+use warpui::prelude::{Border, CornerRadius, Radius};
+use warpui::text_layout::ClipConfig;
 use warpui::{
-    elements::{
-        ConstrainedBox, Container, CrossAxisAlignment, Empty, Expanded, Flex, Hoverable,
-        MainAxisSize, MouseStateHandle, ParentElement, SavePosition, Shrinkable, Text,
-    },
-    fonts::{Properties, Style, Weight::Bold},
-    platform::Cursor,
-    prelude::{Border, CornerRadius, Radius},
-    text_layout::ClipConfig,
     AppContext, Element, Entity, EntityId, EventContext, ModelHandle, SingletonEntity,
     TypedActionView, View, ViewContext,
 };
 
-use crate::{
-    ai::{
-        active_agent_views_model::ActiveAgentViewsModel, agent::conversation::AIConversationId,
-        blocklist::BlocklistAIHistoryEvent,
-    },
-    terminal::BlockListSettings,
-    ui_components::{
-        blended_colors,
-        icon_with_status::{render_icon_with_status, IconWithStatusVariant},
-    },
-    view_components::DismissibleToast,
-    workspace::{ToastStack, WorkspaceAction},
-    BlocklistAIHistoryModel,
-};
-
 use super::{AgentViewController, AgentViewEntryOrigin};
+use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::BlocklistAIHistoryEvent;
+use crate::terminal::BlockListSettings;
+use crate::ui_components::blended_colors;
+use crate::ui_components::icon_with_status::{render_icon_with_status, IconWithStatusVariant};
+use crate::view_components::DismissibleToast;
+use crate::workspace::{ToastStack, WorkspaceAction};
+use crate::BlocklistAIHistoryModel;
 
 #[derive(Default)]
 struct StateHandles {
@@ -92,7 +88,6 @@ impl AgentViewEntryBlock {
             _ => (),
         });
         ctx.subscribe_to_model(&agent_view_controller, |_, _, _, ctx| ctx.notify());
-
         let active_agent_views_model = ActiveAgentViewsModel::handle(ctx);
         ctx.subscribe_to_model(&active_agent_views_model, |_, _, _, ctx| ctx.notify());
 

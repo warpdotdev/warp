@@ -3,25 +3,26 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
+use warpui::elements::{
+    get_rich_content_position_id, ChildView, Container, CrossAxisAlignment, Expanded, Flex,
+    ParentElement, SavePosition, SelectableArea, SelectionHandle, Text,
+};
+use warpui::fonts::{Properties, Style, Weight};
 use warpui::{
-    elements::{
-        get_rich_content_position_id, ChildView, Container, CrossAxisAlignment, Expanded, Flex,
-        ParentElement, SavePosition, SelectableArea, SelectionHandle, Text,
-    },
-    fonts::{Properties, Style, Weight},
     AppContext, Element, Entity, EntityId, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
-use crate::{
-    ai::blocklist::block::view_impl::{
-        common::render_user_avatar, CONTENT_HORIZONTAL_PADDING, CONTENT_ITEM_VERTICAL_MARGIN,
-    },
-    appearance::Appearance,
-    terminal::{block_list_element::BlockListMenuSource, view::TerminalAction},
-    ui_components::{blended_colors, icons::Icon},
-    view_components::action_button::{ActionButton, ButtonSize, NakedTheme},
+use crate::ai::blocklist::block::view_impl::common::render_user_avatar;
+use crate::ai::blocklist::block::view_impl::{
+    CONTENT_HORIZONTAL_PADDING, CONTENT_ITEM_VERTICAL_MARGIN,
 };
+use crate::appearance::Appearance;
+use crate::terminal::block_list_element::BlockListMenuSource;
+use crate::terminal::view::TerminalAction;
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
 
 /// Renders a pending user query block with dimmed text and a "Queued" badge.
 /// Displayed when a follow-up prompt is queued via `/fork-and-compact <prompt>`,

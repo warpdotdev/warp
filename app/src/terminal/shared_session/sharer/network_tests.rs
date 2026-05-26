@@ -3,32 +3,24 @@ use std::sync::Arc;
 use async_channel::Sender;
 use futures_util::stream::AbortHandle;
 use instant::Instant;
-
 use parking_lot::FairMutex;
-use session_sharing_protocol::{
-    common::{
-        ActivePrompt, OrderedTerminalEvent, OrderedTerminalEventType, ParticipantId, Selection,
-        SessionId,
-    },
-    sharer::{DownstreamMessage, ReconnectToken, UpstreamMessage},
+use session_sharing_protocol::common::{
+    ActivePrompt, OrderedTerminalEvent, OrderedTerminalEventType, ParticipantId, Selection,
+    SessionId,
 };
+use session_sharing_protocol::sharer::{DownstreamMessage, ReconnectToken, UpstreamMessage};
 use warpui::{App, ModelHandle};
 use websocket::{Message, WebsocketMessage as _};
 
-use crate::{
-    auth::{auth_manager::AuthManager, AuthStateProvider},
-    editor::ReplicaId,
-    server::{
-        server_api::ServerApiProvider, telemetry::context_provider::AppTelemetryContextProvider,
-    },
-    terminal::{
-        shared_session::{SharedSessionScrollbackType, MAX_BYTES_SHAREABLE},
-        TerminalModel,
-    },
-    test_util::assert_eventually,
-};
-
 use super::{Network, PtyBytesBatchStatus, Stage};
+use crate::auth::auth_manager::AuthManager;
+use crate::auth::AuthStateProvider;
+use crate::editor::ReplicaId;
+use crate::server::server_api::ServerApiProvider;
+use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::terminal::shared_session::{SharedSessionScrollbackType, MAX_BYTES_SHAREABLE};
+use crate::terminal::TerminalModel;
+use crate::test_util::assert_eventually;
 
 fn is_upstream_message_pty_bytes_read(
     message: UpstreamMessage,

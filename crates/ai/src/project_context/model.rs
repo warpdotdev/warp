@@ -1,10 +1,11 @@
-use anyhow::Result;
-#[cfg(feature = "local_fs")]
-use repo_metadata::repositories::RepoDetectionSource;
 use std::collections::HashMap;
 #[cfg(feature = "local_fs")]
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+
+use anyhow::Result;
+#[cfg(feature = "local_fs")]
+use repo_metadata::repositories::RepoDetectionSource;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::GlobalRules;

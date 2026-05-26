@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
+use warpui::units::Pixels;
+use warpui::{AppContext, SingletonEntity};
 
 use crate::settings::{AISettings, InputSettings, TerminalSpacing};
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud,
-};
-use warpui::{units::Pixels, AppContext, SingletonEntity};
 
 #[derive(
     Clone,

@@ -1,39 +1,69 @@
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::rc::Rc;
+
+use ::settings::{Setting, SettingSection, ToggleableSetting};
+use enum_iterator::all;
+use warp_core::ui::theme::color::internal_colors;
+use warp_util::path::user_friendly_path;
+use warpui::elements::{
+    Align, Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Dismiss, Element, Empty, Fill, Flex, FormattedTextElement, Hoverable, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text, Wrap,
+    DEFAULT_UI_LINE_HEIGHT_RATIO,
+};
+use warpui::fonts::{FamilyId, FontInfo, Weight};
+use warpui::keymap::{ContextPredicate, FixedBinding};
+use warpui::platform::{Cursor, FilePickerConfiguration, GraphicsBackend, SystemTheme};
+use warpui::rendering::ThinStrokes;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::radio_buttons::{
+    RadioButtonItem, RadioButtonLayout, RadioButtonStateHandle,
+};
+use warpui::ui_components::slider::SliderStateHandle;
+use warpui::ui_components::switch::SwitchStateHandle;
+use warpui::units::IntoPixels;
+use warpui::{
+    id, Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateModel,
+    View, ViewContext, ViewHandle, WindowId,
+};
+
 use super::directory_color_add_picker::{DirectoryColorAddPicker, DirectoryColorAddPickerEvent};
 use super::settings_page::{
-    AdditionalInfo, Category, LocalOnlyIconState, MatchData, PageType, SettingsWidget,
-    CONTENT_FONT_SIZE,
+    build_reset_button, render_body_item, render_body_item_label, render_dropdown_item,
+    AdditionalInfo, Category, LocalOnlyIconState, MatchData, PageType, SettingsPageEvent,
+    SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState, CONTENT_FONT_SIZE,
+    HEADER_PADDING,
 };
-use super::{flags, SettingsSection};
 use super::{
-    settings_page::{
-        build_reset_button, render_body_item, render_body_item_label, render_dropdown_item,
-        SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle, ToggleState, HEADER_PADDING,
-    },
-    SettingsAction,
+    flags, SettingActionPairContexts, SettingActionPairDescriptions, SettingsAction,
+    SettingsSection, ToggleSettingActionPair,
 };
-use super::{SettingActionPairContexts, SettingActionPairDescriptions, ToggleSettingActionPair};
 use crate::appearance::{Appearance, AppearanceEvent};
 use crate::channel::{Channel, ChannelState};
-use crate::context_chips::prompt::PromptEvent;
-use crate::context_chips::renderer::ChipDragState;
-use crate::context_chips::{
-    prompt::Prompt, renderer::Renderer as ContextChipRenderer, ChipAvailability,
-};
+use crate::context_chips::prompt::{Prompt, PromptEvent};
+use crate::context_chips::renderer::{ChipDragState, Renderer as ContextChipRenderer};
+use crate::context_chips::ChipAvailability;
 use crate::editor::{
-    EditOrigin, Event as EditorEvent, InteractionState, SingleLineEditorOptions, TextOptions,
+    EditOrigin, EditorView, Event as EditorEvent, InteractionState, SingleLineEditorOptions,
+    TextOptions,
 };
+use crate::features::FeatureFlag;
 use crate::gpu_state::{GPUState, GPUStateEvent};
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
-use crate::server::telemetry::InputUXChangeOrigin;
+use crate::server::telemetry::{InputUXChangeOrigin, TelemetryEvent};
+use crate::settings::app_icon::{AppIcon, AppIconSettings};
 use crate::settings::{
-    active_theme_kind,
-    app_icon::{AppIcon, AppIconSettings},
-    respect_system_theme, AIFontName, AppEditorSettings, CursorBlink, CursorBlinkEnabled,
-    EnforceMinimumContrast, FocusPaneOnHover, FontSettings, FontSettingsChangedEvent, InputBoxType,
-    InputModeSettings, InputModeState, MonospaceFontName, PaneSettings, ShouldDimInactivePanes,
-    ThemeSettings, UseSystemTheme, DEFAULT_MONOSPACE_FONT_NAME,
+    active_theme_kind, respect_system_theme, AIFontName, AppEditorSettings, CursorBlink,
+    CursorBlinkEnabled, CursorDisplayType, EnforceMinimumContrast, FocusPaneOnHover, FontSettings,
+    FontSettingsChangedEvent, GPUSettings, InputBoxType, InputModeSettings, InputModeState,
+    InputSettings, InputSettingsChangedEvent, MonospaceFontName, PaneSettings,
+    ShouldDimInactivePanes, ThemeSettings, UseSystemTheme, UseThinStrokes,
+    DEFAULT_MONOSPACE_FONT_NAME,
 };
-use crate::settings::{CursorDisplayType, GPUSettings, InputSettings, InputSettingsChangedEvent};
 use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::blockgrid_element::BlockGridElement;
 use crate::terminal::ligature_settings::{LigatureRenderingEnabled, LigatureSettings};
@@ -43,11 +73,17 @@ use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::settings::{
     AltScreenPadding, AltScreenPaddingMode, Spacing, SpacingMode, TerminalSettings,
 };
-use crate::terminal::{BlockListSettings, ShowBlockDividers};
-use crate::terminal::{ShowJumpToBottomOfBlockButton, SizeInfo};
+use crate::terminal::{
+    BlockListSettings, ShowBlockDividers, ShowJumpToBottomOfBlockButton, SizeInfo,
+};
 use crate::themes::theme::{self, RespectSystemTheme, SelectedSystemThemes, ThemeKind, WarpTheme};
+use crate::themes::theme_chooser::ThemeChooserMode;
+use crate::ui_components::color_dot::{render_color_dot, TAB_COLOR_OPTIONS};
+use crate::ui_components::icons::Icon;
 use crate::user_config::WarpConfig;
 use crate::util::bindings;
+use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
+use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
 use crate::window_settings::{
     BackgroundBlurRadius, BackgroundBlurTexture, BackgroundOpacity, LeftPanelVisibilityAcrossTabs,
     OpenWindowsAtCustomSize, WindowSettings, WindowSettingsChangedEvent, ZoomLevel,
@@ -60,56 +96,7 @@ use crate::workspace::tab_settings::{
     WorkspaceDecorationVisibility,
 };
 use crate::workspace::WorkspaceAction;
-use crate::{editor::EditorView, themes::theme_chooser::ThemeChooserMode};
-use crate::{
-    features::FeatureFlag,
-    view_components::{Dropdown, DropdownItem, FilterableDropdown},
-};
-use crate::{report_error, report_if_error, themes};
-use crate::{send_telemetry_from_ctx, server::telemetry::TelemetryEvent};
-use ::settings::{Setting, SettingSection, ToggleableSetting};
-use enum_iterator::all;
-use std::borrow::Cow;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::rc::Rc;
-use warp_core::ui::theme::color::internal_colors;
-use warp_util::path::user_friendly_path;
-use warpui::elements::{
-    Clipped, Empty, FormattedTextElement, MainAxisAlignment, MainAxisSize, Text, Wrap,
-};
-use warpui::fonts::{FamilyId, FontInfo, Weight};
-use warpui::keymap::{ContextPredicate, FixedBinding};
-use warpui::platform::{Cursor, FilePickerConfiguration, GraphicsBackend};
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ui_components::radio_buttons::{
-    RadioButtonItem, RadioButtonLayout, RadioButtonStateHandle,
-};
-use warpui::ui_components::slider::SliderStateHandle;
-use warpui::ui_components::switch::SwitchStateHandle;
-use warpui::units::IntoPixels;
-
-use warpui::id;
-use warpui::{
-    elements::{
-        Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        Dismiss, Element, Fill, Flex, Hoverable, MouseStateHandle, ParentElement, Radius,
-        Shrinkable, DEFAULT_UI_LINE_HEIGHT_RATIO,
-    },
-    rendering::ThinStrokes,
-};
-use warpui::{platform::SystemTheme, Action};
-use warpui::{
-    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateModel, View,
-    ViewContext, ViewHandle, WindowId,
-};
-
-use crate::settings::UseThinStrokes;
-use crate::ui_components::color_dot::{render_color_dot, TAB_COLOR_OPTIONS};
-use crate::ui_components::icons::Icon;
-use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
+use crate::{report_error, report_if_error, send_telemetry_from_ctx, themes};
 
 const FONT_SIZE_INPUT_BOX_WIDTH: f32 = 80.;
 const NOTEBOOK_FONT_SIZE_INPUT_BOX_WIDTH: f32 = 50.;

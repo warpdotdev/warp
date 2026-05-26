@@ -1,7 +1,5 @@
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Duration, Utc};
@@ -11,21 +9,17 @@ use warp_core::channel::{Channel, ChannelState};
 use warp_graphql::object_permissions::OwnerType;
 use warpui::{AppContext, Entity, SingletonEntity};
 
-use crate::{
-    cloud_object::{GenericStringObjectFormat, JsonObjectType, ObjectType},
-    report_error,
-};
-
-use super::{
-    anonymous_id::get_or_create_anonymous_id,
-    auth_manager::user_persistence::PersistedUser,
-    credentials::Credentials,
-    user::{AnonymousUserType, FirebaseAuthTokens, PersonalObjectLimits, PrincipalType, User},
-    UserUid, API_KEY_PREFIX,
-};
-
+use super::anonymous_id::get_or_create_anonymous_id;
+use super::auth_manager::user_persistence::PersistedUser;
+use super::credentials::Credentials;
 #[cfg(any(not(target_family = "wasm"), test))]
 use super::user::UserMetadata;
+use super::user::{
+    AnonymousUserType, FirebaseAuthTokens, PersonalObjectLimits, PrincipalType, User,
+};
+use super::{UserUid, API_KEY_PREFIX};
+use crate::cloud_object::{GenericStringObjectFormat, JsonObjectType, ObjectType};
+use crate::report_error;
 
 const ANONYMOUS_USER_NOTIFICATION_BLOCK_TIMER: Duration = Duration::days(7);
 

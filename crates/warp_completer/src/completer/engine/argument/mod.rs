@@ -8,13 +8,9 @@ cfg_if::cfg_if! {
     }
 }
 
-use crate::{
-    meta::{Span, SpannedItem},
-    parsers::{
-        hir::{Expression, ShellCommand},
-        ParsedExpression, ParsedToken,
-    },
-};
+use crate::meta::{Span, SpannedItem};
+use crate::parsers::hir::{Expression, ShellCommand};
+use crate::parsers::{ParsedExpression, ParsedToken};
 
 /// Creates a new empty positional arg in a shell_command. This is useful before evaluating args
 /// so that we don't include the extra whitespace at the end of the command (e.g. "cd ") within the

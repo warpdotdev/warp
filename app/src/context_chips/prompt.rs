@@ -1,16 +1,14 @@
-use crate::{
-    settings::{
-        AISettings, AISettingsChangedEvent, InputSettings, InputSettingsChangedEvent,
-        WarpPromptSeparator,
-    },
-    terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent},
-};
-
-pub use super::ContextChipKind;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use settings::Setting as _;
 use warpui::{Entity, GetSingletonModelHandle, ModelContext, SingletonEntity, UpdateModel};
+
+pub use super::ContextChipKind;
+use crate::settings::{
+    AISettings, AISettingsChangedEvent, InputSettings, InputSettingsChangedEvent,
+    WarpPromptSeparator,
+};
+use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 
 #[cfg(test)]
 #[path = "prompt_tests.rs"]

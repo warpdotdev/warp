@@ -1,11 +1,43 @@
 mod selection;
 
-use crate::ai::agent::{conversation::AIConversationId, AIAgentActionId};
-use crate::ai::blocklist::SerializedBlockListItem;
-use crate::terminal::block_filter::BlockFilterQuery;
+use std::collections::{HashMap, HashSet};
+use std::io;
+use std::ops::{AddAssign, Range, RangeInclusive};
+use std::sync::Arc;
+use std::time::Duration;
 
+use anyhow::anyhow;
+use chrono::{DateTime, Local};
+use instant::SystemTime;
+use selection::BlockListSelection;
+pub use selection::SelectionRange;
+use sum_tree::{Dimension, Item, SeekBias, SumTree};
+use warp_core::features::FeatureFlag;
+use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use warpui::color::ColorU;
+use warpui::r#async::executor::Background;
+use warpui::units::{IntoLines, IntoPixels, Lines};
+use warpui::{record_trace_event, AppContext, EntityId, ViewHandle};
+
+use super::ansi::{Handler, InputBufferValue};
+use super::block::{BlockId, BlockSize, BlockState, SerializedAIMetadata};
+use super::early_output::EarlyOutput;
+use super::grid::grid_handler::{FragmentBoundary, GridHandler, Link, PossiblePath};
+use super::grid::RespectDisplayedOutput;
+use super::image_map::StoredImageMetadata;
+use super::kitty::{KittyAction, KittyResponse};
+use super::rich_content::RichContentType;
+use super::secrets::RespectObfuscatedSecrets;
+use super::selection::ScrollDelta;
+use super::terminal_model::RangeInModel;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::AIAgentActionId;
 use crate::ai::blocklist::agent_view::{AgentViewDisplayMode, AgentViewState};
-use crate::terminal::event::AfterBlockCompletedEvent;
+use crate::ai::blocklist::{AIBlock, SerializedBlockListItem};
+use crate::terminal::block_filter::BlockFilterQuery;
+use crate::terminal::block_list_element::GridType;
+use crate::terminal::event::Event::{AfterBlockCompleted, TerminalClear};
+use crate::terminal::event::{AfterBlockCompletedEvent, BlockType, Event as TerminalEvent};
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi;
 use crate::terminal::model::ansi::{
@@ -14,61 +46,15 @@ use crate::terminal::model::ansi::{
     TabulationClearMode,
 };
 use crate::terminal::model::block::{AgentViewVisibility, Block, SerializedBlock};
+use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::bootstrap::BootstrapStage;
+use crate::terminal::model::grid::Dimensions;
 use crate::terminal::model::index::{Point, VisibleRow};
 use crate::terminal::model::iterm_image::ITermImage;
-use crate::terminal::view::SeparatorId;
-use crate::terminal::view::WithinBlockBanner;
-use crate::terminal::{
-    event::{
-        BlockType, Event as TerminalEvent,
-        Event::{AfterBlockCompleted, TerminalClear},
-    },
-    view::{InlineBannerId, InlineBannerItem},
-};
-use crate::terminal::{BlockPadding, ShellHost, SizeInfo, SizeUpdate};
-use anyhow::anyhow;
-use chrono::{DateTime, Local};
-use instant::SystemTime;
-use std::io;
-use std::ops::{AddAssign, Range, RangeInclusive};
-use std::sync::Arc;
-use std::time::Duration;
-use sum_tree::{Dimension, Item, SeekBias, SumTree};
-use warp_core::features::FeatureFlag;
-use warpui::color::ColorU;
-use warpui::r#async::executor::Background;
-use warpui::record_trace_event;
-
-use std::collections::{HashMap, HashSet};
-use warpui::{
-    units::{IntoLines, IntoPixels, Lines},
-    AppContext, EntityId, ViewHandle,
-};
-
-use super::block::{BlockId, BlockSize, BlockState};
-use super::early_output::EarlyOutput;
-use super::grid::grid_handler::{FragmentBoundary, GridHandler, PossiblePath};
-use super::grid::RespectDisplayedOutput;
-use super::image_map::StoredImageMetadata;
-use super::kitty::{KittyAction, KittyResponse};
-use super::rich_content::RichContentType;
-use super::secrets::RespectObfuscatedSecrets;
-use super::{ansi::InputBufferValue, block::SerializedAIMetadata};
-
-use super::selection::ScrollDelta;
-use super::terminal_model::RangeInModel;
-use super::{ansi::Handler, grid::grid_handler::Link};
-use crate::ai::blocklist::AIBlock;
-use crate::terminal::block_list_element::GridType;
-use crate::terminal::model::blockgrid::BlockGrid;
-use crate::terminal::model::grid::Dimensions;
 use crate::terminal::model::secrets::ObfuscateSecrets;
 use crate::terminal::model::terminal_model::{BlockIndex, WithinBlock};
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
-
-use selection::BlockListSelection;
-pub use selection::SelectionRange;
+use crate::terminal::view::{InlineBannerId, InlineBannerItem, SeparatorId, WithinBlockBanner};
+use crate::terminal::{BlockPadding, ShellHost, SizeInfo, SizeUpdate};
 
 #[cfg(feature = "local_fs")]
 const RESTORED_BLOCK_SEPARATOR_HEIGHT: f64 = 1.5;
@@ -1505,6 +1491,44 @@ impl BlockList {
             }
 
             indices_to_remove.push(index);
+        }
+
+        if indices_to_remove.is_empty() {
+            return;
+        }
+
+        self.clear_selection();
+        self.clear_smart_select_override();
+        self.clear_scroll_position_before_filter();
+
+        // Remove in reverse order so indices remain valid.
+        for index in indices_to_remove.into_iter().rev() {
+            self.remove_block_at_index(index);
+        }
+
+        // Force a re-draw since the blocklist has changed.
+        self.event_proxy.send_wakeup_event();
+    }
+
+    pub fn remove_command_blocks_for_conversation(&mut self, conversation_id: AIConversationId) {
+        let active_block_index = self.active_block_index();
+
+        let mut indices_to_remove = Vec::new();
+        for (i, block) in self.blocks.iter().enumerate() {
+            let index: BlockIndex = i.into();
+            if index == active_block_index {
+                continue;
+            }
+
+            if matches!(
+                block.agent_view_visibility(),
+                AgentViewVisibility::Agent {
+                    origin_conversation_id,
+                    ..
+                } if *origin_conversation_id == conversation_id
+            ) {
+                indices_to_remove.push(index);
+            }
         }
 
         if indices_to_remove.is_empty() {
@@ -3696,6 +3720,10 @@ impl ansi::Handler for BlockList {
         }
         self.finalize_block_and_advance_list(data);
         self.latest_block_finished_time = Some(instant::SystemTime::now());
+    }
+
+    fn set_current_working_directory(&mut self, path: String) {
+        delegate_to_block!(self.set_current_working_directory(path));
     }
 
     /// Receives metadata for the prompt and the next command, and

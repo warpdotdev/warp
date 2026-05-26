@@ -1,11 +1,8 @@
-use warpui_core::{
-    integration::TestDriver,
-    keymap::{CustomTag, Keystroke},
-    r#async::LocalBoxFuture,
-    AppContext, AssetProvider,
-};
-
+use warpui_core::integration::TestDriver;
+use warpui_core::keymap::{CustomTag, Keystroke};
 pub use warpui_core::platform::app::*;
+use warpui_core::r#async::LocalBoxFuture;
+use warpui_core::{AppContext, AssetProvider};
 
 use super::AsInnerMut;
 

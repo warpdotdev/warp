@@ -1,10 +1,3 @@
-use core_foundation::base::TCFType;
-use core_graphics::base::CGFloat;
-use core_graphics::color::CGColor;
-use core_graphics::sys::CGColorRef;
-use objc::runtime::Object;
-use objc::{msg_send, sel, sel_impl};
-use pathfinder_color::ColorU;
 use std::os::raw::c_char;
 use std::slice;
 use std::str::Utf8Error;
@@ -27,6 +20,13 @@ use cocoa::appkit::{
     NSPageUpFunctionKey as PAGE_UP_KEY, NSRightArrowFunctionKey as ARROW_RIGHT_KEY,
     NSUpArrowFunctionKey as ARROW_UP_KEY,
 };
+use core_foundation::base::TCFType;
+use core_graphics::base::CGFloat;
+use core_graphics::color::CGColor;
+use core_graphics::sys::CGColorRef;
+use objc::runtime::Object;
+use objc::{msg_send, sel, sel_impl};
+use pathfinder_color::ColorU;
 
 const BACKSPACE_KEY: u16 = 0x7f;
 const ENTER_KEY: u16 = 0x0d;

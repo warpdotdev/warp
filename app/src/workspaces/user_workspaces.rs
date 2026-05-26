@@ -1,51 +1,42 @@
-use super::{
-    team::{DiscoverableTeam, MembershipRole, Team},
-    workspace::{
-        AdminEnablementSetting, CustomerType, EnterpriseSecretRegex, HostEnablementSetting,
-        UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
-    },
-};
-use crate::{
-    ai::llms::LLMModelHost,
-    auth::{AuthStateProvider, UserUid},
-    channel::ChannelState,
-    cloud_object::{
-        model::persistence::CloudModel, CloudObjectEventEntrypoint, ObjectType, Owner, Space,
-    },
-    pricing::PricingInfoModel,
-    report_error,
-    server::{
-        experiments::{ServerExperiment, ServerExperiments, ServerExperimentsEvent},
-        ids::ServerId,
-        server_api::{team::TeamClient, workspace::WorkspaceClient},
-    },
-    settings::{
-        AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, PrivacySettings,
-    },
-    workspaces::workspace::{
-        AiAutonomySettings, AiOverages, SandboxedAgentSettings, UsageBasedPricingSettings,
-    },
-};
+use std::sync::Arc;
+
 use anyhow::Result;
 use regex::Regex;
-use std::sync::Arc;
-use warp_core::{
-    features::FeatureFlag,
-    settings::{ChangeEventReason, Setting},
-};
+use warp_core::features::FeatureFlag;
+use warp_core::settings::{ChangeEventReason, Setting};
 use warp_graphql::workspace::FeatureModelChoice;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, Tracked};
 
+use super::team::{DiscoverableTeam, MembershipRole, Team};
+#[cfg(test)]
+use super::workspace::WorkspaceMemberUsageInfo;
+use super::workspace::{
+    AdminEnablementSetting, CustomerType, EnterpriseSecretRegex, HostEnablementSetting,
+    UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
+};
+use crate::ai::llms::LLMModelHost;
+use crate::auth::{AuthStateProvider, UserUid};
+use crate::channel::ChannelState;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{CloudObjectEventEntrypoint, ObjectType, Owner, Space};
+use crate::pricing::PricingInfoModel;
+use crate::report_error;
+use crate::server::experiments::{ServerExperiment, ServerExperiments, ServerExperimentsEvent};
+use crate::server::ids::ServerId;
+use crate::server::server_api::team::TeamClient;
+use crate::server::server_api::workspace::WorkspaceClient;
 #[cfg(test)]
 use crate::server::server_api::{team::MockTeamClient, workspace::MockWorkspaceClient};
-
+use crate::settings::{
+    AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, PrivacySettings,
+};
 #[cfg(test)]
 use crate::workspaces::workspace::{
     AIAutonomyPolicy, BillingMetadata, WorkspaceMember, WorkspaceSettings,
 };
-
-#[cfg(test)]
-use super::workspace::WorkspaceMemberUsageInfo;
+use crate::workspaces::workspace::{
+    AiAutonomySettings, AiOverages, SandboxedAgentSettings, UsageBasedPricingSettings,
+};
 
 const STRIPE_SUBSCRIPTION_INTERVAL_PAGE_PREFIX: &str = "/upgrade";
 

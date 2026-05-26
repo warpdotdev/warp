@@ -137,12 +137,12 @@ fn reconciles_unsynced_default_profile_with_cloud_after_initial_load() {
             apply_code_diffs: ActionPermission::AlwaysAllow,
             ..Default::default()
         };
-        let server_object = ServerAIExecutionProfile {
-            id: cloud_sync_id,
-            model: CloudAIExecutionProfileModel::new(cloud_profile),
-            metadata: mock_server_metadata(cloud_uid),
-            permissions: ServerPermissions::mock_personal(),
-        };
+        let server_object = ServerAIExecutionProfile::new(
+            cloud_sync_id,
+            CloudAIExecutionProfileModel::new(cloud_profile),
+            mock_server_metadata(cloud_uid),
+            ServerPermissions::mock_personal(),
+        );
 
         // Insert the object into CloudModel via the initial-load path
         // (`emit_events=false`) and then emit `InitialLoadCompleted` so the

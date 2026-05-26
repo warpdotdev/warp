@@ -1,10 +1,15 @@
-use crate::{
-    error::UserFacingError, folder::Folder, generic_string_object::GenericStringObject,
-    mcp_gallery_template::MCPGalleryTemplate, notebook::Notebook,
-    object_actions::ObjectActionHistory, request_context::RequestContext,
-    response_context::ResponseContext, scalars::Time, schema, user::PublicUserProfile,
-    workflow::Workflow,
-};
+use crate::error::UserFacingError;
+use crate::folder::Folder;
+use crate::generic_string_object::GenericStringObject;
+use crate::mcp_gallery_template::MCPGalleryTemplate;
+use crate::notebook::Notebook;
+use crate::object_actions::ObjectActionHistory;
+use crate::request_context::RequestContext;
+use crate::response_context::ResponseContext;
+use crate::scalars::Time;
+use crate::schema;
+use crate::user::PublicUserProfile;
+use crate::workflow::Workflow;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct GetUpdatedCloudObjectsVariables {

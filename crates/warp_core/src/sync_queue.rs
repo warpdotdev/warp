@@ -1,18 +1,19 @@
+use std::collections::HashMap;
+use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use anyhow::Result;
 use async_broadcast::{InactiveReceiver, Sender as BroadcastSender};
 use futures::channel::mpsc::{self, Receiver as MpscReceiver, Sender as MpscSender};
 use futures::channel::oneshot::{self, Receiver, Sender};
 use futures::future::{AbortHandle, Abortable};
 use futures::StreamExt;
 use instant::Instant;
-use std::collections::HashMap;
-use std::future::Future;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use warpui::r#async::executor::Background;
-
-use anyhow::Result;
-use warpui::{r#async::Timer, Entity, RetryOption, SingletonEntity};
+use warpui::r#async::Timer;
+use warpui::{Entity, RetryOption, SingletonEntity};
 
 const DEFAULT_BUFFER_SIZE: usize = 1024;
 const DEFAULT_SYNC_RETRY_STRATEGY: RetryOption = RetryOption::exponential(

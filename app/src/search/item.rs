@@ -3,9 +3,8 @@ use warp_core::ui::theme::Fill;
 use warpui::fonts::FamilyId;
 use warpui::{Action, AppContext, Element};
 
-use crate::appearance::Appearance;
-
 use super::result_renderer::ItemHighlightState;
+use crate::appearance::Appearance;
 
 #[derive(Clone)]
 pub struct SearchItemDetail {

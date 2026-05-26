@@ -1,3 +1,10 @@
+use warp_core::ui::appearance::Appearance;
+use warpui::elements::Empty;
+use warpui::platform::WindowStyle;
+use warpui::{
+    AddSingletonModel, App, AppContext, Element, Entity, TypedActionView, View, WindowId,
+};
+
 use super::CreateEnvironmentModal;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::auth::AuthStateProvider;
@@ -11,12 +18,6 @@ use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use warp_core::ui::appearance::Appearance;
-use warpui::elements::Empty;
-use warpui::platform::WindowStyle;
-use warpui::{
-    AddSingletonModel, App, AppContext, Element, Entity, TypedActionView, View, WindowId,
-};
 
 #[derive(Default)]
 struct TestRootView;

@@ -2,40 +2,31 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use warp_editor::content::text::BufferBlockItem;
-use warpui::{
-    elements::{
-        AnchorPair, Border, Container, CornerRadius, MouseStateHandle, OffsetPositioning,
-        OffsetType, PositionedElementOffsetBounds, PositioningAxis, Radius, SavePosition, Stack,
-        XAxisAnchor, YAxisAnchor,
-    },
-    presenter::ChildView,
-    ui_components::{
-        button::ButtonTooltipPosition,
-        components::{UiComponent, UiComponentStyles},
-    },
-    AppContext, Element, SingletonEntity, ViewContext, ViewHandle,
+use warpui::elements::{
+    AnchorPair, Border, Container, CornerRadius, MouseStateHandle, OffsetPositioning, OffsetType,
+    PositionedElementOffsetBounds, PositioningAxis, Radius, SavePosition, Stack, XAxisAnchor,
+    YAxisAnchor,
 };
+use warpui::presenter::ChildView;
+use warpui::ui_components::button::ButtonTooltipPosition;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, SingletonEntity, ViewContext, ViewHandle};
 
-use crate::{
-    appearance::Appearance,
-    cloud_object::{model::persistence::CloudModel, ObjectIdType, Space},
-    drive::CloudObjectTypeAndId,
-    menu::{self, Menu, MenuItemFields},
-    notebooks::telemetry::EmbeddedObjectInfo,
-    search::notebook_embedding::{
-        searcher::EmbeddingSearchItemAction,
-        view::{EmbeddingSearchEvent, EmbeddingSearchMenu},
-    },
-    server::ids::SyncId,
-    themes::theme::Fill,
-    ui_components::{buttons::icon_button, icons::Icon},
-};
-
-use super::{
-    embedded_item::EmbeddedWorkflow,
-    view::{EditorViewAction, EditorViewEvent, RichTextEditorView},
-    BlockType,
-};
+use super::embedded_item::EmbeddedWorkflow;
+use super::view::{EditorViewAction, EditorViewEvent, RichTextEditorView};
+use super::BlockType;
+use crate::appearance::Appearance;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{ObjectIdType, Space};
+use crate::drive::CloudObjectTypeAndId;
+use crate::menu::{self, Menu, MenuItemFields};
+use crate::notebooks::telemetry::EmbeddedObjectInfo;
+use crate::search::notebook_embedding::searcher::EmbeddingSearchItemAction;
+use crate::search::notebook_embedding::view::{EmbeddingSearchEvent, EmbeddingSearchMenu};
+use crate::server::ids::SyncId;
+use crate::themes::theme::Fill;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
 
 /// The saved position ID for the block insertion button.
 const BLOCK_INSERT_BUTTON_ID: &str = "notebook_block_insertion_button";

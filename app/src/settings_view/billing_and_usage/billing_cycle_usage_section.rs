@@ -3,45 +3,39 @@ use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    DropShadow, Empty, Flex, FormattedTextElement, HighlightedHyperlink, Hoverable, HyperlinkLens,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, Stack, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::platform::Cursor;
 use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, DropShadow, Empty, Flex, FormattedTextElement, HighlightedHyperlink,
-        Hoverable, HyperlinkLens, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-        OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack, Text,
-    },
-    fonts::{Properties, Weight},
-    platform::Cursor,
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::{
-    ai::AIRequestUsageModel,
-    auth::{AuthManager, AuthStateProvider},
-    menu::{self, Menu, MenuItem, MenuItemFields},
-    settings_view::{
-        admin_actions::AdminActions,
-        billing_and_usage::{
-            billing_cycle_usage_common::{
-                filter_legacy_buckets, has_non_viewer_data, BillingUsageMouseStates,
-            },
-            billing_cycle_usage_rows::{has_cloud_usage, render_rows, SourceFilter},
-            billing_cycle_usage_team_totals::render_team_totals_block,
-        },
-        billing_and_usage_page_v2::{
-            AGGREGATE_CREDITS_DOT_COLOR, AMBIENT_CREDITS_DOT_COLOR, BASE_CREDITS_DOT_COLOR,
-            BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
-        },
-    },
-    ui_components::icons::Icon,
-    workspaces::{
-        update_manager::TeamUpdateManager,
-        user_workspaces::UserWorkspaces,
-        workspace::{
-            AiCreditsUsageAndCostType, BillingCycleUsageSummary, MaxPriorCycles, UsageVisibility,
-            UsageVisibilityGranularity, Workspace,
-        },
-    },
+use crate::ai::AIRequestUsageModel;
+use crate::auth::{AuthManager, AuthStateProvider};
+use crate::menu::{self, Menu, MenuItem, MenuItemFields};
+use crate::settings_view::admin_actions::AdminActions;
+use crate::settings_view::billing_and_usage::billing_cycle_usage_common::{
+    filter_legacy_buckets, has_non_viewer_data, BillingUsageMouseStates,
+};
+use crate::settings_view::billing_and_usage::billing_cycle_usage_rows::{
+    has_cloud_usage, render_rows, SourceFilter,
+};
+use crate::settings_view::billing_and_usage::billing_cycle_usage_team_totals::render_team_totals_block;
+use crate::settings_view::billing_and_usage_page_v2::{
+    AGGREGATE_CREDITS_DOT_COLOR, AMBIENT_CREDITS_DOT_COLOR, BASE_CREDITS_DOT_COLOR,
+    BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
+};
+use crate::ui_components::icons::Icon;
+use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::{
+    AiCreditsUsageAndCostType, BillingCycleUsageSummary, MaxPriorCycles, UsageVisibility,
+    UsageVisibilityGranularity, Workspace,
 };
 
 const HEADER_FONT_SIZE: f32 = 16.;

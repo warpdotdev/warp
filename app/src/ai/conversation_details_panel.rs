@@ -1,6 +1,8 @@
 //! A reusable side panel component for displaying conversation metadata.
 
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Local};
 use instant::Instant;
@@ -10,19 +12,19 @@ use warp_cli::agent::Harness;
 use warp_cli::skill::SkillSpec;
 use warp_core::channel::ChannelState;
 use warp_core::ui::color::coloru_with_opacity;
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::new_scrollable::{NewScrollable, SingleAxisConfig};
+use warpui::elements::{
+    resizable_state_handle, Border, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, DragBarSide, Empty, Expanded, Flex, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, Resizable, ResizableStateHandle,
+    SelectableArea, SelectionHandle, Shrinkable, Text, Wrap,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::FixedBinding;
+use warpui::platform::Cursor;
+use warpui::ui_components::components::UiComponent;
 use warpui::{
-    clipboard::ClipboardContent,
-    elements::{
-        new_scrollable::{NewScrollable, SingleAxisConfig},
-        resizable_state_handle, Border, ChildView, ClippedScrollStateHandle, ConstrainedBox,
-        Container, CornerRadius, CrossAxisAlignment, DragBarSide, Empty, Expanded, Flex,
-        MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Resizable,
-        ResizableStateHandle, SelectableArea, SelectionHandle, Shrinkable, Text, Wrap,
-    },
-    fonts::{Properties, Weight},
-    keymap::FixedBinding,
-    platform::Cursor,
-    ui_components::components::UiComponent,
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
@@ -45,6 +47,7 @@ use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
 use crate::appearance::Appearance;
 use crate::auth::UserUid;
+use crate::cloud_object::CloudObjectLookup as _;
 use crate::notebooks::NotebookId;
 use crate::send_telemetry_from_ctx;
 use crate::server::ids::{ServerId, SyncId};

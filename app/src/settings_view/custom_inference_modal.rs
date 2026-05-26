@@ -1,29 +1,27 @@
-use crate::editor::Event as EditorEvent;
-use crate::modal::{Modal, ModalViewState};
-use crate::{
-    appearance::Appearance,
-    editor::{EditorView, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextOptions},
-    ui_components::icons::Icon,
-    view_components::action_button::{ActionButton, DangerSecondaryTheme},
-};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+use ::ai::api_keys::CustomEndpoint;
+use url::Url;
 use warp_editor::editor::NavigationKey;
-use warpui::elements::{ConstrainedBox, CrossAxisAlignment, Expanded, MainAxisSize};
+use warpui::elements::{
+    Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+    Expanded, Flex, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
+};
+use warpui::fonts::FamilyId;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        Border, ChildView, Container, CornerRadius, Empty, Flex, MouseStateHandle, ParentElement,
-        Radius, Text,
-    },
-    fonts::FamilyId,
-    ui_components::{
-        button::ButtonVariant,
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use ::ai::api_keys::CustomEndpoint;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use url::Url;
+use crate::appearance::Appearance;
+use crate::editor::{
+    EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
+    TextOptions,
+};
+use crate::modal::{Modal, ModalViewState};
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{ActionButton, DangerSecondaryTheme};
 
 const LABEL_FONT_SIZE: f32 = 12.;
 const INPUT_WIDTH: f32 = 480.;
