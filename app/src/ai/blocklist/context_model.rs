@@ -1005,8 +1005,11 @@ impl BlocklistAIContextModel {
         let repo = git2::Repository::discover(&pwd).ok()?;
         let remote = repo.find_remote("origin").ok()?;
         let raw_url = remote.url()?.to_string();
-        let (name, owner) = parse_repo_name_and_owner(&raw_url);
-        Some(AIAgentContext::Repository { name, owner })
+        let (name, owner) = parse_repo_name_and_owner(&raw_url)?;
+        Some(AIAgentContext::Repository {
+            name,
+            owner: Some(owner),
+        })
     }
 
     #[cfg(target_family = "wasm")]
@@ -1029,23 +1032,11 @@ impl BlocklistAIContextModel {
 
 /// Parses a repository name and optional owner from a git remote URL.
 #[cfg(not(target_family = "wasm"))]
-fn parse_repo_name_and_owner(url: &str) -> (String, Option<String>) {
+fn parse_repo_name_and_owner(url: &str) -> Option<(String, String)> {
     let url = url.trim().trim_end_matches(".git");
-    if let Some((name, owner)) = parse_scp_like_ssh_remote_path(url)
+    parse_scp_like_ssh_remote_path(url)
         .or_else(|| parse_supported_url_remote_path(url))
         .and_then(parse_repo_name_and_owner_from_path)
-    {
-        return (name, owner);
-    }
-
-    // Fallback: use the last path component as the name.
-    let name = url
-        .rsplit('/')
-        .next()
-        .filter(|s| !s.is_empty())
-        .unwrap_or(url)
-        .to_string();
-    (name, None)
 }
 
 /// Parses a SSH-like remote path (e.g. `git@github.com:owner/repo_name.git`)
@@ -1075,18 +1066,20 @@ fn parse_supported_url_remote_path(url: &str) -> Option<&str> {
 }
 
 #[cfg(not(target_family = "wasm"))]
-fn parse_repo_name_and_owner_from_path(path: &str) -> Option<(String, Option<String>)> {
+fn parse_repo_name_and_owner_from_path(path: &str) -> Option<(String, String)> {
     let path = path.trim_matches('/');
     if path.is_empty() {
         return None;
     }
 
-    // Defensive mechanism in case the path has more than two segments.
-    // we will treat the first segment as the owner and the second segment as the repository name.
-    // Rest will be ignored.
     let mut segments = path.splitn(3, '/');
     let first = segments.next()?;
     let second = segments.next();
+    let extra = segments.next();
+
+    if extra.is_some() {
+        return None;
+    }
 
     match second {
         Some(repo) if !first.is_empty() && !repo.is_empty() => {
@@ -1094,10 +1087,10 @@ fn parse_repo_name_and_owner_from_path(path: &str) -> Option<(String, Option<Str
             if repo.is_empty() {
                 return None;
             }
-            Some((repo.to_string(), Some(first.to_string())))
+            Some((repo.to_string(), first.to_string()))
         }
         Some(_) => None,
-        None => Some((first.to_string(), None)),
+        None => None,
     }
 }
 

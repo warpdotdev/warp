@@ -119,7 +119,7 @@ fn has_locking_attachment_is_false_with_only_pending_block_id() {
 fn parse_repo_name_and_owner_handles_https_remote() {
     assert_eq!(
         super::parse_repo_name_and_owner("https://github.com/warpdotdev/warp-internal.git"),
-        ("warp-internal".to_owned(), Some("warpdotdev".to_owned()))
+        Some(("warp-internal".to_owned(), "warpdotdev".to_owned()))
     );
 }
 
@@ -128,7 +128,7 @@ fn parse_repo_name_and_owner_handles_https_remote() {
 fn parse_repo_name_and_owner_handles_ssh_remote() {
     assert_eq!(
         super::parse_repo_name_and_owner("git@github.com:warpdotdev/warp-internal.git"),
-        ("warp-internal".to_owned(), Some("warpdotdev".to_owned()))
+        Some(("warp-internal".to_owned(), "warpdotdev".to_owned()))
     );
 }
 #[cfg(not(target_family = "wasm"))]
@@ -136,57 +136,66 @@ fn parse_repo_name_and_owner_handles_ssh_remote() {
 fn parse_repo_name_and_owner_handles_url_style_ssh_remote() {
     assert_eq!(
         super::parse_repo_name_and_owner("ssh://git@github.com/warpdotdev/warp-internal.git"),
-        ("warp-internal".to_owned(), Some("warpdotdev".to_owned()))
+        Some(("warp-internal".to_owned(), "warpdotdev".to_owned()))
     );
 }
 
 #[cfg(not(target_family = "wasm"))]
 #[test]
-fn parse_repo_name_and_owner_falls_back_to_name_only() {
+fn parse_repo_name_and_owner_rejects_supported_ownerless_url() {
     assert_eq!(
-        super::parse_repo_name_and_owner("warp-internal.git"),
-        ("warp-internal".to_owned(), None)
+        super::parse_repo_name_and_owner("https://example.com/warp-internal.git"),
+        None
     );
 }
 
 #[cfg(not(target_family = "wasm"))]
 #[test]
-fn parse_repo_name_and_owner_ignores_extra_path_segments() {
-    // Defensive: malformed remote URLs with extra path segments should not encode
-    // the trailing segments into the repository name.
+fn parse_repo_name_and_owner_rejects_extra_path_segments() {
     assert_eq!(
         super::parse_repo_name_and_owner("https://github.com/warpdotdev/warp-internal/extra"),
-        ("warp-internal".to_owned(), Some("warpdotdev".to_owned()))
+        None
     );
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn parse_repo_name_and_owner_strips_query_from_repo_name() {
     assert_eq!(
         super::parse_repo_name_and_owner("https://github.com/warpdotdev/warp-internal?ref=main"),
-        ("warp-internal".to_owned(), Some("warpdotdev".to_owned()))
+        Some(("warp-internal".to_owned(), "warpdotdev".to_owned()))
     );
 }
 
 #[cfg(not(target_family = "wasm"))]
 #[test]
-fn parse_repo_name_and_owner_uses_name_only_for_unrecognized_url_scheme() {
+fn parse_repo_name_and_owner_rejects_unrecognized_ownerless_remote() {
+    assert_eq!(super::parse_repo_name_and_owner("warp-internal.git"), None);
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn parse_repo_name_and_owner_rejects_unrecognized_url_scheme() {
     assert_eq!(
         super::parse_repo_name_and_owner("custom://github.com/warpdotdev/warp-internal.git"),
-        ("warp-internal".to_owned(), None)
+        None
     );
 }
 
 #[cfg(not(target_family = "wasm"))]
 #[test]
-fn parse_repo_name_and_owner_uses_name_only_for_invalid_ssh_remote() {
+fn parse_repo_name_and_owner_rejects_invalid_ssh_remote() {
     assert_eq!(
         super::parse_repo_name_and_owner("git@:warpdotdev/warp-internal.git"),
-        ("warp-internal".to_owned(), None)
+        None
     );
     assert_eq!(
         super::parse_repo_name_and_owner("git@github.com/warpdotdev/warp-internal.git"),
-        ("warp-internal".to_owned(), None)
+        None
     );
     assert_eq!(
         super::parse_repo_name_and_owner("git@github.com:/warpdotdev/warp-internal.git"),
-        ("warp-internal".to_owned(), None)
+        None
     );
 }
 
