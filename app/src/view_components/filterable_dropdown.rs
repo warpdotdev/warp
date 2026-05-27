@@ -237,8 +237,9 @@ where
     /// Set items from rich menu items (MenuItem). This preserves the rich menu items for
     /// filtering and passes the filtered items to the internal dropdown.
     ///
-    /// Rich menu items carry erased [`DropdownAction`]s, so callers are responsible for ensuring
-    /// each item dispatches an action handled by the parent view.
+    /// Rich menu items already carry erased [`DropdownAction`]s. The dropdown dispatches selected
+    /// item actions through normal action propagation, so callers should ensure each action is
+    /// handled by an appropriate view in the containing view hierarchy.
     pub fn set_rich_items(
         &mut self,
         items: Vec<MenuItem<DropdownAction>>,

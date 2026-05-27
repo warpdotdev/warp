@@ -94,9 +94,10 @@ impl DropdownStyle {
 /// A dropdown menu view. The view renders each DropdownItem. When a menu item is clicked,
 /// on_click_action_name is dispatched, with the value of the corresponding menu item.
 ///
-/// The default item action type is `()`, so callers that only need a static dropdown shell can
-/// name `Dropdown` without specifying an action type. Callers that dispatch item selections should
-/// use a concrete action type.
+/// The item action type powers typed item helpers like `set_items` and
+/// `set_selected_by_action`. Callers that populate the menu with already-erased rich
+/// [`MenuItem<DropdownAction>`] values through `set_rich_items` do not need to name a concrete
+/// item action type.
 pub struct Dropdown<A: DropdownItemAction = ()> {
     is_expanded: bool,
     disabled: bool,
@@ -443,8 +444,9 @@ where
 
     /// Set items from rich menu items.
     ///
-    /// Rich menu items carry erased [`DropdownAction`]s, so callers are responsible for ensuring
-    /// each item dispatches an action handled by the parent view.
+    /// Rich menu items already carry erased [`DropdownAction`]s. The dropdown dispatches selected
+    /// item actions through normal action propagation, so callers should ensure each action is
+    /// handled by an appropriate view in the containing view hierarchy.
     pub fn set_rich_items(
         &mut self,
         items: impl IntoIterator<Item = MenuItem<DropdownAction>>,
