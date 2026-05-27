@@ -1,5 +1,4 @@
 use super::*;
-use crate::features::FeatureFlag;
 
 fn host() -> HostId {
     HostId::new("host".to_string())
@@ -362,7 +361,7 @@ fn clear_remote_codebase_indexing_state_returns_paths_and_removes_client_state()
         remote_path("/workspaces/warp"),
         ready_status("/workspaces/warp"),
     );
-    model.record_navigated_directory(&remote_path("/workspaces/warp"));
+    model.record_navigated_directory(session(1), &remote_path("/workspaces/warp"), true);
 
     let remote_paths = model.clear_remote_codebase_indexing_state();
 
@@ -375,7 +374,7 @@ fn clear_remote_codebase_indexing_state_returns_paths_and_removes_client_state()
 }
 
 #[test]
-fn active_repos_needing_auto_index_skips_searchable_and_indexing_repos() {
+fn active_git_repo_paths_needing_auto_index_skips_searchable_and_indexing_repos_across_hosts() {
     let mut model = RemoteCodebaseIndexModel::default();
     let host_ready = host_with_name("ready-host");
     let host_new = host_with_name("new-host");
@@ -383,16 +382,16 @@ fn active_repos_needing_auto_index_skips_searchable_and_indexing_repos() {
     let ready_path = remote_path_for_host(&host_ready, "/ready");
     let new_path = remote_path_for_host(&host_new, "/new");
     let indexing_path = remote_path_for_host(&host_indexing, "/indexing");
-    model.record_navigated_directory(&ready_path);
-    model.record_navigated_directory(&new_path);
-    model.record_navigated_directory(&indexing_path);
+    model.record_navigated_directory(session(1), &ready_path, true);
+    model.record_navigated_directory(session(2), &new_path, true);
+    model.record_navigated_directory(session(3), &indexing_path, true);
     model.apply_status_update(ready_path, ready_status("/ready"));
     model.apply_status_update(
         indexing_path,
         status_with_state("/indexing", RemoteCodebaseIndexState::Indexing),
     );
 
-    let remote_paths = model.active_repos_needing_auto_index();
+    let remote_paths = model.active_git_repo_paths_needing_auto_index();
 
     assert_eq!(remote_paths, vec![new_path]);
 }
