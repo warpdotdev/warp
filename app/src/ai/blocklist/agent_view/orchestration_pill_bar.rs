@@ -195,9 +195,10 @@ const OVERFLOW_MENU_WIDTH: f32 = 200.;
 /// Size in logical pixels of the 3-dot button at the trailing edge of each
 /// child pill.
 const OVERFLOW_BUTTON_SIZE: f32 = PILL_ICON_BUTTON_SIZE;
-/// Label slot width reserved for the hover-only overflow button. The button
-/// sits 4px into the right padding, so it overlaps 12px of the label slot.
-const OVERFLOW_BUTTON_LABEL_RESERVE: f32 = OVERFLOW_BUTTON_SIZE - 4.;
+/// How much of the label slot the overflow button overlays:
+/// `size + right_offset - right_padding`.
+const OVERFLOW_BUTTON_LABEL_RESERVE: f32 =
+    OVERFLOW_BUTTON_SIZE + PILL_OVERFLOW_BUTTON_RIGHT_OFFSET - PILL_HORIZONTAL_PADDING_RIGHT;
 
 /// Returns the saved-position id used to anchor the 3-dot menu to a
 /// specific child pill's overflow button. The id is global within the
