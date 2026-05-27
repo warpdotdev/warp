@@ -574,6 +574,7 @@ fn create_server_metadata(
         title: title.to_string(),
         usage,
         metadata: create_mock_server_metadata(),
+        creator: None,
         permissions: create_mock_server_permissions(),
         ambient_agent_task_id,
         server_conversation_token: ServerConversationToken::new(server_token.to_string()),

@@ -47,6 +47,9 @@ type AIConversation {
   artifacts: [AIConversationArtifact!]!
   conversationId: ID!
 
+  """Public profile for the user who originally created the conversation, when available."""
+  creator: PublicUserProfile
+
   """Base64-encoded proto binary of the final task list."""
   finalTaskList: String!
 

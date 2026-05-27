@@ -251,6 +251,7 @@ fn make_server_metadata_with_harness(
             current_editor_uid: None,
         },
         permissions: ServerPermissions::mock_personal(),
+        creator: None,
         ambient_agent_task_id: None,
         server_conversation_token: ServerConversationToken::new("server-token".to_string()),
         artifacts: vec![],

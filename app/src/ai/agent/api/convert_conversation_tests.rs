@@ -43,6 +43,7 @@ fn test_server_metadata(
             current_editor_uid: None,
         },
         permissions: ServerPermissions::mock_personal(),
+        creator: None,
         ambient_agent_task_id,
         server_conversation_token: ServerConversationToken::new(server_token.to_string()),
         artifacts: vec![],

@@ -715,6 +715,7 @@ fn create_server_conversation_metadata(
             tool_usage_metadata: Default::default(),
         },
         metadata: mock_server_metadata(),
+        creator: None,
         permissions: mock_server_permissions(),
         ambient_agent_task_id,
         server_conversation_token: ServerConversationToken::new(server_token.to_string()),
