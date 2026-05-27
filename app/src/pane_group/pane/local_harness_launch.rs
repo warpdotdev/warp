@@ -15,7 +15,7 @@ use crate::ai::ambient_agents::task::{
     normalize_orchestrator_agent_name, HarnessConfig, HarnessModelConfig,
 };
 use crate::ai::ambient_agents::{AgentConfigSnapshot, AmbientAgentTaskId};
-use crate::ai::local_child_harnesses::local_child_harness_disabled_message;
+use crate::ai::local_harness_setup::local_harness_product_disabled_message;
 use crate::server::server_api::ai::AIClient;
 use crate::terminal::cli_agent_sessions::plugin_manager::plugin_manager_for;
 use crate::terminal::shell::ShellType;
@@ -110,7 +110,7 @@ pub(super) async fn prepare_local_harness_child_launch(
             format!("Unsupported local child harness '{harness_name}'.")
         });
     };
-    if let Some(message) = local_child_harness_disabled_message(harness) {
+    if let Some(message) = local_harness_product_disabled_message(harness) {
         return Err(message.to_string());
     }
     validate_local_harness_shell(shell_type)?;

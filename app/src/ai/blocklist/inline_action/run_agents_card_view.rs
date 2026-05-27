@@ -170,9 +170,6 @@ impl OrchestrationControlAction for RunAgentsCardViewAction {
     fn create_new_auth_secret_requested() -> Self {
         Self::CreateNewAuthSecretRequested
     }
-    fn open_harness_install_docs(url: &'static str) -> Self {
-        Self::OpenHarnessInstallDocs { url }
-    }
 }
 
 /// Per-action UI handles for the confirmation card.
@@ -210,10 +207,6 @@ pub enum RunAgentsCardViewAction {
     },
     /// User picked the "New API key…" item; opens the workspace create modal.
     CreateNewAuthSecretRequested,
-    /// User picked a local harness install help link.
-    OpenHarnessInstallDocs {
-        url: &'static str,
-    },
 }
 
 #[derive(Clone, Debug)]
@@ -1113,11 +1106,6 @@ impl TypedActionView for RunAgentsCardView {
                 }
                 self.refresh_accept_button_state(ctx);
                 ctx.notify();
-            }
-            RunAgentsCardViewAction::OpenHarnessInstallDocs { url } => {
-                ctx.dispatch_typed_action(&crate::workspace::WorkspaceAction::OpenLink(
-                    url.to_string(),
-                ));
             }
         }
     }

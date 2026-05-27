@@ -30,7 +30,7 @@ use crate::ai::auth_secret_types::auth_secret_types_for_harness;
 use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationEditState;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
-use crate::ai::local_child_harnesses::local_child_harness_disabled_message;
+use crate::ai::local_harness_setup::local_harness_product_disabled_message;
 
 /// Per-child spawn timeout. If a child agent doesn't report back within
 /// this window (e.g. binary not found, server error), the slot is failed
@@ -478,7 +478,7 @@ fn validate_request(request: &RunAgentsRequest) -> Result<(), String> {
     }
     if matches!(request.execution_mode, RunAgentsExecutionMode::Local) {
         if let Some(harness) = Harness::parse_local_child_harness(&request.harness_type) {
-            if let Some(message) = local_child_harness_disabled_message(harness) {
+            if let Some(message) = local_harness_product_disabled_message(harness) {
                 return Err(message.to_string());
             }
         }
@@ -534,7 +534,7 @@ pub fn run_agents_to_start_agent_mode(
                 })
             } else {
                 if let Some(harness) = Harness::parse_local_child_harness(trimmed) {
-                    if let Some(message) = local_child_harness_disabled_message(harness) {
+                    if let Some(message) = local_harness_product_disabled_message(harness) {
                         return Err(message.to_string());
                     }
                 }

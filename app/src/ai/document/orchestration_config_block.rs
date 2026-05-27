@@ -137,10 +137,6 @@ pub enum OrchestrationConfigBlockAction {
     },
     /// User picked the "New API key…" item; opens the workspace create modal.
     CreateNewAuthSecretRequested,
-    /// User picked a local harness install help link.
-    OpenHarnessInstallDocs {
-        url: &'static str,
-    },
 }
 
 impl OrchestrationControlAction for OrchestrationConfigBlockAction {
@@ -164,9 +160,6 @@ impl OrchestrationControlAction for OrchestrationConfigBlockAction {
     }
     fn create_new_auth_secret_requested() -> Self {
         Self::CreateNewAuthSecretRequested
-    }
-    fn open_harness_install_docs(url: &'static str) -> Self {
-        Self::OpenHarnessInstallDocs { url }
     }
 }
 
@@ -890,9 +883,6 @@ impl TypedActionView for OrchestrationConfigBlockView {
                     });
                 }
                 ctx.notify();
-            }
-            OrchestrationConfigBlockAction::OpenHarnessInstallDocs { url } => {
-                ctx.dispatch_typed_action(&WorkspaceAction::OpenLink(url.to_string()));
             }
         }
     }

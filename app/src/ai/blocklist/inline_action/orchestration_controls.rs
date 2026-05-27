@@ -39,9 +39,9 @@ use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
 use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
 use crate::ai::harness_display;
 use crate::ai::llms::LLMInfo;
-use crate::ai::local_child_harnesses::{
-    local_child_harness_disabled_message, local_child_harness_is_enabled,
-    local_child_harness_setup_state, LocalChildHarnessSetupState,
+use crate::ai::local_harness_setup::{
+    local_harness_is_product_enabled, local_harness_product_disabled_message,
+    local_harness_setup_state, LocalHarnessSetupState,
 };
 use crate::appearance::Appearance;
 use crate::menu::{MenuItem, MenuItemFields};
@@ -91,8 +91,6 @@ pub trait OrchestrationControlAction: Clone + Debug + Send + Sync + 'static {
     fn auth_secret_changed(name: Option<String>) -> Self;
     /// User picked the "New API key…" item; opens the workspace create modal.
     fn create_new_auth_secret_requested() -> Self;
-    /// User picked a local harness install help link.
-    fn open_harness_install_docs(url: &'static str) -> Self;
 }
 
 // ── Shared edit state ───────────────────────────────────────────────
@@ -157,7 +155,7 @@ impl OrchestrationEditState {
         let Some(harness) = Harness::parse_local_child_harness(&self.harness_type) else {
             return;
         };
-        if local_child_harness_disabled_message(harness).is_some() {
+        if local_harness_product_disabled_message(harness).is_some() {
             self.harness_type = "oz".to_string();
             self.model_id.clear();
         }
@@ -238,11 +236,11 @@ impl OrchestrationEditState {
     }
 
     /// Returns `Some(reason)` if Accept / Apply must be disabled.
-    /// Hard blocks: OpenCode + Cloud, and temporarily disabled local Claude/Codex.
+    /// Hard blocks: OpenCode + Cloud, and product-disabled local harnesses.
     pub fn accept_disabled_reason(&self) -> Option<&'static str> {
         match &self.execution_mode {
             RunAgentsExecutionMode::Local => Harness::parse_local_child_harness(&self.harness_type)
-                .and_then(local_child_harness_disabled_message),
+                .and_then(local_harness_product_disabled_message),
             RunAgentsExecutionMode::Remote { .. }
                 if self.harness_type.eq_ignore_ascii_case("opencode") =>
             {
@@ -614,6 +612,10 @@ fn should_show_harness_picker(_state: &OrchestrationEditState) -> bool {
     true
 }
 
+fn local_harness_setup_is_ready(harness: Harness, is_local: bool) -> bool {
+    !is_local || local_harness_setup_state(harness).is_selectable()
+}
+
 pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
     dropdown: &ViewHandle<Dropdown<A>>,
     initial_harness: &str,
@@ -647,17 +649,13 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
             .iter()
             .filter(|entry| {
                 let harness = resolve_entry_harness(entry.harness, &entry.display_name);
-                harness != Harness::Gemini && (!is_local || local_child_harness_is_enabled(harness))
+                harness != Harness::Gemini
+                    && (!is_local || local_harness_is_product_enabled(harness))
             })
             .collect();
         sorted.sort_by_key(|entry| {
             let harness = resolve_entry_harness(entry.harness, &entry.display_name);
-            let local_setup_state = if is_local {
-                Some(local_child_harness_setup_state(harness))
-            } else {
-                None
-            };
-            !(entry.enabled && local_setup_state.is_none_or(|state| state.is_selectable()))
+            !(entry.enabled && local_harness_setup_is_ready(harness, is_local))
         });
 
         // Resolve the target harness so we can match by enum variant
@@ -672,7 +670,7 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
         for entry in sorted {
             let harness = resolve_entry_harness(entry.harness, &entry.display_name);
             let local_setup_state = if is_local {
-                Some(local_child_harness_setup_state(harness))
+                Some(local_harness_setup_state(harness))
             } else {
                 None
             };
@@ -685,8 +683,7 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
                 fields = fields.with_override_icon_color(Fill::from(color));
             }
             let harness_str = harness.to_string();
-            let selectable =
-                entry.enabled && local_setup_state.is_none_or(|state| state.is_selectable());
+            let selectable = entry.enabled && local_harness_setup_is_ready(harness, is_local);
             if selectable {
                 fields = fields.with_on_select_action(DropdownAction::SelectActionAndClose(
                     A::harness_changed(harness_str.clone()),
@@ -694,11 +691,9 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
             } else {
                 fields = fields.with_disabled(true);
                 let tooltip = match local_setup_state {
-                    Some(LocalChildHarnessSetupState::MissingHarness { tooltip, .. }) => tooltip,
-                    Some(LocalChildHarnessSetupState::ProductDisabled { message }) => message,
-                    Some(LocalChildHarnessSetupState::Ready) | None => {
-                        "Disabled by your administrator"
-                    }
+                    Some(LocalHarnessSetupState::MissingHarness { tooltip }) => tooltip,
+                    Some(LocalHarnessSetupState::ProductDisabled { message }) => message,
+                    Some(LocalHarnessSetupState::Ready) | None => "Disabled by your administrator",
                 };
                 fields = fields.with_tooltip(tooltip);
             }
@@ -716,17 +711,6 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
                 }
             }
             items.push(MenuItem::Item(fields));
-            if let Some(LocalChildHarnessSetupState::MissingHarness { docs_url, .. }) =
-                local_setup_state
-            {
-                items.push(MenuItem::Item(
-                    MenuItemFields::new("Learn more")
-                        .with_indent()
-                        .with_on_select_action(DropdownAction::SelectActionAndClose(
-                            A::open_harness_install_docs(docs_url),
-                        )),
-                ));
-            }
         }
         dropdown.set_rich_items(items, ctx_dropdown);
         if let Some(name) = selected_name {
@@ -1137,14 +1121,14 @@ pub fn accept_disabled_reason_with_auth(
     }
     if matches!(state.execution_mode, RunAgentsExecutionMode::Local) {
         if let Some(harness) = Harness::parse_local_child_harness(&state.harness_type) {
-            match local_child_harness_setup_state(harness) {
-                LocalChildHarnessSetupState::MissingHarness { tooltip, .. } => {
+            match local_harness_setup_state(harness) {
+                LocalHarnessSetupState::MissingHarness { tooltip } => {
                     return Some(tooltip.to_string());
                 }
-                LocalChildHarnessSetupState::ProductDisabled { message } => {
+                LocalHarnessSetupState::ProductDisabled { message } => {
                     return Some(message.to_string());
                 }
-                LocalChildHarnessSetupState::Ready => {}
+                LocalHarnessSetupState::Ready => {}
             }
         }
     }
