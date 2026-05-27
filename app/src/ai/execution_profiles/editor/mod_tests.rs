@@ -1,4 +1,44 @@
+use std::collections::HashMap;
+
 use super::ui_helpers::context_window_snap_values;
+use crate::ai::execution_profiles::{
+    has_effective_configurable_context_window, should_show_long_context_pricing_warning,
+};
+use crate::ai::llms::{
+    LLMContextWindow, LLMInfo, LLMModelHost, LLMProvider, LLMUsageMetadata, RoutingHostConfig,
+};
+
+fn configurable_model(provider: LLMProvider, direct_host_enabled: bool) -> LLMInfo {
+    LLMInfo {
+        display_name: "test model".to_string(),
+        base_model_name: "test model".to_string(),
+        id: "test-model".into(),
+        reasoning_level: None,
+        usage_metadata: LLMUsageMetadata {
+            request_multiplier: 1,
+            credit_multiplier: None,
+        },
+        description: None,
+        disable_reason: None,
+        vision_supported: false,
+        spec: None,
+        provider,
+        host_configs: HashMap::from([(
+            LLMModelHost::DirectApi,
+            RoutingHostConfig {
+                enabled: direct_host_enabled,
+                model_routing_host: LLMModelHost::DirectApi,
+            },
+        )]),
+        discount_percentage: None,
+        context_window: LLMContextWindow {
+            is_configurable: true,
+            min: 200_000,
+            max: 1_000_000,
+            default_max: 272_000,
+        },
+    }
+}
 
 /// Helper: round-trip f32 → u32 for readable assertions and absorb the
 /// negligible f64→f32 drift the snap helper picks up on large ranges.
@@ -81,4 +121,75 @@ fn snap_values_keep_count_reasonable_for_huge_range() {
         "expected at least 5 snap points, got {}",
         values.len()
     );
+}
+
+#[test]
+fn openai_direct_long_context_warning_starts_above_threshold() {
+    let model = configurable_model(LLMProvider::OpenAI, true);
+
+    assert!(!should_show_long_context_pricing_warning(
+        &model,
+        Some(200_000),
+        false
+    ));
+    assert!(!should_show_long_context_pricing_warning(
+        &model,
+        Some(272_000),
+        false
+    ));
+    assert!(should_show_long_context_pricing_warning(
+        &model,
+        Some(272_001),
+        false
+    ));
+}
+
+#[test]
+fn custom_endpoint_fixed_context_does_not_expose_control_or_warning() {
+    let mut model = configurable_model(LLMProvider::Unknown, false);
+    model.context_window.is_configurable = false;
+    model.context_window.max = 200_000;
+
+    assert!(!has_effective_configurable_context_window(&model, false));
+    assert!(!should_show_long_context_pricing_warning(
+        &model,
+        Some(1_000_000),
+        false
+    ));
+}
+
+#[test]
+fn openai_byok_suppresses_expanded_control_and_stale_limit_warning() {
+    let model = configurable_model(LLMProvider::OpenAI, true);
+
+    assert!(!has_effective_configurable_context_window(&model, true));
+    assert!(!should_show_long_context_pricing_warning(
+        &model,
+        Some(1_000_000),
+        true
+    ));
+}
+
+#[test]
+fn openai_without_direct_host_suppresses_expanded_control_and_warning() {
+    let model = configurable_model(LLMProvider::OpenAI, false);
+
+    assert!(!has_effective_configurable_context_window(&model, false));
+    assert!(!should_show_long_context_pricing_warning(
+        &model,
+        Some(1_000_000),
+        false
+    ));
+}
+
+#[test]
+fn non_openai_configurable_context_does_not_show_openai_pricing_warning() {
+    let model = configurable_model(LLMProvider::Anthropic, true);
+
+    assert!(has_effective_configurable_context_window(&model, false));
+    assert!(!should_show_long_context_pricing_warning(
+        &model,
+        Some(1_000_000),
+        false
+    ));
 }
