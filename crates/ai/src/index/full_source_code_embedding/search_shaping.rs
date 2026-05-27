@@ -297,7 +297,7 @@ mod tests {
             result,
             HashSet::from([CodeContextLocation::Fragment(FileFragmentLocation {
                 path: PathBuf::from(path),
-                line_ranges: vec![8..20],
+                line_ranges: std::iter::once(8..20).collect(),
             })])
         );
     }
