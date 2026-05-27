@@ -1,3 +1,6 @@
+// Some of these re-exported types aren't used in the wasm build, so we suppress this
+// warning.
+#[cfg_attr(target_family = "wasm", expect(unused_imports))]
 pub use warp_server_client::cloud_object::models::{
     AmbientAgentEnvironment, AwsProviderConfig, BaseImage, GcpProviderConfig, GithubRepo,
     ProvidersConfig,
