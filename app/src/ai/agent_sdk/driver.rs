@@ -1899,6 +1899,10 @@ impl AgentDriver {
                     })?
                 };
 
+                log::info!(
+                    "Ambient agent Oz lifecycle: event=run_exit_received idle_on_complete_elapsed_or_not_configured=true next=terminal_teardown_after_flush"
+                );
+
                 // Pause before returning to make sure that all conversation events are transmitted before the session is closed.
                 // TODO: This is a bit of a bandaid fix, and it would be better if we explicitly waited for the session to end before terminating.
                 // The way we could do that is through having the driver wait for all in-flight streams to be finished before terminating
@@ -2605,6 +2609,10 @@ impl AgentDriver {
 
                     if conversation.status().is_in_progress() {
                         // Conversation resumed or a new one started; cancel any pending idle timeout.
+                        log::info!(
+                            "Ambient agent idle lifecycle: event=idle_timeout_cancel_requested task_id={:?} terminal_view_id={terminal_id:?} trigger=conversation_in_progress",
+                            me.task_id
+                        );
                         run_exit.cancel_idle_timeout();
                         return;
                     }
@@ -2635,8 +2643,16 @@ impl AgentDriver {
                                 // Whether to keep the process alive after completion is controlled by
                                 // the `warp agent run --idle-on-complete[=<DURATION>]` flag.
                                 if let Some(idle_timeout) = me.idle_on_complete {
+                                    log::info!(
+                                        "Ambient agent idle lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_id:?} timeout={idle_timeout:?} outcome=non_error_completion",
+                                        me.task_id
+                                    );
                                     run_exit.end_run_after(idle_timeout, output_status);
                                 } else {
+                                    log::info!(
+                                        "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome=non_error_completion",
+                                        me.task_id
+                                    );
                                     run_exit.end_run_now(output_status);
                                 }
                             }
@@ -2648,10 +2664,18 @@ impl AgentDriver {
                                 // if the follow-up never arrives.
                                 if error.will_attempt_resume() {
                                     log::info!("Error occurred but automatic resume will be attempted; waiting up to {AUTO_RESUME_TIMEOUT:?} for retry");
+                                    log::info!(
+                                        "Ambient agent idle lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_id:?} timeout={AUTO_RESUME_TIMEOUT:?} outcome=automatic_resume_pending",
+                                        me.task_id
+                                    );
                                     run_exit.end_run_after(AUTO_RESUME_TIMEOUT, output_status);
                                     return;
                                 }
 
+                                log::info!(
+                                    "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome=error",
+                                    me.task_id
+                                );
                                 run_exit.end_run_now(output_status);
                             }
                         }
@@ -2865,12 +2889,24 @@ impl AgentDriver {
                     match status {
                         CLIAgentSessionStatus::Success | CLIAgentSessionStatus::Blocked { .. } => {
                             if let Some(idle_timeout) = me.idle_on_complete {
+                                log::info!(
+                                    "Ambient agent CLI lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_view_id:?} timeout={idle_timeout:?}",
+                                    me.task_id
+                                );
                                 harness_exit.end_run_after(idle_timeout, ());
                             } else {
+                                log::info!(
+                                    "Ambient agent CLI lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_view_id:?}",
+                                    me.task_id
+                                );
                                 harness_exit.end_run_now(());
                             }
                         }
                         CLIAgentSessionStatus::InProgress => {
+                            log::info!(
+                                "Ambient agent CLI lifecycle: event=idle_timeout_cancel_requested task_id={:?} terminal_view_id={terminal_view_id:?} trigger=session_in_progress",
+                                me.task_id
+                            );
                             harness_exit.cancel_idle_timeout();
                         }
                     }
@@ -2989,13 +3025,17 @@ impl AgentDriver {
 
     /// Perform cleanup after the agent has finished running.
     async fn cleanup(spawner: ModelSpawner<Self>) {
-        let Ok(providers) = spawner
-            .spawn(|me, _| std::mem::take(&mut me.cloud_providers))
+        let Ok((providers, task_id)) = spawner
+            .spawn(|me, _| (std::mem::take(&mut me.cloud_providers), me.task_id))
             .await
         else {
             log::error!("Unable to retrieve cloud providers for cleanup");
             return;
         };
+
+        log::info!(
+            "Ambient agent lifecycle: event=driver_cleanup_started task_id={task_id:?} next=terminal_process_exit"
+        );
 
         for provider in providers {
             if let Err(err) = provider.cleanup().await {

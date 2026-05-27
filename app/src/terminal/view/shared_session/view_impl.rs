@@ -647,6 +647,15 @@ impl TerminalView {
         reason: SessionEndedReason,
         ctx: &mut ViewContext<Self>,
     ) {
+        let session_id = self.shared_session_id().cloned();
+        let source_task_id = self
+            .model
+            .lock()
+            .shared_session_source()
+            .and_then(|share_source| share_source.orchestrator_task_id().map(str::to_owned));
+        log::info!(
+            "Shared session view stop requested: session_id={session_id:?} source_task_id={source_task_id:?} action_source={source:?} reason={reason:?}"
+        );
         ctx.emit(Event::StopSharingCurrentSession { reason });
 
         send_telemetry_from_ctx!(
