@@ -3694,12 +3694,7 @@ impl Workspace {
                 self.check_and_trigger_onboarding(ctx);
             }
             NewWorkspaceSource::AmbientAgent => {
-                self.add_tab_with_pane_layout(
-                    PanesLayout::AmbientAgent,
-                    Arc::new(HashMap::new()),
-                    None,
-                    ctx,
-                );
+                self.add_ambient_agent_tab(ctx);
                 self.check_and_trigger_onboarding(ctx);
             }
             NewWorkspaceSource::NotebookFromFilePath { file_path } => {
@@ -10882,8 +10877,14 @@ impl Workspace {
         }
     }
 
+    pub(crate) fn can_add_ambient_agent_tab(ctx: &AppContext) -> bool {
+        AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
+            && FeatureFlag::AgentView.is_enabled()
+            && FeatureFlag::CloudMode.is_enabled()
+    }
+
     fn add_ambient_agent_tab(&mut self, ctx: &mut ViewContext<Self>) {
-        if !FeatureFlag::AgentView.is_enabled() || !FeatureFlag::CloudMode.is_enabled() {
+        if !Self::can_add_ambient_agent_tab(ctx) {
             return;
         }
 
