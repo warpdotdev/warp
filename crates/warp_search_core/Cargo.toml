@@ -32,3 +32,6 @@ warpui_core.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 tantivy = "0.26.0"
+
+[dev-dependencies]
+warp_core = { workspace = true, features = ["test-util"] }
