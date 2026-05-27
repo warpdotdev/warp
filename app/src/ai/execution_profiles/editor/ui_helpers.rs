@@ -12,11 +12,16 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, SingletonEntity, ViewHandle};
 
 use super::{ExecutionProfileEditorView, ExecutionProfileEditorViewAction};
-use crate::ai::execution_profiles::{AIExecutionProfile, ActionPermission};
+use crate::ai::blocklist::BlocklistAIPermissions;
+use crate::ai::execution_profiles::{
+    AIExecutionProfile, ActionPermission, LONG_CONTEXT_PRICING_WARNING_TEXT,
+};
 use crate::editor::EditorView;
 use crate::settings::AISettings;
 use crate::ui_components::icons::Icon;
-use crate::view_components::{Dropdown, FilterableDropdown, SubmittableTextInput};
+use crate::view_components::{
+    render_warning_box, Dropdown, FilterableDropdown, SubmittableTextInput, WarningBoxConfig,
+};
 use crate::{Appearance, TemplatableMCPServerManager};
 
 const CONTEXT_WINDOW_SLIDER_WIDTH: f32 = 220.;
@@ -196,6 +201,13 @@ fn render_info_section(
     Container::new(description).with_margin_bottom(12.).finish()
 }
 
+fn render_long_context_pricing_warning(appearance: &Appearance) -> Box<dyn Element> {
+    render_warning_box(
+        WarningBoxConfig::new(LONG_CONTEXT_PRICING_WARNING_TEXT),
+        appearance,
+    )
+}
+
 fn render_permission_row<T: Clone + 'static + std::fmt::Debug + Send + Sync>(
     appearance: &Appearance,
     icon: Icon,
@@ -285,16 +297,12 @@ pub fn render_models_section(
 
 /// Renders a `[min — slider — max] [input]` row beneath the base model
 /// dropdown. Returns `None` if the active base model doesn't advertise a
-/// configurable context window, global AI is disabled, or the
-/// [`FeatureFlag::ConfigurableContextWindow`] flag is disabled.
+/// configurable context window or global AI is disabled.
 fn render_context_window_row(
     appearance: &Appearance,
     view: &ExecutionProfileEditorView,
     app: &AppContext,
 ) -> Option<Box<dyn Element>> {
-    if !FeatureFlag::ConfigurableContextWindow.is_enabled() {
-        return None;
-    }
     if !AISettings::as_ref(app).is_any_ai_enabled(app) {
         return None;
     }
@@ -414,15 +422,20 @@ fn render_context_window_row(
         .with_child(input_box)
         .finish();
 
+    let mut column = Flex::column()
+        .with_child(Container::new(label_desc).with_margin_bottom(4.).finish())
+        .with_child(slider_row);
+    if BlocklistAIPermissions::as_ref(app)
+        .permissions_profile_for_id(app, view.profile_id())
+        .should_show_long_context_pricing_warning(app)
+    {
+        column.add_child(render_long_context_pricing_warning(appearance));
+    }
+
     Some(
-        Container::new(
-            Flex::column()
-                .with_child(Container::new(label_desc).with_margin_bottom(4.).finish())
-                .with_child(slider_row)
-                .finish(),
-        )
-        .with_margin_bottom(12.)
-        .finish(),
+        Container::new(column.finish())
+            .with_margin_bottom(12.)
+            .finish(),
     )
 }
 

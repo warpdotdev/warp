@@ -5,7 +5,10 @@ use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity};
 
-use super::llms::{LLMContextWindow, LLMId, LLMPreferences};
+use super::llms::{
+    is_using_api_key_for_provider, LLMContextWindow, LLMId, LLMInfo, LLMModelHost, LLMPreferences,
+    LLMProvider,
+};
 use crate::cloud_object::model::generic_string_model::{
     GenericStringModel, GenericStringObjectId, StringModel,
 };
@@ -22,6 +25,9 @@ use crate::settings::{
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub const PROFILE_NAME_MAX_LENGTH: usize = 50;
+pub const LONG_CONTEXT_WARNING_THRESHOLD: u32 = 272_000;
+pub(crate) const LONG_CONTEXT_PRICING_WARNING_TEXT: &str =
+    "OpenAI automatically applies long-context pricing when actual input exceeds 272,000 tokens.";
 
 pub mod editor;
 pub mod model_menu_items;
@@ -335,6 +341,13 @@ impl Default for AIExecutionProfile {
 }
 
 impl AIExecutionProfile {
+    fn effective_base_model<'a>(&self, app: &'a AppContext) -> &'a LLMInfo {
+        let prefs = LLMPreferences::as_ref(app);
+        self.base_model
+            .as_ref()
+            .and_then(|id| prefs.get_llm_info(id))
+            .unwrap_or_else(|| prefs.get_default_base_model())
+    }
     pub fn create_default_from_legacy_settings(app: &AppContext) -> Self {
         // Note that the legacy "Autonomy" and "Code Access" settings are not imported here.
         // The "Code Access" setting defaulted to "Always Ask", which is the most restrictive, so
@@ -445,15 +458,10 @@ impl AIExecutionProfile {
 
 impl AIExecutionProfile {
     pub fn configurable_context_window(&self, app: &AppContext) -> Option<LLMContextWindow> {
-        let prefs = LLMPreferences::as_ref(app);
-        let cw = self
-            .base_model
-            .as_ref()
-            .and_then(|id| prefs.get_llm_info(id))
-            .map(|info| info.context_window.clone())
-            .unwrap_or_else(|| prefs.get_default_base_model().context_window.clone());
-        if cw.is_configurable && cw.max > 0 {
-            Some(cw)
+        let llm = self.effective_base_model(app);
+        let uses_openai_api_key = is_using_api_key_for_provider(&LLMProvider::OpenAI, app);
+        if has_effective_configurable_context_window(llm, uses_openai_api_key) {
+            Some(llm.context_window.clone())
         } else {
             None
         }
@@ -463,6 +471,58 @@ impl AIExecutionProfile {
         let cw = self.configurable_context_window(app)?;
         Some(self.context_window_limit.unwrap_or(cw.default_max))
     }
+
+    pub fn should_show_long_context_pricing_warning(&self, app: &AppContext) -> bool {
+        let llm = self.effective_base_model(app);
+        let uses_openai_api_key = is_using_api_key_for_provider(&LLMProvider::OpenAI, app);
+        should_show_long_context_pricing_warning(
+            llm,
+            Some(
+                self.context_window_limit
+                    .unwrap_or(llm.context_window.default_max),
+            ),
+            uses_openai_api_key,
+        )
+    }
+}
+
+pub(crate) fn has_effective_configurable_context_window(
+    llm: &LLMInfo,
+    uses_openai_api_key: bool,
+) -> bool {
+    if !llm.context_window.is_configurable || llm.context_window.max == 0 {
+        return false;
+    }
+
+    if is_expanded_openai_model(llm) {
+        is_expanded_openai_direct_model(llm) && !uses_openai_api_key
+    } else {
+        true
+    }
+}
+
+pub(crate) fn should_show_long_context_pricing_warning(
+    llm: &LLMInfo,
+    selected_limit: Option<u32>,
+    uses_openai_api_key: bool,
+) -> bool {
+    is_expanded_openai_direct_model(llm)
+        && !uses_openai_api_key
+        && selected_limit.is_some_and(|limit| limit > LONG_CONTEXT_WARNING_THRESHOLD)
+}
+
+fn is_expanded_openai_direct_model(llm: &LLMInfo) -> bool {
+    is_expanded_openai_model(llm)
+        && llm
+            .host_configs
+            .get(&LLMModelHost::DirectApi)
+            .is_some_and(|config| config.enabled)
+}
+
+fn is_expanded_openai_model(llm: &LLMInfo) -> bool {
+    llm.provider == LLMProvider::OpenAI
+        && llm.context_window.is_configurable
+        && llm.context_window.max > LONG_CONTEXT_WARNING_THRESHOLD
 }
 
 pub type CloudAIExecutionProfile =

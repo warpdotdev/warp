@@ -68,13 +68,7 @@ pub async fn generate_multi_agent_output(
                 base: params.model.into(),
                 cli_agent: params.cli_agent_model.into(),
                 computer_use_agent: params.computer_use_model.into(),
-                base_model_context_window_limit: if FeatureFlag::ConfigurableContextWindow
-                    .is_enabled()
-                {
-                    params.context_window_limit.unwrap_or(0)
-                } else {
-                    0
-                },
+                base_model_context_window_limit: params.context_window_limit.unwrap_or(0),
                 ..Default::default()
             }),
             rules_enabled: params.is_memory_enabled,
