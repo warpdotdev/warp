@@ -137,17 +137,6 @@ impl GithubPullRequestChipValue {
     }
 }
 
-pub(crate) fn github_pull_request_from_chip_value(
-    value: &ChipValue,
-) -> Option<GithubPullRequestChipValue> {
-    match value {
-        ChipValue::GithubPullRequest(pr) if pr.number > 0 => Some(pr.clone()),
-        ChipValue::GithubPullRequest(pr) => GithubPullRequestChipValue::from_url(&pr.url),
-        ChipValue::Text(text) => GithubPullRequestChipValue::from_text(text),
-        ChipValue::GitDiffStats(_) => None,
-    }
-}
-
 fn deserialize_github_pr_number<'de, D>(deserializer: D) -> Result<i32, D::Error>
 where
     D: Deserializer<'de>,
@@ -804,5 +793,5 @@ pub fn render_text_from_kind(
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
