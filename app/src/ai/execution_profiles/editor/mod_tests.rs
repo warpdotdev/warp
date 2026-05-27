@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use super::ui_helpers::context_window_snap_values;
 use crate::ai::execution_profiles::{
-    has_effective_configurable_context_window, should_show_long_context_pricing_warning,
+    has_effective_configurable_context_window, sanitize_context_window_limit_for_request,
+    should_show_long_context_pricing_warning,
 };
 use crate::ai::llms::{
     LLMContextWindow, LLMInfo, LLMModelHost, LLMProvider, LLMUsageMetadata, RoutingHostConfig,
@@ -148,6 +149,16 @@ fn openai_direct_long_context_warning_starts_above_threshold() {
 }
 
 #[test]
+fn openai_direct_request_limit_is_clamped_when_expanded_context_is_available() {
+    let model = configurable_model(LLMProvider::OpenAI, true);
+
+    assert_eq!(
+        sanitize_context_window_limit_for_request(&model, Some(1_500_000), false, true),
+        Some(1_000_000)
+    );
+}
+
+#[test]
 fn custom_endpoint_fixed_context_does_not_expose_control_or_warning() {
     let mut model = configurable_model(LLMProvider::Unknown, false);
     model.context_window.is_configurable = false;
@@ -156,6 +167,10 @@ fn custom_endpoint_fixed_context_does_not_expose_control_or_warning() {
     assert!(!has_effective_configurable_context_window(
         &model, false, false
     ));
+    assert_eq!(
+        sanitize_context_window_limit_for_request(&model, Some(1_000_000), false, false),
+        None
+    );
     assert!(!should_show_long_context_pricing_warning(
         &model,
         Some(1_000_000),
@@ -171,6 +186,10 @@ fn openai_byok_suppresses_expanded_control_and_stale_limit_warning() {
     assert!(!has_effective_configurable_context_window(
         &model, true, true
     ));
+    assert_eq!(
+        sanitize_context_window_limit_for_request(&model, Some(1_000_000), true, true),
+        None
+    );
     assert!(!should_show_long_context_pricing_warning(
         &model,
         Some(1_000_000),
@@ -186,6 +205,10 @@ fn openai_without_direct_host_suppresses_expanded_control_and_warning() {
     assert!(!has_effective_configurable_context_window(
         &model, false, true
     ));
+    assert_eq!(
+        sanitize_context_window_limit_for_request(&model, Some(1_000_000), false, true),
+        None
+    );
     assert!(!should_show_long_context_pricing_warning(
         &model,
         Some(1_000_000),
@@ -201,6 +224,10 @@ fn openai_expanded_context_is_hidden_while_feature_flag_is_off() {
     assert!(!has_effective_configurable_context_window(
         &model, false, false
     ));
+    assert_eq!(
+        sanitize_context_window_limit_for_request(&model, Some(1_000_000), false, false),
+        None
+    );
     assert!(!should_show_long_context_pricing_warning(
         &model,
         Some(1_000_000),
@@ -216,6 +243,10 @@ fn non_openai_configurable_context_ignores_gpt_flag_and_does_not_show_openai_war
     assert!(has_effective_configurable_context_window(
         &model, false, false
     ));
+    assert_eq!(
+        sanitize_context_window_limit_for_request(&model, Some(1_000_000), false, false),
+        Some(1_000_000)
+    );
     assert!(!should_show_long_context_pricing_warning(
         &model,
         Some(1_000_000),

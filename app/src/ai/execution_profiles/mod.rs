@@ -110,6 +110,7 @@ pub trait AIExecutionProfileAppExt {
     fn configurable_context_window(&self, app: &AppContext) -> Option<LLMContextWindow>;
 
     fn context_window_display_value(&self, app: &AppContext) -> Option<u32>;
+    fn context_window_limit_for_request(&self, app: &AppContext) -> Option<u32>;
 
     fn should_show_long_context_pricing_warning(&self, app: &AppContext) -> bool;
 }
@@ -133,6 +134,16 @@ impl AIExecutionProfileAppExt for AIExecutionProfile {
         let cw = self.configurable_context_window(app)?;
         Some(self.context_window_limit.unwrap_or(cw.default_max))
     }
+    fn context_window_limit_for_request(&self, app: &AppContext) -> Option<u32> {
+        let llm = effective_base_model(self, app);
+        let uses_openai_api_key = is_using_api_key_for_provider(&LLMProvider::OpenAI, app);
+        sanitize_context_window_limit_for_request(
+            llm,
+            self.context_window_limit,
+            uses_openai_api_key,
+            FeatureFlag::GPTConfigurableContextWindow.is_enabled(),
+        )
+    }
 
     fn should_show_long_context_pricing_warning(&self, app: &AppContext) -> bool {
         let llm = effective_base_model(self, app);
@@ -149,6 +160,22 @@ impl AIExecutionProfileAppExt for AIExecutionProfile {
     }
 }
 
+pub(crate) fn sanitize_context_window_limit_for_request(
+    llm: &LLMInfo,
+    selected_limit: Option<u32>,
+    uses_openai_api_key: bool,
+    gpt_configurable_context_window_enabled: bool,
+) -> Option<u32> {
+    if !has_effective_configurable_context_window(
+        llm,
+        uses_openai_api_key,
+        gpt_configurable_context_window_enabled,
+    ) {
+        return None;
+    }
+
+    selected_limit.map(|limit| limit.clamp(llm.context_window.min, llm.context_window.max))
+}
 pub(crate) fn has_effective_configurable_context_window(
     llm: &LLMInfo,
     uses_openai_api_key: bool,

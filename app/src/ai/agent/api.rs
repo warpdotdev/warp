@@ -303,13 +303,7 @@ impl RequestParams {
                 .active_profile(terminal_view_id, app)
                 .data()
                 .clone();
-            profile_data
-                .configurable_context_window(app)
-                .and_then(|cw| {
-                    profile_data
-                        .context_window_limit
-                        .map(|v| v.clamp(cw.min, cw.max))
-                })
+            profile_data.context_window_limit_for_request(app)
         };
 
         Self {
