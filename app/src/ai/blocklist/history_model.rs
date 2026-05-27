@@ -53,10 +53,19 @@ pub use conversation_loader::{
 };
 
 /// Symmetric with [`crate::persistence::agent::MAX_PERSISTED_CONVERSATION_COUNT`].
-/// Bumped from 100 to 500 alongside the tree-aware prune fix so we don't
+/// Bumped from 100 to 200 alongside the tree-aware prune fix so we don't
 /// arbitrarily clip the in-memory historical view to a smaller window than
-/// what's actually retained on disk.
-pub(super) const MAX_HISTORICAL_CONVERSATIONS: usize = 500;
+/// what's actually retained on disk. 200 covers roughly 10–40 orchestration
+/// sessions of history.
+///
+/// Practically, this read-side cap is currently moot: the disk-side prune
+/// (`crate::persistence::agent::MAX_PERSISTED_CONVERSATION_COUNT`) keeps
+/// the persisted set at or below the same limit, so by the time this code
+/// reads the historical conversations it will already be within the cap.
+/// The cap is retained as a defense-in-depth guard against future changes
+/// that bypass the disk prune (e.g. importing rows from another machine
+/// or relaxing the persistence-side ceiling).
+pub(super) const MAX_HISTORICAL_CONVERSATIONS: usize = 200;
 
 /// Metadata for conversations
 /// When created from local DB, has_local_data=true and server_metadata=None.

@@ -38,12 +38,15 @@ pub(super) enum UpsertConversationError {
 /// Maximum number of `agent_conversations` rows we retain on disk before the
 /// upsert path starts evicting trees.
 ///
-/// Orchestration sessions can produce 5–20 child conversations each, so a
-/// limit of 100 only buys roughly 5–20 sessions of history for active
-/// orchestration users — the limit was hit constantly in real-world use and
-/// caused parents and children to age out independently, splitting trees on
-/// disk. 500 is a more comfortable ceiling that still bounds total DB size.
-pub(super) const MAX_PERSISTED_CONVERSATION_COUNT: usize = 500;
+/// Orchestration sessions can produce 5–20 child conversations each. The
+/// original 100-row cap was hit constantly by orchestration users and —
+/// because eviction was per-row — caused parents and children to age out
+/// independently, splitting trees on disk. 200 gives us roughly 10–40
+/// orchestration sessions of headroom while keeping the on-disk footprint
+/// modest; the tree-aware prune in `select_conversations_to_evict`
+/// guarantees we never split a session, even when a single tree spills
+/// past the cap.
+pub(super) const MAX_PERSISTED_CONVERSATION_COUNT: usize = 200;
 
 pub(super) fn upsert_agent_conversation<'a>(
     conn: &mut SqliteConnection,
