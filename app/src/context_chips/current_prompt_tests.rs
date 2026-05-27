@@ -1,7 +1,6 @@
 use std::any::Any;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use itertools::Itertools;
@@ -21,11 +20,9 @@ use crate::auth::AuthStateProvider;
 use crate::code_review::diff_state::DiffStats;
 #[cfg(feature = "local_fs")]
 use crate::code_review::git_status_update::{GitRepoStatusModel, GitStatusMetadata};
-use crate::context_chips::context_chip::{ChipFingerprintInput, Environment};
+use crate::context_chips::context_chip::{Environment, PromptGenerator};
 use crate::context_chips::prompt::Prompt;
-use crate::context_chips::{
-    ChipAvailability, ChipDisabledReason, ChipRuntimeCapabilities, ContextChipKind,
-};
+use crate::context_chips::{ChipAvailability, ChipDisabledReason, ContextChipKind};
 use crate::features::FeatureFlag;
 use crate::menu::MenuItem;
 use crate::server::server_api::ServerApiProvider;
@@ -37,10 +34,12 @@ use crate::terminal::model::block::BlockMetadata;
 use crate::terminal::model::session::{
     CommandExecutor, ExecuteCommandOptions, SessionId, SessionInfo, Sessions,
 };
-use crate::terminal::session_settings::{GithubPrPromptChipDefaultValidation, SessionSettings};
+use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::shell::Shell;
 use crate::terminal::view::PromptPosition;
 use crate::terminal::History;
+#[cfg(feature = "local_fs")]
+use crate::util::git::PrInfo;
 
 #[test]
 fn test_context_menu_items() {
@@ -311,38 +310,15 @@ fn test_github_pr_chip_runtime_policy_configuration() {
         .expect("github pr chip should exist");
     let policy = chip.runtime_policy();
 
-    assert_eq!(
-        policy.required_executables(),
-        &["gh".to_string(), "git".to_string()]
-    );
-    assert_eq!(policy.shell_command_timeout(), Some(Duration::from_secs(5)));
-    assert!(policy.suppress_on_failure());
-    assert!(policy
-        .fingerprint_inputs()
-        .contains(&ChipFingerprintInput::SessionId));
-    assert!(policy
-        .fingerprint_inputs()
-        .contains(&ChipFingerprintInput::WorkingDirectory));
-    assert!(policy
-        .fingerprint_inputs()
-        .contains(&ChipFingerprintInput::GitBranch));
-    assert!(policy
-        .fingerprint_inputs()
-        .contains(&ChipFingerprintInput::RequiredExecutablesPresence));
-    assert_eq!(
-        chip.availability(&ChipRuntimeCapabilities {
-            session_is_local: Some(false),
-            ..Default::default()
-        }),
-        ChipAvailability::Disabled(ChipDisabledReason::RequiresLocalSession)
-    );
-    assert_eq!(
-        policy.invalidate_on_commands(),
-        &["git".to_string(), "gh".to_string(), "gt".to_string()]
-    );
-    assert!(policy
-        .fingerprint_inputs()
-        .contains(&ChipFingerprintInput::InvalidatingCommandCount));
+    assert!(matches!(
+        chip.generator(),
+        PromptGenerator::Contextual { .. }
+    ));
+    assert!(policy.required_executables().is_empty());
+    assert_eq!(policy.shell_command_timeout(), None);
+    assert!(!policy.suppress_on_failure());
+    assert!(policy.fingerprint_inputs().is_empty());
+    assert!(policy.invalidate_on_commands().is_empty());
 }
 
 #[test]
@@ -391,640 +367,6 @@ fn test_invalidating_command_count_unaffected_for_chips_without_invalidate_on_co
     });
 }
 
-#[test]
-fn test_github_pr_chip_is_disabled_when_github_cli_is_missing() {
-    let _flag_guard = FeatureFlag::GithubPrPromptChip.override_enabled(true);
-    App::test((), |mut app| async move {
-        let session_id = SessionId::from(654);
-        app.add_singleton_model(|_| {
-            Prompt::mock_with(
-                [ContextChipKind::GithubPullRequest],
-                false,
-                WarpPromptSeparator::None,
-            )
-        });
-        app.add_singleton_model(SessionSettings::new_with_defaults);
-        app.add_singleton_model(|_| History::new(vec![]));
-        app.add_singleton_model(|_ctx| {
-            settings::PublicPreferences::new(
-                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
-            )
-        });
-        app.add_singleton_model(|_| {
-            settings::PrivatePreferences::new(
-                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
-            )
-        });
-        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
-        app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
-        app.add_singleton_model(AuthManager::new_for_test);
-        app.add_singleton_model(|_| crate::settings::manager::SettingsManager::default());
-        crate::settings::InputSettings::register(&mut app);
-        app.update(crate::settings::AISettings::register_and_subscribe_to_events);
-        app.add_singleton_model(crate::workspaces::user_workspaces::UserWorkspaces::default_mock);
-        #[cfg(windows)]
-        app.add_singleton_model(SystemInfo::new);
-
-        let executor = Arc::new(RecordingCommandExecutor::default());
-        let sessions = app.add_model(|ctx| {
-            let mut sessions = Sessions::new_for_test().with_command_executor(executor.clone());
-            sessions.initialize_bootstrapped_session(
-                SessionInfo::new_for_test().with_id(session_id),
-                "test command".to_string(),
-                vec![],
-                None,
-                ctx,
-            );
-            sessions
-        });
-        let sessions_for_prompt = sessions.clone();
-        let current_prompt =
-            app.add_model(move |ctx| CurrentPrompt::new(sessions_for_prompt.clone(), ctx));
-
-        let session = app
-            .read(|ctx| sessions.as_ref(ctx).get(session_id))
-            .expect("session should exist");
-        session.load_external_commands().await;
-        executor.clear();
-
-        current_prompt.update(&mut app, |current_prompt, ctx| {
-            current_prompt.latest_context = Some(PromptContext {
-                active_block_metadata: BlockMetadata::new(
-                    Some(session_id),
-                    Some("/tmp/project".to_string()),
-                ),
-                environment: Environment::default(),
-            });
-            current_prompt.update_states_with_new_context(ctx);
-
-            let state = current_prompt
-                .states
-                .get(&ContextChipKind::GithubPullRequest)
-                .expect("expected github pr state");
-            assert_eq!(
-                state.availability,
-                ChipAvailability::Disabled(ChipDisabledReason::RequiresExecutable {
-                    command: "gh".to_string(),
-                })
-            );
-            assert_eq!(state.update_status, ChipUpdateStatus::Disabled);
-            assert!(state.generator_handle.is_none());
-            assert!(state.on_click_generator_handle.is_none());
-        });
-
-        assert!(executor.commands.lock().is_empty());
-    });
-}
-
-#[test]
-fn test_github_pr_chip_empty_success_does_not_set_failure_suppression() {
-    let _flag_guard = FeatureFlag::GithubPrPromptChip.override_enabled(true);
-    App::test((), |mut app| async move {
-        let session_id = SessionId::from(789);
-        app.add_singleton_model(|_| {
-            Prompt::mock_with(
-                [ContextChipKind::GithubPullRequest],
-                false,
-                WarpPromptSeparator::None,
-            )
-        });
-        app.add_singleton_model(SessionSettings::new_with_defaults);
-        app.add_singleton_model(|_| History::new(vec![]));
-        app.add_singleton_model(|_ctx| {
-            settings::PublicPreferences::new(
-                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
-            )
-        });
-        app.add_singleton_model(|_| {
-            settings::PrivatePreferences::new(
-                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
-            )
-        });
-        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
-        app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
-        app.add_singleton_model(AuthManager::new_for_test);
-        app.add_singleton_model(|_| crate::settings::manager::SettingsManager::default());
-        crate::settings::InputSettings::register(&mut app);
-        app.update(crate::settings::AISettings::register_and_subscribe_to_events);
-        app.add_singleton_model(crate::workspaces::user_workspaces::UserWorkspaces::default_mock);
-        #[cfg(windows)]
-        app.add_singleton_model(SystemInfo::new);
-
-        let executor = Arc::new(RecordingCommandExecutor::with_success_responses([
-            "gh\ngit\n",
-            "",
-        ]));
-        let sessions = app.add_model(|ctx| {
-            let mut sessions = Sessions::new_for_test().with_command_executor(executor.clone());
-            sessions.initialize_bootstrapped_session(
-                SessionInfo::new_for_test().with_id(session_id),
-                "test command".to_string(),
-                vec![],
-                None,
-                ctx,
-            );
-            sessions
-        });
-        let sessions_for_prompt = sessions.clone();
-        let current_prompt =
-            app.add_model(move |ctx| CurrentPrompt::new(sessions_for_prompt.clone(), ctx));
-
-        let session = app
-            .read(|ctx| sessions.as_ref(ctx).get(session_id))
-            .expect("session should exist");
-        session.load_external_commands().await;
-        executor.clear();
-
-        // First update: chip command runs and returns empty.
-        current_prompt
-            .update(&mut app, |current_prompt, ctx| {
-                current_prompt.latest_context = Some(PromptContext {
-                    active_block_metadata: BlockMetadata::new(
-                        Some(session_id),
-                        Some("/tmp/project".to_string()),
-                    ),
-                    environment: Environment::default(),
-                });
-                current_prompt.update_states_with_new_context(ctx);
-                current_prompt.await_generators(ctx)
-            })
-            .await;
-
-        // The chip command should have run once.
-        assert_eq!(executor.commands.lock().len(), 1);
-
-        // Verify the empty success cleared the chip value without setting failure suppression.
-        current_prompt.update(&mut app, |current_prompt, _ctx| {
-            let state = current_prompt
-                .states
-                .get(&ContextChipKind::GithubPullRequest)
-                .expect("expected github pr state");
-            assert_eq!(state.last_failure_fingerprint, None);
-            assert!(
-                state.last_computed_value.is_none(),
-                "chip value should be None after empty result"
-            );
-            assert_eq!(state.update_status, ChipUpdateStatus::Ready);
-        });
-    });
-}
-
-#[test]
-fn test_github_pr_chip_revisiting_empty_result_directory_reruns_and_clears_previous_value() {
-    let _flag_guard = FeatureFlag::GithubPrPromptChip.override_enabled(true);
-    App::test((), |mut app| async move {
-        let session_id = SessionId::from(790);
-        app.add_singleton_model(|_| {
-            Prompt::mock_with(
-                [ContextChipKind::GithubPullRequest],
-                false,
-                WarpPromptSeparator::None,
-            )
-        });
-        app.add_singleton_model(SessionSettings::new_with_defaults);
-        app.add_singleton_model(|_| History::new(vec![]));
-        app.add_singleton_model(|_ctx| {
-            settings::PublicPreferences::new(
-                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
-            )
-        });
-        app.add_singleton_model(|_| {
-            settings::PrivatePreferences::new(
-                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
-            )
-        });
-        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
-        app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
-        app.add_singleton_model(AuthManager::new_for_test);
-        app.add_singleton_model(|_| crate::settings::manager::SettingsManager::default());
-        crate::settings::InputSettings::register(&mut app);
-        app.update(crate::settings::AISettings::register_and_subscribe_to_events);
-        app.add_singleton_model(crate::workspaces::user_workspaces::UserWorkspaces::default_mock);
-        #[cfg(windows)]
-        app.add_singleton_model(SystemInfo::new);
-
-        let executor = Arc::new(RecordingCommandExecutor::with_success_responses([
-            "gh\ngit\n",
-            "",
-            "https://github.com/warp/warp/pull/456\n",
-            "",
-        ]));
-        let sessions = app.add_model(|ctx| {
-            let mut sessions = Sessions::new_for_test().with_command_executor(executor.clone());
-            sessions.initialize_bootstrapped_session(
-                SessionInfo::new_for_test().with_id(session_id),
-                "test command".to_string(),
-                vec![],
-                None,
-                ctx,
-            );
-            sessions
-        });
-        let sessions_for_prompt = sessions.clone();
-        let current_prompt =
-            app.add_model(move |ctx| CurrentPrompt::new(sessions_for_prompt.clone(), ctx));
-
-        let session = app
-            .read(|ctx| sessions.as_ref(ctx).get(session_id))
-            .expect("session should exist");
-        session.load_external_commands().await;
-        executor.clear();
-
-        current_prompt
-            .update(&mut app, |current_prompt, ctx| {
-                current_prompt.latest_context = Some(PromptContext {
-                    active_block_metadata: BlockMetadata::new(
-                        Some(session_id),
-                        Some("/tmp/no-pr".to_string()),
-                    ),
-                    environment: Environment::default(),
-                });
-                current_prompt.update_states_with_new_context(ctx);
-                current_prompt.await_generators(ctx)
-            })
-            .await;
-        current_prompt.update(&mut app, |current_prompt, _ctx| {
-            let state = current_prompt
-                .states
-                .get(&ContextChipKind::GithubPullRequest)
-                .expect("expected github pr state");
-            assert_eq!(state.last_computed_value, None);
-            assert_eq!(state.last_failure_fingerprint, None);
-        });
-
-        executor.clear();
-
-        current_prompt
-            .update(&mut app, |current_prompt, ctx| {
-                current_prompt.latest_context = Some(PromptContext {
-                    active_block_metadata: BlockMetadata::new(
-                        Some(session_id),
-                        Some("/tmp/has-pr".to_string()),
-                    ),
-                    environment: Environment::default(),
-                });
-                current_prompt.update_states_with_new_context(ctx);
-                current_prompt.await_generators(ctx)
-            })
-            .await;
-
-        current_prompt.update(&mut app, |current_prompt, _ctx| {
-            let state = current_prompt
-                .states
-                .get(&ContextChipKind::GithubPullRequest)
-                .expect("expected github pr state");
-            assert_eq!(
-                state.last_computed_value.as_ref().and_then(|v| v.as_text()),
-                Some("https://github.com/warp/warp/pull/456")
-            );
-        });
-
-        executor.clear();
-
-        current_prompt
-            .update(&mut app, |current_prompt, ctx| {
-                current_prompt.latest_context = Some(PromptContext {
-                    active_block_metadata: BlockMetadata::new(
-                        Some(session_id),
-                        Some("/tmp/no-pr".to_string()),
-                    ),
-                    environment: Environment::default(),
-                });
-                current_prompt.update_states_with_new_context(ctx);
-                current_prompt.await_generators(ctx)
-            })
-            .await;
-
-        assert_eq!(executor.commands.lock().len(), 1);
-
-        current_prompt.update(&mut app, |current_prompt, _ctx| {
-            let state = current_prompt
-                .states
-                .get(&ContextChipKind::GithubPullRequest)
-                .expect("expected github pr state");
-            assert_eq!(state.last_computed_value, None);
-            assert_eq!(state.last_failure_fingerprint, None);
-            assert_eq!(state.update_status, ChipUpdateStatus::Ready);
-        });
-    });
-}
-
-#[test]
-fn test_github_pr_chip_revisiting_failed_directory_uses_failure_suppression() {
-    let _flag_guard = FeatureFlag::GithubPrPromptChip.override_enabled(true);
-    App::test((), |mut app| async move {
-        let session_id = SessionId::from(791);
-        app.add_singleton_model(|_| {
-            Prompt::mock_with(
-                [ContextChipKind::GithubPullRequest],
-                false,
-                WarpPromptSeparator::None,
-            )
-        });
-        app.add_singleton_model(SessionSettings::new_with_defaults);
-        app.add_singleton_model(|_| History::new(vec![]));
-        app.add_singleton_model(|_ctx| {
-            settings::PublicPreferences::new(
-                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
-            )
-        });
-        app.add_singleton_model(|_| {
-            settings::PrivatePreferences::new(
-                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
-            )
-        });
-        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
-        app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
-        app.add_singleton_model(AuthManager::new_for_test);
-        app.add_singleton_model(|_| crate::settings::manager::SettingsManager::default());
-        crate::settings::InputSettings::register(&mut app);
-        app.update(crate::settings::AISettings::register_and_subscribe_to_events);
-        app.add_singleton_model(crate::workspaces::user_workspaces::UserWorkspaces::default_mock);
-        #[cfg(windows)]
-        app.add_singleton_model(SystemInfo::new);
-
-        let executor = Arc::new(RecordingCommandExecutor::with_outputs([
-            RecordingCommandExecutor::success_output("gh\ngit\n"),
-            RecordingCommandExecutor::failure_output("authentication required", ExitCode::from(4)),
-            RecordingCommandExecutor::success_output("https://github.com/warp/warp/pull/456\n"),
-        ]));
-        let sessions = app.add_model(|ctx| {
-            let mut sessions = Sessions::new_for_test().with_command_executor(executor.clone());
-            sessions.initialize_bootstrapped_session(
-                SessionInfo::new_for_test().with_id(session_id),
-                "test command".to_string(),
-                vec![],
-                None,
-                ctx,
-            );
-            sessions
-        });
-        let sessions_for_prompt = sessions.clone();
-        let current_prompt =
-            app.add_model(move |ctx| CurrentPrompt::new(sessions_for_prompt.clone(), ctx));
-
-        let session = app
-            .read(|ctx| sessions.as_ref(ctx).get(session_id))
-            .expect("session should exist");
-        session.load_external_commands().await;
-        executor.clear();
-
-        current_prompt
-            .update(&mut app, |current_prompt, ctx| {
-                current_prompt.latest_context = Some(PromptContext {
-                    active_block_metadata: BlockMetadata::new(
-                        Some(session_id),
-                        Some("/tmp/gh-failure".to_string()),
-                    ),
-                    environment: Environment::default(),
-                });
-                current_prompt.update_states_with_new_context(ctx);
-                current_prompt.await_generators(ctx)
-            })
-            .await;
-
-        current_prompt.update(&mut app, |current_prompt, ctx| {
-            let state = current_prompt
-                .states
-                .get(&ContextChipKind::GithubPullRequest)
-                .expect("expected github pr state");
-            assert_eq!(state.last_computed_value, None);
-            assert!(state.last_failure_fingerprint.is_some());
-            assert_eq!(state.update_status, ChipUpdateStatus::Error);
-            assert_eq!(
-                *SessionSettings::as_ref(ctx).github_pr_chip_default_validation,
-                GithubPrPromptChipDefaultValidation::Suppressed
-            );
-        });
-
-        executor.clear();
-
-        current_prompt
-            .update(&mut app, |current_prompt, ctx| {
-                current_prompt.latest_context = Some(PromptContext {
-                    active_block_metadata: BlockMetadata::new(
-                        Some(session_id),
-                        Some("/tmp/has-pr".to_string()),
-                    ),
-                    environment: Environment::default(),
-                });
-                current_prompt.update_states_with_new_context(ctx);
-                current_prompt.await_generators(ctx)
-            })
-            .await;
-
-        current_prompt.update(&mut app, |current_prompt, _ctx| {
-            let state = current_prompt
-                .states
-                .get(&ContextChipKind::GithubPullRequest)
-                .expect("expected github pr state");
-            assert_eq!(
-                state.last_computed_value.as_ref().and_then(|v| v.as_text()),
-                Some("https://github.com/warp/warp/pull/456")
-            );
-        });
-
-        executor.clear();
-
-        current_prompt.update(&mut app, |current_prompt, ctx| {
-            current_prompt.latest_context = Some(PromptContext {
-                active_block_metadata: BlockMetadata::new(
-                    Some(session_id),
-                    Some("/tmp/gh-failure".to_string()),
-                ),
-                environment: Environment::default(),
-            });
-            current_prompt.update_states_with_new_context(ctx);
-        });
-
-        assert!(executor.commands.lock().is_empty());
-
-        current_prompt.update(&mut app, |current_prompt, _ctx| {
-            let state = current_prompt
-                .states
-                .get(&ContextChipKind::GithubPullRequest)
-                .expect("expected github pr state");
-            assert_eq!(state.last_computed_value, None);
-            assert_eq!(state.update_status, ChipUpdateStatus::Cached);
-            assert!(state.last_failure_fingerprint.is_some());
-        });
-    });
-}
-
-#[test]
-fn test_github_pr_chip_transient_failure_retries_with_same_fingerprint() {
-    let _flag_guard = FeatureFlag::GithubPrPromptChip.override_enabled(true);
-    App::test((), |mut app| async move {
-        let session_id = SessionId::from(792);
-        app.add_singleton_model(|_| {
-            Prompt::mock_with(
-                [ContextChipKind::GithubPullRequest],
-                false,
-                WarpPromptSeparator::None,
-            )
-        });
-        app.add_singleton_model(SessionSettings::new_with_defaults);
-        app.add_singleton_model(|_| History::new(vec![]));
-        app.add_singleton_model(|_ctx| {
-            settings::PublicPreferences::new(
-                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
-            )
-        });
-        app.add_singleton_model(|_| {
-            settings::PrivatePreferences::new(
-                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
-            )
-        });
-        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
-        app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
-        app.add_singleton_model(AuthManager::new_for_test);
-        app.add_singleton_model(|_| crate::settings::manager::SettingsManager::default());
-        crate::settings::InputSettings::register(&mut app);
-        app.update(crate::settings::AISettings::register_and_subscribe_to_events);
-        app.add_singleton_model(crate::workspaces::user_workspaces::UserWorkspaces::default_mock);
-        #[cfg(windows)]
-        app.add_singleton_model(SystemInfo::new);
-
-        let executor = Arc::new(RecordingCommandExecutor::with_outputs([
-            RecordingCommandExecutor::success_output("gh\ngit\n"),
-            RecordingCommandExecutor::failure_output(
-                "Post \"https://api.github.com/graphql\": dial tcp: lookup api.github.com: no such host",
-                ExitCode::from(1),
-            ),
-            RecordingCommandExecutor::success_output("https://github.com/warp/warp/pull/456\n"),
-        ]));
-        let sessions = app.add_model(|ctx| {
-            let mut sessions = Sessions::new_for_test().with_command_executor(executor.clone());
-            sessions.initialize_bootstrapped_session(
-                SessionInfo::new_for_test().with_id(session_id),
-                "test command".to_string(),
-                vec![],
-                None,
-                ctx,
-            );
-            sessions
-        });
-        let sessions_for_prompt = sessions.clone();
-        let current_prompt =
-            app.add_model(move |ctx| CurrentPrompt::new(sessions_for_prompt.clone(), ctx));
-
-        let session = app
-            .read(|ctx| sessions.as_ref(ctx).get(session_id))
-            .expect("session should exist");
-        session.load_external_commands().await;
-        executor.clear();
-
-        current_prompt
-            .update(&mut app, |current_prompt, ctx| {
-                current_prompt.latest_context = Some(PromptContext {
-                    active_block_metadata: BlockMetadata::new(
-                        Some(session_id),
-                        Some("/tmp/network-failure".to_string()),
-                    ),
-                    environment: Environment::default(),
-                });
-                current_prompt.update_states_with_new_context(ctx);
-                current_prompt.await_generators(ctx)
-            })
-            .await;
-
-        assert_eq!(executor.commands.lock().len(), 1);
-
-        current_prompt.update(&mut app, |current_prompt, ctx| {
-            let state = current_prompt
-                .states
-                .get(&ContextChipKind::GithubPullRequest)
-                .expect("expected github pr state");
-            assert_eq!(state.last_computed_value, None);
-            assert_eq!(state.last_failure_fingerprint, None);
-            assert_eq!(state.update_status, ChipUpdateStatus::Error);
-            assert_eq!(
-                *SessionSettings::as_ref(ctx).github_pr_chip_default_validation,
-                GithubPrPromptChipDefaultValidation::Unvalidated
-            );
-        });
-
-        executor.clear();
-
-        current_prompt
-            .update(&mut app, |current_prompt, ctx| {
-                let chip = ContextChipKind::GithubPullRequest
-                    .to_chip()
-                    .expect("expected github pr chip");
-                let generator = chip.generator().clone();
-                // Pass `allow_fingerprint_skip = true` to exercise the same
-                // path the periodic timer uses. The previous attempt left the
-                // chip in `Error` state with the fingerprint already recorded;
-                // without status-aware skip handling, this call would short-
-                // circuit as `Cached` and the transient failure would become
-                // sticky.
-                current_prompt.fetch_chip_value_once(
-                    &ContextChipKind::GithubPullRequest,
-                    &generator,
-                    None,
-                    true,
-                    ctx,
-                );
-                current_prompt.await_generators(ctx)
-            })
-            .await;
-
-        assert_eq!(executor.commands.lock().len(), 1);
-
-        current_prompt.update(&mut app, |current_prompt, ctx| {
-            let state = current_prompt
-                .states
-                .get(&ContextChipKind::GithubPullRequest)
-                .expect("expected github pr state");
-            assert_eq!(
-                state.last_computed_value.as_ref().and_then(|v| v.as_text()),
-                Some("https://github.com/warp/warp/pull/456")
-            );
-            assert_eq!(state.last_failure_fingerprint, None);
-            assert_eq!(state.update_status, ChipUpdateStatus::Ready);
-            assert_eq!(
-                *SessionSettings::as_ref(ctx).github_pr_chip_default_validation,
-                GithubPrPromptChipDefaultValidation::Validated
-            );
-        });
-    });
-}
-
-#[test]
-fn test_github_pr_chip_caches_only_deterministic_failures() {
-    let auth_failure =
-        RecordingCommandExecutor::failure_output("authentication required", ExitCode::from(4));
-    let network_failure = RecordingCommandExecutor::failure_output(
-        "Post \"https://api.github.com/graphql\": dial tcp: lookup api.github.com: no such host",
-        ExitCode::from(1),
-    );
-
-    assert!(CurrentPrompt::should_cache_failure_fingerprint(
-        &ContextChipKind::GithubPullRequest,
-        Some(&auth_failure),
-        false,
-    ));
-    assert!(!CurrentPrompt::should_cache_failure_fingerprint(
-        &ContextChipKind::GithubPullRequest,
-        Some(&network_failure),
-        false,
-    ));
-    assert!(!CurrentPrompt::should_cache_failure_fingerprint(
-        &ContextChipKind::GithubPullRequest,
-        None,
-        true,
-    ));
-    assert!(CurrentPrompt::should_cache_failure_fingerprint(
-        &ContextChipKind::ShellGitBranch,
-        None,
-        true,
-    ));
-}
 #[test]
 fn test_disabling_chips() {
     App::test((), |mut app| async move {
@@ -1279,6 +621,108 @@ fn test_git_status_change_updates_chip_value() {
                     "feature-branch".to_string(),
                 )),
                 "Chip value should reflect the new branch name after metadata change"
+            );
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_git_status_pr_info_updates_github_pr_chip_value() {
+    let _flag_guard = FeatureFlag::GithubPrPromptChip.override_enabled(true);
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| {
+            Prompt::mock_with(
+                [ContextChipKind::GithubPullRequest],
+                false,
+                WarpPromptSeparator::None,
+            )
+        });
+        app.add_singleton_model(SessionSettings::new_with_defaults);
+        app.add_singleton_model(|_ctx| {
+            settings::PublicPreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+        app.add_singleton_model(|_| {
+            settings::PrivatePreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let watcher_handle = app.add_singleton_model(DirectoryWatcher::new_for_testing);
+        let repo_handle = watcher_handle.update(&mut app, |watcher, ctx| {
+            watcher
+                .add_directory(
+                    warp_util::standardized_path::StandardizedPath::from_local_canonicalized(
+                        temp_dir.path(),
+                    )
+                    .unwrap(),
+                    ctx,
+                )
+                .unwrap()
+        });
+
+        let git_status = app.add_model(move |_| {
+            GitRepoStatusModel::new_for_test(
+                repo_handle,
+                Some(GitStatusMetadata {
+                    current_branch_name: "feature-a".to_string(),
+                    main_branch_name: "main".to_string(),
+                    stats_against_head: DiffStats::default(),
+                }),
+            )
+        });
+
+        let sessions = app.add_model(|_| Sessions::new_for_test());
+        let current_prompt = app.add_model(move |ctx| CurrentPrompt::new(sessions, ctx));
+
+        current_prompt.update(&mut app, |cp, ctx| {
+            cp.set_git_repo_status(Some(git_status.downgrade()), ctx);
+            cp.update_states_with_new_context(ctx);
+        });
+
+        git_status.update(&mut app, |model, ctx| {
+            model.set_pr_info_for_test(
+                Some(PrInfo {
+                    number: 123,
+                    url: "https://github.com/warp/warp/pull/123".to_string(),
+                }),
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            let value = current_prompt
+                .as_ref(ctx)
+                .latest_chip_value(&ContextChipKind::GithubPullRequest);
+            assert_eq!(
+                value,
+                Some(&crate::context_chips::ChipValue::Text(
+                    "https://github.com/warp/warp/pull/123".to_string(),
+                )),
+            );
+        });
+
+        git_status.update(&mut app, |model, ctx| {
+            model.set_metadata_for_test(
+                Some(GitStatusMetadata {
+                    current_branch_name: "feature-b".to_string(),
+                    main_branch_name: "main".to_string(),
+                    stats_against_head: DiffStats::default(),
+                }),
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            let value = current_prompt
+                .as_ref(ctx)
+                .latest_chip_value(&ContextChipKind::GithubPullRequest);
+            assert_eq!(
+                value, None,
+                "PR chip should clear when switching to a branch without cached PR info"
             );
         });
     });

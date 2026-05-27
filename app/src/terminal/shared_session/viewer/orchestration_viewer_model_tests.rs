@@ -12,9 +12,12 @@
 //! through `apply_children_fetch`, which is what we cover here.
 
 use chrono::Utc;
+use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId, SingletonEntity};
 
 use super::*;
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::ambient_agents::task::{AgentConfigSnapshot, AmbientAgentTask};
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
@@ -128,6 +131,7 @@ fn make_task_with_name(
         created_at: now,
         started_at: Some(now),
         updated_at: now,
+        run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: None,
         session_id: session_id.map(String::from),
@@ -169,6 +173,7 @@ fn setup_model(
         children: HashMap::new(),
         polling_handle: None,
         fetch_generation: 0,
+        idle_due_to_no_children: false,
     };
 
     (terminal_view_id, parent_conversation_id, model)
@@ -285,6 +290,7 @@ fn skips_child_when_no_active_parent_conversation() {
             children: HashMap::new(),
             polling_handle: None,
             fetch_generation: 0,
+            idle_due_to_no_children: false,
         };
         let model_handle = app.add_model(|_| model);
 
@@ -679,6 +685,503 @@ fn registers_multiple_children() {
         history.read(&app, |history, _| {
             let child_ids = history.child_conversation_ids_of(&parent_conv_id);
             assert_eq!(child_ids.len(), 2);
+        });
+    });
+}
+
+// ---- agent_id_to_conversation_id population --------------------------------
+
+#[test]
+fn b1_populates_agent_id_to_conversation_id_for_new_child() {
+    // After `apply_children_fetch` registers a new viewer-created child,
+    // `BlocklistAIHistoryModel::conversation_id_for_agent_id` resolves the
+    // child's `run_id` back to the local child conversation so sibling
+    // references in transcript bodies render display names instead of
+    // "Unknown agent".
+    App::test((), |mut app| async move {
+        // `agent_id_key` reads `AIConversation::orchestration_agent_id`,
+        // which only returns the `run_id` when OrchestrationV2 is enabled.
+        // Without this override, the v1 fallback is `server_conversation_token`,
+        // which the test doesn't populate.
+        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
+        let parent = task_id(PARENT_TASK_ID);
+        let (_, _, model) = setup_model(&mut app, parent);
+        let model_handle = app.add_model(|_| model);
+
+        model_handle.update(&mut app, |model, ctx| {
+            model.apply_children_fetch(
+                vec![make_task(
+                    CHILD_A_TASK_ID,
+                    AmbientAgentTaskState::InProgress,
+                    "Worker",
+                    None,
+                )],
+                ctx,
+            );
+        });
+
+        let history = BlocklistAIHistoryModel::handle(&app);
+        let child_conversation_id = model_handle.read(&app, |model, _| {
+            model
+                .children
+                .get(&task_id(CHILD_A_TASK_ID))
+                .expect("child registered")
+                .conversation_id
+        });
+        history.read(&app, |history, _| {
+            // The child's run_id matches its task_id under v2 (and is the
+            // string form of the same AmbientAgentTaskId in either case).
+            let child_run_id = task_id(CHILD_A_TASK_ID).to_string();
+            assert_eq!(
+                history.conversation_id_for_agent_id(&child_run_id),
+                Some(child_conversation_id),
+                "sibling references via run_id must resolve to the child conversation",
+            );
+        });
+    });
+}
+
+// ---- parent_agent_id backfill ----------------------------------------------
+
+#[test]
+fn b2_backfills_parent_agent_id_on_orchestrator_token_assigned() {
+    // When the orchestrator's local conversation doesn't have an
+    // `orchestration_agent_id` yet at child-creation time, the
+    // viewer-created child's `parent_agent_id` stays `None`. When the
+    // orchestrator subsequently receives its run id (via
+    // `assign_run_id_for_conversation`), the model should backfill
+    // `parent_agent_id` on every tracked child so
+    // `orchestration_conversation_links::parent_conversation_id` resolves
+    // back to the orchestrator.
+    App::test((), |mut app| async move {
+        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
+        let parent = task_id(PARENT_TASK_ID);
+        let (terminal_view_id, parent_conv_id, model) = setup_model(&mut app, parent);
+        let model_handle = app.add_model(|_| model);
+
+        // Step 1: register a child while the parent has no orchestration
+        // agent id. The child's `parent_agent_id` must be `None`.
+        model_handle.update(&mut app, |model, ctx| {
+            model.apply_children_fetch(
+                vec![make_task(
+                    CHILD_A_TASK_ID,
+                    AmbientAgentTaskState::InProgress,
+                    "Worker",
+                    None,
+                )],
+                ctx,
+            );
+        });
+        let history = BlocklistAIHistoryModel::handle(&app);
+        let child_conversation_id = history.read(&app, |history, _| {
+            let child_ids = history.child_conversation_ids_of(&parent_conv_id);
+            assert_eq!(child_ids.len(), 1, "one child registered");
+            let child = history
+                .conversation(&child_ids[0])
+                .expect("child conversation exists");
+            assert!(
+                child.parent_agent_id().is_none(),
+                "parent_agent_id should be unset before the orchestrator has a run id",
+            );
+            child_ids[0]
+        });
+
+        // Step 2: assign the parent's run id. `assign_run_id_for_conversation`
+        // emits `ConversationServerTokenAssigned`, which fires the model's
+        // subscription. Since `setup_model` bypasses the constructor (and
+        // therefore the subscription wiring), call the handler directly.
+        let parent_run_id = parent.to_string();
+        history.update(&mut app, |history, ctx| {
+            history.assign_run_id_for_conversation(
+                parent_conv_id,
+                parent_run_id.clone(),
+                Some(parent),
+                terminal_view_id,
+                ctx,
+            );
+        });
+        let synthetic_event = BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
+            conversation_id: parent_conv_id,
+            terminal_view_id,
+        };
+        model_handle.update(&mut app, |model, ctx| {
+            model.maybe_backfill_parent_agent_ids(&synthetic_event, ctx);
+        });
+
+        // Step 3: the child's `parent_agent_id` is now stamped with the
+        // orchestrator's run id, so `parent_agent_id`-based resolution can
+        // walk back up to the parent.
+        history.read(&app, |history, _| {
+            let child = history
+                .conversation(&child_conversation_id)
+                .expect("child conversation exists");
+            assert_eq!(
+                child.parent_agent_id(),
+                Some(parent_run_id.as_str()),
+                "parent_agent_id should be backfilled to the orchestrator's run id",
+            );
+        });
+    });
+}
+
+#[test]
+fn b2_does_not_overwrite_existing_parent_agent_id() {
+    // The backfill is a one-way upgrade. Children whose `parent_agent_id`
+    // is already set (e.g. created after the orchestrator already had a
+    // run id) must not be clobbered.
+    App::test((), |mut app| async move {
+        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
+        let parent = task_id(PARENT_TASK_ID);
+        let (terminal_view_id, parent_conv_id, model) = setup_model(&mut app, parent);
+        let model_handle = app.add_model(|_| model);
+
+        // Pre-seed the orchestrator with a run id so the child created
+        // below picks it up immediately.
+        let original_parent_run_id = parent.to_string();
+        let history = BlocklistAIHistoryModel::handle(&app);
+        history.update(&mut app, |history, ctx| {
+            history.assign_run_id_for_conversation(
+                parent_conv_id,
+                original_parent_run_id.clone(),
+                Some(parent),
+                terminal_view_id,
+                ctx,
+            );
+        });
+        model_handle.update(&mut app, |model, ctx| {
+            model.apply_children_fetch(
+                vec![make_task(
+                    CHILD_A_TASK_ID,
+                    AmbientAgentTaskState::InProgress,
+                    "Worker",
+                    None,
+                )],
+                ctx,
+            );
+        });
+        let child_conversation_id = history.read(&app, |history, _| {
+            let child_ids = history.child_conversation_ids_of(&parent_conv_id);
+            child_ids[0]
+        });
+
+        // Now fire a backfill: the existing `parent_agent_id` must stay.
+        let synthetic_event = BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
+            conversation_id: parent_conv_id,
+            terminal_view_id,
+        };
+        model_handle.update(&mut app, |model, ctx| {
+            model.maybe_backfill_parent_agent_ids(&synthetic_event, ctx);
+        });
+        history.read(&app, |history, _| {
+            let child = history
+                .conversation(&child_conversation_id)
+                .expect("child conversation exists");
+            assert_eq!(
+                child.parent_agent_id(),
+                Some(original_parent_run_id.as_str()),
+            );
+        });
+    });
+}
+
+#[test]
+fn b2_ignores_token_assigned_for_unrelated_conversation() {
+    // Events for other conversations (e.g. the user's local conversation
+    // in another tab) must not trigger backfill on this model's children.
+    App::test((), |mut app| async move {
+        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
+        let parent = task_id(PARENT_TASK_ID);
+        let (terminal_view_id, parent_conv_id, model) = setup_model(&mut app, parent);
+        let model_handle = app.add_model(|_| model);
+
+        model_handle.update(&mut app, |model, ctx| {
+            model.apply_children_fetch(
+                vec![make_task(
+                    CHILD_A_TASK_ID,
+                    AmbientAgentTaskState::InProgress,
+                    "Worker",
+                    None,
+                )],
+                ctx,
+            );
+        });
+
+        // Synthesize an event for some unrelated conversation id; the
+        // backfill handler must short-circuit on the parent-mismatch check.
+        let unrelated_event = BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
+            conversation_id: AIConversationId::new(),
+            terminal_view_id,
+        };
+        model_handle.update(&mut app, |model, ctx| {
+            model.maybe_backfill_parent_agent_ids(&unrelated_event, ctx);
+        });
+
+        // Belt-and-braces: ensure the parent's lookup short-circuits when
+        // the orchestrator id is still unknown.
+        let still_no_parent_id = BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
+            conversation_id: parent_conv_id,
+            terminal_view_id,
+        };
+        model_handle.update(&mut app, |model, ctx| {
+            model.maybe_backfill_parent_agent_ids(&still_no_parent_id, ctx);
+        });
+
+        let history = BlocklistAIHistoryModel::handle(&app);
+        history.read(&app, |history, _| {
+            let child_ids = history.child_conversation_ids_of(&parent_conv_id);
+            let child = history.conversation(&child_ids[0]).unwrap();
+            assert!(
+                child.parent_agent_id().is_none(),
+                "backfill must not run when orchestrator has no agent id yet",
+            );
+        });
+    });
+}
+
+// ---- child-link sibling preload --------------------------------------------
+//
+// Removed: see specs/QUALITY-726/TECH.md §B4 for the deferral note.
+
+// ---- idle_due_to_no_children polling-cost mitigation ----------------------
+
+/// Builds an [`AppendedExchange`] event for the given conversation, with
+/// stub identifiers for the unrelated fields. Mirrors what the history
+/// model would emit when a fresh exchange is appended; the model's
+/// `maybe_kick_polling` handler only reads `conversation_id`.
+fn make_appended_exchange_event(
+    conversation_id: AIConversationId,
+    terminal_view_id: EntityId,
+) -> BlocklistAIHistoryEvent {
+    BlocklistAIHistoryEvent::AppendedExchange {
+        exchange_id: AIAgentExchangeId::new(),
+        task_id: TaskId::new("test-task".to_string()),
+        terminal_view_id,
+        conversation_id,
+        is_hidden: false,
+        response_stream_id: None,
+    }
+}
+
+/// Spawns a long-lived no-op future and stores its handle on the model.
+/// Used to populate `polling_handle` in tests so we can assert that the
+/// polling-state machine aborts it when transitioning to the
+/// idle-due-to-no-children state.
+///
+/// `SpawnedFutureHandle::abort()` doesn't expose an observable side-effect
+/// from outside the model, so the assertion target is
+/// `model.polling_handle.is_none()` after the transition. The timer is
+/// scheduled for an hour so it cannot fire during the test.
+fn populate_polling_handle(
+    model: &mut OrchestrationViewerModel,
+    ctx: &mut ModelContext<OrchestrationViewerModel>,
+) {
+    let handle = ctx.spawn(
+        async {
+            Timer::after(Duration::from_secs(3600)).await;
+        },
+        |_me, _, _ctx| {},
+    );
+    model.polling_handle = Some(handle);
+}
+
+#[test]
+fn empty_descendant_fetch_sets_idle_flag_and_aborts_polling() {
+    // When a non-orchestrator share's first descendant fetch returns no
+    // children, the viewer model sets `idle_due_to_no_children = true`
+    // and tears down its polling handle. `schedule_next_poll` later
+    // honours the flag and refuses to spawn another timer, so the model
+    // spends zero CPU / network until an `AppendedExchange` on the
+    // orchestrator wakes it up.
+    App::test((), |mut app| async move {
+        let parent = task_id(PARENT_TASK_ID);
+        let (_, _, model) = setup_model(&mut app, parent);
+        let model_handle = app.add_model(|_| model);
+
+        // Simulate an already-active polling cadence by pre-populating the
+        // handle. After the empty fetch this handle should be cleared.
+        model_handle.update(&mut app, |model, ctx| {
+            populate_polling_handle(model, ctx);
+        });
+        model_handle.read(&app, |model, _| {
+            assert!(
+                model.polling_handle.is_some(),
+                "sanity: polling_handle populated for the test"
+            );
+            assert!(
+                !model.idle_due_to_no_children,
+                "sanity: idle flag starts clear"
+            );
+        });
+
+        // Server returns no descendants. `apply_children_fetch` is the
+        // sync portion of the fetch callback, so calling it directly
+        // exercises the polling-state transition without an HTTP round
+        // trip.
+        model_handle.update(&mut app, |model, ctx| {
+            model.apply_children_fetch(vec![], ctx);
+        });
+
+        model_handle.read(&app, |model, _| {
+            assert!(
+                model.idle_due_to_no_children,
+                "empty fetch must mark the model as idle-due-to-no-children"
+            );
+            assert!(
+                model.polling_handle.is_none(),
+                "empty fetch must abort the prior polling handle and clear the field"
+            );
+            assert!(
+                model.children.is_empty(),
+                "sanity: no children were registered"
+            );
+        });
+    });
+}
+
+#[test]
+fn appended_exchange_on_orchestrator_resumes_from_idle() {
+    // Once the model has gone idle on an empty fetch, the next
+    // `AppendedExchange` on the orchestrator conversation must resume
+    // polling: clear the idle flag and call `fetch_children`. We observe
+    // `fetch_children` indirectly via `fetch_generation`, which is bumped
+    // synchronously at the head of the function before any spawn fires.
+    App::test((), |mut app| async move {
+        let parent = task_id(PARENT_TASK_ID);
+        let (terminal_view_id, parent_conv_id, model) = setup_model(&mut app, parent);
+        let model_handle = app.add_model(|_| model);
+
+        // Drive the model into the idle state via the same path the
+        // production fetch callback would: empty descendant list.
+        model_handle.update(&mut app, |model, ctx| {
+            model.apply_children_fetch(vec![], ctx);
+        });
+        let generation_before_resume = model_handle.read(&app, |model, _| {
+            assert!(
+                model.idle_due_to_no_children,
+                "sanity: idle flag set after empty fetch"
+            );
+            assert!(
+                model.polling_handle.is_none(),
+                "sanity: polling handle aborted"
+            );
+            model.fetch_generation
+        });
+
+        // Fire an `AppendedExchange` against the orchestrator. The model
+        // resumes via the idle-due-to-no-children branch in
+        // `maybe_kick_polling`.
+        let event = make_appended_exchange_event(parent_conv_id, terminal_view_id);
+        model_handle.update(&mut app, |model, ctx| {
+            model.maybe_kick_polling(&event, ctx);
+        });
+
+        model_handle.read(&app, |model, _| {
+            assert!(
+                !model.idle_due_to_no_children,
+                "AppendedExchange on the orchestrator must clear the idle flag"
+            );
+            assert_eq!(
+                model.fetch_generation,
+                generation_before_resume.wrapping_add(1),
+                "AppendedExchange on the orchestrator must call fetch_children, \
+                 which bumps fetch_generation by one",
+            );
+        });
+    });
+}
+
+#[test]
+fn non_empty_fetch_clears_idle_flag_and_resumes_polling() {
+    // The complementary path: a fetch that *does* discover children
+    // clears the idle flag so subsequent `schedule_next_poll` calls go
+    // back to the active cadence. We then exercise `schedule_next_poll`
+    // directly to verify that, once the flag is clear, a new
+    // `polling_handle` is created.
+    App::test((), |mut app| async move {
+        let parent = task_id(PARENT_TASK_ID);
+        let (_, _, mut model) = setup_model(&mut app, parent);
+        // Manually start from the idle state so we can confirm the
+        // non-empty fetch clears it.
+        model.idle_due_to_no_children = true;
+        let model_handle = app.add_model(|_| model);
+
+        model_handle.update(&mut app, |model, ctx| {
+            model.apply_children_fetch(
+                vec![make_task(
+                    CHILD_A_TASK_ID,
+                    AmbientAgentTaskState::InProgress,
+                    "Worker",
+                    None,
+                )],
+                ctx,
+            );
+        });
+        model_handle.read(&app, |model, _| {
+            assert!(
+                !model.idle_due_to_no_children,
+                "non-empty fetch must clear the idle flag"
+            );
+            assert_eq!(model.children.len(), 1, "child was registered");
+        });
+
+        // The fetch callback would normally call `schedule_next_poll`
+        // right after `apply_children_fetch`. Invoke it explicitly so we
+        // can assert that, with the flag now cleared, a new polling
+        // handle is installed.
+        model_handle.update(&mut app, |model, ctx| {
+            model.schedule_next_poll(ctx);
+        });
+        model_handle.read(&app, |model, _| {
+            assert!(
+                model.polling_handle.is_some(),
+                "schedule_next_poll must spawn a new timer when not idle"
+            );
+        });
+    });
+}
+
+#[test]
+fn appended_exchange_on_non_orchestrator_does_not_resume_idle() {
+    // Symmetric to the orchestrator-resume test: an exchange on an
+    // unrelated conversation (i.e. not the orchestrator tracked by this
+    // viewer) must not pull the model out of the idle-due-to-no-children
+    // state. The flag stays set and `fetch_children` is not invoked.
+    App::test((), |mut app| async move {
+        let parent = task_id(PARENT_TASK_ID);
+        let (terminal_view_id, _, model) = setup_model(&mut app, parent);
+        let model_handle = app.add_model(|_| model);
+
+        // Idle the model.
+        model_handle.update(&mut app, |model, ctx| {
+            model.apply_children_fetch(vec![], ctx);
+        });
+        let generation_before_event = model_handle.read(&app, |model, _| {
+            assert!(model.idle_due_to_no_children, "sanity: model is idle");
+            model.fetch_generation
+        });
+
+        // Fire an `AppendedExchange` for some unrelated conversation. The
+        // resume gate compares against the orchestrator id returned by
+        // `find_parent_conversation_id`, so a fresh id will not match.
+        let unrelated_conversation_id = AIConversationId::new();
+        let event = make_appended_exchange_event(unrelated_conversation_id, terminal_view_id);
+        model_handle.update(&mut app, |model, ctx| {
+            model.maybe_kick_polling(&event, ctx);
+        });
+
+        model_handle.read(&app, |model, _| {
+            assert!(
+                model.idle_due_to_no_children,
+                "AppendedExchange on an unrelated conversation must NOT resume the model"
+            );
+            assert_eq!(
+                model.fetch_generation, generation_before_event,
+                "fetch_children must not run when the resume gate doesn't match the orchestrator"
+            );
+            assert!(
+                model.polling_handle.is_none(),
+                "polling handle must remain cleared while idle"
+            );
         });
     });
 }

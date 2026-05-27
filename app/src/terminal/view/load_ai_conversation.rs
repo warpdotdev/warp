@@ -200,6 +200,16 @@ impl RestoredAIConversation {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestoreConversationEntryBehavior {
+    /// Update the restored conversation as the pending/selected conversation.
+    /// This enters Agent View for the restored conversation.
+    EnterRestoredConversation,
+    /// Restore blocks and history without changing Agent View state. Use this when the caller
+    /// will explicitly enter Agent View after restoration.
+    PreserveAgentViewState,
+}
+
 impl TerminalView {
     /// Determine the directory state for restoring the conversation: whether it's missing, we're
     /// already in the right directory, or we need to cd.
@@ -236,10 +246,13 @@ impl TerminalView {
         RestorationDirState::Unchanged
     }
 
+    /// This always restores the conversation. Caller is responsible for
+    /// ensuring the conversation does not already exist in this terminal view.
     pub(crate) fn restore_conversation_and_directory_context<F>(
         &mut self,
         cloud_conversation: CloudConversationData,
         use_live_appearance: bool,
+        entry_behavior: RestoreConversationEntryBehavior,
         on_restored: F,
         ctx: &mut ViewContext<Self>,
     ) where
@@ -258,6 +271,7 @@ impl TerminalView {
                         me.restore_conversation_after_view_creation(
                             RestoredAIConversation::new(*conversation),
                             use_live_appearance,
+                            entry_behavior,
                             ctx,
                         );
                     }
@@ -412,6 +426,7 @@ impl TerminalView {
         &mut self,
         ai_block_params: Vec<AIBlockCreationParams>,
         restored_conversations: Vec<RestoredAIConversation>,
+        entry_behavior: RestoreConversationEntryBehavior,
         ctx: &mut ViewContext<Self>,
     ) -> usize {
         let conversations: Vec<AIConversation> = restored_conversations
@@ -443,21 +458,7 @@ impl TerminalView {
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
             history_model.restore_conversations(self.view_id, conversations, ctx);
             if let Some(active_conversation_id) = active_conversation_id {
-                // Use `mark_active_conversation_id` (non-transferring) so we
-                // don't rip the conversation out of any other terminal view's
-                // live list. This matters for the orchestration pill bar's
-                // in-place navigation: the child agent's hidden pane must
-                // retain ownership so its `conversation_id_for_action`
-                // lookups for in-flight requested commands keep resolving.
-                // `restore_conversation_after_view_creation` decides after
-                // restoration whether the current view should become the
-                // canonical owner (regular terminal panes) or remain a
-                // non-owning mirror (conversation transcript viewers).
-                history_model.mark_active_conversation_id(
-                    active_conversation_id,
-                    self.view_id,
-                    ctx,
-                );
+                history_model.set_active_conversation_id(active_conversation_id, self.view_id, ctx);
             }
         });
 
@@ -465,7 +466,9 @@ impl TerminalView {
         // loading a conversation due to selection from the command palette), then we don't eagerly
         // set the pending query state (which is equivalent to _entering_ the agent view when the
         // FeatureFlag is enabled).
-        if !FeatureFlag::AgentView.is_enabled() || !is_restoring_on_startup {
+        if entry_behavior == RestoreConversationEntryBehavior::EnterRestoredConversation
+            && (!FeatureFlag::AgentView.is_enabled() || !is_restoring_on_startup)
+        {
             // Set agent pending state for follow-up if we have an active conversation
             if let Some(conversation_id) = active_conversation_id {
                 let origin = AgentViewEntryOrigin::RestoreExistingConversation;
@@ -534,10 +537,12 @@ impl TerminalView {
     /// Restore a conversation using the stored exchanges for said conversation.
     /// This is used for opening a historical conversation from the agent mode homepage, and
     /// when loading from a debug link.
+    /// Caller is responsible for ensuring the conversation does not already exist in this terminal view.
     pub fn restore_conversation_after_view_creation(
         &mut self,
         restored: RestoredAIConversation,
         use_live_appearance: bool,
+        entry_behavior: RestoreConversationEntryBehavior,
         ctx: &mut ViewContext<Self>,
     ) {
         let conversation_id = restored.ai_conversation.id();
@@ -605,16 +610,12 @@ impl TerminalView {
         }
 
         // Restore action results from all exchanges
-        let blocks_created =
-            self.restore_conversations_from_block_params(all_ai_block_params, vec![restored], ctx);
-
-        if !BlocklistAIHistoryModel::as_ref(ctx)
-            .is_terminal_view_conversation_transcript_viewer(self.view_id)
-        {
-            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                history_model.set_active_conversation_id(conversation_id, self.view_id, ctx);
-            });
-        }
+        let blocks_created = self.restore_conversations_from_block_params(
+            all_ai_block_params,
+            vec![restored],
+            entry_behavior,
+            ctx,
+        );
 
         log::info!(
             "Successfully restored {blocks_created} AI blocks for conversation: {conversation_id}"
@@ -749,6 +750,7 @@ impl TerminalView {
         let blocks_created = self.restore_conversations_from_block_params(
             all_ai_block_params,
             restored_conversations,
+            RestoreConversationEntryBehavior::EnterRestoredConversation,
             ctx,
         );
 
@@ -944,6 +946,7 @@ impl TerminalView {
                 self.restore_conversation_after_view_creation(
                     RestoredAIConversation::new(conversation),
                     true,
+                    RestoreConversationEntryBehavior::EnterRestoredConversation,
                     ctx,
                 );
             }

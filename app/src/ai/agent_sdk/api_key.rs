@@ -9,10 +9,10 @@ use inquire::{Confirm, InquireError, Select};
 use serde::Serialize;
 use warp_cli::agent::OutputFormat;
 use warp_cli::api_key::{
-    ApiKeyCommand, ApiKeyExpirationArgs, ApiKeySortByArg, ApiKeySortOrderArg, CreateApiKeyArgs,
-    ExpireApiKeyArgs, ListApiKeysArgs,
+    ApiKeyCommand, ApiKeyExpirationArgs, ApiKeySortByArg, CreateApiKeyArgs, ExpireApiKeyArgs,
+    ListApiKeysArgs,
 };
-use warp_cli::GlobalOptions;
+use warp_cli::{GlobalOptions, SortOrderArg};
 use warp_graphql::mutations::expire_api_key::ExpireApiKeyResult;
 use warp_graphql::mutations::generate_api_key::GenerateApiKeyResult;
 use warp_graphql::queries::api_keys::ApiKeyProperties;
@@ -363,12 +363,12 @@ struct ExpiredApiKeyInfo {
 fn sort_api_keys(
     keys: &mut [ApiKeyInfo],
     sort_by: Option<ApiKeySortByArg>,
-    sort_order: Option<ApiKeySortOrderArg>,
+    sort_order: Option<SortOrderArg>,
 ) {
     let Some(sort_by) = sort_by else {
         return;
     };
-    let descending = matches!(sort_order, Some(ApiKeySortOrderArg::Desc));
+    let descending = matches!(sort_order, Some(SortOrderArg::Desc));
     match sort_by {
         ApiKeySortByArg::Name => {
             if descending {

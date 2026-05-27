@@ -96,10 +96,33 @@ impl Entry {
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
         gitignores: &mut Vec<Gitignore>,
+        remaining_file_quota: Option<&mut usize>,
+        max_depth: usize,
+        current_depth: usize,
+        ignored_path_strategy: &IgnoredPathStrategy,
+    ) -> Result<Self, BuildTreeError> {
+        Self::build_tree_with_ignored_ancestor(
+            path,
+            files,
+            gitignores,
+            remaining_file_quota,
+            max_depth,
+            current_depth,
+            ignored_path_strategy,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_tree_with_ignored_ancestor(
+        path: impl Into<PathBuf>,
+        files: &mut Vec<FileMetadata>,
+        gitignores: &mut Vec<Gitignore>,
         mut remaining_file_quota: Option<&mut usize>,
         max_depth: usize,
         current_depth: usize,
         ignored_path_strategy: &IgnoredPathStrategy,
+        ancestor_is_ignored: bool,
     ) -> Result<Self, BuildTreeError> {
         let curr_path: PathBuf = path.into();
         let is_dir = curr_path.is_dir();
@@ -115,12 +138,14 @@ impl Entry {
             gitignores.push(gitignore);
         }
 
-        let path_is_ignored = matches_gitignores(
-            &curr_path,
-            is_dir,
-            &*gitignores,
-            true, /* check_ancestors */
-        ) || is_git_internal_path(&curr_path);
+        let path_is_ignored = ancestor_is_ignored
+            || is_git_internal_path(&curr_path)
+            || matches_gitignores(
+                &curr_path,
+                is_dir,
+                &*gitignores,
+                false, /* check_ancestors */
+            );
 
         // If we've reached the max depth, force lazy-loading even of non-ignored folders.
         let mut lazy_load = current_depth >= max_depth;
@@ -184,7 +209,7 @@ impl Entry {
                         };
 
                         if let Some(canonical_path) = canonical_path {
-                            match Entry::build_tree(
+                            match Entry::build_tree_with_ignored_ancestor(
                                 canonical_path,
                                 files,
                                 gitignores,
@@ -192,6 +217,7 @@ impl Entry {
                                 max_depth,
                                 current_depth + 1,
                                 ignored_path_strategy,
+                                path_is_ignored,
                             ) {
                                 Ok(entry) => Some(entry),
                                 Err(BuildTreeError::ExceededMaxFileLimit) => {
@@ -267,8 +293,9 @@ impl Entry {
 
         let mut remaining_file_quota = LAZY_LOAD_FILE_LIMIT;
         let mut files = Vec::new();
+        let ancestor_is_ignored = directory.ignored;
 
-        let result = Entry::build_tree(
+        let result = Entry::build_tree_with_ignored_ancestor(
             directory.path.to_local_path_lossy(),
             &mut files,
             gitignores,
@@ -276,6 +303,7 @@ impl Entry {
             1, /* max_depth */
             0, /* current_depth */
             &IgnoredPathStrategy::Include,
+            ancestor_is_ignored,
         );
 
         result.map(|entry| match entry {

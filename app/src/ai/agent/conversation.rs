@@ -20,7 +20,7 @@ use warp_multi_agent_api::response_event::stream_finished;
 use warp_multi_agent_api::response_event::stream_finished::TokenUsage;
 use warp_multi_agent_api::{self as api};
 use warpui::color::ColorU;
-use warpui::{EntityId, ModelContext, SingletonEntity};
+use warpui::{AppContext, EntityId, ModelContext, SingletonEntity};
 
 use super::api::ServerConversationToken;
 use super::task::helper::*;
@@ -56,6 +56,7 @@ use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, ConversationStatusUpdate, RequestInput, ResponseStreamId,
     SerializedBlockListItem,
 };
+use crate::ai::llms::LLMPreferences;
 use crate::ai::skills::SkillDescriptor;
 use crate::code_review::CodeReviewTelemetryEvent;
 use crate::notebooks::NotebookId;
@@ -85,6 +86,72 @@ impl TodoStatus {
     pub fn is_cancelled(&self) -> bool {
         matches!(self, TodoStatus::Cancelled)
     }
+}
+
+fn footer_model_token_usage(
+    usage_metadata: &stream_finished::ConversationUsageMetadata,
+    llm_preferences: &LLMPreferences,
+) -> Vec<ModelTokenUsage> {
+    // warp + byok rows merge on their server-known model id. Custom endpoint
+    // rows live in a separate bucket keyed by their upstream `config_key` so
+    // they never collide with a warp/byok row that happens to share the same
+    // resolved alias. The `config_key` itself is not retained on
+    // `ModelTokenUsage`; it is translated to an alias up front and only the
+    // alias flows downstream (display + shared-session replay).
+    let mut standard_usage: HashMap<String, ModelTokenUsage> = HashMap::new();
+    for (model_id, usage) in &usage_metadata.warp_token_usage {
+        let entry = standard_usage
+            .entry(model_id.clone())
+            .or_insert_with(|| ModelTokenUsage {
+                model_id: model_id.clone(),
+                ..Default::default()
+            });
+        entry.warp_tokens += usage.total_tokens;
+        for (category, tokens) in &usage.token_usage_by_category {
+            *entry
+                .warp_token_usage_by_category
+                .entry(category.clone())
+                .or_default() += *tokens;
+        }
+    }
+    for (model_id, usage) in &usage_metadata.byok_token_usage {
+        let entry = standard_usage
+            .entry(model_id.clone())
+            .or_insert_with(|| ModelTokenUsage {
+                model_id: model_id.clone(),
+                ..Default::default()
+            });
+        entry.byok_tokens += usage.total_tokens;
+        for (category, tokens) in &usage.token_usage_by_category {
+            *entry
+                .byok_token_usage_by_category
+                .entry(category.clone())
+                .or_default() += *tokens;
+        }
+    }
+
+    let mut custom_usage: HashMap<String, ModelTokenUsage> = HashMap::new();
+    for (config_key, usage) in &usage_metadata.custom_endpoint_token_usage {
+        let label = llm_preferences.custom_endpoint_usage_display_label(config_key);
+        let entry = custom_usage
+            .entry(config_key.clone())
+            .or_insert_with(|| ModelTokenUsage {
+                model_id: label,
+                ..Default::default()
+            });
+        entry.custom_endpoint_tokens += usage.total_tokens;
+        for (category, tokens) in &usage.token_usage_by_category {
+            *entry
+                .custom_endpoint_token_usage_by_category
+                .entry(category.clone())
+                .or_default() += *tokens;
+        }
+    }
+
+    standard_usage
+        .into_values()
+        .chain(custom_usage.into_values())
+        .collect()
 }
 
 // basic info for creating a dummy command block based on an exchange's inputs
@@ -237,7 +304,7 @@ pub struct AIConversation {
     /// True when this conversation is a placeholder for a child agent executing
     /// on a remote worker. The parent's client does not drive execution for
     /// these conversations — the remote worker's own client handles status
-    /// reporting. TaskStatusSyncModel skips status updates for these.
+    /// reporting.
     is_remote_child: bool,
 
     /// The last event sequence number observed from the v2 orchestration
@@ -1707,6 +1774,7 @@ impl AIConversation {
         token_usage: Vec<TokenUsage>,
         usage_metadata: Option<stream_finished::ConversationUsageMetadata>,
         was_user_initiated_request: bool,
+        ctx: &AppContext,
     ) -> Result<(), UpdateConversationError> {
         for usage in token_usage.into_iter() {
             let entry = self
@@ -1749,36 +1817,9 @@ impl AIConversation {
             self.conversation_usage_metadata.context_window_usage =
                 usage_metadata.context_window_usage;
             self.conversation_usage_metadata.credits_spent = usage_metadata.credits_spent;
-
-            let mut token_usage: HashMap<_, ModelTokenUsage> = HashMap::new();
-            for (model_id, usage) in usage_metadata.warp_token_usage {
-                let entry = token_usage.entry(model_id.clone()).or_default();
-                entry.warp_tokens += usage.total_tokens;
-                for (category, tokens) in usage.token_usage_by_category {
-                    *entry
-                        .warp_token_usage_by_category
-                        .entry(category)
-                        .or_default() += tokens;
-                }
-            }
-            for (model_id, usage) in usage_metadata.byok_token_usage {
-                let entry = token_usage.entry(model_id.clone()).or_default();
-                entry.byok_tokens += usage.total_tokens;
-                for (category, tokens) in usage.token_usage_by_category {
-                    *entry
-                        .byok_token_usage_by_category
-                        .entry(category)
-                        .or_default() += tokens;
-                }
-            }
-
-            self.conversation_usage_metadata.token_usage = token_usage
-                .into_iter()
-                .map(|(name, mut usage)| {
-                    usage.model_id = name;
-                    usage
-                })
-                .collect();
+            let llm_preferences = LLMPreferences::as_ref(ctx);
+            self.conversation_usage_metadata.token_usage =
+                footer_model_token_usage(&usage_metadata, llm_preferences);
 
             self.conversation_usage_metadata.tool_usage_metadata = usage_metadata
                 .tool_usage_metadata

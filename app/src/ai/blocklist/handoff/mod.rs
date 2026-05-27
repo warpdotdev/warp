@@ -18,6 +18,8 @@ use super::PendingAttachment;
 use crate::server::server_api::ai::AttachmentInput;
 
 #[cfg(feature = "local_fs")]
+pub(crate) mod snapshot;
+#[cfg(feature = "local_fs")]
 pub(crate) mod touched_repos;
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]

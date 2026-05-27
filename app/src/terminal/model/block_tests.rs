@@ -521,6 +521,59 @@ pub fn test_block_duration_formatting() {
 }
 
 #[test]
+pub fn test_set_current_working_directory_updates_pwd_and_emits_cwd_event() {
+    let (events_tx, events_rx) = async_channel::unbounded();
+    let event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(events_tx)
+        .build();
+    let mut block = TestBlockBuilder::new()
+        .with_event_proxy(event_proxy)
+        .build();
+    assert!(block.pwd().is_none());
+
+    block.set_current_working_directory("/Users/foo/bar".to_string());
+    assert_eq!(block.pwd(), Some(&"/Users/foo/bar".to_string()));
+
+    // A second call with the same path should be a no-op (no event emitted).
+    block.set_current_working_directory("/Users/foo/bar".to_string());
+
+    // A call with a different path updates pwd again and emits another event.
+    block.set_current_working_directory("/Users/foo/baz".to_string());
+    assert_eq!(block.pwd(), Some(&"/Users/foo/baz".to_string()));
+
+    events_rx.close();
+    let mut received_paths = Vec::new();
+    let mut received_block_metadata_events = 0usize;
+    warpui::r#async::block_on(pin!(events_rx).for_each(|event| match event {
+        Event::BlockWorkingDirectoryUpdated(event) => {
+            received_paths.push(
+                event
+                    .block_metadata
+                    .current_working_directory()
+                    .map(str::to_owned),
+            );
+        }
+        Event::BlockMetadataReceived(_) => {
+            received_block_metadata_events += 1;
+        }
+        _ => {}
+    }));
+    assert_eq!(
+        received_paths,
+        vec![
+            Some("/Users/foo/bar".to_string()),
+            Some("/Users/foo/baz".to_string()),
+        ],
+        "set_current_working_directory should emit one BlockWorkingDirectoryUpdated per distinct path"
+    );
+    assert_eq!(
+        received_block_metadata_events, 0,
+        "set_current_working_directory must not emit BlockMetadataReceived — \
+         that event is contracted to fire once per block at precmd"
+    );
+}
+
+#[test]
 pub fn test_elapsed_duration_rounds_down_to_whole_seconds() {
     let mut block = TestBlockBuilder::new().build();
     // Move the block into the Executing state so `elapsed_duration` returns a value.

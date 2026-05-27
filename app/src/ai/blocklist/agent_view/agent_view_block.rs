@@ -88,7 +88,6 @@ impl AgentViewEntryBlock {
             _ => (),
         });
         ctx.subscribe_to_model(&agent_view_controller, |_, _, _, ctx| ctx.notify());
-
         let active_agent_views_model = ActiveAgentViewsModel::handle(ctx);
         ctx.subscribe_to_model(&active_agent_views_model, |_, _, _, ctx| ctx.notify());
 

@@ -24,6 +24,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use ai::agent::action::{AskUserQuestionItem, InsertReviewComment, RunAgentsRequest};
+use base64::Engine as _;
 use chrono::Duration;
 use cli_controller::{CLISubagentController, CLISubagentEvent};
 use find::FindState;
@@ -4073,19 +4074,9 @@ impl AIBlock {
     /// Handles find match focus changes by auto-expanding collapsed reasoning blocks
     /// that contain the focused match.
     fn handle_find_match_focus_change(&mut self, ctx: &mut ViewContext<Self>) {
-        // Get the currently focused match ID from the terminal's find model
-        let focused_match_id = self
-            .find_model
-            .as_ref(ctx)
-            .block_list_find_run()
-            .and_then(|run| match run.focused_match() {
-                Some(crate::terminal::find::BlockListMatch::RichContent { match_id, .. }) => {
-                    Some(*match_id)
-                }
-                _ => None,
-            });
-
-        let Some(match_id) = focused_match_id else {
+        // Get the currently focused match ID from the terminal's find model.
+        // The helper handles both the sync and async find paths.
+        let Some(match_id) = self.find_model.as_ref(ctx).focused_rich_content_match_id() else {
             return;
         };
 
@@ -4523,6 +4514,7 @@ impl AIBlock {
         if !self.model.is_restored() {
             send_telemetry_from_ctx!(
                 CodeReviewTelemetryEvent::CommentsReceived {
+                    is_local: Some(repo_location.is_local()),
                     raw_count,
                     converted_count,
                     thread_count,
@@ -5941,6 +5933,11 @@ pub enum AIBlockAction {
     ViewScreenshot {
         action_id: AIAgentActionId,
     },
+    /// Open the lightbox for an image attached to an already-submitted user query
+    /// rendered inside this AI block.
+    OpenSubmittedAttachmentLightbox {
+        image_index: usize,
+    },
     ToggleImportedCommentCollapsed {
         action_id: AIAgentActionId,
         comment_index: usize,
@@ -6593,6 +6590,73 @@ impl TypedActionView for AIBlock {
                     .iter()
                     .position(|id| *id == action_id)
                     .unwrap_or(0);
+
+                ctx.dispatch_typed_action(&WorkspaceAction::OpenLightbox {
+                    images,
+                    initial_index,
+                });
+            }
+            AIBlockAction::OpenSubmittedAttachmentLightbox { image_index } => {
+                let decoded_images = self
+                    .model
+                    .inputs_to_render(ctx)
+                    .iter()
+                    .filter_map(|input| input.context())
+                    .flat_map(|contexts| contexts.iter())
+                    .filter_map(|context| match context {
+                        AIAgentContext::Image(image) => Some(image),
+                        _ => None,
+                    })
+                    .enumerate()
+                    .filter_map(|(submitted_image_index, image)| {
+                        let image_bytes =
+                            match base64::engine::general_purpose::STANDARD.decode(&image.data) {
+                                Ok(image_bytes) => image_bytes,
+                                Err(error) => {
+                                    log::warn!(
+                                        "Failed to decode submitted image attachment for lightbox: {error}"
+                                    );
+                                    return None;
+                                }
+                            };
+
+                        Some((submitted_image_index, image_bytes, image.file_name.clone()))
+                    })
+                    .collect_vec();
+                let mut images = Vec::new();
+                let mut initial_index = None;
+                for (submitted_image_index, image_bytes, file_name) in decoded_images {
+                    let asset_id = format!(
+                        "submitted-attachment-lightbox-{}-{submitted_image_index}",
+                        self.client_ids.client_exchange_id
+                    );
+                    // Raw assets are keyed by exchange/image index, so repeated opens replace the
+                    // same cache entry. `AssetCache` also enforces its raw-asset size cap when
+                    // inserting, so no lightbox-specific cleanup is needed here.
+                    AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
+                        asset_cache.insert_raw_asset_bytes::<ImageType>(
+                            asset_id.clone(),
+                            &image_bytes,
+                            ctx,
+                        );
+                    });
+
+                    if submitted_image_index == *image_index {
+                        initial_index = Some(images.len());
+                    }
+                    images.push(ui_components::lightbox::LightboxImage {
+                        source: ui_components::lightbox::LightboxImageSource::Resolved {
+                            asset_source: warpui::assets::asset_cache::AssetSource::Raw {
+                                id: asset_id,
+                            },
+                        },
+                        description: Some(file_name),
+                    });
+                }
+
+                let Some(initial_index) = initial_index else {
+                    return;
+                };
 
                 ctx.dispatch_typed_action(&WorkspaceAction::OpenLightbox {
                     images,

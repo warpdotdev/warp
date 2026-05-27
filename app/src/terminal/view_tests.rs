@@ -9,9 +9,8 @@ use std::sync::Arc;
 use chrono::Local;
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::CLIAgentSessionState;
-use session_sharing_protocol::sharer::SessionSourceType;
 use warp_cli::agent::Harness;
-use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
+use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START, C0};
 use warpui::notification::UserNotification;
 use warpui::platform::WindowStyle;
 use warpui::{App, Presenter, ReadModel, WindowInvalidation};
@@ -24,7 +23,10 @@ use crate::ai::agent::{
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
-use crate::ai::blocklist::agent_view::{AgentViewEntryOrigin, AgentViewState, ExitAgentViewError};
+use crate::ai::blocklist::agent_view::{
+    AgentViewEntryBlock, AgentViewEntryOrigin, AgentViewState, EnterAgentBlockAction,
+    ExitAgentViewError,
+};
 use crate::ai::blocklist::block::cli_controller::UserTakeOverReason;
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, InputConfig, InputType, ResponseStreamId,
@@ -65,9 +67,11 @@ use crate::terminal::session_settings::AgentToolbarChipSelection;
 use crate::terminal::shared_session::shared_handlers::{
     apply_cli_agent_state_update, RemoteUpdateGuard,
 };
-use crate::terminal::shared_session::SharedSessionStatus;
+use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
 use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
-use crate::terminal::view::load_ai_conversation::RestoredAIConversation;
+use crate::terminal::view::load_ai_conversation::{
+    RestoreConversationEntryBehavior, RestoredAIConversation,
+};
 use crate::terminal::view::shared_session::ConversationEndedTombstoneView;
 use crate::terminal::{CLIAgent, MockTerminalManager, TerminalManager, TerminalModel};
 use crate::test_util::terminal::{
@@ -76,6 +80,7 @@ use crate::test_util::terminal::{
 use crate::test_util::{add_window_with_terminal, assert_eventually};
 use crate::view_components::find::FindWithinBlockState;
 use crate::workspace::ToastStack;
+use crate::ActiveAgentViewsModel;
 
 fn add_window_with_cloud_mode_terminal(app: &mut App) -> ViewHandle<TerminalView> {
     let tips_model = app.add_model(|_| Default::default());
@@ -236,6 +241,42 @@ fn ai_block_count(view: &TerminalView) -> usize {
         .count()
 }
 
+fn agent_view_entry_count_for_conversation(
+    view: &TerminalView,
+    conversation_id: AIConversationId,
+) -> usize {
+    view.rich_content_views
+        .iter()
+        .filter(|rich_content| {
+            matches!(
+                rich_content.metadata(),
+                Some(RichContentMetadata::AgentViewEntry(params))
+                    if params.conversation_id == conversation_id
+            )
+        })
+        .count()
+}
+
+fn command_block_count_for_conversation(
+    view: &TerminalView,
+    conversation_id: AIConversationId,
+) -> usize {
+    view.model
+        .lock()
+        .block_list()
+        .blocks()
+        .iter()
+        .filter(|block| {
+            matches!(
+                block.agent_view_visibility(),
+                AgentViewVisibility::Agent {
+                    origin_conversation_id,
+                    ..
+                } if *origin_conversation_id == conversation_id
+            )
+        })
+        .count()
+}
 struct TestTerminalManager {
     model: Arc<FairMutex<TerminalModel>>,
     view: ViewHandle<TerminalView>,
@@ -361,6 +402,7 @@ fn submit_cli_agent_rich_input_restores_unlocked_input_config() {
                             is_locked: false,
                         },
                         true,
+                        None,
                         ctx,
                     );
                 });
@@ -426,6 +468,7 @@ fn unregister_cli_agent_session_restores_unlocked_input_config() {
                             is_locked: false,
                         },
                         true,
+                        None,
                         ctx,
                     );
                 });
@@ -517,6 +560,257 @@ fn clear_buffer_action_in_fullscreen_agent_view_starts_new_conversation() {
 }
 
 #[test]
+fn restoring_conversation_to_new_pane_transfers_blocks_from_previous_owner() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let original_owner = add_window_with_terminal(&mut app, None);
+        let restored_view = add_window_with_terminal(&mut app, None);
+
+        let original_owner_view_id = original_owner.read(&app, |view, _| view.view_id);
+        let restored_view_id = restored_view.read(&app, |view, _| view.view_id);
+
+        let conversation_id = original_owner.update(&mut app, |view, ctx| {
+            let (conversation_id, _, _, _) = append_exchange_with_inputs_and_handle_event(
+                view,
+                vec![AIAgentInput::UserQuery {
+                    query: "first query".to_owned(),
+                    context: Default::default(),
+                    static_query_type: None,
+                    referenced_attachments: Default::default(),
+                    user_query_mode: UserQueryMode::Normal,
+                    running_command: None,
+                    intended_agent: None,
+                }],
+                ctx,
+            );
+            view.insert_agent_view_entry_block(
+                AgentViewEntryBlockParams {
+                    conversation_id,
+                    is_new: false,
+                    is_restored: false,
+                    origin: AgentViewEntryOrigin::AgentViewBlock,
+                    agent_view_controller: view.agent_view_controller().clone(),
+                },
+                RichContentInsertionPosition::Append {
+                    insert_below_long_running_block: false,
+                },
+                ctx,
+            );
+            {
+                let mut model = view.model.lock();
+                model.simulate_block("agent command", "agent output");
+                let command_block_index = model.block_list().blocks().len() - 2;
+                model.block_list_mut().blocks_mut()[command_block_index]
+                    .set_conversation_id(conversation_id);
+            }
+            conversation_id
+        });
+
+        original_owner.read(&app, |view, _| {
+            assert_eq!(ai_block_count(view), 1);
+            assert_eq!(
+                agent_view_entry_count_for_conversation(view, conversation_id),
+                1
+            );
+            assert_eq!(
+                command_block_count_for_conversation(view, conversation_id),
+                1
+            );
+        });
+
+        let restored_conversation =
+            BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+                history
+                    .conversation(&conversation_id)
+                    .cloned()
+                    .expect("conversation should exist")
+            });
+
+        restored_view.update(&mut app, |view, ctx| {
+            view.restore_conversation_after_view_creation(
+                RestoredAIConversation::new(restored_conversation),
+                true,
+                RestoreConversationEntryBehavior::EnterRestoredConversation,
+                ctx,
+            );
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let original_owner_live_conversation_ids = history
+                .all_live_conversations_for_terminal_view(original_owner_view_id)
+                .map(|conversation| conversation.id())
+                .collect::<Vec<_>>();
+            let restored_view_live_conversation_ids = history
+                .all_live_conversations_for_terminal_view(restored_view_id)
+                .map(|conversation| conversation.id())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                history.terminal_view_id_for_conversation(&conversation_id),
+                Some(restored_view_id)
+            );
+            assert!(original_owner_live_conversation_ids.is_empty());
+            assert_eq!(restored_view_live_conversation_ids, vec![conversation_id]);
+        });
+
+        original_owner.read(&app, |view, _| {
+            assert_eq!(ai_block_count(view), 0);
+            assert_eq!(
+                agent_view_entry_count_for_conversation(view, conversation_id),
+                1
+            );
+            assert_eq!(
+                command_block_count_for_conversation(view, conversation_id),
+                0
+            );
+        });
+        restored_view.read(&app, |view, _| {
+            assert_eq!(ai_block_count(view), 1);
+        });
+    })
+}
+
+#[test]
+fn clicking_old_banner_for_open_conversation_focuses_current_owner_without_transferring_blocks() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let original_owner = add_window_with_terminal(&mut app, None);
+        let restored_view = add_window_with_terminal(&mut app, None);
+
+        let original_owner_window_id = app.read(|ctx| original_owner.window_id(ctx));
+        let original_owner_view_id = original_owner.read(&app, |view, _| view.view_id);
+        let restored_view_id = restored_view.read(&app, |view, _| view.view_id);
+
+        let conversation_id = original_owner.update(&mut app, |view, ctx| {
+            let (conversation_id, _, _, _) = append_exchange_with_inputs_and_handle_event(
+                view,
+                vec![AIAgentInput::UserQuery {
+                    query: "first query".to_owned(),
+                    context: Default::default(),
+                    static_query_type: None,
+                    referenced_attachments: Default::default(),
+                    user_query_mode: UserQueryMode::Normal,
+                    running_command: None,
+                    intended_agent: None,
+                }],
+                ctx,
+            );
+            view.insert_agent_view_entry_block(
+                AgentViewEntryBlockParams {
+                    conversation_id,
+                    is_new: false,
+                    is_restored: false,
+                    origin: AgentViewEntryOrigin::AgentViewBlock,
+                    agent_view_controller: view.agent_view_controller().clone(),
+                },
+                RichContentInsertionPosition::Append {
+                    insert_below_long_running_block: false,
+                },
+                ctx,
+            );
+            conversation_id
+        });
+
+        let restored_conversation =
+            BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+                history
+                    .conversation(&conversation_id)
+                    .cloned()
+                    .expect("conversation should exist")
+            });
+
+        restored_view.update(&mut app, |view, ctx| {
+            view.restore_conversation_after_view_creation(
+                RestoredAIConversation::new(restored_conversation),
+                true,
+                RestoreConversationEntryBehavior::PreserveAgentViewState,
+                ctx,
+            );
+            assert_eq!(
+                view.agent_view_controller()
+                    .as_ref(ctx)
+                    .agent_view_state()
+                    .active_conversation_id(),
+                None
+            );
+            view.agent_view_controller().update(ctx, |controller, ctx| {
+                controller
+                    .try_enter_agent_view(
+                        Some(conversation_id),
+                        AgentViewEntryOrigin::AgentViewBlock,
+                        ctx,
+                    )
+                    .expect("restored view should enter agent view");
+            });
+        });
+        let restored_agent_view_controller =
+            restored_view.read(&app, |view, _| view.agent_view_controller().clone());
+        let restored_active_session =
+            restored_view.read(&app, |view, _| view.active_session().clone());
+        ActiveAgentViewsModel::handle(&app).update(&mut app, |active_views, ctx| {
+            active_views.register_agent_view_controller(
+                &restored_agent_view_controller,
+                &restored_active_session,
+                restored_view_id,
+                ctx,
+            );
+        });
+
+        ActiveAgentViewsModel::handle(&app).read(&app, |active_views, ctx| {
+            assert_eq!(
+                active_views.terminal_view_id_for_conversation(conversation_id, ctx),
+                Some(restored_view_id)
+            );
+        });
+        original_owner.read(&app, |view, _| {
+            assert_eq!(ai_block_count(view), 0);
+            assert_eq!(
+                agent_view_entry_count_for_conversation(view, conversation_id),
+                1
+            );
+        });
+        restored_view.read(&app, |view, _| {
+            assert_eq!(ai_block_count(view), 1);
+        });
+
+        let entry_blocks = app
+            .views_of_type::<AgentViewEntryBlock>(original_owner_window_id)
+            .expect("original window should contain agent entry block");
+        assert_eq!(entry_blocks.len(), 1);
+        entry_blocks[0].update(&mut app, |block, ctx| {
+            block.handle_action(
+                &EnterAgentBlockAction::EnterAgentMode { conversation_id },
+                ctx,
+            );
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                history.terminal_view_id_for_conversation(&conversation_id),
+                Some(restored_view_id)
+            );
+            assert!(history
+                .all_live_conversations_for_terminal_view(original_owner_view_id)
+                .next()
+                .is_none());
+        });
+        original_owner.read(&app, |view, _| {
+            assert_eq!(ai_block_count(view), 0);
+            assert_eq!(
+                agent_view_entry_count_for_conversation(view, conversation_id),
+                1
+            );
+        });
+        restored_view.read(&app, |view, _| {
+            assert_eq!(ai_block_count(view), 1);
+        });
+    })
+}
+
+#[test]
 fn appended_exchange_renders_in_current_owner_after_conversation_transfer() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
@@ -557,6 +851,7 @@ fn appended_exchange_renders_in_current_owner_after_conversation_transfer() {
             view.restore_conversation_after_view_creation(
                 RestoredAIConversation::new(restored_conversation),
                 true,
+                RestoreConversationEntryBehavior::EnterRestoredConversation,
                 ctx,
             );
         });
@@ -897,6 +1192,7 @@ fn cloud_mode_v1_agent_prefixed_query_spawns_cloud_agent() {
                         is_locked: false,
                     },
                     true,
+                    None,
                     ctx,
                 );
             });
@@ -1025,9 +1321,7 @@ fn shared_third_party_viewer_sync_enters_agent_view_and_retags_existing_block() 
         terminal.update(&mut app, |view, ctx| {
             let harness_block_id = {
                 let mut model = view.model.lock();
-                model.set_shared_session_source_type(SessionSourceType::AmbientAgent {
-                    task_id: None,
-                });
+                model.set_shared_session_source(SharedSessionSource::ambient_agent(None));
                 model.set_shared_session_status(SharedSessionStatus::ActiveViewer {
                     role: Default::default(),
                 });
@@ -1100,9 +1394,7 @@ fn shared_third_party_viewer_syncs_from_viewer_harness_updated_when_harness_unch
         terminal.update(&mut app, |view, ctx| {
             let harness_block_id = {
                 let mut model = view.model.lock();
-                model.set_shared_session_source_type(SessionSourceType::AmbientAgent {
-                    task_id: None,
-                });
+                model.set_shared_session_source(SharedSessionSource::ambient_agent(None));
                 model.set_shared_session_status(SharedSessionStatus::ActiveViewer {
                     role: Default::default(),
                 });
@@ -1171,7 +1463,7 @@ fn shared_third_party_viewer_syncs_from_cli_agent_state_without_ambient_model() 
         let harness_block_id = terminal.update(&mut app, |view, _| {
             assert!(view.ambient_agent_view_model().is_none());
             let mut model = view.model.lock();
-            model.set_shared_session_source_type(SessionSourceType::AmbientAgent { task_id: None });
+            model.set_shared_session_source(SharedSessionSource::ambient_agent(None));
             model.set_shared_session_status(SharedSessionStatus::ActiveViewer {
                 role: Default::default(),
             });
@@ -5076,6 +5368,7 @@ fn cli_agent_rich_input_shell_mode_uses_run_commands_hint_text() {
                             is_locked: true,
                         },
                         true,
+                        None,
                         ctx,
                     );
                 });
@@ -5234,6 +5527,92 @@ fn drag_drop_image_in_cli_agent_long_running_command_pastes_via_clipboard() {
 
         std::fs::remove_file(&image_path).ok();
     })
+}
+
+#[test]
+fn paste_raw_image_clipboard_in_cli_agent_sends_correct_bytes() {
+    fn run_for_agent(agent: CLIAgent) {
+        App::test((), move |mut app| async move {
+            initialize_app_for_terminal_view(&mut app);
+            let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+            let terminal = add_window_with_terminal(&mut app, None);
+
+            let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+            let writes = pty_writes.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                    if let Event::WriteBytesToPty { bytes } = event {
+                        writes.borrow_mut().push(bytes.to_vec());
+                    }
+                });
+            });
+
+            terminal.update(&mut app, |view, ctx| {
+                CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+                    sessions.set_session(
+                        view.view_id,
+                        CLIAgentSession {
+                            agent,
+                            status: CLIAgentSessionStatus::InProgress,
+                            session_context: CLIAgentSessionContext::default(),
+                            input_state: CLIAgentInputState::Closed,
+                            should_auto_toggle_input: false,
+                            listener: None,
+                            remote_host: None,
+                            plugin_version: None,
+                            draft_text: None,
+                            custom_command_prefix: None,
+                        },
+                        ctx,
+                    );
+                });
+
+                {
+                    let mut model = view.model.lock();
+                    model.simulate_long_running_block(agent.command_prefix(), "");
+                    model.set_mode(ansi::Mode::BracketedPaste);
+                }
+
+                // Write image-only data to the clipboard (no text, no paths).
+                ctx.clipboard().write(ClipboardContent {
+                    images: Some(vec![warpui::clipboard::ImageData {
+                        data: vec![0x89, 0x50, 0x4E, 0x47], // PNG magic bytes
+                        mime_type: "image/png".to_string(),
+                        filename: None,
+                    }]),
+                    ..Default::default()
+                });
+
+                view.handle_action(&TerminalAction::Paste, ctx);
+            });
+
+            let writes = pty_writes.borrow();
+            assert_eq!(
+                writes.len(),
+                1,
+                "expected 1 PTY write, got {}",
+                writes.len()
+            );
+
+            if cfg!(windows) {
+                if agent == CLIAgent::Claude {
+                    assert_eq!(writes[0], vec![C0::ESC, b'v']);
+                } else {
+                    let mut expected = Vec::new();
+                    expected.extend_from_slice(BRACKETED_PASTE_START);
+                    expected.extend_from_slice(BRACKETED_PASTE_END);
+                    assert_eq!(writes[0], expected);
+                }
+            } else {
+                assert_eq!(writes[0], vec![C0::SYN]);
+            }
+        })
+    }
+
+    run_for_agent(CLIAgent::Claude);
+    run_for_agent(CLIAgent::OpenCode);
+    run_for_agent(CLIAgent::Codex);
 }
 
 #[test]

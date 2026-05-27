@@ -27,6 +27,7 @@ fn task_with(
         created_at: Utc::now(),
         started_at: Some(Utc::now()),
         updated_at: Utc::now(),
+        run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: None,
         session_id,

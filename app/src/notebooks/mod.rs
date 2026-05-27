@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use warp_server_client::cloud_object::CloudObjectUpsertParams;
 use warpui::AppContext;
 
 use crate::ai::document::ai_document_model::AIDocumentId;
@@ -83,14 +83,14 @@ impl CloudModelType for CloudNotebookModel {
         name.clone_into(&mut self.title);
     }
 
-    fn upsert_event(&self, notebook: &CloudNotebook) -> ModelEvent {
+    fn upsert_event(params: CloudObjectUpsertParams<Self>) -> ModelEvent {
         ModelEvent::UpsertNotebook {
-            notebook: notebook.clone(),
+            notebook: CloudNotebook::from(params),
         }
     }
 
-    fn bulk_upsert_event(objects: &[CloudNotebook]) -> ModelEvent {
-        ModelEvent::UpsertNotebooks(objects.to_vec())
+    fn bulk_upsert_event(objects: Vec<CloudObjectUpsertParams<Self>>) -> ModelEvent {
+        ModelEvent::UpsertNotebooks(objects.into_iter().map(CloudNotebook::from).collect())
     }
 
     fn create_object_queue_item(
@@ -232,15 +232,6 @@ pub fn init(app: &mut AppContext) {
     self::notebook::init(app);
     self::file::init(app);
     self::editor::view::init(app);
-}
-
-/// Post process a notebook's content read from an external system. This cleans up extra
-/// whitespace, and, in the future, may filter out unsupported syntax extensions.
-///
-/// See CLD-944.
-pub fn post_process_notebook(data: &str) -> String {
-    // TODO(kevin): We should not strip out newlines in the code block.
-    data.lines().filter(|line| !line.is_empty()).join("\n")
 }
 
 /// Translate a notebook's Markdown content into an external Markdown format.

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use session_sharing_protocol::common::SessionId;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
 
@@ -16,37 +17,55 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
 
-/// Listens for conversation status changes and CLI agent session status
-/// changes, then reports the corresponding task state to the server via
-/// `update_agent_task`. This centralises task status reporting so that
-/// individual call-sites (driver, controller, etc.) no longer need to
-/// call `update_agent_task` for state transitions.
+/// Syncs locally-owned conversation state to the server `ai_tasks` row via
+/// `AIClient::update_agent_task`. This includes task state, status message,
+/// server conversation token (`conversation_id`), and shared session ID.
 ///
-/// For Oz harness conversations, status is derived from
-/// `BlocklistAIHistoryEvent::UpdatedConversationStatus` and the `task_id`
-/// is read from the `AIConversation`.
+/// For Oz harness conversations, the model listens to
+/// `BlocklistAIHistoryEvent::UpdatedConversationStatus` (state transitions)
+/// and `BlocklistAIHistoryEvent::ConversationServerTokenAssigned` (so the
+/// server conversation token is persisted as soon as the streamed `Init`
+/// event arrives). It also handles
+/// `BlocklistAIHistoryEvent::LocalSharedSessionEstablished` to link
+/// shared session IDs to the task row.
 ///
 /// For third-party harnesses (e.g. Claude Code), status is derived from
-/// `CLIAgentSessionsModelEvent::StatusChanged`. Because these sessions
-/// do not create conversations in the history model, the driver must
-/// register a `terminal_view_id → task_id` mapping via
-/// `register_cli_session`.
-///
-/// Registered unconditionally — handles task status reporting for all
-/// conversations, not just v2 orchestrated ones.
-pub struct TaskStatusSyncModel {
+/// `CLIAgentSessionsModelEvent::StatusChanged`. Because these sessions do
+/// not create conversations in the history model, the driver must register
+/// a `terminal_view_id → task_id` mapping via `register_cli_session`.
+pub struct LocalAgentTaskSyncModel {
     ai_client: Arc<dyn AIClient>,
     /// Maps terminal view IDs to task IDs for third-party harness sessions
     /// that don't have conversations in `BlocklistAIHistoryModel`.
     cli_session_task_ids: HashMap<EntityId, AmbientAgentTaskId>,
 }
 
-pub enum TaskStatusSyncModelEvent {}
+pub enum LocalAgentTaskSyncModelEvent {}
 
-impl TaskStatusSyncModel {
+/// Aggregated update to send via `AIClient::update_agent_task`. Field names
+/// match the server input shape so it is unambiguous which value flows to
+/// which server field.
+///
+/// `server_conversation_token` is the server-assigned conversation token
+/// (see `ServerConversationToken`), passed to the server in the
+/// `conversation_id` field of `UpdateAgentTaskInput`. It is intentionally
+/// distinct from the client-local `AIConversationId`, which never crosses
+/// this boundary.
+#[derive(Default)]
+struct LocalTaskUpdate {
+    task_state: Option<AgentTaskState>,
+    session_id: Option<SessionId>,
+    server_conversation_token: Option<String>,
+    status_message: Option<TaskStatusUpdate>,
+}
+
+impl LocalAgentTaskSyncModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        Self::new_with_ai_client(ai_client, ctx)
+    }
 
+    fn new_with_ai_client(ai_client: Arc<dyn AIClient>, ctx: &mut ModelContext<Self>) -> Self {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         ctx.subscribe_to_model(&history_model, |me, event, ctx| {
             me.handle_history_event(event, ctx);
@@ -63,6 +82,15 @@ impl TaskStatusSyncModel {
         }
     }
 
+    /// Test-only constructor that lets tests inject a mock `AIClient`.
+    #[cfg(test)]
+    pub(super) fn new_with_ai_client_for_test(
+        ai_client: Arc<dyn AIClient>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
+        Self::new_with_ai_client(ai_client, ctx)
+    }
+
     /// Registers a terminal view as a tracked CLI agent session so that
     /// status changes from `CLIAgentSessionsModel` are reported to the
     /// server. Called by `AgentDriver` when setting up a third-party
@@ -75,10 +103,17 @@ impl TaskStatusSyncModel {
         ctx: &mut ModelContext<Self>,
     ) {
         self.cli_session_task_ids.insert(terminal_view_id, task_id);
-        // Report IN_PROGRESS immediately
-        // by CLIAgentSessionsModel::register_listener is never emitted as a
-        // StatusChanged event, so we must report it at registration time.
-        self.fire_update(task_id, AgentTaskState::InProgress, None, ctx);
+        // Report IN_PROGRESS immediately because the initial
+        // `register_listener` call on `CLIAgentSessionsModel` never emits a
+        // `StatusChanged` event, so we must report it at registration time.
+        self.fire_update(
+            task_id,
+            LocalTaskUpdate {
+                task_state: Some(AgentTaskState::InProgress),
+                ..LocalTaskUpdate::default()
+            },
+            ctx,
+        );
     }
 
     fn handle_history_event(
@@ -104,6 +139,12 @@ impl TaskStatusSyncModel {
                 conversation_id, ..
             } => {
                 self.on_conversation_status_updated(*conversation_id, ctx);
+            }
+            BlocklistAIHistoryEvent::LocalSharedSessionEstablished {
+                conversation_id,
+                session_id,
+            } => {
+                self.on_local_shared_session_established(*conversation_id, *session_id, ctx);
             }
             _ => {}
         }
@@ -136,34 +177,41 @@ impl TaskStatusSyncModel {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let (task_id, task_state, status_message) = {
-            let Some(conversation) =
-                BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
-            else {
-                return;
-            };
-            // Viewers of shared sessions must not report status — they don't
-            // own the task. Currently also protected by the absence of task_id,
-            // but this guard makes the intent explicit.
-            if conversation.is_viewing_shared_session() {
-                return;
-            }
-            // Skip remote child placeholder conversations — the remote worker's
-            // own client handles status reporting. Reporting here would
-            // prematurely move remote tasks from QUEUED to IN_PROGRESS before
-            // the worker can claim them. Local children are NOT skipped because
-            // they execute in this client and have no separate reporter.
-            if conversation.is_remote_child() {
-                return;
-            }
-            let Some(task_id) = conversation.task_id() else {
-                return;
-            };
-            let (state, msg) = map_conversation_status(conversation);
-            (task_id, state, msg)
+        let Some((task_id, update)) =
+            with_local_conversation(conversation_id, ctx, |conversation| {
+                let (task_state, status_message) = map_conversation_status(conversation);
+                LocalTaskUpdate {
+                    task_state: Some(task_state),
+                    server_conversation_token: conversation
+                        .server_conversation_token()
+                        .map(|token| token.as_str().to_string()),
+                    status_message,
+                    ..LocalTaskUpdate::default()
+                }
+            })
+        else {
+            return;
         };
 
-        self.fire_update(task_id, task_state, status_message, ctx);
+        self.fire_update(task_id, update, ctx);
+    }
+
+    fn on_local_shared_session_established(
+        &self,
+        conversation_id: AIConversationId,
+        session_id: SessionId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some((task_id, update)) =
+            with_local_conversation(conversation_id, ctx, |_| LocalTaskUpdate {
+                session_id: Some(session_id),
+                ..LocalTaskUpdate::default()
+            })
+        else {
+            return;
+        };
+
+        self.fire_update(task_id, update, ctx);
     }
 
     fn on_cli_session_status_changed(
@@ -177,26 +225,47 @@ impl TaskStatusSyncModel {
         };
 
         let (task_state, status_message) = map_cli_session_status(status);
-        self.fire_update(task_id, task_state, status_message, ctx);
+        self.fire_update(
+            task_id,
+            LocalTaskUpdate {
+                task_state: Some(task_state),
+                status_message,
+                ..LocalTaskUpdate::default()
+            },
+            ctx,
+        );
     }
 
     /// Sends an `update_agent_task` request to the server (fire-and-forget).
     fn fire_update(
         &self,
         task_id: AmbientAgentTaskId,
-        task_state: AgentTaskState,
-        status_message: Option<TaskStatusUpdate>,
+        update: LocalTaskUpdate,
         ctx: &mut ModelContext<Self>,
     ) {
         let ai_client = self.ai_client.clone();
+        let LocalTaskUpdate {
+            task_state,
+            session_id,
+            server_conversation_token,
+            status_message,
+        } = update;
         ctx.spawn(
             async move {
                 if let Err(err) = ai_client
-                    .update_agent_task(task_id, Some(task_state), None, None, status_message)
+                    .update_agent_task(
+                        task_id,
+                        task_state,
+                        session_id,
+                        server_conversation_token.clone(),
+                        status_message,
+                    )
                     .await
                 {
                     log::warn!(
-                        "TaskStatusSyncModel: failed to update task {task_id} to {task_state:?}: {err:#}"
+                        "LocalAgentTaskSyncModel: failed to update task {task_id} \
+                         (state={task_state:?}, session_id={session_id:?}, \
+                         server_conversation_token={server_conversation_token:?}): {err:#}"
                     );
                 }
             },
@@ -205,11 +274,40 @@ impl TaskStatusSyncModel {
     }
 }
 
-impl Entity for TaskStatusSyncModel {
-    type Event = TaskStatusSyncModelEvent;
+impl Entity for LocalAgentTaskSyncModel {
+    type Event = LocalAgentTaskSyncModelEvent;
 }
 
-impl SingletonEntity for TaskStatusSyncModel {}
+impl SingletonEntity for LocalAgentTaskSyncModel {}
+
+/// Resolves a conversation ID to a `(task_id, value)` pair when the
+/// conversation is owned by this client. Returns `None` for viewer
+/// conversations, remote-child placeholders, conversations without a
+/// `task_id`, and unknown conversation IDs.
+fn with_local_conversation<T>(
+    conversation_id: AIConversationId,
+    ctx: &ModelContext<LocalAgentTaskSyncModel>,
+    make_value: impl FnOnce(&AIConversation) -> T,
+) -> Option<(AmbientAgentTaskId, T)> {
+    let history = BlocklistAIHistoryModel::as_ref(ctx);
+    let conversation = history.conversation(&conversation_id)?;
+    // Viewers of shared sessions must not report status — they don't
+    // own the task. Currently also protected by the absence of task_id,
+    // but this guard makes the intent explicit.
+    if conversation.is_viewing_shared_session() {
+        return None;
+    }
+    // Skip remote child placeholder conversations — the remote worker's
+    // own client handles status reporting. Reporting here would
+    // prematurely move remote tasks from QUEUED to IN_PROGRESS before
+    // the worker can claim them. Local children are NOT skipped because
+    // they execute in this client and have no separate reporter.
+    if conversation.is_remote_child() {
+        return None;
+    }
+    let task_id = conversation.task_id()?;
+    Some((task_id, make_value(conversation)))
+}
 
 /// Maps conversation state to an `AgentTaskState` and optional status message.
 /// For errors, extracts the specific error from the last exchange when available.
@@ -333,5 +431,5 @@ fn map_cli_session_status(
 }
 
 #[cfg(test)]
-#[path = "task_status_sync_model_tests.rs"]
+#[path = "local_agent_task_sync_model_tests.rs"]
 mod tests;

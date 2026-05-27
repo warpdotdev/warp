@@ -125,6 +125,7 @@ pub enum RemoteServerOperation {
     GetDiffState,
     DiscardFiles,
     GetBranches,
+    UploadHandoffSnapshot,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]

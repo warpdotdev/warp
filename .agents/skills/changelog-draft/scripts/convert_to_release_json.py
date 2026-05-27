@@ -31,8 +31,6 @@ CATEGORY_MAP = {
     "IMAGE": "images",
 }
 
-REPO_URL = "https://github.com/warpdotdev/warp"
-
 
 def format_entry(entry: dict) -> str:
     """Format a single changelog entry as a text line with a PR link.
@@ -40,14 +38,17 @@ def format_entry(entry: dict) -> str:
     Includes external contributor attribution when applicable.
     """
     text = entry["text"]
-    pr_number = entry["pr_number"]
-    link = f"([#{pr_number}]({REPO_URL}/pull/{pr_number}))"
+    pr_number = entry.get("pr_number") or entry.get("number")
+    url = entry.get("url") or entry.get("pr_url")
+
+    link = ""
+    if url and pr_number:
+        link = f" ([#{pr_number}]({url}))"
 
     attribution = ""
     if entry.get("is_external") and entry.get("author"):
         attribution = f" — @{entry['author']} ✨"
-
-    return f"{text} {link}{attribution}"
+    return f"{text}{link}{attribution}"
 
 
 def convert(draft: dict) -> dict:

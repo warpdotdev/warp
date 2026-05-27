@@ -281,15 +281,20 @@ impl OrchestrationConfigBlockView {
                 }
                 HarnessAvailabilityEvent::Changed
                 | HarnessAvailabilityEvent::AuthSecretsLoaded
-                | HarnessAvailabilityEvent::AuthSecretsFetchFailed => {
+                | HarnessAvailabilityEvent::AuthSecretsFetchFailed
+                | HarnessAvailabilityEvent::AuthSecretDeleted { .. } => {
                     // Repopulate even on fetch failure to replace "Loading…".
+                    // The Deleted event also triggers a refresh so any
+                    // already-mounted picker drops the deleted entry from
+                    // its menu.
                     if me.pickers_initialized {
                         oc::repopulate_all_pickers(&mut me.edit_state, &me.pickers, ctx);
                     }
                     me.maybe_auto_open_create_modal(ctx);
                     ctx.notify();
                 }
-                HarnessAvailabilityEvent::AuthSecretCreationFailed { .. } => {}
+                HarnessAvailabilityEvent::AuthSecretCreationFailed { .. }
+                | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
             },
         );
 

@@ -44,8 +44,8 @@ use crate::ai::mcp::{
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::{
-    CloudObject, CloudObjectLocation, CloudObjectMetadataExt, GenericStringObjectFormat,
-    JsonObjectType, Space,
+    CloudObject, CloudObjectLocation, CloudObjectLookup as _, CloudObjectMetadataExt,
+    CloudObjectUuidLookup as _, GenericStringObjectFormat, JsonObjectType, Space,
 };
 use crate::drive::CloudObjectTypeAndId;
 use crate::persistence::{
@@ -1416,8 +1416,6 @@ impl TemplatableMCPServerManager {
         servers_to_restart: HashSet<Uuid>,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Import inline because of circular dependencies
-        use crate::ai::mcp::CloudMCPServer;
         let cloud_legacy_servers = CloudMCPServer::get_all(ctx);
         log::info!(
             "Converting {} legacy MCP servers into templatable MCP servers",

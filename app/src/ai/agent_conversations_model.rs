@@ -43,6 +43,7 @@ use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::conversation_navigation::ConversationNavigationData;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
+use crate::cloud_object::CloudObjectLookup as _;
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::server::cloud_objects::update_manager::{UpdateManager, UpdateManagerEvent};
 use crate::server::ids::{ServerId, SyncId};
@@ -528,6 +529,9 @@ pub struct AgentConversationsModel {
     /// and are absent from this map.
     task_fetch_state: HashMap<AmbientAgentTaskId, TaskFetchState>,
     rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState,
+    /// Earliest RTC timestamp received while no list surface was open.
+    /// On next `register_view_open`, triggers a single `fetch_tasks_updated_after`.
+    dirty_since: Option<DateTime<Utc>>,
 }
 
 pub enum AgentConversationsModelEvent {
@@ -575,6 +579,7 @@ impl AgentConversationsModel {
                 has_finished_initial_load: true,
                 task_fetch_state: HashMap::new(),
                 rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
+                dirty_since: None,
             };
         }
 
@@ -613,6 +618,7 @@ impl AgentConversationsModel {
             has_finished_initial_load: false,
             task_fetch_state: HashMap::new(),
             rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
+            dirty_since: None,
         };
 
         // Only sync local conversations if we're not in CLI mode. Server-side data
@@ -678,23 +684,51 @@ impl AgentConversationsModel {
         event: &UpdateManagerEvent,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let UpdateManagerEvent::AmbientTaskUpdated { timestamp } = event {
-            match std::mem::take(&mut self.rtc_task_refresh_throttle_state) {
-                RtcTaskRefreshThrottleState::Idle => {
-                    self.fetch_tasks_updated_after(*timestamp, ctx);
-                    self.start_rtc_task_refresh_throttle_timer(ctx);
-                }
-                RtcTaskRefreshThrottleState::CoolingDown {
-                    mut pending_timestamp,
+        let UpdateManagerEvent::AmbientTaskUpdated { task_id, timestamp } = event else {
+            return;
+        };
+
+        let has_list_consumers = self
+            .active_data_consumers_per_window
+            .values()
+            .any(|views| !views.is_empty());
+        if has_list_consumers {
+            // (a) If management view or conversation list is open, throttled list-fetch.
+            self.handle_rtc_for_list_views(*timestamp, ctx);
+        } else {
+            let has_open_tab = ActiveAgentViewsModel::as_ref(ctx)
+                .get_terminal_view_id_for_ambient_task(*task_id)
+                .is_some();
+            if has_open_tab {
+                // (b) If this task has an open tab (any window), force a re-fetch.
+                self.async_fetch_task(task_id, ctx);
+            } else {
+                // (c) No list surface open: record earliest timestamp for flush on next view open.
+                record_earliest_rtc_task_refresh_timestamp(&mut self.dirty_since, *timestamp);
+            }
+        }
+    }
+
+    // Handle RTC invalidations for list views, respecting the refresh throttling.
+    fn handle_rtc_for_list_views(
+        &mut self,
+        timestamp: DateTime<Utc>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match std::mem::take(&mut self.rtc_task_refresh_throttle_state) {
+            RtcTaskRefreshThrottleState::Idle => {
+                self.fetch_tasks_updated_after(timestamp, ctx);
+                self.start_rtc_task_refresh_throttle_timer(ctx);
+            }
+            RtcTaskRefreshThrottleState::CoolingDown {
+                mut pending_timestamp,
+                timer_abort_handle,
+            } => {
+                record_earliest_rtc_task_refresh_timestamp(&mut pending_timestamp, timestamp);
+                self.rtc_task_refresh_throttle_state = RtcTaskRefreshThrottleState::CoolingDown {
+                    pending_timestamp,
                     timer_abort_handle,
-                } => {
-                    record_earliest_rtc_task_refresh_timestamp(&mut pending_timestamp, *timestamp);
-                    self.rtc_task_refresh_throttle_state =
-                        RtcTaskRefreshThrottleState::CoolingDown {
-                            pending_timestamp,
-                            timer_abort_handle,
-                        };
-                }
+                };
             }
         }
     }
@@ -744,6 +778,8 @@ impl AgentConversationsModel {
 
         // Subtract 1 second to give buffer for clock differences with server
         let updated_after = timestamp - chrono::Duration::seconds(1);
+        // Reset `dirty_since` now that we are doing a fetch.
+        self.dirty_since = None;
 
         ctx.spawn_with_retry_on_error(
             move || {
@@ -945,6 +981,11 @@ impl AgentConversationsModel {
             .or_default()
             .insert(view_id);
         self.update_polling_state(ctx);
+
+        // Flush dirty tasks accumulated while no list surface was open.
+        if let Some(dirty_since) = self.dirty_since.take() {
+            self.fetch_tasks_updated_after(dirty_since, ctx);
+        }
     }
 
     /// Called when a view that consumes this model's data becomes hidden.
@@ -1477,7 +1518,8 @@ impl AgentConversationsModel {
             | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. }
             | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
             | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
-            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. } => {}
+            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
+            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => {}
 
             BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. } => {
                 ctx.emit(AgentConversationsModelEvent::ConversationUpdated {
@@ -1529,20 +1571,24 @@ impl AgentConversationsModel {
             return Some(task.clone());
         }
 
-        // Consult the per-task fetch state. The three variants are mutually exclusive: at most
-        // one applies to a given id.
+        self.async_fetch_task(task_id, ctx);
+        None
+    }
+
+    /// Consult fetch-state guards and spawn a fetch if allowed.
+    fn async_fetch_task(&mut self, task_id: &AmbientAgentTaskId, ctx: &mut ModelContext<Self>) {
         match self.task_fetch_state.get(task_id) {
-            Some(TaskFetchState::InFlight) => return None,
+            Some(TaskFetchState::InFlight) => return,
             Some(TaskFetchState::PermanentlyFailed { at, .. }) => {
                 if at.elapsed() < PERMANENT_FETCH_FAILURE_COOLDOWN {
-                    return None;
+                    return;
                 }
                 // Cooldown has elapsed; clear the entry and fall through to fetch again.
                 self.task_fetch_state.remove(task_id);
             }
             Some(TaskFetchState::TransientlyFailed { at, .. }) => {
                 if at.elapsed() < TRANSIENT_FETCH_FAILURE_COOLDOWN {
-                    return None;
+                    return;
                 }
                 self.task_fetch_state.remove(task_id);
             }
@@ -1602,8 +1648,6 @@ impl AgentConversationsModel {
                 }
             },
         );
-
-        None
     }
 
     /// Returns all (name, uid) pairs for creators of tasks in the model.
@@ -1830,6 +1874,7 @@ impl AgentConversationsModel {
         self.abort_rtc_task_refresh_throttle();
         self.active_data_consumers_per_window.clear();
         self.task_fetch_state.clear();
+        self.dirty_since = None;
         // Reset the initial load flag so that we can retry the initial sync with the new logged in user
         self.has_finished_initial_load = false;
     }

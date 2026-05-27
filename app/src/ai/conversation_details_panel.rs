@@ -47,6 +47,7 @@ use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
 use crate::appearance::Appearance;
 use crate::auth::UserUid;
+use crate::cloud_object::CloudObjectLookup as _;
 use crate::notebooks::NotebookId;
 use crate::send_telemetry_from_ctx;
 use crate::server::ids::{ServerId, SyncId};

@@ -15,10 +15,9 @@ use crate::cloud_object::model::generic_string_model::{
     GenericStringModel, GenericStringObjectId, StringModel,
 };
 use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
-use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{
-    GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType,
-    Revision,
+    CloudObjectUuid, GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
+    JsonObjectType, Revision,
 };
 use crate::drive::items::mcp_server::WarpDriveMCPServer;
 use crate::drive::items::WarpDriveItem;
@@ -56,7 +55,6 @@ cfg_if::cfg_if! {
 
 pub mod gallery;
 pub use gallery::MCPGalleryManager;
-use warpui::{AppContext, SingletonEntity as _};
 pub mod templatable;
 pub use templatable::{JsonTemplate, TemplatableMCPServer, TemplateVariable};
 pub mod logs;
@@ -162,26 +160,9 @@ pub struct ServerSentEvents {
 pub type CloudMCPServer = GenericCloudObject<GenericStringObjectId, CloudMCPServerModel>;
 pub type CloudMCPServerModel = GenericStringModel<MCPServer, JsonSerializer>;
 
-impl CloudMCPServer {
-    pub fn get_all(app: &AppContext) -> Vec<CloudMCPServer> {
-        CloudModel::as_ref(app)
-            .get_all_objects_of_type::<GenericStringObjectId, CloudMCPServerModel>()
-            .cloned()
-            .collect()
-    }
-
-    pub fn get_by_id<'a>(sync_id: &'a SyncId, app: &'a AppContext) -> Option<&'a CloudMCPServer> {
-        CloudModel::as_ref(app)
-            .get_object_of_type::<GenericStringObjectId, CloudMCPServerModel>(sync_id)
-    }
-
-    pub fn get_by_uuid<'a>(
-        uuid: &'a uuid::Uuid,
-        app: &'a AppContext,
-    ) -> Option<&'a CloudMCPServer> {
-        CloudModel::as_ref(app)
-            .get_all_objects_of_type::<GenericStringObjectId, CloudMCPServerModel>()
-            .find(|server| server.model().string_model.uuid == *uuid)
+impl CloudObjectUuid for MCPServer {
+    fn uuid(&self) -> uuid::Uuid {
+        self.uuid
     }
 }
 

@@ -103,6 +103,7 @@ popd > /dev/null
 if [[ ",$FEATURES," =~ ",cocoa_sentry," ]]; then
   echo "Copying Sentry framework into app bundle..."
   SENTRY_FRAMEWORK="app/frameworks/dev/Sentry-Dynamic-WithARM64e.xcframework/macos-arm64_arm64e_x86_64/Sentry.framework"
+  mkdir -p "$WARP_APP_PATH/Contents/Frameworks"
   cp -a "$SENTRY_FRAMEWORK" "$WARP_APP_PATH/Contents/Frameworks/"
 fi
 echo "Adding rpath to support mac frameworks (e.g. Sentry)"

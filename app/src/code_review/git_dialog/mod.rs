@@ -812,6 +812,7 @@ impl TypedActionView for GitDialog {
                     };
                     send_telemetry_from_ctx!(
                         CodeReviewTelemetryEvent::GitDialogCompleted {
+                            is_local: Some(true),
                             operation,
                             status: GitDialogStatus::Cancelled,
                             error: None,

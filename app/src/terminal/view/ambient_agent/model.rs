@@ -31,6 +31,7 @@ use crate::ai::execution_profiles::{CloudAgentComputerUseState, ComputerUsePermi
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
+use crate::cloud_object::CloudObjectLookup as _;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
@@ -233,7 +234,7 @@ pub struct AmbientAgentViewModel {
     harness_reasoning_level: Option<String>,
     /// Name of the selected auth secret for the current non-Oz harness.
     harness_auth_secret_name: Option<String>,
-    /// Whether the harness CLI
+    /// Whether the harness CLI (e.g. `claude`, `gemini`) has started running for a non-oz run.
     /// Used to transition the cloud-mode setup UI out of the pre-first-exchange phase when
     /// there is no oz `AppendedExchange` to key off of.
     harness_command_started: bool,

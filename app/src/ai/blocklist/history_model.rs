@@ -813,10 +813,13 @@ impl BlocklistAIHistoryModel {
         for conversation in conversations.into_iter() {
             let conversation_id = conversation.id();
             conversation_ids.push(conversation_id);
-            self.live_conversation_ids_for_terminal_view
+            let live_conversation_ids = self
+                .live_conversation_ids_for_terminal_view
                 .entry(terminal_view_id)
-                .or_default()
-                .push(conversation_id);
+                .or_default();
+            if !live_conversation_ids.contains(&conversation_id) {
+                live_conversation_ids.push(conversation_id);
+            }
 
             if let Some(key) = agent_id_key(&conversation) {
                 self.agent_id_to_conversation_id
@@ -856,13 +859,8 @@ impl BlocklistAIHistoryModel {
         });
     }
 
-    /// Sets the active conversation ID, transferring ownership from any other
-    /// terminal view that currently holds it.
-    ///
-    /// Use this when the user **explicitly navigates** to a conversation in a
-    /// different view (e.g. from the conversation history or command palette).
-    /// For automatic follow-ups during tool-call cycles, use [`Self::mark_active_conversation_id`]
-    /// instead — it updates the active pointer without touching other views.
+    /// Sets the active conversation ID for a terminal view and transfers ownership
+    /// from any other terminal view that currently holds it.
     pub fn set_active_conversation_id(
         &mut self,
         conversation_id: AIConversationId,
@@ -892,11 +890,9 @@ impl BlocklistAIHistoryModel {
             .iter_mut()
             .filter(|(other_terminal_view_id, _)| **other_terminal_view_id != terminal_view_id)
         {
-            if let Some(pos) = other_terminal_view_live_conversation_ids
-                .iter()
-                .position(|id| *id == conversation_id)
-            {
-                other_terminal_view_live_conversation_ids.remove(pos);
+            let previous_len = other_terminal_view_live_conversation_ids.len();
+            other_terminal_view_live_conversation_ids.retain(|id| *id != conversation_id);
+            if other_terminal_view_live_conversation_ids.len() != previous_len {
                 previous_owners.push(*other_terminal_view);
             }
 
@@ -919,40 +915,6 @@ impl BlocklistAIHistoryModel {
                 previous_terminal_view_id,
                 new_terminal_view_id: terminal_view_id,
             });
-        }
-
-        self.active_conversation_for_terminal_view
-            .insert(terminal_view_id, conversation_id);
-
-        ctx.emit(BlocklistAIHistoryEvent::SetActiveConversation {
-            conversation_id,
-            terminal_view_id,
-        });
-    }
-
-    /// Marks a conversation as the active conversation for a terminal view
-    /// **without** removing it from other views.
-    ///
-    /// This is the non-transferring counterpart to [`Self::set_active_conversation_id`].
-    /// Use this during automatic follow-ups and request sending where the
-    /// conversation already belongs to this view and we only need to update
-    /// the "most recently streamed" pointer.
-    pub fn mark_active_conversation_id(
-        &mut self,
-        conversation_id: AIConversationId,
-        terminal_view_id: EntityId,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if !self
-            .live_conversation_ids_for_terminal_view
-            .get(&terminal_view_id)
-            .is_some_and(|conversation_ids| conversation_ids.contains(&conversation_id))
-        {
-            log::warn!(
-                "mark_active_conversation_id: conversation {conversation_id:?} is not in \
-                 terminal view {terminal_view_id:?} live list, skipping"
-            );
-            return;
         }
 
         self.active_conversation_for_terminal_view
@@ -1584,6 +1546,7 @@ impl BlocklistAIHistoryModel {
                 token_usage,
                 usage_metadata,
                 was_user_initiated_request,
+                ctx,
             ) {
                 log::warn!(
                     "Failed to update request cost for conversation {conversation_id}: {e:#}"
@@ -1729,28 +1692,32 @@ impl BlocklistAIHistoryModel {
         let active_conversation_id = self
             .active_conversation_for_terminal_view
             .remove(&terminal_view_id);
-        if let Some(cleared_conversation_ids) = self
+        let mut cleared_conversation_ids: Vec<AIConversationId> = Vec::new();
+        if let Some(ids) = self
             .live_conversation_ids_for_terminal_view
             .remove(&terminal_view_id)
         {
+            cleared_conversation_ids.extend(ids.iter().copied());
             self.cleared_conversation_ids_for_terminal_view
                 .entry(terminal_view_id)
-                .and_modify(|existing| existing.extend(cleared_conversation_ids.clone()))
-                .or_insert(cleared_conversation_ids);
+                .and_modify(|existing| existing.extend(ids.clone()))
+                .or_insert(ids);
         }
-        let cleared_conversation_ids = self
+        if let Some(ids) = self
             .live_conversation_ids_for_terminal_view
-            .remove(&terminal_view_id);
-        if let Some(cleared_conversation_ids) = cleared_conversation_ids {
+            .remove(&terminal_view_id)
+        {
+            cleared_conversation_ids.extend(ids.iter().copied());
             self.cleared_conversation_ids_for_terminal_view
                 .entry(terminal_view_id)
-                .and_modify(|existing| existing.extend(cleared_conversation_ids.clone()))
-                .or_insert(cleared_conversation_ids);
+                .and_modify(|existing| existing.extend(ids.clone()))
+                .or_insert(ids);
         }
         ctx.emit(
             BlocklistAIHistoryEvent::ClearedConversationsInTerminalView {
                 terminal_view_id,
                 active_conversation_id,
+                cleared_conversation_ids,
             },
         );
     }
@@ -2469,6 +2436,9 @@ pub enum BlocklistAIHistoryEvent {
     ClearedConversationsInTerminalView {
         terminal_view_id: EntityId,
         active_conversation_id: Option<AIConversationId>,
+        /// All conversation ids that were live in `terminal_view_id` before the clear.
+        /// Subscribers (e.g. `QueuedQueryModel`) use this to drop per-conversation state.
+        cleared_conversation_ids: Vec<AIConversationId>,
     },
 
     UpdatedTodoList {
@@ -2572,6 +2542,13 @@ pub enum BlocklistAIHistoryEvent {
     ConversationUsageMetadataUpdated {
         conversation_id: AIConversationId,
     },
+
+    /// Emitted when a sharer-owned conversation establishes a local
+    /// shared session.
+    LocalSharedSessionEstablished {
+        conversation_id: AIConversationId,
+        session_id: session_sharing_protocol::common::SessionId,
+    },
 }
 
 impl BlocklistAIHistoryEvent {
@@ -2653,6 +2630,8 @@ impl BlocklistAIHistoryEvent {
             // orchestrator footer reading descendant credits) can't be
             // disambiguated by a single owner pane.
             BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. } => None,
+            // Conversation-scoped; subscribers resolve the owning view via conversation_id.
+            BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => None,
         }
     }
 }

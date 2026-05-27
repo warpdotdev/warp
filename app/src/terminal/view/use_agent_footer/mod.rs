@@ -5,7 +5,6 @@
 //! Gemini CLI, Codex), it displays a specialized footer with additional functionality.
 
 use base64::Engine;
-use session_sharing_protocol::sharer::SessionSourceType;
 use warpui::clipboard::{ClipboardContent, ImageData};
 
 use crate::ai::agent::ImageContext;
@@ -14,7 +13,9 @@ use crate::ai::blocklist::agent_view::agent_input_footer::{
 };
 use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
 use crate::terminal::cli_agent_sessions::{CLIAgentInputEntrypoint, CLIAgentSessionsModel};
-use crate::terminal::shared_session::{SharedSessionActionSource, SharedSessionScrollbackType};
+use crate::terminal::shared_session::{
+    SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
+};
 use crate::util::image::{infer_mime_type, MAX_IMAGE_SIZE_BYTES_FOR_CLI_AGENT, MIME_SNIFF_BYTES};
 mod warpify_footer;
 
@@ -242,10 +243,13 @@ impl TerminalView {
             UseAgentToolbarEvent::StartRemoteControl { scrollback_type } => {
                 self.auto_stop_sharing_on_cli_end =
                     *scrollback_type == SharedSessionScrollbackType::None;
+                let source = SharedSessionSource::user(
+                    self.active_conversation_task_id(ctx).map(|t| t.to_string()),
+                );
                 self.attempt_to_share_session(
                     *scrollback_type,
                     Some(SharedSessionActionSource::FooterChip),
-                    SessionSourceType::default(),
+                    source,
                     true,
                     ctx,
                 );

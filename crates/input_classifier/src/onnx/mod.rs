@@ -14,7 +14,10 @@ use crate::parser::parse_query_into_tokens;
 use crate::util::{
     is_likely_shell_command, is_one_off_natural_language_word, is_one_off_shell_command_keyword,
 };
-use crate::{ClassificationResult, Context, InputClassifier, InputType};
+use crate::{
+    ClassificationResult, Context, InputClassificationResult, InputClassifier,
+    InputClassifierDecisionSource, InputType,
+};
 
 #[derive(Clone, Copy, RustEmbed)]
 #[folder = "models/onnx"]
@@ -88,7 +91,11 @@ impl OnnxClassifier {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl InputClassifier for OnnxClassifier {
-    async fn detect_input_type(&self, input: ParsedTokensSnapshot, context: &Context) -> InputType {
+    async fn detect_input_type(
+        &self,
+        input: ParsedTokensSnapshot,
+        context: &Context,
+    ) -> InputClassificationResult {
         let word_tokens = parse_query_into_tokens(input.buffer_text.as_str());
 
         let total_word_token_count = word_tokens.len();
@@ -99,36 +106,53 @@ impl InputClassifier for OnnxClassifier {
 
             // If the input is a single word and the word is one of a specific set of words, classify it as AI
             if word_tokens.len() == 1 && is_one_off_natural_language_word(&first_word) {
-                return InputType::AI;
+                return InputClassificationResult::new(
+                    InputType::AI,
+                    InputClassifierDecisionSource::NaturalLanguageOneOffAllowlist,
+                );
             }
 
             // If the first token is one of a specific set of shell command keywords (e.g.: echo or sudo),
             // we should classify it as shell.
             if is_one_off_shell_command_keyword(&first_word) {
-                return InputType::Shell;
+                return InputClassificationResult::new(
+                    InputType::Shell,
+                    InputClassifierDecisionSource::ShellHeuristic,
+                );
             }
         }
 
         if is_likely_shell_command(&input, total_word_token_count).await {
-            return InputType::Shell;
+            return InputClassificationResult::new(
+                InputType::Shell,
+                InputClassifierDecisionSource::ShellHeuristic,
+            );
         }
 
         // Otherwise, defer all decision-making to the model.
         self.classify_input(input, context)
             .await
-            .map(|result| result.to_input_type())
-            .unwrap_or(context.current_input_type)
+            .map(|classification| {
+                InputClassificationResult::new(
+                    classification.to_input_type(),
+                    classification.source,
+                )
+            })
+            .unwrap_or(InputClassificationResult::new(
+                context.current_input_type,
+                InputClassifierDecisionSource::InputClassifierFallbackCurrentInput,
+            ))
     }
 
     async fn classify_input(
         &self,
         input: warp_completer::ParsedTokensSnapshot,
-        _context: &Context,
+        context: &Context,
     ) -> anyhow::Result<ClassificationResult> {
         // If we ever panicked while running inference, we should fall back to the heuristic classifier.
         if self.has_panicked.has_panicked() {
             return crate::heuristic_classifier::HeuristicClassifier
-                .classify_input(input, _context)
+                .classify_input(input, context)
                 .await;
         }
 
@@ -166,7 +190,7 @@ impl InputClassifier for OnnxClassifier {
                 );
                 self.has_panicked.on_panic();
                 crate::heuristic_classifier::HeuristicClassifier
-                    .classify_input(input, _context)
+                    .classify_input(input, context)
                     .await
             }
         }
@@ -197,5 +221,73 @@ impl HasPanicked {
     fn has_panicked(&self) -> bool {
         // Return true if the classifier has panicked.
         self.inner.is_completed()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use futures::executor::block_on;
+    use warp_completer::meta::SpannedItem;
+    use warp_completer::{ParsedTokenData, ParsedTokensSnapshot};
+
+    use super::*;
+
+    struct FailingInferenceRunner;
+
+    impl InferenceRunner for FailingInferenceRunner {
+        fn run_inference(&self, _input: &ParsedTokensSnapshot) -> Result<ClassificationResult> {
+            Err(anyhow::anyhow!("inference failed"))
+        }
+    }
+
+    fn parsed_input_without_descriptions(buffer_text: &str) -> ParsedTokensSnapshot {
+        let mut next_search_start = 0;
+        let parsed_tokens = buffer_text
+            .split_whitespace()
+            .enumerate()
+            .map(|(token_index, token)| {
+                let token_start =
+                    buffer_text[next_search_start..].find(token).unwrap() + next_search_start;
+                let token_end = token_start + token.len();
+                next_search_start = token_end;
+
+                ParsedTokenData {
+                    token: token.to_string().spanned((token_start, token_end)),
+                    token_index,
+                    token_description: None,
+                }
+            })
+            .collect();
+
+        ParsedTokensSnapshot {
+            buffer_text: buffer_text.to_owned(),
+            parsed_tokens,
+        }
+    }
+
+    #[test]
+    fn test_inference_error_reports_current_input_fallback_source() {
+        block_on(async move {
+            let classifier = OnnxClassifier {
+                inference_runner: Box::new(FailingInferenceRunner),
+                has_panicked: HasPanicked::new(),
+            };
+            let context = Context {
+                current_input_type: InputType::AI,
+                is_agent_follow_up: false,
+            };
+            let input = parsed_input_without_descriptions("help migrate database");
+
+            let decision = classifier.detect_input_type(input, &context).await;
+
+            assert_eq!(
+                decision,
+                InputClassificationResult::new(
+                    InputType::AI,
+                    InputClassifierDecisionSource::InputClassifierFallbackCurrentInput,
+                )
+            );
+        });
     }
 }

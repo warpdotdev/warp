@@ -56,6 +56,8 @@ use warpui::{
     ViewHandle, WindowId,
 };
 
+use remote_server::manager::RemoteServerManager;
+
 use crate::ai::persisted_workspace::{PersistedWorkspace, PersistedWorkspaceEvent};
 use crate::code::buffer_location::LocalOrRemotePath as BufferFileLocation;
 use crate::code::editor::model::HoverableLink;
@@ -1580,10 +1582,28 @@ impl LocalCodeEditorView {
         self.has_unsaved_changes(app)
             && self.base_content_version != GlobalBufferModel::as_ref(app).base_version(file_id)
     }
+
+    /// Returns `true` when this editor is backed by a remote file whose
+    /// host no longer has any connected session. Derived on-the-fly from
+    /// `RemoteServerManager` so it is always in sync with actual
+    /// connection state.
+    pub fn is_remote_disconnected(&self, app: &AppContext) -> bool {
+        let Some(BufferFileLocation::Remote(remote_path)) = self.file_location() else {
+            return false;
+        };
+        RemoteServerManager::as_ref(app)
+            .client_for_host(&remote_path.host_id)
+            .is_none()
+    }
+
     /// Save the file to the local file system (or remotely via the remote server).
     /// This will only return an error immediately if there is a failure in the sync part of the call.
     /// Other errors could be returned asynchronously via the FileModelEvent::FailedToSave event.
     pub fn save_local(&mut self, ctx: &mut ViewContext<Self>) -> Result<(), ImmediateSaveError> {
+        if self.is_remote_disconnected(ctx) {
+            return Err(ImmediateSaveError::RemoteDisconnected);
+        }
+
         let Some(file_id) = self.file_id() else {
             return Err(ImmediateSaveError::NoFileId);
         };
@@ -2128,30 +2148,45 @@ impl View for LocalCodeEditorView {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn warpui::Element> {
-        // Rendering the version conflict banner.
-        let base: Box<dyn Element> = if self.has_version_conflicts(app) {
-            let appearance = Appearance::as_ref(app);
-            let banner = render_unsaved_changes_banner(
-                appearance,
-                self.conflict_banner_mouse_states
-                    .discard_mouse_state
-                    .clone(),
-                self.conflict_banner_mouse_states
-                    .overwrite_mouse_state
-                    .clone(),
-            );
-            let mut col = Flex::column().with_child(banner);
+        // Rendering the remote disconnection banner or version conflict banner.
+        // Only show the disconnection banner if the file was successfully loaded;
+        // if it never loaded, the error/loading state handles that.
+        let base: Box<dyn Element> =
+            if self.base_content_version.is_some() && self.is_remote_disconnected(app) {
+                let appearance = Appearance::as_ref(app);
+                let banner = render_remote_disconnected_banner(appearance);
+                let mut col = Flex::column().with_child(banner);
 
-            let editor_view = ChildView::new(&self.editor).finish();
-            if self.editor.as_ref(app).needs_vertical_constraint() {
-                col.add_child(Shrinkable::new(1., editor_view).finish());
+                let editor_view = ChildView::new(&self.editor).finish();
+                if self.editor.as_ref(app).needs_vertical_constraint() {
+                    col.add_child(Shrinkable::new(1., editor_view).finish());
+                } else {
+                    col.add_child(editor_view);
+                }
+                col.finish()
+            } else if self.has_version_conflicts(app) {
+                let appearance = Appearance::as_ref(app);
+                let banner = render_unsaved_changes_banner(
+                    appearance,
+                    self.conflict_banner_mouse_states
+                        .discard_mouse_state
+                        .clone(),
+                    self.conflict_banner_mouse_states
+                        .overwrite_mouse_state
+                        .clone(),
+                );
+                let mut col = Flex::column().with_child(banner);
+
+                let editor_view = ChildView::new(&self.editor).finish();
+                if self.editor.as_ref(app).needs_vertical_constraint() {
+                    col.add_child(Shrinkable::new(1., editor_view).finish());
+                } else {
+                    col.add_child(editor_view);
+                }
+                col.finish()
             } else {
-                col.add_child(editor_view);
-            }
-            col.finish()
-        } else {
-            ChildView::new(&self.editor).finish()
-        };
+                ChildView::new(&self.editor).finish()
+            };
 
         let base_with_handler =
             Hoverable::new(self.context_menu_state.mouse_state.clone(), |_| base)
@@ -2420,6 +2455,51 @@ pub fn render_unsaved_changes_banner(
     .with_padding_left(12.)
     .with_padding_right(12.)
     .finish()
+}
+
+/// Renders a banner indicating that the remote SSH session is disconnected
+/// and save / auto-reload are unavailable.
+pub fn render_remote_disconnected_banner(appearance: &Appearance) -> Box<dyn Element> {
+    let row = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_child(
+            Container::new(
+                ConstrainedBox::new(
+                    Icon::Warning
+                        .to_warpui_icon(appearance.theme().active_ui_text_color())
+                        .finish(),
+                )
+                .with_height(16.)
+                .with_width(16.)
+                .finish(),
+            )
+            .with_margin_right(8.)
+            .finish(),
+        )
+        .with_child(
+            Shrinkable::new(
+                1.,
+                Text::new(
+                    "Remote host disconnected. You will not be able to see updates and save changes.",
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(appearance.theme().active_ui_text_color().into())
+                .soft_wrap(true)
+                .finish(),
+            )
+            .finish(),
+        )
+        .finish();
+
+    Container::new(row)
+        .with_background(appearance.theme().text_selection_as_context_color())
+        .with_padding_top(8.)
+        .with_padding_bottom(8.)
+        .with_padding_left(12.)
+        .with_padding_right(12.)
+        .finish()
 }
 
 /// Renders a small yellow circle with tooltip indicating unsaved changes

@@ -230,12 +230,6 @@ impl JsonModel for EnvVarCollection {
     }
 }
 
-impl PartialEq<CloudEnvVarCollection> for CloudEnvVarCollection {
-    fn eq(&self, other: &CloudEnvVarCollection) -> bool {
-        self.model().string_model == other.model().string_model && self.id == other.id
-    }
-}
-
 pub fn serialize_variables_for_shell<'s, I: IntoIterator<Item = (&'s str, &'s EnvVarValue)>>(
     pairs: I,
     shell_type: ShellType,

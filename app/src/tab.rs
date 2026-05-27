@@ -116,6 +116,8 @@ pub enum NewSessionMenuItem {
     OpenLaunchConfig(LaunchConfig),
     OpenLaunchConfigDocs,
     CreateNewTabConfig,
+    /// Creates a new tab group. Gated by `FeatureFlag::GroupedTabs`.
+    CreateNewTabGroup,
 }
 
 #[derive(Clone, Copy)]
@@ -192,6 +194,7 @@ impl TabData {
         let mut menu_items = vec![];
 
         for section_items in [
+            Self::tab_group_menu_items(),
             self.session_sharing_menu_items(index, ctx),
             self.copy_metadata_menu_items(pane_name_target, ctx),
             self.modify_tab_menu_items(index, tabs_len, pane_name_target, ctx),
@@ -525,6 +528,17 @@ impl TabData {
         vec![MenuItemFields::new("Save as new config")
             .with_on_select_action(WorkspaceAction::SaveCurrentTabAsNewConfig(index))
             .into_item()]
+    }
+
+    /// Returns the tab-group related entries, TODO(johnturcoo) add group actions.
+    fn tab_group_menu_items() -> Vec<MenuItem<WorkspaceAction>> {
+        if !FeatureFlag::GroupedTabs.is_enabled() {
+            return vec![];
+        }
+        vec![
+            MenuItemFields::new("New group with tab").into_item(),
+            MenuItemFields::new_submenu("Move to group").into_item(),
+        ]
     }
 
     fn color_option_menu_items(

@@ -19,13 +19,14 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, Entity, EntityId, SingletonEntity as _};
 
 use super::model_spec_scores::{
-    render_model_spec_header, render_model_spec_scores, CostRow, ModelSpecScoresLayout,
-    MODEL_SPECS_DESCRIPTION, MODEL_SPECS_TITLE, REASONING_LEVEL_DESCRIPTION, REASONING_LEVEL_TITLE,
+    render_model_spec_header, render_model_spec_scores, CostRow, CostRowTooltip,
+    ModelSpecScoresLayout, MODEL_SPECS_DESCRIPTION, MODEL_SPECS_TITLE, REASONING_LEVEL_DESCRIPTION,
+    REASONING_LEVEL_TITLE,
 };
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::llms::{
-    is_using_api_key_for_provider, DisableReason, LLMId, LLMInfo, LLMPreferences, LLMProvider,
-    LLMSpec,
+    is_using_api_key_for_provider, should_show_bedrock_icon_for_model, DisableReason, LLMId,
+    LLMInfo, LLMPreferences, LLMProvider, LLMSpec,
 };
 use crate::auth::AuthStateProvider;
 use crate::features::FeatureFlag;
@@ -41,6 +42,8 @@ use crate::terminal::input::inline_menu::{
 use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+
+const AUTO_BEDROCK_TOOLTIP: &str = "Warp uses Bedrock when the model Auto selects supports it; otherwise it may use Warp-hosted inference.";
 
 #[derive(Clone, Debug)]
 pub struct AcceptModel {
@@ -235,14 +238,18 @@ struct ModelSearchItem {
     id: LLMId,
     provider: LLMProvider,
     spec: Option<LLMSpec>,
-    provider_icon: Option<Icon>,
+    leading_icon: Icon,
+    credential_icon: Option<Icon>,
     display_text: String,
     is_selected: bool,
     is_custom_endpoint: bool,
     disable_reason: Option<DisableReason>,
+    is_auto: bool,
+    is_using_bedrock: bool,
     name_match_result: Option<FuzzyMatchResult>,
     score: OrderedFloat<f64>,
     manage_api_key_mouse_state: MouseStateHandle,
+    cost_row_tooltip_mouse_state: MouseStateHandle,
     reasoning_level: Option<String>,
     discount_percentage: Option<f32>,
 }
@@ -261,18 +268,36 @@ impl ModelSearchItem {
         let is_custom_endpoint = LLMPreferences::as_ref(app)
             .custom_llm_info_for_id(&llm.id)
             .is_some();
+        let is_auto = is_auto(llm);
+        let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
+        let is_using_api_key =
+            is_custom_endpoint || is_using_api_key_for_provider(&llm.provider, app);
+        let leading_icon = if is_using_bedrock {
+            Icon::Aws
+        } else {
+            llm.provider.icon().unwrap_or(Icon::Oz)
+        };
+        let credential_icon = if !is_using_bedrock && is_using_api_key {
+            Some(Icon::Key)
+        } else {
+            None
+        };
         Self {
             id: llm.id.clone(),
             provider: llm.provider.clone(),
             spec: llm.spec.clone(),
-            provider_icon: llm.provider.icon(),
+            leading_icon,
+            credential_icon,
             display_text: llm.display_name.clone(),
             is_selected: &llm.id == active_llm_id,
             is_custom_endpoint,
             disable_reason,
+            is_auto,
+            is_using_bedrock,
             name_match_result: None,
             score: OrderedFloat(f64::MIN),
             manage_api_key_mouse_state: Default::default(),
+            cost_row_tooltip_mouse_state: Default::default(),
             reasoning_level: llm.reasoning_level(),
             discount_percentage: llm.discount_percentage,
         }
@@ -300,11 +325,7 @@ impl SearchItem for ModelSearchItem {
         let icon_size = inline_styles::font_size(appearance);
         let icon_color = inline_styles::icon_color(appearance);
 
-        let icon = self
-            .provider_icon
-            .unwrap_or(Icon::Oz)
-            .to_warpui_icon(icon_color)
-            .finish();
+        let icon = self.leading_icon.to_warpui_icon(icon_color).finish();
 
         Container::new(
             ConstrainedBox::new(icon)
@@ -359,14 +380,17 @@ impl SearchItem for ModelSearchItem {
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(text.finish());
-
-        if self.is_custom_endpoint || is_using_api_key_for_provider(&self.provider, app) {
-            let key_icon =
-                ConstrainedBox::new(Icon::Key.to_warpui_icon(secondary_text_color).finish())
+        if let Some(icon) = self.credential_icon {
+            let credential_icon =
+                ConstrainedBox::new(icon.to_warpui_icon(secondary_text_color).finish())
                     .with_width(font_size)
                     .with_height(font_size)
                     .finish();
-            row = row.with_child(Container::new(key_icon).with_margin_left(6.).finish());
+            row = row.with_child(
+                Container::new(credential_icon)
+                    .with_margin_left(6.)
+                    .finish(),
+            );
         }
 
         if self.is_selected {
@@ -409,7 +433,7 @@ impl SearchItem for ModelSearchItem {
 
         if should_show_discount_chip(
             self.discount_percentage,
-            is_using_api_key_for_provider(&self.provider, app),
+            is_using_api_key_for_provider(&self.provider, app) || self.is_using_bedrock,
         ) {
             let discount_percentage = self.discount_percentage.unwrap_or(0.);
             let chip = Container::new(
@@ -456,7 +480,13 @@ impl SearchItem for ModelSearchItem {
 
         let is_using_api_key =
             self.is_custom_endpoint || is_using_api_key_for_provider(&self.provider, app);
-        let cost_row = if is_using_api_key {
+        let cost_row = if self.is_using_bedrock || is_using_api_key {
+            let search_query = if self.is_using_bedrock {
+                "bedrock"
+            } else {
+                "api"
+            }
+            .to_string();
             let manage_button = appearance
                 .ui_builder()
                 .button(
@@ -476,15 +506,29 @@ impl SearchItem for ModelSearchItem {
                 })
                 .with_cursor(Some(Cursor::PointingHand))
                 .build()
-                .on_click(|ctx, _, _| {
+                .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(WorkspaceAction::ShowSettingsPageWithSearch {
-                        search_query: "api".to_string(),
+                        search_query: search_query.clone(),
                         section: Some(SettingsSection::WarpAgent),
                     });
                 })
                 .finish();
-
-            CostRow::BilledToApi {
+            CostRow::BilledToProvider {
+                label: if self.is_using_bedrock && self.is_auto {
+                    "Inference may use Bedrock"
+                } else if self.is_using_bedrock {
+                    "Inference via Bedrock"
+                } else {
+                    "Inference via API key"
+                },
+                tooltip: if self.is_using_bedrock && self.is_auto {
+                    Some(CostRowTooltip {
+                        text: AUTO_BEDROCK_TOOLTIP,
+                        mouse_state: self.cost_row_tooltip_mouse_state.clone(),
+                    })
+                } else {
+                    None
+                },
                 manage_button: Container::new(manage_button).finish(),
             }
         } else {

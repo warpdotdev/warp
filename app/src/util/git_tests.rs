@@ -4,7 +4,10 @@ use command::r#async::Command;
 use command::Stdio;
 use tempfile::TempDir;
 
-use super::{detect_current_branch, detect_current_branch_display};
+use super::{
+    detect_current_branch, detect_current_branch_display, get_pr_for_branch, is_gh_auth_error,
+    is_gh_missing_error, is_no_pr_for_branch_error,
+};
 
 /// Helper: run a git command inside the given repo directory.
 async fn git(repo: &Path, args: &[&str]) -> String {
@@ -30,6 +33,39 @@ async fn init_repo() -> (TempDir, std::path::PathBuf) {
     git(&path, &["commit", "--allow-empty", "-m", "initial"]).await;
 
     (dir, path)
+}
+
+#[test]
+fn detects_missing_gh_errors() {
+    assert!(is_gh_missing_error(
+        "Failed to execute gh command: No such file or directory (os error 2)"
+    ));
+    assert!(is_gh_missing_error(
+        "Failed to execute gh command: program not found"
+    ));
+
+    assert!(!is_gh_missing_error(
+        "gh command failed: GraphQL: authentication required; run gh auth login"
+    ));
+    assert!(!is_gh_missing_error(
+        "Post \"https://api.github.com/graphql\": dial tcp: lookup api.github.com: no such host"
+    ));
+}
+
+#[test]
+fn detects_no_pr_for_branch_errors() {
+    assert!(is_no_pr_for_branch_error(
+        "gh command failed: no pull requests found for branch \"feature-a\""
+    ));
+    assert!(is_no_pr_for_branch_error(
+        "gh command failed: no open pull requests found for branch \"feature-a\""
+    ));
+    assert!(is_no_pr_for_branch_error(
+        "GraphQL: NO OPEN PULL REQUESTS FOUND FOR BRANCH feature-a"
+    ));
+
+    assert!(!is_no_pr_for_branch_error("authentication required"));
+    assert!(!is_no_pr_for_branch_error("repository not found"));
 }
 
 #[tokio::test]
@@ -68,6 +104,128 @@ async fn detached_head_display_returns_short_sha() {
         full_sha.starts_with(&result),
         "expected {full_sha} to start with {result}"
     );
+}
+
+#[tokio::test]
+async fn get_pr_for_branch_returns_none_for_detached_head() {
+    let (_dir, repo) = init_repo().await;
+    git(&repo, &["checkout", "--detach", "HEAD"]).await;
+    assert_eq!(get_pr_for_branch(&repo, None).await.unwrap(), None);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn get_pr_for_branch_does_not_require_origin_remote() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::PrInfo;
+
+    let (_dir, repo) = init_repo().await;
+
+    let fake_bin = tempfile::tempdir().expect("failed to create fake bin dir");
+    let gh_path = fake_bin.path().join("gh");
+    fs::write(
+        &gh_path,
+        "#!/bin/sh\nprintf '{\"number\":123,\"url\":\"https://github.com/warp/warp/pull/123\"}\\n'\n",
+    )
+    .expect("failed to write fake gh");
+    let mut permissions = fs::metadata(&gh_path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&gh_path, permissions).unwrap();
+
+    let path_env = format!(
+        "{}:{}",
+        fake_bin.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    assert_eq!(
+        get_pr_for_branch(&repo, Some(&path_env)).await.unwrap(),
+        Some(PrInfo {
+            number: 123,
+            url: "https://github.com/warp/warp/pull/123".to_string()
+        })
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn get_pr_for_branch_returns_none_when_gh_finds_no_pr() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_dir, repo) = init_repo().await;
+
+    let fake_bin = tempfile::tempdir().expect("failed to create fake bin dir");
+    let gh_path = fake_bin.path().join("gh");
+    fs::write(
+        &gh_path,
+        "#!/bin/sh\nprintf 'no pull requests found for branch \"main\"\\n' >&2\nexit 1\n",
+    )
+    .expect("failed to write fake gh");
+    let mut permissions = fs::metadata(&gh_path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&gh_path, permissions).unwrap();
+
+    let path_env = format!(
+        "{}:{}",
+        fake_bin.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    assert_eq!(
+        get_pr_for_branch(&repo, Some(&path_env)).await.unwrap(),
+        None
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn get_pr_for_branch_returns_none_when_gh_cannot_resolve_github_repo() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_dir, repo) = init_repo().await;
+
+    let fake_bin = tempfile::tempdir().expect("failed to create fake bin dir");
+    let gh_path = fake_bin.path().join("gh");
+    fs::write(
+        &gh_path,
+        "#!/bin/sh\nprintf 'none of the git remotes configured for this repository point to a known GitHub host\\n' >&2\nexit 1\n",
+    )
+    .expect("failed to write fake gh");
+    let mut permissions = fs::metadata(&gh_path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&gh_path, permissions).unwrap();
+
+    let path_env = format!(
+        "{}:{}",
+        fake_bin.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    assert_eq!(
+        get_pr_for_branch(&repo, Some(&path_env)).await.unwrap(),
+        None
+    );
+}
+#[test]
+fn detects_gh_auth_errors() {
+    assert!(is_gh_auth_error(
+        "You are not logged in to any GitHub hosts"
+    ));
+    assert!(is_gh_auth_error(
+        "GraphQL: authentication required; run gh auth login"
+    ));
+    assert!(is_gh_auth_error(
+        "To get started with GitHub CLI, run: gh auth login"
+    ));
+
+    assert!(!is_gh_auth_error(
+        "Post \"https://api.github.com/graphql\": dial tcp: lookup api.github.com: no such host"
+    ));
+    assert!(!is_gh_auth_error("no pull requests found for branch"));
 }
 
 #[tokio::test]

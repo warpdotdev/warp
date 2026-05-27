@@ -1,6 +1,5 @@
 use std::rc::Rc;
 
-use session_sharing_protocol::sharer::SessionSourceType;
 use warp_core::settings::Setting as _;
 use warpui::{App, AppContext, SingletonEntity, ViewContext};
 
@@ -23,6 +22,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionsModel,
 };
 use crate::terminal::model::ansi::{BootstrappedValue, Handler as _, InitShellValue};
+use crate::terminal::shared_session::SharedSessionSource;
 use crate::terminal::CLIAgent;
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
@@ -301,7 +301,7 @@ fn use_agent_footer_hidden_during_cloud_agent_setup_lrc() {
             // NO CLIAgentSession registered yet.
             view.model
                 .lock()
-                .set_shared_session_source_type(SessionSourceType::AmbientAgent { task_id: None });
+                .set_shared_session_source(SharedSessionSource::ambient_agent(None));
             assert!(view.model.lock().is_shared_ambient_agent_session());
             assert!(
                 CLIAgentSessionsModel::as_ref(ctx)
@@ -345,7 +345,7 @@ fn cli_agent_footer_renders_for_viewer_of_shared_cloud_agent_session() {
             // what the viewer's terminal manager does on `JoinedSuccessfully`.
             view.model
                 .lock()
-                .set_shared_session_source_type(SessionSourceType::AmbientAgent { task_id: None });
+                .set_shared_session_source(SharedSessionSource::ambient_agent(None));
             assert!(view.model.lock().is_shared_ambient_agent_session());
 
             // Inject a CLI agent session as `apply_cli_agent_state_update` would on

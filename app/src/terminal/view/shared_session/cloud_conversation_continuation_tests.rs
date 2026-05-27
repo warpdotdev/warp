@@ -171,6 +171,7 @@ fn ambient_agent_task(
         created_at: now,
         started_at: Some(now),
         updated_at: now,
+        run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: None,
         session_id: None,
