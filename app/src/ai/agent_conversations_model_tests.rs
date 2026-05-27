@@ -38,6 +38,7 @@ use crate::ai::conversation_navigation::ConversationNavigationData;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
 use crate::server::ids::ServerId;
+use crate::server::server_api::presigned_upload::HttpStatusError;
 use crate::test_util::ai_agent_tasks::{create_api_task, create_message};
 use crate::workspace::WorkspaceAction;
 
@@ -2110,6 +2111,35 @@ fn test_harness_filter_is_filtering_and_reset() {
 }
 
 #[test]
+fn test_task_fetch_error_extracts_access_denied_http_status() {
+    for status in [401, 403] {
+        let error = anyhow::Error::new(HttpStatusError {
+            status,
+            body: String::new(),
+        })
+        .context("run metadata unavailable");
+        let fetch_error = TaskFetchError::from_error(&error);
+
+        assert_eq!(fetch_error.message(), "run metadata unavailable");
+        assert!(
+            fetch_error.is_access_denied(),
+            "expected status {status} to be access denied"
+        );
+    }
+
+    for error in [
+        anyhow::Error::new(HttpStatusError {
+            status: 404,
+            body: String::new(),
+        })
+        .context("permission denied text alone should not decide the UI"),
+        anyhow::anyhow!("API error 403: forbidden"),
+    ] {
+        assert!(!TaskFetchError::from_error(&error).is_access_denied());
+    }
+}
+
+#[test]
 fn test_get_or_async_fetch_task_data_returns_cached_task_without_fetching() {
     // If the task is already in `tasks`, return it directly and don't touch the fetch-state
     // map — even if a stale `PermanentlyFailedAt` entry exists (which shouldn't normally happen,
@@ -2127,7 +2157,10 @@ fn test_get_or_async_fetch_task_data_returns_cached_task_without_fetching() {
                 task_id,
                 TaskFetchState::PermanentlyFailed {
                     at: Instant::now(),
-                    error: TaskFetchError::new("test".to_string(), None),
+                    error: TaskFetchError {
+                        message: "test".to_string(),
+                        status: None,
+                    },
                 },
             );
             model
@@ -2162,7 +2195,10 @@ fn test_get_or_async_fetch_task_data_skips_when_permanently_failed() {
                 task_id,
                 TaskFetchState::PermanentlyFailed {
                     at: Instant::now(),
-                    error: TaskFetchError::new("403 Forbidden".to_string(), Some(403)),
+                    error: TaskFetchError {
+                        message: "403 Forbidden".to_string(),
+                        status: Some(403),
+                    },
                 },
             );
             model
@@ -2225,7 +2261,10 @@ fn test_get_or_async_fetch_task_data_skips_within_transient_cooldown() {
                 task_id,
                 TaskFetchState::TransientlyFailed {
                     at: Instant::now(),
-                    error: TaskFetchError::new("500 Internal Server Error".to_string(), Some(500)),
+                    error: TaskFetchError {
+                        message: "500 Internal Server Error".to_string(),
+                        status: Some(500),
+                    },
                 },
             );
             model

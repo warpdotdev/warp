@@ -81,16 +81,16 @@ pub(crate) struct TaskFetchError {
 }
 
 impl TaskFetchError {
-    pub(crate) fn new(message: String, status: Option<u16>) -> Self {
-        Self { message, status }
-    }
     fn from_error(e: &anyhow::Error) -> Self {
         let status = e.chain().find_map(|cause| {
             cause
                 .downcast_ref::<HttpStatusError>()
                 .map(|http_err| http_err.status)
         });
-        Self::new(format!("{e}"), status)
+        Self {
+            message: format!("{e}"),
+            status,
+        }
     }
 
     pub(crate) fn message(&self) -> &str {
