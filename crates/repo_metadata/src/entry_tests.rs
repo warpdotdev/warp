@@ -1,3 +1,8 @@
+use std::fs;
+
+use ignore::gitignore::Gitignore;
+
+use super::{Entry, IgnoredPathStrategy};
 #[test]
 fn test_git_path_filtering_allowlist() {
     use std::path::Path;
@@ -166,6 +171,94 @@ fn test_git_path_filtering_allowlist() {
             r"C:\Users\user\project\.git\index"
         )));
     }
+}
+
+#[test]
+fn build_tree_marks_descendants_of_ignored_directory_as_ignored() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root_path = dunce::canonicalize(temp_dir.path()).unwrap();
+    fs::write(root_path.join(".gitignore"), "ignored-dir/\n").unwrap();
+    fs::create_dir(root_path.join("ignored-dir")).unwrap();
+    fs::write(root_path.join("ignored-dir").join("ignored-file.txt"), "").unwrap();
+
+    let mut files = Vec::new();
+    let mut gitignores = Vec::<Gitignore>::new();
+    let tree = Entry::build_tree(
+        &root_path,
+        &mut files,
+        &mut gitignores,
+        None,
+        10,
+        0,
+        &IgnoredPathStrategy::Include,
+    )
+    .unwrap();
+
+    let Entry::Directory(root) = tree else {
+        panic!("root should be a directory");
+    };
+    let ignored_dir = root
+        .children
+        .iter()
+        .find(|entry| entry.path().file_name() == Some("ignored-dir"))
+        .unwrap();
+    let Entry::Directory(ignored_dir) = ignored_dir else {
+        panic!("ignored child should be a directory");
+    };
+    assert!(ignored_dir.ignored);
+
+    let ignored_file = ignored_dir
+        .children
+        .iter()
+        .find(|entry| entry.path().file_name() == Some("ignored-file.txt"))
+        .unwrap();
+    assert!(ignored_file.ignored());
+}
+
+#[test]
+fn lazy_loaded_ignored_directory_marks_loaded_children_as_ignored() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root_path = dunce::canonicalize(temp_dir.path()).unwrap();
+    fs::write(root_path.join(".gitignore"), "ignored-dir/\n").unwrap();
+    fs::create_dir(root_path.join("ignored-dir")).unwrap();
+    fs::write(root_path.join("ignored-dir").join("ignored-file.txt"), "").unwrap();
+
+    let mut files = Vec::new();
+    let mut gitignores = Vec::<Gitignore>::new();
+    let mut tree = Entry::build_tree(
+        &root_path,
+        &mut files,
+        &mut gitignores,
+        None,
+        10,
+        0,
+        &IgnoredPathStrategy::IncludeLazy,
+    )
+    .unwrap();
+
+    let ignored_path = root_path.join("ignored-dir");
+    let ignored_dir = tree.find_mut(&ignored_path).unwrap();
+    let Entry::Directory(directory) = ignored_dir else {
+        panic!("ignored child should be a directory");
+    };
+    assert!(directory.ignored);
+    assert!(!directory.loaded);
+    assert!(directory.children.is_empty());
+
+    ignored_dir.load(&mut gitignores).unwrap();
+
+    let Entry::Directory(directory) = ignored_dir else {
+        panic!("ignored child should still be a directory");
+    };
+    assert!(directory.ignored);
+    assert!(directory.loaded);
+
+    let ignored_file = directory
+        .children
+        .iter()
+        .find(|entry| entry.path().file_name() == Some("ignored-file.txt"))
+        .unwrap();
+    assert!(ignored_file.ignored());
 }
 
 #[test]

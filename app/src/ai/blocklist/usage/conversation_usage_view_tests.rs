@@ -22,11 +22,13 @@
 //! framework's render path (which needs `Appearance` / theme singletons
 //! that aren't relevant to the handler's correctness).
 
+use std::collections::HashMap;
 use warp_core::ui::appearance::Appearance;
 use warpui::platform::WindowStyle;
 use warpui::App;
 
 use super::*;
+use crate::persistence::model::{ModelTokenUsage, PRIMARY_AGENT_CATEGORY};
 
 fn placeholder_usage_info() -> ConversationUsageInfo {
     ConversationUsageInfo {
@@ -118,6 +120,33 @@ fn toggle_details_expanded_flips_state_and_resets_show_all_on_collapse() {
             );
         });
     });
+}
+
+#[test]
+fn custom_endpoint_models_use_the_external_key_icon_bucket() {
+    let view = ConversationUsageView::new(
+        ConversationUsageInfo {
+            models: vec![ModelTokenUsage {
+                model_id: "Friendly alias".to_string(),
+                custom_endpoint_tokens: 6,
+                custom_endpoint_token_usage_by_category: HashMap::from([(
+                    PRIMARY_AGENT_CATEGORY.to_string(),
+                    6,
+                )]),
+                ..Default::default()
+            }],
+            ..placeholder_usage_info()
+        },
+        DisplayMode::Footer,
+        None,
+        MouseStateHandle::default(),
+    );
+
+    assert_eq!(
+        view.collect_models_by_category()
+            .get(PRIMARY_AGENT_CATEGORY),
+        Some(&vec![("Friendly alias".to_string(), true)])
+    );
 }
 
 #[test]

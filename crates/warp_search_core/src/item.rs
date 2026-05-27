@@ -1,10 +1,10 @@
 use ordered_float::OrderedFloat;
+use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
-use warpui::fonts::FamilyId;
-use warpui::{Action, AppContext, Element};
+use warpui_core::fonts::FamilyId;
+use warpui_core::{Action, AppContext, Element};
 
 use super::result_renderer::ItemHighlightState;
-use crate::appearance::Appearance;
 
 #[derive(Clone)]
 pub struct SearchItemDetail {

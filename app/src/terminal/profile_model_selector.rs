@@ -2319,12 +2319,18 @@ impl View for ProfileModelSelector {
         let is_udi_enabled =
             crate::settings::InputSettings::as_ref(app).is_universal_developer_input_enabled(app);
 
-        if is_udi_enabled
-            || self
-                .input_model
-                .as_ref(app)
-                .last_ai_autodetection_ts()
-                .is_none_or(|ts| Instant::now().duration_since(ts) > NEW_MODEL_CHOICES_POPUP_DELAY)
+        // The popup overflows the viewport on wasm mobile.
+        let is_wasm_mobile = warpui::platform::is_mobile_device();
+
+        if !is_wasm_mobile
+            && (is_udi_enabled
+                || self
+                    .input_model
+                    .as_ref(app)
+                    .last_ai_autodetection_ts()
+                    .is_none_or(|ts| {
+                        Instant::now().duration_since(ts) > NEW_MODEL_CHOICES_POPUP_DELAY
+                    }))
         {
             let llm_preferences = LLMPreferences::as_ref(app);
             match (

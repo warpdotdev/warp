@@ -108,6 +108,41 @@ pub(crate) fn pill_initial(name: &str) -> char {
         .map(|c| c.to_ascii_uppercase())
         .unwrap_or('A')
 }
+
+/// Status key for the trailing "done" bucket (Cancelled + Success).
+/// Named so render code and tests don't have to chase a literal `3`.
+pub(super) const DONE_STATUS_KEY: u8 = 3;
+
+/// Sort priority within a pill section. Lower sorts leftmost. Cancelled
+/// and Success share one "done" bucket; recency decides their order.
+fn pill_status_sort_key(status: Option<&ConversationStatus>) -> u8 {
+    match status {
+        Some(ConversationStatus::Blocked { .. }) => 0,
+        Some(ConversationStatus::Error) => 1,
+        Some(ConversationStatus::InProgress) => 2,
+        Some(ConversationStatus::Cancelled) | Some(ConversationStatus::Success) => DONE_STATUS_KEY,
+        None => 2,
+    }
+}
+
+/// Recency tiebreaker for done pills, sorted ascending: newer finish
+/// times sort first; unknown sorts last. `saturating_neg` so a wild
+/// `i64::MIN` (impossible for real timestamps) couldn't panic.
+fn pill_done_recency_key(last_modified_ms: Option<i64>) -> i64 {
+    last_modified_ms.unwrap_or(0).saturating_neg()
+}
+
+/// Combines status key + recency into the secondary sort key. Recency
+/// wins inside the done bucket; everything else collapses to 0 so the
+/// spawn-index tiebreaker decides. Shared so render and tests can't drift.
+pub(super) fn pill_secondary_sort_key(status_key: u8, last_modified_ms: Option<i64>) -> i64 {
+    if status_key == DONE_STATUS_KEY {
+        pill_done_recency_key(last_modified_ms)
+    } else {
+        0
+    }
+}
+
 /// Renders the orchestrator avatar disc shared by pill, breadcrumb, and transcript
 /// surfaces.
 pub(crate) fn render_orchestrator_avatar_disc(
@@ -176,6 +211,9 @@ struct PillSpec {
     pin_state: PillPinState,
     /// Child running on a remote worker; drives the cloud-shaped badge variant.
     is_remote_child: bool,
+    /// Epoch ms of the conversation's last activity; recency tiebreaker
+    /// within the done bucket.
+    last_modified_ms: Option<i64>,
 }
 
 #[derive(Clone, Copy)]
@@ -626,6 +664,8 @@ impl OrchestrationPillBar {
             kind: PillKind::Orchestrator,
             pin_state: PillPinState::Unpinned,
             is_remote_child: false,
+            // Unused: orchestrator pills aren't sorted (they render first).
+            last_modified_ms: None,
         });
 
         // Stamp each child's current pin state; partitioning happens at render.
@@ -650,6 +690,7 @@ impl OrchestrationPillBar {
                 kind: PillKind::Child,
                 pin_state,
                 is_remote_child: child.is_remote_child(),
+                last_modified_ms: child.last_modified_at().map(|t| t.timestamp_millis()),
             });
         }
 
@@ -1067,12 +1108,13 @@ impl View for OrchestrationPillBar {
         // the orchestrator pane, so any child whose owner differs from
         // this id has been split off into another pane/tab.
         let self_terminal_view_id = self.agent_view_controller.as_ref(app).terminal_view_id();
-        // Bucket pills so the row is: orchestrator, pinned, divider, unpinned.
-        // Spawn order within each child bucket is preserved by iteration order.
+        // Row layout: orchestrator, pinned, divider, unpinned. Each
+        // child bucket is sorted by status priority, then recency for
+        // done pills and spawn order otherwise.
         let mut orchestrator_pill: Option<Box<dyn Element>> = None;
-        let mut pinned_pills: Vec<Box<dyn Element>> = Vec::new();
-        let mut unpinned_pills: Vec<Box<dyn Element>> = Vec::new();
-        for spec in specs {
+        let mut pinned_pills: Vec<(u8, i64, usize, Box<dyn Element>)> = Vec::new();
+        let mut unpinned_pills: Vec<(u8, i64, usize, Box<dyn Element>)> = Vec::new();
+        for (spawn_index, spec) in specs.into_iter().enumerate() {
             let mouse_state = mouse_states
                 .entry(spec.conversation_id)
                 .or_default()
@@ -1092,6 +1134,8 @@ impl View for OrchestrationPillBar {
             let menu_is_open_for_this = menu_open_for == Some(spec.conversation_id);
             let kind = spec.kind;
             let pin_state = spec.pin_state;
+            let status_key = pill_status_sort_key(spec.status.as_ref());
+            let secondary_key = pill_secondary_sort_key(status_key, spec.last_modified_ms);
             let pill = render_pill(
                 spec,
                 mouse_state,
@@ -1103,27 +1147,36 @@ impl View for OrchestrationPillBar {
             );
             match (kind, pin_state) {
                 (PillKind::Orchestrator, _) => orchestrator_pill = Some(pill),
-                (PillKind::Child, PillPinState::Pinned) => pinned_pills.push(pill),
-                (PillKind::Child, PillPinState::Unpinned) => unpinned_pills.push(pill),
+                (PillKind::Child, PillPinState::Pinned) => {
+                    pinned_pills.push((status_key, secondary_key, spawn_index, pill));
+                }
+                (PillKind::Child, PillPinState::Unpinned) => {
+                    unpinned_pills.push((status_key, secondary_key, spawn_index, pill));
+                }
             }
         }
         drop(mouse_states);
         drop(overflow_states);
         drop(pin_states);
 
+        // Explicit spawn-index tiebreaker keeps ordering deterministic.
+        let sort_key = |(k, s, idx, _): &(u8, i64, usize, _)| (*k, *s, *idx);
+        pinned_pills.sort_by_key(sort_key);
+        unpinned_pills.sort_by_key(sort_key);
+
         if let Some(pill) = orchestrator_pill {
             row.add_child(pill);
         }
         let has_pinned = !pinned_pills.is_empty();
         let has_unpinned = !unpinned_pills.is_empty();
-        for pill in pinned_pills {
+        for (.., pill) in pinned_pills {
             row.add_child(pill);
         }
         // Only show the divider when both sides actually have pills.
         if has_pinned && has_unpinned {
             row.add_child(render_pinned_divider(app));
         }
-        for pill in unpinned_pills {
+        for (.., pill) in unpinned_pills {
             row.add_child(pill);
         }
 

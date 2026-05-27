@@ -944,6 +944,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::DragTabsToWindows,
     FeatureFlag::RemoteCodebaseIndexing,
     FeatureFlag::GroupedTabs,
+    FeatureFlag::AsyncFind,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
@@ -951,7 +952,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
 pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::BlocklistMarkdownTableRendering,
     FeatureFlag::MarkdownTables,
-    FeatureFlag::GitOperationsInCodeReview,
 ];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).

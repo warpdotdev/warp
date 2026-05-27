@@ -24,7 +24,7 @@ use super::{
 use crate::code_review::telemetry_event::CodeReviewTelemetryEvent;
 use crate::remote_server::diff_state_proto::{try_decode_file_delta, try_decode_snapshot};
 use crate::remote_server::proto;
-use crate::util::git::{BranchEntry, Commit, PrInfo};
+use crate::util::git::{BranchEntry, Commit};
 
 // ── Internal state ────────────────────────────────────────────────
 
@@ -524,14 +524,6 @@ impl RemoteDiffStateModel {
             (Some(upstream), Some(main)) => upstream != main,
             _ => false,
         }
-    }
-
-    pub fn pr_info(&self) -> Option<&PrInfo> {
-        self.metadata.as_ref().and_then(|m| m.pr_info.as_ref())
-    }
-
-    pub fn is_pr_info_refreshing(&self) -> bool {
-        false
     }
 
     pub fn is_git_operation_blocked(&self, _ctx: &warpui::AppContext) -> bool {

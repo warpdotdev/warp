@@ -133,11 +133,6 @@ pub struct BlocklistAIContextModel {
     /// When `AgentViewBlockContext` is enabled, completed user commands are tracked here
     /// and automatically included as context with the next user query.
     auto_attached_agent_view_user_block_ids: Vec<BlockId>,
-
-    /// When true, submitting a prompt while the agent is responding will queue it
-    /// instead of sending it immediately.
-    /// Persists across exchanges in the same conversation (like fast-forward).
-    queue_next_prompt_enabled: bool,
 }
 
 pub fn block_context_from_terminal_model(
@@ -291,7 +286,6 @@ impl BlocklistAIContextModel {
             pending_inline_diff_hunk_attachments: Default::default(),
             pending_document_id: None,
             auto_attached_agent_view_user_block_ids: Vec::new(),
-            queue_next_prompt_enabled: false,
         }
     }
 
@@ -319,7 +313,6 @@ impl BlocklistAIContextModel {
             pending_inline_diff_hunk_attachments: Default::default(),
             pending_document_id: None,
             auto_attached_agent_view_user_block_ids: Vec::new(),
-            queue_next_prompt_enabled: false,
         }
     }
 
@@ -851,15 +844,6 @@ impl BlocklistAIContextModel {
         }
     }
 
-    pub fn is_queue_next_prompt_enabled(&self) -> bool {
-        self.queue_next_prompt_enabled
-    }
-
-    pub fn toggle_queue_next_prompt(&mut self, ctx: &mut ModelContext<Self>) {
-        self.queue_next_prompt_enabled = !self.queue_next_prompt_enabled;
-        ctx.emit(BlocklistAIContextEvent::QueueNextPromptToggled);
-    }
-
     pub fn toggle_pending_query_autoexecute(&mut self, ctx: &mut ModelContext<Self>) {
         // When AgentView is enabled, the autoexecution toggle should apply to the active agent view
         // conversation -- even when starting a new conversation, the agent view always has a conversation
@@ -1016,7 +1000,6 @@ pub enum BlocklistAIContextEvent {
     },
     /// Emitted whenever the value changes.
     PendingQueryStateUpdated,
-    QueueNextPromptToggled,
 }
 
 impl Entity for BlocklistAIContextModel {

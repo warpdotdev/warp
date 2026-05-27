@@ -1,21 +1,20 @@
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_channel::Sender;
 use async_trait::async_trait;
 use futures_util::stream::AbortHandle;
 use itertools::Itertools;
-use warpui::r#async::Timer;
-use warpui::{Action, AppContext, Entity, ModelContext};
+use warp_core::r#async::debounce;
+use warp_core::send_telemetry_from_ctx;
+use warpui_core::r#async::Timer;
+use warpui_core::{Action, AppContext, Entity, ModelContext};
 
-use super::data_source::{Query, QueryResult};
-use crate::debounce::debounce;
-use crate::search::QueryFilter;
-use crate::send_telemetry_from_ctx;
-use crate::server::telemetry::TelemetryEvent;
+use super::data_source::{Query, QueryFilter, QueryResult};
+use crate::telemetry::TelemetryEvent;
 
 /// Maximum time to wait for matching data sources to return results before showing
 /// partial results.
@@ -25,12 +24,7 @@ use crate::server::telemetry::TelemetryEvent;
 /// if an async source is slow.
 const INITIAL_RESULTS_TIMEOUT: Duration = Duration::from_millis(500);
 
-#[cfg(not(target_family = "wasm"))]
-pub(crate) type BoxFuture<'a, T> =
-    std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
-
-#[cfg(target_family = "wasm")]
-pub(crate) type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + 'a>>;
+pub use warpui_core::r#async::BoxFuture;
 
 #[derive(Debug, Clone, Default)]
 pub enum DedupeStrategy {
@@ -175,10 +169,9 @@ impl<T: Action + Clone> SearchMixer<T> {
                 latest_run_abort_handle,
                 ..
             } = &mut registered_source.source
+                && let Some(abort_handle) = latest_run_abort_handle.take()
             {
-                if let Some(abort_handle) = latest_run_abort_handle.take() {
-                    abort_handle.abort();
-                }
+                abort_handle.abort();
             }
         }
     }
@@ -409,11 +402,11 @@ impl<T: Action + Clone> SearchMixer<T> {
                 }
 
                 // Check if we should just be debouncing the query rather than running it right now.
-                if let Some(debounce_tx) = debounce_tx {
-                    if !skip_debounce {
-                        let _ = debounce_tx.try_send(DataSourceDebounceArg {});
-                        return;
-                    }
+                if let Some(debounce_tx) = debounce_tx
+                    && !skip_debounce
+                {
+                    let _ = debounce_tx.try_send(DataSourceDebounceArg {});
+                    return;
                 }
 
                 // If we get here, then we should run the query against the data source right now.

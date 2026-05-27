@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use tantivy::tokenizer::{TextAnalyzer, Token};
-use warpui::r#async::executor::Background;
+use warpui_core::r#async::executor::Background;
 
 use crate::define_search_schema;
-use crate::search::searcher::{CustomTokenizer, MIN_MEMORY_BUDGET};
+use crate::searcher::{CustomTokenizer, MIN_MEMORY_BUDGET};
 
 fn token_stream_helper(text: &str) -> Vec<Token> {
     let mut a = TextAnalyzer::from(CustomTokenizer::default());

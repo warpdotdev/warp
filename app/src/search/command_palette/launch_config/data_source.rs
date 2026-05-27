@@ -66,9 +66,7 @@ impl SyncDataSource for DataSource {
             .searcher
             .search(&query.text.trim().to_lowercase())
             .map_err(|err| {
-                Box::new(DataSourceSearchError {
-                    message: err.to_string(),
-                }) as DataSourceRunErrorWrapper
+                Box::new(DataSourceSearchError::new(err.to_string())) as DataSourceRunErrorWrapper
             })?
             .into_iter()
             .map(QueryResult::from)
@@ -123,10 +121,10 @@ mod full_text_searcher {
     use std::sync::Arc;
 
     use fuzzy_match::FuzzyMatchResult;
+    use warp_search_core::define_search_schema;
     use warpui::r#async::executor::Background;
     use warpui::{AppContext, SingletonEntity};
 
-    use crate::define_search_schema;
     use crate::launch_configs::launch_config::LaunchConfig;
     use crate::search::command_palette::launch_config::data_source::LaunchConfigSearcher;
     use crate::search::command_palette::launch_config::search_item::SearchItem;

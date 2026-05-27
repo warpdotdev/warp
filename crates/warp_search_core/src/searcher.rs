@@ -19,14 +19,14 @@ use tantivy::query::{
     AllQuery, BooleanQuery, BoostQuery, FuzzyTermQuery, Occur, PhrasePrefixQuery, TermQuery,
 };
 use tantivy::schema::{
-    BytesOptions, Field, FieldEntry, IndexRecordOption, OwnedValue, Schema, TextFieldIndexing,
-    STORED, TEXT,
+    BytesOptions, Field, FieldEntry, IndexRecordOption, OwnedValue, STORED, Schema, TEXT,
+    TextFieldIndexing,
 };
 use tantivy::snippet::SnippetGenerator;
 use tantivy::tokenizer::{Token, TokenStream, Tokenizer};
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
-use warpui::r#async::executor::Background;
-use warpui::r#async::{block_on, Timer};
+use warpui_core::r#async::executor::Background;
+use warpui_core::r#async::{Timer, block_on};
 
 pub type FullTextSearchDocumentEntry = HashMap<String, FullTextSearchFieldValue>;
 
@@ -1219,10 +1219,8 @@ async fn process_searcher_events(
                 _ = idle_timer => {
                     // If we hit the idle timeout, and the batch is empty, join with the index writer
                     // threads and terminate them.
-                    if batch.is_empty() {
-                        if let Err(e) = writer_handle.lock().wait_on_and_drop_indexing_threads() {
-                            log::error!("Failed to wait on Tantivy indexing threads: {e:#}");
-                        }
+                    if batch.is_empty() && let Err(e) = writer_handle.lock().wait_on_and_drop_indexing_threads() {
+                        log::error!("Failed to wait on Tantivy indexing threads: {e:#}");
                     }
                     break;
                 }

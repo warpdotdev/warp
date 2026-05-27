@@ -46,7 +46,7 @@ pub struct OpenWarpDriveObjectArgs {
     pub settings: OpenWarpDriveObjectSettings,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum DriveObjectType {
     Workflow,
     AgentModeWorkflow,

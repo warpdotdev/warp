@@ -56,6 +56,9 @@ struct SseConnectionState {
     generation: u64,
     /// Abort handle for the spawned SSE driver task, used to cancel on teardown.
     abort_handle: futures::future::AbortHandle,
+    /// Snapshot of `watched_run_ids` at the time this connection was opened;
+    /// compared in `reevaluate_eligibility` to skip same-set reconnects.
+    connected_run_ids: HashSet<String>,
 }
 
 struct SseForwardingConsumer {
@@ -1038,10 +1041,12 @@ impl OrchestrationEventStreamer {
         match (eligible, connected) {
             (true, false) => self.start_sse_connection(conversation_id, ctx),
             (true, true) => {
-                // Already connected; reconnect with the current run_ids
-                // list (in case the parent role's contribution
-                // changed).
-                self.reconnect_sse(conversation_id, ctx);
+                // Status / metadata updates fire `reevaluate_eligibility` on
+                // every exchange transition; only reconnect when the run-id
+                // filter actually changed.
+                if self.watched_run_ids_differ_from_connected(conversation_id) {
+                    self.reconnect_sse(conversation_id, ctx);
+                }
             }
             (false, true) => self.teardown_sse(conversation_id, ctx),
             (false, false) => {}
@@ -1255,15 +1260,29 @@ impl OrchestrationEventStreamer {
             },
         );
 
+        let connected_run_ids: HashSet<String> = run_ids.iter().cloned().collect();
         let stream = self.streams.entry(conversation_id).or_default();
         stream.sse_connection = Some(SseConnectionState {
             event_receiver: rx,
             generation,
             abort_handle: handle.abort_handle(),
+            connected_run_ids,
         });
 
         // Start periodic event drain.
         self.start_sse_drain_timer(conversation_id, generation, ctx);
+    }
+
+    /// True iff the open SSE's recorded run-id set is stale relative to the
+    /// conversation's current `watched_run_ids`.
+    fn watched_run_ids_differ_from_connected(&self, conversation_id: AIConversationId) -> bool {
+        let Some(stream) = self.streams.get(&conversation_id) else {
+            return false;
+        };
+        let Some(connection) = stream.sse_connection.as_ref() else {
+            return false;
+        };
+        stream.watched_run_ids != connection.connected_run_ids
     }
 
     /// Periodically fires to drain buffered SSE events into the event

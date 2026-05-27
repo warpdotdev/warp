@@ -2,7 +2,7 @@
 #[macro_export]
 macro_rules! type_to_field_type {
     ($t:ty) => {
-        <$t as $crate::search::searcher::ToFieldType>::field_type()
+        <$t as $crate::searcher::ToFieldType>::field_type()
     };
 }
 pub use type_to_field_type;
@@ -10,7 +10,7 @@ pub use type_to_field_type;
 #[macro_export]
 macro_rules! data_from_owned_value {
     ($value:expr, $t:ty) => {
-        <$t as $crate::search::searcher::FromOwnedValue>::from_owned_value($value)
+        <$t as $crate::searcher::FromOwnedValue>::from_owned_value($value)
     };
 }
 
@@ -25,7 +25,7 @@ macro_rules! get_factor_or_default {
 }
 pub use get_factor_or_default;
 
-/// Macro to define a search schema for a [`crate::search::searcher::SimpleFullTextSearcher`].
+/// Macro to define a search schema for a [`crate::searcher::SimpleFullTextSearcher`].
 /// ### Parameters
 /// * `schema_name` - The name of the schema. This would be the name of the static reference of the schema.
 /// * `config_name` - The name of the generated type config corresponding to the defined schema.
@@ -45,8 +45,8 @@ pub use get_factor_or_default;
 /// Here is an example of using this schema to create a simple searcher:
 /// ```
 /// use itertools::Itertools;
-/// use warp::define_search_schema;
-/// use warp::search::searcher::{SimpleFullTextSearcher, DEFAULT_MEMORY_BUDGET};
+/// use warp_search_core::define_search_schema;
+/// use warp_search_core::searcher::{SimpleFullTextSearcher, DEFAULT_MEMORY_BUDGET};
 ///
 /// define_search_schema!(
 ///     schema_name: MY_SCHEMA,
@@ -110,7 +110,7 @@ pub use get_factor_or_default;
 macro_rules! define_search_schema {
     (schema_name: $schema_name:ident, config_name: $config_name:ident, search_doc: $search_doc:ident, identifying_doc: $id_doc_name:ident, search_fields: [$($s_name:ident: $weight:literal$(,)?)*], id_fields: [$($i_name:ident: $value_type:ty$(,)?)*] $(, boost_factor: $boost_factor:expr)? $(,)?) => {
         lazy_static::lazy_static! {
-            static ref $schema_name: $crate::search::searcher::FullTextSearchSchema<$config_name> = $crate::search::searcher::FullTextSearchSchema::new(
+            static ref $schema_name: $crate::searcher::FullTextSearchSchema<$config_name> = $crate::searcher::FullTextSearchSchema::new(
                 std::collections::HashMap::from([
                     $((stringify!($s_name).to_owned(), $weight)),*
                 ]),
@@ -131,8 +131,8 @@ macro_rules! define_search_schema {
             ),*
         }
 
-        impl $crate::search::searcher::SearchDocumentEntry for $search_doc {
-            fn into_document_entry(self) -> $crate::search::searcher::FullTextSearchDocumentEntry {
+        impl $crate::searcher::SearchDocumentEntry for $search_doc {
+            fn into_document_entry(self) -> $crate::searcher::FullTextSearchDocumentEntry {
                 let mut entry = std::collections::HashMap::new();
                 $(
                     entry.insert(
@@ -150,8 +150,8 @@ macro_rules! define_search_schema {
             }
         }
 
-        impl $crate::search::searcher::FullTextSearchMatchValues for $search_doc {
-            fn from_match_result_values(mut values: std::collections::HashMap<String, tantivy::schema::OwnedValue>) -> Option<Self> {
+        impl $crate::searcher::FullTextSearchMatchValues for $search_doc {
+            fn from_match_result_values(mut values: std::collections::HashMap<String, $crate::tantivy::schema::OwnedValue>) -> Option<Self> {
                 Some(Self {
                     $(
                         $s_name: $crate::data_from_owned_value!(values.remove(stringify!($s_name))?, String)?,
@@ -172,8 +172,8 @@ macro_rules! define_search_schema {
         }
 
         #[allow(unused)]
-        impl $crate::search::searcher::SearchIdentifyingEntry for $id_doc_name {
-            fn into_identifying_entry(self) -> $crate::search::searcher::FullTextSearchDocumentEntry {
+        impl $crate::searcher::SearchIdentifyingEntry for $id_doc_name {
+            fn into_identifying_entry(self) -> $crate::searcher::FullTextSearchDocumentEntry {
                 let mut entry = std::collections::HashMap::new();
                 $(
                     entry.insert(
@@ -186,8 +186,8 @@ macro_rules! define_search_schema {
         }
 
         #[allow(unused)]
-        impl $crate::search::searcher::FullTextSearchMatchValues for $id_doc_name {
-            fn from_match_result_values(mut values: std::collections::HashMap<String, tantivy::schema::OwnedValue>) -> Option<Self> {
+        impl $crate::searcher::FullTextSearchMatchValues for $id_doc_name {
+            fn from_match_result_values(mut values: std::collections::HashMap<String, $crate::tantivy::schema::OwnedValue>) -> Option<Self> {
                 Some(Self {
                     $(
                         $i_name: $crate::data_from_owned_value!(values.remove(stringify!($i_name))?, $value_type)?,
@@ -196,7 +196,7 @@ macro_rules! define_search_schema {
             }
         }
 
-        paste::paste! {
+        $crate::paste::paste! {
             #[allow(unused)]
             #[derive(Debug, Clone)]
             struct [<_ $config_name HighlightResult>] {
@@ -206,7 +206,7 @@ macro_rules! define_search_schema {
             }
 
             #[allow(unused)]
-            impl $crate::search::searcher::FullTextSearchMatchHighlights for [<_ $config_name HighlightResult>] {
+            impl $crate::searcher::FullTextSearchMatchHighlights for [<_ $config_name HighlightResult>] {
                 fn from_match_result_highlights(mut highlights: std::collections::HashMap<String, Vec<usize>>) -> Option<Self> {
                     Some(Self {
                         $(
@@ -217,7 +217,7 @@ macro_rules! define_search_schema {
             }
 
             struct $config_name;
-            impl $crate::search::searcher::SearchSchemaConfig for $config_name {
+            impl $crate::searcher::SearchSchemaConfig for $config_name {
                 type SearchDocEntry = $search_doc;
                 type SearchIdEntry = $id_doc_name;
                 type SearchHighlight = [<_ $config_name HighlightResult>];

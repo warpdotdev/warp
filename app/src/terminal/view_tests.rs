@@ -10,7 +10,7 @@ use chrono::Local;
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::CLIAgentSessionState;
 use warp_cli::agent::Harness;
-use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
+use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START, C0};
 use warpui::notification::UserNotification;
 use warpui::platform::WindowStyle;
 use warpui::{App, Presenter, ReadModel, WindowInvalidation};
@@ -5527,6 +5527,92 @@ fn drag_drop_image_in_cli_agent_long_running_command_pastes_via_clipboard() {
 
         std::fs::remove_file(&image_path).ok();
     })
+}
+
+#[test]
+fn paste_raw_image_clipboard_in_cli_agent_sends_correct_bytes() {
+    fn run_for_agent(agent: CLIAgent) {
+        App::test((), move |mut app| async move {
+            initialize_app_for_terminal_view(&mut app);
+            let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+            let terminal = add_window_with_terminal(&mut app, None);
+
+            let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+            let writes = pty_writes.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                    if let Event::WriteBytesToPty { bytes } = event {
+                        writes.borrow_mut().push(bytes.to_vec());
+                    }
+                });
+            });
+
+            terminal.update(&mut app, |view, ctx| {
+                CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+                    sessions.set_session(
+                        view.view_id,
+                        CLIAgentSession {
+                            agent,
+                            status: CLIAgentSessionStatus::InProgress,
+                            session_context: CLIAgentSessionContext::default(),
+                            input_state: CLIAgentInputState::Closed,
+                            should_auto_toggle_input: false,
+                            listener: None,
+                            remote_host: None,
+                            plugin_version: None,
+                            draft_text: None,
+                            custom_command_prefix: None,
+                        },
+                        ctx,
+                    );
+                });
+
+                {
+                    let mut model = view.model.lock();
+                    model.simulate_long_running_block(agent.command_prefix(), "");
+                    model.set_mode(ansi::Mode::BracketedPaste);
+                }
+
+                // Write image-only data to the clipboard (no text, no paths).
+                ctx.clipboard().write(ClipboardContent {
+                    images: Some(vec![warpui::clipboard::ImageData {
+                        data: vec![0x89, 0x50, 0x4E, 0x47], // PNG magic bytes
+                        mime_type: "image/png".to_string(),
+                        filename: None,
+                    }]),
+                    ..Default::default()
+                });
+
+                view.handle_action(&TerminalAction::Paste, ctx);
+            });
+
+            let writes = pty_writes.borrow();
+            assert_eq!(
+                writes.len(),
+                1,
+                "expected 1 PTY write, got {}",
+                writes.len()
+            );
+
+            if cfg!(windows) {
+                if agent == CLIAgent::Claude {
+                    assert_eq!(writes[0], vec![C0::ESC, b'v']);
+                } else {
+                    let mut expected = Vec::new();
+                    expected.extend_from_slice(BRACKETED_PASTE_START);
+                    expected.extend_from_slice(BRACKETED_PASTE_END);
+                    assert_eq!(writes[0], expected);
+                }
+            } else {
+                assert_eq!(writes[0], vec![C0::SYN]);
+            }
+        })
+    }
+
+    run_for_agent(CLIAgent::Claude);
+    run_for_agent(CLIAgent::OpenCode);
+    run_for_agent(CLIAgent::Codex);
 }
 
 #[test]

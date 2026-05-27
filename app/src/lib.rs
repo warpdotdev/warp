@@ -27,7 +27,6 @@ mod context_chips;
 mod crash_recovery;
 #[cfg(feature = "crash_reporting")]
 mod crash_reporting;
-mod debounce;
 mod debug_dump;
 mod default_terminal;
 mod download_method;
@@ -211,6 +210,8 @@ use terminal::session_settings::SessionSettings;
 use url::Url;
 pub use warp_core::errors::{report_error, report_if_error};
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
+// Re-export the debounce function to simplify imports.
+pub use warp_core::r#async::debounce;
 // Re-export the send_telemetry_from_ctx macro at the crate root level
 pub use warp_core::send_telemetry_from_app_ctx;
 pub use warp_core::send_telemetry_from_ctx;
@@ -651,6 +652,7 @@ pub fn run() -> Result<()> {
                 warp_logging::init(warp_logging::LogConfig {
                     is_cli: true,
                     log_destination: launch_mode.log_destination(),
+                    ..Default::default()
                 })?;
                 return crate::remote_server::run_proxy(args.identity_key.clone());
             }
@@ -791,10 +793,18 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             if crash_recovery::is_crash_recovery_process(launch_mode.args().as_ref()) {
                 warp_logging::init_for_crash_recovery_process()?;
             } else {
-                warp_logging::init(warp_logging::LogConfig { is_cli, log_destination })?;
+                warp_logging::init(warp_logging::LogConfig {
+                    is_cli,
+                    log_destination,
+                    ..Default::default()
+                })?;
             }
         } else {
-            warp_logging::init(warp_logging::LogConfig { is_cli, log_destination })?;
+            warp_logging::init(warp_logging::LogConfig {
+                is_cli,
+                log_destination,
+                ..Default::default()
+            })?;
         }
     }
 
@@ -1711,6 +1721,9 @@ pub(crate) fn initialize_app(
         let conversations = &multi_agent_conversations;
         ctx.add_singleton_model(move |_| BlocklistAIHistoryModel::new(ai_queries, conversations));
     }
+    // Per-conversation queued prompts. Registered after the history model
+    // since it subscribes to history events for cleanup.
+    ctx.add_singleton_model(ai::blocklist::QueuedQueryModel::new);
     // Cross-pane UI state for the orchestration pill bar. Registered
     // after the history model since it subscribes to history events.
     ctx.add_singleton_model(move |ctx| {
@@ -1726,9 +1739,8 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(AgentNotificationsModel::new);
     ctx.add_singleton_model(BlocklistAIPermissions::new);
     ctx.add_singleton_model(ai::blocklist::orchestration_events::OrchestrationEventService::new);
-    ctx.add_singleton_model(ai::blocklist::task_status_sync_model::TaskStatusSyncModel::new);
     ctx.add_singleton_model(
-        ai::blocklist::local_shared_session_link_model::LocalSharedSessionLinkModel::new,
+        ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel::new,
     );
     if warp_core::features::FeatureFlag::OrchestrationV2.is_enabled() {
         ctx.add_singleton_model(

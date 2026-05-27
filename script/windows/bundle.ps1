@@ -115,7 +115,7 @@ if ("$CHANNEL" -eq 'local') {
     $FEATURES = 'release_bundle,gui'
 }
 
-if (("$CHANNEL" -eq 'local') -or ("$CHANNEL" -eq 'dev')) {
+if (("$CHANNEL" -eq 'local') -or ("$CHANNEL" -eq 'dev') -or ("$CHANNEL" -eq 'preview')) {
     $FEATURES = "$FEATURES,nld_classifier_v2,nld_heuristic_v2"
 } else {
     $FEATURES = "$FEATURES,nld_classifier_v1,nld_heuristic_v1"

@@ -24,6 +24,7 @@ fn create_test_task(task_id: &str) -> AmbientAgentTask {
         created_at: now,
         started_at: None,
         updated_at: now,
+        run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: None,
         session_id: None,

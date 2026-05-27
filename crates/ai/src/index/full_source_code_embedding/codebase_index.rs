@@ -2150,13 +2150,14 @@ impl CodebaseIndex {
                     match entry.and_then(|entry| dunce::canonicalize(entry.path())) {
                         Ok(child_path) => {
                             // Ignore paths that are excluded by .gitignore, end with .git, or are symlinks.
-                            if matches_gitignores(
-                                &child_path,
-                                is_dir,
-                                &*gitignores,
-                                false, /* check_ancestors */
-                            ) || child_path.ends_with(".git")
+                            if child_path.ends_with(".git")
                                 || child_path.is_symlink()
+                                || matches_gitignores(
+                                    &child_path,
+                                    child_path.is_dir(),
+                                    &*gitignores,
+                                    false, /* check_ancestors */
+                                )
                             {
                                 continue;
                             }
@@ -2294,13 +2295,14 @@ impl CodebaseIndex {
                     match entry.and_then(|entry| dunce::canonicalize(entry.path())) {
                         Ok(child_path) => {
                             // Ignore paths that are excluded by .gitignore, end with .git, or are symlinks.
-                            if matches_gitignores(
-                                &child_path,
-                                is_dir,
-                                &*gitignores,
-                                false, /* check_ancestors */
-                            ) || child_path.ends_with(".git")
+                            if child_path.ends_with(".git")
                                 || child_path.is_symlink()
+                                || matches_gitignores(
+                                    &child_path,
+                                    child_path.is_dir(),
+                                    &*gitignores,
+                                    false, /* check_ancestors */
+                                )
                             {
                                 continue;
                             }

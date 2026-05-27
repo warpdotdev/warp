@@ -38,10 +38,10 @@ use crate::ai::ambient_agents::{
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::CloudConversationData;
+use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
-use crate::ai::blocklist::task_status_sync_model::TaskStatusSyncModel;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::{BlocklistAIHistoryModel, QueuedQueryModel};
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
@@ -146,6 +146,9 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(NotebookKeybindings::new);
     app.add_singleton_model(TerminalKeybindings::new);
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+    // QueuedQueryModel subscribes to history events; register after the
+    // history model is in place.
+    app.add_singleton_model(QueuedQueryModel::new);
     // Pill bar model subscribes to history events; register after the
     // history model is in place.
     app.add_singleton_model(|ctx| {
@@ -156,7 +159,7 @@ fn initialize_app(app: &mut App) {
     });
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(OrchestrationEventService::new);
-    app.add_singleton_model(TaskStatusSyncModel::new);
+    app.add_singleton_model(LocalAgentTaskSyncModel::new);
     if FeatureFlag::OrchestrationV2.is_enabled() {
         app.add_singleton_model(OrchestrationEventStreamer::new);
     }
@@ -276,6 +279,7 @@ fn ambient_agent_task_for_current_user(task_id: AmbientAgentTaskId) -> AmbientAg
         created_at: now,
         started_at: Some(now),
         updated_at: now,
+        run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: Some(AgentSource::CloudMode),
         session_id: None,
@@ -754,6 +758,52 @@ fn test_insert_hidden_child_agent_pane_keeps_focus_and_active_session() {
     });
 }
 
+#[test]
+fn test_swapping_to_child_agent_from_maximized_pane_keeps_maximized_state() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            panes.add_terminal_pane(Direction::Right, None, ctx);
+            panes.focus_pane(parent_pane_id, true, ctx);
+
+            let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+            let child = create_hidden_child_agent_conversation(
+                panes,
+                HiddenChildAgentConversationRequest {
+                    parent_pane_id,
+                    name: "Agent 1".to_string(),
+                    parent_conversation_id,
+                    orchestration_harness: None,
+                    env_vars: HashMap::new(),
+                    task_context: None,
+                    is_shared_session_creator: IsSharedSessionCreator::No,
+                },
+                ctx,
+            )
+            .expect("fresh hidden child conversation should be created");
+            let child_pane_id = panes
+                .child_agent_panes
+                .get(&child.conversation_id)
+                .copied()
+                .expect("fresh hidden child pane should be tracked");
+
+            panes.toggle_maximize_pane(ctx);
+            assert!(panes.is_focused_pane_maximized(ctx));
+
+            panes.swap_active_pane_to_conversation(parent_pane_id, child.conversation_id, ctx);
+
+            assert_eq!(panes.focused_pane_id(ctx), child_pane_id);
+            assert!(panes.is_focused_pane_maximized(ctx));
+            assert_eq!(
+                split_pane_state(panes, child_pane_id, ctx),
+                SplitPaneState::InSplitPane(PaneState::Maximized),
+            );
+        });
+    });
+}
 #[test]
 fn test_insert_hidden_ambient_child_agent_pane_suppresses_details_auto_open() {
     App::test((), |mut app| async move {

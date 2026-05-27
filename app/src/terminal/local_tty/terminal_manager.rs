@@ -1358,6 +1358,13 @@ impl TerminalManager {
         // the orchestrator task id is discoverable regardless of which variant
         // the share is.
         model.lock().set_shared_session_source(source.clone());
+        Self::log_shared_session_lifecycle(
+            &terminal_view,
+            &model,
+            "start_requested",
+            "trigger=terminal_view_start_sharing",
+            ctx,
+        );
         if matches!(source.source_type, SessionSourceType::AmbientAgent { .. }) {
             let terminal_view_id = terminal_view.id();
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _ctx| {
@@ -1535,6 +1542,13 @@ impl TerminalManager {
                         controller.set_sharer_participant_id(sharer_id.clone());
                     });
                 });
+                Self::log_shared_session_lifecycle(
+                    &terminal_view,
+                    &model,
+                    "session_established",
+                    "outcome=active_sharer",
+                    ctx,
+                );
 
                 // Let the manager know the share is active with the relevant metadata.
                 Manager::handle(ctx).update(ctx, |manager, ctx| {
@@ -1576,7 +1590,7 @@ impl TerminalManager {
                     Self::stream_historical_agent_conversations(&terminal_view, &model, ctx);
                 }
 
-                // `LocalSharedSessionLinkModel` fires the (task_id,
+                // `LocalAgentTaskSyncModel` fires the (task_id,
                 // session_id) link in response to the event emitted above.
             }
             NetworkEvent::FailedToCreateSharedSession {
@@ -2182,6 +2196,35 @@ impl TerminalManager {
         *session_sharer = Some(network);
     }
 
+    fn log_shared_session_lifecycle(
+        terminal_view: &ViewHandle<TerminalView>,
+        model: &Arc<FairMutex<TerminalModel>>,
+        event: &'static str,
+        details: impl std::fmt::Display,
+        ctx: &AppContext,
+    ) {
+        let session_id = terminal_view.as_ref(ctx).shared_session_id().cloned();
+        let (source_type, source_task_id) = {
+            let model = model.lock();
+            match model.shared_session_source() {
+                Some(source) => {
+                    let source_type = match &source.source_type {
+                        SessionSourceType::User => "user",
+                        SessionSourceType::AmbientAgent { .. } => "ambient_agent",
+                    };
+                    (
+                        source_type,
+                        source.orchestrator_task_id().map(str::to_owned),
+                    )
+                }
+                None => ("unknown", None),
+            }
+        };
+        log::info!(
+            "Shared session local lifecycle: event={event} session_id={session_id:?} source_type={source_type} source_task_id={source_task_id:?} {details}"
+        );
+    }
+
     /// Contains necessary logic for stopping the current shared session.
     fn cleanup_shared_session(
         terminal_view: &ViewHandle<TerminalView>,
@@ -2234,6 +2277,13 @@ impl TerminalManager {
         model: Arc<FairMutex<TerminalModel>>,
         ctx: &mut AppContext,
     ) {
+        Self::log_shared_session_lifecycle(
+            terminal_view,
+            &model,
+            "end_requested",
+            format_args!("reason={reason:?}"),
+            ctx,
+        );
         Self::cleanup_shared_session(terminal_view, model, ctx);
 
         // Drop the ModelHandle<Network> and set session_sharer to None.
@@ -2622,11 +2672,18 @@ impl crate::terminal::TerminalManager for TerminalManager {
         // The detach type is intentionally ignored: a sharer always stops sharing immediately,
         // even on a reversible `HiddenForClose` detach. This is desirable for security — a sharer
         // should not continue accepting commands from viewers while the session is not visible.
-        _detach_type: crate::pane_group::pane::DetachType,
+        detach_type: crate::pane_group::pane::DetachType,
         app: &mut AppContext,
     ) {
         let shared_session_status = self.model.lock().shared_session_status().clone();
         if shared_session_status.is_sharer() {
+            Self::log_shared_session_lifecycle(
+                &self.view,
+                &self.model,
+                "view_detached",
+                format_args!("detach_type={detach_type:?}"),
+                app,
+            );
             let is_confirm_close_session =
                 *SessionSettings::as_ref(app).should_confirm_close_session;
             self.view.update(app, |terminal_view, ctx| {

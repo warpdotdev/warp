@@ -113,9 +113,7 @@ impl SyncDataSource for PromptsMenuDataSource {
                     .collect()
             })
             .map_err(|e| {
-                Box::new(DataSourceSearchError {
-                    message: e.to_string(),
-                }) as DataSourceRunErrorWrapper
+                Box::new(DataSourceSearchError::new(e.to_string())) as DataSourceRunErrorWrapper
             })
     }
 }
