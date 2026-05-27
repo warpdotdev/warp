@@ -510,9 +510,10 @@ impl SkillWatcher {
                 },
             );
         } else if path.is_dir() {
-            // The old local project path queued directory creations until repo
-            // metadata caught up. In fallback mode metadata may never catch up
-            // for oversized repos, so scan the changed directory directly.
+            // The original local watcher deferred added directories until RepoMetadataModel
+            // incorporated them. This handler runs only after metadata indexing has failed, so
+            // scan added directories directly from disk instead of waiting for an update that
+            // may never arrive.
             self.scan_local_project_skills_from_filesystem(path, ctx);
         }
     }
