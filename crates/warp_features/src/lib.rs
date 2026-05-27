@@ -865,6 +865,8 @@ pub enum FeatureFlag {
 
     /// Gates the v2 billing and usage page redesign.
     BillingAndUsagePageV2,
+    /// Enables configurable expanded context windows for eligible GPT models.
+    GPTConfigurableContextWindow,
 
     /// Replaces the raw harness CLI command with a styled header showing CLI name + status icon.
     HarnessSessionHeader,
