@@ -77,7 +77,6 @@ impl SlashCommandRequest {
             controller.context_model.as_ref(ctx),
             controller.active_session.as_ref(ctx),
             conversation_id,
-            Some(controller.current_prompt.as_ref(ctx)),
             vec![],
             ctx,
         );

@@ -24,8 +24,6 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{
     GenericCloudObject, GenericStringObjectFormat, JsonObjectType, ObjectType,
 };
-use crate::context_chips::prompt_type::PromptType;
-use crate::context_chips::{github_pull_request_from_chip_value, ChipValue, ContextChipKind};
 #[cfg(not(target_family = "wasm"))]
 use crate::remote_server::codebase_index_model::RemoteCodebaseIndexModel;
 use crate::terminal::model::block::BlockId;
@@ -52,12 +50,10 @@ pub(super) fn input_context_for_request(
     context_model: &BlocklistAIContextModel,
     active_session: &ActiveSession,
     conversation_id: Option<AIConversationId>,
-    current_prompt: Option<&PromptType>,
     additional_context: Vec<AIAgentContext>,
     app: &AppContext,
 ) -> Arc<[AIAgentContext]> {
     let mut context = context_model.pending_context(app, is_user_query);
-    add_current_prompt_pull_request_context(&mut context, current_prompt, app);
 
     context.push(AIAgentContext::CurrentTime {
         current_time: Local::now(),
@@ -93,33 +89,6 @@ pub(super) fn input_context_for_request(
     context.extend(additional_context);
 
     context.into()
-}
-
-fn add_current_prompt_pull_request_context(
-    context: &mut Vec<AIAgentContext>,
-    current_prompt: Option<&PromptType>,
-    app: &AppContext,
-) {
-    let Some(pull_request) = current_prompt
-        .and_then(|current_prompt| {
-            current_prompt.latest_chip_value(&ContextChipKind::GithubPullRequest, app)
-        })
-        .and_then(|value| pull_request_ai_context_from_chip_value(&value))
-    else {
-        return;
-    };
-
-    context.push(pull_request);
-}
-
-fn pull_request_ai_context_from_chip_value(value: &ChipValue) -> Option<AIAgentContext> {
-    let pull_request = github_pull_request_from_chip_value(value)?;
-    Some(AIAgentContext::PullRequest {
-        number: pull_request.number,
-        state: pull_request.state,
-        draft: pull_request.draft,
-        base_branch: pull_request.base_branch,
-    })
 }
 
 fn add_local_codebase_context(context: &mut Vec<AIAgentContext>, app: &AppContext) {
@@ -391,7 +360,3 @@ fn get_object_attachment_payload(
         _ => None, // Other object types not supported for drive object attachments
     }
 }
-
-#[cfg(test)]
-#[path = "input_context_tests.rs"]
-mod tests;

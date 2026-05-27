@@ -1991,14 +1991,6 @@ pub struct MCPServer {
     pub resources: Vec<rmcp::model::Resource>,
     pub tools: Vec<rmcp::model::Tool>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PullRequestContext {
-    #[serde(default, deserialize_with = "deserialize_pull_request_number")]
-    pub number: i32,
-    pub state: String,
-    pub draft: bool,
-    pub base_branch: String,
-}
 
 /// Contains context that may be attached to a user query.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

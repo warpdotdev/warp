@@ -9,6 +9,8 @@ use std::sync::Arc;
 use ai::project_context::model::ProjectContextModel;
 use parking_lot::FairMutex;
 use warp_core::features::FeatureFlag;
+#[cfg(feature = "local_fs")]
+use warpui::WeakModelHandle;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::agent_view::{AgentViewController, AgentViewEntryOrigin, EnterAgentViewError};
@@ -26,11 +28,15 @@ use crate::ai::block_context::BlockContext;
 use crate::ai::document::ai_document_model::AIDocumentId;
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::outline::RepoOutlines;
+#[cfg(feature = "local_fs")]
+use crate::code_review::git_status_update::GitRepoStatusModel;
 use crate::terminal::event::{BlockCompletedEvent, BlockType};
 use crate::terminal::model::block::{BlockId, BlockMetadata};
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::TerminalModel;
+#[cfg(feature = "local_fs")]
+use crate::util::git::PrInfo;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// A non-image file picked via the "attach file" button, stored until query submission.
@@ -99,6 +105,8 @@ impl PendingQueryState {
 pub struct BlocklistAIContextModel {
     terminal_model: Arc<FairMutex<TerminalModel>>,
     directory_context: DirectoryContext,
+    #[cfg(feature = "local_fs")]
+    git_repo_status: Option<WeakModelHandle<GitRepoStatusModel>>,
 
     /// `BlockId`s corresponding to blocks to be included as context with the next AI query.
     pending_context_block_ids: HashSet<BlockId>,
@@ -282,6 +290,8 @@ impl BlocklistAIContextModel {
         Self {
             terminal_model,
             directory_context: Default::default(),
+            #[cfg(feature = "local_fs")]
+            git_repo_status: None,
             pending_context_block_ids: HashSet::new(),
             pending_context_selected_text: None,
             pending_attachments: Default::default(),
@@ -310,6 +320,8 @@ impl BlocklistAIContextModel {
         Self {
             terminal_model,
             directory_context: Default::default(),
+            #[cfg(feature = "local_fs")]
+            git_repo_status: None,
             pending_context_block_ids: HashSet::new(),
             pending_context_selected_text: None,
             pending_attachments: Default::default(),
@@ -443,6 +455,10 @@ impl BlocklistAIContextModel {
         // Include repository info from the origin remote URL if available.
         if let Some(repo_context) = self.repository_context() {
             context.push(repo_context);
+        }
+        #[cfg(feature = "local_fs")]
+        if let Some(pull_request_context) = self.pull_request_context(app) {
+            context.push(pull_request_context);
         }
 
         // Always include project rules if available
@@ -997,6 +1013,11 @@ impl BlocklistAIContextModel {
         }
     }
 
+    #[cfg(feature = "local_fs")]
+    pub fn set_git_repo_status(&mut self, handle: Option<WeakModelHandle<GitRepoStatusModel>>) {
+        self.git_repo_status = handle;
+    }
+
     /// Builds an `AIAgentContext::Repository` from the current working directory's git remote
     /// metadata, if available. Only available on non-WASM targets (git2 is not available on WASM).
     #[cfg(not(target_family = "wasm"))]
@@ -1015,6 +1036,23 @@ impl BlocklistAIContextModel {
     #[cfg(target_family = "wasm")]
     fn repository_context(&self) -> Option<AIAgentContext> {
         None
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn pull_request_context(&self, app: &AppContext) -> Option<AIAgentContext> {
+        let handle = self.git_repo_status.as_ref()?.upgrade(app)?;
+        let pr_info = handle.as_ref(app).pr_info()?;
+        Self::pull_request_context_from_pr_info(pr_info)
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn pull_request_context_from_pr_info(pr_info: &PrInfo) -> Option<AIAgentContext> {
+        Some(AIAgentContext::PullRequest {
+            number: i32::try_from(pr_info.number).ok()?,
+            state: pr_info.state.clone(),
+            draft: pr_info.draft,
+            base_branch: pr_info.base_branch.clone(),
+        })
     }
 
     /// Clears all pending attachments.
