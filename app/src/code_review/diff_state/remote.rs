@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use instant::Instant;
 use remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
-use warp_core::{send_telemetry_from_ctx, HostId, SessionId};
+use warp_core::{send_telemetry_from_ctx, HostId};
 use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::{ModelContext, SingletonEntity};
@@ -47,8 +47,6 @@ pub struct RemoteDiffStateModel {
     mode: DiffMode,
     state: InternalRemoteDiffState,
     metadata: Option<DiffMetadata>,
-    /// The session through which the current server-side subscription was established.
-    session_id: SessionId,
     /// Start time for the latest caller-tracked full diff snapshot request.
     tracked_diff_load_start_time: Option<Instant>,
 }
@@ -58,36 +56,44 @@ impl warpui::Entity for RemoteDiffStateModel {
 }
 
 impl RemoteDiffStateModel {
-    /// Creates a new remote diff state model and initiates the `GetDiffState`
-    /// request. The model starts in `Loading` state.
-    pub fn new(
-        remote_path: RemotePath,
-        mode: DiffMode,
-        session_id: SessionId,
-        ctx: &mut ModelContext<Self>,
-    ) -> Self {
+    /// Creates a new remote diff state model.
+    ///
+    /// Identity is `(host_id, repo_path, mode)`. The model is session-agnostic:
+    /// the manager picks a connected session for the host at every outbound
+    /// RPC, and host-level connect/disconnect events drive subscription
+    /// lifecycle. If no session for the host is currently connected the
+    /// model starts in `Disconnected` and self-heals once a session becomes
+    /// available; otherwise it starts in `Loading` and issues the initial
+    /// `GetDiffState` request.
+    pub fn new(remote_path: RemotePath, mode: DiffMode, ctx: &mut ModelContext<Self>) -> Self {
         // Subscribe to RemoteServerManager push events and filter by remote_path and diff_mode
         let mgr_handle = RemoteServerManager::handle(ctx);
         ctx.subscribe_to_model(&mgr_handle, Self::handle_manager_event);
 
-        // Send the initial GetDiffState request through the provided session.
-        let remote_path_clone = remote_path.clone();
-        let mode_clone = mode.clone();
-        mgr_handle.update(ctx, |mgr, ctx| {
-            mgr.get_diff_state(
-                session_id,
-                remote_path_clone,
-                proto::DiffMode::from(&mode_clone),
-                ctx,
-            );
-        });
+        // Decide initial state based on whether a session for this host is
+        // already connected. If so, kick off the GetDiffState request now;
+        // otherwise wait for HostConnected to arrive.
+        let host_connected = mgr_handle
+            .as_ref(ctx)
+            .client_for_host(&remote_path.host_id)
+            .is_some();
+        let state = if host_connected {
+            let host_id = remote_path.host_id.clone();
+            let repo_path = remote_path.path.clone();
+            let mode_clone = mode.clone();
+            mgr_handle.update(ctx, |mgr, ctx| {
+                mgr.get_diff_state(host_id, repo_path, proto::DiffMode::from(&mode_clone), ctx);
+            });
+            InternalRemoteDiffState::Loading
+        } else {
+            InternalRemoteDiffState::Disconnected
+        };
 
         Self {
             remote_path,
             mode,
-            state: InternalRemoteDiffState::Loading,
+            state,
             metadata: None,
-            session_id,
             tracked_diff_load_start_time: None,
         }
     }
@@ -168,18 +174,10 @@ impl RemoteDiffStateModel {
             {
                 self.mark_disconnected(ctx);
             }
-            RemoteServerManagerEvent::SessionDisconnected {
-                session_id,
-                host_id,
-                ..
-            } if *session_id == self.session_id && host_id == &self.remote_path.host_id => {
-                self.mark_disconnected(ctx);
-            }
-            RemoteServerManagerEvent::SessionReconnected {
-                session_id,
-                host_id,
-                ..
-            } if *session_id == self.session_id && host_id == &self.remote_path.host_id => {
+            RemoteServerManagerEvent::HostConnected { host_id }
+                if host_id == &self.remote_path.host_id
+                    && matches!(self.state, InternalRemoteDiffState::Disconnected) =>
+            {
                 self.resubscribe(false, ctx);
             }
             _ => {}
@@ -197,17 +195,18 @@ impl RemoteDiffStateModel {
         ctx.emit(DiffStateModelEvent::ConnectionLost);
     }
 
-    /// Re-sends `GetDiffState` through the model's existing `session_id`
-    /// and transitions to `Loading` while waiting for a fresh snapshot.
+    /// Re-sends `GetDiffState` for this model's `(host_id, repo, mode)` and
+    /// transitions to `Loading` while waiting for a fresh snapshot. The
+    /// manager chooses a connected session for the host at dispatch time.
     fn resubscribe(&mut self, track_load_duration: bool, ctx: &mut ModelContext<Self>) {
         // Always overwrite to avoid carrying a stale `Instant` from a prior
         // tracked load that was interrupted by a session blip.
         self.tracked_diff_load_start_time = track_load_duration.then(Instant::now);
-        let remote_path = self.remote_path.clone();
+        let host_id = self.remote_path.host_id.clone();
+        let repo_path = self.remote_path.path.clone();
         let mode = self.mode.clone();
-        let session_id = self.session_id;
         RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-            mgr.get_diff_state(session_id, remote_path, proto::DiffMode::from(&mode), ctx);
+            mgr.get_diff_state(host_id, repo_path, proto::DiffMode::from(&mode), ctx);
         });
         self.state = InternalRemoteDiffState::Loading;
         ctx.emit(DiffStateModelEvent::NewDiffsComputed {
@@ -294,11 +293,11 @@ impl RemoteDiffStateModel {
         if track_load_duration {
             self.tracked_diff_load_start_time = Some(Instant::now());
         }
-        let remote_path = self.remote_path.clone();
+        let host_id = self.remote_path.host_id.clone();
+        let repo_path = self.remote_path.path.clone();
         let mode = self.mode.clone();
-        let session_id = self.session_id;
         RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-            mgr.get_diff_state(session_id, remote_path, proto::DiffMode::from(&mode), ctx);
+            mgr.get_diff_state(host_id, repo_path, proto::DiffMode::from(&mode), ctx);
         });
     }
 
@@ -447,21 +446,18 @@ impl RemoteDiffStateModel {
 
     /// Sends `UnsubscribeDiffState` to the server. Call before dropping the
     /// model (the wrapper calls it during mode switch / pane close).
+    ///
+    /// The manager handles the "no connected client" case internally; the
+    /// server-side subscription is also cleaned up automatically when the
+    /// underlying connection drops, so this is a best-effort notification.
     pub fn unsubscribe(&self, ctx: &mut ModelContext<Self>) {
-        let mgr_handle = RemoteServerManager::handle(ctx);
-        let mgr = mgr_handle.as_ref(ctx);
-        if mgr.client_for_session(self.session_id).is_none() {
-            log::debug!(
-                "RemoteDiffStateModel::unsubscribe: subscription session is no longer connected: session={:?}",
-                self.session_id,
+        RemoteServerManager::handle(ctx)
+            .as_ref(ctx)
+            .unsubscribe_diff_state(
+                self.remote_path.host_id.clone(),
+                &self.remote_path.path,
+                proto::DiffMode::from(&self.mode),
             );
-            return;
-        }
-        mgr.unsubscribe_diff_state(
-            self.session_id,
-            &self.remote_path,
-            proto::DiffMode::from(&self.mode),
-        );
     }
 
     // ── Read API (matching LocalDiffStateModel interface) ────────────
@@ -538,13 +534,6 @@ impl RemoteDiffStateModel {
         self.remote_path.clone()
     }
 
-    /// Returns the session this model's subscription is anchored to. Set
-    /// once at construction and never changed by the model itself — see
-    /// the `session_id` field doc for the lifecycle contract.
-    pub fn session_id(&self) -> SessionId {
-        self.session_id
-    }
-
     // ── Write API ────────────────────────────────────────────────────
 
     pub fn set_diff_mode(
@@ -558,7 +547,8 @@ impl RemoteDiffStateModel {
         }
 
         // Unsubscribe from the old mode before switching, then re-send
-        // GetDiffState for the new mode through the same session.
+        // GetDiffState for the new mode. The manager resolves a connected
+        // session for the host at dispatch time.
         self.unsubscribe(ctx);
         self.mode = mode;
         self.resubscribe(track_load_duration, ctx);
@@ -568,10 +558,10 @@ impl RemoteDiffStateModel {
     /// The response is handled in `handle_manager_event` which emits
     /// `DiffStateModelEvent::BranchesReceived`.
     pub fn fetch_branches(&self, ctx: &mut ModelContext<Self>) {
-        let session_id = self.session_id;
-        let remote_path = self.remote_path.clone();
+        let host_id = self.remote_path.host_id.clone();
+        let repo_path = self.remote_path.path.clone();
         RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-            mgr.get_branches(session_id, remote_path, None, false, ctx);
+            mgr.get_branches(host_id, repo_path, None, false, ctx);
         });
     }
 
@@ -584,14 +574,14 @@ impl RemoteDiffStateModel {
         branch_name: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) {
-        let session_id = self.session_id;
-        let remote_path = self.remote_path.clone();
+        let host_id = self.remote_path.host_id.clone();
+        let repo_path = self.remote_path.path.clone();
         let mode = self.mode.clone();
         let proto_files = file_infos.iter().map(proto::FileStatusInfo::from).collect();
         RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
             mgr.discard_files(
-                session_id,
-                remote_path,
+                host_id,
+                repo_path,
                 proto_files,
                 should_stash,
                 branch_name,

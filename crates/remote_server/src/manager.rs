@@ -1807,25 +1807,29 @@ impl RemoteServerManager {
     }
 
     /// Sends a `GetDiffState` request to the remote server for the given
-    /// session and emits the snapshot response as a manager event.
+    /// host and emits the snapshot response as a manager event.
+    ///
+    /// When no session is currently connected for the host the request is
+    /// silently dropped (logged) — the caller is a session-agnostic model
+    /// whose state machine self-heals on `HostConnected`, so emitting a
+    /// synthetic error here would clobber its `Disconnected` state and
+    /// defeat the recovery path. Callers will re-issue the request once
+    /// a session to the host is established.
     pub fn get_diff_state(
         &mut self,
-        session_id: SessionId,
-        remote_path: RemotePath,
+        host_id: HostId,
+        repo_path: StandardizedPath,
         mode: DiffMode,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some(client) = self.client_for_session(session_id).cloned() else {
-            log::warn!("Remote server get_diff_state: no connected client session={session_id:?}");
+        let Some(client) = self.client_for_host(&host_id).cloned() else {
+            log::warn!("Remote server get_diff_state: no connected client host={host_id}");
             return;
         };
 
-        let RemotePath {
-            host_id,
-            path: repo_path,
-        } = remote_path;
         let mode_for_event = mode.clone();
         let repo_path_for_event = repo_path.clone();
+        let host_id_for_event = host_id.clone();
         let spawner = self.spawner.clone();
         ctx.background_executor()
             .spawn(async move {
@@ -1837,7 +1841,7 @@ impl RemoteServerManager {
                         let _ = spawner
                             .spawn(move |_me, ctx| {
                                 ctx.emit(RemoteServerManagerEvent::DiffStateSnapshotReceived {
-                                    host_id,
+                                    host_id: host_id_for_event,
                                     repo_path: repo_path_for_event,
                                     mode: mode_for_event,
                                     snapshot,
@@ -1865,26 +1869,20 @@ impl RemoteServerManager {
                                 // by send_request via RequestFailedEvent.
                                 log::warn!(
                                     "Remote server get_diff_state failed: \
-                                     session={session_id:?} error={e}"
+                                     host={host_id_for_event} error={e}"
                                 );
                                 e.to_string()
                             }
                         };
-                        let error_snapshot = DiffStateSnapshot {
-                            repo_path: repo_path_for_event.to_string(),
-                            mode: Some(mode_for_event.clone()),
-                            metadata: None,
-                            state: Some(DiffState {
-                                state: Some(diff_state::State::Error(DiffStateErrorValue {
-                                    message: error_message,
-                                })),
-                            }),
-                            diffs: None,
-                        };
+                        let error_snapshot = Self::make_diff_state_error_snapshot(
+                            &repo_path_for_event,
+                            &mode_for_event,
+                            error_message,
+                        );
                         let _ = spawner
                             .spawn(move |_me, ctx| {
                                 ctx.emit(RemoteServerManagerEvent::DiffStateSnapshotReceived {
-                                    host_id,
+                                    host_id: host_id_for_event,
                                     repo_path: repo_path_for_event,
                                     mode: mode_for_event,
                                     snapshot: error_snapshot,
@@ -1897,22 +1895,49 @@ impl RemoteServerManager {
             .detach();
     }
 
+    /// Builds a `DiffStateSnapshot` carrying an `Error` state. Used by the
+    /// post-dispatch transport-error path so callers downstream of
+    /// `DiffStateSnapshotReceived` see a consistent error shape.
+    fn make_diff_state_error_snapshot(
+        repo_path: &StandardizedPath,
+        mode: &DiffMode,
+        message: String,
+    ) -> DiffStateSnapshot {
+        DiffStateSnapshot {
+            repo_path: repo_path.to_string(),
+            mode: Some(mode.clone()),
+            metadata: None,
+            state: Some(DiffState {
+                state: Some(diff_state::State::Error(DiffStateErrorValue { message })),
+            }),
+            diffs: None,
+        }
+    }
+
     /// Sends a `GetBranches` request to the remote server for the given
-    /// session and emits the result as a manager event.
+    /// host and emits the result as a manager event.
+    ///
+    /// When no session is currently connected for the host the request is
+    /// silently dropped (logged). Callers can re-issue once a session
+    /// becomes available; emitting a synthetic error response here would
+    /// only feed downstream models an empty `BranchesReceived` and isn't
+    /// useful for an event-driven state machine.
     pub fn get_branches(
         &mut self,
-        session_id: SessionId,
-        remote_path: RemotePath,
+        host_id: HostId,
+        repo_path: StandardizedPath,
         max_branch_count: Option<u32>,
         include_remotes: bool,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some(client) = self.client_for_session(session_id).cloned() else {
-            log::warn!("Remote server get_branches: no connected client session={session_id:?}");
+        let Some((session_id, client)) = self
+            .any_connected_session_for_host(&host_id)
+            .map(|(sid, client)| (sid, client.clone()))
+        else {
+            log::warn!("Remote server get_branches: no connected client host={host_id}");
             return;
         };
 
-        let repo_path = remote_path.path;
         let repo_path_for_event = repo_path.clone();
         let spawner = self.spawner.clone();
         ctx.background_executor()
@@ -1935,19 +1960,22 @@ impl RemoteServerManager {
     }
 
     /// Sends an `UnsubscribeDiffState` notification (fire-and-forget) to the
-    /// remote server for the given session.
+    /// remote server for the given host.
+    ///
+    /// Safe no-op when no session is connected: the server already cleans up
+    /// the corresponding `(repo, mode, conn_id)` subscription when the
+    /// connection drops (see `deregister_connection` in the daemon), so the
+    /// client doesn't need to retry.
     pub fn unsubscribe_diff_state(
         &self,
-        session_id: SessionId,
-        remote_path: &RemotePath,
+        host_id: HostId,
+        repo_path: &StandardizedPath,
         mode: DiffMode,
     ) {
-        if let Some(client) = self.client_for_session(session_id) {
-            client.unsubscribe_diff_state(&remote_path.path, mode);
+        if let Some(client) = self.client_for_host(&host_id) {
+            client.unsubscribe_diff_state(repo_path, mode);
         } else {
-            log::debug!(
-                "Remote server unsubscribe_diff_state: no client for session={session_id:?}"
-            );
+            log::debug!("Remote server unsubscribe_diff_state: no client for host={host_id}");
         }
     }
 
@@ -1956,20 +1984,19 @@ impl RemoteServerManager {
     #[allow(clippy::too_many_arguments)]
     pub fn discard_files(
         &mut self,
-        session_id: SessionId,
-        remote_path: RemotePath,
+        host_id: HostId,
+        repo_path: StandardizedPath,
         files: Vec<FileStatusInfo>,
         should_stash: bool,
         branch_name: Option<String>,
         mode: DiffMode,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some(client) = self.client_for_session(session_id).cloned() else {
-            log::warn!("Remote server discard_files: no connected client session={session_id:?}");
+        let Some(client) = self.client_for_host(&host_id).cloned() else {
+            log::warn!("Remote server discard_files: no connected client host={host_id}");
             return;
         };
 
-        let repo_path = remote_path.path;
         ctx.background_executor()
             .spawn(async move {
                 match client
@@ -1980,9 +2007,7 @@ impl RemoteServerManager {
                         log::info!("Remote server discard_files succeeded");
                     }
                     Err(e) => {
-                        log::warn!(
-                            "Remote server discard_files failed: session={session_id:?} error={e}"
-                        );
+                        log::warn!("Remote server discard_files failed: host={host_id} error={e}");
                         // Transport-level telemetry is emitted automatically
                         // by send_request via RequestFailedEvent.
                     }
