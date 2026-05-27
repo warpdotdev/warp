@@ -18,7 +18,6 @@ use parking_lot::FairMutex;
 use rich_content::FindableRichContentHandle;
 pub use rich_content::{FindableRichContentView, RichContentMatchId};
 use settings::Setting as _;
-use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, ViewHandle};
 
 use crate::settings::InputModeSettings;
@@ -28,6 +27,7 @@ use crate::terminal::model::grid::grid_handler::GridHandler;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::model::TerminalModel;
+use crate::terminal::settings::TerminalSettings;
 use crate::view_components::find::{FindDirection, FindEvent, FindModel};
 
 /// Pre-computed find data for rendering a single block.
@@ -188,7 +188,7 @@ pub struct TerminalFindModel {
     /// `true` if the find bar is open.
     is_find_bar_open: bool,
 
-    /// Controller for async find operations (used when AsyncFind feature flag is enabled).
+    /// Controller for async find operations.
     pub(crate) async_find_controller: Option<AsyncFindController>,
 }
 
@@ -237,8 +237,8 @@ impl FindModel for TerminalFindModel {
 }
 
 impl TerminalFindModel {
-    pub fn new(terminal_model: Arc<FairMutex<TerminalModel>>) -> Self {
-        let async_find_controller = if FeatureFlag::AsyncFind.is_enabled() {
+    pub fn new(terminal_model: Arc<FairMutex<TerminalModel>>, ctx: &AppContext) -> Self {
+        let async_find_controller = if TerminalSettings::as_ref(ctx).is_async_find_enabled() {
             Some(AsyncFindController::new(terminal_model.clone()))
         } else {
             None
