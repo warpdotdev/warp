@@ -241,6 +241,10 @@ impl SingletonEntity for ServerModel {}
 impl ServerModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let host_id = uuid::Uuid::new_v4().to_string();
+        Self::new_with_host_id(host_id, ctx)
+    }
+
+    pub(crate) fn new_with_host_id(host_id: String, ctx: &mut ModelContext<Self>) -> Self {
         log::info!(
             "Daemon started: PID={}, host_id={}",
             std::process::id(),

@@ -14,7 +14,9 @@
 pub(super) mod proxy;
 
 use std::fs::Permissions;
-use std::os::unix::fs::PermissionsExt;
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 
 use warpui::r#async::executor;
 use warpui::SingletonEntity;
@@ -41,6 +43,62 @@ pub fn run_daemon(identity_key: String) -> anyhow::Result<()> {
     let _ = std::fs::remove_file(&pid_path);
     log::info!("Daemon exiting");
     result
+}
+
+fn daemon_host_id_path(identity_key: &str) -> PathBuf {
+    let path = remote_server::setup::remote_server_daemon_host_id_path(identity_key);
+    PathBuf::from(shellexpand::tilde(&path).into_owned())
+}
+
+fn load_or_create_daemon_host_id(identity_key: &str) -> String {
+    load_or_create_daemon_host_id_at_path(&daemon_host_id_path(identity_key))
+}
+
+fn load_or_create_daemon_host_id_at_path(host_id_path: &Path) -> String {
+    match std::fs::read_to_string(host_id_path) {
+        Ok(existing_host_id) => {
+            let existing_host_id = existing_host_id.trim();
+            if !existing_host_id.is_empty() {
+                return existing_host_id.to_string();
+            }
+            log::warn!(
+                "Daemon host ID file is empty, generating a replacement: {}",
+                host_id_path.display()
+            );
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            log::warn!(
+                "Failed to read daemon host ID file, generating a replacement: path={} error={err}",
+                host_id_path.display()
+            );
+        }
+    }
+
+    let host_id = uuid::Uuid::new_v4().to_string();
+    if let Err(err) = write_daemon_host_id(host_id_path, &host_id) {
+        log::warn!(
+            "Failed to persist daemon host ID: path={} error={err}",
+            host_id_path.display()
+        );
+    }
+    host_id
+}
+
+fn write_daemon_host_id(host_id_path: &Path, host_id: &str) -> anyhow::Result<()> {
+    if let Some(parent) = host_id_path.parent() {
+        proxy::ensure_private_daemon_dir(parent)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        // Set the file mode at creation time so the host ID is never world-readable.
+        .mode(0o600)
+        .open(host_id_path)?;
+    file.set_permissions(Permissions::from_mode(0o600))?;
+    writeln!(file, "{host_id}")?;
+    Ok(())
 }
 
 /// Called from `launch()` inside the headless AppBuilder callback.
@@ -93,6 +151,7 @@ pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
     );
 
     let _ = std::fs::write(&pid_path, std::process::id().to_string());
+    let stable_host_id = load_or_create_daemon_host_id(identity_key);
 
     ctx.add_singleton_model(move |ctx| {
         let spawner = ctx.spawner();
@@ -128,8 +187,7 @@ pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
             }
         })
         .detach();
-
-        ServerModel::new(ctx)
+        ServerModel::new_with_host_id(stable_host_id.clone(), ctx)
     });
 }
 
@@ -307,4 +365,53 @@ fn is_disconnect_error(e: &remote_server::protocol::ProtocolError) -> bool {
 /// Alias for [`is_disconnect_error`] — used in the write path for clarity.
 fn is_disconnect_protocol_error(e: &remote_server::protocol::ProtocolError) -> bool {
     is_disconnect_error(e)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    fn temp_host_id_path() -> PathBuf {
+        std::env::temp_dir()
+            .join(format!(
+                "warp-remote-server-host-id-{}",
+                uuid::Uuid::new_v4()
+            ))
+            .join("host_id")
+    }
+
+    #[test]
+    fn load_or_create_daemon_host_id_reuses_existing_id() {
+        let path = temp_host_id_path();
+        let parent = path.parent().unwrap();
+        std::fs::create_dir_all(parent).unwrap();
+        std::fs::write(&path, "existing-host-id\n").unwrap();
+
+        assert_eq!(
+            load_or_create_daemon_host_id_at_path(&path),
+            "existing-host-id"
+        );
+
+        std::fs::remove_dir_all(parent).unwrap();
+    }
+
+    #[test]
+    fn load_or_create_daemon_host_id_persists_generated_id() {
+        let path = temp_host_id_path();
+        let parent = path.parent().unwrap();
+
+        let host_id = load_or_create_daemon_host_id_at_path(&path);
+        assert!(!host_id.is_empty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap().trim(), host_id);
+        assert_eq!(load_or_create_daemon_host_id_at_path(&path), host_id);
+
+        let parent_permissions = std::fs::metadata(parent).unwrap().permissions().mode() & 0o777;
+        let file_permissions = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(parent_permissions, 0o700);
+        assert_eq!(file_permissions, 0o600);
+
+        std::fs::remove_dir_all(parent).unwrap();
+    }
 }

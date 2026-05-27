@@ -132,6 +132,14 @@ fn data_dir_handles_empty_identity_key() {
     let data_dir = remote_server_daemon_data_dir("");
     assert_eq!(data_dir, format!("{}/empty/data", remote_server_dir()));
 }
+#[test]
+fn host_id_path_lives_under_identity_data_dir() {
+    let key = "user@example.com/ssh host";
+    assert_eq!(
+        remote_server_daemon_host_id_path(key),
+        format!("{}/host_id", remote_server_daemon_data_dir(key))
+    );
+}
 
 #[test]
 fn daemon_dir_and_data_dir_use_different_identity_paths() {

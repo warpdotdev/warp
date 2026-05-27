@@ -420,6 +420,15 @@ pub fn remote_server_daemon_data_dir(identity_key: &str) -> String {
     )
 }
 
+/// Returns the path where the remote-server daemon stores its stable host ID.
+///
+/// The host ID is identity-scoped because it is used by the client to key
+/// per-user remote codebase state for this daemon. Persisting it avoids treating
+/// a daemon restart as a new host and duplicating `{host, path}` settings rows.
+pub fn remote_server_daemon_host_id_path(identity_key: &str) -> String {
+    format!("{}/host_id", remote_server_daemon_data_dir(identity_key))
+}
+
 /// Returns a short, deterministic 8-hex-char hash of the app version string.
 ///
 /// Used to version-discriminate daemon socket and PID files without
