@@ -10222,6 +10222,8 @@ impl Input {
                     && *AISettings::as_ref(ctx).submit_on_ctrl_enter
                 {
                     self.editor.update(ctx, |editor, ctx| {
+                        // EditorEvent::CtrlEnter triggers the editor's default InsertNewLineIfMultiLine,
+                        // which inserts a trailing newline. Strip it before submit so the message is clean.
                         editor.backspace(ctx);
                     });
                 }

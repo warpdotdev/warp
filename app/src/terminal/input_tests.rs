@@ -7277,6 +7277,13 @@ fn ctrl_enter_submits_when_submit_on_ctrl_enter_is_true() {
             !*ctrl_enter_fired.borrow(),
             "Ctrl+Enter must NOT emit Event::CtrlEnter when submit_on_ctrl_enter=true"
         );
+
+        input.read(&app, |input, ctx| {
+            assert!(
+                input.buffer_text(ctx).is_empty(),
+                "buffer should be cleared after submit"
+            );
+        });
     });
 }
 
