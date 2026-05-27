@@ -3415,13 +3415,29 @@ impl PaneGroup {
             return;
         }
 
+        log::info!(
+            "[ORCH-RESTORE-DBG] create_hidden_child_agent_pane: child={child_id} \
+             is_viewing_shared_session={shared} is_remote_child={remote} \
+             task_id={task_id:?} run_id={run_id:?} agent_name={name:?}",
+            shared = child_conversation.is_viewing_shared_session(),
+            remote = child_conversation.is_remote_child(),
+            task_id = child_conversation.task_id(),
+            run_id = child_conversation.run_id(),
+            name = child_conversation.agent_name(),
+        );
+
         if child_conversation.is_remote_child() {
             let Some(task_id) = child_conversation.task_id() else {
                 log::warn!(
-                    "Cannot restore remote child conversation {child_id:?} without a task ID"
+                    "[ORCH-RESTORE-DBG] create_hidden_child_agent_pane: remote child {child_id:?} \
+                     missing task_id; bailing out before creating any pane"
                 );
                 return;
             };
+            log::info!(
+                "[ORCH-RESTORE-DBG] create_hidden_child_agent_pane: taking remote-child branch \
+                 for child={child_id} task_id={task_id:?}",
+            );
             self.hydrate_task_backed_hidden_child_pane(
                 child_conversation,
                 parent_pane_id,
@@ -3704,6 +3720,12 @@ impl PaneGroup {
             return;
         }
 
+        log::info!(
+            "[ORCH-RESTORE-DBG] handle_pending_ambient_restoration_event: fired \
+             pending_ambient_count={amb} pending_remote_child_count={rch}",
+            amb = self.pending_ambient_agent_conversation_restorations.len(),
+            rch = self.pending_remote_child_hydrations.len(),
+        );
         self.process_pending_ambient_restorations(ctx);
         self.process_pending_remote_child_hydrations(ctx);
     }
@@ -3815,12 +3837,23 @@ impl PaneGroup {
             })
             .copied()
             .collect();
+        log::info!(
+            "[ORCH-RESTORE-DBG] process_pending_remote_child_hydrations: \
+             pending={pending} ready={ready}",
+            pending = self.pending_remote_child_hydrations.len(),
+            ready = ready_tasks.len(),
+        );
 
         for task_id in ready_tasks {
             let Some((child_id, _pane_id)) = self.pending_remote_child_hydrations.remove(&task_id)
             else {
                 continue;
             };
+            log::info!(
+                "[ORCH-RESTORE-DBG] process_pending_remote_child_hydrations: retrying \
+                 child={child_id} task_id={task_id:?} remaining_pending={remaining}",
+                remaining = self.pending_remote_child_hydrations.len(),
+            );
             self.attempt_remote_child_hydration(child_id, task_id, ctx);
         }
     }
@@ -3854,6 +3887,13 @@ impl PaneGroup {
         ctx: &mut ViewContext<Self>,
     ) {
         let child_id = child_conversation.id();
+        log::info!(
+            "[ORCH-RESTORE-DBG] hydrate_task_backed_hidden_child_pane: entry \
+             child={child_id} task_id={task_id:?} parent_pane={parent_pane_id:?} \
+             exchange_count={ec} existing_pane={existing:?}",
+            ec = child_conversation.exchange_count(),
+            existing = self.child_agent_panes.get(&child_id).copied(),
+        );
 
         // Idempotency guard: if the placeholder already has a hidden pane
         // tracked and has hydrated tasks (non-optimistic root task with
@@ -3861,6 +3901,10 @@ impl PaneGroup {
         // `restore_missing_child_agent_panes_for_parent` runs again.
         if let Some(existing_pane_id) = self.child_agent_panes.get(&child_id).copied() {
             if self.has_pane_id(existing_pane_id) && child_conversation.exchange_count() > 0 {
+                log::info!(
+                    "[ORCH-RESTORE-DBG] hydrate_task_backed_hidden_child_pane: \
+                     idempotency-skip child={child_id} existing_pane={existing_pane_id:?}",
+                );
                 return;
             }
         }
@@ -3870,9 +3914,16 @@ impl PaneGroup {
         // it in place.
         let new_pane_id =
             self.insert_ambient_agent_pane_hidden_for_child_agent(parent_pane_id, ctx);
+        log::info!(
+            "[ORCH-RESTORE-DBG] hydrate_task_backed_hidden_child_pane: created hidden pane \
+             child={child_id} new_pane={new_pane_id:?}",
+        );
 
         let Some(new_terminal_view) = self.terminal_view_from_pane_id(new_pane_id, ctx) else {
-            log::error!("Failed to get terminal view for remote child agent pane {child_id:?}");
+            log::error!(
+                "[ORCH-RESTORE-DBG] hydrate_task_backed_hidden_child_pane: \
+                 failed to get terminal view for remote child agent pane {child_id:?}; discarding"
+            );
             self.discard_pane(new_pane_id.into(), ctx);
             return;
         };
@@ -3902,7 +3953,8 @@ impl PaneGroup {
 
         if !restored {
             log::error!(
-                "Failed to restore remote child agent pane {child_id:?}: missing ambient agent view model"
+                "[ORCH-RESTORE-DBG] hydrate_task_backed_hidden_child_pane: missing ambient agent \
+                 view model for child={child_id:?}; discarding pane"
             );
             self.discard_pane(new_pane_id.into(), ctx);
             return;
@@ -3911,11 +3963,21 @@ impl PaneGroup {
         // Track the pane keyed by the placeholder's local id. Live-attach and
         // transcript hydration both keep this key stable.
         self.child_agent_panes.insert(child_id, new_pane_id.into());
+        log::info!(
+            "[ORCH-RESTORE-DBG] hydrate_task_backed_hidden_child_pane: registered child_agent_pane \
+             child={child_id} pane={new_pane_id:?}",
+        );
 
         // Kick off the task-data fetch if needed.
         let task_now = AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
             model.get_or_async_fetch_task_data(&task_id, ctx)
         });
+        log::info!(
+            "[ORCH-RESTORE-DBG] hydrate_task_backed_hidden_child_pane: \
+             get_or_async_fetch_task_data child={child_id} task_id={task_id:?} \
+             task_now_present={present}",
+            present = task_now.is_some(),
+        );
 
         if task_now.is_none() {
             // Task data not in memory yet; install a subscription so we
@@ -3926,6 +3988,12 @@ impl PaneGroup {
             // arrives.
             self.pending_remote_child_hydrations
                 .insert(task_id, (child_id, new_pane_id.into()));
+            log::info!(
+                "[ORCH-RESTORE-DBG] hydrate_task_backed_hidden_child_pane: deferred hydration \
+                 child={child_id} task_id={task_id:?} pane={new_pane_id:?} \
+                 pending_map_size={size}",
+                size = self.pending_remote_child_hydrations.len(),
+            );
             self.ensure_pending_ambient_restoration_subscription(ctx);
             self.enter_remote_child_existing_session_in_place(
                 new_pane_id.into(),
@@ -3937,6 +4005,10 @@ impl PaneGroup {
         }
 
         // Task data available — resolve the open action and dispatch.
+        log::info!(
+            "[ORCH-RESTORE-DBG] hydrate_task_backed_hidden_child_pane: task data immediately \
+             available; calling attempt_remote_child_hydration child={child_id} task_id={task_id:?}",
+        );
         self.attempt_remote_child_hydration(child_id, task_id, ctx);
     }
 
@@ -3949,12 +4021,20 @@ impl PaneGroup {
         task_id: AmbientAgentTaskId,
         ctx: &mut ViewContext<Self>,
     ) {
+        log::info!(
+            "[ORCH-RESTORE-DBG] attempt_remote_child_hydration: entry \
+             child={child_id} task_id={task_id:?}",
+        );
         let Some(pane_id) = self
             .child_agent_panes
             .get(&child_id)
             .copied()
             .filter(|pane_id| self.has_pane_id(*pane_id))
         else {
+            log::warn!(
+                "[ORCH-RESTORE-DBG] attempt_remote_child_hydration: no live pane for \
+                 child={child_id}; bailing out",
+            );
             return;
         };
 
@@ -3965,15 +4045,36 @@ impl PaneGroup {
             None,
             ctx,
         );
+        log::info!(
+            "[ORCH-RESTORE-DBG] attempt_remote_child_hydration: resolve_open_action result \
+             child={child_id} task_id={task_id:?} variant={variant}",
+            variant = match &resolution {
+                Some(WorkspaceAction::OpenOrAttachAmbientAgentConversation { .. }) =>
+                    "OpenOrAttachAmbientAgentConversation",
+                Some(WorkspaceAction::OpenConversationTranscriptViewer { .. }) =>
+                    "OpenConversationTranscriptViewer",
+                Some(_) => "Other",
+                None => "None",
+            },
+        );
 
         match resolution {
             Some(WorkspaceAction::OpenOrAttachAmbientAgentConversation { task_id, .. }) => {
+                log::info!(
+                    "[ORCH-RESTORE-DBG] attempt_remote_child_hydration: dispatching to \
+                     enter_remote_child_existing_session_in_place child={child_id} pane={pane_id:?}",
+                );
                 self.enter_remote_child_existing_session_in_place(pane_id, child_id, task_id, ctx);
             }
             Some(WorkspaceAction::OpenConversationTranscriptViewer {
                 conversation_id: server_token,
                 ambient_agent_task_id: _,
             }) => {
+                log::info!(
+                    "[ORCH-RESTORE-DBG] attempt_remote_child_hydration: dispatching to \
+                     hydrate_remote_child_transcript_in_place child={child_id} pane={pane_id:?} \
+                     server_token={server_token:?}",
+                );
                 self.hydrate_remote_child_transcript_in_place(
                     pane_id,
                     child_id,
@@ -3988,6 +4089,11 @@ impl PaneGroup {
                 // session and insert the conversation-ended tombstone. This
                 // matches the pre-Fix-B behavior so we are never worse than
                 // today.
+                log::warn!(
+                    "[ORCH-RESTORE-DBG] attempt_remote_child_hydration: fallback (no live session, \
+                     no transcript) for child={child_id} pane={pane_id:?}; entering empty \
+                     ambient session + tombstone",
+                );
                 self.enter_remote_child_existing_session_in_place(pane_id, child_id, task_id, ctx);
                 if let Some(terminal_view) = self.terminal_view_from_pane_id(pane_id, ctx) {
                     terminal_view.update(ctx, |view, ctx| {
@@ -4009,7 +4115,15 @@ impl PaneGroup {
         task_id: AmbientAgentTaskId,
         ctx: &mut ViewContext<Self>,
     ) {
+        log::info!(
+            "[ORCH-RESTORE-DBG] enter_remote_child_existing_session_in_place: entry \
+             pane={pane_id:?} child={child_id} task_id={task_id:?}",
+        );
         let Some(terminal_view) = self.terminal_view_from_pane_id(pane_id, ctx) else {
+            log::warn!(
+                "[ORCH-RESTORE-DBG] enter_remote_child_existing_session_in_place: no terminal view \
+                 for pane={pane_id:?}",
+            );
             return;
         };
         terminal_view.update(ctx, |terminal_view, ctx| {
@@ -4018,8 +4132,16 @@ impl PaneGroup {
                 .into_optional_handle()
                 .cloned()
             else {
+                log::warn!(
+                    "[ORCH-RESTORE-DBG] enter_remote_child_existing_session_in_place: no \
+                     ambient_agent_view_model for child={child_id}",
+                );
                 return;
             };
+            log::info!(
+                "[ORCH-RESTORE-DBG] enter_remote_child_existing_session_in_place: calling \
+                 enter_viewing_existing_session child={child_id} task_id={task_id:?}",
+            );
             ambient_agent_view_model.update(ctx, |model, ctx| {
                 model.set_conversation_id(Some(child_id));
                 model.enter_viewing_existing_session(task_id, ctx);
