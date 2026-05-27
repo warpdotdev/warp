@@ -186,8 +186,8 @@ use crate::ai::blocklist::suggested_rule_modal::{
     SuggestedRuleAndId, SuggestedRuleModal, SuggestedRuleModalEvent,
 };
 use crate::ai::blocklist::{
-    BlocklistAIHistoryEvent, PendingQueryState, SerializedBlockListItem, SlashCommandRequest,
-    FORK_PREFIX,
+    BlocklistAIHistoryEvent, PendingQueryState, QueuedQueryOrigin, SerializedBlockListItem,
+    SlashCommandRequest, FORK_PREFIX,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 #[cfg(target_family = "wasm")]
@@ -13071,7 +13071,7 @@ impl Workspace {
                 {
                     terminal.enqueue_followup_prompt(
                         prompt,
-                        crate::ai::blocklist::QueuedQueryOrigin::CompactAndSlashCommand,
+                        QueuedQueryOrigin::CompactAndSlashCommand,
                         conversation_id,
                         ctx,
                     );

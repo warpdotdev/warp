@@ -89,17 +89,6 @@ fn queue_texts(
     else {
         return Vec::new();
     };
-    queue_texts_for(view, conversation_id, ctx)
-}
-
-/// Returns the queue rows for an explicit `conversation_id`, looked up against the
-/// `QueuedQueryModel` singleton. Useful for tests that need to target a conversation other than
-/// the currently selected one (e.g. `/fork-and-compact`).
-fn queue_texts_for(
-    _view: &TerminalView,
-    conversation_id: AIConversationId,
-    ctx: &ViewContext<TerminalView>,
-) -> Vec<(String, QueuedQueryOrigin)> {
     QueuedQueryModel::as_ref(ctx)
         .queue(conversation_id)
         .iter()
@@ -579,7 +568,7 @@ fn enqueue_followup_prompt_appends_compact_and_row_when_v2_is_enabled() {
             );
 
             assert_eq!(
-                queue_texts_for(view, conversation_id, ctx),
+                queue_texts(view, ctx),
                 vec![(
                     "follow up after summarize".to_owned(),
                     QueuedQueryOrigin::CompactAndSlashCommand
@@ -612,7 +601,7 @@ fn enqueue_followup_prompt_appends_fork_and_compact_row_when_v2_is_enabled() {
             );
 
             assert_eq!(
-                queue_texts_for(view, conversation_id, ctx),
+                queue_texts(view, ctx),
                 vec![(
                     "work on the forked branch".to_owned(),
                     QueuedQueryOrigin::ForkAndCompactSlashCommand
@@ -646,13 +635,13 @@ fn enqueue_followup_prompt_uses_supplied_conversation_id_when_v2_is_enabled() {
                 ctx,
             );
 
-            assert!(queue_texts_for(view, selected_conversation_id, ctx).is_empty());
+            assert!(queue_texts(view, ctx).is_empty());
+            let other_queue = QueuedQueryModel::as_ref(ctx).queue(other_conversation_id);
+            assert_eq!(other_queue.len(), 1);
+            assert_eq!(other_queue[0].text(), "goes to the forked id");
             assert_eq!(
-                queue_texts_for(view, other_conversation_id, ctx),
-                vec![(
-                    "goes to the forked id".to_owned(),
-                    QueuedQueryOrigin::ForkAndCompactSlashCommand
-                )]
+                other_queue[0].origin(),
+                QueuedQueryOrigin::ForkAndCompactSlashCommand
             );
         });
     });
