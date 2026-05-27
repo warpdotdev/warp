@@ -193,18 +193,17 @@ impl Component for Lightbox {
             central_content
         };
 
-        let centered_content = Align::new(
-            Dismiss::new(content_with_description)
+        let centered_content = Align::new(content_with_description).finish();
+
+        let scrim = Container::new(
+            Dismiss::new(centered_content)
                 .prevent_interaction_with_other_elements()
                 .on_dismiss(move |ctx, app| on_dismiss(ctx, app))
                 .finish(),
         )
+        .with_background_color(scrim_color())
+        .with_uniform_padding(SCRIM_PADDING)
         .finish();
-
-        let scrim = Container::new(centered_content)
-            .with_background_color(scrim_color())
-            .with_uniform_padding(SCRIM_PADDING)
-            .finish();
 
         // Stack the scrim, close button, and optional navigation arrows.
         let mut content = Stack::new().with_child(scrim);
