@@ -5,7 +5,7 @@ use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
-    CacheOption, Debug, Dismiss, DispatchEventResult, EventHandler, Image, Shrinkable,
+    CacheOption, Dismiss, DispatchEventResult, EventHandler, Image, Shrinkable,
 };
 use warpui::keymap::Keystroke;
 use warpui::prelude::stack::*;
@@ -132,7 +132,7 @@ impl Component for Lightbox {
             appearance,
             button::Params {
                 content: button::Content::Icon(Icon::X),
-                theme: &button::themes::Secondary,
+                theme: &DismissButtonTheme,
                 options: button::Options {
                     size: button::Size::Small,
                     on_click: Some(Box::new(move |ctx, app, _| {
@@ -297,4 +297,39 @@ fn loading_element(appearance: &Appearance) -> Box<dyn Element> {
 
 fn lightbox_text_size(appearance: &Appearance) -> f32 {
     appearance.ui_font_size() + LIGHTBOX_TEXT_SIZE_DELTA
+}
+
+/// A custom button theme for the dismiss button to force colors to match
+/// a Dark theme button, as this button always appears on top of a near-black
+/// scrim, independent of application theme.
+struct DismissButtonTheme;
+
+impl button::Theme for DismissButtonTheme {
+    fn background(
+        &self,
+        button_state: button::State,
+        _appearance: &Appearance,
+    ) -> Option<warp_core::ui::theme::Fill> {
+        match button_state {
+            button::State::Default => None,
+            button::State::Hovered => Some(warp_core::ui::theme::Fill::white().with_opacity(10)),
+            button::State::Pressed => Some(warp_core::ui::theme::Fill::white().with_opacity(15)),
+        }
+    }
+
+    fn text_color(
+        &self,
+        _background: Option<warp_core::ui::theme::Fill>,
+        _appearance: &Appearance,
+    ) -> ColorU {
+        ColorU::new(255, 255, 255, 255)
+    }
+
+    fn border(&self, _appearance: &Appearance) -> Option<ColorU> {
+        Some(ColorU::new(51, 51, 51, 255))
+    }
+
+    fn keyboard_shortcut_background(&self, _appearance: &Appearance) -> Option<ColorU> {
+        Some(ColorU::new(38, 38, 38, 255))
+    }
 }
