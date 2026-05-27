@@ -111,9 +111,11 @@ pub struct DiffStatus {
 }
 
 impl DiffStatus {
+    /// Returns true if there are no changes or deletions in the current diff.
     pub fn is_empty(&self) -> bool {
         self.change_mapping.is_empty() && self.deletion_mapping.is_empty()
     }
+
     /// Returns the number of lines added and removed in the current diff.
     pub fn get_diff_lines(&self) -> (usize, usize) {
         let mut lines_added = 0;
