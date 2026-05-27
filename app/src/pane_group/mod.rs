@@ -910,21 +910,18 @@ pub struct PaneGroup {
     pending_ambient_agent_conversation_restorations: HashMap<AmbientAgentTaskId, PaneId>,
 
     /// Hidden remote-child placeholder panes whose task data was not yet
-    /// cached when `hydrate_task_backed_hidden_child_pane` ran. Modelled on
-    /// `pending_ambient_agent_conversation_restorations`, but keyed by the
-    /// child's `AmbientAgentTaskId` with the local placeholder
-    /// `AIConversationId` and the hidden pane id stored as the value so the
-    /// subscription handler can update the existing pane in place when task
-    /// data arrives. Distinct map (rather than reusing the ambient one) so
-    /// the visible-tree `replace_pane` flow doesn't accidentally swap a
-    /// hidden child pane.
-    pending_remote_child_hydrations: HashMap<AmbientAgentTaskId, (AIConversationId, PaneId)>,
+    /// cached when `hydrate_task_backed_hidden_child_pane` ran. Keyed by the
+    /// child's `AmbientAgentTaskId`; each entry carries the placeholder's
+    /// local `AIConversationId` and the hidden pane id so the subscription
+    /// handler can update the existing pane in place when task data
+    /// arrives. Distinct map (rather than reusing
+    /// `pending_ambient_agent_conversation_restorations`) so the
+    /// visible-tree `replace_pane` flow doesn't accidentally swap a hidden
+    /// child pane.
+    pending_remote_child_hydrations: HashMap<AmbientAgentTaskId, PendingRemoteChildHydration>,
 
-    /// Set when the long-lived AgentConversationsModel subscription has been
-    /// installed. Used to lazily install the subscription the first time
-    /// either pending map gains an entry, so hidden-child hydrations dispatched
-    /// outside of snapshot restoration still wake up on TasksUpdated /
-    /// ConversationsLoaded.
+    /// `true` once the long-lived `AgentConversationsModel` subscription
+    /// shared by both pending maps has been installed.
     pending_ambient_restoration_subscription_installed: bool,
 
     /// Maps child agent conversation IDs to their hidden pane IDs, so they can
@@ -1080,6 +1077,19 @@ enum AmbientRestoreKind {
     NewCloudConversation,
 }
 
+/// Hidden remote-child placeholder value stored in
+/// [`PaneGroup::pending_remote_child_hydrations`] while waiting for task
+/// data to arrive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingRemoteChildHydration {
+    /// Local conversation id of the placeholder. Stays the canonical key in
+    /// `child_agent_panes` across hydration so the orchestration pill bar
+    /// and topology indexes continue to find the pane.
+    placeholder_conversation_id: AIConversationId,
+    /// The hidden child pane to hydrate in place.
+    hidden_pane_id: PaneId,
+}
+
 /// Decision returned by [`decide_remote_child_hydration_action`]; describes
 /// how to hydrate a restored hidden remote-child pane given the current
 /// state of its [`AmbientAgentTask`].
@@ -1094,6 +1104,13 @@ enum RemoteChildHydrationAction {
     LoadTranscript {
         /// Server conversation token to load and merge.
         server_token: ServerConversationToken,
+        /// `true` when the originating task was in a terminal
+        /// (`Inactive`) state, `false` when it was `ActiveUnattachable`
+        /// (still running on the server but not joinable from this
+        /// client). Drives whether the post-merge step inserts a
+        /// conversation-ended tombstone: terminal runs get the tombstone;
+        /// active runs do not, since they are still streaming.
+        task_is_terminal: bool,
     },
     /// The task has neither an attachable live session nor a server
     /// conversation token. Fall back to the pre-Fix-B behavior (attach to
@@ -1107,15 +1124,31 @@ enum RemoteChildHydrationAction {
 /// remote-child pane. Pulled out into a free function so it can be unit
 /// tested without standing up a full `PaneGroup`.
 fn decide_remote_child_hydration_action(task: &AmbientAgentTask) -> RemoteChildHydrationAction {
-    match task.active_live_session_state() {
-        AmbientAgentLiveSessionState::Attachable { .. } => RemoteChildHydrationAction::LiveAttach,
-        AmbientAgentLiveSessionState::Inactive
-        | AmbientAgentLiveSessionState::ActiveUnattachable => match task.conversation_id() {
-            Some(token) => RemoteChildHydrationAction::LoadTranscript {
-                server_token: ServerConversationToken::new(token.to_string()),
-            },
-            None => RemoteChildHydrationAction::Fallback,
+    let live_session_state = task.active_live_session_state();
+    if matches!(
+        live_session_state,
+        AmbientAgentLiveSessionState::Attachable { .. }
+    ) {
+        return RemoteChildHydrationAction::LiveAttach;
+    }
+
+    // Drop empty/whitespace tokens before treating them as a valid
+    // `LoadTranscript` target. An empty `conversation_id` here would route
+    // us to a no-op cloud fetch and a misleading tombstone insert; the
+    // `Fallback` arm handles "nothing to attach to, nothing to load"
+    // correctly.
+    let server_token = task
+        .conversation_id()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(|t| ServerConversationToken::new(t.to_string()));
+
+    match server_token {
+        Some(server_token) => RemoteChildHydrationAction::LoadTranscript {
+            server_token,
+            task_is_terminal: matches!(live_session_state, AmbientAgentLiveSessionState::Inactive),
         },
+        None => RemoteChildHydrationAction::Fallback,
     }
 }
 
@@ -3830,17 +3863,23 @@ impl PaneGroup {
             .collect();
 
         for task_id in ready_tasks {
-            let Some((child_id, _pane_id)) = self.pending_remote_child_hydrations.remove(&task_id)
-            else {
+            let Some(entry) = self.pending_remote_child_hydrations.remove(&task_id) else {
                 continue;
             };
-            self.attempt_remote_child_hydration(child_id, task_id, ctx);
+            self.attempt_remote_child_hydration(entry.placeholder_conversation_id, task_id, ctx);
         }
     }
 
     /// Hydrates a restored hidden remote-child pane from task data and cloud
-    /// transcript. Idempotent: if the placeholder is already hydrated
-    /// (tasks/title present) the call is a no-op.
+    /// transcript.
+    ///
+    /// Idempotent: a second call with the same `child_conversation` is a
+    /// no-op when (a) we already track the pane in `child_agent_panes` AND
+    /// (b) the placeholder conversation already carries at least one
+    /// exchange (i.e. has been hydrated by a prior call). The guard
+    /// protects against double-hydration when
+    /// `restore_missing_child_agent_panes_for_parent` runs again before the
+    /// async retry path completes.
     ///
     /// Per the Phase 1 plan, this is the task-backed restore path for the
     /// `is_remote_child` branch of `create_hidden_child_agent_pane`. It
@@ -3937,15 +3976,15 @@ impl PaneGroup {
             // the live-session attach is at least attempted; the pending
             // entry will retry the merge/transcript path when the task
             // arrives.
-            self.pending_remote_child_hydrations
-                .insert(task_id, (child_id, new_pane_id.into()));
-            self.ensure_pending_ambient_restoration_subscription(ctx);
-            self.enter_remote_child_existing_session_in_place(
-                new_pane_id.into(),
-                child_id,
+            self.pending_remote_child_hydrations.insert(
                 task_id,
-                ctx,
+                PendingRemoteChildHydration {
+                    placeholder_conversation_id: child_id,
+                    hidden_pane_id: new_pane_id.into(),
+                },
             );
+            self.ensure_pending_ambient_restoration_subscription(ctx);
+            self.apply_existing_ambient_task_to_pane(new_pane_id.into(), child_id, task_id, ctx);
             return;
         }
 
@@ -3993,14 +4032,18 @@ impl PaneGroup {
 
         match decide_remote_child_hydration_action(&task) {
             RemoteChildHydrationAction::LiveAttach => {
-                self.enter_remote_child_existing_session_in_place(pane_id, child_id, task_id, ctx);
+                self.apply_existing_ambient_task_to_pane(pane_id, child_id, task_id, ctx);
             }
-            RemoteChildHydrationAction::LoadTranscript { server_token } => {
+            RemoteChildHydrationAction::LoadTranscript {
+                server_token,
+                task_is_terminal,
+            } => {
                 self.hydrate_remote_child_transcript_in_place(
                     pane_id,
                     child_id,
                     task_id,
                     server_token,
+                    task_is_terminal,
                     ctx,
                 );
             }
@@ -4009,7 +4052,7 @@ impl PaneGroup {
                 // back to the pre-Fix-B behavior: enter the (possibly empty)
                 // ambient session and insert the conversation-ended
                 // tombstone. This guarantees we're never worse than today.
-                self.enter_remote_child_existing_session_in_place(pane_id, child_id, task_id, ctx);
+                self.apply_existing_ambient_task_to_pane(pane_id, child_id, task_id, ctx);
                 if let Some(terminal_view) = self.terminal_view_from_pane_id(pane_id, ctx) {
                     terminal_view.update(ctx, |view, ctx| {
                         view.insert_conversation_ended_tombstone_with_resolved_cta(ctx);
@@ -4019,11 +4062,14 @@ impl PaneGroup {
         }
     }
 
-    /// Updates the hidden child pane's ambient agent view model in place to
-    /// attach to the live ambient session for `task_id`. Mirrors the
-    /// pre-Fix-B behavior so live-streaming runs continue to attach instead
-    /// of being downgraded to a transcript viewer.
-    fn enter_remote_child_existing_session_in_place(
+    /// Updates the hidden child pane's ambient agent view model in place so
+    /// it views the live ambient session for `task_id`. Wrapper around
+    /// [`AmbientAgentViewModel::enter_viewing_existing_session`] that also
+    /// sets the active conversation id; the underlying ambient-agent method
+    /// keeps its existing name. Mirrors the pre-Fix-B behavior so
+    /// live-streaming runs continue to attach instead of being downgraded
+    /// to a transcript viewer.
+    fn apply_existing_ambient_task_to_pane(
         &mut self,
         pane_id: PaneId,
         child_id: AIConversationId,
@@ -4051,15 +4097,26 @@ impl PaneGroup {
     /// Fetches the cloud conversation transcript identified by `server_token`,
     /// merges it onto the placeholder local conversation
     /// (`merge_cloud_tasks_into_existing_conversation`), and re-restores the
-    /// merged conversation into the hidden child pane in place. Falls back to
-    /// the live-session attach + tombstone path if the transcript fetch
-    /// fails.
+    /// merged conversation into the hidden child pane in place.
+    ///
+    /// `task_is_terminal` indicates whether the originating task was in a
+    /// terminal (`Inactive`) state when the dispatch decision was made. If
+    /// `true`, we insert the conversation-ended tombstone after the merge
+    /// because the run is finished. If `false` (the task was
+    /// `ActiveUnattachable`, i.e. still running on the server but not
+    /// joinable from this client), we skip the tombstone so the user is not
+    /// led to believe a still-streaming run has ended.
+    ///
+    /// Falls back to the live-session attach + tombstone path if the
+    /// transcript fetch fails or the merge errors out (e.g. placeholder is
+    /// no longer in `conversations_by_id`).
     fn hydrate_remote_child_transcript_in_place(
         &mut self,
         pane_id: PaneId,
         child_id: AIConversationId,
         task_id: AmbientAgentTaskId,
         server_token: ServerConversationToken,
+        task_is_terminal: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         let history_handle = BlocklistAIHistoryModel::handle(ctx);
@@ -4067,14 +4124,29 @@ impl PaneGroup {
             history_model.load_conversation_by_server_token(&server_token, ctx)
         });
         ctx.spawn(future, move |group, conversation, ctx| {
-            let Some(pane_id) = group
+            // Tighter guard than "pane still exists": we also require that
+            // (a) `child_agent_panes` still maps `child_id` to *the same*
+            // pane id we dispatched against, AND (b) that pane's terminal
+            // view is still displaying the same child conversation. Either
+            // can change while the cloud fetch is in flight (e.g. user
+            // navigates the child away, or a competing hydration races us);
+            // mutating UI state on a stale target would clobber whatever
+            // the user is currently looking at.
+            let still_canonical = group
                 .child_agent_panes
                 .get(&child_id)
                 .copied()
-                .filter(|p| *p == pane_id && group.has_pane_id(*p))
-            else {
+                .is_some_and(|p| p == pane_id && group.has_pane_id(p));
+            if !still_canonical {
                 return;
-            };
+            }
+            let terminal_view_active_conversation = group
+                .terminal_view_from_pane_id(pane_id, ctx)
+                .and_then(|tv| tv.as_ref(ctx).active_conversation_id(ctx));
+            if terminal_view_active_conversation != Some(child_id) {
+                return;
+            }
+
             match conversation {
                 Some(CloudConversationData::Oz(cloud)) => {
                     let tasks: Vec<warp_multi_agent_api::Task> = cloud
@@ -4108,24 +4180,31 @@ impl PaneGroup {
                             // ambient session so streaming runs continue to
                             // attach as before; transcript is now visible
                             // via the merged exchanges.
-                            group.enter_remote_child_existing_session_in_place(
+                            group.apply_existing_ambient_task_to_pane(
                                 pane_id, child_id, task_id, ctx,
                             );
-                            if let Some(terminal_view) =
-                                group.terminal_view_from_pane_id(pane_id, ctx)
-                            {
-                                terminal_view.update(ctx, |view, ctx| {
-                                    view.insert_conversation_ended_tombstone_with_resolved_cta(
-                                        ctx,
-                                    );
-                                });
+                            // Insert the conversation-ended tombstone only
+                            // when the task is in a terminal state. For
+                            // `ActiveUnattachable` tasks the run is still
+                            // executing on the server and the tombstone
+                            // would falsely signal completion.
+                            if task_is_terminal {
+                                if let Some(terminal_view) =
+                                    group.terminal_view_from_pane_id(pane_id, ctx)
+                                {
+                                    terminal_view.update(ctx, |view, ctx| {
+                                        view.insert_conversation_ended_tombstone_with_resolved_cta(
+                                            ctx,
+                                        );
+                                    });
+                                }
                             }
                         }
                         Err(err) => {
                             log::warn!(
                                 "merge_cloud_tasks_into_existing_conversation failed for {child_id:?}: {err:#}"
                             );
-                            group.enter_remote_child_existing_session_in_place(
+                            group.apply_existing_ambient_task_to_pane(
                                 pane_id, child_id, task_id, ctx,
                             );
                             if let Some(terminal_view) =
@@ -4144,7 +4223,7 @@ impl PaneGroup {
                     // Non-Oz transcript or fetch failure — fall back to the
                     // pre-Fix-B behavior (attach to ambient session +
                     // tombstone).
-                    group.enter_remote_child_existing_session_in_place(
+                    group.apply_existing_ambient_task_to_pane(
                         pane_id, child_id, task_id, ctx,
                     );
                     if let Some(terminal_view) = group.terminal_view_from_pane_id(pane_id, ctx) {

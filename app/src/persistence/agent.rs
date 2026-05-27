@@ -205,19 +205,19 @@ pub(super) fn select_conversations_to_evict(
     // spec's "Keep trees in order until... exceed the limit").
     let mut kept_count: usize = 0;
     let mut evicted: Vec<String> = Vec::new();
+    let mut tree_iter = tree_list.into_iter();
+
+    // Always keep the freshest tree to avoid evicting an active session
+    // purely because it's larger than `limit`. Subsequent trees are
+    // budgeted against `kept_count`.
+    if let Some((_effective, _root, members)) = tree_iter.next() {
+        kept_count += members.len();
+    }
+
     let mut stopped = false;
-    let mut first = true;
-    for (_effective, _root, members) in tree_list {
+    for (_effective, _root, members) in tree_iter {
         let tree_size = members.len();
-        let keep_this = if stopped {
-            false
-        } else if first {
-            // Always keep the freshest tree to avoid evicting an active
-            // session purely because it's larger than `limit`.
-            true
-        } else {
-            kept_count + tree_size <= limit
-        };
+        let keep_this = !stopped && kept_count + tree_size <= limit;
         if keep_this {
             kept_count += tree_size;
         } else {
@@ -226,7 +226,6 @@ pub(super) fn select_conversations_to_evict(
                 evicted.push(m.conversation_id.clone());
             }
         }
-        first = false;
     }
 
     evicted.sort();
@@ -516,11 +515,13 @@ mod tests {
         assert_eq!(evicted, vec!["older_singleton".to_string()]);
     }
 
-    /// Extra: parse failures fall back to standalone trees. A row with
-    /// malformed `conversation_data` is treated as a root, never gets
-    /// linked into another tree, and is eligible for eviction on its own.
+    /// Extra: a row whose `conversation_data` fails to parse is treated as
+    /// a tree root (it has no resolvable parent) and is still eligible to
+    /// be referenced as a parent by other rows whose parent string matches
+    /// its `conversation_id`. In other words: parse failures don't quarantine
+    /// the row out of the parent index — they just make it a root.
     #[test]
-    fn parse_failure_is_treated_as_standalone_tree() {
+    fn parse_failure_row_is_treated_as_root_and_can_be_referenced_by_others() {
         let mut rows = vec![
             AgentConversationRecord {
                 id: 1,

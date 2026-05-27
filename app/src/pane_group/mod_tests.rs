@@ -1044,18 +1044,19 @@ fn test_restored_remote_hidden_child_pane_fallback_when_task_data_unavailable() 
             assert_eq!(active_conversation_id, Some(child_conversation_id));
 
             // Fix B: pending hydration is recorded so the subscription handler
-            // can re-run hydration when task data lands. The tuple value is
-            // (placeholder_conversation_id, hidden_pane_id); the placeholder
-            // id must match the conversation we just restored.
+            // can re-run hydration when task data lands. The named struct
+            // captures the placeholder local AIConversationId plus the
+            // hidden pane id; the placeholder id must match the conversation
+            // we just restored.
             let pending_entry = panes.pending_remote_child_hydrations.get(&task_id).expect(
                 "task-data-unavailable hydration must register a pending entry keyed by task id",
             );
             assert_eq!(
-                pending_entry.0, child_conversation_id,
+                pending_entry.placeholder_conversation_id, child_conversation_id,
                 "pending hydration must record the placeholder's local AIConversationId",
             );
             assert_eq!(
-                pending_entry.1, child_pane_id,
+                pending_entry.hidden_pane_id, child_pane_id,
                 "pending hydration must record the hidden child pane id",
             );
         });
@@ -3092,13 +3093,23 @@ fn test_focused_pane_is_synchronized_with_application_focus() {
 /// Builds an [`AmbientAgentTask`] tailored for unit-testing
 /// [`decide_remote_child_hydration_action`].
 ///
-/// * `attachable` controls whether the live-session state resolves to
-///   [`AmbientAgentLiveSessionState::Attachable`] (`true`),
-///   [`AmbientAgentLiveSessionState::ActiveUnattachable`] (`false` + the
-///   `active_but_unparseable` toggle), or
-///   [`AmbientAgentLiveSessionState::Inactive`] (`false` + no live execution).
-/// * `conversation_id` populates the server conversation token used by the
-///   `LoadTranscript` branch.
+/// `state`, `is_sandbox_running`, and `session_id` combine to determine the
+/// task's [`AmbientAgentLiveSessionState`]:
+/// - `state == InProgress`, `is_sandbox_running == true`, and a parseable
+///   UUID-shaped `session_id` resolve to
+///   [`AmbientAgentLiveSessionState::Attachable`].
+/// - `state == InProgress`, `is_sandbox_running == true`, and an
+///   unparseable `session_id` resolve to
+///   [`AmbientAgentLiveSessionState::ActiveUnattachable`].
+/// - Any other shape resolves to [`AmbientAgentLiveSessionState::Inactive`].
+///
+/// `conversation_id` populates the server conversation token used by the
+/// `LoadTranscript` branch; pass `None` to exercise `Fallback`.
+///
+/// Note: `session_link` is unconditionally set to `None` in this helper.
+/// `AmbientAgentTask::active_live_session_state` falls back to parsing the
+/// session id out of `session_link` when `session_id` is absent, so a test
+/// that exercises that branch would need a different helper.
 fn hydration_decision_task(
     state: AmbientAgentTaskState,
     is_sandbox_running: bool,
@@ -3154,6 +3165,7 @@ fn decide_remote_child_hydration_inactive_with_token_loads_transcript() {
         decide_remote_child_hydration_action(&task),
         RemoteChildHydrationAction::LoadTranscript {
             server_token: ServerConversationToken::new("my-server-token".to_string()),
+            task_is_terminal: true,
         },
     );
 }
@@ -3179,6 +3191,7 @@ fn decide_remote_child_hydration_active_unattachable_with_token_loads_transcript
         decide_remote_child_hydration_action(&task),
         RemoteChildHydrationAction::LoadTranscript {
             server_token: ServerConversationToken::new("unattachable-server-token".to_string()),
+            task_is_terminal: false,
         },
     );
 }
@@ -3197,4 +3210,27 @@ fn decide_remote_child_hydration_inactive_without_token_falls_back() {
         decide_remote_child_hydration_action(&task),
         RemoteChildHydrationAction::Fallback,
     );
+}
+
+/// An `AmbientAgentTask` whose `conversation_id` is `Some("")` (or
+/// whitespace-only) is treated the same as `None`: the dispatch must not
+/// route to a no-op cloud fetch wrapped in a misleading tombstone. The
+/// `Fallback` arm handles "nothing to attach to, nothing to load"
+/// correctly.
+#[test]
+fn decide_remote_child_hydration_empty_token_falls_back() {
+    for empty_token in [Some(""), Some("   "), Some("\t\n")] {
+        let task =
+            hydration_decision_task(AmbientAgentTaskState::Succeeded, false, None, empty_token);
+        assert_eq!(
+            task.active_live_session_state(),
+            AmbientAgentLiveSessionState::Inactive,
+            "empty/whitespace token={empty_token:?} should still resolve to Inactive",
+        );
+        assert_eq!(
+            decide_remote_child_hydration_action(&task),
+            RemoteChildHydrationAction::Fallback,
+            "empty/whitespace token={empty_token:?} must fall through to Fallback",
+        );
+    }
 }
