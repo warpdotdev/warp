@@ -18,7 +18,7 @@ use warpui::{Entity, ModelContext, ModelHandle};
 use crate::watcher::DirectoryWatcher;
 use crate::watcher::TaskQueue;
 #[cfg(feature = "local_fs")]
-use crate::{entry::should_ignore_git_path, gitignore_rules_for_directory, GitignoreRules};
+use crate::{entry::should_ignore_git_path, gitignore_rules_for_directory, GitignoreRuleCache};
 use crate::{RepoMetadataError, RepositoryUpdate};
 
 /// Trait for entities that want to subscribe to repository file changes.
@@ -69,7 +69,7 @@ pub struct Repository {
     next_subscriber_id: SubscriberId,
     /// Cached gitignore patterns for this repository.
     #[cfg(feature = "local_fs")]
-    gitignore_rules: GitignoreRules,
+    gitignore_rules: GitignoreRuleCache,
     /// Cached loose remote-tracking ref tracked by the active branch.
     #[cfg(feature = "local_fs")]
     tracked_remote_ref: Option<TrackedRemoteRef>,
@@ -427,7 +427,8 @@ impl Repository {
 
         // Check if path matches gitignore patterns
         let is_dir = path.is_dir();
-        self.gitignore_rules.is_ignored(path, is_dir, true)
+        self.gitignore_rules
+            .is_ignored_with_refresh(path, is_dir, true)
     }
 }
 

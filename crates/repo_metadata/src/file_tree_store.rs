@@ -7,7 +7,7 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::ModelHandle;
 
 use crate::file_tree_store::file_tree_state::FileTreeMapStore;
-use crate::{BuildTreeError, Entry, FileId, FileMetadata, GitignoreRules, Repository};
+use crate::{BuildTreeError, Entry, FileId, FileMetadata, GitignoreRuleCache, Repository};
 
 #[derive(Debug, Clone)]
 pub struct FileTreeEntry {
@@ -46,7 +46,7 @@ impl FileTreeEntry {
     pub fn load_at_path(
         &mut self,
         path: &StandardizedPath,
-        gitignore_rules: &mut GitignoreRules,
+        gitignore_rules: &mut GitignoreRuleCache,
     ) -> Result<(), BuildTreeError> {
         self.state_map.load_at_path(path, gitignore_rules)
     }
@@ -356,7 +356,7 @@ pub struct FileTreeState {
     /// The entry representing the file tree structure.
     pub entry: FileTreeEntry,
     /// Gitignore rules applicable to this repository.
-    pub gitignore_rules: GitignoreRules,
+    pub gitignore_rules: GitignoreRuleCache,
 
     /// Handle to the backing repository (None for lazily-loaded standalone paths).
     #[expect(unused)]
@@ -367,7 +367,7 @@ impl FileTreeState {
     /// Creates a new FileTreeState.
     pub fn new(
         entry: Entry,
-        gitignore_rules: GitignoreRules,
+        gitignore_rules: GitignoreRuleCache,
         repository: Option<ModelHandle<Repository>>,
     ) -> Self {
         Self {
@@ -382,7 +382,7 @@ impl FileTreeState {
         let rule_root = entry_path_for_rules(&entry);
         Self {
             entry: entry.into(),
-            gitignore_rules: GitignoreRules::new(rule_root),
+            gitignore_rules: GitignoreRuleCache::empty_for_root(rule_root),
             repository: None,
         }
     }
@@ -394,7 +394,7 @@ impl FileTreeState {
     pub fn from_file_tree_entry(entry: FileTreeEntry) -> Self {
         Self {
             entry,
-            gitignore_rules: GitignoreRules::new(PathBuf::new()),
+            gitignore_rules: GitignoreRuleCache::empty_for_root(PathBuf::new()),
             repository: None,
         }
     }

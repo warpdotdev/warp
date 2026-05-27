@@ -148,7 +148,7 @@ impl Outline {
                 // At the end of the iteration we'll have reached the target path.
                 let mut current_parent = directory;
                 for ancestor in ancestors_between_target_and_directory.iter().rev() {
-                    if self.gitignore_rules.is_ignored(
+                    if self.gitignore_rules.is_ignored_with_refresh(
                         ancestor,
                         ancestor.is_dir(),
                         false, /* check_ancestors */

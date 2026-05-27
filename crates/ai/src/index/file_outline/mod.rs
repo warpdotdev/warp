@@ -11,7 +11,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 
 use itertools::Itertools;
-use repo_metadata::GitignoreRules;
+use repo_metadata::GitignoreRuleCache;
 use serde::{Deserialize, Serialize};
 
 use crate::index::{Entry, FileId};
@@ -32,7 +32,7 @@ pub struct Outline {
     file_id_to_outline: HashMap<FileId, FileOutline>,
 
     /// Repository-scoped gitignore rule cache.
-    gitignore_rules: GitignoreRules,
+    gitignore_rules: GitignoreRuleCache,
 }
 
 impl Outline {
@@ -127,7 +127,7 @@ impl Outline {
         self.file_id_to_outline.len()
     }
 
-    pub fn gitignore_rules(&self) -> GitignoreRules {
+    pub fn gitignore_rules(&self) -> GitignoreRuleCache {
         self.gitignore_rules.clone()
     }
 }

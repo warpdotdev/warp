@@ -269,7 +269,8 @@ impl RepoOutlines {
                                 if let Some(outline_state) =
                                     me.outlines.get_mut(canonicalized_path.as_path_buf())
                                 {
-                                    outline_state.status = OutlineStatus::Complete(outline);
+                                    outline_state.status =
+                                        OutlineStatus::Complete(Box::new(outline));
                                 }
                                 ctx.emit(RepoOutlinesEvent::OutlinesUpdated(
                                     canonicalized_path.into(),

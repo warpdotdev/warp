@@ -13,7 +13,7 @@ cfg_if::cfg_if! {
         use super::changed_files::ChangedFiles;
         use crate::index::is_git_internal_path;
         use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
-        use repo_metadata::GitignoreRules;
+        use repo_metadata::GitignoreRuleCache;
         use warp_core::features::FeatureFlag;
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
         use warpui::r#async::Timer;
@@ -832,7 +832,7 @@ impl CodebaseIndexManager {
     fn watch_path(
         &self,
         root_path: &Path,
-        gitignore_rules: Arc<Mutex<GitignoreRules>>,
+        gitignore_rules: Arc<Mutex<GitignoreRuleCache>>,
         ctx: &mut ModelContext<Self>,
     ) {
         // The codebase indexer only cares about source files:
@@ -845,7 +845,10 @@ impl CodebaseIndexManager {
             }
 
             gitignore_rules.lock().map_or(true, |mut rules| {
-                !rules.is_ignored(path, path.is_dir(), true)
+                // Keep watcher filtering refresh-aware for correctness. If this
+                // becomes a hot path, this closure is the narrow point to replace
+                // with a debounced refresh or immutable matcher snapshot.
+                !rules.is_ignored_with_refresh(path, path.is_dir(), true)
             })
         });
 
@@ -1046,7 +1049,7 @@ impl CodebaseIndexManager {
                 })
             }
             #[cfg(feature = "local_fs")]
-            CodebaseIndexEvent::GitignoreRulesUpdated {
+            CodebaseIndexEvent::GitignoreRuleCacheUpdated {
                 repo_root_path,
                 gitignore_rules,
             } => {

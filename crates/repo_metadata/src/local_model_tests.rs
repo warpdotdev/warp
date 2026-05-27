@@ -19,12 +19,12 @@ mod tests {
 
     use crate::entry::{DirectoryEntry, Entry, FileMetadata};
     use crate::file_tree_store::{FileTreeEntry, FileTreeEntryState, FileTreeState};
-    use crate::gitignore_stack::GitignoreRules;
     use crate::local_model::{
         GetContentsArgs, IndexedRepoState, LocalRepoMetadataModel, RepoUpdate,
         RepositoryMetadataEvent,
     };
     use crate::repositories::DetectedRepositories;
+    use crate::scoped_gitignore::GitignoreRuleCache;
     use crate::watcher::DirectoryWatcher;
     use crate::RepoMetadataError;
 
@@ -49,7 +49,7 @@ mod tests {
         });
         FileTreeState::new(
             root,
-            GitignoreRules::new(repo_path.to_local_path_lossy()),
+            GitignoreRuleCache::empty_for_root(repo_path.to_local_path_lossy()),
             None,
         )
     }
@@ -258,8 +258,11 @@ mod tests {
                         )
                         .unwrap()
                 });
-                let state =
-                    FileTreeState::new(root, GitignoreRules::new(&test_repo), Some(repo_handle));
+                let state = FileTreeState::new(
+                    root,
+                    GitignoreRuleCache::empty_for_root(&test_repo),
+                    Some(repo_handle),
+                );
 
                 let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
 
@@ -547,8 +550,11 @@ mod tests {
                         )
                         .unwrap()
                 });
-                let state =
-                    FileTreeState::new(root, GitignoreRules::new(&test_repo), Some(repo_handle));
+                let state = FileTreeState::new(
+                    root,
+                    GitignoreRuleCache::empty_for_root(&test_repo),
+                    Some(repo_handle),
+                );
 
                 let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
 
@@ -652,7 +658,7 @@ mod tests {
                     Stub::FileWithContent(".gitignore", "*.log\n/target/\nnode_modules/\n.env"),
                 ]);
 
-            let mut gitignore_rules = GitignoreRules::new(&repo_path);
+            let mut gitignore_rules = GitignoreRuleCache::empty_for_root(&repo_path);
 
             // Test files that should be excluded
             let excluded_paths = vec![
@@ -704,7 +710,7 @@ mod tests {
                 ])
                 .mkdir("target");
 
-            let gitignore_rules = GitignoreRules::new(&repo_path);
+            let gitignore_rules = GitignoreRuleCache::empty_for_root(&repo_path);
 
             // Create an initial file tree
             let root_entry = Entry::Directory(DirectoryEntry {
@@ -840,7 +846,7 @@ Thumbs.db
                 Stub::FileWithContent(".gitignore", gitignore_content),
             ]);
 
-            let mut gitignore_rules = GitignoreRules::new(&repo_path);
+            let mut gitignore_rules = GitignoreRuleCache::empty_for_root(&repo_path);
 
             // Test various patterns
             let test_cases = vec![
@@ -894,7 +900,7 @@ Thumbs.db
                 Stub::FileWithContent("src/main.rs", "rust"),
             ]);
 
-            let mut gitignore_rules = GitignoreRules::new(&repo_path);
+            let mut gitignore_rules = GitignoreRuleCache::empty_for_root(&repo_path);
 
             // .git directory and its contents should be excluded
             assert!(LocalRepoMetadataModel::path_is_ignored(
@@ -935,7 +941,7 @@ Thumbs.db
                     Stub::FileWithContent("frontend/.gitignore", "!dist/important.js"),
                 ]);
 
-            let mut gitignore_rules = GitignoreRules::new(&repo_path);
+            let mut gitignore_rules = GitignoreRuleCache::empty_for_root(&repo_path);
 
             // Test that nested gitignore rules are respected
             assert!(LocalRepoMetadataModel::path_is_ignored(
@@ -1320,7 +1326,7 @@ Thumbs.db
                     });
                     let state = FileTreeState::new(
                         root,
-                        GitignoreRules::new(&real_repo),
+                        GitignoreRuleCache::empty_for_root(&real_repo),
                         Some(repo_handle),
                     );
 

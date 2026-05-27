@@ -16,7 +16,7 @@ pub enum OutlineStatus {
     /// The outline is being computed.
     Pending,
     /// The successfully computed outline.
-    Complete(Outline),
+    Complete(Box<Outline>),
     /// Outline creation failed.
     Failed,
 }

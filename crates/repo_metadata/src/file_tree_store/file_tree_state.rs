@@ -5,7 +5,7 @@ use std::sync::Arc;
 use warp_util::standardized_path::StandardizedPath;
 
 use crate::file_tree_store::{FileTreeDirectoryEntryState, FileTreeEntry, FileTreeEntryState};
-use crate::{BuildTreeError, DirectoryEntry, Entry, GitignoreRules};
+use crate::{BuildTreeError, DirectoryEntry, Entry, GitignoreRuleCache};
 
 #[derive(Debug, Clone)]
 pub(super) struct FileTreeMapStore {
@@ -185,7 +185,7 @@ impl FileTreeMapStore {
     pub fn load_at_path(
         &mut self,
         path: &StandardizedPath,
-        gitignore_rules: &mut GitignoreRules,
+        gitignore_rules: &mut GitignoreRuleCache,
     ) -> Result<(), BuildTreeError> {
         let child_path: Arc<StandardizedPath> = Arc::new(path.clone());
         let mut entry = Entry::Directory(DirectoryEntry {

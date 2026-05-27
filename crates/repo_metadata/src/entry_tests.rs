@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use super::{Entry, GitignoreRules, IgnoredPathStrategy};
+use super::{Entry, GitignoreRuleCache, IgnoredPathStrategy};
 
 #[test]
 fn gitignore_traversal_truncates_sibling_scope() {
@@ -14,8 +14,8 @@ fn gitignore_traversal_truncates_sibling_scope() {
     fs::write(left.join(".gitignore"), "shared.txt\n").unwrap();
     fs::write(right.join(".gitignore"), "other.txt\n").unwrap();
 
-    let mut gitignore_rules = GitignoreRules::new(root);
-    let mut gitignore_traversal = gitignore_rules.traversal_for_path(root);
+    let mut gitignore_rules = GitignoreRuleCache::empty_for_root(root);
+    let mut gitignore_traversal = gitignore_rules.refreshed_traversal_for_path(root);
     let root_active_len = gitignore_traversal.enter_directory(root);
 
     let left_active_len = gitignore_traversal.enter_directory(&left);
@@ -39,7 +39,7 @@ fn gitignore_rules_repeated_lazy_loads_do_not_grow_matcher_count() {
     fs::write(child.join(".gitignore"), "ignored.txt\n").unwrap();
     fs::write(child.join("ignored.txt"), "ignored").unwrap();
 
-    let mut gitignore_rules = GitignoreRules::new(&root);
+    let mut gitignore_rules = GitignoreRuleCache::empty_for_root(&root);
     for _ in 0..3 {
         let mut files = Vec::new();
         Entry::build_tree(
@@ -65,15 +65,15 @@ fn gitignore_rules_refresh_changed_and_deleted_gitignore_files() {
     fs::write(root.join(".gitignore"), "ignored.txt\n").unwrap();
     fs::write(&ignored, "ignored").unwrap();
 
-    let mut gitignore_rules = GitignoreRules::new(&root);
-    assert!(gitignore_rules.is_ignored(&ignored, false, false));
+    let mut gitignore_rules = GitignoreRuleCache::empty_for_root(&root);
+    assert!(gitignore_rules.is_ignored_with_refresh(&ignored, false, false));
 
     fs::write(root.join(".gitignore"), "other.txt\n").unwrap();
-    assert!(!gitignore_rules.is_ignored(&ignored, false, false));
-    assert!(gitignore_rules.is_ignored(&root.join("other.txt"), false, false));
+    assert!(!gitignore_rules.is_ignored_with_refresh(&ignored, false, false));
+    assert!(gitignore_rules.is_ignored_with_refresh(&root.join("other.txt"), false, false));
 
     fs::remove_file(root.join(".gitignore")).unwrap();
-    assert!(!gitignore_rules.is_ignored(&root.join("other.txt"), false, false));
+    assert!(!gitignore_rules.is_ignored_with_refresh(&root.join("other.txt"), false, false));
     assert_eq!(gitignore_rules.matcher_count(), 0);
 }
 
@@ -88,9 +88,9 @@ fn gitignore_traversal_for_path_only_activates_ancestor_matchers() {
     fs::write(left.join(".gitignore"), "shared.txt\n").unwrap();
     fs::write(right.join(".gitignore"), "other.txt\n").unwrap();
 
-    let mut gitignore_rules = GitignoreRules::new(&root);
-    assert!(gitignore_rules.is_ignored(&left.join("shared.txt"), false, false));
-    let gitignore_traversal = gitignore_rules.traversal_for_path(&right);
+    let mut gitignore_rules = GitignoreRuleCache::empty_for_root(&root);
+    assert!(gitignore_rules.is_ignored_with_refresh(&left.join("shared.txt"), false, false));
+    let gitignore_traversal = gitignore_rules.refreshed_traversal_for_path(&right);
 
     assert!(gitignore_traversal.matches(&right.join("other.txt"), false, false));
     assert!(!gitignore_traversal.matches(&left.join("shared.txt"), false, false));
@@ -108,8 +108,8 @@ fn build_tree_with_seeded_gitignores_does_not_apply_sibling_rules() {
     fs::write(left.join("ignored.txt"), "left ignored").unwrap();
     fs::write(right.join("ignored.txt"), "right visible").unwrap();
 
-    let mut gitignore_rules = GitignoreRules::new(&root);
-    assert!(gitignore_rules.is_ignored(&left.join("ignored.txt"), false, false));
+    let mut gitignore_rules = GitignoreRuleCache::empty_for_root(&root);
+    assert!(gitignore_rules.is_ignored_with_refresh(&left.join("ignored.txt"), false, false));
     let mut files = Vec::new();
     Entry::build_tree(
         right.clone(),
@@ -142,7 +142,7 @@ fn build_tree_does_not_apply_sibling_gitignore_rules() {
     fs::write(right.join("ignored.txt"), "right visible").unwrap();
 
     let mut files = Vec::new();
-    let mut gitignore_rules = GitignoreRules::new(&root);
+    let mut gitignore_rules = GitignoreRuleCache::empty_for_root(&root);
     let entry = Entry::build_tree(
         root,
         &mut files,

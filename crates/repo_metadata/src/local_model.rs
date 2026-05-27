@@ -22,7 +22,7 @@ pub enum RepoContent<'a> {
 
 use warp_util::standardized_path::StandardizedPath;
 
-use crate::entry::{BuildTreeError, Entry, FileId, GitignoreRules, IgnoredPathStrategy};
+use crate::entry::{BuildTreeError, Entry, FileId, GitignoreRuleCache, IgnoredPathStrategy};
 use crate::repository::Repository;
 use crate::telemetry::RepoMetadataTelemetryEvent;
 use crate::{gitignore_rules_for_directory, RepoMetadataError};
@@ -509,7 +509,7 @@ impl LocalRepoMetadataModel {
 
         // Build first-level-only tree.
         let mut files = Vec::new();
-        let mut gitignore_rules = GitignoreRules::for_directory(&local_path);
+        let mut gitignore_rules = GitignoreRuleCache::for_repo_tree(&local_path);
         let mut file_limit = MAX_FILES_PER_REPO;
         let root_entry = Entry::build_tree(
             &local_path,
@@ -586,8 +586,8 @@ impl LocalRepoMetadataModel {
     /// be applied to the tree on the main thread without cloning it.
     async fn compute_file_tree_mutations(
         update: &RepoUpdate,
-        mut gitignore_rules: GitignoreRules,
-    ) -> (Vec<FileTreeMutation>, GitignoreRules) {
+        mut gitignore_rules: GitignoreRuleCache,
+    ) -> (Vec<FileTreeMutation>, GitignoreRuleCache) {
         let mut mutations = Vec::new();
 
         // Removals for deleted and moved-from paths
@@ -814,7 +814,7 @@ impl LocalRepoMetadataModel {
     }
 
     /// Checks if a path matches any of the gitignore patterns
-    fn path_is_ignored(path: &Path, gitignore_rules: &mut GitignoreRules) -> bool {
+    fn path_is_ignored(path: &Path, gitignore_rules: &mut GitignoreRuleCache) -> bool {
         // Check if any component of the path is .git
         if path
             .components()
@@ -825,7 +825,7 @@ impl LocalRepoMetadataModel {
 
         // Check if path matches any gitignore patterns
         let is_dir = path.is_dir();
-        gitignore_rules.is_ignored(path, is_dir, true)
+        gitignore_rules.is_ignored_with_refresh(path, is_dir, true)
     }
 
     /// Indexes a repository from the given repository handle.

@@ -12,8 +12,8 @@ use notify_debouncer_full::notify::WatchFilter;
 use thiserror::Error;
 use warp_util::standardized_path::StandardizedPath;
 
-use crate::gitignore_stack::gitignore_matches_path;
-pub use crate::gitignore_stack::{GitignoreRules, GitignoreTraversal};
+use crate::scoped_gitignore::gitignore_matches_path;
+pub use crate::scoped_gitignore::{GitignoreRuleCache, ScopedGitignoreTraversal};
 
 /// Maximum file size allowed for treesitter parsing (3MB).
 const MAX_FILE_SIZE: usize = 3 * 1000 * 1000;
@@ -98,7 +98,7 @@ impl Entry {
     pub fn build_tree(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
-        gitignore_rules: &mut GitignoreRules,
+        gitignore_rules: &mut GitignoreRuleCache,
         remaining_file_quota: Option<&mut usize>,
         max_depth: usize,
         current_depth: usize,
@@ -120,7 +120,7 @@ impl Entry {
     pub(crate) fn build_tree_with_ignored_ancestor(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
-        gitignore_rules: &mut GitignoreRules,
+        gitignore_rules: &mut GitignoreRuleCache,
         remaining_file_quota: Option<&mut usize>,
         max_depth: usize,
         current_depth: usize,
@@ -128,8 +128,8 @@ impl Entry {
         ancestor_is_ignored: bool,
     ) -> Result<Self, BuildTreeError> {
         let path = path.into();
-        let mut gitignore_traversal = gitignore_rules.traversal_for_path(&path);
-        let result = Self::build_tree_inner(
+        let mut gitignore_traversal = gitignore_rules.refreshed_traversal_for_path(&path);
+        Self::build_tree_inner(
             path,
             files,
             &mut gitignore_traversal,
@@ -138,15 +138,14 @@ impl Entry {
             current_depth,
             ignored_path_strategy,
             ancestor_is_ignored,
-        );
-        result
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
     fn build_tree_inner(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
-        gitignore_traversal: &mut GitignoreTraversal<'_>,
+        gitignore_traversal: &mut ScopedGitignoreTraversal<'_>,
         mut remaining_file_quota: Option<&mut usize>,
         max_depth: usize,
         current_depth: usize,
@@ -311,7 +310,7 @@ impl Entry {
     }
 
     /// Loads an unloaded directory
-    pub fn load(&mut self, gitignore_rules: &mut GitignoreRules) -> Result<(), BuildTreeError> {
+    pub fn load(&mut self, gitignore_rules: &mut GitignoreRuleCache) -> Result<(), BuildTreeError> {
         // TODO: Consider a similar `unload` method if we run into performance issues.
         let Self::Directory(directory) = self else {
             return Ok(());
@@ -634,8 +633,8 @@ pub fn is_file_parsable(path: &Path) -> Result<bool, io::Error> {
     std::fs::metadata(path).map(|metadata| (metadata.len() as usize) < MAX_FILE_SIZE)
 }
 
-pub fn gitignore_rules_for_directory(directory_path: &Path) -> GitignoreRules {
-    GitignoreRules::for_directory(directory_path)
+pub fn gitignore_rules_for_directory(directory_path: &Path) -> GitignoreRuleCache {
+    GitignoreRuleCache::for_repo_tree(directory_path)
 }
 
 #[derive(Debug, Clone)]
