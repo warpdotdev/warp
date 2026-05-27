@@ -1151,6 +1151,9 @@ pub enum InputAction {
 
     /// Activates `&` cloud handoff compose mode from the message bar hint.
     ActivateCloudHandoff,
+
+    /// Submits the CLI agent rich input with the configured modifier keybinding.
+    SubmitCLIAgentRichInput,
 }
 
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
@@ -1768,6 +1771,11 @@ pub fn init(app: &mut AppContext) {
 
     app.register_fixed_bindings(vec![
         FixedBinding::new("ctrl-d", InputAction::CtrlD, id!("Input")),
+        FixedBinding::new(
+            "ctrl-enter",
+            InputAction::SubmitCLIAgentRichInput,
+            id!("Input") & !id!("IMEOpen") & id!(flags::CTRL_ENTER_SUBMITS_CLI_AGENT_RICH_INPUT),
+        ),
         FixedBinding::custom(
             CustomAction::History,
             InputAction::Up,
@@ -2801,6 +2809,11 @@ impl Input {
 
                         if CLIAgentSessionsModel::as_ref(app).is_input_open(terminal_view_id) {
                             context.set.insert(flags::CLI_AGENT_RICH_INPUT_OPEN);
+                            if *AISettings::as_ref(app).submit_on_ctrl_enter {
+                                context
+                                    .set
+                                    .insert(flags::CTRL_ENTER_SUBMITS_CLI_AGENT_RICH_INPUT);
+                            }
                         }
                     })),
                     ..Default::default()
@@ -12502,15 +12515,12 @@ impl Input {
                 return;
             }
 
-            // When the `!` prefix was stripped (shell mode in CLI agent input),
-            // prepend it back so the CLI agent receives the mode-switch prefix,
-            // then exit shell mode so the next prompt starts in AI mode.
-            let mut text = self.editor.as_ref(ctx).buffer_text(ctx);
-            if self.is_locked_in_shell_mode(ctx) {
-                text = format!("{TERMINAL_INPUT_PREFIX}{text}");
-                self.exit_shell_mode_to_ai(ctx);
+            if *AISettings::as_ref(ctx).submit_on_ctrl_enter {
+                self.insert_newline(ctx);
+                return;
             }
-            ctx.emit(Event::SubmitCLIAgentInput { text });
+
+            self.submit_cli_agent_rich_input(ctx);
             return;
         }
         let command = self.editor.as_ref(ctx).buffer_text(ctx);
@@ -12899,6 +12909,24 @@ impl Input {
             ai_settings.mark_quota_banner_as_dismissed(ctx);
             ctx.notify();
         });
+    }
+
+    fn insert_newline(&mut self, ctx: &mut ViewContext<Self>) {
+        self.editor.update(ctx, |editor, ctx| {
+            editor.user_initiated_insert("\n", PlainTextEditorViewAction::NewLine, ctx)
+        });
+    }
+
+    fn submit_cli_agent_rich_input(&mut self, ctx: &mut ViewContext<Self>) {
+        // When the `!` prefix was stripped (shell mode in CLI agent input),
+        // prepend it back so the CLI agent receives the mode-switch prefix,
+        // then exit shell mode so the next prompt starts in AI mode.
+        let mut text = self.editor.as_ref(ctx).buffer_text(ctx);
+        if self.is_locked_in_shell_mode(ctx) {
+            text = format!("{TERMINAL_INPUT_PREFIX}{text}");
+            self.exit_shell_mode_to_ai(ctx);
+        }
+        ctx.emit(Event::SubmitCLIAgentInput { text });
     }
 
     fn input_cmd_enter(&mut self, ctx: &mut ViewContext<Self>) {
@@ -14887,6 +14915,13 @@ impl TypedActionView for Input {
             InputAction::CtrlD => self.ctrl_d(ctx),
             InputAction::CtrlR => self.ctrl_r(ctx),
             InputAction::ClearScreen => self.clear_screen(ctx),
+            InputAction::SubmitCLIAgentRichInput => {
+                if CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id)
+                    && *AISettings::as_ref(ctx).submit_on_ctrl_enter
+                {
+                    self.submit_cli_agent_rich_input(ctx);
+                }
+            }
             InputAction::SelectAndRefreshVoltron(feature_name) => {
                 self.select_and_refresh_voltron(*feature_name, ctx);
             }
@@ -15163,6 +15198,14 @@ impl View for Input {
 
         if ai_settings.is_ai_autodetection_enabled(app) {
             ctx.set.insert(flags::AI_INPUT_AUTODETECTION_FLAG);
+        }
+
+        if CLIAgentSessionsModel::as_ref(app).is_input_open(self.terminal_view_id) {
+            ctx.set.insert(flags::CLI_AGENT_RICH_INPUT_OPEN);
+            if *ai_settings.submit_on_ctrl_enter {
+                ctx.set
+                    .insert(flags::CTRL_ENTER_SUBMITS_CLI_AGENT_RICH_INPUT);
+            }
         }
 
         if ai_settings.is_code_suggestions_enabled(app) {

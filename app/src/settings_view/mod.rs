@@ -513,6 +513,8 @@ pub mod flags {
     ///
     /// This is true on linux and windows.
     pub const CTRL_ENTER_ENTERS_AGENT_VIEW: &str = "CtrlEnterEntersAgentView";
+    /// When set, ctrl-enter should submit CLI agent rich input instead of inserting a newline.
+    pub const CTRL_ENTER_SUBMITS_CLI_AGENT_RICH_INPUT: &str = "CtrlEnterSubmitsCLIAgentRichInput";
     pub const AGENT_VIEW_ENABLED: &str = "FeatureFlag.AgentView";
     pub const LOCKED_INPUT: &str = "LockedInput";
     pub const OPEN_INLINE_CONVERSATION_MENU: &str = "OpenInlineConversationMenu";
