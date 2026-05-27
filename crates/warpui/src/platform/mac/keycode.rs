@@ -49,7 +49,11 @@ impl Keycode {
         // and returns an autoreleased array of NSNumber keycodes.
         let keycodes: *const NSArray<NSNumber> =
             unsafe { charToKeyCodes(Retained::as_ptr(&key_name) as id) }.cast();
-        let keycodes_length = unsafe { (*keycodes).count() };
+        let keycodes_length = if keycodes.is_null() {
+            0
+        } else {
+            unsafe { (*keycodes).count() }
+        };
 
         (0..keycodes_length).map(move |i| {
             let keycode = unsafe { (*keycodes).objectAtIndex(i).unsignedIntegerValue() };
