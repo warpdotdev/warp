@@ -69,7 +69,8 @@ use crate::settings::{
     CopyOnSelect, CtrlTabBehavior, DefaultSessionMode, EnableSlashCommandsInTerminal,
     EnableSshWrapper, ErrorUnderliningEnabled, ExtraMetaKeys, GPUSettings, GlobalHotkeyMode,
     InputSettings, InputSettingsChangedEvent, LinuxSelectionClipboard, MiddleClickPasteEnabled,
-    MouseScrollMultiplier, OutlineCodebaseSymbolsForAtContextMenu, PreferLowPowerGPU,
+    MouseScrollMultiplier, OutlineCodebaseSymbolsForAtContextMenu, PaneSettings,
+    PaneSpecificFontSize, PreferLowPowerGPU,
     PreferredGraphicsBackend, QuakeModeSettings, ScrollSettings, ScrollSettingsChangedEvent,
     SelectionSettings, ShowAutosuggestionIgnoreButton, ShowChangelogAfterUpdate,
     ShowTerminalInputMessageBar, SshSettings, SyntaxHighlighting, TabBehavior,
@@ -722,6 +723,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 pub enum FeaturesPageAction {
     ToggleCopyOnSelect,
     ToggleAsyncFind,
+    TogglePaneSpecificFontSize,
     ToggleNotifications,
     ToggleRestoreSession,
     ToggleAutocompleteSymbols,
@@ -881,6 +883,9 @@ impl FeaturesPageAction {
             Self::ToggleCopyOnSelect => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleCopyOnSelect".to_string(),
                 value: to_string(selection_settings.copy_on_select_enabled()),
+            },
+            Self::TogglePaneSpecificFontSize => TelemetryEvent::TogglePaneSpecificFontSize {
+                enabled: *PaneSettings::as_ref(ctx).pane_specific_font_size,
             },
             Self::ToggleOpenLinksInDesktopApp => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleOpenLinksInDesktopApp".to_string(),
@@ -1440,6 +1445,13 @@ impl TypedActionView for FeaturesPageView {
             ToggleCopyOnSelect => {
                 SelectionSettings::handle(ctx).update(ctx, |selection_settings, ctx| {
                     report_if_error!(selection_settings.copy_on_select.toggle_and_save_value(ctx));
+                });
+            }
+            TogglePaneSpecificFontSize => {
+                PaneSettings::handle(ctx).update(ctx, |pane_settings, ctx| {
+                    report_if_error!(pane_settings
+                        .pane_specific_font_size
+                        .toggle_and_save_value(ctx));
                 });
             }
             ToggleSnackbar => {
@@ -2714,6 +2726,11 @@ impl FeaturesPageView {
         // is off. Channels with the flag on force the feature on and hide the toggle
         // entirely; see `TerminalSettings::is_async_find_enabled`.
         general_widgets.push(Box::new(AsyncFindWidget::default()));
+
+        // Opt-in surface for the per-pane font-size override. On channels where
+        // `FeatureFlag::PerPaneFontSize` is on the feature is force-enabled and the
+        // widget hides itself; see `PaneSettings::is_pane_specific_font_size_enabled`.
+        general_widgets.push(Box::new(PaneSpecificFontSizeWidget::default()));
 
         let app_editor_settings = AppEditorSettings::as_ref(ctx);
 
@@ -7611,6 +7628,74 @@ impl SettingsWidget for AsyncFindWidget {
             appearance,
             Some(
                 "Use an improved implementation of find to keep the UI responsive while searching for matches on large outputs."
+                    .into(),
+            ),
+        )
+    }
+}
+
+#[derive(Default)]
+struct PaneSpecificFontSizeWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for PaneSpecificFontSizeWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "pane specific font size monospace terminal focused"
+    }
+
+    fn should_render(&self, _app: &AppContext) -> bool {
+        !FeatureFlag::PerPaneFontSize.is_enabled()
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ui_builder = appearance.ui_builder();
+
+        let label = render_body_item_label::<FeaturesPageAction>(
+            "Pane-specific font size".into(),
+            None,
+            None,
+            LocalOnlyIconState::for_setting(
+                PaneSpecificFontSize::storage_key(),
+                PaneSpecificFontSize::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+        );
+
+        let label_with_chip = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(label)
+            .with_child(render_beta_chip(appearance))
+            .finish();
+
+        let switch = ui_builder
+            .switch(self.switch_state.clone())
+            .check(*PaneSettings::as_ref(app).pane_specific_font_size)
+            .build()
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(FeaturesPageAction::TogglePaneSpecificFontSize);
+            })
+            .finish();
+
+        build_toggle_element(
+            label_with_chip,
+            switch,
+            appearance,
+            Some(
+                "Apply font size shortcuts to the focused pane instead of all panes globally."
                     .into(),
             ),
         )

@@ -173,6 +173,11 @@ pub enum FeatureFlag {
     SshDragAndDrop,
     DragTabsToWindows,
 
+    /// Gates the experimental per-pane monospace font-size override. When the flag is
+    /// on, the feature is force-enabled and the user-facing toggle is hidden; when the
+    /// flag is off, the toggle on the Features page lets users opt in.
+    PerPaneFontSize,
+
     /// Enables the overflow menu on AI blocks.
     AIBlockOverflowMenu,
 
@@ -945,6 +950,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::RemoteCodebaseIndexing,
     FeatureFlag::GroupedTabs,
     FeatureFlag::AsyncFind,
+    FeatureFlag::PerPaneFontSize,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
