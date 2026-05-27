@@ -437,7 +437,7 @@ impl OrchestrationConfigBlockView {
             self.edit_state.model_id.clone()
         };
         let is_local = !self.edit_state.execution_mode.is_remote();
-        let model_handle = oc::new_standard_picker_dropdown(&colors, ctx);
+        let model_handle = oc::new_standard_filterable_picker_dropdown(&styles, ctx);
         model_handle.update(ctx, |d, c| d.set_use_overlay_layer(true, c));
         oc::populate_model_picker_for_harness(
             &model_handle,

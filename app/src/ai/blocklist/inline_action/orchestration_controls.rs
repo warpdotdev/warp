@@ -336,7 +336,7 @@ impl OrchestrationEditState {
 /// block. Generic over the action type `A`.
 #[derive(Clone)]
 pub struct OrchestrationPickerHandles<A: OrchestrationControlAction> {
-    pub model_picker: Option<ViewHandle<Dropdown<A>>>,
+    pub model_picker: Option<ViewHandle<FilterableDropdown<A>>>,
     pub harness_picker: Option<ViewHandle<Dropdown<A>>>,
     pub environment_picker: Option<ViewHandle<FilterableDropdown<A>>>,
     pub host_picker: Option<ViewHandle<HostPicker>>,
@@ -438,6 +438,26 @@ pub fn new_standard_picker_dropdown<A: OrchestrationControlAction, V: View>(
     })
 }
 
+/// Creates a searchable dropdown with the shared orchestration picker
+/// chrome (border, radius, background, font).
+pub fn new_standard_filterable_picker_dropdown<A: OrchestrationControlAction, V: View>(
+    styles: &UiComponentStyles,
+    ctx: &mut ViewContext<V>,
+) -> ViewHandle<FilterableDropdown<A>> {
+    let styles = *styles;
+    ctx.add_typed_action_view(move |ctx_dropdown| {
+        let mut dropdown = FilterableDropdown::<A>::new(ctx_dropdown);
+        dropdown.set_use_overlay_layer(false, ctx_dropdown);
+        dropdown.set_match_menu_width_to_top_bar(true, ctx_dropdown);
+        dropdown.set_main_axis_size(MainAxisSize::Max, ctx_dropdown);
+        dropdown.set_button_variant(ButtonVariant::Secondary);
+        dropdown.set_style(styles);
+        dropdown.set_top_bar_height(ORCHESTRATION_PICKER_HEIGHT, ctx_dropdown);
+        dropdown.set_top_bar_max_width(f32::INFINITY);
+        dropdown
+    })
+}
+
 /// Returns Warp base-model choices for orchestration.
 fn get_base_model_choices<'a>(
     llm_prefs: &'a LLMPreferences,
@@ -457,7 +477,7 @@ fn get_base_model_choices<'a>(
 ///   by the server-provided harness model catalog from
 ///   `HarnessAvailabilityModel::models_for()`.
 pub fn populate_model_picker_for_harness<A: OrchestrationControlAction, V: View>(
-    dropdown: &ViewHandle<Dropdown<A>>,
+    dropdown: &ViewHandle<FilterableDropdown<A>>,
     initial_model_id: &str,
     harness_type: &str,
     is_local: bool,
