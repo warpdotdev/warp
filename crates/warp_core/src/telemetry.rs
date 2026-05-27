@@ -235,3 +235,28 @@ impl Entity for TelemetryContextModel {
 }
 
 impl SingletonEntity for TelemetryContextModel {}
+
+#[cfg(any(test, feature = "test-util"))]
+pub mod testing {
+    use warpui::prelude::*;
+
+    pub struct MockTelemetryContextProvider;
+
+    impl MockTelemetryContextProvider {
+        pub fn register(ctx: &mut AppContext) {
+            ctx.add_singleton_model(|_| {
+                Box::new(MockTelemetryContextProvider) as super::TelemetryContextModel
+            });
+        }
+    }
+
+    impl super::TelemetryContextProvider for MockTelemetryContextProvider {
+        fn user_id(&self, _ctx: &AppContext) -> Option<String> {
+            None
+        }
+
+        fn anonymous_id(&self, _ctx: &AppContext) -> String {
+            "test_anonymous_id".to_string()
+        }
+    }
+}
