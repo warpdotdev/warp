@@ -251,6 +251,11 @@ pub struct Draggable {
     bounds_cache: Option<RectF>,
     /// If true, keeps the original element visible in its original position during drag.
     keep_original_visible: bool,
+    /// When true, this `Draggable` skips initiating its own drag on a
+    /// `LeftMouseDown` event that was already handled by a child element
+    /// (typically a nested `Draggable` that initiated its own drag). Lets
+    /// nested `Draggable`s take priority over their parents.
+    defer_to_handled_child_mouse_down: bool,
 
     start_handler: Option<Handler>,
     drag_handler: Option<DragDropHandler>,
@@ -273,6 +278,7 @@ impl Draggable {
             drag_bounds: DragBounds::None,
             bounds_cache: None,
             keep_original_visible: false,
+            defer_to_handled_child_mouse_down: false,
             start_handler: None,
             drag_handler: None,
             is_accepted_by_drop_target_handler: None,
@@ -303,6 +309,17 @@ impl Draggable {
     /// showing both the original and the dragged copy.
     pub fn with_keep_original_visible(mut self, keep_visible: bool) -> Self {
         self.keep_original_visible = keep_visible;
+        self
+    }
+
+    /// When set, this `Draggable` will not initiate its own drag on a
+    /// `LeftMouseDown` event that was already handled by a child element.
+    /// Use this on the *outer* `Draggable` when there are nested inner
+    /// `Draggable`s (e.g. a tab group whose member tabs are also each
+    /// individually draggable) so the inner drag takes priority — without
+    /// this, mouse-down would simultaneously start both drags.
+    pub fn with_defer_to_handled_child_mouse_down(mut self) -> Self {
+        self.defer_to_handled_child_mouse_down = true;
         self
     }
 
@@ -591,6 +608,18 @@ impl Element for Draggable {
 
         match event.raw_event() {
             Event::LeftMouseDown { position, .. } => {
+                // When opted in, defer to a nested `Draggable` that
+                // initiated its own drag for the same gesture so the
+                // inner drag takes priority. Reads a context flag set
+                // by the inner `Draggable` itself (see the
+                // `WaitingToDrag` transition below) so a plain
+                // `Hoverable` returning `true` for click tracking does
+                // NOT cause us to skip.
+                if self.defer_to_handled_child_mouse_down
+                    && ctx.descendant_draggable_initiated()
+                {
+                    return true;
+                }
                 let origin = self.origin().expect("origin should exist");
                 if let Some(rect) = ctx.visible_rect(origin, size) {
                     let max_z_index = self.child_max_z_index.expect("child z index should exist");
@@ -605,6 +634,10 @@ impl Element for Draggable {
                             mouse_down_position: *position,
                             mouse_down_offset,
                         });
+                        // Signal to any ancestor `Draggable` that we
+                        // have claimed this gesture so it can defer
+                        // when configured to do so.
+                        ctx.mark_descendant_draggable_initiated();
 
                         ctx.set_cursor(Cursor::PointingHand, max_z_index);
                         return true;

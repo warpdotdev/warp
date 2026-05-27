@@ -236,6 +236,12 @@ pub struct EventContext<'a> {
     /// Flag indicating the soft keyboard should be shown.
     /// Used on mobile WASM to trigger the keyboard in user gesture context.
     soft_keyboard_requested: bool,
+    /// Set when any `Draggable` transitions into `WaitingToDrag` during the
+    /// current event dispatch. Read by ancestor `Draggable`s with
+    /// `defer_to_handled_child_mouse_down` so they can defer to a nested
+    /// inner drag instead of also initiating their own. Lives for the
+    /// duration of one dispatched event.
+    descendant_draggable_initiated: bool,
 }
 
 impl<'a> EventContext<'a> {
@@ -504,6 +510,7 @@ impl Presenter {
             notify_timers_to_clear: Default::default(),
             cursor_update: Default::default(),
             soft_keyboard_requested: false,
+            descendant_draggable_initiated: false,
         }
     }
 
@@ -753,6 +760,22 @@ impl EventContext<'_> {
     /// This is used on mobile WASM to trigger the keyboard when a text input area is tapped.
     pub fn request_soft_keyboard(&mut self) {
         self.soft_keyboard_requested = true;
+    }
+
+    /// Returns whether a descendant `Draggable` has initiated a drag
+    /// (transitioned to `WaitingToDrag`) during the current event
+    /// dispatch. Used by ancestor `Draggable`s with
+    /// `defer_to_handled_child_mouse_down` to skip initiating their own
+    /// drag when an inner drag has already started.
+    pub fn descendant_draggable_initiated(&self) -> bool {
+        self.descendant_draggable_initiated
+    }
+
+    /// Marks that a `Draggable` has initiated a drag during the current
+    /// event dispatch. Called by `Draggable` itself on the
+    /// `WaitingToDrag` transition.
+    pub fn mark_descendant_draggable_initiated(&mut self) {
+        self.descendant_draggable_initiated = true;
     }
 }
 

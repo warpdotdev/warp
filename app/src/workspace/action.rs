@@ -174,6 +174,22 @@ pub enum WorkspaceAction {
     CloseTabGroup(TabGroupId),
     /// Toggle collapsed state for the given tab group.
     ToggleTabGroupCollapsed(TabGroupId),
+    /// Enter rename mode for the given tab group. Focuses the inline header
+    /// editor and seeds it with the existing name (or a placeholder when the
+    /// group is unnamed).
+    RenameTabGroup(TabGroupId),
+    /// Commit any in-progress tab-group rename. Dispatched by header click /
+    /// editor blur. No-op when no group is being renamed.
+    FinishTabGroupRename,
+    /// Create a new tab group containing the existing tab at `tab_index` and
+    /// immediately enter rename mode on the new group.
+    NewTabGroupFromTab(usize),
+    /// Move the tab at `tab_index` into the given group, or remove it from
+    /// its current group when `group_id` is `None`.
+    AssignTabToGroup {
+        tab_index: usize,
+        group_id: Option<TabGroupId>,
+    },
     AddDefaultTab,
     AddTerminalTab {
         hide_homepage: bool,
@@ -280,6 +296,20 @@ pub enum WorkspaceAction {
         tab_position: RectF,
     },
     DropTab,
+    /// Begins a drag of an entire tab group via its header.
+    /// Mirrors `StartTabDrag` but for the group's contiguous run of member
+    /// tabs. Gated at runtime by `FeatureFlag::GroupedTabs`.
+    StartGroupDrag(TabGroupId),
+    /// In-progress drag of an entire tab group. Forwarded to
+    /// `Workspace::on_group_drag`, which decides whether to swap the group's
+    /// block with an adjacent neighbor block based on the dragged header's
+    /// current Y position. Mirrors `DragTab` but for groups.
+    DragGroup {
+        group_id: TabGroupId,
+        position: RectF,
+    },
+    /// Finalizes a group drag. Persists via `should_save_app_state_on_action`.
+    DropGroup(TabGroupId),
     /// Toggles the left panel. In Code Mode V1 this toggles Warp Drive.
     /// In Code Mode V2 this toggles the left panel which contains both the project explorer and
     /// Warp Drive. This happens as explicit action from the user.
@@ -785,6 +815,7 @@ impl WorkspaceAction {
             | MoveTabLeft(_)
             | MoveTabRight(_)
             | DropTab
+            | DropGroup(_)
             | RenameTab(_)
             | ResetTabName(_)
             | RenamePane(_)
@@ -801,6 +832,10 @@ impl WorkspaceAction {
             | CloseTabsRightActiveTab
             | CloseTabGroup(_)
             | ToggleTabGroupCollapsed(_)
+            | RenameTabGroup(_)
+            | FinishTabGroupRename
+            | NewTabGroupFromTab(_)
+            | AssignTabToGroup { .. }
             | ToggleTabColor { .. }
             | AddDefaultTab
             | AddTerminalTab { .. }
@@ -895,6 +930,8 @@ impl WorkspaceAction {
             | OpenInExplorer { .. }
             | DragTab { .. }
             | StartTabDrag
+            | DragGroup { .. }
+            | StartGroupDrag(_)
             | ToggleLeftPanel
             | ToggleWarpDrive
             | OpenWarpDrive

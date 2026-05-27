@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,7 +45,7 @@ use crate::util::color::{coloru_with_opacity, Opacity};
 use crate::util::truncation::truncate_from_end;
 use crate::window_settings::WindowSettings;
 use crate::workspace::sync_inputs::SyncedInputState;
-use crate::workspace::tab_group::TabGroupId;
+use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::tab_settings::{
     TabCloseButtonPosition, TabSettings, VerticalTabsDisplayGranularity,
 };
@@ -55,6 +56,21 @@ use crate::BlocklistAIHistoryModel;
 
 pub const TAB_BAR_BORDER_HEIGHT: f32 = 1.0;
 const TAB_INDICATOR_HEIGHT: f32 = 14.0;
+
+const UNTITLED_TAB_GROUP_DISPLAY_NAME: &str = "Untitled group";
+
+/// Shared between `tab_group_menu_items` and the sidecar overlay in `view.rs`
+/// (used as the `SavePosition` anchor key) so the lookup matches the label.
+pub const MOVE_TO_GROUP_LABEL: &str = "Move to group";
+
+fn tab_group_display_name(group: &TabGroup) -> String {
+    group
+        .name
+        .as_ref()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| UNTITLED_TAB_GROUP_DISPLAY_NAME.to_string())
+}
 
 /// True when the user has opted into vertical tabs and the feature flag is on.
 /// Exposed so binding-description overrides in `workspace/mod.rs` and context-
@@ -181,9 +197,10 @@ impl TabData {
         &self,
         index: usize,
         tabs_len: usize,
+        tab_groups: &HashMap<TabGroupId, TabGroup>,
         ctx: &AppContext,
     ) -> Vec<MenuItem<WorkspaceAction>> {
-        self.menu_items_with_pane_name_target(index, tabs_len, None, ctx)
+        self.menu_items_with_pane_name_target(index, tabs_len, None, tab_groups, ctx)
     }
 
     pub fn menu_items_with_pane_name_target(
@@ -191,6 +208,7 @@ impl TabData {
         index: usize,
         tabs_len: usize,
         pane_name_target: Option<PaneNameMenuTarget>,
+        tab_groups: &HashMap<TabGroupId, TabGroup>,
         ctx: &AppContext,
     ) -> Vec<MenuItem<WorkspaceAction>> {
         let appearance = Appearance::as_ref(ctx);
@@ -198,7 +216,7 @@ impl TabData {
         let mut menu_items = vec![];
 
         for section_items in [
-            Self::tab_group_menu_items(),
+            self.tab_group_menu_items(index, tab_groups),
             self.session_sharing_menu_items(index, ctx),
             self.copy_metadata_menu_items(pane_name_target, ctx),
             self.modify_tab_menu_items(index, tabs_len, pane_name_target, ctx),
@@ -534,15 +552,73 @@ impl TabData {
             .into_item()]
     }
 
-    /// Returns the tab-group related entries, TODO(johnturcoo) add group actions.
-    fn tab_group_menu_items() -> Vec<MenuItem<WorkspaceAction>> {
+    /// "New group with tab" plus an optional "Move to group" submenu marker.
+    fn tab_group_menu_items(
+        &self,
+        index: usize,
+        tab_groups: &HashMap<TabGroupId, TabGroup>,
+    ) -> Vec<MenuItem<WorkspaceAction>> {
         if !FeatureFlag::GroupedTabs.is_enabled() {
             return vec![];
         }
-        vec![
-            MenuItemFields::new("New group with tab").into_item(),
-            MenuItemFields::new_submenu("Move to group").into_item(),
-        ]
+        let mut items = vec![MenuItemFields::new("New group with tab")
+            .with_on_select_action(WorkspaceAction::NewTabGroupFromTab(index))
+            .into_item()];
+
+        if self.group_sidecar_menu_items(index, tab_groups).is_empty() {
+            return items;
+        }
+
+        items.push(
+            MenuItemFields::new_submenu(MOVE_TO_GROUP_LABEL)
+                .with_tooltip(MOVE_TO_GROUP_LABEL.to_string())
+                .into_item(),
+        );
+        items
+    }
+
+    /// Sidecar entries for "Move to group": every other group, plus
+    /// "Remove from group" when this tab belongs to one.
+    pub fn group_sidecar_menu_items(
+        &self,
+        index: usize,
+        tab_groups: &HashMap<TabGroupId, TabGroup>,
+    ) -> Vec<MenuItem<WorkspaceAction>> {
+        let current_group_id = self.group_id;
+        // Group ids are random UUIDs; sort by display name for stable order.
+        let mut group_entries: Vec<(&TabGroupId, &TabGroup)> = tab_groups.iter().collect();
+        group_entries.sort_by(|(_, a), (_, b)| {
+            tab_group_display_name(a)
+                .to_lowercase()
+                .cmp(&tab_group_display_name(b).to_lowercase())
+        });
+
+        let mut items: Vec<MenuItem<WorkspaceAction>> = group_entries
+            .into_iter()
+            .filter(|(gid, _)| Some(**gid) != current_group_id)
+            .map(|(gid, group)| {
+                MenuItemFields::new(tab_group_display_name(group))
+                    .with_on_select_action(WorkspaceAction::AssignTabToGroup {
+                        tab_index: index,
+                        group_id: Some(*gid),
+                    })
+                    .into_item()
+            })
+            .collect();
+        if current_group_id.is_some() {
+            if !items.is_empty() {
+                items.push(MenuItem::Separator);
+            }
+            items.push(
+                MenuItemFields::new("Remove from group")
+                    .with_on_select_action(WorkspaceAction::AssignTabToGroup {
+                        tab_index: index,
+                        group_id: None,
+                    })
+                    .into_item(),
+            );
+        }
+        items
     }
 
     fn color_option_menu_items(

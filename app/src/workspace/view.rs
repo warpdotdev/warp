@@ -108,7 +108,7 @@ use warpui::{
 
 use self::vertical_tabs::telemetry::{VerticalTabsDisplayOption, VerticalTabsTelemetryEvent};
 use self::vertical_tabs::{
-    render_detail_sidecar, render_settings_popup, VerticalTabsPanelState,
+    render_detail_sidecar, render_settings_popup, vtab_group_position_id, VerticalTabsPanelState,
     VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
@@ -337,7 +337,8 @@ use crate::settings_view::{flags, SettingsSection, SettingsView, SettingsViewEve
 use crate::shell_indicator::ShellIndicatorType;
 use crate::tab::{
     tab_position_id, uses_vertical_tabs, NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor,
-    TabBarState, TabComponent, TabData, TabTelemetryAction, TAB_BAR_BORDER_HEIGHT,
+    TabBarState, TabComponent, TabData, TabTelemetryAction, MOVE_TO_GROUP_LABEL,
+    TAB_BAR_BORDER_HEIGHT,
 };
 use crate::tab_configs::action_sidecar::SidecarItemKind;
 use crate::tab_configs::remove_confirmation_dialog::{
@@ -571,6 +572,9 @@ const TOGGLE_RESOURCE_CENTER_KEYBINDING_NAME: &str = "workspace:toggle_resource_
 /// `SavePosition` wrapper and the safe-zone rect lookup.
 const NEW_SESSION_SIDECAR_POSITION_ID: &str = "new_session_sidecar";
 const NEW_SESSION_SIDECAR_WIDTH: f32 = 300.;
+
+const TAB_GROUPS_SIDECAR_POSITION_ID: &str = "tab_groups_sidecar";
+const TAB_GROUPS_SIDECAR_WIDTH: f32 = 200.;
 const NEW_SESSION_SIDECAR_SEARCH_BOX_HEIGHT: f32 = 32.;
 const NEW_SESSION_SIDECAR_SEARCH_BOX_HORIZONTAL_PADDING: f32 = 12.;
 const NEW_SESSION_SIDECAR_SEARCH_BOX_VERTICAL_PADDING: f32 = 6.;
@@ -936,6 +940,12 @@ pub struct Workspace {
     traffic_light_mouse_states: TrafficLightMouseStates,
     /// Tab groups in this workspace, keyed by id.
     pub(crate) tab_groups: HashMap<TabGroupId, TabGroup>,
+    /// While a tab drag is hovering over a collapsed group's container,
+    /// holds that group's id so the vertical tabs renderer transiently
+    /// displays the group as expanded. Cleared on drop / drag end.
+    /// Distinct from `TabGroup::collapsed`, which is the user's persistent
+    /// intent and is not mutated by the drag.
+    pub(crate) drag_force_expanded_group: Option<TabGroupId>,
     tab_rename_editor: ViewHandle<EditorView>,
     pane_rename_editor: ViewHandle<EditorView>,
     vertical_tabs_search_input: ViewHandle<EditorView>,
@@ -1088,6 +1098,10 @@ pub struct Workspace {
     new_session_sidecar_add_repo_mouse_state: MouseStateHandle,
     tab_config_action_sidecar_item: Option<SidecarItemKind>,
     tab_config_action_sidecar_mouse_states: crate::tab_configs::action_sidecar::SidecarMouseStates,
+    tab_group_rename_editor: ViewHandle<EditorView>,
+    tab_groups_sidecar_menu: ViewHandle<Menu<WorkspaceAction>>,
+    show_tab_groups_sidecar: bool,
+    tab_groups_sidecar_tab_index: Option<usize>,
     remove_tab_config_confirmation_dialog: ViewHandle<RemoveTabConfigConfirmationDialog>,
     handoff_environment_creation_modal: Option<ViewHandle<HandoffEnvironmentCreationModal>>,
     /// Workspace-level modal hosting `AuthSecretFtuxView` for the
@@ -1325,6 +1339,38 @@ impl Workspace {
         editor
     }
 
+    fn tab_group_rename_editor(ctx: &mut ViewContext<Self>) -> ViewHandle<EditorView> {
+        let editor = ctx.add_typed_action_view(|ctx| {
+            let appearance = Appearance::as_ref(ctx);
+            let options = SingleLineEditorOptions {
+                text: TextOptions::ui_text(Some(12.), appearance),
+                ..Default::default()
+            };
+            EditorView::single_line(options, ctx)
+        });
+        ctx.subscribe_to_view(&editor, move |me, _, event, ctx| {
+            me.handle_tab_group_rename_editor_event(event, ctx);
+        });
+        editor
+    }
+
+    /// Sidecar menu for the "Move to group" submenu. Item dispatch is
+    /// suppressed so we can close the parent menu before dispatching.
+    fn build_tab_groups_sidecar_menu(
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<Menu<WorkspaceAction>> {
+        let sidecar = ctx.add_typed_action_view(|_| {
+            Menu::new()
+                .without_item_action_dispatch()
+                .with_width(TAB_GROUPS_SIDECAR_WIDTH)
+                .prevent_interaction_with_other_elements()
+        });
+        ctx.subscribe_to_view(&sidecar, move |me, _, event, ctx| {
+            me.handle_tab_groups_sidecar_event(event, ctx);
+        });
+        sidecar
+    }
+
     pub fn handle_tab_rename_editor_event(
         &mut self,
         event: &EditorEvent,
@@ -1355,6 +1401,27 @@ impl Workspace {
                 }
                 EditorEvent::Escape => {
                     self.cancel_pane_rename(ctx);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub fn handle_tab_group_rename_editor_event(
+        &mut self,
+        event: &EditorEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self
+            .current_workspace_state
+            .is_any_tab_group_being_renamed()
+        {
+            match event {
+                EditorEvent::Blurred | EditorEvent::Enter => {
+                    self.finish_tab_group_rename(ctx);
+                }
+                EditorEvent::Escape => {
+                    self.cancel_tab_group_rename(ctx);
                 }
                 _ => {}
             }
@@ -1412,6 +1479,210 @@ impl Workspace {
             self.clear_pane_name_editor(ctx);
             self.focus_pane(locator, ctx);
             ctx.notify();
+        }
+    }
+
+    fn clear_tab_group_name_editor(&mut self, ctx: &mut ViewContext<Self>) {
+        self.tab_group_rename_editor
+            .update(ctx, move |editor, ctx| {
+                editor.clear_buffer_and_reset_undo_stack(ctx);
+            });
+    }
+
+    /// Enters rename mode for the given tab group. Seeds the editor with the
+    /// existing name (or "New group" placeholder when unnamed) and selects it
+    /// so the user can either keep it or type to replace.
+    pub fn rename_tab_group(&mut self, group_id: TabGroupId, ctx: &mut ViewContext<Self>) {
+        let existing_name = self
+            .tab_groups
+            .get(&group_id)
+            .and_then(|g| g.name.clone())
+            .unwrap_or_default();
+        let seed_text = if existing_name.is_empty() {
+            "New group".to_string()
+        } else {
+            existing_name
+        };
+
+        self.current_workspace_state
+            .set_tab_group_being_renamed(group_id);
+        self.clear_tab_group_name_editor(ctx);
+        self.tab_group_rename_editor
+            .update(ctx, move |editor, ctx| {
+                editor.insert_selected_text(&seed_text, ctx);
+            });
+        ctx.focus(&self.tab_group_rename_editor);
+        ctx.notify();
+    }
+
+    fn finish_tab_group_rename(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(group_id) = self.current_workspace_state.tab_group_being_renamed() {
+            self.current_workspace_state.clear_tab_group_being_renamed();
+            let title = self.tab_group_rename_editor.as_ref(ctx).buffer_text(ctx);
+            let trimmed = title.trim();
+            if let Some(group) = self.tab_groups.get_mut(&group_id) {
+                group.name = (!trimmed.is_empty()).then(|| trimmed.to_string());
+            }
+            self.clear_tab_group_name_editor(ctx);
+            self.focus_active_tab(ctx);
+            ctx.notify();
+        }
+    }
+
+    fn cancel_tab_group_rename(&mut self, ctx: &mut ViewContext<Self>) {
+        if self
+            .current_workspace_state
+            .is_any_tab_group_being_renamed()
+        {
+            self.current_workspace_state.clear_tab_group_being_renamed();
+            self.clear_tab_group_name_editor(ctx);
+            self.focus_active_tab(ctx);
+            ctx.notify();
+        }
+    }
+
+    /// Creates a new tab group containing `tab_index`, clusters it next to
+    /// other grouped tabs, and enters rename mode on the new group.
+    pub fn new_tab_group_from_tab(&mut self, tab_index: usize, ctx: &mut ViewContext<Self>) {
+        if tab_index >= self.tabs.len() {
+            log::warn!(
+                "Tried to create a tab group from tab {tab_index} but only {} tabs exist",
+                self.tabs.len()
+            );
+            return;
+        }
+        let group_id = TabGroupId::new();
+        self.tab_groups.insert(
+            group_id,
+            TabGroup {
+                id: group_id,
+                name: None,
+                collapsed: false,
+                draggable_state: Default::default(),
+            },
+        );
+        // Detach from any prior group; a tab can only belong to one group.
+        self.tabs[tab_index].group_id = Some(group_id);
+
+        // Land one slot after the last grouped tab so groups stay clustered.
+        let target_index = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(idx, tab)| *idx != tab_index && tab.group_id.is_some())
+            .map(|(idx, _)| idx)
+            .max()
+            .map(|max_idx| max_idx + 1)
+            .unwrap_or(0);
+
+        let mut active_tab_index = tab_index;
+        if tab_index != target_index {
+            let tab = self.tabs.remove(tab_index);
+            let insert_index = if tab_index < target_index {
+                target_index - 1
+            } else {
+                target_index
+            };
+            self.tabs.insert(insert_index, tab);
+            active_tab_index = insert_index;
+        }
+        self.set_active_tab_index(active_tab_index, ctx);
+
+        ctx.notify();
+
+        // Deferred so the inline editor mounts on the next render.
+        ctx.dispatch_typed_action_deferred(WorkspaceAction::RenameTabGroup(group_id));
+    }
+
+    /// Assigns `tab_index` to `group_id` (or removes it from its group when
+    /// `None`), then reorders to keep group members adjacent. Prunes the
+    /// previous group if it becomes empty.
+    pub fn assign_tab_to_group(
+        &mut self,
+        tab_index: usize,
+        group_id: Option<TabGroupId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if tab_index >= self.tabs.len() {
+            log::warn!(
+                "Tried to assign tab {tab_index} to a group but only {} tabs exist",
+                self.tabs.len()
+            );
+            return;
+        }
+        if let Some(gid) = group_id {
+            if !self.tab_groups.contains_key(&gid) {
+                log::warn!("Tried to assign tab {tab_index} to unknown group {gid:?}");
+                return;
+            }
+        }
+
+        // Short-circuit no-op assignments.
+        if self.tabs[tab_index].group_id == group_id {
+            return;
+        }
+
+        let previous_group_id = self.tabs[tab_index].group_id;
+        self.tabs[tab_index].group_id = group_id;
+
+        // If the tab is joining a collapsed group, expand it so the user can
+        // see where the tab landed. Applies to both drag-into and the
+        // right-click "Move to group" path. The user's persistent collapse
+        // intent only sticks until the next time membership changes.
+        if let Some(gid) = group_id {
+            if let Some(group) = self.tab_groups.get_mut(&gid) {
+                group.collapsed = false;
+            }
+        }
+
+        // Destination index: after the group's last member when joining, or
+        // after the last grouped tab when leaving (so the cluster stays
+        // contiguous). `None` keeps the tab in place.
+        let target_index = match group_id {
+            Some(gid) => self
+                .tabs
+                .iter()
+                .enumerate()
+                .filter(|(idx, tab)| *idx != tab_index && tab.group_id == Some(gid))
+                .map(|(idx, _)| idx)
+                .max()
+                .map(|max_idx| max_idx + 1),
+            None => self
+                .tabs
+                .iter()
+                .enumerate()
+                .filter(|(idx, tab)| *idx != tab_index && tab.group_id.is_some())
+                .map(|(idx, _)| idx)
+                .max()
+                .map(|max_idx| max_idx + 1),
+        };
+
+        if let Some(target_index) = target_index {
+            if tab_index != target_index {
+                let tab = self.tabs.remove(tab_index);
+                let insert_index = if tab_index < target_index {
+                    target_index - 1
+                } else {
+                    target_index
+                };
+                self.tabs.insert(insert_index, tab);
+                if self.active_tab_index == tab_index {
+                    self.set_active_tab_index(insert_index, ctx);
+                }
+            }
+        }
+
+        if let Some(previous_group_id) = previous_group_id {
+            self.prune_empty_tab_group(previous_group_id);
+        }
+
+        ctx.notify();
+    }
+
+    fn prune_empty_tab_group(&mut self, group_id: TabGroupId) {
+        let has_member = self.tabs.iter().any(|tab| tab.group_id == Some(group_id));
+        if !has_member {
+            self.tab_groups.remove(&group_id);
         }
     }
 
@@ -3089,6 +3360,7 @@ impl Workspace {
             tab_bar_hover_state: Default::default(),
             traffic_light_mouse_states: Default::default(),
             tab_groups: HashMap::new(),
+            drag_force_expanded_group: None,
             tab_rename_editor: Self::tab_rename_editor(ctx),
             pane_rename_editor: Self::pane_rename_editor(ctx),
             vertical_tabs_search_input: Self::vertical_tabs_search_input(ctx),
@@ -3215,6 +3487,10 @@ impl Workspace {
             new_session_sidecar_add_repo_mouse_state: Default::default(),
             tab_config_action_sidecar_item: None,
             tab_config_action_sidecar_mouse_states: Default::default(),
+            tab_group_rename_editor: Self::tab_group_rename_editor(ctx),
+            tab_groups_sidecar_menu: Self::build_tab_groups_sidecar_menu(ctx),
+            show_tab_groups_sidecar: false,
+            tab_groups_sidecar_tab_index: None,
             remove_tab_config_confirmation_dialog:
                 Self::build_remove_tab_config_confirmation_dialog(ctx),
             handoff_environment_creation_modal: None,
@@ -6648,6 +6924,7 @@ impl Workspace {
                 id: group_id,
                 name: None,
                 collapsed: false,
+                draggable_state: Default::default(),
             },
         );
         self.add_new_session_tab_with_default_mode(
@@ -6687,6 +6964,11 @@ impl Workspace {
 
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
+
+        // Defer entering rename mode to the next event-loop turn so the new
+        // tab group renders first; the inline rename editor anchors to a
+        // header element that only exists after the next render.
+        ctx.dispatch_typed_action_deferred(WorkspaceAction::RenameTabGroup(group_id));
     }
 
     /// Closes every tab in the given group and removes the group.
@@ -6744,7 +7026,7 @@ impl Workspace {
         }
 
         let tab = &self.tabs[tab_index];
-        let menu_items = tab.menu_items(tab_index, self.tabs.len(), ctx);
+        let menu_items = tab.menu_items(tab_index, self.tabs.len(), &self.tab_groups, ctx);
         ctx.update_view(&self.tab_right_click_menu, |context_menu, view_ctx| {
             context_menu.set_items(menu_items, view_ctx);
         });
@@ -6792,6 +7074,7 @@ impl Workspace {
             tab_index,
             self.tabs.len(),
             Some(pane_name_target),
+            &self.tab_groups,
             ctx,
         );
 
@@ -8772,10 +9055,151 @@ impl Workspace {
         event: &MenuEvent,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let MenuEvent::Close { via_select_item: _ } = event {
-            self.show_tab_right_click_menu = None;
+        match event {
+            MenuEvent::Close { .. } => {
+                self.show_tab_right_click_menu = None;
+                self.clear_tab_groups_sidecar_state(ctx);
+                self.tab_right_click_menu.update(ctx, |menu, _| {
+                    menu.set_safe_zone_target(None);
+                    menu.set_submenu_being_shown_for_item_index(None);
+                });
+                ctx.notify();
+            }
+            // Submenu-parent items emit `ItemSelected` via
+            // `HoverSubmenuWithChildren` instead of `ItemHovered`, so handle
+            // both to keep the sidecar in sync with the cursor.
+            MenuEvent::ItemHovered | MenuEvent::ItemSelected => {
+                self.update_tab_groups_sidecar(ctx);
+            }
+        }
+    }
+
+    fn update_tab_groups_sidecar(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some((tab_index, _)) = self.show_tab_right_click_menu else {
+            return;
+        };
+
+        let hovered = self.tab_right_click_menu.read(ctx, |menu, _| {
+            menu.hovered_index().and_then(|idx| {
+                menu.items().get(idx).and_then(|item| match item {
+                    MenuItem::Item(fields) => Some((idx, fields.label().to_string())),
+                    _ => None,
+                })
+            })
+        });
+        let Some((hovered_index, hovered_label)) = hovered else {
+            return;
+        };
+
+        if hovered_label == MOVE_TO_GROUP_LABEL {
+            self.configure_tab_groups_sidecar(tab_index, hovered_index, ctx);
+        } else if self.show_tab_groups_sidecar {
+            self.clear_tab_groups_sidecar_state(ctx);
+            self.tab_right_click_menu.update(ctx, |menu, _| {
+                menu.set_safe_zone_target(None);
+                menu.set_submenu_being_shown_for_item_index(None);
+            });
             ctx.notify();
         }
+    }
+
+    fn configure_tab_groups_sidecar(
+        &mut self,
+        tab_index: usize,
+        hovered_index: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(tab) = self.tabs.get(tab_index) else {
+            return;
+        };
+        let items = tab.group_sidecar_menu_items(tab_index, &self.tab_groups);
+        if items.is_empty() {
+            self.clear_tab_groups_sidecar_state(ctx);
+            self.tab_right_click_menu.update(ctx, |menu, _| {
+                menu.set_safe_zone_target(None);
+                menu.set_submenu_being_shown_for_item_index(None);
+            });
+            return;
+        }
+
+        self.tab_groups_sidecar_menu.update(ctx, |menu, view_ctx| {
+            menu.set_items(items, view_ctx);
+            menu.reset_selection(view_ctx);
+        });
+        self.show_tab_groups_sidecar = true;
+        self.tab_groups_sidecar_tab_index = Some(tab_index);
+
+        let sidecar_rect = ctx
+            .element_position_by_id_at_last_frame(self.window_id, TAB_GROUPS_SIDECAR_POSITION_ID);
+        self.tab_right_click_menu.update(ctx, |menu, _| {
+            menu.set_safe_zone_target(sidecar_rect);
+            menu.set_submenu_being_shown_for_item_index(Some(hovered_index));
+        });
+        ctx.notify();
+    }
+
+    /// Hides the sidecar and resets its selection. Callers handle the parent
+    /// menu's safe-zone state separately.
+    fn clear_tab_groups_sidecar_state(&mut self, ctx: &mut ViewContext<Self>) {
+        self.show_tab_groups_sidecar = false;
+        self.tab_groups_sidecar_tab_index = None;
+        self.tab_groups_sidecar_menu.update(ctx, |menu, view_ctx| {
+            menu.reset_selection(view_ctx);
+        });
+    }
+
+    fn selected_tab_groups_sidecar_action(&self, ctx: &AppContext) -> Option<WorkspaceAction> {
+        self.tab_groups_sidecar_menu.read(ctx, |menu, _| {
+            menu.selected_item().and_then(|item| match item {
+                MenuItem::Item(fields) => fields.on_select_action().cloned(),
+                _ => None,
+            })
+        })
+    }
+
+    fn handle_tab_groups_sidecar_event(&mut self, event: &MenuEvent, ctx: &mut ViewContext<Self>) {
+        match event {
+            MenuEvent::Close { via_select_item } => {
+                let action = via_select_item
+                    .then(|| self.selected_tab_groups_sidecar_action(ctx))
+                    .flatten();
+                if *via_select_item {
+                    // Sidecar item clicked: close the parent menu too.
+                    self.show_tab_right_click_menu = None;
+                    self.tab_right_click_menu.update(ctx, |menu, _| {
+                        menu.set_safe_zone_target(None);
+                        menu.set_submenu_being_shown_for_item_index(None);
+                    });
+                }
+                self.clear_tab_groups_sidecar_state(ctx);
+                if let Some(action) = action {
+                    // Deferred so the workspace view handler is reachable
+                    // after `flush_effects` reinserts the view post-close.
+                    ctx.dispatch_typed_action_deferred(action);
+                }
+                ctx.notify();
+            }
+            MenuEvent::ItemSelected => {}
+            MenuEvent::ItemHovered => {
+                self.sync_tab_groups_sidecar_selection_to_hover(ctx);
+            }
+        }
+    }
+
+    fn sync_tab_groups_sidecar_selection_to_hover(&mut self, ctx: &mut ViewContext<Self>) {
+        self.tab_groups_sidecar_menu.update(ctx, |menu, view_ctx| {
+            let Some(hovered_index) = menu.hovered_index() else {
+                return;
+            };
+            let hovered_item_has_action = menu
+                .items()
+                .get(hovered_index)
+                .and_then(MenuItem::item_on_select_action)
+                .is_some();
+            if hovered_item_has_action && menu.selected_index() != Some(hovered_index) {
+                menu.set_selected_by_index(hovered_index, view_ctx);
+            }
+        });
     }
 
     fn handle_new_session_menu_event(&mut self, event: &MenuEvent, ctx: &mut ViewContext<Self>) {
@@ -11146,10 +11570,13 @@ impl Workspace {
         let active_tab = self.tabs.get(self.active_tab_index);
         let active_tab_selected_color = active_tab.map(|tab| tab.selected_color);
         let active_tab_default_color = active_tab.and_then(|tab| tab.default_directory_color);
-
         let is_new_terminal = matches!(panes_layout, PanesLayout::SingleTerminal(_));
         let is_restoration = matches!(panes_layout, PanesLayout::Snapshot(_));
-        // Capture the active tab's group membership so the new tab can inherit it.
+        // Capture the active tab's group membership so the new tab can
+        // inherit it. Picked up only when grouped tabs are enabled and we
+        // are not restoring a tab (restored tabs come with their own
+        // persisted `group_id` and shouldn't be retroactively re-grouped
+        // based on whichever tab happens to be active during restoration).
         let active_tab_group_id = if FeatureFlag::GroupedTabs.is_enabled() && !is_restoration {
             active_tab.and_then(|tab| tab.group_id)
         } else {
@@ -11178,7 +11605,19 @@ impl Workspace {
 
         let new_tab_placement_setting = TabSettings::as_ref(ctx).new_tab_placement;
 
-        match new_tab_placement_setting {
+        // When the active tab belongs to a tab group, the user's
+        // `new_tab_placement` is overridden to `AfterCurrentTab` so the new
+        // tab lands adjacent to the active tab inside the group's
+        // contiguous run. Without this, an `AfterAllTabs` setting would
+        // push the new tab past the group, breaking contiguity and
+        // requiring an immediate reclustering step.
+        let effective_placement = if active_tab_group_id.is_some() {
+            NewTabPlacement::AfterCurrentTab
+        } else {
+            new_tab_placement_setting
+        };
+
+        match effective_placement {
             NewTabPlacement::AfterAllTabs => {
                 // When inheriting a group, land at the end of the group's
                 // contiguous run instead of past it so the setting is
@@ -11216,7 +11655,14 @@ impl Workspace {
             }
         }
 
-        // Inherit the active tab's group membership. D
+        // Inherit the active tab's group membership. Done after the
+        // placement match so the new tab is already at
+        // `self.active_tab_index`. Because we forced `AfterCurrentTab`
+        // placement above when the active tab is grouped, the new tab is
+        // always inserted somewhere inside the group's contiguous run
+        // (immediately after the active member), so simply tagging it
+        // with the same `group_id` preserves contiguity without a
+        // reclustering step.
         if let Some(group_id) = active_tab_group_id {
             let new_idx = self.active_tab_index;
             if let Some(new_tab) = self.tabs.get_mut(new_idx) {
@@ -21253,6 +21699,13 @@ impl TypedActionView for Workspace {
             }
             CloseTabGroup(group_id) => self.close_tab_group(*group_id, ctx),
             ToggleTabGroupCollapsed(group_id) => self.toggle_tab_group_collapsed(*group_id, ctx),
+            RenameTabGroup(group_id) => self.rename_tab_group(*group_id, ctx),
+            FinishTabGroupRename => self.finish_tab_group_rename(ctx),
+            NewTabGroupFromTab(tab_index) => self.new_tab_group_from_tab(*tab_index, ctx),
+            AssignTabToGroup {
+                tab_index,
+                group_id,
+            } => self.assign_tab_to_group(*tab_index, *group_id, ctx),
             AddDefaultTab => {
                 let effective_mode = AISettings::as_ref(ctx).default_session_mode(ctx);
                 match effective_mode {
@@ -21803,6 +22256,27 @@ impl TypedActionView for Workspace {
                 self.finish_tab_rename(ctx);
                 self.current_workspace_state.is_tab_being_dragged = true;
             }
+            StartGroupDrag(_group_id) => {
+                // Mirrors `StartTabDrag` so the rest of the workspace knows a
+                // drag is in flight (e.g. action-button overlays hide). The
+                // group's `draggable_state` is managed by the `Draggable`
+                // element itself; we only need to flip the workspace-level
+                // "is dragging" flag here and finish any in-progress rename.
+                self.finish_tab_rename(ctx);
+                self.finish_tab_group_rename(ctx);
+                self.current_workspace_state.is_tab_being_dragged = true;
+            }
+            DragGroup { group_id, position } => {
+                self.on_group_drag(*group_id, *position, ctx);
+            }
+            DropGroup(_group_id) => {
+                // Symmetric to `DropTab`: clear the shared drag flag so
+                // overlays reappear. Persistence runs via
+                // `should_save_app_state_on_action`.
+                self.current_workspace_state.is_tab_being_dragged = false;
+                send_telemetry_from_ctx!(TelemetryEvent::DragAndDropTab, ctx);
+                ctx.notify();
+            }
             OpenWarpDrive => {
                 if WarpDriveSettings::is_warp_drive_enabled(ctx) {
                     self.open_left_panel_view(&LeftPanelAction::WarpDrive, ctx);
@@ -22187,6 +22661,12 @@ impl TypedActionView for Workspace {
                 tab_position,
             } => self.on_tab_drag(*tab_index, *tab_position, ctx),
             DropTab => {
+                // Clear the transient "force-expand group under cursor"
+                // marker so the persisted `TabGroup::collapsed` state takes
+                // over again on the next render.
+                if self.drag_force_expanded_group.take().is_some() {
+                    ctx.notify();
+                }
                 let is_cross_window = CrossWindowTabDrag::as_ref(ctx).is_active();
                 let handed_off_tab_index =
                     CrossWindowTabDrag::as_ref(ctx)
@@ -23822,6 +24302,46 @@ impl View for Workspace {
                         positioning,
                     );
                 }
+
+                // "Move to group" sidecar, anchored to the per-label
+                // `SavePosition` set up in tab.rs.
+                if self.show_tab_groups_sidecar {
+                    let sidecar_element = SavePosition::new(
+                        ChildView::new(&self.tab_groups_sidecar_menu).finish(),
+                        TAB_GROUPS_SIDECAR_POSITION_ID,
+                    )
+                    .finish();
+
+                    let render_left = self.should_render_sidecar_left(
+                        MOVE_TO_GROUP_LABEL,
+                        TAB_GROUPS_SIDECAR_WIDTH,
+                        app,
+                    );
+                    let (offset, parent_anchor, child_anchor) = if render_left {
+                        (
+                            vec2f(-4., 0.),
+                            PositionedElementAnchor::TopLeft,
+                            ChildAnchor::TopRight,
+                        )
+                    } else {
+                        (
+                            vec2f(4., 0.),
+                            PositionedElementAnchor::TopRight,
+                            ChildAnchor::TopLeft,
+                        )
+                    };
+
+                    stack.add_positioned_overlay_child(
+                        sidecar_element,
+                        OffsetPositioning::offset_from_save_position_element(
+                            MOVE_TO_GROUP_LABEL,
+                            offset,
+                            PositionedElementOffsetBounds::WindowByPosition,
+                            parent_anchor,
+                            child_anchor,
+                        ),
+                    );
+                }
             }
         }
 
@@ -25251,15 +25771,95 @@ impl Workspace {
             return;
         }
 
-        let new_index = if FeatureFlag::VerticalTabs.is_enabled()
-            && *TabSettings::as_ref(ctx).use_vertical_tabs
-        {
+        let use_vertical_tabs =
+            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs;
+        let groups_enabled = FeatureFlag::GroupedTabs.is_enabled();
+
+        // Group-aware path: only meaningful in the vertical tabs panel, where
+        // each group container has a `SavePosition` we can hit-test against.
+        if use_vertical_tabs && groups_enabled {
+            let cursor_y = position.center().y();
+            // Collapsed groups are intentionally excluded as drop targets:
+            // assigning a tab into a collapsed group triggers a transient
+            // layout shift (the group expands mid-drag) that interacts
+            // badly with the dispatched `DragTab` action's stale
+            // `tab_index` between renders — subsequent events can end up
+            // operating on the wrong tab and split the group's contiguous
+            // run. To drop a tab into a group, expand it first.
+            let target_group = self
+                .target_group_at_y(cursor_y, ctx)
+                .filter(|gid| !self.tab_groups.get(gid).is_some_and(|g| g.collapsed));
+            let source_group = self.tabs[current_index].group_id;
+
+            // `drag_force_expanded_group` stays unused while we disallow
+            // drag-into-collapsed (the filter above ensures `target_group`
+            // is never a collapsed group). The field/clear-on-drop wiring
+            // remains in place so we can re-enable the auto-expand UX
+            // later by removing just the filter, once the underlying
+            // stale-`tab_index` race is fixed.
+            if self.drag_force_expanded_group.take().is_some() {
+                ctx.notify();
+            }
+
+            // Cursor crossed a group boundary (or moved between two
+            // different groups). Delegate to `assign_tab_to_group`, which
+            // updates `group_id`, slots the tab adjacent to the target
+            // group's existing members to preserve contiguity, prunes an
+            // emptied source group, and adjusts `active_tab_index`.
+            if target_group != source_group {
+                self.assign_tab_to_group(current_index, target_group, ctx);
+                return;
+            }
+        }
+
+        let new_index = if use_vertical_tabs {
             self.calculate_updated_tab_index_vertical(current_index, position, ctx)
         } else {
             self.calculate_updated_tab_index(current_index, position, ctx)
         };
 
+        // Within-group reorder: clamp the swap destination to the dragged
+        // tab's group so a grouped tab can't be swapped past an ungrouped
+        // neighbor (which would break the group's contiguous run). The
+        // group-boundary case above already handled cross-group transitions
+        // via `assign_tab_to_group`.
+        let new_index = if let Some(group_id) = self.tabs[current_index].group_id {
+            if let Some((first, last)) = group_member_index_range(&self.tabs, group_id) {
+                new_index.clamp(first, last)
+            } else {
+                new_index
+            }
+        } else {
+            new_index
+        };
+
         if new_index != current_index {
+            // When the neighbor we would swap with is a member of a
+            // collapsed group that the dragged tab does not belong to,
+            // a plain `tabs.swap(new_index, current_index)` would land
+            // the dragged tab between the group's first member and the
+            // rest, breaking the group's contiguous run (the renderer
+            // walks runs of equal `group_id` so the group would split
+            // into two disjoint runs). Hop past the entire collapsed
+            // group block with `remove` + `insert` instead so the
+            // members keep their order and stay contiguous.
+            let dragged_group = self.tabs[current_index].group_id;
+            let neighbor_collapsed_group = self
+                .tabs
+                .get(new_index)
+                .and_then(|t| t.group_id)
+                .filter(|gid| {
+                    Some(*gid) != dragged_group
+                        && self.tab_groups.get(gid).is_some_and(|g| g.collapsed)
+                });
+            if let Some(group_id) = neighbor_collapsed_group {
+                if let Some((first, last)) = group_member_index_range(&self.tabs, group_id) {
+                    let insert_at = if current_index < first { last } else { first };
+                    self.hop_tab_to_index(current_index, insert_at, ctx);
+                    return;
+                }
+            }
+
             self.tabs.swap(new_index, current_index);
 
             if current_index == self.active_tab_index {
@@ -25270,6 +25870,63 @@ impl Workspace {
 
             ctx.notify();
         }
+    }
+
+    /// Removes the tab at `from_index` and re-inserts it at `to_index` in
+    /// the resulting list, shifting intervening tabs to preserve their
+    /// relative order. Used by `on_tab_drag` to hop an ungrouped tab past
+    /// a collapsed tab group's contiguous block in a single motion,
+    /// keeping the group's members intact. `active_tab_index` is adjusted
+    /// directly (without `set_active_tab_index`) to avoid the MRU and
+    /// focus side effects that aren't appropriate for a transient drag
+    /// reorder.
+    fn hop_tab_to_index(
+        &mut self,
+        from_index: usize,
+        to_index: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if from_index == to_index
+            || from_index >= self.tabs.len()
+            || to_index >= self.tabs.len()
+        {
+            return;
+        }
+        let tab = self.tabs.remove(from_index);
+        self.tabs.insert(to_index, tab);
+
+        let old_active = self.active_tab_index;
+        self.active_tab_index = if old_active == from_index {
+            to_index
+        } else if from_index < to_index {
+            if old_active > from_index && old_active <= to_index {
+                old_active - 1
+            } else {
+                old_active
+            }
+        } else if old_active >= to_index && old_active < from_index {
+            old_active + 1
+        } else {
+            old_active
+        };
+
+        ctx.notify();
+    }
+
+    /// Returns the tab group whose vertical container rect contains
+    /// `cursor_y`, if any. Used during `on_tab_drag` to decide whether the
+    /// dragged tab should join, leave, or move between groups based on
+    /// where the cursor currently sits. Reads each group's saved rect via
+    /// `element_position_by_id_at_last_frame`, so it returns `None` until
+    /// the renderer has emitted at least one frame for the group.
+    fn target_group_at_y(&self, cursor_y: f32, ctx: &AppContext) -> Option<TabGroupId> {
+        self.tab_groups.keys().copied().find(|group_id| {
+            ctx.element_position_by_id_at_last_frame(
+                self.window_id,
+                &vtab_group_position_id(*group_id),
+            )
+            .is_some_and(|rect| rect.min_y() <= cursor_y && cursor_y <= rect.max_y())
+        })
     }
 
     /// Performs the source-workspace cleanup indicated by `DropResult`.
@@ -25391,7 +26048,7 @@ impl Workspace {
         let midpoint_drag_y = (drag_position.min_y() + drag_position.max_y()) / 2.;
 
         let maybe_above_tab = if current_index > 0 {
-            ctx.element_position_by_id(tab_position_id(current_index - 1))
+            self.neighbor_drag_rect(current_index - 1, ctx)
         } else {
             None
         };
@@ -25403,7 +26060,7 @@ impl Workspace {
         }
 
         let maybe_below_tab = if current_index < self.tabs.len() - 1 {
-            ctx.element_position_by_id(tab_position_id(current_index + 1))
+            self.neighbor_drag_rect(current_index + 1, ctx)
         } else {
             None
         };
@@ -25416,10 +26073,151 @@ impl Workspace {
 
         current_index
     }
+
+    /// Returns the rect to compare a vertical-tab drag against for the
+    /// neighbor at `neighbor_index`. Normally this is the tab's own rect,
+    /// but when the neighbor is a member of a collapsed group its row is
+    /// not rendered (so `tab_position_id` isn't saved). In that case we
+    /// fall back to the group container's rect, which treats the whole
+    /// collapsed group as a single block the dragged tab can swap past.
+    fn neighbor_drag_rect(
+        &self,
+        neighbor_index: usize,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<RectF> {
+        ctx.element_position_by_id(tab_position_id(neighbor_index))
+            .or_else(|| {
+                let gid = self.tabs.get(neighbor_index)?.group_id?;
+                ctx.element_position_by_id_at_last_frame(
+                    self.window_id,
+                    &vtab_group_position_id(gid),
+                )
+            })
+    }
+
+    /// Handles a drag of an entire tab group from the `Draggable` wrapped
+    /// around the group header. Mirrors `on_tab_drag`'s within-window
+    /// reorder logic but treats the group's contiguous run of member tabs
+    /// as a single block: swaps the block with the adjacent neighbor
+    /// block (another group or an ungrouped tab) when the dragged
+    /// header's Y midpoint crosses the neighbor's midpoint. Neighbor
+    /// blocks are looked up via `vtab_group_position_id` when the
+    /// neighbor is itself grouped, otherwise via `tab_position_id`, so
+    /// the dragged group never lands inside another group (no nesting).
+    pub(crate) fn on_group_drag(
+        &mut self,
+        group_id: TabGroupId,
+        position: RectF,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some((first, last)) = group_member_index_range(&self.tabs, group_id) else {
+            return;
+        };
+        let midpoint_drag_y = (position.min_y() + position.max_y()) / 2.;
+        let block_size = last - first + 1;
+
+        // Swap up: check the neighbor directly above the group's first
+        // member. Find the start of that neighbor's block (its group's
+        // first member when grouped, else its own index) and move our
+        // block to land there.
+        if first > 0 {
+            let above_index = first - 1;
+            if let Some(rect) = self.neighbor_drag_rect(above_index, ctx) {
+                let neighbor_midpoint = (rect.min_y() + rect.max_y()) / 2.;
+                if midpoint_drag_y < neighbor_midpoint {
+                    let new_first = if let Some(other_gid) = self.tabs[above_index].group_id {
+                        group_member_index_range(&self.tabs, other_gid)
+                            .map(|(f, _)| f)
+                            .unwrap_or(above_index)
+                    } else {
+                        above_index
+                    };
+                    self.move_group_block(group_id, new_first, ctx);
+                    return;
+                }
+            }
+        }
+
+        // Swap down: check the neighbor directly below the group's last
+        // member. After the move the dragged block should land such that
+        // its last member sits at `below_block_last`, so its first member
+        // ends up at `below_block_last + 1 - block_size`.
+        if last + 1 < self.tabs.len() {
+            let below_index = last + 1;
+            if let Some(rect) = self.neighbor_drag_rect(below_index, ctx) {
+                let neighbor_midpoint = (rect.min_y() + rect.max_y()) / 2.;
+                if midpoint_drag_y > neighbor_midpoint {
+                    let below_block_last = if let Some(other_gid) = self.tabs[below_index].group_id
+                    {
+                        group_member_index_range(&self.tabs, other_gid)
+                            .map(|(_, l)| l)
+                            .unwrap_or(below_index)
+                    } else {
+                        below_index
+                    };
+                    let new_first = below_block_last + 1 - block_size;
+                    self.move_group_block(group_id, new_first, ctx);
+                }
+            }
+        }
+    }
+
+    /// Moves the contiguous run of tabs belonging to `group_id` so its
+    /// first member ends up at `new_first` in the resulting tab list.
+    /// Uses `Vec::drain` + `Vec::splice` so the relative order of the
+    /// member tabs is preserved through the move. The active tab index is
+    /// re-derived by tracking the active tab's `pane_group` id across
+    /// the mutation, so the in-app focus follows the moved tab when the
+    /// user is dragging the group that contains it.
+    fn move_group_block(
+        &mut self,
+        group_id: TabGroupId,
+        new_first: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some((first, last)) = group_member_index_range(&self.tabs, group_id) else {
+            return;
+        };
+        if new_first == first {
+            return;
+        }
+
+        let active_pane_group_id = self
+            .tabs
+            .get(self.active_tab_index)
+            .map(|tab| tab.pane_group.id());
+
+        let drained: Vec<TabData> = self.tabs.drain(first..=last).collect();
+        self.tabs.splice(new_first..new_first, drained);
+
+        if let Some(active_id) = active_pane_group_id {
+            if let Some(new_idx) = self
+                .tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == active_id)
+            {
+                self.active_tab_index = new_idx;
+            }
+        }
+
+        ctx.notify();
+    }
 }
 
 fn should_reserve_traffic_light_space_in_tab_bar(side: TrafficLightSide) -> bool {
     side == TrafficLightSide::Right
+}
+
+/// Returns `(first, last)` indices of `tabs` belonging to `group_id`, or
+/// `None` when the group has no members. Members of a group are always
+/// contiguous (enforced on every membership change), so the first and last
+/// matching indices fully describe the group's block.
+fn group_member_index_range(tabs: &[TabData], group_id: TabGroupId) -> Option<(usize, usize)> {
+    let first = tabs.iter().position(|tab| tab.group_id == Some(group_id))?;
+    let last = tabs
+        .iter()
+        .rposition(|tab| tab.group_id == Some(group_id))?;
+    Some((first, last))
 }
 
 /// Returns every tab-bar-equivalent rect laid out in `window_id` (horizontal
