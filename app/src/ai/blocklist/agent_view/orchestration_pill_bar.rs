@@ -58,6 +58,7 @@ use crate::ai::blocklist::telemetry::{
     PillBarPillKind, PillSwitchOutcome,
 };
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::conversation_status_ui::{render_status_element, STATUS_ELEMENT_PADDING};
 use crate::ai::harness_display;
 use crate::features::FeatureFlag;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
@@ -80,6 +81,14 @@ const PILL_GAP: f32 = 6.;
 const PILL_GAP_WITH_STATUS: f32 = 2.;
 const PILL_HORIZONTAL_PADDING_LEFT: f32 = 4.;
 const PILL_HORIZONTAL_PADDING_RIGHT: f32 = 10.;
+/// Primary status lockup size for child-agent pills. This intentionally makes
+/// the run state more legible than the old ~7px corner overlay while preserving
+/// the pill's 22px height.
+const CHILD_STATUS_LOCKUP_SIZE: f32 = 18.;
+const CHILD_STATUS_ICON_SIZE: f32 = CHILD_STATUS_LOCKUP_SIZE - STATUS_ELEMENT_PADDING * 2.;
+const CHILD_HARNESS_BADGE_SIZE: f32 = 9.;
+const CHILD_HARNESS_BADGE_GLYPH_SIZE: f32 = 5.;
+const CHILD_HARNESS_BADGE_RING_PADDING: f32 = 1.;
 
 /// Stable palette used to color child agent avatars deterministically by name.
 fn pill_palette(theme: &WarpTheme) -> [ColorU; 6] {
@@ -205,6 +214,7 @@ struct PillSpec {
     label: String,
     avatar_color: ColorU,
     avatar_glyph: AvatarGlyph,
+    harness: Harness,
     status: Option<ConversationStatus>,
     is_selected: bool,
     kind: PillKind,
@@ -659,6 +669,7 @@ impl OrchestrationPillBar {
             label: orchestrator_label(orchestrator),
             avatar_color: theme.ansi_fg_cyan(),
             avatar_glyph: AvatarGlyph::Icon(Icon::Oz),
+            harness: Harness::Oz,
             status: Some(aggregated_orchestrator_status(history, orchestrator_id)),
             is_selected: orchestrator_id == active_id,
             kind: PillKind::Orchestrator,
@@ -685,6 +696,10 @@ impl OrchestrationPillBar {
                 label: name.to_string(),
                 avatar_color: pill_avatar_color(name, theme),
                 avatar_glyph: AvatarGlyph::Letter(pill_initial(name)),
+                harness: child
+                    .server_metadata()
+                    .map(|metadata| Harness::from(metadata.harness))
+                    .unwrap_or(Harness::Oz),
                 status: Some(child.status().clone()),
                 is_selected: child.id() == active_id,
                 kind: PillKind::Child,
@@ -1760,6 +1775,7 @@ fn render_pill(
     let label = spec.label;
     let avatar_color = spec.avatar_color;
     let avatar_glyph = spec.avatar_glyph;
+    let harness = spec.harness;
     let status = spec.status;
     let is_remote_child = spec.is_remote_child;
 
@@ -1893,11 +1909,9 @@ fn render_pill(
                     })
                     .finish()
                 } else if let Some(ref status) = status {
-                    render_avatar_with_status_overlay(
-                        avatar_color,
-                        avatar_glyph,
+                    render_child_status_with_harness_badge(
                         status.clone(),
-                        is_remote_child,
+                        harness,
                         background,
                         theme,
                         appearance,
@@ -2109,6 +2123,61 @@ fn render_avatar_with_status_overlay(
         // Cutout ring color for the local badge; ignored by the cloud path.
         pill_background.into(),
     )
+}
+
+/// Renders child-agent pill state with status as the primary visual and the
+/// harness as a small secondary badge. The row label already identifies the
+/// child agent, so this keeps multi-harness context without making users hunt
+/// for a tiny running/done indicator.
+fn render_child_status_with_harness_badge(
+    status: ConversationStatus,
+    harness: Harness,
+    pill_background: ColorU,
+    theme: &WarpTheme,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let status_element = render_status_element(&status, CHILD_STATUS_ICON_SIZE, appearance);
+
+    let harness_icon = ConstrainedBox::new(
+        harness_display::icon_for(harness)
+            .to_warpui_icon(harness_display::icon_fill_on_circle(harness, theme))
+            .finish(),
+    )
+    .with_width(CHILD_HARNESS_BADGE_GLYPH_SIZE)
+    .with_height(CHILD_HARNESS_BADGE_GLYPH_SIZE)
+    .finish();
+    let glyph_padding = (CHILD_HARNESS_BADGE_SIZE - CHILD_HARNESS_BADGE_GLYPH_SIZE) / 2.;
+    let harness_badge = Container::new(harness_icon)
+        .with_uniform_padding(glyph_padding)
+        .with_background(harness_display::circle_background(harness, theme))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+            CHILD_HARNESS_BADGE_SIZE / 2.,
+        )))
+        .finish();
+    let harness_badge_with_ring = Container::new(harness_badge)
+        .with_uniform_padding(CHILD_HARNESS_BADGE_RING_PADDING)
+        .with_background_color(pill_background)
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+            CHILD_HARNESS_BADGE_SIZE / 2. + CHILD_HARNESS_BADGE_RING_PADDING,
+        )))
+        .finish();
+
+    let badge_total_size = CHILD_HARNESS_BADGE_SIZE + CHILD_HARNESS_BADGE_RING_PADDING * 2.;
+    let mut stack = Stack::new().with_child(status_element);
+    stack.add_positioned_child(
+        harness_badge_with_ring,
+        OffsetPositioning::offset_from_parent(
+            vec2f(1., 1.),
+            ParentOffsetBounds::Unbounded,
+            ParentAnchor::BottomRight,
+            ChildAnchor::BottomRight,
+        ),
+    );
+
+    ConstrainedBox::new(stack.finish())
+        .with_width(CHILD_STATUS_LOCKUP_SIZE + badge_total_size / 4.)
+        .with_height(CHILD_STATUS_LOCKUP_SIZE + badge_total_size / 4.)
+        .finish()
 }
 
 /// Renders the avatar circle as a colored disc with a centered glyph (letter
