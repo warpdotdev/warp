@@ -1160,7 +1160,15 @@ impl Network {
         let num_bytes = event_type.num_bytes();
         self.num_bytes_shared = self.num_bytes_shared.add(num_bytes).unwrap_or(Byte::MAX);
         if self.num_bytes_shared > self.max_session_size {
-            log::info!("Stopping shared session because max bytes exceeded.");
+            let shared_bytes = self
+                .num_bytes_shared
+                .get_appropriate_unit(UnitType::Decimal);
+            let max_session_size = self
+                .max_session_size
+                .get_appropriate_unit(UnitType::Decimal);
+            log::info!(
+                "Stopping shared session because max bytes exceeded: shared_bytes={shared_bytes}, max_session_size={max_session_size}."
+            );
             self.end_session(SessionEndedReason::ExceededSizeLimit);
             return;
         }

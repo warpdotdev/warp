@@ -1,18 +1,17 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_channel::Sender;
-use async_io::Timer;
-use instant::Instant;
-use parking_lot::FairMutex;
-use session_sharing_protocol::viewer::UpstreamMessage;
-use warpui::{App, ModelHandle};
-
-use super::{Network, PtyBytesBatchStatus, Stage};
+use super::{session_ended_reason_string, Network, PtyBytesBatchStatus, Stage};
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::TerminalModel;
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
+use async_channel::Sender;
+use async_io::Timer;
+use instant::Instant;
+use parking_lot::FairMutex;
+use session_sharing_protocol::viewer::{SessionEndedReason, UpstreamMessage};
+use warpui::{App, ModelHandle};
 
 fn create_network(app: &mut App) -> (ModelHandle<Network>, Sender<Vec<u8>>) {
     initialize_app_for_terminal_view(app);
@@ -70,6 +69,14 @@ fn test_send_pty_write_event_advances_event_no() {
             assert_eq!(network.write_to_pty_event_no.as_usize(), 1);
         });
     });
+}
+
+#[test]
+fn test_exceeded_size_limit_session_end_has_user_facing_error() {
+    assert_eq!(
+        session_ended_reason_string(&SessionEndedReason::ExceededSizeLimit),
+        "The shared session reached its size limit. Start a new session to continue."
+    );
 }
 
 #[test]

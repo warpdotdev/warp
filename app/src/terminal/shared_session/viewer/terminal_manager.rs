@@ -870,8 +870,7 @@ impl TerminalManager {
                 view.update(ctx, |terminal_view, ctx| {
                     let reason_string = session_ended_reason_string(reason);
                     match reason {
-                        SessionEndedReason::EndedBySharer
-                        | SessionEndedReason::ExceededSizeLimit => {}
+                        SessionEndedReason::EndedBySharer => {}
                         SessionEndedReason::InactivityLimitReached => {
                             terminal_view.show_persistent_toast(
                                 reason_string,

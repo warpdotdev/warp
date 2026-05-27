@@ -1046,6 +1046,9 @@ pub fn session_ended_reason_string(reason: &SessionEndedReason) -> String {
         SessionEndedReason::InactivityLimitReached => {
             "Sharing ended due to sharer inactivity".to_owned()
         }
+        SessionEndedReason::ExceededSizeLimit => {
+            "The shared session reached its size limit. Start a new session to continue.".to_owned()
+        }
         _ => "Session ended.".to_owned(),
     }
 }
