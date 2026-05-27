@@ -2677,6 +2677,7 @@ pub enum AISettingsPageAction {
     ToggleAutoToggleRichInput,
     ToggleAutoOpenRichInputOnCLIAgentStart,
     ToggleAutoDismissRichInputAfterSubmit,
+    ToggleSubmitOnCtrlEnter,
     SetCLIAgentForCommand {
         pattern: String,
         agent: Option<CLIAgent>,
@@ -2952,6 +2953,12 @@ impl TypedActionView for AISettingsPageView {
                     report_if_error!(settings
                         .auto_dismiss_rich_input_after_submit
                         .toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleSubmitOnCtrlEnter => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.submit_on_ctrl_enter.toggle_and_save_value(ctx));
                 });
                 ctx.notify();
             }
@@ -6237,13 +6244,14 @@ struct CLIAgentWidget {
     auto_toggle_rich_input_info_tooltip: MouseStateHandle,
     auto_open_rich_input_on_cli_agent_start_toggle: SwitchStateHandle,
     auto_dismiss_rich_input_toggle: SwitchStateHandle,
+    submit_on_ctrl_enter_toggle: SwitchStateHandle,
 }
 
 impl SettingsWidget for CLIAgentWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "third party cli coding agent claude codex gemini toolbar footer layout chip chips rearrange re-arrange bar command regex auto show rich input dismiss"
+        "third party cli coding agent claude codex gemini toolbar footer layout chip chips rearrange re-arrange bar command regex auto show rich input dismiss ctrl enter"
     }
 
     fn render(
@@ -6313,7 +6321,7 @@ impl SettingsWidget for CLIAgentWidget {
             use super::settings_page::AdditionalInfo;
             use crate::settings::{
                 AutoDismissRichInputAfterSubmit, AutoOpenRichInputOnCLIAgentStart,
-                AutoToggleRichInput,
+                AutoToggleRichInput, SubmitOnCtrlEnter,
             };
 
             if FeatureFlag::CLIAgentRichInput.is_enabled() {
@@ -6370,6 +6378,16 @@ impl SettingsWidget for CLIAgentWidget {
                     *ai_settings.auto_dismiss_rich_input_after_submit,
                     true,
                     self.auto_dismiss_rich_input_toggle.clone(),
+                    &view.local_only_icon_tooltip_states,
+                    app,
+                ));
+
+                column.add_child(render_ai_setting_toggle::<SubmitOnCtrlEnter>(
+                    "Submit with Ctrl+Enter (Enter inserts newline)",
+                    AISettingsPageAction::ToggleSubmitOnCtrlEnter,
+                    *ai_settings.submit_on_ctrl_enter,
+                    true,
+                    self.submit_on_ctrl_enter_toggle.clone(),
                     &view.local_only_icon_tooltip_states,
                     app,
                 ));
