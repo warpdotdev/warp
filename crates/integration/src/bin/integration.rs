@@ -461,5 +461,11 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     // Video recording test (manual only)
     register_test!(test_video_recording);
 
+    // Rich Input Ctrl+Enter submit toggle (issue #11588)
+    register_test!(test_rich_input_enter_submits_when_ctrl_enter_setting_is_false);
+    register_test!(test_rich_input_ctrl_enter_passthrough_when_ctrl_enter_setting_is_false);
+    register_test!(test_rich_input_enter_inserts_newline_when_ctrl_enter_setting_is_true);
+    register_test!(test_rich_input_ctrl_enter_submits_when_ctrl_enter_setting_is_true);
+
     tests
 }

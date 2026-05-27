@@ -339,4 +339,10 @@ integration_tests! {
     // Video recording test — requires real display, run manually
     #[ignore = "Manual test: requires real display for frame capture"]
     test_video_recording,
+
+    // Rich Input Ctrl+Enter submit toggle (issue #11588)
+    test_rich_input_enter_submits_when_ctrl_enter_setting_is_false,
+    test_rich_input_ctrl_enter_passthrough_when_ctrl_enter_setting_is_false,
+    test_rich_input_enter_inserts_newline_when_ctrl_enter_setting_is_true,
+    test_rich_input_ctrl_enter_submits_when_ctrl_enter_setting_is_true,
 }
