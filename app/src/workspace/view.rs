@@ -6639,7 +6639,7 @@ impl Workspace {
     #[cfg(not(feature = "local_fs"))]
     fn save_current_tab_as_new_config(&mut self, _tab_index: usize, _ctx: &mut ViewContext<Self>) {}
 
-    /// Creates a new tab group containing a single new tab. 
+    /// Creates a new tab group containing a single new tab.
     fn create_new_tab_group(&mut self, ctx: &mut ViewContext<Self>) {
         let group_id = TabGroupId::new();
         self.tab_groups.insert(

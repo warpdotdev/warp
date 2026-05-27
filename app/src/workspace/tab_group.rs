@@ -12,6 +12,12 @@ impl TabGroupId {
     }
 }
 
+impl Default for TabGroupId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A group of tabs. Member tabs point to their
 /// group via `TabData::group_id`.
 #[derive(Clone)]

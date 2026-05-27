@@ -3299,12 +3299,10 @@ fn test_close_tab_group_removes_group_and_members() {
 
             // All group members are closed and the group entry is removed.
             assert!(!workspace.tab_groups.contains_key(&group_id));
-            assert!(
-                workspace
-                    .tabs
-                    .iter()
-                    .all(|tab| tab.group_id != Some(group_id))
-            );
+            assert!(workspace
+                .tabs
+                .iter()
+                .all(|tab| tab.group_id != Some(group_id)));
         });
     });
 }
@@ -3321,11 +3319,9 @@ fn test_new_tab_with_after_all_tabs_setting_lands_at_group_end() {
         initialize_app(&mut app);
         app.update(|ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(
-                    settings
-                        .new_tab_placement
-                        .set_value(NewTabPlacement::AfterAllTabs, ctx)
-                );
+                report_if_error!(settings
+                    .new_tab_placement
+                    .set_value(NewTabPlacement::AfterAllTabs, ctx));
             });
         });
 
@@ -3410,11 +3406,9 @@ fn test_new_tab_with_after_current_tab_setting_lands_after_active_tab_in_group()
         initialize_app(&mut app);
         app.update(|ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(
-                    settings
-                        .new_tab_placement
-                        .set_value(NewTabPlacement::AfterCurrentTab, ctx)
-                );
+                report_if_error!(settings
+                    .new_tab_placement
+                    .set_value(NewTabPlacement::AfterCurrentTab, ctx));
             });
         });
 
