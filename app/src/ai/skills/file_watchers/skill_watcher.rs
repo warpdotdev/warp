@@ -16,9 +16,9 @@ use super::subscribers::{
     HomeSkillSubscriber, ProjectSkillSubscriber, SkillRepositoryMessage, SymlinkSkillSubscriber,
 };
 use super::utils::{
-    find_local_skill_files_on_filesystem, find_skill_files_in_tree,
-    find_symlinked_skill_files_in_tree, is_home_provider_path, is_home_skill_directory,
-    is_skill_file, read_skills_from_directories, read_skills_from_files,
+    find_skill_files_in_tree, find_symlinked_skill_files_in_tree, is_home_provider_path,
+    is_home_skill_directory, is_skill_file, read_local_project_skills_from_filesystem,
+    read_skills_from_directories, read_skills_from_files,
 };
 use crate::warp_managed_paths_watcher::{
     filter_repository_update_by_prefix, warp_managed_skill_dirs, WarpManagedPathsWatcher,
@@ -321,15 +321,18 @@ impl SkillWatcher {
         repo_path: &Path,
         ctx: &mut ModelContext<Self>,
     ) {
-        let skills = read_skills_from_files(find_local_skill_files_on_filesystem(repo_path));
-        if skills.is_empty() {
-            return;
-        }
-
-        self.register_symlink_watches(&skills, ctx);
-        let _ = self
-            .watcher_event_tx
-            .try_send(SkillWatcherEvent::SkillsAdded { skills });
+        let repo_path = repo_path.to_path_buf();
+        ctx.spawn(
+            async move { read_local_project_skills_from_filesystem(&repo_path) },
+            move |me, skills, ctx| {
+                if !skills.is_empty() {
+                    me.register_symlink_watches(&skills, ctx);
+                    let _ = me
+                        .watcher_event_tx
+                        .try_send(SkillWatcherEvent::SkillsAdded { skills });
+                }
+            },
+        );
     }
 
     fn stop_failed_local_project_watcher(

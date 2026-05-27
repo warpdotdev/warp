@@ -211,6 +211,48 @@ fn test_local_project_fallback_scans_filesystem_when_repo_metadata_fails() {
 }
 
 #[test]
+#[cfg(unix)]
+fn test_local_project_fallback_initial_scan_loads_symlinked_skill_directory() {
+    let (tx, rx) = async_channel::unbounded();
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new_for_testing);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        let skill_watcher_handle = app.add_model(|ctx| SkillWatcher::new_for_testing(ctx, tx));
+
+        let repo_dir = TempDir::new().unwrap();
+        let target_dir = TempDir::new().unwrap();
+        let target_skill = create_skill_file(
+            &target_dir,
+            "fallback-linked-skill",
+            "Fallback linked skill",
+            "Linked content",
+        );
+        let repo = dunce::canonicalize(repo_dir.path()).unwrap();
+        let symlink_parent = repo.join(".agents/skills");
+        fs::create_dir_all(&symlink_parent).unwrap();
+        let symlink_skill_dir = symlink_parent.join("fallback-linked-skill");
+        std::os::unix::fs::symlink(target_skill.path.parent().unwrap(), &symlink_skill_dir)
+            .unwrap();
+
+        let mut expected_skill = target_skill;
+        expected_skill.path = symlink_skill_dir.join("SKILL.md");
+
+        let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
+        skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
+            skill_watcher.fallback_to_local_project_watcher(&repo_id, ctx);
+        });
+
+        assert_eq!(
+            rx.recv().await.unwrap(),
+            SkillWatcherEvent::SkillsAdded {
+                skills: vec![expected_skill]
+            }
+        );
+    });
+}
+#[test]
 fn test_local_project_fallback_update_reuses_repository_update_handler() {
     let (tx, rx) = async_channel::unbounded();
 

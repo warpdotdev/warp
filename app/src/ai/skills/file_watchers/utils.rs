@@ -67,23 +67,40 @@ pub fn find_skill_files_in_tree(
         .collect()
 }
 
-/// Finds local project skill files by walking the filesystem directly.
+/// Reads local project skills by discovering provider directories on the filesystem.
 ///
 /// This is a local-only fallback for repositories whose repo metadata indexing fails. Successful
 /// local and remote repos should use [`find_skill_files_in_tree`] so the normal metadata-backed
 /// path remains shared.
-pub(super) fn find_local_skill_files_on_filesystem(repo_path: &Path) -> Vec<PathBuf> {
-    let mut skill_files = WalkDir::new(repo_path)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|entry| !is_ignored_fallback_scan_entry(entry))
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-        .map(|entry| entry.into_path())
-        .filter(|path| is_skill_file(path))
-        .collect::<Vec<_>>();
-    skill_files.sort();
-    skill_files
+pub(super) fn read_local_project_skills_from_filesystem(scan_root: &Path) -> Vec<ParsedSkill> {
+    let direct_skill_file = scan_root.join("SKILL.md");
+    if is_skill_file(&direct_skill_file) {
+        return read_skills_from_files([direct_skill_file]);
+    }
+
+    read_skills_from_directories(find_local_provider_directories_on_filesystem(scan_root))
+}
+
+fn find_local_provider_directories_on_filesystem(scan_root: &Path) -> Vec<PathBuf> {
+    let mut provider_dirs = Vec::new();
+    let mut entries = WalkDir::new(scan_root).follow_links(false).into_iter();
+    while let Some(entry) = entries.next() {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        if is_ignored_fallback_scan_entry(&entry) {
+            if entry.file_type().is_dir() {
+                entries.skip_current_dir();
+            }
+            continue;
+        }
+        if entry.file_type().is_dir() && is_project_provider_path(entry.path()) {
+            provider_dirs.push(entry.into_path());
+            entries.skip_current_dir();
+        }
+    }
+    provider_dirs.sort();
+    provider_dirs
 }
 
 fn is_ignored_fallback_scan_entry(entry: &DirEntry) -> bool {
