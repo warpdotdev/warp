@@ -3618,6 +3618,13 @@ impl EditorView {
         self.enter_settings = settings;
     }
 
+    /// Returns the current enter-key settings.  Primarily for tests that
+    /// need to assert the settings were correctly applied without simulating
+    /// a full keystroke dispatch.
+    pub fn enter_settings(&self) -> EnterSettings {
+        self.enter_settings.clone()
+    }
+
     /// Clears the transient editor-height shrink-delay state.
     ///
     /// The shrink-delay is useful when height briefly drops during autosuggestion churn, but

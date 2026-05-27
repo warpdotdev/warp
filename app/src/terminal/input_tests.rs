@@ -7847,3 +7847,59 @@ fn enter_accepts_inline_menu_item_when_submit_on_ctrl_enter_is_true() {
         });
     });
 }
+
+// ---------------------------------------------------------------------------
+// Issue #11588 / PR #11723 — Bug 3: Ctrl+Enter enter_settings restore on close
+// ---------------------------------------------------------------------------
+
+/// After a CLI-agent Rich Input session closes, the shared editor's
+/// `ctrl_enter` setting must be restored to `InsertNewLineIfMultiLine`
+/// (the `EnterSettings::default()` value).
+///
+/// The bug: `update_cli_agent_enter_settings` always wrote `{enter: Emit,
+/// ctrl_enter: Emit}` regardless of whether the rich input was open or
+/// closed.  After a Rich Input session ended, the normal terminal input
+/// therefore had `ctrl_enter = Emit`, which emitted `Event::CtrlEnter`
+/// instead of inserting a newline — breaking the default multi-line
+/// editing behaviour.
+///
+/// The fix: branch inside `update_cli_agent_enter_settings` on
+/// `is_input_open` and restore `EnterSettings::default()` on close.
+#[test]
+fn ctrl_enter_inserts_newline_in_normal_input_after_rich_input_closes() {
+    use crate::editor::EnterAction;
+
+    App::test((), |mut app| async move {
+        let _cli_agent_flag = FeatureFlag::CLIAgentRichInput.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        // Open the rich input — update_cli_agent_enter_settings fires and sets
+        // {enter: Emit, ctrl_enter: Emit}.
+        open_rich_input_for_terminal(&terminal, &mut app);
+
+        // Close the rich input — update_cli_agent_enter_settings must fire
+        // again and restore EnterSettings::default(), where ctrl_enter is
+        // InsertNewLineIfMultiLine.
+        terminal.update(&mut app, |view, ctx| {
+            let view_id = view.view_id();
+            CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.close_input(view_id, false, ctx);
+            });
+        });
+
+        // Assert that the editor's ctrl_enter setting is back to
+        // InsertNewLineIfMultiLine — the EnterSettings::default() value.
+        input.read(&app, |input, ctx| {
+            let settings = input.editor().as_ref(ctx).enter_settings();
+            assert!(
+                matches!(settings.ctrl_enter, EnterAction::InsertNewLineIfMultiLine),
+                "after Rich Input closes, ctrl_enter must be InsertNewLineIfMultiLine \
+                 (the default); got Emit instead"
+            );
+        });
+    });
+}

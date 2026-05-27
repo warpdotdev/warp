@@ -2598,9 +2598,10 @@ impl Input {
             // Sync the editor text colors with the (now active or inactive)
             // alt-screen CLI agent background so input text stays legible.
             me.update_cli_agent_editor_text_colors(ctx);
-            // Ensure enter_settings are applied for this input instance.
-            // Both enter and ctrl_enter are always Emit; see the function
-            // docstring for why the submit_on_ctrl_enter toggle is irrelevant.
+            // Sync enter_settings with the new open/closed state.
+            // When open: enter and ctrl_enter are Emit (rich input mode).
+            // When closed: restores EnterSettings::default() (normal terminal).
+            // See update_cli_agent_enter_settings for details.
             me.update_cli_agent_enter_settings(ctx);
             me.set_zero_state_hint_text(ctx);
             ctx.notify();
