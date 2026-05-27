@@ -1766,8 +1766,8 @@ fn render_groups(
                 let members = &visible_tabs[i..i + run_len];
                 // The group's last member needs an "after" drop target only when
                 // it's also the absolute last visible tab.
-                let last_member_after_index = (i + run_len == total_visible)
-                    .then(|| members.last().unwrap().0 + 1);
+                let last_member_after_index =
+                    (i + run_len == total_visible).then(|| members.last().unwrap().0 + 1);
                 groups.add_child(render_grouped_tab_container(
                     state,
                     workspace,
