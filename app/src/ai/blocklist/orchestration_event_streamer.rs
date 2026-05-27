@@ -1477,13 +1477,6 @@ impl OrchestrationEventStreamer {
     /// `start_agent` with cloud `execution_mode`. Either way the actual
     /// run lives elsewhere (and that process owns the inbox), so this
     /// process should not open its own SSE for the conversation.
-    ///
-    /// Shared-session viewer placeholders are excluded *only* when the
-    /// `OrchestrationViewerStreamer` flag is off. When the flag is on, the
-    /// streamer serves them via the ancestor SSE on its viewer-mode entry
-    /// path, so they must not be excluded here. `is_remote_child()` stays
-    /// excluded unconditionally — owner-side remote children still receive
-    /// events through their parent's existing per-run-ids SSE.
     fn is_remote_run_view(
         &self,
         conversation_id: AIConversationId,
@@ -1491,15 +1484,7 @@ impl OrchestrationEventStreamer {
     ) -> bool {
         BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
-            .is_some_and(|c| {
-                if c.is_remote_child() {
-                    return true;
-                }
-                if c.is_viewing_shared_session() {
-                    return !FeatureFlag::OrchestrationViewerStreamer.is_enabled();
-                }
-                false
-            })
+            .is_some_and(|c| c.is_viewing_shared_session() || c.is_remote_child())
     }
 
     fn should_skip_sse_for_dormant_local_claude_child(

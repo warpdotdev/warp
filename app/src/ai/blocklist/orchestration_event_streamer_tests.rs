@@ -1542,16 +1542,11 @@ fn viewer_mode_consumer_refcount_handles_multiple_panes_and_double_unregister() 
 }
 
 #[test]
-fn is_remote_run_view_excludes_shared_session_viewer_when_streamer_flag_off() {
+fn is_remote_run_view_excludes_shared_session_viewer() {
     use crate::ai::agent::conversation::AIConversation;
 
     App::test((), |mut app| async move {
-        // OrchestrationV2 is the parent feature that gates the rest of the
-        // streamer; without it `on_restored_conversations` early-returns and
-        // most paths are inert. Enable it but leave OrchestrationViewerStreamer
-        // OFF (the default).
         let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
-        let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(false);
 
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
@@ -1575,23 +1570,23 @@ fn is_remote_run_view_excludes_shared_session_viewer_when_streamer_flag_off() {
         streamer.read(&app, |me, ctx| {
             assert!(
                 me.is_remote_run_view(conversation_id, ctx),
-                "flag OFF: shared-session viewer conversations stay excluded"
+                "shared-session viewer conversations are passive remote-run views"
             );
         });
     });
 }
 
 #[test]
-fn is_remote_run_view_includes_shared_session_viewer_when_streamer_flag_on() {
+fn is_remote_run_view_excludes_remote_child() {
     use crate::ai::agent::conversation::AIConversation;
 
     App::test((), |mut app| async move {
         let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
-        let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
 
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
-        let conversation = AIConversation::new(true, false);
+        let mut conversation = AIConversation::new(false, false);
+        conversation.mark_as_remote_child();
         let conversation_id = conversation.id();
         let terminal_view_id = warpui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
@@ -1608,55 +1603,11 @@ fn is_remote_run_view_includes_shared_session_viewer_when_streamer_flag_on() {
 
         streamer.read(&app, |me, ctx| {
             assert!(
-                !me.is_remote_run_view(conversation_id, ctx),
-                "flag ON: shared-session viewer conversations are eligible"
+                me.is_remote_run_view(conversation_id, ctx),
+                "remote-child conversations represent owner-side runs hosted elsewhere"
             );
         });
     });
-}
-
-#[test]
-fn is_remote_run_view_excludes_remote_child_under_both_flag_states() {
-    use crate::ai::agent::conversation::AIConversation;
-
-    // Remote-child placeholders represent owner-side runs hosted elsewhere;
-    // the parent's existing per-run-ids SSE delivers their events. The
-    // viewer-streamer flag is orthogonal — `is_remote_child()` conversations
-    // must remain excluded regardless. See `Risks and mitigations:
-    // is_remote_run_view relaxation scope` in the spec.
-    for streamer_flag in [false, true] {
-        App::test((), |mut app| async move {
-            let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
-            let _streamer_guard =
-                FeatureFlag::OrchestrationViewerStreamer.override_enabled(streamer_flag);
-
-            let history_model =
-                app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
-
-            let mut conversation = AIConversation::new(false, false);
-            conversation.mark_as_remote_child();
-            let conversation_id = conversation.id();
-            let terminal_view_id = warpui::EntityId::new();
-            history_model.update(&mut app, |model, ctx| {
-                model.restore_conversations(terminal_view_id, vec![conversation], ctx);
-            });
-
-            let mock = MockAIClient::new();
-            let ai_client: Arc<dyn AIClient> = Arc::new(mock);
-            let server_api = ServerApiProvider::new_for_test().get();
-
-            let streamer = app.add_singleton_model(|ctx| {
-                OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
-            });
-
-            streamer.read(&app, |me, ctx| {
-                assert!(
-                    me.is_remote_run_view(conversation_id, ctx),
-                    "remote-child conversations must be excluded under any flag value (streamer_flag={streamer_flag})"
-                );
-            });
-        });
-    }
 }
 
 #[test]

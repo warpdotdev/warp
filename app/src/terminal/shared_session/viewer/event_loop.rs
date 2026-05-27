@@ -347,66 +347,27 @@ impl EventLoop {
                 }
             }
 
+            if Some(self.next_event_no) == self.catching_up_to_event_no {
+                if let Some(view) = self.terminal_view.upgrade(ctx) {
+                    // TODO (suraj): reconsider how we query the role here.
+                    if let Some(presence_manager) =
+                        view.read(ctx, |view, _| view.shared_session_presence_manager())
+                    {
+                        // Role is set to the presence manager's role to stay as up-to-date as possible.
+                        // This avoids a race condition if a viewer gets a new role before catching up,
+                        // by ensuring we're not overwriting the new role.
+                        if let Some(role) = presence_manager.as_ref(ctx).role() {
+                            self.terminal_model.lock().set_shared_session_status(
+                                SharedSessionStatus::ActiveViewer { role },
+                            );
+                        }
+                    }
+                }
+            }
+
             self.channel_event_listener.send_wakeup_event();
 
             self.next_event_no += 1;
-
-            // Catch-up gate: transition ViewPending → ActiveViewer once
-            // we've processed enough events to match the server's
-            // catch-up target.
-            //
-            // Empirically the target value `latest_event_no` from
-            // `JoinedSuccessfully` is the count of events to consume,
-            // not the highest event_no — a server-reported 335 means
-            // events 0..334 arrive (335 events). We compare against
-            // the *post-increment* `next_event_no` with `>=` so the
-            // gate fires once we've handled that many events, and is
-            // robust to slight overshoots when buffered live events
-            // are drained immediately after.
-            //
-            // We clear `catching_up_to_event_no` only after a successful
-            // transition: if the presence_manager / role isn't ready yet
-            // (the share-join adapter hasn't installed it), the next
-            // event re-evaluates the gate and retries.
-            if self
-                .catching_up_to_event_no
-                .is_some_and(|target| self.next_event_no >= target)
-            {
-                let view_handle = self.terminal_view.upgrade(ctx);
-                let presence_manager = view_handle.as_ref().and_then(|view| {
-                    view.read(ctx, |view, _| view.shared_session_presence_manager())
-                });
-                // Read role from the presence manager rather than caching
-                // it so a role change that lands during catch-up is not
-                // clobbered by a stale value.
-                let role = presence_manager
-                    .as_ref()
-                    .and_then(|pm| pm.as_ref(ctx).role());
-                if let Some(role) = role {
-                    log::info!(
-                        "[orch-viewer] EventLoop: catch-up complete \
-                         (next_event_no={} target={:?}); transitioning \
-                         ViewPending → ActiveViewer role={role:?}",
-                        self.next_event_no,
-                        self.catching_up_to_event_no,
-                    );
-                    self.terminal_model
-                        .lock()
-                        .set_shared_session_status(SharedSessionStatus::ActiveViewer { role });
-                    self.catching_up_to_event_no = None;
-                } else {
-                    log::debug!(
-                        "[orch-viewer] EventLoop: catch-up target reached \
-                         (next_event_no={} target={:?}) but role not yet \
-                         available (view_handle.is_some={} \
-                         presence_manager.is_some={}); retrying on next event",
-                        self.next_event_no,
-                        self.catching_up_to_event_no,
-                        view_handle.is_some(),
-                        presence_manager.is_some(),
-                    );
-                }
-            }
         }
     }
 }
