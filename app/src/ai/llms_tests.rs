@@ -343,3 +343,138 @@ fn removing_endpoint_purges_all_its_models_from_custom_llms() {
     assert_eq!(infos.len(), 1);
     assert_eq!(infos[0].id.as_str(), "uuid-k1");
 }
+
+// -- reconcile_disabled_model_preferences: custom/BYOK persistence --
+
+use warpui::App;
+
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::sync_queue::SyncQueue;
+use crate::settings::PrivacySettings;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::LaunchMode;
+
+/// Installs the minimal singleton graph needed to construct an
+/// `AIExecutionProfilesModel` and run `reconcile_disabled_model_preferences`.
+///
+/// Uses a logged-in auth state because `is_custom_inference_enabled` (and thus
+/// `custom_inference_enabled`) returns `false` for anonymous/logged-out users,
+/// which would short-circuit the custom-model resolution path we're testing.
+fn install_singletons_for_reconcile(app: &mut App) {
+    initialize_settings_for_tests(app);
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    app.add_singleton_model(SyncQueue::mock);
+    app.add_singleton_model(|_| NetworkStatus::new());
+    app.add_singleton_model(TeamTesterStatus::mock);
+    app.add_singleton_model(UpdateManager::mock);
+    app.add_singleton_model(CloudModel::mock);
+    app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+    app.add_singleton_model(PrivacySettings::mock);
+    app.add_singleton_model(UserWorkspaces::default_mock);
+}
+
+fn prefs_with_custom_model(custom_config_key: &str) -> LLMPreferences {
+    let keys = ai::api_keys::ApiKeys {
+        custom_endpoints: vec![endpoint(
+            "ep",
+            "https://a.io",
+            "k",
+            vec![model("custom", None, custom_config_key)],
+        )],
+        ..Default::default()
+    };
+    LLMPreferences {
+        models_by_feature: ModelsByFeature::default(),
+        last_update: None,
+        base_llm_for_terminal_view: HashMap::new(),
+        custom_llms: build_custom_llm_infos(&keys),
+    }
+}
+
+/// Regression test for #11564: reconciliation (which runs on startup and when
+/// BYOK keys change) must not clear a profile's saved custom/BYOK base model.
+/// The model getters resolve a saved id against both server models *and*
+/// `custom_llms`, but `reconcile_disabled_model_preferences` used to validate
+/// only against server `agent_mode` models — so a custom `config_key` id looked
+/// "unusable" and the default profile silently reverted to `auto` after restart.
+#[test]
+fn reconcile_preserves_custom_base_model_for_default_profile() {
+    App::test((), |mut app| async move {
+        install_singletons_for_reconcile(&mut app);
+        // Custom inference is gated behind this flag; without it,
+        // `custom_inference_enabled` is false and custom models are never resolved.
+        let _flag = FeatureFlag::CustomInferenceEndpoints.override_enabled(true);
+
+        let profile_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_prefs = app.add_singleton_model(|_| prefs_with_custom_model("custom-uuid"));
+
+        let default_id = profile_model.read(&app, |model, _| model.default_profile_id());
+
+        // Save the custom model as the default profile's base model, mirroring
+        // a user picking a BYOK model in the profile editor.
+        profile_model.update(&mut app, |model, ctx| {
+            model.set_base_model(default_id, Some("custom-uuid".into()), ctx);
+        });
+        profile_model.read(&app, |model, ctx| {
+            assert_eq!(
+                model.get_profile_by_id(default_id, ctx).unwrap().data().base_model,
+                Some("custom-uuid".into()),
+                "precondition: custom base model should be saved",
+            );
+        });
+
+        // Run reconciliation, as happens on startup / BYOK-key changes.
+        llm_prefs.update(&mut app, |me, ctx| {
+            me.reconcile_disabled_model_preferences(ctx);
+        });
+
+        profile_model.read(&app, |model, ctx| {
+            assert_eq!(
+                model.get_profile_by_id(default_id, ctx).unwrap().data().base_model,
+                Some("custom-uuid".into()),
+                "custom base model was cleared by reconciliation (the #11564 bug)",
+            );
+        });
+    })
+}
+
+/// Guards against over-correcting the fix above: reconciliation must still clear
+/// a saved base model whose id matches neither a server model nor a known custom
+/// endpoint model (e.g. a stale id left over from a removed endpoint).
+#[test]
+fn reconcile_clears_unknown_base_model_for_default_profile() {
+    App::test((), |mut app| async move {
+        install_singletons_for_reconcile(&mut app);
+        let _flag = FeatureFlag::CustomInferenceEndpoints.override_enabled(true);
+
+        let profile_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        // custom_llms only knows about "custom-uuid"; the profile points elsewhere.
+        let llm_prefs = app.add_singleton_model(|_| prefs_with_custom_model("custom-uuid"));
+
+        let default_id = profile_model.read(&app, |model, _| model.default_profile_id());
+
+        profile_model.update(&mut app, |model, ctx| {
+            model.set_base_model(default_id, Some("not-a-real-model".into()), ctx);
+        });
+
+        llm_prefs.update(&mut app, |me, ctx| {
+            me.reconcile_disabled_model_preferences(ctx);
+        });
+
+        profile_model.read(&app, |model, ctx| {
+            assert_eq!(
+                model.get_profile_by_id(default_id, ctx).unwrap().data().base_model,
+                None,
+                "an unresolvable base model should still be cleared by reconciliation",
+            );
+        });
+    })
+}

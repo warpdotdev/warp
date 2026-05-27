@@ -1178,6 +1178,16 @@ impl LLMPreferences {
     ///
     /// Called both when the model list is refreshed from the server and when
     /// BYOK API keys change (since `RequiresUpgrade` usability is BYOK-aware).
+    ///
+    /// A saved selection is considered usable if it resolves to a usable
+    /// server model *or* an enabled custom/BYOK model (`custom_llms`). This
+    /// must stay symmetric with the model getters (e.g. `get_preferred_base_model`),
+    /// which resolve against both collections — otherwise a custom model id
+    /// (a `config_key` UUID absent from the server `choices`) is treated as
+    /// unusable here and the profile is silently reset to the default `auto`
+    /// model on restart. Custom-model clearing when custom inference is
+    /// *disabled* is handled separately by
+    /// `sanitize_disabled_custom_model_preferences`.
     fn reconcile_disabled_model_preferences(&self, ctx: &mut ModelContext<Self>) {
         let profiles_model = AIExecutionProfilesModel::handle(ctx);
         profiles_model.update(ctx, |profiles, ctx| {
@@ -1191,7 +1201,10 @@ impl LLMPreferences {
                     let effective_base_model_usable = self
                         .models_by_feature
                         .agent_mode
-                        .usable_info_for_id(effective_base_model_id, ctx);
+                        .usable_info_for_id(effective_base_model_id, ctx)
+                        .or_else(|| {
+                            self.custom_llm_info_for_id_if_enabled(effective_base_model_id, ctx)
+                        });
                     let effective_base_model_unusable = effective_base_model_usable.is_none();
                     let effective_base_model_is_configurable = effective_base_model_usable
                         .is_some_and(|info| info.context_window.is_configurable);
@@ -1210,6 +1223,7 @@ impl LLMPreferences {
                             .models_by_feature
                             .coding
                             .usable_info_for_id(preferred_llm_id, ctx)
+                            .or_else(|| self.custom_llm_info_for_id_if_enabled(preferred_llm_id, ctx))
                             .is_none()
                         {
                             profiles.set_coding_model(profile_id, None, ctx);
@@ -1219,6 +1233,7 @@ impl LLMPreferences {
                         if self
                             .get_cli_agent_available()
                             .usable_info_for_id(preferred_llm_id, ctx)
+                            .or_else(|| self.custom_llm_info_for_id_if_enabled(preferred_llm_id, ctx))
                             .is_none()
                         {
                             profiles.set_cli_agent_model(profile_id, None, ctx);
