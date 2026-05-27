@@ -2,14 +2,14 @@ use warp_core::features::FeatureFlag;
 use warpui::{SingletonEntity, ViewContext};
 
 use super::rich_content::RichContentMetadata;
-use crate::{
-    ai::{
-        agent::{conversation::AIConversationId, CancellationReason},
-        blocklist::block::{FinishReason, PendingUserQueryBlock, PendingUserQueryBlockEvent},
-    },
-    auth::AuthStateProvider,
-    terminal::{view::PendingUserQueryKind, TerminalView},
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::CancellationReason;
+use crate::ai::blocklist::block::{
+    FinishReason, PendingUserQueryBlock, PendingUserQueryBlockEvent,
 };
+use crate::auth::AuthStateProvider;
+use crate::terminal::view::PendingUserQueryKind;
+use crate::terminal::TerminalView;
 
 impl TerminalView {
     pub(super) fn pending_user_query_conversation_id(&self) -> Option<AIConversationId> {

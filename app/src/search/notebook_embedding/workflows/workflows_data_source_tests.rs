@@ -1,8 +1,6 @@
-use crate::{
-    cloud_object::{Owner, Space},
-    search::notebook_embedding::is_embed_accessible,
-    server::ids::ServerId,
-};
+use crate::cloud_object::{Owner, Space};
+use crate::search::notebook_embedding::is_embed_accessible;
+use crate::server::ids::ServerId;
 
 #[test]
 fn test_embed_in_personal_object() {

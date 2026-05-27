@@ -12,49 +12,48 @@ mod task_store;
 pub(super) mod telemetry;
 pub(super) mod util;
 
-// Re-export types that were moved to the ai crate.
-pub use ai::agent::{action::*, action_result::*, AIAgentCitation, FileLocations};
-use warp_core::features::FeatureFlag;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Display;
+use std::ops::{AddAssign, Deref, DerefMut, Range};
+use std::sync::Arc;
+use std::time::Duration;
 
+// Re-export types that were moved to the ai crate.
+pub use ai::agent::action::*;
+pub use ai::agent::action_result::*;
+use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
+pub use ai::agent::{AIAgentCitation, FileLocations};
+use ai::skills::ParsedSkill;
+use chrono::{DateTime, Local, TimeDelta};
+use comment::ReviewComment;
+use derivative::Derivative;
+use markdown_parser::{parse_markdown, FormattedTable, FormattedText, FormattedTextInline};
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use session_sharing_protocol::common::ParticipantId;
+use task::TaskId;
+pub use telemetry::AIIdentifiers;
+use uuid::Uuid;
+use warp_core::features::FeatureFlag;
+use warp_editor::render::model::LineCount;
+use warp_multi_agent_api::{diff_hunk as diff_hunk_api, AgentEvent, AgentType};
+
+pub use self::api::{MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError};
+use super::llms::LLMId;
 use crate::ai::block_context::BlockContext;
 use crate::ai::blocklist::block::view_impl::output::are_all_text_sections_empty;
 use crate::ai::skills::SkillDescriptor;
+use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::code::editor_management::CodeSource;
 use crate::code_review::comments::{
     AttachedReviewComment as CodeReviewComment, ReviewCommentBatch,
 };
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::server_api::AIApiError;
-use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
-use ai::skills::ParsedSkill;
-use chrono::{DateTime, Local, TimeDelta};
-use comment::ReviewComment;
-use task::TaskId;
-pub use telemetry::AIIdentifiers;
-
-use warp_editor::render::model::LineCount;
-
-use parking_lot::RwLock;
-use std::collections::{HashMap, HashSet};
-use std::fmt::Display;
-use std::ops::{AddAssign, Deref, DerefMut, Range};
-use std::sync::Arc;
-use std::time::Duration;
-use uuid::Uuid;
-use warp_multi_agent_api::{diff_hunk as diff_hunk_api, AgentEvent, AgentType};
-
-pub use self::api::{MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError};
-use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingChipType;
 use crate::TelemetryEvent;
-use derivative::Derivative;
-use markdown_parser::{parse_markdown, FormattedTable, FormattedText, FormattedTextInline};
-use serde::{Deserialize, Serialize};
-use session_sharing_protocol::common::ParticipantId;
-
-use super::llms::LLMId;
 
 /// A server supplied ID for a specific AI generated output.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
@@ -83,6 +82,8 @@ impl ServerOutputId {
 pub enum CancellationReason {
     /// The user explicitly cancelled without providing a follow-up.
     ManuallyCancelled,
+    /// Warp automatically cancelled the local run so it could continue in Cloud Mode.
+    AutomaticCloudHandoff,
 
     /// The user submitted a follow-up query during streaming which implicitly cancelled the current one.
     FollowUpSubmitted {
@@ -107,6 +108,7 @@ impl Display for CancellationReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CancellationReason::ManuallyCancelled => write!(f, "manual cancellation"),
+            CancellationReason::AutomaticCloudHandoff => write!(f, "automatic cloud handoff"),
             CancellationReason::FollowUpSubmitted { .. } => write!(f, "follow-up submission"),
             CancellationReason::UserCommandExecuted => write!(f, "user command execution"),
             CancellationReason::Reverted => write!(f, "revert"),

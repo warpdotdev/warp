@@ -71,7 +71,7 @@ const FEATURE_ITEMS: &[FeatureItem] = &[
         badge: None,
     },
     FeatureItem {
-        icon: Icon::Atom02,
+        icon: Icon::Atom,
         title: "Multi-agent orchestration",
         description: "Warp Agents will now orchestrate swarms of subagents, allowing you to parallelize tasks.",
         badge: None,

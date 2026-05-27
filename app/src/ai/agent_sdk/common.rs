@@ -18,7 +18,7 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::auth::auth_state::AuthStateProvider;
-use crate::cloud_object::{CloudObject, Owner};
+use crate::cloud_object::{CloudObject, CloudObjectLookup as _, Owner};
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ai::AIClient;

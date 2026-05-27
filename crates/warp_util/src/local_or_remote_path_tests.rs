@@ -1,7 +1,7 @@
-use crate::{
-    host_id::HostId, local_or_remote_path::LocalOrRemotePath, remote_path::RemotePath,
-    standardized_path::StandardizedPath,
-};
+use crate::host_id::HostId;
+use crate::local_or_remote_path::LocalOrRemotePath;
+use crate::remote_path::RemotePath;
+use crate::standardized_path::StandardizedPath;
 
 fn test_host_id() -> HostId {
     HostId::new("test-host".to_string())

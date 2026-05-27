@@ -1,6 +1,8 @@
-use super::*;
 use std::fs;
+
 use tempfile::tempdir;
+
+use super::*;
 
 #[test]
 fn test_read_skills_with_valid_skills() {

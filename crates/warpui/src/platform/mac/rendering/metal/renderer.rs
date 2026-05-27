@@ -1,35 +1,29 @@
-use crate::rendering::atlas::{AllocatedRegion, TextureId};
-use crate::rendering::{get_best_dash_gap, GlyphCache, GlyphRasterBoundsFn, RasterizeGlyphFn};
-use warpui_core::{
-    fonts::{self, SubpixelAlignment},
-    rendering::{self, texture_cache::TextureCache},
-};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::Write;
+use std::mem;
+use std::os::raw::c_void;
+use std::sync::Once;
 
-use super::frame_capture::capture_frame;
-use crate::platform::mac::rendering::renderer::Device;
-use crate::platform::mac::window::WindowState;
-use cocoa::base::id;
 use metal::{
     Function, MTLBlendFactor, MTLBlendOperation, MTLIndexType, MTLPrimitiveType,
     MTLResourceOptions, RenderPipelineDescriptor,
 };
 use objc::{msg_send, sel, sel_impl};
-use warpui_core::platform::CapturedFrame;
-
 use pathfinder_color::{ColorF, ColorU};
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
-};
-use warpui_core::fonts::{canvas, RasterizedGlyph};
-use warpui_core::scene::{CornerRadius, GlyphFade, Icon, Image, Layer, Scene};
+use pathfinder_geometry::rect::{RectF, RectI};
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warpui_core::fonts::{self, canvas, RasterizedGlyph, SubpixelAlignment};
+use warpui_core::platform::CapturedFrame;
+use warpui_core::rendering::texture_cache::TextureCache;
+use warpui_core::rendering::{self};
+use warpui_core::scene::{CornerRadius, GlyphFade, GlyphKey, Icon, Image, Layer, Scene};
 
-use std::collections::HashMap;
-
-use pathfinder_geometry::rect::RectI;
-use std::{fs::File, mem, sync::Once};
-use std::{io::Write, os::raw::c_void};
-use warpui_core::scene::GlyphKey;
+use super::frame_capture::capture_frame;
+use crate::platform::mac::rendering::renderer::Device;
+use crate::platform::mac::window::WindowState;
+use crate::rendering::atlas::{AllocatedRegion, TextureId};
+use crate::rendering::{get_best_dash_gap, GlyphCache, GlyphRasterBoundsFn, RasterizeGlyphFn};
 
 const METAL_LIB_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders.metallib"));
 static WRITE_LIB_TO_FILE: Once = Once::new();
@@ -67,16 +61,24 @@ impl<'a> RenderPass<'a> {
         mut self,
         drawable_size: pathfinder_geometry::vector::Vector2F,
         should_capture: bool,
+        presents_with_transaction: bool,
     ) -> Option<CapturedFrame> {
         self.encoder.end_encoding();
-
         self.encoding_finished = true;
 
-        self.buffer.commit();
+        // If we're able to do asynchronous presentation, do so - it allows us to avoid
+        // blocking on the GPU for the duration of the frame.
+        if !should_capture && !presents_with_transaction {
+            self.buffer.present_drawable(self.drawable);
+            self.buffer.commit();
+            return None;
+        }
 
+        // Otherwise, commit the buffer and wait for it to complete before continuing.
+        self.buffer.commit();
         self.buffer.wait_until_completed();
 
-        let captured = if should_capture {
+        let capture = if should_capture {
             let texture = self.drawable.texture();
             capture_frame(texture, drawable_size)
         } else {
@@ -84,7 +86,7 @@ impl<'a> RenderPass<'a> {
         };
 
         self.drawable.present();
-        captured
+        capture
     }
 
     /// Creates a descriptor for a pass that renders into the provided drawable.
@@ -239,6 +241,7 @@ impl Renderer {
         scene: &Scene,
         ctx: &MetalDrawContext,
         should_capture: bool,
+        presents_with_transaction: bool,
     ) -> Option<CapturedFrame> {
         self.resources
             .glyph_cache
@@ -248,7 +251,11 @@ impl Renderer {
 
         Frame::new(scene, render_pass.encoder, &mut self.resources, ctx).draw();
 
-        render_pass.finish_with_capture(ctx.drawable_size, should_capture)
+        render_pass.finish_with_capture(
+            ctx.drawable_size,
+            should_capture,
+            presents_with_transaction,
+        )
     }
 }
 
@@ -959,11 +966,12 @@ impl super::super::Renderer for Renderer {
             return;
         };
 
-        let drawable = unsafe {
+        let (drawable, presents_with_transaction) = unsafe {
             let native_view = window.native_view();
-            let layer: id = msg_send![native_view, layer];
+            let layer: &metal::MetalLayerRef = msg_send![native_view, layer];
+            let presents_with_transaction = layer.presents_with_transaction();
             let drawable: &metal::MetalDrawableRef = msg_send![layer, nextDrawable];
-            drawable
+            (drawable, presents_with_transaction)
         };
 
         let ctx = &MetalDrawContext {
@@ -986,7 +994,7 @@ impl super::super::Renderer for Renderer {
 
         let capture_callback = window.capture_callback.borrow_mut().take();
         let should_capture = capture_callback.is_some();
-        let captured = Self::render(self, scene, ctx, should_capture);
+        let captured = Self::render(self, scene, ctx, should_capture, presents_with_transaction);
         if let (Some(frame), Some(callback)) = (captured, capture_callback) {
             callback(frame);
         }

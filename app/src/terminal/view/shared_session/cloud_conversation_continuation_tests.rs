@@ -1,6 +1,12 @@
+use std::sync::Arc;
+
 use chrono::Utc;
 use persistence::model::ConversationUsageMetadata;
+use warp_cli::agent::Harness;
+use warp_graphql::object_permissions::AccessLevel;
+use warpui::{App, EntityId, SingletonEntity};
 
+use super::*;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIAgentHarness, ServerAIConversationMetadata};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
@@ -21,12 +27,6 @@ use crate::workspaces::team::Team;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::Workspace;
 use crate::FeatureFlag;
-use std::sync::Arc;
-use warp_cli::agent::Harness;
-use warp_graphql::object_permissions::AccessLevel;
-use warpui::{App, EntityId, SingletonEntity};
-
-use super::*;
 
 const CONVERSATION_TOKEN: &str = "server-conversation-token";
 
@@ -171,6 +171,7 @@ fn ambient_agent_task(
         created_at: now,
         started_at: Some(now),
         updated_at: now,
+        run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: None,
         session_id: None,

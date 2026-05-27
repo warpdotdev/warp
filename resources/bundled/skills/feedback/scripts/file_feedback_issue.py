@@ -13,7 +13,6 @@ import shutil
 import subprocess
 import sys
 
-DEFAULT_REPO = "warpdotdev/warp"
 DEFAULT_HOSTNAME = "github.com"
 FEEDBACK_LABEL = "in-app-feedback"
 
@@ -27,7 +26,7 @@ MAX_PREFILL_URL_LENGTH = 8000
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "File a GitHub issue in warpdotdev/warp. The caller must choose "
+            "File a GitHub issue in the requested GitHub repository. The caller must choose "
             "the filing method via --use: `gh` to create the issue directly with the "
             "gh CLI, or `browser` to open the prefilled new-issue page in the browser "
             "(used when attachments require manual upload via GitHub's web UI)."
@@ -47,6 +46,11 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument("--title", required=True, help="Issue title.")
+    parser.add_argument(
+        "--repo",
+        required=True,
+        help="GitHub repository to file the issue in, formatted as owner/name.",
+    )
     parser.add_argument(
         "--body-file",
         type=Path,
@@ -79,6 +83,16 @@ def normalize_body(body: str) -> str:
     return normalized_body
 
 
+def normalize_repo(repo: str) -> str:
+    normalized_repo = repo.strip()
+    if not normalized_repo or "/" not in normalized_repo:
+        raise SystemExit("Issue repo must be provided in owner/name format.")
+    owner, name = normalized_repo.split("/", 1)
+    if not owner or not name or "/" in name:
+        raise SystemExit("Issue repo must be provided in owner/name format.")
+    return normalized_repo
+
+
 def gh_path_if_authenticated() -> str | None:
     gh_path = shutil.which("gh")
     if gh_path is None:
@@ -98,12 +112,13 @@ def gh_path_if_authenticated() -> str | None:
 
 def create_issue_with_gh(
     gh_path: str,
+    repo: str,
     title: str,
     body: str,
 ) -> tuple[str | None, str | None]:
     command = [
         gh_path, "issue", "create",
-        "--repo", DEFAULT_REPO,
+        "--repo", repo,
         "--title", title,
         "--body", body,
         "--label", FEEDBACK_LABEL,
@@ -121,9 +136,9 @@ def create_issue_with_gh(
     return issue_url, None
 
 
-def build_new_issue_url(title: str, body: str | None) -> str:
+def build_new_issue_url(repo: str, title: str, body: str | None) -> str:
     """Build a GitHub new-issue URL with the provided title and optional body prefilled."""
-    base = f"https://{DEFAULT_HOSTNAME}/{DEFAULT_REPO}/issues/new"
+    base = f"https://{DEFAULT_HOSTNAME}/{repo}/issues/new"
     params: list[tuple[str, str]] = [("title", title)]
     if body is not None:
         params.append(("body", body))
@@ -160,7 +175,7 @@ def open_in_browser(url: str) -> bool:
         return False
 
 
-def fallback_to_browser(title: str, body: str) -> int:
+def fallback_to_browser(repo: str, title: str, body: str) -> int:
     """Open the GitHub new-issue page with a prefilled title (and body when it fits).
 
     Intended for the caller-selected ``--use browser`` path, which the feedback skill
@@ -175,15 +190,15 @@ def fallback_to_browser(title: str, body: str) -> int:
     caller can inform the user that the browser could not be opened and images were not
     uploaded. If both the browser and ``gh`` are unavailable, filing fails.
     """
-    full_url = build_new_issue_url(title, body)
+    full_url = build_new_issue_url(repo, title, body)
     body_fits_in_url = len(full_url) <= MAX_PREFILL_URL_LENGTH
-    url_to_open = full_url if body_fits_in_url else build_new_issue_url(title, None)
+    url_to_open = full_url if body_fits_in_url else build_new_issue_url(repo, title, None)
 
     browser_available, browser_unavailable_reason = browser_is_available()
 
     base_payload: dict[str, object] = {
         "method": "browser",
-        "repo": DEFAULT_REPO,
+        "repo": repo,
         "url": url_to_open,
     }
     if not body_fits_in_url:
@@ -200,12 +215,12 @@ def fallback_to_browser(title: str, body: str) -> int:
         # Browser unavailable — try gh CLI as a fallback so the issue is still filed.
         gh_path = gh_path_if_authenticated()
         if gh_path is not None:
-            issue_url, _gh_error = create_issue_with_gh(gh_path, title, body)
+            issue_url, _gh_error = create_issue_with_gh(gh_path, repo, title, body)
             if issue_url is not None:
                 print_result({
                     "status": "created",
                     "method": "gh",
-                    "repo": DEFAULT_REPO,
+                    "repo": repo,
                     "issue_url": issue_url,
                     "browser_unavailable": True,
                     "message": (
@@ -252,7 +267,7 @@ def print_result(payload: dict[str, object]) -> None:
     sys.stdout.write("\n")
 
 
-def file_with_gh(title: str, body: str) -> int:
+def file_with_gh(repo: str, title: str, body: str) -> int:
     """File the issue via the gh CLI. Returns status `unavailable` when gh isn't
     installed or not authenticated; the caller is responsible for choosing a
     different --use method in that case (no automatic fallback happens here).
@@ -263,19 +278,18 @@ def file_with_gh(title: str, body: str) -> int:
             {
                 "status": "unavailable",
                 "method": "gh",
-                "repo": DEFAULT_REPO,
+                "repo": repo,
                 "message": f"GitHub CLI is not installed or not authenticated for {DEFAULT_HOSTNAME}.",
             }
         )
         return 0
-
-    issue_url, gh_error = create_issue_with_gh(gh_path, title, body)
+    issue_url, gh_error = create_issue_with_gh(gh_path, repo, title, body)
     if issue_url is not None:
         print_result(
             {
                 "status": "created",
                 "method": "gh",
-                "repo": DEFAULT_REPO,
+                "repo": repo,
                 "issue_url": issue_url,
             }
         )
@@ -285,7 +299,7 @@ def file_with_gh(title: str, body: str) -> int:
         {
             "status": "failed",
             "method": "gh",
-            "repo": DEFAULT_REPO,
+            "repo": repo,
             "gh_error": gh_error,
         }
     )
@@ -296,12 +310,13 @@ def main() -> int:
     args = parse_args()
 
     title = normalize_title(args.title)
+    repo = normalize_repo(args.repo)
     body = normalize_body(read_text(args.body_file, "body"))
 
     if args.use_method == "browser":
-        return fallback_to_browser(title, body)
+        return fallback_to_browser(repo, title, body)
     # argparse enforces choices=["gh", "browser"], so the remaining case is "gh".
-    return file_with_gh(title, body)
+    return file_with_gh(repo, title, body)
 
 
 if __name__ == "__main__":

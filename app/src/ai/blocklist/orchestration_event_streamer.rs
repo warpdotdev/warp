@@ -1,26 +1,10 @@
-use super::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
-use super::orchestration_events::{
-    build_lifecycle_event, LifecycleEventDetailPayload, LifecycleEventDetailStage,
-    OrchestrationEventService, PendingEvent, PendingEventDetail,
-};
-use crate::ai::agent::{
-    conversation::{AIAgentHarness, AIConversationId, ConversationStatus},
-    AIAgentExchangeId, AIAgentOutputMessageType, ReceivedMessageInput,
-};
-use crate::ai::agent_events::{
-    run_agent_event_driver, AgentEventConsumer, AgentEventConsumerControlFlow,
-    AgentEventDriverConfig, AgentMessageEventMetadata, MessageHydrator, ServerApiAgentEventSource,
-};
-use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::server::retry_strategies::is_transient_http_error;
-use crate::server::server_api::ai::{AIClient, AgentRunEvent};
-use crate::server::server_api::{ServerApi, ServerApiProvider};
-use anyhow::anyhow;
-use async_trait::async_trait;
-use futures::channel::mpsc;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
+
+use anyhow::anyhow;
+use async_trait::async_trait;
+use futures::channel::mpsc;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
@@ -29,6 +13,22 @@ use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
     Entity, EntityId, GetSingletonModelHandle, ModelContext, SingletonEntity, UpdateModel,
 };
+
+use super::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use super::orchestration_events::{
+    build_lifecycle_event, LifecycleEventDetailPayload, LifecycleEventDetailStage,
+    OrchestrationEventService, PendingEvent, PendingEventDetail,
+};
+use crate::ai::agent::conversation::{AIAgentHarness, AIConversationId, ConversationStatus};
+use crate::ai::agent::{AIAgentExchangeId, AIAgentOutputMessageType, ReceivedMessageInput};
+use crate::ai::agent_events::{
+    run_agent_event_driver, AgentEventConsumer, AgentEventConsumerControlFlow,
+    AgentEventDriverConfig, AgentMessageEventMetadata, MessageHydrator, ServerApiAgentEventSource,
+};
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::server::retry_strategies::is_transient_http_error;
+use crate::server::server_api::ai::{AIClient, AgentRunEvent};
+use crate::server::server_api::{ServerApi, ServerApiProvider};
 
 /// Backoff schedule (seconds) for the post-restore
 /// `get_ambient_agent_task` retry on transient errors: 1s, 2s, 5s, then 10s max.
@@ -471,7 +471,8 @@ impl OrchestrationEventStreamer {
             | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. }
             | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
             | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
-            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. } => {}
+            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
+            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => {}
         }
     }
 

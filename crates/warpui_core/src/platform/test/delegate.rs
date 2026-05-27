@@ -1,32 +1,31 @@
-use crate::clipboard::InMemoryClipboard;
-use crate::fonts::FamilyId;
-use crate::geometry;
-use crate::keymap::Keystroke;
-use crate::modals::{AlertDialog, ModalId};
-use crate::platform::{
-    self,
-    file_picker::{FilePickerCallback, FilePickerConfiguration},
-    Cursor, RequestNotificationPermissionsCallback, SendNotificationErrorCallback,
-    WindowFocusBehavior, WindowOptions,
-};
-use crate::platform::{MicrophoneAccessState, TerminationMode, TextLayoutSystem};
-use crate::text_layout::TextAlignment;
-use crate::windowing::WindowCallbacks;
-use crate::{accessibility::AccessibilityContent, notification::UserNotification, Scene, WindowId};
-use crate::{ApplicationBundleInfo, DisplayId, DisplayIdx, OptionalPlatformWindow};
-use anyhow::Result;
-use parking_lot::Mutex;
-use pathfinder_geometry::rect::RectI;
-use pathfinder_geometry::vector::{vec2i, Vector2I};
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
-};
 use std::any::Any;
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
+
+use anyhow::Result;
+use parking_lot::Mutex;
+use pathfinder_geometry::rect::{RectF, RectI};
+use pathfinder_geometry::vector::{vec2f, vec2i, Vector2F, Vector2I};
+
+use crate::accessibility::AccessibilityContent;
+use crate::clipboard::InMemoryClipboard;
+use crate::fonts::FamilyId;
+use crate::keymap::Keystroke;
+use crate::modals::{AlertDialog, ModalId};
+use crate::notification::UserNotification;
+use crate::platform::file_picker::{FilePickerCallback, FilePickerConfiguration};
+use crate::platform::{
+    self, Cursor, MicrophoneAccessState, RequestNotificationPermissionsCallback,
+    SendNotificationErrorCallback, TerminationMode, TextLayoutSystem, WindowFocusBehavior,
+    WindowOptions,
+};
+use crate::text_layout::TextAlignment;
+use crate::windowing::WindowCallbacks;
+use crate::{
+    geometry, ApplicationBundleInfo, DisplayId, DisplayIdx, OptionalPlatformWindow, Scene, WindowId,
+};
 
 pub struct AppDelegate {
     clipboard: InMemoryClipboard,

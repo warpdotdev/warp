@@ -1,85 +1,77 @@
-use crate::code::editor::scroll::ScrollPosition;
-use crate::code::editor::view::CodeEditorRenderOptions;
-use crate::code::editor_management::CodeEditorStatus;
-use crate::code::global_buffer_model::GlobalBufferModel;
-use crate::code::local_code_editor::ShowFindReferencesCard;
-use crate::code::{ImmediateSaveError, SaveOutcome, SaveStatus};
-use crate::editor::InteractionState;
-use crate::input::Vector2F;
-use crate::pane_group::focus_state::PaneFocusHandle;
-use crate::pane_group::pane::view::header::components::{
-    render_pane_header_buttons, render_pane_header_title_text, render_three_column_header,
-    CenteredHeaderEdgeWidth,
-};
-use crate::pane_group::pane::view::header::render_pane_header_draggable;
-use crate::pane_group::{CodePane, PaneConfigurationEvent, PaneDragDropLocation};
-use crate::quit_warning::UnsavedStateSummary;
-use crate::server::telemetry::CodeContextDestination;
-use crate::terminal::cli_agent::{
-    build_selection_line_range_prompt, build_selection_substring_prompt,
-};
-use crate::terminal::view::CliAgentRouting;
-use crate::workspace::util::get_context_target_terminal_view;
-use crate::workspace::TabBarDropTargetData;
-use crate::{code::EditorTabBarDropTargetData, pane_group::pane::ActionOrigin};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
 use lsp::LspManagerModel;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::ICON_DIMENSIONS;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_util::path::LineAndColumnArg;
-use warpui::elements::Rect;
-use warpui::fonts::Style;
-use warpui::text::point::Point;
-use warpui::text_layout::ClipConfig;
-
 #[cfg(feature = "local_fs")]
 use warpui::clipboard::ClipboardContent;
+use warpui::elements::{
+    AcceptedByDropTarget, Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox,
+    Container, CornerRadius, CrossAxisAlignment, Draggable, DraggableState, DropTarget, Empty,
+    Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Rect,
+    SavePosition, Shrinkable, Stack, Text,
+};
+use warpui::fonts::{Properties, Style, Weight};
+use warpui::keymap::EditableBinding;
+use warpui::text::point::Point;
+use warpui::text_layout::ClipConfig;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::UiComponent;
 use warpui::{
-    elements::{
-        AcceptedByDropTarget, Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox,
-        Container, CornerRadius, CrossAxisAlignment, Draggable, DraggableState, DropTarget, Empty,
-        Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-        OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
-        SavePosition, Shrinkable, Stack, Text,
-    },
-    fonts::{Properties, Weight},
-    id,
-    keymap::EditableBinding,
-    ui_components::{button::ButtonVariant, components::UiComponent},
-    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle, WindowId,
+    id, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle, WindowId,
 };
 
-use crate::{
-    menu::{MenuItem, MenuItemFields},
-    notebooks::file::{is_markdown_file, MarkdownDisplayMode},
-    search::{files::icon::icon_from_file_path, ItemHighlightState},
-    tab::TAB_BAR_BORDER_HEIGHT,
-    ui_components::{blended_colors, buttons::icon_button},
-    view_components::{DismissibleToast, MarkdownToggleEvent, MarkdownToggleView},
-    workspace::{ActiveSession, ToastStack, WorkspaceAction},
+use super::buffer_location::LocalOrRemotePath;
+use super::diff_viewer::DiffViewer;
+use super::editor::view::{CodeEditorEvent, CodeEditorView};
+use super::editor_management::{CodeManager, CodeSource};
+use super::local_code_editor::{LocalCodeEditorEvent, LocalCodeEditorView};
+use crate::code::editor::scroll::ScrollPosition;
+use crate::code::editor::view::CodeEditorRenderOptions;
+use crate::code::editor_management::CodeEditorStatus;
+use crate::code::global_buffer_model::GlobalBufferModel;
+use crate::code::local_code_editor::ShowFindReferencesCard;
+use crate::code::{EditorTabBarDropTargetData, ImmediateSaveError, SaveOutcome, SaveStatus};
+use crate::editor::InteractionState;
+use crate::input::Vector2F;
+use crate::menu::{MenuItem, MenuItemFields};
+use crate::notebooks::file::{is_markdown_file, MarkdownDisplayMode};
+use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::pane::view::header::components::{
+    render_pane_header_buttons, render_pane_header_title_text, render_three_column_header,
+    CenteredHeaderEdgeWidth,
 };
-
+use crate::pane_group::pane::view::header::render_pane_header_draggable;
+use crate::pane_group::pane::{view, ActionOrigin, PaneHeaderAction};
 use crate::pane_group::{
-    pane::{view, PaneHeaderAction},
-    BackingView, PaneConfiguration, PaneEvent,
+    BackingView, CodePane, PaneConfiguration, PaneConfigurationEvent, PaneDragDropLocation,
+    PaneEvent,
 };
-
-use super::{
-    buffer_location::LocalOrRemotePath,
-    diff_viewer::DiffViewer,
-    editor::view::{CodeEditorEvent, CodeEditorView},
-    editor_management::{CodeManager, CodeSource},
-    local_code_editor::{LocalCodeEditorEvent, LocalCodeEditorView},
+use crate::quit_warning::UnsavedStateSummary;
+use crate::search::files::icon::icon_from_file_path;
+use crate::search::ItemHighlightState;
+use crate::server::telemetry::CodeContextDestination;
+use crate::tab::TAB_BAR_BORDER_HEIGHT;
+use crate::terminal::cli_agent::{
+    build_selection_line_range_prompt, build_selection_substring_prompt,
 };
-
+use crate::terminal::view::CliAgentRouting;
+use crate::ui_components::blended_colors;
+use crate::ui_components::buttons::icon_button;
+use crate::util::path::{display_name_with_host, display_path_with_host};
+use crate::view_components::{DismissibleToast, MarkdownToggleEvent, MarkdownToggleView};
+use crate::workspace::util::get_context_target_terminal_view;
+use crate::workspace::{ActiveSession, TabBarDropTargetData, ToastStack, WorkspaceAction};
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 type SaveCallback =
@@ -227,6 +219,11 @@ pub enum PendingSaveIntent {
 }
 
 impl TabData {
+    /// Returns the file location (local or remote), if any.
+    pub fn location(&self) -> Option<&LocalOrRemotePath> {
+        self.location.as_ref()
+    }
+
     /// Returns the local filesystem path, if this tab is backed by a local file.
     /// Returns `None` for remote files and untitled tabs.
     pub fn local_path(&self) -> Option<PathBuf> {
@@ -281,15 +278,11 @@ impl CodeView {
 
     #[cfg(feature = "local_fs")]
     fn update_markdown_mode_segmented_control(&mut self, ctx: &mut ViewContext<Self>) {
-        let path = self
-            .local_path(ctx)
-            .or_else(|| {
-                self.tab_at(self.active_tab_index)
-                    .and_then(|t| t.local_path())
-            })
-            .or_else(|| self.source.path());
-
-        let is_markdown = path.as_ref().map(is_markdown_file).unwrap_or(false);
+        let is_markdown = self
+            .tab_at(self.active_tab_index)
+            .and_then(|t| t.location.as_ref())
+            .map(|loc| is_markdown_file(std::path::Path::new(&loc.display_path())))
+            .unwrap_or(false);
 
         if !is_markdown {
             self.markdown_mode_segmented_control = None;
@@ -828,8 +821,7 @@ impl CodeView {
             .is_some_and(|t| t.editor_view.as_ref(ctx).is_new_file());
 
         let title = match &file_location {
-            Some(LocalOrRemotePath::Local(path)) => path.display().to_string(),
-            Some(LocalOrRemotePath::Remote(remote_path)) => remote_path.path.as_str().to_string(),
+            Some(location) => display_path_with_host(location, false, ctx),
             None => "Untitled".to_string(),
         };
 
@@ -870,6 +862,14 @@ impl CodeView {
             Err(ImmediateSaveError::NoFileId) => {
                 // If there's no file ID, this is a new file - trigger Save As
                 self.save_as(index, callback, ctx)
+            }
+            Err(ImmediateSaveError::RemoteDisconnected) => {
+                log::warn!("Cannot save: remote session disconnected");
+                CodeView::display_remote_disconnected_save_failure(ctx.window_id(), ctx);
+                if let Some(callback) = callback {
+                    callback(SaveOutcome::Failed, self, ctx);
+                }
+                SaveStatus::Failed(ImmediateSaveError::RemoteDisconnected)
             }
             Err(err) => {
                 log::warn!("Failed to save file. {err:?}");
@@ -931,6 +931,15 @@ impl CodeView {
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
             let toast = DismissibleToast::error(String::from("Failed to save file."))
                 .with_object_id("failed_to_save_file".to_string());
+            toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+        });
+    }
+
+    fn display_remote_disconnected_save_failure(window_id: WindowId, ctx: &mut ViewContext<Self>) {
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            let toast =
+                DismissibleToast::error(String::from("Cannot save — remote session disconnected."))
+                    .with_object_id("failed_to_save_file_remote_disconnected".to_string());
             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
         });
     }
@@ -1135,7 +1144,7 @@ impl CodeView {
             let file_name = tab
                 .location
                 .as_ref()
-                .map(|loc| loc.display_name().to_string())
+                .map(|loc| display_name_with_host(loc, ctx))
                 .filter(|n| !n.is_empty());
             let summary = UnsavedStateSummary::for_editor_tab(
                 file_name,
@@ -1482,6 +1491,7 @@ impl CodeView {
         is_hovered: bool,
         has_unsaved_changes: bool,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let text_color = if is_active {
@@ -1497,7 +1507,7 @@ impl CodeView {
         let file_name = tab_data
             .location
             .as_ref()
-            .map(|loc| loc.display_name().to_string())
+            .map(|loc| display_name_with_host(loc, app))
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| "Untitled".to_string());
         let language_icon =
@@ -1533,6 +1543,7 @@ impl CodeView {
         )
         .with_color(text_color)
         .with_style(style)
+        .with_clip(ClipConfig::start())
         .finish();
         row.add_child(
             Shrinkable::new(
@@ -1713,6 +1724,7 @@ impl CodeView {
                             tab_handle.is_hovered(),
                             Self::has_unsaved_changes(tab_data, app),
                             appearance,
+                            app,
                         ))
                         .with_horizontal_margin(TAB_HORIZONTAL_MARGIN)
                         .with_padding(Padding::uniform(TAB_PADDING))
@@ -1874,7 +1886,7 @@ impl CodeView {
             .and_then(|tab| {
                 tab.location
                     .as_ref()
-                    .map(|loc| loc.display_name().to_string())
+                    .map(|loc| display_name_with_host(loc, app))
                     .filter(|n| !n.is_empty())
             })
             .unwrap_or_else(|| "Untitled".to_string());
@@ -1944,10 +1956,10 @@ impl CodeView {
                 let mut stack = Stack::new();
                 stack.add_child(title_row.finish());
                 if hover_state.is_hovered() {
-                    let tooltip_relative_path = tab
-                        .and_then(|tab| tab.local_path())
-                        .map(|p| Self::relative_path(p, self.window_id, app));
-                    if let Some(ref path) = tooltip_relative_path {
+                    let tooltip_path = tab
+                        .and_then(|tab| tab.location())
+                        .map(|loc| loc.display_path());
+                    if let Some(ref path) = tooltip_path {
                         let tooltip = appearance
                             .ui_builder()
                             .tool_tip(path.clone())
@@ -2024,25 +2036,45 @@ impl CodeView {
         ];
 
         #[cfg(feature = "local_fs")]
-        if let Some(path) = self.local_path(ctx) {
-            let reveal_label = if cfg!(target_os = "macos") {
-                "Reveal in Finder"
-            } else if cfg!(target_os = "windows") {
-                "Reveal in Explorer"
-            } else {
-                "Reveal in file manager"
-            };
-            items.extend([
-                MenuItem::Separator,
-                MenuItemFields::new("Copy file path")
-                    .with_on_select_action(CodeViewAction::CopyFilePath)
-                    .into_item(),
-                MenuItemFields::new(reveal_label)
-                    .with_on_select_action(CodeViewAction::RevealInFinder)
-                    .into_item(),
-            ]);
+        {
+            let active_location = self
+                .tab_at(self.active_tab_index)
+                .and_then(|t| t.location.as_ref());
+            let local_path = self.local_path(ctx);
 
-            if is_markdown_file(&path) {
+            if active_location.is_some() {
+                items.push(MenuItem::Separator);
+                items.push(
+                    MenuItemFields::new("Copy file path")
+                        .with_on_select_action(CodeViewAction::CopyFilePath)
+                        .into_item(),
+                );
+            }
+
+            if local_path.is_some() {
+                let reveal_label = if cfg!(target_os = "macos") {
+                    "Reveal in Finder"
+                } else if cfg!(target_os = "windows") {
+                    "Reveal in Explorer"
+                } else {
+                    "Reveal in file manager"
+                };
+                items.push(
+                    MenuItemFields::new(reveal_label)
+                        .with_on_select_action(CodeViewAction::RevealInFinder)
+                        .into_item(),
+                );
+            }
+
+            let is_md = local_path
+                .as_ref()
+                .map(is_markdown_file)
+                .unwrap_or_else(|| {
+                    active_location
+                        .map(|loc| is_markdown_file(std::path::Path::new(&loc.display_path())))
+                        .unwrap_or(false)
+                });
+            if is_md {
                 items.push(
                     MenuItemFields::new("View Markdown preview")
                         .with_on_select_action(CodeViewAction::RenderMarkdown)
@@ -2195,9 +2227,12 @@ impl TypedActionView for CodeView {
 
             #[cfg(feature = "local_fs")]
             CodeViewAction::CopyFilePath => {
-                if let Some(path) = self.local_path(ctx) {
+                if let Some(location) = self
+                    .tab_at(self.active_tab_index)
+                    .and_then(|t| t.location.as_ref())
+                {
                     ctx.clipboard()
-                        .write(ClipboardContent::plain_text(path.display().to_string()));
+                        .write(ClipboardContent::plain_text(location.display_path()));
                 }
             }
             #[cfg(feature = "local_fs")]
@@ -2212,12 +2247,11 @@ impl TypedActionView for CodeView {
             }
             #[cfg(feature = "local_fs")]
             CodeViewAction::RenderMarkdown => {
-                let path = self.local_path(ctx).or_else(|| {
-                    self.tab_at(self.active_tab_index)
-                        .and_then(|t| t.local_path())
-                });
+                let lor_path = self
+                    .tab_at(self.active_tab_index)
+                    .and_then(|t| t.location.clone());
 
-                if let Some(path) = path {
+                if let Some(lor_path) = lor_path {
                     let source = self.source.clone();
                     if self.active_tab_has_unsaved_changes(ctx) {
                         self.save_local(
@@ -2225,7 +2259,7 @@ impl TypedActionView for CodeView {
                             Some(Box::new(move |outcome, _me, ctx| {
                                 if outcome != SaveOutcome::Canceled {
                                     ctx.emit(CodeViewEvent::Pane(PaneEvent::ReplaceWithFilePane {
-                                        path: path.clone(),
+                                        path: lor_path.clone(),
                                         source: Some(source.clone()),
                                     }));
                                 }
@@ -2234,7 +2268,7 @@ impl TypedActionView for CodeView {
                         );
                     } else {
                         ctx.emit(CodeViewEvent::Pane(PaneEvent::ReplaceWithFilePane {
-                            path,
+                            path: lor_path,
                             source: Some(source),
                         }));
                     }

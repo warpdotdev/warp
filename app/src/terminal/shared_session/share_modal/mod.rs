@@ -1,10 +1,3 @@
-use crate::modal::Modal;
-
-use crate::modal::ModalEvent;
-use crate::pane_group::TerminalPaneId;
-use crate::terminal::TerminalModel;
-use crate::ui_components::icons::Icon;
-
 use std::default::Default;
 use std::sync::Arc;
 
@@ -12,14 +5,17 @@ use parking_lot::FairMutex;
 use style::{DENIED_MODAL_WIDTH, MODAL_HEIGHT, MODAL_WIDTH};
 use warp_core::ui::appearance::Appearance;
 use warpui::keymap::FixedBinding;
-use warpui::EntityId;
-
 use warpui::presenter::ChildView;
 use warpui::ui_components::components::UiComponentStyles;
-use warpui::AppContext;
-use warpui::SingletonEntity;
-use warpui::ViewHandle;
-use warpui::{Element, Entity, TypedActionView, View, ViewContext};
+use warpui::{
+    AppContext, Element, Entity, EntityId, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
+
+use crate::modal::{Modal, ModalEvent};
+use crate::pane_group::TerminalPaneId;
+use crate::terminal::TerminalModel;
+use crate::ui_components::icons::Icon;
 
 mod body;
 mod denied_body;
@@ -29,7 +25,6 @@ use body::Body;
 use denied_body::{DeniedBody, DeniedBodyEvent};
 
 use self::body::BodyEvent;
-
 use super::{SharedSessionActionSource, SharedSessionScrollbackType};
 
 const MODAL_HEADER: &str = "Share session";

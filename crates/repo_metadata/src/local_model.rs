@@ -4,11 +4,9 @@
 //! This module provides a singleton model that manages repository metadata across
 //! all repositories tracked by Warp.
 
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use futures::future::{self, BoxFuture, FutureExt as _};
 use warp_core::{safe_warn, send_telemetry_from_ctx};
@@ -24,16 +22,14 @@ pub enum RepoContent<'a> {
 
 use warp_util::standardized_path::StandardizedPath;
 
-use crate::{
-    entry::{BuildTreeError, Entry, FileId, IgnoredPathStrategy},
-    gitignores_for_directory, matches_gitignores,
-    repository::Repository,
-    telemetry::RepoMetadataTelemetryEvent,
-    RepoMetadataError,
-};
+use crate::entry::{BuildTreeError, Entry, FileId, IgnoredPathStrategy};
+use crate::repository::Repository;
+use crate::telemetry::RepoMetadataTelemetryEvent;
+use crate::{gitignores_for_directory, matches_gitignores, RepoMetadataError};
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
-        use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
+        use notify_debouncer_full::notify::RecursiveMode;
+        use crate::entry::repo_watch_filter;
         use crate::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
         use warpui::SingletonEntity as _;
@@ -43,6 +39,9 @@ cfg_if::cfg_if! {
     }
 }
 
+use ignore::gitignore::Gitignore;
+use warpui::ModelContext;
+
 use crate::file_tree_store::{
     FileTreeDirectoryEntryState, FileTreeEntry, FileTreeEntryState, FileTreeFileMetadata,
     FileTreeState,
@@ -51,8 +50,6 @@ use crate::file_tree_update::{
     flatten_entry_metadata, DirectoryNodeMetadata, FileNodeMetadata, FileTreeEntryUpdate,
     RepoMetadataUpdate, RepoNodeMetadata,
 };
-use ignore::gitignore::Gitignore;
-use warpui::ModelContext;
 
 /// Maximum depth to traverse when building file trees
 const MAX_TREE_DEPTH: usize = 200;
@@ -400,13 +397,9 @@ impl LocalRepoMetadataModel {
             if let Some(ref watcher) = self.watcher {
                 let watch_path = local_path.clone();
                 watcher.update(ctx, |watcher, _ctx| {
-                    use crate::entry::should_ignore_git_path;
-                    let watch_filter = WatchFilter::with_filter(Arc::new(move |watch_path| {
-                        !should_ignore_git_path(watch_path)
-                    }));
                     std::mem::drop(watcher.register_path(
                         &watch_path,
-                        watch_filter,
+                        repo_watch_filter(),
                         RecursiveMode::Recursive,
                     ));
                 });
@@ -616,7 +609,7 @@ impl LocalRepoMetadataModel {
                 let mut files = Vec::new();
                 let mut gitignores = gitignores.to_owned();
                 let mut file_limit = MAX_FILES_PER_REPO;
-                match Entry::build_tree(
+                match Entry::build_tree_with_ignored_ancestor(
                     path_to_add,
                     &mut files,
                     &mut gitignores,
@@ -624,6 +617,7 @@ impl LocalRepoMetadataModel {
                     MAX_TREE_DEPTH,
                     0,
                     &IgnoredPathStrategy::IncludeLazy,
+                    is_ignored,
                 ) {
                     Ok(subtree) => {
                         mutations.push(FileTreeMutation::AddDirectorySubtree {

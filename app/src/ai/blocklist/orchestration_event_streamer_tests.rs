@@ -1,3 +1,8 @@
+use std::sync::Arc;
+
+use mockall::predicate::eq;
+use warpui::App;
+
 use super::*;
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent_events::{
@@ -9,9 +14,6 @@ use crate::server::server_api::ai::MockAIClient;
 use crate::server::server_api::ServerApiProvider;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
-use mockall::predicate::eq;
-use std::sync::Arc;
-use warpui::App;
 
 #[test]
 fn sse_backoff_escalates_then_caps() {
@@ -153,6 +155,7 @@ fn ai_conversation_new_restored_preserves_last_event_sequence() {
         orchestration_harness_type: None,
         parent_conversation_id: None,
         is_remote_child: false,
+        root_task_is_optimistic: None,
         run_id: None,
         autoexecute_override: None,
         last_event_sequence: Some(42),
@@ -187,6 +190,7 @@ fn make_ambient_task_with_event_seq(
         created_at: Utc::now(),
         started_at: Some(Utc::now()),
         updated_at: Utc::now(),
+        run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: None,
         session_id: None,
@@ -206,11 +210,12 @@ fn make_ambient_task_with_event_seq(
 fn make_server_metadata_with_harness(
     harness: AIAgentHarness,
 ) -> crate::ai::agent::conversation::ServerAIConversationMetadata {
+    use chrono::Utc;
+
     use crate::ai::agent::api::ServerConversationToken;
     use crate::cloud_object::{Revision, ServerMetadata, ServerPermissions};
     use crate::persistence::model::ConversationUsageMetadata;
     use crate::server::ids::ServerId;
-    use chrono::Utc;
 
     crate::ai::agent::conversation::ServerAIConversationMetadata {
         title: "test".to_string(),
@@ -244,11 +249,13 @@ fn make_server_metadata_with_harness(
 
 #[test]
 fn dormant_local_claude_child_skips_generic_sse_but_allows_wake_listener() {
+    use std::sync::Arc;
+
+    use warpui::App;
+
     use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
     use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
-    use std::sync::Arc;
-    use warpui::App;
 
     App::test((), |mut app| async move {
         let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
@@ -304,14 +311,16 @@ fn dormant_local_claude_child_skips_generic_sse_but_allows_wake_listener() {
 
 #[test]
 fn persist_event_cursor_keeps_the_max_sequence_and_updates_history_model() {
+    use std::sync::Arc;
+
+    use warpui::App;
+
     use crate::ai::agent::conversation::{AIConversation, AIConversationId};
     use crate::persistence::ModelEvent;
     use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
     use crate::test_util::settings::initialize_settings_for_tests;
     use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
-    use std::sync::Arc;
-    use warpui::App;
 
     App::test((), |mut app| async move {
         let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
@@ -373,12 +382,14 @@ fn persist_event_cursor_keeps_the_max_sequence_and_updates_history_model() {
 
 #[test]
 fn wake_ready_does_not_advance_cursor_before_wake_preparation() {
+    use std::sync::Arc;
+
+    use warpui::App;
+
     use crate::ai::agent::conversation::AIConversation;
     use crate::ai::agent_events::AgentMessageEventMetadata;
     use crate::server::server_api::ai::{AIClient, MockAIClient};
     use crate::server::server_api::ServerApiProvider;
-    use std::sync::Arc;
-    use warpui::App;
 
     App::test((), |mut app| async move {
         let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
@@ -436,12 +447,14 @@ fn wake_ready_does_not_advance_cursor_before_wake_preparation() {
 
 #[test]
 fn dormant_local_claude_child_uses_task_harness_when_server_metadata_missing() {
+    use std::sync::Arc;
+
+    use warp_cli::agent::Harness;
+    use warpui::App;
+
     use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
     use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
-    use std::sync::Arc;
-    use warp_cli::agent::Harness;
-    use warpui::App;
 
     App::test((), |mut app| async move {
         let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
@@ -565,11 +578,13 @@ async fn dormant_claude_wake_consumer_stops_on_first_target_event() {
 
 #[test]
 fn restored_conversations_skip_v2_streaming_when_orchestration_v2_disabled() {
+    use std::sync::Arc;
+
+    use warpui::App;
+
     use crate::ai::agent::conversation::AIConversation;
     use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
-    use std::sync::Arc;
-    use warpui::App;
 
     App::test((), |mut app| async move {
         let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(false);
@@ -668,11 +683,13 @@ async fn sse_forwarding_consumer_skips_message_hydration_when_disabled() {
 }
 #[test]
 fn finish_restore_fetch_uses_server_cursor_when_sqlite_is_absent() {
+    use std::sync::Arc;
+
+    use warpui::App;
+
     use crate::ai::agent::conversation::AIConversation;
     use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
-    use std::sync::Arc;
-    use warpui::App;
 
     App::test((), |mut app| async move {
         let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
@@ -727,14 +744,16 @@ fn finish_restore_fetch_uses_server_cursor_when_sqlite_is_absent() {
 
 #[test]
 fn handle_event_batch_persists_max_seq_to_history_model() {
+    use std::sync::Arc;
+
+    use warpui::App;
+
     use crate::ai::agent::conversation::{AIConversation, AIConversationId};
     use crate::persistence::ModelEvent;
     use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
     use crate::test_util::settings::initialize_settings_for_tests;
     use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
-    use std::sync::Arc;
-    use warpui::App;
 
     App::test((), |mut app| async move {
         let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
@@ -961,11 +980,13 @@ fn finish_restore_fetch_no_ops_when_conversation_deleted_mid_flight() {
     // RemoveConversation handler removes the streams entry. finish_restore_fetch
     // uses the missing entry as a sentinel and must not re-populate
     // streamer state for the deleted conversation.
+    use std::sync::Arc;
+
+    use warpui::App;
+
     use crate::ai::agent::conversation::AIConversation;
     use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
-    use std::sync::Arc;
-    use warpui::App;
 
     App::test((), |mut app| async move {
         let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
@@ -1030,11 +1051,13 @@ fn finish_restore_fetch_err_does_not_resurrect_deleted_conversation() {
     // was just removed must not resurrect a streams entry (which would then
     // defeat the deletion sentinel inside the retry timer and cause an
     // indefinite retry loop).
+    use std::sync::Arc;
+
+    use warpui::App;
+
     use crate::ai::agent::conversation::AIConversation;
     use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
-    use std::sync::Arc;
-    use warpui::App;
 
     App::test((), |mut app| async move {
         let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
@@ -1095,11 +1118,13 @@ fn on_conversation_removed_prunes_stale_child_run_id_from_parent() {
     // filter. Previously the streamer looked up the run_id from the history
     // model after the removal, which always returned `None` because the
     // history model emits `RemoveConversation` after dropping the record.
+    use std::sync::Arc;
+
+    use warpui::App;
+
     use crate::ai::agent::conversation::AIConversation;
     use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
-    use std::sync::Arc;
-    use warpui::App;
 
     App::test((), |mut app| async move {
         let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
@@ -1154,11 +1179,13 @@ fn on_conversation_removed_prunes_stale_child_run_id_from_parent() {
 
 #[test]
 fn on_conversation_removed_prunes_killed_child_run_id_from_parent_but_keeps_tombstone() {
+    use std::sync::Arc;
+
+    use warpui::App;
+
     use crate::ai::agent::conversation::AIConversation;
     use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
-    use std::sync::Arc;
-    use warpui::App;
 
     App::test((), |mut app| async move {
         let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
@@ -1205,11 +1232,13 @@ fn finish_restore_fetch_reconnects_sse_when_children_added_to_open_connection() 
     // When a status transition races with the restore fetch and opens SSE
     // before children are known, finish_restore_fetch must reconnect SSE
     // with the updated run_id set rather than leaving children unwatched.
+    use std::sync::Arc;
+
+    use warpui::App;
+
     use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
     use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
-    use std::sync::Arc;
-    use warpui::App;
 
     App::test((), |mut app| async move {
         let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
@@ -1286,14 +1315,14 @@ fn finish_restore_fetch_reconnects_sse_when_children_added_to_open_connection() 
             );
             // The old generation-0 connection must have been replaced by a
             // new one with a higher generation, proving SSE was reconnected.
-            let gen = me
+            let generation = me
                 .streams
                 .get(&conversation_id)
                 .and_then(|s| s.sse_connection.as_ref())
                 .map(|c| c.generation);
             assert!(
-                gen.is_some_and(|g| g > 0),
-                "SSE must be reconnected (new generation) after children are discovered; got gen={gen:?}"
+                generation.is_some_and(|g| g > 0),
+                "SSE must be reconnected (new generation) after children are discovered; got generation={generation:?}"
             );
         });
     });

@@ -1,23 +1,19 @@
-use std::{
-    collections::{hash_map::Entry, HashMap},
-    path::PathBuf,
-};
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+use std::path::PathBuf;
 
-use super::buffer_location::LocalOrRemotePath;
-use crate::ai::skills::SkillOpenOrigin;
 use ai::skills::SkillReference;
 use serde::{Deserialize, Serialize};
 use warp_util::path::LineAndColumnArg;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, ViewHandle, WindowId};
 
-use crate::{
-    ai::agent::AIAgentActionId,
-    code_review::code_review_view::CodeReviewView,
-    pane_group::{PaneGroup, PaneId},
-    workspace::PaneViewLocator,
-};
-
+use super::buffer_location::LocalOrRemotePath;
 use super::view::CodeView;
+use crate::ai::agent::AIAgentActionId;
+use crate::ai::skills::SkillOpenOrigin;
+use crate::code_review::code_review_view::CodeReviewView;
+use crate::pane_group::{PaneGroup, PaneId};
+use crate::workspace::PaneViewLocator;
 
 pub struct CodeEditorSummary<'a> {
     pub unsaved_changes: Vec<&'a CodeEditorStatus>,
@@ -121,6 +117,8 @@ pub enum CodeSource {
     ProjectRules { path: PathBuf },
     /// Opened from file tree (local or remote).
     FileTree { location: LocalOrRemotePath },
+    /// Opened from command palette file search (local or remote).
+    CommandPalette { location: LocalOrRemotePath },
     /// Opened from macOS Finder via "Open With".
     Finder { path: PathBuf },
     /// Opened from a skill.
@@ -141,6 +139,7 @@ impl CodeSource {
             | Self::AIAction { .. }
             | Self::ProjectRules { .. }
             | Self::FileTree { .. }
+            | Self::CommandPalette { .. }
             | Self::Finder { .. }
             | Self::Skill { .. } => None,
         }
@@ -149,10 +148,12 @@ impl CodeSource {
     pub fn path(&self) -> Option<PathBuf> {
         match self {
             Self::New { .. } | Self::AIAction { .. } => None,
-            Self::FileTree { location, .. } => match location {
-                LocalOrRemotePath::Local(path) => Some(path.clone()),
-                LocalOrRemotePath::Remote(_) => None,
-            },
+            Self::FileTree { location, .. } | Self::CommandPalette { location, .. } => {
+                match location {
+                    LocalOrRemotePath::Local(path) => Some(path.clone()),
+                    LocalOrRemotePath::Remote(_) => None,
+                }
+            }
             Self::Link { path, .. }
             | Self::ProjectRules { path }
             | Self::Finder { path }
@@ -163,7 +164,7 @@ impl CodeSource {
     /// Returns the `LocalOrRemotePath` for file tree sources.
     pub fn file_location(&self) -> Option<&LocalOrRemotePath> {
         match self {
-            Self::FileTree { location } => Some(location),
+            Self::FileTree { location } | Self::CommandPalette { location } => Some(location),
             _ => None,
         }
     }
@@ -176,7 +177,9 @@ impl CodeSource {
     pub fn location(&self) -> Option<LocalOrRemotePath> {
         match self {
             Self::New { .. } | Self::AIAction { .. } => None,
-            Self::FileTree { location } => Some(location.clone()),
+            Self::FileTree { location } | Self::CommandPalette { location } => {
+                Some(location.clone())
+            }
             Self::Link { path, .. }
             | Self::ProjectRules { path }
             | Self::Finder { path }
@@ -218,6 +221,10 @@ impl CodeSource {
                 location: LocalOrRemotePath::Remote(_),
             } => "remote_file_tree",
             Self::FileTree { .. } => "file_tree",
+            Self::CommandPalette {
+                location: LocalOrRemotePath::Remote(_),
+            } => "remote_command_palette",
+            Self::CommandPalette { .. } => "command_palette",
             Self::Finder { .. } => "finder",
             Self::Skill { .. } => "skill",
         }
@@ -232,6 +239,9 @@ impl CodeSource {
             self,
             Self::AIAction { .. }
                 | Self::FileTree {
+                    location: LocalOrRemotePath::Remote(_),
+                }
+                | Self::CommandPalette {
                     location: LocalOrRemotePath::Remote(_),
                 }
         )

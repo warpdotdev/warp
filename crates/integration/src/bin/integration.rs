@@ -1,4 +1,5 @@
-use std::{collections::HashMap, env};
+use std::collections::HashMap;
+use std::env;
 
 use anyhow::Result;
 use clap::Parser;
@@ -206,6 +207,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_warp_auto_title_disabled);
     register_test!(test_warp_honors_user_title_bash);
     register_test!(test_warp_honors_user_title_zsh);
+    register_test!(test_osc7_updates_current_working_directory);
     register_test!(test_input_focused_after_executing_command);
     register_test!(test_new_session_focuses_input);
     register_test!(test_executable_completions);

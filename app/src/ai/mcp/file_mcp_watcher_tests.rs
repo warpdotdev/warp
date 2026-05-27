@@ -1,5 +1,6 @@
-use super::substitute_env_vars;
 use std::env;
+
+use super::substitute_env_vars;
 
 fn cleanup_env_vars(vars: &[&str]) {
     for var in vars {

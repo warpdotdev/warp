@@ -1,3 +1,5 @@
+use std::cmp::max;
+
 pub use block_list_element::GridType;
 use model::alt_screen::AltScreen;
 use model::blocks::BlockList;
@@ -6,17 +8,14 @@ pub use model::terminal_model::TerminalModel;
 use ordered_float::Float;
 use pathfinder_geometry::vector::vec2f;
 use serde::{Deserialize, Serialize};
-use std::cmp::max;
 mod package_installers;
 pub(crate) use history::UpArrowHistoryConfig;
-pub use view::Event;
-pub use view::TerminalView;
+pub use history::{History, HistoryEntry, HistoryEvent, ShellHost};
+pub use view::{Event, TerminalView};
 pub use warp_terminal::shell::{self, ShellLaunchData};
 use warpui::geometry::vector::Vector2F;
 use warpui::units::{IntoPixels, Lines, Pixels};
-use warpui::AppContext;
-use warpui::WindowId;
-pub use {history::History, history::HistoryEntry, history::HistoryEvent, history::ShellHost};
+use warpui::{AppContext, WindowId};
 mod block_list_settings;
 
 mod alias;
@@ -40,6 +39,7 @@ pub mod enable_auto_reload_modal;
 pub mod event;
 pub mod event_listener;
 pub mod find;
+pub(crate) mod focus_env;
 pub mod general_settings;
 pub mod grid_renderer;
 pub mod grid_size_util;
@@ -89,19 +89,17 @@ pub mod cli_agent;
 pub use cli_agent::CLIAgent;
 pub(crate) mod cli_agent_sessions;
 
+pub use block_list_settings::*;
 pub use mock_terminal_manager::MockTerminalManager;
 use model_events::{ModelEvent, ModelEventDispatcher};
-pub use share_block_modal::{ShareBlockModal, ShareBlockModalEvent, ShareBlockType};
-pub use terminal_manager::TerminalManager;
-
-pub use block_list_settings::*;
 pub use secret_regex_updater::CustomSecretRegexUpdater;
+pub use share_block_modal::{ShareBlockModal, ShareBlockModalEvent, ShareBlockType};
+pub use shell_launch_state::ShellLaunchState;
+pub use terminal_manager::TerminalManager;
 pub use view::{
     CANCEL_COMMAND_KEYBINDING, TOGGLE_AUTOEXECUTE_MODE_KEYBINDING,
     TOGGLE_HIDE_CLI_RESPONSES_KEYBINDING, TOGGLE_QUEUE_NEXT_PROMPT_KEYBINDING,
 };
-
-pub use shell_launch_state::ShellLaunchState;
 
 /// Minimum number of visible lines.
 const MIN_ROWS: usize = 1;

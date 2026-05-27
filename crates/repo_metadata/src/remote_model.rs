@@ -4,19 +4,18 @@
 //! there is no syncing or indexing — state is populated externally (e.g. by a future
 //! remote client model or via test helpers).
 
-use futures::future::{self, BoxFuture, FutureExt as _};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use futures::future::{self, BoxFuture, FutureExt as _};
 use warp_core::HostId;
 use warpui::ModelContext;
 
+use super::local_model::collect_contents_recursive;
 use crate::file_tree_store::{FileTreeEntry, FileTreeState};
 use crate::file_tree_update::RepoMetadataUpdate;
 use crate::local_model::{GetContentsArgs, IndexedRepoState, RepoContent};
 use crate::repository_identifier::RemoteRepositoryIdentifier;
-
-use super::local_model::collect_contents_recursive;
 
 /// Events emitted by the [`RemoteRepoMetadataModel`].
 #[derive(Debug)]

@@ -1,72 +1,66 @@
-use crate::ai::mcp::file_based_manager::FileBasedMCPManagerEvent;
-use crate::ai::mcp::templatable_manager::oauth::{
-    load_credentials_from_secure_storage, write_to_secure_storage, FILE_BASED_MCP_CREDENTIALS_KEY,
-    TEMPLATABLE_MCP_CREDENTIALS_KEY,
-};
-use crate::ai::mcp::FileBasedMCPManager;
 use core::fmt;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::sync::Arc;
-use std::{collections::HashMap, future::Future};
 
-use crate::ai::mcp::http_client::build_client_with_headers;
-use crate::ai::mcp::templatable::GalleryData;
-use crate::ai::mcp::templatable_manager::FigmaMcpStatus;
-use crate::ai::mcp::{
-    Author, CloudMCPServer, JsonTemplate, MCPGalleryManager, MCPServerUpdate,
-    ParsedTemplatableMCPServerResult,
-};
-
-use crate::ai::mcp::parsing::resolve_json;
-use crate::ai::mcp::TemplatableMCPServer;
-use crate::auth::AuthStateProvider;
-use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
-use crate::cloud_object::{CloudObject, CloudObjectLocation, CloudObjectMetadataExt, Space};
-use crate::server::cloud_objects::update_manager::InitiatedBy;
-use crate::server::ids::{ClientId, ServerId};
-use crate::server::telemetry::{
-    MCPServerModel, MCPServerTelemetryTransportType, MCPTemplateCreationSource,
-};
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{
-    ai::mcp::{
-        logs, templatable::CloudTemplatableMCPServer, templatable_installation::VariableValue,
-        MCPServer, StaticEnvVar, TemplatableMCPServerInstallation, TransportType,
-    },
-    cloud_object::{GenericStringObjectFormat, JsonObjectType},
-    drive::CloudObjectTypeAndId,
-    persistence::{
-        database_file_path_for_scope, establish_ro_connection, ModelEvent, PersistenceScope,
-    },
-    send_telemetry_from_ctx,
-    server::{
-        cloud_objects::update_manager::UpdateManager, ids::SyncId, telemetry::TelemetryEvent,
-    },
-    settings::AISettings,
-    view_components::DismissibleToast,
-    workspace::ToastStack,
-    GlobalResourceHandlesProvider,
-};
 use async_compat::CompatExt as _;
 use cfg_if::cfg_if;
 use futures::FutureExt as _;
 use parking_lot::Mutex;
-use rmcp::{transport::ConfigureCommandExt as _, ServiceExt as _};
+use rmcp::transport::ConfigureCommandExt as _;
+use rmcp::ServiceExt as _;
 use simple_logger::manager::LogManager;
 use simple_logger::SimpleLogger;
 use tokio::io::AsyncBufReadExt as _;
 use uuid::Uuid;
+use warp_core::execution_mode::AppExecutionMode;
+use warp_core::features::FeatureFlag;
 use warp_core::safe_error;
-use warp_core::{execution_mode::AppExecutionMode, features::FeatureFlag, settings::Setting as _};
-use warpui::AppContext;
-use warpui::{windowing::WindowManager, ModelContext, SingletonEntity};
+use warp_core::settings::Setting as _;
+use warpui::windowing::WindowManager;
+use warpui::{AppContext, ModelContext, SingletonEntity};
 
+use super::oauth::{self, AuthContext, FileBasedPersistedCredentialsMap, PersistedCredentialsMap};
+use super::utils::{query_resources_for, query_tools_for};
 use super::{
-    oauth::{self, AuthContext, FileBasedPersistedCredentialsMap, PersistedCredentialsMap},
-    utils::{query_resources_for, query_tools_for},
     MCPServerState, SpawnedServerInfo, TemplatableMCPServerInfo, TemplatableMCPServerManager,
     TemplatableMCPServerManagerEvent,
 };
+use crate::ai::mcp::file_based_manager::FileBasedMCPManagerEvent;
+use crate::ai::mcp::http_client::build_client_with_headers;
+use crate::ai::mcp::parsing::resolve_json;
+use crate::ai::mcp::templatable::{CloudTemplatableMCPServer, GalleryData};
+use crate::ai::mcp::templatable_installation::VariableValue;
+use crate::ai::mcp::templatable_manager::oauth::{
+    load_credentials_from_secure_storage, write_to_secure_storage, FILE_BASED_MCP_CREDENTIALS_KEY,
+    TEMPLATABLE_MCP_CREDENTIALS_KEY,
+};
+use crate::ai::mcp::templatable_manager::FigmaMcpStatus;
+use crate::ai::mcp::{
+    logs, Author, CloudMCPServer, FileBasedMCPManager, JsonTemplate, MCPGalleryManager, MCPServer,
+    MCPServerUpdate, ParsedTemplatableMCPServerResult, StaticEnvVar, TemplatableMCPServer,
+    TemplatableMCPServerInstallation, TransportType,
+};
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
+use crate::cloud_object::{
+    CloudObject, CloudObjectLocation, CloudObjectLookup as _, CloudObjectMetadataExt,
+    CloudObjectUuidLookup as _, GenericStringObjectFormat, JsonObjectType, Space,
+};
+use crate::drive::CloudObjectTypeAndId;
+use crate::persistence::{
+    database_file_path_for_scope, establish_ro_connection, ModelEvent, PersistenceScope,
+};
+use crate::server::cloud_objects::update_manager::{InitiatedBy, UpdateManager};
+use crate::server::ids::{ClientId, ServerId, SyncId};
+use crate::server::telemetry::{
+    MCPServerModel, MCPServerTelemetryTransportType, MCPTemplateCreationSource, TelemetryEvent,
+};
+use crate::settings::AISettings;
+use crate::view_components::DismissibleToast;
+use crate::workspace::ToastStack;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{send_telemetry_from_ctx, GlobalResourceHandlesProvider};
 
 /// Controls the behavior of `spawn_server_impl`.
 enum SpawnMode {
@@ -1422,8 +1416,6 @@ impl TemplatableMCPServerManager {
         servers_to_restart: HashSet<Uuid>,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Import inline because of circular dependencies
-        use crate::ai::mcp::CloudMCPServer;
         let cloud_legacy_servers = CloudMCPServer::get_all(ctx);
         log::info!(
             "Converting {} legacy MCP servers into templatable MCP servers",

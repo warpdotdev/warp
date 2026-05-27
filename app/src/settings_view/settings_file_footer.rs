@@ -7,10 +7,6 @@
 //!   `Workspace::render_settings_error_banner`) when the settings file has an
 //!   error *and* the user has dismissed the workspace banner.
 //! * Otherwise, a plain bordered "Open settings file" button.
-use crate::appearance::Appearance;
-use crate::settings::SettingsFileError;
-use crate::ui_components::icons::Icon;
-use crate::WorkspaceAction;
 use pathfinder_color::ColorU;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::Fill;
@@ -22,6 +18,11 @@ use warpui::elements::{
 };
 use warpui::fonts::{FamilyId, Properties, Weight};
 use warpui::platform::Cursor;
+
+use crate::appearance::Appearance;
+use crate::settings::SettingsFileError;
+use crate::ui_components::icons::Icon;
+use crate::WorkspaceAction;
 
 /// Horizontal + vertical padding applied to the footer inside the sidebar.
 const FOOTER_PADDING: f32 = 12.;

@@ -21,23 +21,21 @@ use std::time::Duration;
 use context_chip::PromptGenerator;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
-use warpui::{
-    color::ColorU,
-    elements::Text,
-    fonts::{Properties, Weight},
-};
-
-use crate::ui_components::{blended_colors, icons::Icon};
-use crate::{appearance::Appearance, features::FeatureFlag, themes::theme::PromptColors};
+use warpui::color::ColorU;
+use warpui::elements::Text;
+use warpui::fonts::{Properties, Weight};
 
 #[allow(unused_imports)]
 pub use self::context_chip::{
     ChipAvailability, ChipDisabledReason, ChipRuntimeCapabilities, ExternalCommandsAvailability,
 };
-use self::{
-    context_chip::{ChipFingerprintInput, ChipRuntimePolicy, ContextChip, RefreshConfig},
-    renderer::RendererStyles,
-};
+use self::context_chip::{ChipFingerprintInput, ChipRuntimePolicy, ContextChip, RefreshConfig};
+use self::renderer::RendererStyles;
+use crate::appearance::Appearance;
+use crate::features::FeatureFlag;
+use crate::themes::theme::PromptColors;
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
 
 /// The value of a context chip. Most chips produce plain text, but some
 /// (like `GitDiffStats`) carry structured data to avoid string round-trips.
@@ -302,30 +300,11 @@ impl ContextChipKind {
                 .with_allow_empty_value(),
             ),
             Self::GithubPullRequest if !FeatureFlag::GithubPrPromptChip.is_enabled() => None,
-            Self::GithubPullRequest => {
-                let generator = builtins::github_pull_request_url();
-                let policy = ChipRuntimePolicy::new(
-                    generator.dependencies().to_vec(),
-                    true,
-                    Some(Duration::from_secs(5)),
-                    [
-                        ChipFingerprintInput::SessionId,
-                        ChipFingerprintInput::WorkingDirectory,
-                        ChipFingerprintInput::GitBranch,
-                        ChipFingerprintInput::RequiredExecutablesPresence,
-                        ChipFingerprintInput::InvalidatingCommandCount,
-                    ],
-                )
-                .with_suppress_on_failure()
-                .with_invalidate_on_commands(["git", "gh", "gt"]);
-                Some(ContextChip::shell_builtin_with_runtime_policy(
-                    "GitHub Pull Request",
-                    generator,
-                    None,
-                    GIT_REFRESH_CONFIG,
-                    policy,
-                ))
-            }
+            Self::GithubPullRequest => Some(ContextChip::builtin(
+                "GitHub Pull Request",
+                |_| None,
+                RefreshConfig::OnDemandOnly,
+            )),
             Self::KubernetesContext => Some(ContextChip::shell_builtin(
                 "Kubernetes Context",
                 builtins::kubernetes_current_context(),

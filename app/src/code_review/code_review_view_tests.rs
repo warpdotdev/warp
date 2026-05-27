@@ -1,3 +1,19 @@
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use ai::agent::action::InsertReviewComment;
+use chrono::Local;
+use lsp::LspManagerModel;
+use repo_metadata::repositories::DetectedRepositories;
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
+use warp_editor::content::buffer::InitialBufferState;
+use warp_editor::render::element::VerticalExpansionBehavior;
+use warp_editor::render::model::LineCount;
+use warpui::elements::{Empty, MouseStateHandle};
+use warpui::platform::WindowStyle;
+use warpui::{App, ViewHandle};
+
 use super::*;
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai::request_usage_model::AIRequestUsageModel;
@@ -14,11 +30,12 @@ use crate::code_review::comments::{
 use crate::code_review::diff_size_limits::DiffSize;
 use crate::code_review::diff_state::{DiffStateModel, FileDiff, GitFileStatus};
 use crate::code_review::editor_state::CodeReviewEditorState;
+use crate::code_review::git_status_update::GitStatusUpdateModel;
 use crate::code_review::GlobalCodeReviewModel;
 use crate::pane_group::WorkingDirectoriesModel;
-use crate::server::server_api::{
-    team::MockTeamClient, workspace::MockWorkspaceClient, ServerApiProvider,
-};
+use crate::server::server_api::team::MockTeamClient;
+use crate::server::server_api::workspace::MockWorkspaceClient;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::terminal::local_shell::LocalShellState;
@@ -28,20 +45,6 @@ use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::ActiveSession;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::NotebookKeybindings;
-use ai::agent::action::InsertReviewComment;
-use chrono::Local;
-use lsp::LspManagerModel;
-use repo_metadata::repositories::DetectedRepositories;
-use std::path::PathBuf;
-use std::sync::Arc;
-use warp_core::features::FeatureFlag;
-use warp_core::ui::appearance::Appearance;
-use warp_editor::content::buffer::InitialBufferState;
-use warp_editor::render::element::VerticalExpansionBehavior;
-use warp_editor::render::model::LineCount;
-use warpui::elements::{Empty, MouseStateHandle};
-use warpui::platform::WindowStyle;
-use warpui::{App, ViewHandle};
 
 #[derive(Default)]
 struct TestView;
@@ -74,6 +77,7 @@ fn initialize_test_app(app: &mut App) {
     app.add_singleton_model(|_| VimRegisters::new());
     app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
     app.add_singleton_model(|_| DetectedRepositories::default());
+    app.add_singleton_model(|_| GitStatusUpdateModel::new());
     app.add_singleton_model(|_| LspManagerModel::new());
     app.add_singleton_model(|_| LocalShellState::NotLoaded);
     app.add_singleton_model(PersistedWorkspace::new_for_test);

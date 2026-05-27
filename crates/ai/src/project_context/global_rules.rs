@@ -1,15 +1,17 @@
-use super::model::{GlobalRulesDelta, ProjectContextModel, ProjectContextModelEvent, ProjectRule};
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
+
 use async_channel::Sender;
 use repo_metadata::repository::{RepositorySubscriber, SubscriberId};
 use repo_metadata::{DirectoryWatcher, Repository, RepositoryUpdate};
-use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use warp_core::safe_warn;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::{ModelContext, ModelHandle, SingletonEntity};
 use watcher::{HomeDirectoryWatcher, HomeDirectoryWatcherEvent};
+
+use super::model::{GlobalRulesDelta, ProjectContextModel, ProjectContextModelEvent, ProjectRule};
 
 /// A well-known location under `$HOME` that may contain a global rule file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter)]

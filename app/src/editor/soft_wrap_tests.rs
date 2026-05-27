@@ -1,5 +1,6 @@
-use super::*;
 use vec1::vec1;
+
+use super::*;
 
 #[test]
 fn test_singleton_frames_displayed_lines() {

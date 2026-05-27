@@ -1,35 +1,25 @@
 mod queries;
-use languages::Language;
-pub use queries::highlight_query::{ColorMap, TextSlice};
-
-use std::{
-    cell::{Ref, RefCell},
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
-
-use parking_lot::Mutex;
+use std::cell::{Ref, RefCell};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use arborium::tree_sitter::{InputEdit, Parser, Tree};
 use futures::stream::AbortHandle;
-use queries::{
-    highlight_query::HighlightQuery,
-    indent_query::{indentation_delta, IndentDelta},
-};
+use languages::Language;
+use parking_lot::Mutex;
+use queries::highlight_query::HighlightQuery;
+pub use queries::highlight_query::{ColorMap, TextSlice};
+use queries::indent_query::{indentation_delta, IndentDelta};
 use rangemap::{RangeMap, RangeSet};
 use string_offset::{ByteOffset, CharOffset};
-use warpui::{color::ColorU, AppContext, Entity, ModelContext, WeakModelHandle};
-
-use warp_editor::{
-    content::{
-        buffer::{Buffer, BufferSnapshot},
-        edit::PreciseDelta,
-        text::IndentUnit,
-        version::BufferVersion,
-    },
-    decoration::DecorationLayer,
-};
+use warp_editor::content::buffer::{Buffer, BufferSnapshot};
+use warp_editor::content::edit::PreciseDelta;
+use warp_editor::content::text::IndentUnit;
+use warp_editor::content::version::BufferVersion;
+use warp_editor::decoration::DecorationLayer;
+use warpui::color::ColorU;
 use warpui::text::point::Point;
+use warpui::{AppContext, Entity, ModelContext, WeakModelHandle};
 
 const MAX_SYNTAX_TREES: usize = 3;
 

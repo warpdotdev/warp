@@ -1,11 +1,13 @@
+use std::fmt::Display;
+use std::str::FromStr;
+
+use serde::{Deserialize, Serialize};
+use uuid::{NonNilUuid, Uuid};
+
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
 use crate::ai::agent::{
     AIAgentOutputStatus, CancellationReason, FinishedAIAgentOutput, RenderableAIError,
 };
-use serde::{Deserialize, Serialize};
-use std::fmt::Display;
-use std::str::FromStr;
-use uuid::{NonNilUuid, Uuid};
 
 pub mod github_auth_notifier;
 pub mod github_auth_url;

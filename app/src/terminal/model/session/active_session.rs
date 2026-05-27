@@ -1,24 +1,17 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-use warp_util::{
-    local_or_remote_path::LocalOrRemotePath, remote_path::RemotePath,
-    standardized_path::StandardizedPath,
-};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 
-use crate::{
-    ai_assistant::execution_context::WarpAiExecutionContext,
-    terminal::{
-        model::session::SessionsEvent,
-        model_events::{ModelEvent, ModelEventDispatcher},
-        shell::ShellType,
-        ShellLaunchData,
-    },
-};
-
 use super::{Session, SessionType, Sessions};
+use crate::ai_assistant::execution_context::WarpAiExecutionContext;
+use crate::terminal::model::session::SessionsEvent;
+use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::terminal::shell::ShellType;
+use crate::terminal::ShellLaunchData;
 
 pub struct ActiveSession {
     model_event_dispatcher: ModelHandle<ModelEventDispatcher>,
@@ -35,11 +28,20 @@ impl ActiveSession {
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&model_event_dispatcher, move |me, event, ctx| {
-            if let ModelEvent::BlockMetadataReceived(block_metadata_received_event) = event {
-                let new_pwd = block_metadata_received_event
-                    .block_metadata
-                    .current_working_directory()
-                    .map(|cwd| cwd.to_owned());
+            let new_pwd = match event {
+                ModelEvent::BlockMetadataReceived(e) => Some(
+                    e.block_metadata
+                        .current_working_directory()
+                        .map(|cwd| cwd.to_owned()),
+                ),
+                ModelEvent::BlockWorkingDirectoryUpdated(e) => Some(
+                    e.block_metadata
+                        .current_working_directory()
+                        .map(|cwd| cwd.to_owned()),
+                ),
+                _ => None,
+            };
+            if let Some(new_pwd) = new_pwd {
                 if me.current_working_directory != new_pwd {
                     me.current_working_directory = new_pwd;
                     ctx.emit(ActiveSessionEvent::UpdatedPwd);

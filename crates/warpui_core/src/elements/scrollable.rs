@@ -1,21 +1,20 @@
+use std::mem;
+use std::sync::{Arc, Mutex, MutexGuard};
+
+use pathfinder_color::ColorU;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+
 use super::{
     AfterLayoutContext, AppContext, Axis, Element, Event, EventContext, Fill, LayoutContext,
     PaintContext, Point, SizeConstraint, Vector2FExt, ZIndex,
 };
 use crate::elements::F32Ext;
-use crate::event::ModifiersState;
+use crate::event::{DispatchedEvent, ModifiersState};
 pub use crate::scene::CornerRadius;
+use crate::scene::Radius;
 use crate::units::{IntoPixels, Pixels};
 use crate::ClipBounds;
-use crate::{event::DispatchedEvent, scene::Radius};
-
-use pathfinder_color::ColorU;
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
-};
-use std::mem;
-use std::sync::{Arc, Mutex, MutexGuard};
 
 pub const LEFT_PADDING: f32 = 2.;
 const RIGHT_PADDING: f32 = 2.;

@@ -3,128 +3,118 @@ pub mod editor;
 mod environment_selector;
 pub mod toolbar_item;
 
-use crate::{
-    ai::{
-        blocklist::{
-            history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel},
-            prompt::prompt_alert::{PromptAlertEvent, PromptAlertView},
-            usage::icon_for_context_window_usage,
-            BlocklistAIInputModel,
-        },
-        execution_profiles::profiles::AIExecutionProfilesModel,
-        harness_availability::HarnessAvailabilityModel,
-        AIRequestUsageModel,
-    },
-    appearance::Appearance,
-    auth::{AuthManager, AuthStateProvider},
-    completer::SessionContext,
-    context_chips::{
-        self,
-        display_chip::{DisplayChip, DisplayChipConfig},
-        prompt_type::PromptType,
-        ContextChipKind,
-    },
-    features::FeatureFlag,
-    network::NetworkStatus,
-    send_telemetry_from_ctx,
-    server::telemetry::{PluginChipTelemetryKind, TelemetryEvent},
-    settings::{AISettings, AISettingsChangedEvent, PrivacySettings, PrivacySettingsChangedEvent},
-    settings_view::SettingsSection,
-    terminal::{
-        cli_agent_sessions::{
-            listener::agent_supports_rich_status, CLIAgentInputState, CLIAgentSessionsModel,
-            CLIAgentSessionsModelEvent,
-        },
-        input::{models::InlineModelSelectorTab, HandoffComposeState, MenuPositioningProvider},
-        model_events::ModelEvent,
-        profile_model_selector::{ProfileModelSelector, ProfileModelSelectorEvent},
-        session_settings::{SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection},
-        shared_session::SharedSessionStatus,
-        view::ambient_agent::{AmbientAgentViewModel, ModelSelector, ModelSelectorEvent},
-        view::init::OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING,
-        view::TerminalAction,
-        CLIAgent, TerminalModel,
-    },
-    ui_components::icons::Icon,
-    view_components::{
-        action_button::{
-            ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, KeystrokeSource, NakedTheme,
-            TooltipAlignment,
-        },
-        DismissibleToast,
-    },
-    workspace::{view::TOGGLE_PROJECT_EXPLORER_BINDING_NAME, ToastStack},
-    workspaces::user_workspaces::UserWorkspaces,
-};
-use toolbar_item::AgentToolbarItemKind;
-use warp_cli::agent::Harness;
-
-use std::sync::Arc;
-
-#[cfg(feature = "voice_input")]
-use crate::server::server_api::TranscribeError;
-#[cfg(not(target_family = "wasm"))]
-use crate::terminal::local_shell::LocalShellState;
-#[cfg(not(target_family = "wasm"))]
-use crate::terminal::ShellLaunchData;
-use ai::document::{AIDocumentId, AIDocumentVersion};
-use parking_lot::FairMutex;
-use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
-use settings::Setting;
-use settings::ToggleableSetting;
 #[cfg(not(target_family = "wasm"))]
 use std::env;
 #[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
+use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
+
+use ai::document::{AIDocumentId, AIDocumentVersion};
+use parking_lot::FairMutex;
+use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use settings::{Setting, ToggleableSetting};
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs;
+use toolbar_item::AgentToolbarItemKind;
 #[cfg(feature = "voice_input")]
 use voice_input::{StartListeningError, VoiceSessionResult};
-
-use warp_core::{
-    context_flag::ContextFlag,
-    report_if_error,
-    ui::{
-        color::{blend::Blend, contrast::MinimumAllowedContrast, ContrastingColor},
-        theme::{color::internal_colors, AnsiColorIdentifier, Fill},
-    },
+use warp_cli::agent::Harness;
+use warp_core::context_flag::ContextFlag;
+use warp_core::report_if_error;
+use warp_core::ui::color::blend::Blend;
+use warp_core::ui::color::contrast::MinimumAllowedContrast;
+use warp_core::ui::color::ContrastingColor;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Expanded, Flex,
+    MainAxisAlignment, MainAxisSize, OffsetPositioning, ParentElement, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, Shrinkable, Stack, Text, Wrap, WrapFill,
+    WrapFillEntireRun, DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
 #[cfg(feature = "voice_input")]
 use warpui::r#async::SpawnedFutureHandle;
+#[cfg(not(target_family = "wasm"))]
+use warpui::r#async::Timer;
 use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Expanded, Flex,
-        MainAxisAlignment, MainAxisSize, OffsetPositioning, ParentElement, PositionedElementAnchor,
-        PositionedElementOffsetBounds, Radius, Shrinkable, Stack, Text, Wrap, WrapFill,
-        WrapFillEntireRun, DEFAULT_UI_LINE_HEIGHT_RATIO,
-    },
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
 #[cfg(feature = "local_fs")]
 pub(crate) use self::environment_selector::sort_environments_by_recency;
-#[cfg(not(target_family = "wasm"))]
-use warpui::r#async::Timer;
-
 pub(crate) use self::environment_selector::{
     EnvironmentSelector, EnvironmentSelectorEvent, EnvironmentSelectorTarget,
 };
+use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
+use crate::ai::blocklist::usage::icon_for_context_window_usage;
+use crate::ai::blocklist::BlocklistAIInputModel;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::harness_availability::HarnessAvailabilityModel;
+use crate::ai::AIRequestUsageModel;
+use crate::appearance::Appearance;
+use crate::auth::{AuthManager, AuthStateProvider};
+use crate::completer::SessionContext;
+use crate::context_chips::display_chip::{DisplayChip, DisplayChipConfig};
+use crate::context_chips::prompt_type::PromptType;
+use crate::context_chips::{self, ContextChipKind};
+use crate::features::FeatureFlag;
+use crate::network::NetworkStatus;
+use crate::send_telemetry_from_ctx;
+#[cfg(feature = "voice_input")]
+use crate::server::server_api::TranscribeError;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::telemetry::PluginChipTelemetryAction;
+use crate::server::telemetry::{PluginChipTelemetryKind, TelemetryEvent};
+use crate::settings::{
+    AISettings, AISettingsChangedEvent, PrivacySettings, PrivacySettingsChangedEvent,
+};
+use crate::settings_view::SettingsSection;
+use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{
     compare_versions, plugin_manager_for, plugin_manager_for_with_shell, CliAgentPluginManager,
     PluginInstallError, PluginModalKind,
 };
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
+};
+use crate::terminal::input::models::InlineModelSelectorTab;
+use crate::terminal::input::{HandoffComposeState, MenuPositioningProvider};
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::local_shell::LocalShellState;
+use crate::terminal::model_events::ModelEvent;
+use crate::terminal::profile_model_selector::{ProfileModelSelector, ProfileModelSelectorEvent};
+use crate::terminal::session_settings::{
+    SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection,
+};
+use crate::terminal::shared_session::SharedSessionStatus;
+use crate::terminal::view::ambient_agent::{
+    AmbientAgentViewModel, ModelSelector, ModelSelectorEvent,
+};
+use crate::terminal::view::init::OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING;
+use crate::terminal::view::TerminalAction;
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::ShellLaunchData;
+use crate::terminal::{CLIAgent, TerminalModel};
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{
+    ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, KeystrokeSource, NakedTheme,
+    TooltipAlignment,
+};
+use crate::view_components::DismissibleToast;
 #[cfg(not(target_family = "wasm"))]
 use crate::view_components::ToastLink;
+use crate::workspace::view::TOGGLE_PROJECT_EXPLORER_BINDING_NAME;
+use crate::workspace::ToastStack;
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::WorkspaceAction;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const ENABLE_NLD_TOOLTIP: &str = "Enable terminal command autodetection";
 const DISABLE_NLD_TOOLTIP: &str = "Disable terminal command autodetection";
@@ -177,6 +167,19 @@ fn plugin_chip_key(agent_prefix: &str, remote_host: &Option<String>) -> String {
         Some(host) => format!("{agent_prefix}@{host}"),
         None => agent_prefix.to_owned(),
     }
+}
+
+fn is_conversation_transcript_context(
+    terminal_view_id: EntityId,
+    terminal_model: &TerminalModel,
+    app: &AppContext,
+) -> bool {
+    terminal_model.is_conversation_transcript_viewer()
+        || BlocklistAIHistoryModel::as_ref(app)
+            .active_conversation(terminal_view_id)
+            .is_some_and(|conversation| {
+                conversation.is_viewing_shared_session() || conversation.is_cli_agent_transcript()
+            })
 }
 
 /// Footer control bar at the bottom of the agent input.
@@ -744,7 +747,8 @@ impl AgentInputFooter {
                     ctx.notify();
                 }
                 SessionSettingsChangedEvent::AgentToolbarChipSelectionSetting { .. }
-                | SessionSettingsChangedEvent::CLIAgentToolbarChipSelectionSetting { .. } => {
+                | SessionSettingsChangedEvent::CLIAgentToolbarChipSelectionSetting { .. }
+                | SessionSettingsChangedEvent::GithubPrChipDefaultValidation { .. } => {
                     me.update_display_chips(&prompt_for_session_settings, ctx);
                     ctx.notify();
                 }
@@ -1408,6 +1412,7 @@ impl AgentInputFooter {
         &self,
         item: &AgentToolbarItemKind,
         shared_status: &SharedSessionStatus,
+        is_conversation_transcript_context: bool,
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         if !item.available_in().is_available_for_cli()
@@ -1420,7 +1425,8 @@ impl AgentInputFooter {
         // it doesn't make sense to offer remote-control when already
         // viewing a cloud agent's shared session.
         if matches!(item, AgentToolbarItemKind::ShareSession)
-            && self.terminal_model.lock().is_shared_ambient_agent_session()
+            && (is_conversation_transcript_context
+                || self.terminal_model.lock().is_shared_ambient_agent_session())
         {
             return None;
         }
@@ -1446,6 +1452,9 @@ impl AgentInputFooter {
                 None
             }
             AgentToolbarItemKind::ShareSession => {
+                if is_conversation_transcript_context {
+                    return None;
+                }
                 let enabled = FeatureFlag::CreatingSharedSessions.is_enabled()
                     && FeatureFlag::HOARemoteControl.is_enabled()
                     && ContextFlag::CreateSharedSession.is_enabled();
@@ -1478,7 +1487,7 @@ impl AgentInputFooter {
         // the lock before calling into helpers like `should_use_manual_mode`
         // and `render_cli_toolbar_item`, which may re-lock the same model and
         // would deadlock since the lock is non-reentrant.
-        let (background_color, shared_status) = {
+        let (background_color, shared_status, is_conversation_transcript_context) = {
             let terminal_model = self.terminal_model.lock();
             let background_color = if terminal_model.is_alt_screen_active() {
                 terminal_model
@@ -1489,7 +1498,13 @@ impl AgentInputFooter {
                 appearance.theme().surface_1().into_solid()
             };
             let shared_status = terminal_model.shared_session_status().clone();
-            (background_color, shared_status)
+            let is_conversation_transcript_context =
+                is_conversation_transcript_context(self.terminal_view_id, &terminal_model, app);
+            (
+                background_color,
+                shared_status,
+                is_conversation_transcript_context,
+            )
         };
 
         let session_settings = SessionSettings::as_ref(app);
@@ -1552,7 +1567,12 @@ impl AgentInputFooter {
         }
 
         for item in &left_items {
-            if let Some(element) = self.render_cli_toolbar_item(item, &shared_status, app) {
+            if let Some(element) = self.render_cli_toolbar_item(
+                item,
+                &shared_status,
+                is_conversation_transcript_context,
+                app,
+            ) {
                 left_buttons.add_child(element);
             }
         }
@@ -1563,7 +1583,12 @@ impl AgentInputFooter {
             .with_spacing(4.);
 
         for item in &right_items {
-            if let Some(element) = self.render_cli_toolbar_item(item, &shared_status, app) {
+            if let Some(element) = self.render_cli_toolbar_item(
+                item,
+                &shared_status,
+                is_conversation_transcript_context,
+                app,
+            ) {
                 right_buttons.add_child(element);
             }
         }
@@ -1983,6 +2008,7 @@ impl AgentInputFooter {
         item: &AgentToolbarItemKind,
         shared_status: &SharedSessionStatus,
         is_cloud_context: bool,
+        is_conversation_transcript_context: bool,
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let is_cloud_mode = FeatureFlag::CloudModeImageContext.is_enabled()
@@ -2045,6 +2071,9 @@ impl AgentInputFooter {
                 has_conversation.then(|| ChildView::new(&self.context_window_button).finish())
             }
             AgentToolbarItemKind::ShareSession => {
+                if is_conversation_transcript_context {
+                    return None;
+                }
                 let enabled = FeatureFlag::CreatingSharedSessions.is_enabled()
                     && FeatureFlag::HOARemoteControl.is_enabled()
                     && ContextFlag::CreateSharedSession.is_enabled();
@@ -2159,11 +2188,17 @@ impl View for AgentInputFooter {
             terminal_model.block_list().agent_view_state(),
             &terminal_model,
         );
+        let is_conversation_transcript_context =
+            is_conversation_transcript_context(self.terminal_view_id, &terminal_model, app);
 
         for item in &left_items {
-            if let Some(element) =
-                self.render_toolbar_item(item, shared_status, is_cloud_context, app)
-            {
+            if let Some(element) = self.render_toolbar_item(
+                item,
+                shared_status,
+                is_cloud_context,
+                is_conversation_transcript_context,
+                app,
+            ) {
                 left_buttons.add_child(element);
             }
         }
@@ -2184,9 +2219,13 @@ impl View for AgentInputFooter {
             );
         } else {
             for item in &right_items {
-                if let Some(element) =
-                    self.render_toolbar_item(item, shared_status, is_cloud_context, app)
-                {
+                if let Some(element) = self.render_toolbar_item(
+                    item,
+                    shared_status,
+                    is_cloud_context,
+                    is_conversation_transcript_context,
+                    app,
+                ) {
                     right_buttons.add_child(element);
                 }
             }

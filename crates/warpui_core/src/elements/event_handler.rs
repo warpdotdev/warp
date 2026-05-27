@@ -1,15 +1,14 @@
-use crate::{
-    event::{DispatchedEvent, EventDiscriminants, KeyState, ModifiersState},
-    keymap::Keystroke,
-    platform::keyboard::KeyCode,
-};
+use std::cell::RefCell;
+
+use pathfinder_geometry::vector::Vector2F;
 
 use super::{
     AfterLayoutContext, AppContext, DispatchEventResult, Element, Event, EventContext,
     LayoutContext, PaintContext, Point, SizeConstraint, ZIndex,
 };
-use pathfinder_geometry::vector::Vector2F;
-use std::cell::RefCell;
+use crate::event::{DispatchedEvent, EventDiscriminants, KeyState, ModifiersState};
+use crate::keymap::Keystroke;
+use crate::platform::keyboard::KeyCode;
 
 type Handler = Box<dyn FnMut(&mut EventContext, &AppContext, Vector2F) -> DispatchEventResult>;
 type KeyHandler = Box<dyn FnMut(&mut EventContext, &AppContext, &Keystroke) -> DispatchEventResult>;

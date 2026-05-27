@@ -1,11 +1,11 @@
+use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
+use warpui::image_cache::ImageType;
+use warpui::text_layout::LayoutCache;
+use warpui::{App, SingletonEntity};
+
 use super::*;
-use crate::render::{layout::TextLayout, model::test_utils::TEST_STYLES};
-use warpui::{
-    App, SingletonEntity,
-    assets::asset_cache::{AssetCache, AssetSource, AssetState},
-    image_cache::ImageType,
-    text_layout::LayoutCache,
-};
+use crate::render::layout::TextLayout;
+use crate::render::model::test_utils::TEST_STYLES;
 
 fn mermaid_block_spacing() -> BlockSpacing {
     TEST_STYLES.block_spacings.from_block_style(

@@ -1,8 +1,8 @@
-use super::model::ProjectRule;
 use std::path::PathBuf;
+
 use warpui::ModelContext;
 
-use super::model::ProjectContextModel;
+use super::model::{ProjectContextModel, ProjectRule};
 
 /// No-op stand-in for non-`local_fs` builds. File-based global rules require
 /// filesystem watchers that don't exist on WASM, so callers see an empty

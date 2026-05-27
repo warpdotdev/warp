@@ -1,18 +1,16 @@
 use warp_core::features::FeatureFlag;
-use warpui::{elements::MouseStateHandle, AppContext, Element};
-
-use crate::{
-    appearance::Appearance,
-    cloud_object::CloudObjectMetadata,
-    drive::{
-        cloud_object_styling::warp_drive_icon_color, folders::CloudFolder, index::DriveIndexAction,
-        CloudObjectTypeAndId, DriveObjectType,
-    },
-    themes::theme::Fill,
-    ui_components::icons::Icon,
-};
+use warpui::elements::MouseStateHandle;
+use warpui::{AppContext, Element};
 
 use super::{WarpDriveItem, WarpDriveItemId};
+use crate::appearance::Appearance;
+use crate::cloud_object::CloudObjectMetadata;
+use crate::drive::cloud_object_styling::warp_drive_icon_color;
+use crate::drive::folders::CloudFolder;
+use crate::drive::index::DriveIndexAction;
+use crate::drive::{CloudObjectTypeAndId, DriveObjectType};
+use crate::themes::theme::Fill;
+use crate::ui_components::icons::Icon;
 
 #[derive(Clone)]
 pub struct WarpDriveFolder {

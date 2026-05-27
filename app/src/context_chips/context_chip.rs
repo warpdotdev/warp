@@ -1,15 +1,11 @@
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{HashMap, HashSet},
-    time::Duration,
-};
 
 use super::ChipValue;
-
-use crate::terminal::model::{
-    block::{Block, BlockMetadata},
-    session::{Session, SessionId},
-};
+use crate::terminal::model::block::{Block, BlockMetadata};
+use crate::terminal::model::session::{Session, SessionId};
 use crate::terminal::shell::ShellType;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

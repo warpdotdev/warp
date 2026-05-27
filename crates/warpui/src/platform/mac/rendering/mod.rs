@@ -5,9 +5,10 @@ mod renderer_manager;
 #[cfg(wgpu)]
 mod wgpu;
 
-pub use self::metal::is_integrated_gpu;
 pub use renderer::{Device, Renderer};
 pub use renderer_manager::RendererManager;
+
+pub use self::metal::is_integrated_gpu;
 
 /// Returns `true` if a low power GPU is available for rendering. Typically, this is true for
 /// machines with two GPUs -- a dedicated discrete high-performance GPU and a lower power

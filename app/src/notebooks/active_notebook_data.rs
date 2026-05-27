@@ -1,26 +1,17 @@
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
-use crate::{
-    ai::document::ai_document_model::AIDocumentId,
-    cloud_object::{
-        breadcrumbs::ContainingObject,
-        model::{
-            persistence::{CloudModel, CloudModelEvent},
-            view::{CloudViewModel, Editor, EditorState},
-        },
-        CloudObject, Owner, Space,
-    },
-    drive::sharing::{ContentEditability, SharingAccessLevel},
-    notebooks::CloudNotebook,
-    server::{
-        cloud_objects::update_manager::{
-            ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
-        },
-        ids::{ClientId, SyncId},
-    },
-};
-
 use super::{CloudNotebookModel, NotebookId};
+use crate::ai::document::ai_document_model::AIDocumentId;
+use crate::cloud_object::breadcrumbs::ContainingObject;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
+use crate::cloud_object::model::view::{CloudViewModel, Editor, EditorState};
+use crate::cloud_object::{CloudObject, Owner, Space};
+use crate::drive::sharing::{ContentEditability, SharingAccessLevel};
+use crate::notebooks::CloudNotebook;
+use crate::server::cloud_objects::update_manager::{
+    ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
+};
+use crate::server::ids::{ClientId, SyncId};
 
 #[derive(Default, Clone)]
 pub enum ActiveNotebook {

@@ -1,11 +1,12 @@
+use ai::LLMId;
+use warp_core::send_telemetry_from_ctx;
+use warpui::{Entity, ModelContext};
+
 use crate::slides::{
     AgentAutonomy, AgentDevelopmentSettings, OnboardingModelInfo, ProjectOnboardingSettings,
 };
 use crate::telemetry::OnboardingEvent;
 use crate::OnboardingIntention;
-use ai::LLMId;
-use warp_core::send_telemetry_from_ctx;
-use warpui::{Entity, ModelContext};
 
 /// UI customization settings chosen during the "Customize your UI" onboarding slide.
 #[derive(Clone, Debug)]

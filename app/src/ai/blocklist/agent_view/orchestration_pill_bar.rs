@@ -3,15 +3,20 @@
 //! active pane to that agent's conversation.
 
 use std::cell::RefCell;
-use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_cli::agent::Harness;
+use warp_core::channel::ChannelState;
+use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::color::blend::Blend;
 use warp_core::ui::color::coloru_with_opacity;
-use warp_core::ui::theme::Fill;
-use warp_core::ui::{appearance::Appearance, theme::WarpTheme};
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::{Fill, WarpTheme};
 use warpui::elements::new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::{
     Align, AnchorPair, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
@@ -27,7 +32,7 @@ use warpui::text_layout::{
     ClipConfig, ClipDirection, ClipStyle, StyleAndFont, TextStyle, DEFAULT_TOP_BOTTOM_RATIO,
 };
 use warpui::{
-    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
@@ -42,8 +47,12 @@ use crate::ai::blocklist::agent_view::orchestration_conversation_links::{
 use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::{
     OrchestrationPillBarEvent, OrchestrationPillBarModel,
 };
-use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
-use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
+use crate::ai::blocklist::agent_view::{
+    agent_view_bg_color, AgentViewController, AgentViewControllerEvent,
+};
+use crate::ai::blocklist::orchestration_topology::{
+    aggregated_orchestrator_status, descendant_conversation_ids_in_spawn_order,
+};
 use crate::ai::blocklist::telemetry::{
     BlocklistOrchestrationTelemetryEvent, PillBarActionKind, PillBarInteractionEvent,
     PillBarPillKind, PillSwitchOutcome,
@@ -59,9 +68,6 @@ use crate::ui_components::icon_with_status::{
 };
 use crate::ui_components::icons::Icon;
 use crate::workspace::WorkspaceAction;
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::EntityId;
 
 const PILL_HEIGHT: f32 = 22.;
 const PILL_RADIUS: f32 = PILL_HEIGHT / 2.;
@@ -102,6 +108,41 @@ pub(crate) fn pill_initial(name: &str) -> char {
         .map(|c| c.to_ascii_uppercase())
         .unwrap_or('A')
 }
+
+/// Status key for the trailing "done" bucket (Cancelled + Success).
+/// Named so render code and tests don't have to chase a literal `3`.
+pub(super) const DONE_STATUS_KEY: u8 = 3;
+
+/// Sort priority within a pill section. Lower sorts leftmost. Cancelled
+/// and Success share one "done" bucket; recency decides their order.
+fn pill_status_sort_key(status: Option<&ConversationStatus>) -> u8 {
+    match status {
+        Some(ConversationStatus::Blocked { .. }) => 0,
+        Some(ConversationStatus::Error) => 1,
+        Some(ConversationStatus::InProgress) => 2,
+        Some(ConversationStatus::Cancelled) | Some(ConversationStatus::Success) => DONE_STATUS_KEY,
+        None => 2,
+    }
+}
+
+/// Recency tiebreaker for done pills, sorted ascending: newer finish
+/// times sort first; unknown sorts last. `saturating_neg` so a wild
+/// `i64::MIN` (impossible for real timestamps) couldn't panic.
+fn pill_done_recency_key(last_modified_ms: Option<i64>) -> i64 {
+    last_modified_ms.unwrap_or(0).saturating_neg()
+}
+
+/// Combines status key + recency into the secondary sort key. Recency
+/// wins inside the done bucket; everything else collapses to 0 so the
+/// spawn-index tiebreaker decides. Shared so render and tests can't drift.
+pub(super) fn pill_secondary_sort_key(status_key: u8, last_modified_ms: Option<i64>) -> i64 {
+    if status_key == DONE_STATUS_KEY {
+        pill_done_recency_key(last_modified_ms)
+    } else {
+        0
+    }
+}
+
 /// Renders the orchestrator avatar disc shared by pill, breadcrumb, and transcript
 /// surfaces.
 pub(crate) fn render_orchestrator_avatar_disc(
@@ -170,6 +211,9 @@ struct PillSpec {
     pin_state: PillPinState,
     /// Child running on a remote worker; drives the cloud-shaped badge variant.
     is_remote_child: bool,
+    /// Epoch ms of the conversation's last activity; recency tiebreaker
+    /// within the done bucket.
+    last_modified_ms: Option<i64>,
 }
 
 #[derive(Clone, Copy)]
@@ -238,6 +282,14 @@ fn pill_label_width(
 
 /// Width of the per-pill hover details card.
 const HOVER_CARD_WIDTH: f32 = 280.;
+const HOVER_CARD_HORIZONTAL_PADDING: f32 = 12.;
+const HOVER_CARD_VERTICAL_PADDING: f32 = 10.;
+const HOVER_CARD_CONTENT_WIDTH: f32 = HOVER_CARD_WIDTH - 2. * HOVER_CARD_HORIZONTAL_PADDING;
+const HOVER_CARD_HEADER_AVATAR_NAME_GAP: f32 = 8.;
+const HOVER_CARD_HEADER_NAME_BADGE_GAP: f32 = 8.;
+/// Slightly larger than the longest expected status label ("In progress") plus
+/// its icon and padding.
+const HOVER_CARD_STATUS_BADGE_MAX_WIDTH: f32 = 96.;
 
 /// Typed actions dispatched by the pill bar's widgets. Each action carries
 /// the targeted child pill's conversation id so a single shared `Menu`
@@ -252,6 +304,8 @@ pub enum OrchestrationPillBarAction {
     OpenInNewPane(AIConversationId),
     /// Menu item: open this child in a new tab.
     OpenInNewTab(AIConversationId),
+    /// Menu item: open this child's run in the Oz web app.
+    ViewInOz(AIConversationId),
     /// Menu item: stop the in-progress task.
     Stop(AIConversationId),
     /// Menu item: cancel and remove from local history.
@@ -445,6 +499,13 @@ impl OrchestrationPillBar {
                 ),
             ]
         };
+        if Self::oz_run_url_for_conversation(conversation_id, ctx).is_some() {
+            items.push(item(
+                "View in Oz",
+                Icon::Oz,
+                OrchestrationPillBarAction::ViewInOz(conversation_id),
+            ));
+        }
         // Stop is shown only while the agent is in progress; Kill becomes
         // Delete once the agent's run has finished (Success / Error /
         // Cancelled). Blocked is treated as not-yet-finished (the agent
@@ -493,6 +554,17 @@ impl OrchestrationPillBar {
         }
         self.menu_open_for = None;
         ctx.notify();
+    }
+
+    fn oz_run_url_for_conversation(
+        conversation_id: AIConversationId,
+        app: &AppContext,
+    ) -> Option<String> {
+        let run_id = BlocklistAIHistoryModel::as_ref(app)
+            .conversation(&conversation_id)?
+            .run_id()?;
+        let oz_root_url = ChannelState::oz_root_url();
+        Some(format!("{oz_root_url}/runs/{run_id}"))
     }
 
     fn set_hovered_pill(
@@ -580,18 +652,20 @@ impl OrchestrationPillBar {
 
         let mut specs = Vec::with_capacity(1 + children.len());
 
-        // Orchestrator pill first; never pinned (it's the home view).
+        // Orchestrator pill first; never pinned. Its badge aggregates the tree,
+        // while child pills show per-child status.
         specs.push(PillSpec {
             conversation_id: orchestrator_id,
             label: orchestrator_label(orchestrator),
             avatar_color: theme.ansi_fg_cyan(),
             avatar_glyph: AvatarGlyph::Icon(Icon::Oz),
-            status: None,
+            status: Some(aggregated_orchestrator_status(history, orchestrator_id)),
             is_selected: orchestrator_id == active_id,
             kind: PillKind::Orchestrator,
             pin_state: PillPinState::Unpinned,
-            // Unused: orchestrator pills don't render a status overlay.
             is_remote_child: false,
+            // Unused: orchestrator pills aren't sorted (they render first).
+            last_modified_ms: None,
         });
 
         // Stamp each child's current pin state; partitioning happens at render.
@@ -616,6 +690,7 @@ impl OrchestrationPillBar {
                 kind: PillKind::Child,
                 pin_state,
                 is_remote_child: child.is_remote_child(),
+                last_modified_ms: child.last_modified_at().map(|t| t.timestamp_millis()),
             });
         }
 
@@ -886,6 +961,18 @@ impl TypedActionView for OrchestrationPillBar {
                     ),
                 );
             }
+            OrchestrationPillBarAction::ViewInOz(id) => {
+                self.emit_pill_bar_interaction(
+                    PillBarActionKind::ViewInOz,
+                    PillBarPillKind::Child,
+                    *id,
+                    ctx,
+                );
+                self.close_menu(ctx);
+                if let Some(url) = Self::oz_run_url_for_conversation(*id, ctx) {
+                    ctx.open_url(&url);
+                }
+            }
             OrchestrationPillBarAction::Stop(id) => {
                 self.emit_pill_bar_interaction(
                     PillBarActionKind::Stop,
@@ -1021,12 +1108,13 @@ impl View for OrchestrationPillBar {
         // the orchestrator pane, so any child whose owner differs from
         // this id has been split off into another pane/tab.
         let self_terminal_view_id = self.agent_view_controller.as_ref(app).terminal_view_id();
-        // Bucket pills so the row is: orchestrator, pinned, divider, unpinned.
-        // Spawn order within each child bucket is preserved by iteration order.
+        // Row layout: orchestrator, pinned, divider, unpinned. Each
+        // child bucket is sorted by status priority, then recency for
+        // done pills and spawn order otherwise.
         let mut orchestrator_pill: Option<Box<dyn Element>> = None;
-        let mut pinned_pills: Vec<Box<dyn Element>> = Vec::new();
-        let mut unpinned_pills: Vec<Box<dyn Element>> = Vec::new();
-        for spec in specs {
+        let mut pinned_pills: Vec<(u8, i64, usize, Box<dyn Element>)> = Vec::new();
+        let mut unpinned_pills: Vec<(u8, i64, usize, Box<dyn Element>)> = Vec::new();
+        for (spawn_index, spec) in specs.into_iter().enumerate() {
             let mouse_state = mouse_states
                 .entry(spec.conversation_id)
                 .or_default()
@@ -1046,6 +1134,8 @@ impl View for OrchestrationPillBar {
             let menu_is_open_for_this = menu_open_for == Some(spec.conversation_id);
             let kind = spec.kind;
             let pin_state = spec.pin_state;
+            let status_key = pill_status_sort_key(spec.status.as_ref());
+            let secondary_key = pill_secondary_sort_key(status_key, spec.last_modified_ms);
             let pill = render_pill(
                 spec,
                 mouse_state,
@@ -1057,27 +1147,36 @@ impl View for OrchestrationPillBar {
             );
             match (kind, pin_state) {
                 (PillKind::Orchestrator, _) => orchestrator_pill = Some(pill),
-                (PillKind::Child, PillPinState::Pinned) => pinned_pills.push(pill),
-                (PillKind::Child, PillPinState::Unpinned) => unpinned_pills.push(pill),
+                (PillKind::Child, PillPinState::Pinned) => {
+                    pinned_pills.push((status_key, secondary_key, spawn_index, pill));
+                }
+                (PillKind::Child, PillPinState::Unpinned) => {
+                    unpinned_pills.push((status_key, secondary_key, spawn_index, pill));
+                }
             }
         }
         drop(mouse_states);
         drop(overflow_states);
         drop(pin_states);
 
+        // Explicit spawn-index tiebreaker keeps ordering deterministic.
+        let sort_key = |(k, s, idx, _): &(u8, i64, usize, _)| (*k, *s, *idx);
+        pinned_pills.sort_by_key(sort_key);
+        unpinned_pills.sort_by_key(sort_key);
+
         if let Some(pill) = orchestrator_pill {
             row.add_child(pill);
         }
         let has_pinned = !pinned_pills.is_empty();
         let has_unpinned = !unpinned_pills.is_empty();
-        for pill in pinned_pills {
+        for (.., pill) in pinned_pills {
             row.add_child(pill);
         }
         // Only show the divider when both sides actually have pills.
         if has_pinned && has_unpinned {
             row.add_child(render_pinned_divider(app));
         }
-        for pill in unpinned_pills {
+        for (.., pill) in unpinned_pills {
             row.add_child(pill);
         }
 
@@ -1281,41 +1380,26 @@ fn render_hover_card(
     .with_clip(ClipConfig::ellipsis())
     .soft_wrap(false)
     .finish();
-    // The orchestrator's `ConversationStatus` reflects its own last
-    // exchange's outcome (often `Cancelled` after the user cancels to
-    // delegate to subagents, or `Success` once the orchestrator's own
-    // streaming finishes), which doesn't usefully describe the state of
-    // the orchestration as a whole. Until we plumb an aggregated
-    // child-status accessor we hide the badge for the orchestrator pill
-    // — child pills still show the (per-child accurate) badge.
-    // Cap the badge at a fixed width so it can't shove the name out of
-    // the card. Slightly larger than the longest expected status label
-    // ("In progress") plus its icon and padding.
-    const STATUS_BADGE_MAX_WIDTH: f32 = 96.;
-    let status_badge: Option<Box<dyn Element>> = (!is_orchestrator).then(|| {
-        ConstrainedBox::new(render_status_badge(
-            conversation.status(),
-            theme,
-            appearance,
-        ))
-        .with_max_width(STATUS_BADGE_MAX_WIDTH)
-        .finish()
-    });
-    // Compute the name's max width by subtracting all of the surrounding
-    // chrome from the card width: card horizontal padding (12+12), the
-    // 16px avatar, the 8px avatar→name gap, an 8px name→badge gap, and
-    // the reserved badge slot when one is shown. Without this fixed
-    // budget, `MainAxisAlignment::SpaceBetween` would happily push the
-    // badge off the right edge of the card whenever the name is long
-    // enough to fill the available space (this happened on the
-    // orchestrator pill, whose title falls back to the conversation's
-    // multi-word title rather than a short agent name).
-    let name_max_width = if status_badge.is_some() {
-        HOVER_CARD_WIDTH - 24. - 16. - 8. - 8. - STATUS_BADGE_MAX_WIDTH
+    // Orchestrator hover cards use aggregated tree status; child cards use
+    // per-child status.
+    let aggregated_status;
+    let badge_status: &ConversationStatus = if is_orchestrator {
+        aggregated_status = aggregated_orchestrator_status(history, conversation_id);
+        &aggregated_status
     } else {
-        HOVER_CARD_WIDTH - 24. - 16. - 8.
+        conversation.status()
     };
-    let mut header_row = Flex::row()
+    let status_badge = ConstrainedBox::new(render_status_badge(badge_status, theme, appearance))
+        .with_max_width(HOVER_CARD_STATUS_BADGE_MAX_WIDTH)
+        .finish();
+    // Reserve fixed space for the badge so long names ellipsize instead of
+    // pushing it off the card.
+    let name_max_width = HOVER_CARD_CONTENT_WIDTH
+        - AVATAR_SIZE
+        - HOVER_CARD_HEADER_AVATAR_NAME_GAP
+        - HOVER_CARD_HEADER_NAME_BADGE_GAP
+        - HOVER_CARD_STATUS_BADGE_MAX_WIDTH;
+    let header = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_main_axis_size(MainAxisSize::Max)
         .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
@@ -1323,7 +1407,7 @@ fn render_hover_card(
             Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_main_axis_size(MainAxisSize::Min)
-                .with_spacing(8.)
+                .with_spacing(HOVER_CARD_HEADER_AVATAR_NAME_GAP)
                 .with_child(avatar)
                 .with_child(
                     ConstrainedBox::new(name_text)
@@ -1331,11 +1415,9 @@ fn render_hover_card(
                         .finish(),
                 )
                 .finish(),
-        );
-    if let Some(status_badge) = status_badge {
-        header_row = header_row.with_child(status_badge);
-    }
-    let header = header_row.finish();
+        )
+        .with_child(status_badge)
+        .finish();
 
     // Working directory line: pulled from the root task's first exchange
     // when available, falling back to the most recent exchange. Hidden
@@ -1459,14 +1541,14 @@ fn render_hover_card(
     if let Some(cwd_line) = cwd_line {
         column = column.with_child(
             ConstrainedBox::new(cwd_line)
-                .with_max_width(HOVER_CARD_WIDTH - 24.)
+                .with_max_width(HOVER_CARD_CONTENT_WIDTH)
                 .finish(),
         );
     }
     if let Some(description) = description {
         column = column.with_child(
             ConstrainedBox::new(description)
-                .with_max_width(HOVER_CARD_WIDTH - 24.)
+                .with_max_width(HOVER_CARD_CONTENT_WIDTH)
                 .finish(),
         );
     }
@@ -1482,10 +1564,10 @@ fn render_hover_card(
     }
 
     let card = Container::new(column.finish())
-        .with_padding_left(12.)
-        .with_padding_right(12.)
-        .with_padding_top(10.)
-        .with_padding_bottom(10.)
+        .with_padding_left(HOVER_CARD_HORIZONTAL_PADDING)
+        .with_padding_right(HOVER_CARD_HORIZONTAL_PADDING)
+        .with_padding_top(HOVER_CARD_VERTICAL_PADDING)
+        .with_padding_bottom(HOVER_CARD_VERTICAL_PADDING)
         .with_background(bg)
         .with_border(warpui::elements::Border::all(1.).with_border_fill(outline))
         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
@@ -1681,6 +1763,17 @@ fn render_pill(
     let status = spec.status;
     let is_remote_child = spec.is_remote_child;
 
+    // Per Figma: fg_overlay_2 at rest, fg_overlay_3 on hover, composed over
+    // the agent-view surface. Pre-blend to a solid so the avatar cutout ring
+    // matches the painted pill exactly.
+    let pill_rest_bg = Fill::from(agent_view_bg_color(app))
+        .blend(&internal_colors::fg_overlay_2(theme))
+        .into_solid();
+    let pill_hover_bg = Fill::from(agent_view_bg_color(app))
+        .blend(&internal_colors::fg_overlay_3(theme))
+        .into_solid();
+    let pill_text_color = internal_colors::text_main(theme, theme.background());
+
     // `Hoverable::new`'s build closure is `FnOnce` (see
     // `crates/warpui_core/src/elements/hoverable.rs`). We can therefore move
     // `label` into the closure by value rather than cloning it on every
@@ -1697,15 +1790,9 @@ fn render_pill(
                 theme.background().into_solid(),
             )
         } else if hover_state.is_hovered() || hover_state.is_clicked() || menu_is_open_for_this {
-            (
-                warp_core::ui::theme::color::internal_colors::neutral_3(theme),
-                warp_core::ui::theme::color::internal_colors::text_main(theme, theme.background()),
-            )
+            (pill_hover_bg, pill_text_color)
         } else {
-            (
-                warp_core::ui::theme::color::internal_colors::neutral_2(theme),
-                warp_core::ui::theme::color::internal_colors::text_main(theme, theme.background()),
-            )
+            (pill_rest_bg, pill_text_color)
         };
 
         let show_dots = show_overflow_button && (hover_state.is_hovered() || menu_is_open_for_this);
@@ -1765,7 +1852,6 @@ fn render_pill(
         let show_pin_glyph = supports_pinning && outer_pill_hovered;
         let leading: Box<dyn Element> = match kind {
             PillKind::Orchestrator => match status.as_ref() {
-                // Defensive: orchestrator pills don't currently carry a status.
                 Some(status) => render_avatar_with_status_overlay(
                     avatar_color,
                     avatar_glyph,

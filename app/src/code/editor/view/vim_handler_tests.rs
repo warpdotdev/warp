@@ -1,36 +1,35 @@
-use crate::auth::AuthStateProvider;
-use crate::cloud_object::model::persistence::CloudModel;
-use crate::code::editor::view::CodeEditorRenderOptions;
-use crate::notebooks::editor::keys::NotebookKeybindings;
-use crate::workspace::ActiveSession;
-use crate::{
-    code::editor::view::{CodeEditorView, CodeEditorViewAction},
-    server::server_api::{team::MockTeamClient, workspace::MockWorkspaceClient},
-    settings::AppEditorSettings,
-    settings_view::keybindings::KeybindingChangedNotifier,
-    test_util::settings::initialize_settings_for_tests,
-    vim_registers::VimRegisters,
-    workspace::sync_inputs::SyncedInputState,
-    workspaces::user_workspaces::UserWorkspaces,
-};
-use pathfinder_geometry::vector::Vector2F;
 use std::sync::Arc;
+
+use pathfinder_geometry::vector::Vector2F;
 use unindent::Unindent;
 use vim::vim::{MotionType, VimMode};
-use warp_core::{features::FeatureFlag, settings::Setting, ui::appearance::Appearance};
+use warp_core::features::FeatureFlag;
+use warp_core::settings::Setting;
+use warp_core::ui::appearance::Appearance;
+use warp_editor::content::buffer::{InitialBufferState, ToBufferCharOffset, ToBufferPoint};
 use warp_editor::model::CoreEditorModel;
+use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_editor::render::model::viewport::SizeInfo;
-use warp_editor::{
-    content::buffer::{InitialBufferState, ToBufferCharOffset, ToBufferPoint},
-    render::element::VerticalExpansionBehavior,
-};
 use warp_util::user_input::UserInput;
+use warpui::keymap::Keystroke;
+use warpui::platform::WindowStyle;
 use warpui::text::point::Point;
 use warpui::units::IntoPixels;
-use warpui::{
-    keymap::Keystroke, platform::WindowStyle, App, SingletonEntity, TypedActionView, UpdateModel,
-    ViewHandle,
-};
+use warpui::{App, SingletonEntity, TypedActionView, UpdateModel, ViewHandle};
+
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView, CodeEditorViewAction};
+use crate::notebooks::editor::keys::NotebookKeybindings;
+use crate::server::server_api::team::MockTeamClient;
+use crate::server::server_api::workspace::MockWorkspaceClient;
+use crate::settings::AppEditorSettings;
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::vim_registers::VimRegisters;
+use crate::workspace::sync_inputs::SyncedInputState;
+use crate::workspace::ActiveSession;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 // Await render/layout completion for a CodeEditorView in tests.
 async fn layout_editor_view(app: &mut App, editor: &ViewHandle<CodeEditorView>) {

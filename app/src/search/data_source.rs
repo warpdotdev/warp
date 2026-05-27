@@ -1,20 +1,23 @@
-use crate::search::item::IconLocation;
-use crate::search::mixer::{DataSourceRunError, SyncDataSource};
-use crate::search::result_renderer::ItemHighlightState;
-use crate::{appearance::Appearance, ui_components::icons::Icon};
+use std::any::Any;
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use enum_iterator::{all, Sequence};
 use lazy_static::lazy_static;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::any::Any;
-use std::{collections::HashSet, sync::Arc};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
 use warpui::{Action, AppContext, Element, Entity, ModelHandle};
 
-use super::mixer::{AsyncDataSource, BoxFuture};
-use super::{item::SearchItem, mixer::DataSourceRunErrorWrapper};
+use super::item::SearchItem;
+use super::mixer::{AsyncDataSource, BoxFuture, DataSourceRunErrorWrapper};
+use crate::appearance::Appearance;
+use crate::search::item::IconLocation;
+use crate::search::mixer::{DataSourceRunError, SyncDataSource};
+use crate::search::result_renderer::ItemHighlightState;
+use crate::ui_components::icons::Icon;
 
 lazy_static! {
     static ref HISTORY_FILTER_ATOM: FilterAtom = FilterAtom {
