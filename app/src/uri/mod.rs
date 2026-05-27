@@ -944,9 +944,6 @@ impl Action {
             }
             Action::NewCloudAgentConversation => {
                 let Some(window_id) = primary_window_id else {
-                    if !Workspace::can_add_ambient_agent_tab(ctx) {
-                        return;
-                    }
                     open_new_with_workspace_source(NewWorkspaceSource::AmbientAgent, ctx);
                     return;
                 };
