@@ -331,31 +331,6 @@ impl CurrentPrompt {
         }
     }
 
-    fn clear_chip_value(&mut self, chip_kind: &ContextChipKind) -> bool {
-        let Some(state) = self.states.get_mut(chip_kind) else {
-            return false;
-        };
-        if state.last_computed_value.is_none() {
-            return false;
-        }
-        log::debug!("Clearing prompt value of {chip_kind:?}");
-        state.last_computed_value = None;
-        let _ = self.update_tx.try_send(());
-        true
-    }
-
-    fn clear_github_pull_request_chip_value(
-        &mut self,
-        chip_kind: &ContextChipKind,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if matches!(chip_kind, ContextChipKind::GithubPullRequest)
-            && self.clear_chip_value(chip_kind)
-        {
-            ctx.notify();
-        }
-    }
-
     fn update_on_click_value(&mut self, chip_kind: &ContextChipKind, value: Option<Vec<String>>) {
         log::debug!("Updating prompt on_click value of {chip_kind:?} to {value:?}");
         let filter_values = match chip_kind {
@@ -706,7 +681,6 @@ impl CurrentPrompt {
             if let Some(state) = self.states.get(chip_kind) {
                 if let Some(current_fp) = &fingerprint {
                     if state.last_failure_fingerprint.as_ref() == Some(current_fp) {
-                        self.clear_github_pull_request_chip_value(chip_kind, ctx);
                         self.update_chip_value(chip_kind, None);
                         self.update_on_click_value(chip_kind, None);
                         self.set_chip_update_status(chip_kind, ChipUpdateStatus::Cached);
@@ -715,7 +689,6 @@ impl CurrentPrompt {
                 }
             }
         }
-        self.clear_github_pull_request_chip_value(chip_kind, ctx);
         match generator {
             PromptGenerator::ShellCommand(cmd) => {
                 let Some(exec_ctx) = self.prepare_shell_command_context(cmd, ctx) else {
