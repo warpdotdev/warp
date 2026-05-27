@@ -6641,15 +6641,9 @@ impl Workspace {
 
     /// Creates a new tab group containing a single new tab.
     fn create_new_tab_group(&mut self, ctx: &mut ViewContext<Self>) {
-        let group_id = TabGroupId::new();
-        self.tab_groups.insert(
-            group_id,
-            TabGroup {
-                id: group_id,
-                name: None,
-                collapsed: false,
-            },
-        );
+        let group = TabGroup::new();
+        let group_id = group.id;
+        self.tab_groups.insert(group_id, group);
         self.add_new_session_tab_with_default_mode(
             NewSessionSource::Tab,
             Some(ctx.window_id()),
@@ -6663,26 +6657,11 @@ impl Workspace {
             tab.group_id = Some(group_id);
         }
 
-        // Cluster the new group after the last existing grouped tab.
-        let target_index = self
-            .tabs
-            .iter()
-            .enumerate()
-            .filter(|(idx, tab)| *idx != new_tab_index && tab.group_id.is_some())
-            .map(|(idx, _)| idx)
-            .max()
-            .map(|max_idx| max_idx + 1)
-            .unwrap_or(0);
-
-        if new_tab_index != target_index {
+        // New tab groups always land at the top of the tab list.
+        if new_tab_index != 0 {
             let tab = self.tabs.remove(new_tab_index);
-            let insert_index = if new_tab_index < target_index {
-                target_index - 1
-            } else {
-                target_index
-            };
-            self.tabs.insert(insert_index, tab);
-            self.active_tab_index = insert_index;
+            self.tabs.insert(0, tab);
+            self.active_tab_index = 0;
         }
 
         ctx.dispatch_global_action("workspace:save_app", ());
@@ -6691,13 +6670,7 @@ impl Workspace {
 
     /// Closes every tab in the given group and removes the group.
     pub fn close_tab_group(&mut self, group_id: TabGroupId, ctx: &mut ViewContext<Self>) {
-        let indices: Vec<usize> = self
-            .tabs
-            .iter()
-            .enumerate()
-            .filter(|(_, tab)| tab.group_id == Some(group_id))
-            .map(|(idx, _)| idx)
-            .collect();
+        let indices: Vec<usize> = group_member_indices(&self.tabs, group_id).collect();
         if indices.is_empty() {
             self.tab_groups.remove(&group_id);
             ctx.notify();
@@ -11185,13 +11158,9 @@ impl Workspace {
                 // honored within the group's bounds.
                 let insert_idx = active_tab_group_id
                     .and_then(|gid| {
-                        self.tabs
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, tab)| tab.group_id == Some(gid))
-                            .map(|(idx, _)| idx)
-                            .max()
-                            .map(|max_idx| max_idx + 1)
+                        group_member_indices(&self.tabs, gid)
+                            .last()
+                            .map(|last| last + 1)
                     })
                     .unwrap_or(self.tabs.len());
                 self.tabs.insert(insert_idx, TabData::new(new_pane_group));
@@ -25402,6 +25371,18 @@ impl Workspace {
 
 fn should_reserve_traffic_light_space_in_tab_bar(side: TrafficLightSide) -> bool {
     side == TrafficLightSide::Right
+}
+
+/// Returns the indices of every tab in `tabs` that belongs to `group_id`,
+/// in ascending order.
+fn group_member_indices(
+    tabs: &[TabData],
+    group_id: TabGroupId,
+) -> impl Iterator<Item = usize> + '_ {
+    tabs.iter()
+        .enumerate()
+        .filter(move |(_, tab)| tab.group_id == Some(group_id))
+        .map(|(idx, _)| idx)
 }
 
 /// Returns every tab-bar-equivalent rect laid out in `window_id` (horizontal

@@ -838,13 +838,6 @@ struct TabGroupDragState {
     insert_after_index: Option<usize>,
 }
 
-/// One visible member of a tab group, captured during the render walk.
-struct TabGroupMember<'a> {
-    tab_index: usize,
-    filtered_pane_ids: Option<&'a [PaneId]>,
-    is_last_visible: bool,
-}
-
 fn resolve_vertical_tabs_mode(app: &AppContext) -> VerticalTabsResolvedMode {
     let settings = TabSettings::as_ref(app);
     match *settings.vertical_tabs_display_granularity.value() {
@@ -1765,30 +1758,26 @@ fn render_groups(
                 .map(|group| (gid, group.clone()))
         }) {
             Some((group_id, group)) => {
-                // Collect consecutive member tabs belonging to the same group.
-                let mut members: Vec<TabGroupMember<'_>> = Vec::new();
-                let mut j = i;
-                while j < total_visible {
-                    let (next_tab_index, ref next_filtered_pane_ids) = visible_tabs[j];
-                    if workspace.tabs[next_tab_index].group_id != Some(group_id) {
-                        break;
-                    }
-                    members.push(TabGroupMember {
-                        tab_index: next_tab_index,
-                        filtered_pane_ids: next_filtered_pane_ids.as_deref(),
-                        is_last_visible: j == total_visible - 1,
-                    });
-                    j += 1;
-                }
+                // Members are a contiguous subslice of `visible_tabs`.
+                let run_len = visible_tabs[i..]
+                    .iter()
+                    .take_while(|(idx, _)| workspace.tabs[*idx].group_id == Some(group_id))
+                    .count();
+                let members = &visible_tabs[i..i + run_len];
+                // The group's last member needs an "after" drop target only when
+                // it's also the absolute last visible tab.
+                let last_member_after_index = (i + run_len == total_visible)
+                    .then(|| members.last().unwrap().0 + 1);
                 groups.add_child(render_grouped_tab_container(
                     state,
                     workspace,
                     &group,
-                    &members,
+                    members,
+                    last_member_after_index,
                     is_any_pane_dragging,
                     app,
                 ));
-                i = j;
+                i += run_len;
             }
             None => {
                 let insert_before_index = tab_index;
@@ -2591,7 +2580,8 @@ fn render_grouped_tab_container(
     state: &VerticalTabsPanelState,
     workspace: &Workspace,
     group: &TabGroup,
-    members: &[TabGroupMember<'_>],
+    members: &[(usize, Option<Vec<PaneId>>)],
+    last_member_after_index: Option<usize>,
     is_any_pane_dragging: bool,
     app: &AppContext,
 ) -> Box<dyn Element> {
@@ -2609,7 +2599,7 @@ fn render_grouped_tab_container(
     let group = group.clone();
     let any_member_active = members
         .iter()
-        .any(|m| m.tab_index == workspace.active_tab_index);
+        .any(|(tab_index, _)| *tab_index == workspace.active_tab_index);
     let is_collapsed = group.collapsed;
 
     let resolved_mode = resolve_vertical_tabs_mode(app);
@@ -2638,21 +2628,25 @@ fn render_grouped_tab_container(
 
         // Collapsed groups hide member rows in the panel chrome; the members remain in `workspace.tabs`.
         if !is_collapsed {
-            for member in members {
-                let tab = &workspace.tabs[member.tab_index];
-                let insert_before_index = member.tab_index;
-                let insert_after_index = member.is_last_visible.then_some(member.tab_index + 1);
+            let last_member_idx = members.len().saturating_sub(1);
+            for (i, (tab_index, filtered_pane_ids)) in members.iter().enumerate() {
+                let tab = &workspace.tabs[*tab_index];
+                let insert_after_index = if i == last_member_idx {
+                    last_member_after_index
+                } else {
+                    None
+                };
                 let drag_state = TabGroupDragState {
                     is_any_pane_dragging,
-                    insert_before_index,
+                    insert_before_index: *tab_index,
                     insert_after_index,
                 };
                 let tab_element = render_tab_group(
                     state,
                     workspace,
-                    member.tab_index,
+                    *tab_index,
                     tab,
-                    member.filtered_pane_ids,
+                    filtered_pane_ids.as_deref(),
                     drag_state,
                     true,
                     app,

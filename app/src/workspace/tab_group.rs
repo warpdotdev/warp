@@ -26,3 +26,20 @@ pub struct TabGroup {
     pub name: Option<String>,
     pub collapsed: bool,
 }
+
+impl TabGroup {
+    /// Creates a new, untitled, expanded tab group with a fresh id.
+    pub fn new() -> Self {
+        Self {
+            id: TabGroupId::new(),
+            name: None,
+            collapsed: false,
+        }
+    }
+}
+
+impl Default for TabGroup {
+    fn default() -> Self {
+        Self::new()
+    }
+}
