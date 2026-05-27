@@ -26,7 +26,10 @@ use crate::drive::{OpenWarpDriveObjectArgs, OpenWarpDriveObjectSettings};
 use crate::features::FeatureFlag;
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::linear::{LinearAction, LinearIssueWork};
-use crate::root_view::{open_new_window_get_handles, OpenLaunchConfigArg};
+use crate::root_view::{
+    open_new_window_get_handles, open_new_with_workspace_source, NewWorkspaceSource,
+    OpenLaunchConfigArg,
+};
 use crate::server::ids::ServerId;
 use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
 use crate::settings_view::{OpenTeamsSettingsModalArgs, SettingsSection};
@@ -940,13 +943,8 @@ impl Action {
                 }
             }
             Action::NewCloudAgentConversation => {
-                let window_id =
-                    primary_window_id.or_else(|| Some(open_new_window_get_handles(None, ctx).0));
-
-                let Some(window_id) = window_id else {
-                    log::warn!(
-                        "unable to determine window for new cloud agent conversation action"
-                    );
+                let Some(window_id) = primary_window_id else {
+                    open_new_with_workspace_source(NewWorkspaceSource::AmbientAgent, ctx);
                     return;
                 };
 
