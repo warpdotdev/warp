@@ -281,6 +281,9 @@ impl QueuedPromptsPanelView {
             }
             | QueuedQueryEvent::Cleared { conversation_id }
             | QueuedQueryEvent::QueueNextPromptToggled { conversation_id } => *conversation_id,
+            // The queue panel doesn't display the auto-queue toggle state, so a
+            // change to the cached default doesn't affect what it renders.
+            QueuedQueryEvent::DefaultModeChanged => return,
         };
         if event_conv_id != active_conv_id {
             return;
@@ -335,7 +338,8 @@ impl QueuedPromptsPanelView {
                 }
             }
             QueuedQueryEvent::Reordered { .. }
-            | QueuedQueryEvent::QueueNextPromptToggled { .. } => {}
+            | QueuedQueryEvent::QueueNextPromptToggled { .. }
+            | QueuedQueryEvent::DefaultModeChanged => {}
         }
         ctx.notify();
     }

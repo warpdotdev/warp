@@ -5,6 +5,7 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::settings::{AISettings, AISettingsChangedEvent, PromptSubmissionMode};
 
 /// A globally unique identifier for a single queued prompt row.
 /// Used by the queue panel to address rows across reorder, edit, and delete.
@@ -84,12 +85,16 @@ pub enum AutofireAction {
 
 /// Per-conversation queue / edit / toggle state.
 /// Lives inside [`QueuedQueryModel::queues`]; a missing key means empty queue, no edit in
-/// progress, and toggle off.
+/// progress, and no explicit auto-queue override (so the cached default from
+/// [`AISettings::default_prompt_submission_mode`] is used).
 #[derive(Default)]
 struct ConversationQueueState {
     queue: Vec<QueuedQuery>,
     editing: Option<QueuedQueryId>,
-    queue_next_prompt_enabled: bool,
+    /// Explicit per-conversation override. `None` defers to the model's cached
+    /// `default_mode`; `Some` means the user has toggled this conversation
+    /// at least once.
+    queue_next_prompt_override: Option<bool>,
 }
 
 /// App-wide singleton owning the queued prompts and auto-queue toggle for every conversation,
@@ -98,6 +103,12 @@ struct ConversationQueueState {
 /// to in [`QueuedQueryModel::new`].
 pub struct QueuedQueryModel {
     queues: HashMap<AIConversationId, ConversationQueueState>,
+    /// Cached value of the `AISettings::default_prompt_submission_mode` setting,
+    /// refreshed by an `AISettingsChangedEvent::DefaultPromptSubmissionMode`
+    /// subscription. Used as the fallback when a conversation has no explicit
+    /// per-conversation override. Caching keeps the warping-indicator render
+    /// path doing only a hashmap lookup plus a comparison.
+    default_mode: PromptSubmissionMode,
 }
 
 /// Events emitted by [`QueuedQueryModel`]. Every variant carries the `conversation_id` it applies
@@ -135,6 +146,11 @@ pub enum QueuedQueryEvent {
     QueueNextPromptToggled {
         conversation_id: AIConversationId,
     },
+    /// The `AISettings::default_prompt_submission_mode` setting changed, so the
+    /// effective value of `is_queue_next_prompt_enabled` may have changed for
+    /// every conversation without an explicit override. Subscribers that
+    /// display the toggle state should re-render.
+    DefaultModeChanged,
 }
 
 impl Entity for QueuedQueryModel {
@@ -153,8 +169,21 @@ impl QueuedQueryModel {
             this.handle_history_event(event, ctx);
         });
 
+        // Cache the default submission mode and refresh whenever the AI setting
+        // changes. The render path consults the cache instead of dereferencing
+        // the setting on every call.
+        let default_mode = AISettings::as_ref(ctx).default_prompt_submission_mode;
+        let ai_settings_handle = AISettings::handle(ctx);
+        ctx.subscribe_to_model(&ai_settings_handle, |this, event, ctx| {
+            if matches!(event, AISettingsChangedEvent::PromptSubmissionMode { .. }) {
+                this.default_mode = AISettings::as_ref(ctx).default_prompt_submission_mode;
+                ctx.emit(QueuedQueryEvent::DefaultModeChanged);
+            }
+        });
+
         Self {
             queues: HashMap::new(),
+            default_mode,
         }
     }
 
@@ -227,22 +256,28 @@ impl QueuedQueryModel {
         state.queue.first().is_some_and(|q| q.id == editing_id)
     }
 
-    /// Returns the per-conversation auto-queue toggle state. Defaults to false for conversations
-    /// that have never been touched.
+    /// Returns the per-conversation auto-queue toggle state. Falls back to the cached
+    /// [`AISettings::default_prompt_submission_mode`] when the conversation has no
+    /// explicit override.
     pub fn is_queue_next_prompt_enabled(&self, conversation_id: AIConversationId) -> bool {
         self.queues
             .get(&conversation_id)
-            .is_some_and(|state| state.queue_next_prompt_enabled)
+            .and_then(|state| state.queue_next_prompt_override)
+            .unwrap_or(self.default_mode == PromptSubmissionMode::Queue)
     }
 
-    /// Toggles the per-conversation auto-queue state.
+    /// Toggles the per-conversation auto-queue state. Computes the effective
+    /// current value (which may come from the cached default) before writing
+    /// its inverse as an explicit override, so toggling from the setting-driven
+    /// default flips correctly.
     pub fn toggle_queue_next_prompt(
         &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
+        let current = self.is_queue_next_prompt_enabled(conversation_id);
         let state = self.queues.entry(conversation_id).or_default();
-        state.queue_next_prompt_enabled = !state.queue_next_prompt_enabled;
+        state.queue_next_prompt_override = Some(!current);
         ctx.emit(QueuedQueryEvent::QueueNextPromptToggled { conversation_id });
     }
 
