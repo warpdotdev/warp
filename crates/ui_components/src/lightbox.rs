@@ -132,7 +132,7 @@ impl Component for Lightbox {
             appearance,
             button::Params {
                 content: button::Content::Icon(Icon::X),
-                theme: &DismissButtonTheme,
+                theme: &ButtonTheme,
                 options: button::Options {
                     size: button::Size::Small,
                     on_click: Some(Box::new(move |ctx, app, _| {
@@ -228,7 +228,7 @@ impl Component for Lightbox {
                     appearance,
                     button::Params {
                         content: button::Content::Icon(Icon::ChevronLeft),
-                        theme: &button::themes::Secondary,
+                        theme: &ButtonTheme,
                         options: button::Options {
                             size: button::Size::Small,
                             on_click: Some(Box::new(move |ctx, app, _| {
@@ -256,7 +256,7 @@ impl Component for Lightbox {
                     appearance,
                     button::Params {
                         content: button::Content::Icon(Icon::ChevronRight),
-                        theme: &button::themes::Secondary,
+                        theme: &ButtonTheme,
                         options: button::Options {
                             size: button::Size::Small,
                             on_click: Some(Box::new(move |ctx, app, _| {
@@ -298,12 +298,12 @@ fn lightbox_text_size(appearance: &Appearance) -> f32 {
     appearance.ui_font_size() + LIGHTBOX_TEXT_SIZE_DELTA
 }
 
-/// A custom button theme for the dismiss button to force colors to match
-/// a Dark theme button, as this button always appears on top of a near-black
+/// A custom button theme for lightbox buttons to force colors to match
+/// a Dark theme button, as these buttons always appear on top of a near-black
 /// scrim, independent of application theme.
-struct DismissButtonTheme;
+struct ButtonTheme;
 
-impl button::Theme for DismissButtonTheme {
+impl button::Theme for ButtonTheme {
     fn background(
         &self,
         button_state: button::State,
