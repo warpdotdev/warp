@@ -2,15 +2,11 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use ordered_float::OrderedFloat;
-use warpui::r#async::Timer;
-use warpui::{App, AppContext, Element};
+use warpui_core::r#async::Timer;
+use warpui_core::{App, AppContext, Element};
 
 use super::*;
-use crate::auth::AuthStateProvider;
-use crate::auth::auth_manager::AuthManager;
-use crate::search::item::SearchItem;
-use crate::server::server_api::ServerApiProvider;
-use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::item::SearchItem;
 
 #[derive(Clone, Debug, PartialEq)]
 struct TestAction {
@@ -30,15 +26,15 @@ impl SearchItem for TestSearchItem {
 
     fn render_icon(
         &self,
-        _highlight_state: crate::search::result_renderer::ItemHighlightState,
-        _appearance: &crate::appearance::Appearance,
+        _highlight_state: crate::result_renderer::ItemHighlightState,
+        _appearance: &warp_core::ui::appearance::Appearance,
     ) -> Box<dyn Element> {
         unimplemented!()
     }
 
     fn render_item(
         &self,
-        _highlight_state: crate::search::result_renderer::ItemHighlightState,
+        _highlight_state: crate::result_renderer::ItemHighlightState,
         _app: &AppContext,
     ) -> Box<dyn Element> {
         unimplemented!()
@@ -149,13 +145,6 @@ impl AsyncDataSource for QueryDrivenDelayedAsyncSource {
             })])
         })
     }
-}
-
-fn initialize_app(app: &mut App) {
-    app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
-    app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
-    app.add_singleton_model(AuthManager::new_for_test);
 }
 
 #[test]
@@ -340,7 +329,6 @@ fn test_results_with_mixed_tiers_scores_and_sources_sort_consistently() {
 #[test]
 fn test_initial_results_timeout_and_appends_late_async_results_without_reordering() {
     App::test((), |mut app| async move {
-        initialize_app(&mut app);
         let mixer = app.add_model(|_| SearchMixer::<TestAction>::new());
         mixer.update(&mut app, |mixer, ctx| {
             mixer.add_sync_source(
@@ -435,7 +423,6 @@ fn test_initial_results_timeout_and_appends_late_async_results_without_reorderin
 #[test]
 fn test_initial_results_commit_keeps_sorted_results_when_async_finishes_before_timeout() {
     App::test((), |mut app| async move {
-        initialize_app(&mut app);
         let mixer = app.add_model(|_| SearchMixer::<TestAction>::new());
         mixer.update(&mut app, |mixer, ctx| {
             mixer.add_sync_source(
@@ -497,7 +484,6 @@ fn test_initial_results_commit_keeps_sorted_results_when_async_finishes_before_t
 #[test]
 fn test_stale_async_results_do_not_poison_newer_query() {
     App::test((), |mut app| async move {
-        initialize_app(&mut app);
         let mixer = app.add_model(|_| SearchMixer::<TestAction>::new());
         mixer.update(&mut app, |mixer, ctx| {
             mixer.add_async_source(

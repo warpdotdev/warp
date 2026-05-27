@@ -196,7 +196,7 @@ macro_rules! define_search_schema {
             }
         }
 
-        paste::paste! {
+        $crate::paste::paste! {
             #[allow(unused)]
             #[derive(Debug, Clone)]
             struct [<_ $config_name HighlightResult>] {

@@ -155,7 +155,6 @@ ordered-float.workspace = true
 os_info = { version = "3.7.0", default-features = false }
 palette = { version = "0.6.0", default-features = false, features = ["std"] }
 parking_lot = { version = "0.12.1", features = ["serde"] }
-paste = "1.0"
 pathfinder_color = "0.5.0"
 pathfinder_geometry.workspace = true
 persistence.workspace = true

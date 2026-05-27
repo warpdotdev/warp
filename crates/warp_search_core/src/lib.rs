@@ -6,5 +6,7 @@ pub mod result_renderer;
 pub mod searcher;
 mod telemetry;
 
-// Re-export tantivy dependency for use by macros.
+// Re-export paste for use by macros.
+pub use paste;
+// Re-export tantivy for use by macros.
 pub use tantivy;

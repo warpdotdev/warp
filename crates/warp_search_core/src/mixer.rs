@@ -169,10 +169,9 @@ impl<T: Action + Clone> SearchMixer<T> {
                 latest_run_abort_handle,
                 ..
             } = &mut registered_source.source
+                && let Some(abort_handle) = latest_run_abort_handle.take()
             {
-                if let Some(abort_handle) = latest_run_abort_handle.take() {
-                    abort_handle.abort();
-                }
+                abort_handle.abort();
             }
         }
     }
@@ -403,11 +402,11 @@ impl<T: Action + Clone> SearchMixer<T> {
                 }
 
                 // Check if we should just be debouncing the query rather than running it right now.
-                if let Some(debounce_tx) = debounce_tx {
-                    if !skip_debounce {
-                        let _ = debounce_tx.try_send(DataSourceDebounceArg {});
-                        return;
-                    }
+                if let Some(debounce_tx) = debounce_tx
+                    && !skip_debounce
+                {
+                    let _ = debounce_tx.try_send(DataSourceDebounceArg {});
+                    return;
                 }
 
                 // If we get here, then we should run the query against the data source right now.
