@@ -760,7 +760,7 @@ fn find_skill_files_in_tree_returns_remote_skill_paths_for_remote_repos() {
 }
 
 #[test]
-fn find_skill_files_in_tree_includes_ignored_skill_files() {
+fn find_skill_files_in_tree_excludes_ignored_skill_files() {
     VirtualFS::test("find_skills_ignored", |dirs, mut vfs| {
         let repo = dirs.tests().join("repo");
         vfs.mkdir("repo/.agents/skills/ignored-skill")
@@ -819,12 +819,7 @@ fn find_skill_files_in_tree_includes_ignored_skill_files() {
 
             model_handle.read(&app, |model, ctx| {
                 let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
-                assert_eq!(
-                    find_skill_files_in_tree(&repo_id, model, ctx),
-                    vec![LocalOrRemotePath::Local(
-                        repo.join(".agents/skills/ignored-skill/SKILL.md")
-                    )]
-                );
+                assert!(find_skill_files_in_tree(&repo_id, model, ctx).is_empty());
             });
         });
     });

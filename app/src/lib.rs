@@ -1519,12 +1519,6 @@ pub(crate) fn initialize_app(
             } else {
                 RepoMetadataModel::new(ctx)
             };
-            model.register_ignored_path_interests(
-                ::ai::skills::SKILL_PROVIDER_DEFINITIONS
-                    .iter()
-                    .map(|provider| provider.skills_path.clone()),
-                ctx,
-            );
 
             // Subscribe to RemoteServerManager push events so that remote repo
             // metadata snapshots and incremental updates populate the remote
