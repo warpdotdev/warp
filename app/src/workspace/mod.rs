@@ -18,6 +18,7 @@ mod one_time_modal_model;
 mod registry;
 pub mod rewind_confirmation_dialog;
 pub mod sync_inputs;
+pub mod tab_group;
 pub mod tab_settings;
 mod toast_stack;
 pub mod util;

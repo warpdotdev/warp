@@ -41,6 +41,7 @@ use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::themes::theme_chooser::ThemeChooserMode;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
+use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::PaneViewLocator;
 
 /// This enum determines how the search query is initialized when opening command search.
@@ -169,6 +170,10 @@ pub enum WorkspaceAction {
     CloseNonActiveTabs,
     CloseTabsRight(usize),
     CloseTabsRightActiveTab,
+    /// Close every tab that belongs to the given tab group.
+    CloseTabGroup(TabGroupId),
+    /// Toggle collapsed state for the given tab group.
+    ToggleTabGroupCollapsed(TabGroupId),
     AddDefaultTab,
     AddTerminalTab {
         hide_homepage: bool,
@@ -790,6 +795,8 @@ impl WorkspaceAction {
             | CloseNonActiveTabs
             | CloseTabsRight(_)
             | CloseTabsRightActiveTab
+            | CloseTabGroup(_)
+            | ToggleTabGroupCollapsed(_)
             | ToggleTabColor { .. }
             | AddDefaultTab
             | AddTerminalTab { .. }

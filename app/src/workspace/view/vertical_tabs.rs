@@ -70,6 +70,7 @@ use crate::util::color::Opacity;
 use crate::workspace::action::{NewSessionMenuAnchor, WorkspaceAction};
 use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
 use crate::workspace::hoa_onboarding::HoaOnboardingStep;
+use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::tab_settings::{
     TabSettings, VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity,
     VerticalTabsPrimaryInfo, VerticalTabsTabItemMode, VerticalTabsViewMode,
@@ -94,9 +95,13 @@ const GROUP_BODY_BOTTOM_PADDING: f32 = 8.;
 const GROUP_ITEM_SPACING: f32 = 4.;
 const TABS_MODE_ITEM_SPACING: f32 = 4.;
 const GROUP_ACTION_BUTTON_ICON_SIZE: f32 = 12.;
+const TAB_GROUP_HEADER_ACTION_ICON_SIZE: f32 = 14.;
 const GROUP_ACTION_BUTTON_PADDING: f32 = 2.;
 const GROUP_ACTION_BUTTON_GAP: f32 = 2.;
 const ROW_CORNER_RADIUS: f32 = 4.;
+const TAB_GROUP_MEMBER_INDENT: f32 = 12.;
+const TAB_GROUP_ICON_SIZE: f32 = 16.;
+const TAB_GROUP_CONTENT_INSET: f32 = 4.;
 const BADGE_ICON_SIZE: f32 = 12.;
 const DETAIL_SIDECAR_DEFAULT_WIDTH: f32 = 320.;
 const DETAIL_SIDECAR_MIN_WIDTH: f32 = 240.;
@@ -267,6 +272,16 @@ struct PaneGroupStateHandles {
     kebab: MouseStateHandle,
     close: MouseStateHandle,
     action_buttons: MouseStateHandle,
+}
+
+/// Hover states for a tab group's container, header, chevron, kebab, and close button.
+#[derive(Clone, Default)]
+struct TabGroupMouseStates {
+    container: MouseStateHandle,
+    header: MouseStateHandle,
+    chevron: MouseStateHandle,
+    kebab: MouseStateHandle,
+    close: MouseStateHandle,
 }
 
 fn pane_row_background(
@@ -556,6 +571,8 @@ pub(super) struct VerticalTabsPanelState {
     scroll_state: ClippedScrollStateHandle,
     resizable_state: ResizableStateHandle,
     group_mouse_states: RefCell<HashMap<EntityId, PaneGroupStateHandles>>,
+    /// Hover states per tab group, keyed by `TabGroupId`.
+    tab_group_mouse_states: RefCell<HashMap<TabGroupId, TabGroupMouseStates>>,
     pane_row_mouse_states: RefCell<HashMap<PaneId, MouseStateHandle>>,
     pane_title_mouse_states: RefCell<HashMap<PaneId, MouseStateHandle>>,
     pane_badge_mouse_states: RefCell<HashMap<PaneId, PaneRowBadgeMouseStates>>,
@@ -592,6 +609,7 @@ impl Default for VerticalTabsPanelState {
             scroll_state: ClippedScrollStateHandle::default(),
             resizable_state: resizable_state_handle(PANEL_WIDTH),
             group_mouse_states: RefCell::default(),
+            tab_group_mouse_states: RefCell::default(),
             pane_row_mouse_states: RefCell::default(),
             pane_title_mouse_states: RefCell::default(),
             pane_badge_mouse_states: RefCell::default(),
@@ -818,6 +836,13 @@ struct TabGroupDragState {
     is_any_pane_dragging: bool,
     insert_before_index: usize,
     insert_after_index: Option<usize>,
+}
+
+/// One visible member of a tab group, captured during the render walk.
+struct TabGroupMember<'a> {
+    tab_index: usize,
+    filtered_pane_ids: Option<&'a [PaneId]>,
+    is_last_visible: bool,
 }
 
 fn resolve_vertical_tabs_mode(app: &AppContext) -> VerticalTabsResolvedMode {
@@ -1724,27 +1749,67 @@ fn render_groups(
         groups = groups.with_spacing(TABS_MODE_ITEM_SPACING);
     }
 
-    for (visible_tab_index, (tab_index, filtered_pane_ids)) in visible_tabs.iter().enumerate() {
-        // Insert ghost slot before this tab group if the drop would land here.
-        if ghost_insertion_index == Some(*tab_index) {
+    // Consecutive tabs sharing a group_id collapse into a single group container.
+    let total_visible = visible_tabs.len();
+    let mut i = 0;
+    while i < total_visible {
+        let (tab_index, ref filtered_pane_ids) = visible_tabs[i];
+        if ghost_insertion_index == Some(tab_index) {
             groups.add_child(render_ghost_vertical_tab_slot(workspace, app));
         }
-        let insert_before_index = *tab_index;
-        let insert_after_index =
-            (visible_tab_index == visible_tabs.len() - 1).then_some(tab_index + 1);
-        groups.add_child(render_tab_group(
-            state,
-            workspace,
-            *tab_index,
-            &workspace.tabs[*tab_index],
-            filtered_pane_ids.as_deref(),
-            TabGroupDragState {
-                is_any_pane_dragging,
-                insert_before_index,
-                insert_after_index,
-            },
-            app,
-        ));
+        let tab = &workspace.tabs[tab_index];
+        match tab.group_id.and_then(|gid| {
+            workspace
+                .tab_groups
+                .get(&gid)
+                .map(|group| (gid, group.clone()))
+        }) {
+            Some((group_id, group)) => {
+                // Collect consecutive member tabs belonging to the same group.
+                let mut members: Vec<TabGroupMember<'_>> = Vec::new();
+                let mut j = i;
+                while j < total_visible {
+                    let (next_tab_index, ref next_filtered_pane_ids) = visible_tabs[j];
+                    if workspace.tabs[next_tab_index].group_id != Some(group_id) {
+                        break;
+                    }
+                    members.push(TabGroupMember {
+                        tab_index: next_tab_index,
+                        filtered_pane_ids: next_filtered_pane_ids.as_deref(),
+                        is_last_visible: j == total_visible - 1,
+                    });
+                    j += 1;
+                }
+                groups.add_child(render_grouped_tab_container(
+                    state,
+                    workspace,
+                    &group,
+                    &members,
+                    is_any_pane_dragging,
+                    app,
+                ));
+                i = j;
+            }
+            None => {
+                let insert_before_index = tab_index;
+                let insert_after_index = (i == total_visible - 1).then_some(tab_index + 1);
+                groups.add_child(render_tab_group(
+                    state,
+                    workspace,
+                    tab_index,
+                    tab,
+                    filtered_pane_ids.as_deref(),
+                    TabGroupDragState {
+                        is_any_pane_dragging,
+                        insert_before_index,
+                        insert_after_index,
+                    },
+                    false, // in_tab_group
+                    app,
+                ));
+                i += 1;
+            }
+        }
     }
     // Ghost after all tab groups (fencepost).
     if ghost_insertion_index == Some(workspace.tabs.len()) {
@@ -1780,6 +1845,7 @@ fn render_groups(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_tab_group(
     state: &VerticalTabsPanelState,
     workspace: &Workspace,
@@ -1787,6 +1853,7 @@ fn render_tab_group(
     tab: &TabData,
     filtered_pane_ids: Option<&[PaneId]>,
     drag_state: TabGroupDragState,
+    in_tab_group: bool,
     app: &AppContext,
 ) -> Box<dyn Element> {
     render_tab_group_internal(
@@ -1797,6 +1864,7 @@ fn render_tab_group(
         filtered_pane_ids,
         drag_state,
         false,
+        in_tab_group,
         app,
     )
 }
@@ -1810,6 +1878,7 @@ fn render_tab_group_internal(
     filtered_pane_ids: Option<&[PaneId]>,
     drag_state: TabGroupDragState,
     for_drag_ghost: bool,
+    in_tab_group: bool,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
@@ -1824,7 +1893,9 @@ fn render_tab_group_internal(
             VerticalTabsDisplayGranularity::Tabs
         }
     };
-    let uses_outer_group_container = uses_outer_group_container(display_granularity);
+    // Tabs inside a group skip the per-tab outer container; the group provides it.
+    let uses_outer_group_container =
+        !in_tab_group && uses_outer_group_container(display_granularity);
     let representative_pane_ids = pane_ids_for_display_granularity(
         &visible_pane_ids,
         pane_group.focused_pane_id(app),
@@ -2060,14 +2131,28 @@ fn render_tab_group_internal(
             }
             container.finish()
         } else {
+            // Inside a tab group the surrounding container already paints
+            // hover/active state for the whole group, so suppress the
+            // per-tab background here and let each row show its own
+            // selected/hovered state.
             let background = if is_drag_target {
                 internal_colors::fg_overlay_2(theme)
-            } else if is_active || group_state.is_hovered() {
+            } else if !in_tab_group && (is_active || group_state.is_hovered()) {
                 internal_colors::fg_overlay_1(theme)
             } else {
                 ThemeFill::Solid(ColorU::transparent_black())
             };
+            // Pane view inside a tab group: reserve a top band so the action
+            // buttons (anchored to this wrapper's top-right) sit above the
+            // first pane row instead of overlaying its content, matching how
+            // regular pane view places them in the body's top padding.
+            let needs_action_button_band = in_tab_group
+                && matches!(display_granularity, VerticalTabsDisplayGranularity::Panes);
             let mut container = Container::new(build_rows()).with_background(background);
+            if needs_action_button_band {
+                container = container
+                    .with_padding(Padding::uniform(0.).with_top(GROUP_BODY_BOTTOM_PADDING));
+            }
             if is_drag_target {
                 container = container.with_border(
                     Border::all(1.).with_border_fill(ThemeFill::Solid(theme.accent().into())),
@@ -2120,10 +2205,23 @@ fn render_tab_group_internal(
                 );
             }
         }
+        // Pane view inside a tab group: the group container adds
+        // `GROUP_HORIZONTAL_PADDING` of right padding and the member wrapper
+        // around this `Stack` adds another `TAB_GROUP_CONTENT_INSET`, so the
+        // `Stack`'s right edge sits that much further inside the panel than
+        // it does in regular pane view. Push the buttons back out by the
+        // same amount so they land at the same panel-relative offset.
+        let action_button_x_offset = if in_tab_group
+            && matches!(display_granularity, VerticalTabsDisplayGranularity::Panes)
+        {
+            GROUP_HORIZONTAL_PADDING + TAB_GROUP_CONTENT_INSET - 4.
+        } else {
+            -4.
+        };
         stack.add_positioned_overlay_child(
             action_buttons,
             OffsetPositioning::offset_from_parent(
-                vec2f(-4., GROUP_HEADER_VERTICAL_PADDING),
+                vec2f(action_button_x_offset, GROUP_HEADER_VERTICAL_PADDING),
                 ParentOffsetBounds::WindowByPosition,
                 ParentAnchor::TopRight,
                 ChildAnchor::TopRight,
@@ -2304,9 +2402,295 @@ pub(crate) fn render_tab_group_for_drag_ghost(
         tab,
         None,
         drag_state,
-        true, // for_drag_ghost
+        true,  // for_drag_ghost
+        false, // in_tab_group
         app,
     )
+}
+
+/// Small icon button for the tab-group header; consumes clicks so they don't bubble.
+fn render_tab_group_header_icon_button(
+    icon: WarpIcon,
+    icon_size: f32,
+    icon_color: WarpThemeFill,
+    hover_background: WarpThemeFill,
+    mouse_state: MouseStateHandle,
+    on_click_action: Option<WorkspaceAction>,
+) -> Box<dyn Element> {
+    Hoverable::new(mouse_state, move |button_state| {
+        let mut container = Container::new(
+            ConstrainedBox::new(icon.to_warpui_icon(icon_color).finish())
+                .with_width(icon_size)
+                .with_height(icon_size)
+                .finish(),
+        )
+        .with_padding(Padding::uniform(GROUP_ACTION_BUTTON_PADDING))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
+        if button_state.is_hovered() {
+            container = container.with_background(hover_background);
+        }
+        container.finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(move |ctx, _, _| {
+        if let Some(action) = on_click_action.clone() {
+            ctx.dispatch_typed_action(action);
+        }
+    })
+    .finish()
+}
+
+/// Renders the header row for a tab group: chevron, title + "N tabs", and (on hover)
+/// kebab + close buttons. Single-clicking outside the per-button regions toggles collapse.
+fn render_grouped_tabs_header(
+    group: &TabGroup,
+    member_count: usize,
+    mouse_states: &TabGroupMouseStates,
+    is_collapsed: bool,
+    is_header_selected: bool,
+    show_action_buttons: bool,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    let font_family = appearance.ui_font_family();
+    let main_text_color = theme.main_text_color(theme.background());
+    let sub_text_color = theme.sub_text_color(theme.background());
+    let group_id = group.id;
+
+    let chevron_icon = if is_collapsed {
+        WarpIcon::ChevronRight
+    } else {
+        WarpIcon::ChevronDown
+    };
+    let chevron_button = render_tab_group_header_icon_button(
+        chevron_icon,
+        TAB_GROUP_ICON_SIZE,
+        main_text_color,
+        internal_colors::fg_overlay_2(theme),
+        mouse_states.chevron.clone(),
+        Some(WorkspaceAction::ToggleTabGroupCollapsed(group_id)),
+    );
+    // Center the chevron in a `VERTICAL_TABS_ICON_SIZE` slot so the title aligns with member rows.
+    let chevron_slot = ConstrainedBox::new(
+        Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::Center)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(chevron_button)
+            .finish(),
+    )
+    .with_width(VERTICAL_TABS_ICON_SIZE)
+    .with_height(VERTICAL_TABS_ICON_SIZE)
+    .finish();
+
+    let title_text = group.name.clone().unwrap_or_else(|| "New Group".to_string());
+    let title_element: Box<dyn Element> = Text::new_inline(title_text, font_family, 12.)
+        .with_clip(ClipConfig::ellipsis())
+        .with_color(main_text_color.into())
+        .finish();
+    let subtitle_text = if member_count == 1 {
+        "1 tab".to_string()
+    } else {
+        format!("{member_count} tabs")
+    };
+    let subtitle = Text::new_inline(subtitle_text, font_family, 10.)
+        .with_clip(ClipConfig::ellipsis())
+        .with_color(sub_text_color.into())
+        .finish();
+    let text_column: Box<dyn Element> = Flex::column()
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_spacing(1.)
+        .with_child(title_element)
+        .with_child(subtitle)
+        .finish();
+
+    let action_buttons = if show_action_buttons {
+        let kebab_button = render_tab_group_header_icon_button(
+            WarpIcon::DotsVertical,
+            TAB_GROUP_HEADER_ACTION_ICON_SIZE,
+            sub_text_color,
+            internal_colors::fg_overlay_2(theme),
+            mouse_states.kebab.clone(),
+            // No-op for now; TODO(johnturcoo) add tab group more-options menu.
+            None,
+        );
+        let close_button = render_tab_group_header_icon_button(
+            WarpIcon::X,
+            TAB_GROUP_HEADER_ACTION_ICON_SIZE,
+            sub_text_color,
+            internal_colors::fg_overlay_3(theme),
+            mouse_states.close.clone(),
+            Some(WorkspaceAction::CloseTabGroup(group_id)),
+        );
+        Flex::row()
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(GROUP_ACTION_BUTTON_GAP)
+            .with_child(kebab_button)
+            .with_child(close_button)
+            .finish()
+    } else {
+        Empty::new().finish()
+    };
+
+    let row = Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_child(
+            Shrinkable::new(
+                1.,
+                Flex::row()
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(ICON_WITH_STATUS_GAP)
+                    .with_child(chevron_slot)
+                    .with_child(Shrinkable::new(1., text_column).finish())
+                    .finish(),
+            )
+            .finish(),
+        )
+        .with_child(action_buttons)
+        .finish();
+
+    let mut hoverable = Hoverable::new(mouse_states.header.clone(), move |state| {
+        let border_fill = if is_header_selected {
+            internal_colors::fg_overlay_3(theme)
+        } else {
+            WarpThemeFill::Solid(ColorU::transparent_black())
+        };
+        let mut container = Container::new(row)
+            .with_padding(Padding::uniform(GROUP_HORIZONTAL_PADDING))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)))
+            .with_border(Border::all(1.).with_border_fill(border_fill));
+        if is_header_selected || state.is_hovered() {
+            container = container.with_background(internal_colors::fg_overlay_2(theme));
+        }
+        container.finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .with_defer_events_to_children();
+
+    // Single-click toggles collapse; no-op `on_right_click` keeps right-clicks from bubbling
+    // up to the panel's new-session menu handler.
+    hoverable = hoverable.on_click(move |ctx, _, _| {
+        ctx.dispatch_typed_action(WorkspaceAction::ToggleTabGroupCollapsed(group_id));
+    });
+    hoverable = hoverable.on_right_click(|_, _, _| {});
+    hoverable.finish()
+}
+
+/// Renders a tab group: pane-like header followed by indented member rows. Background only paints
+/// on hover or when a member is active.
+fn render_grouped_tab_container(
+    state: &VerticalTabsPanelState,
+    workspace: &Workspace,
+    group: &TabGroup,
+    members: &[TabGroupMember<'_>],
+    is_any_pane_dragging: bool,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+
+    let mouse_states = state
+        .tab_group_mouse_states
+        .borrow_mut()
+        .entry(group.id)
+        .or_default()
+        .clone();
+
+    let member_count = members.len();
+    let group = group.clone();
+    let any_member_active = members
+        .iter()
+        .any(|m| m.tab_index == workspace.active_tab_index);
+    let is_collapsed = group.collapsed;
+
+    let resolved_mode = resolve_vertical_tabs_mode(app);
+    let needs_outer_horizontal_padding = uses_outer_group_container(match resolved_mode {
+        VerticalTabsResolvedMode::Panes => VerticalTabsDisplayGranularity::Panes,
+        _ => VerticalTabsDisplayGranularity::Tabs,
+    });
+
+    Hoverable::new(mouse_states.container.clone(), |hover_state| {
+        let mut content = Flex::column()
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_spacing(TABS_MODE_ITEM_SPACING);
+
+        // Collapsed group + active member: highlight the header instead of the (now hidden) member row.
+        let is_header_selected = is_collapsed && any_member_active;
+        content.add_child(render_grouped_tabs_header(
+            &group,
+            member_count,
+            &mouse_states,
+            is_collapsed,
+            is_header_selected,
+            hover_state.is_hovered(),
+            app,
+        ));
+
+        // Collapsed groups hide member rows in the panel chrome; the members remain in `workspace.tabs`.
+        if !is_collapsed {
+            for member in members {
+                let tab = &workspace.tabs[member.tab_index];
+                let insert_before_index = member.tab_index;
+                let insert_after_index = member.is_last_visible.then_some(member.tab_index + 1);
+                let drag_state = TabGroupDragState {
+                    is_any_pane_dragging,
+                    insert_before_index,
+                    insert_after_index,
+                };
+                let tab_element = render_tab_group(
+                    state,
+                    workspace,
+                    member.tab_index,
+                    tab,
+                    member.filtered_pane_ids,
+                    drag_state,
+                    true, 
+                    app,
+                );
+                content.add_child(
+                    Container::new(tab_element)
+                        .with_padding(
+                            Padding::uniform(0.)
+                                .with_left(TAB_GROUP_MEMBER_INDENT)
+                                .with_right(TAB_GROUP_CONTENT_INSET),
+                        )
+                        .finish(),
+                );
+            }
+        }
+
+        let background = if hover_state.is_hovered() || any_member_active {
+            internal_colors::fg_overlay_1(theme)
+        } else {
+            ThemeFill::Solid(ColorU::transparent_black())
+        };
+
+        // Pane view: uniform `GROUP_HORIZONTAL_PADDING` matches ungrouped-tab body padding.
+        // Tab view: only apply bottom padding when expanded so a collapsed group has no trailing band.
+        let mut padding = Padding::uniform(0.);
+        if needs_outer_horizontal_padding {
+            padding = Padding::uniform(GROUP_HORIZONTAL_PADDING);
+        } else if !is_collapsed {
+            padding = padding.with_bottom(TAB_GROUP_CONTENT_INSET);
+        }
+
+        Container::new(content.finish())
+            .with_padding(padding)
+            .with_background(background)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)))
+            .finish()
+    })
+    // Consume right-clicks so they don't bubble to the panel's new-session menu handler.
+    .on_right_click(|_, _, _| {})
+    .with_defer_events_to_children()
+    .finish()
 }
 
 fn render_group_header(props: GroupHeaderProps<'_>, app: &AppContext) -> Box<dyn Element> {
