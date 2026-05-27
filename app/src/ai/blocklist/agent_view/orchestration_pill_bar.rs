@@ -2009,6 +2009,16 @@ fn render_pill(
             pill_kind: kind,
         });
     })
+    .on_right_click(move |ctx, _app, _| {
+        // Right-clicking a child pill should expose the same overflow
+        // actions as clicking the trailing 3-dot button. The menu is still
+        // anchored to that button's saved position: opening the menu forces
+        // `show_dots`, so the next render creates the anchor before the menu
+        // overlay is positioned.
+        if show_overflow_button {
+            ctx.dispatch_typed_action(OrchestrationPillBarAction::OpenMenu(conversation_id));
+        }
+    })
     .finish();
 
     // Cache the painted rect of this pill body under a stable id so the
