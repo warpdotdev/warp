@@ -324,12 +324,10 @@ impl ShellType {
             }
             #[cfg(windows)]
             ShellType::PowerShell => {
-                vec![
-                    base_config_dir()
-                        .join("Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt")
-                        .display()
-                        .to_string(),
-                ]
+                vec![base_config_dir()
+                    .join("Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt")
+                    .display()
+                    .to_string()]
             }
         }
     }
