@@ -627,3 +627,186 @@ fn panw_audit_management_repro_coerces_all_integers() {
     assert_serialized_as(&args, "request_data.search_to", "100");
     assert_serialized_as(&args, "request_data.filters.0.value", "1730419200000");
 }
+
+// ---------- oneOf/anyOf branch selection (#10596 review) ----------
+
+#[test]
+fn tagged_union_does_not_coerce_through_non_matching_branch() {
+    // Discriminated union: branch "a" types `val` as integer, branch "b" types
+    // it as number. The instance carries `kind: "b"`, so the float `val` must
+    // be left alone — coercing it via branch "a" would corrupt a legitimate
+    // float the server asked for.
+    let mut args = obj(json!({ "kind": "b", "val": 5.0 }));
+    let schema = obj(json!({
+        "oneOf": [
+            {
+                "properties": {
+                    "kind": { "const": "a" },
+                    "val": { "type": "integer" }
+                }
+            },
+            {
+                "properties": {
+                    "kind": { "const": "b" },
+                    "val": { "type": "number" }
+                }
+            }
+        ]
+    }));
+
+    coerce_integer_args(&mut args, &schema);
+
+    // Stayed a float — branch "a" was excluded by the `kind` discriminator.
+    assert_serialized_as(&args, "val", "5.0");
+}
+
+#[test]
+fn tagged_union_coerces_through_matching_branch() {
+    // Same schema as above, but the instance selects branch "a", so `val`
+    // should coerce to an integer.
+    let mut args = obj(json!({ "kind": "a", "val": 5.0 }));
+    let schema = obj(json!({
+        "oneOf": [
+            {
+                "properties": {
+                    "kind": { "const": "a" },
+                    "val": { "type": "integer" }
+                }
+            },
+            {
+                "properties": {
+                    "kind": { "const": "b" },
+                    "val": { "type": "number" }
+                }
+            }
+        ]
+    }));
+
+    coerce_integer_args(&mut args, &schema);
+
+    assert_serialized_as(&args, "val", "5");
+}
+
+#[test]
+fn enum_discriminator_excludes_non_matching_branch() {
+    // `enum` discriminator instead of `const`.
+    let mut args = obj(json!({ "tag": "float", "n": 9.0 }));
+    let schema = obj(json!({
+        "oneOf": [
+            {
+                "properties": {
+                    "tag": { "enum": ["int"] },
+                    "n": { "type": "integer" }
+                }
+            },
+            {
+                "properties": {
+                    "tag": { "enum": ["float", "double"] },
+                    "n": { "type": "number" }
+                }
+            }
+        ]
+    }));
+
+    coerce_integer_args(&mut args, &schema);
+
+    assert_serialized_as(&args, "n", "9.0");
+}
+
+#[test]
+fn type_mismatched_branch_is_skipped() {
+    // A branch whose top-level `type` the value can't satisfy is excluded, so
+    // the object's integer field is coerced only via the matching object branch.
+    let mut args = obj(json!({ "x": 3.0 }));
+    let schema = obj(json!({
+        "anyOf": [
+            { "type": "string" },
+            { "type": "object", "properties": { "x": { "type": "integer" } } }
+        ]
+    }));
+
+    coerce_integer_args(&mut args, &schema);
+
+    assert_serialized_as(&args, "x", "3");
+}
+
+#[test]
+fn required_discriminator_excludes_branch_missing_keys() {
+    // Branch "a" requires `a_only`; the instance lacks it, so that branch is
+    // excluded and `shared` is coerced via branch "b".
+    let mut args = obj(json!({ "b_only": true, "shared": 4.0 }));
+    let schema = obj(json!({
+        "oneOf": [
+            {
+                "required": ["a_only"],
+                "properties": { "shared": { "type": "number" } }
+            },
+            {
+                "required": ["b_only"],
+                "properties": { "shared": { "type": "integer" } }
+            }
+        ]
+    }));
+
+    coerce_integer_args(&mut args, &schema);
+
+    assert_serialized_as(&args, "shared", "4");
+}
+
+// ---------- patternProperties compile bounds (#10596 review) ----------
+
+#[test]
+fn too_many_pattern_properties_skips_additional_coercion() {
+    // More than MAX_PATTERN_PROPERTIES patterns ⇒ we can't safely reason about
+    // which keys are pattern-governed, so additionalProperties coercion is
+    // skipped and the float is left untouched (conservative fallback).
+    let mut patterns = serde_json::Map::new();
+    for i in 0..(MAX_PATTERN_PROPERTIES + 1) {
+        patterns.insert(format!("^p{i}_"), json!({ "type": "string" }));
+    }
+    let mut args = obj(json!({ "free": 5.0 }));
+    let schema = obj(json!({
+        "type": "object",
+        "patternProperties": patterns,
+        "additionalProperties": { "type": "integer" }
+    }));
+
+    coerce_integer_args(&mut args, &schema);
+
+    // Skipped — stayed a float.
+    assert_serialized_as(&args, "free", "5.0");
+}
+
+#[test]
+fn overlong_pattern_skips_additional_coercion() {
+    let long_pattern = format!("^{}$", "a".repeat(MAX_PATTERN_LEN + 1));
+    let mut args = obj(json!({ "free": 5.0 }));
+    let schema = obj(json!({
+        "type": "object",
+        "patternProperties": { long_pattern: { "type": "string" } },
+        "additionalProperties": { "type": "integer" }
+    }));
+
+    coerce_integer_args(&mut args, &schema);
+
+    assert_serialized_as(&args, "free", "5.0");
+}
+
+#[test]
+fn bounded_pattern_properties_still_coerce_non_matching_keys() {
+    // A small, well-formed patternProperties set compiles fine: keys matching
+    // the pattern are excluded, and other keys still coerce via
+    // additionalProperties.
+    let mut args = obj(json!({ "_internal": 1.0, "free": 2.0 }));
+    let schema = obj(json!({
+        "type": "object",
+        "patternProperties": { "^_": { "type": "string" } },
+        "additionalProperties": { "type": "integer" }
+    }));
+
+    coerce_integer_args(&mut args, &schema);
+
+    // `_internal` is pattern-governed (left alone); `free` coerces.
+    assert_serialized_as(&args, "_internal", "1.0");
+    assert_serialized_as(&args, "free", "2");
+}

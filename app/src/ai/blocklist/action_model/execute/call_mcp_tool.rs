@@ -186,6 +186,17 @@ const MAX_COERCE_DEPTH: usize = 64;
 /// most; 10_000 leaves ~20× headroom for unusual but legitimate shapes.
 const MAX_COERCE_OPS: usize = 10_000;
 
+/// Bounds on `patternProperties` regex compilation. The patterns come from the
+/// MCP server's advertised schema, which is untrusted input. Rust's `regex`
+/// crate already guarantees linear-time *matching* (it's a finite automaton —
+/// no catastrophic backtracking), so the only attack surface is forcing a
+/// pathological *compile*: a huge or deeply-nested pattern that blows up
+/// memory/CPU while building the program. We defend by capping the number of
+/// patterns, the length of each, and the compiled program size (#10596 review).
+const MAX_PATTERN_PROPERTIES: usize = 64;
+const MAX_PATTERN_LEN: usize = 1024;
+const PATTERN_REGEX_SIZE_LIMIT: usize = 64 * 1024;
+
 /// Coerces whole-number floats in `args` to integers wherever the tool's JSON
 /// Schema `input_schema` declares an [integer type], at any depth.
 ///
@@ -239,14 +250,19 @@ fn coerce_recursive(
         }
     }
 
-    // `oneOf` / `anyOf` — apply every branch. Coercion is conservative
-    // (whole-number f64 → i64 only) and applying a branch whose schema doesn't
-    // match the value is a no-op, so trying all branches sidesteps the
-    // ambiguity of picking the "right" branch when multiple top-level types
-    // would match.
+    // `oneOf` / `anyOf` — apply each branch the value could actually satisfy.
+    // We skip any branch the value provably violates (`const`, `enum`, `type`,
+    // `required`, or a discriminator `const`/`enum` on a present property), so
+    // we never coerce a value according to a branch it isn't governed by — e.g.
+    // a tagged union where one arm types a field as `integer` and another as
+    // `number`. For branches with no recognized discriminator the check is a
+    // no-op, preserving the prior "try them all" behavior (#10596 review).
     for key in ["oneOf", "anyOf"] {
         if let Some(branches) = schema.get(key).and_then(|v| v.as_array()) {
             for b in branches {
+                if branch_excluded(value, b, root) {
+                    continue;
+                }
                 coerce_recursive(value, b, root, depth + 1, budget);
             }
         }
@@ -289,21 +305,17 @@ fn coerce_recursive(
             // crate is a strict subset and rejects valid patterns such as
             // those with lookaheads or certain Unicode constructs. We
             // can't safely tell those apart from "this key doesn't match
-            // the pattern", so if any pattern fails to compile we fall
-            // back to skipping `additionalProperties` for this schema —
-            // a key that should have been governed by the pattern won't
-            // get coerced with the wrong schema.
-            let pattern_compile = schema
-                .get("patternProperties")
-                .and_then(|v| v.as_object())
-                .map(|p| {
-                    p.keys()
-                        .map(|pat| regex::Regex::new(pat))
-                        .collect::<Result<Vec<_>, _>>()
-                });
-            let pattern_regexes = match pattern_compile {
-                Some(Ok(res)) => res,
-                Some(Err(_)) => break 'additional,
+            // the pattern", so if any pattern fails to compile (or is
+            // rejected by the compile bounds) we fall back to skipping
+            // `additionalProperties` for this schema — a key that should
+            // have been governed by the pattern won't get coerced with the
+            // wrong schema.
+            let pattern_regexes = match schema.get("patternProperties").and_then(|v| v.as_object())
+            {
+                Some(patterns) => match compile_pattern_properties(patterns) {
+                    Some(res) => res,
+                    None => break 'additional,
+                },
                 None => Vec::new(),
             };
             for (k, v) in map.iter_mut() {
@@ -343,6 +355,137 @@ fn declares_integer(schema: &serde_json::Value) -> bool {
         Some(serde_json::Value::Array(arr)) => arr.iter().any(|t| t.as_str() == Some("integer")),
         _ => false,
     }
+}
+
+/// Returns `true` only when `value` *provably* fails one of `schema`'s
+/// discriminating constraints, so it should not be coerced as if it satisfied
+/// that `oneOf`/`anyOf` branch.
+///
+/// This is intentionally a partial check, not a JSON Schema validator: it
+/// returns `true` solely when it can prove a non-match via `const`, `enum`,
+/// `type`, `required`, or a `const`/`enum` discriminator on a property present
+/// in `value`. A branch with no recognized discriminator is never excluded, so
+/// behavior for un-tagged unions is unchanged. Numeric `type` checks treat a
+/// whole-number float as a valid `integer` — that's exactly the value this
+/// coercion exists to fix, so such a branch must stay a candidate.
+fn branch_excluded(
+    value: &serde_json::Value,
+    schema: &serde_json::Value,
+    root: &serde_json::Value,
+) -> bool {
+    let schema = resolve_refs(schema, root);
+
+    if let Some(constant) = schema.get("const") {
+        if value != constant {
+            return true;
+        }
+    }
+    if let Some(serde_json::Value::Array(variants)) = schema.get("enum") {
+        if !variants.iter().any(|variant| variant == value) {
+            return true;
+        }
+    }
+    if let Some(type_schema) = schema.get("type") {
+        if !type_allows_value(type_schema, value) {
+            return true;
+        }
+    }
+    if let (Some(serde_json::Value::Array(required)), serde_json::Value::Object(map)) =
+        (schema.get("required"), value)
+    {
+        for key in required {
+            if let Some(key) = key.as_str() {
+                if !map.contains_key(key) {
+                    return true;
+                }
+            }
+        }
+    }
+    // Tagged-union discriminator: a `const`/`enum` on a property that is present
+    // in the value must match. We only check `const`/`enum` here (not `type`),
+    // so we don't exclude a branch over the very integer-vs-number distinction
+    // this walker is meant to reconcile.
+    if let (Some(props), serde_json::Value::Object(map)) =
+        (schema.get("properties").and_then(|v| v.as_object()), value)
+    {
+        for (key, child_schema) in props {
+            let Some(child_value) = map.get(key) else {
+                continue;
+            };
+            let child_schema = resolve_refs(child_schema, root);
+            if let Some(constant) = child_schema.get("const") {
+                if child_value != constant {
+                    return true;
+                }
+            }
+            if let Some(serde_json::Value::Array(variants)) = child_schema.get("enum") {
+                if !variants.iter().any(|variant| variant == child_value) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Whether `value`'s JSON type is compatible with a schema `type` keyword
+/// (either a single string or an array of accepted type names). Unknown type
+/// spellings are treated as compatible so we never exclude on a type we don't
+/// understand.
+fn type_allows_value(type_schema: &serde_json::Value, value: &serde_json::Value) -> bool {
+    match type_schema {
+        serde_json::Value::String(name) => json_type_matches(name, value),
+        serde_json::Value::Array(names) => names
+            .iter()
+            .filter_map(|name| name.as_str())
+            .any(|name| json_type_matches(name, value)),
+        _ => true,
+    }
+}
+
+fn json_type_matches(type_name: &str, value: &serde_json::Value) -> bool {
+    match type_name {
+        "null" => value.is_null(),
+        "boolean" => value.is_boolean(),
+        "string" => value.is_string(),
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "number" => value.is_number(),
+        // A JSON number with no fractional part satisfies "integer" — exactly
+        // the whole-number-float case this coercion targets.
+        "integer" => {
+            value.is_i64() || value.is_u64() || value.as_f64().is_some_and(|f| f.fract() == 0.0)
+        }
+        // Unknown type name (or a non-standard spelling): don't exclude.
+        _ => true,
+    }
+}
+
+/// Compile the keys of a `patternProperties` map into regexes under strict
+/// bounds (see [`MAX_PATTERN_PROPERTIES`], [`MAX_PATTERN_LEN`],
+/// [`PATTERN_REGEX_SIZE_LIMIT`]). Returns `None` if the set is rejected — too
+/// many patterns, an over-long pattern, or one that fails to compile within the
+/// size limit — and callers treat `None` as "can't safely reason about these
+/// patterns" and skip the dependent coercion path.
+fn compile_pattern_properties(
+    patterns: &serde_json::Map<String, serde_json::Value>,
+) -> Option<Vec<regex::Regex>> {
+    if patterns.len() > MAX_PATTERN_PROPERTIES {
+        return None;
+    }
+    let mut compiled = Vec::with_capacity(patterns.len());
+    for pattern in patterns.keys() {
+        if pattern.len() > MAX_PATTERN_LEN {
+            return None;
+        }
+        let regex = regex::RegexBuilder::new(pattern)
+            .size_limit(PATTERN_REGEX_SIZE_LIMIT)
+            .dfa_size_limit(PATTERN_REGEX_SIZE_LIMIT)
+            .build()
+            .ok()?;
+        compiled.push(regex);
+    }
+    Some(compiled)
 }
 
 /// Iteratively follows `$ref` pointers against `root`. Returns the first schema
