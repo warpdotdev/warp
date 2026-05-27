@@ -45,6 +45,7 @@ pub fn find_skill_files_in_tree(
         include_folders: false,
         ..GetContentsArgs::default()
     }
+    .include_ignored()
     .with_filter(|content| {
         let RepoContent::File(file) = content else {
             return false;
@@ -134,6 +135,7 @@ fn find_local_provider_directories_in_tree(
         include_folders: true,
         ..GetContentsArgs::default()
     }
+    .include_ignored()
     .with_filter(|content| {
         let RepoContent::Directory(directory) = content else {
             return false;

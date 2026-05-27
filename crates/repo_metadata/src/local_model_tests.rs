@@ -36,6 +36,7 @@ mod tests {
                 #[cfg(feature = "local_fs")]
                 watcher: Default::default(),
                 emit_incremental_updates: false,
+                ignored_path_interests: Vec::new(),
             }
         }
     }
@@ -743,6 +744,7 @@ mod tests {
             let mutations = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
                 &update,
                 &gitignores,
+                &[],
             ));
             LocalRepoMetadataModel::apply_file_tree_mutations(&mut root, mutations, false, false);
 
