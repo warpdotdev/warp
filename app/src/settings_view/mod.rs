@@ -465,6 +465,8 @@ pub mod flags {
     pub const SAFE_MODE_FLAG: &str = "safe_mode";
     pub const CRASH_REPORTING_FLAG: &str = "crash_reporting";
     pub const CLOUD_CONVERSATION_STORAGE_FLAG: &str = "Cloud_Conversation_Storage_Enabled";
+    pub const CLOUD_CONVERSATION_STORAGE_EDITABLE_FLAG: &str =
+        "Cloud_Conversation_Storage_Editable";
     pub const DIM_INACTIVE_PANES_FLAG: &str = "Dim_Inactive_Panes";
     pub const OPEN_WINDOWS_AT_CUSTOM_SIZE_FLAG: &str = "Open_Windows_At_Custom_Size";
     pub const WINDOW_BLUR_TEXTURE_FLAG: &str = "Window_Blur_Texture";
@@ -800,16 +802,9 @@ impl<T: Action + Clone> ToggleSettingActionPair<T> {
         self
     }
 
-    pub fn is_supported_on_current_platform(&self, value: bool) -> Self {
-        ToggleSettingActionPair {
-            descriptions: self.descriptions.clone(),
-            toggle_action: self.toggle_action.clone(),
-            contexts: self.contexts.clone(),
-            custom_action: self.custom_action,
-            binding_group: self.binding_group,
-            supported_on_current_platform: value,
-            enabled_predicate: None,
-        }
+    pub fn is_supported_on_current_platform(mut self, value: bool) -> Self {
+        self.supported_on_current_platform = value;
+        self
     }
 
     /// Creates enable/disable bindings for a toggle feature, given a list of `ToggleSettingActionPair`'s.

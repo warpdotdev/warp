@@ -2019,7 +2019,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             builder(SettingsAction::PrivacyPageToggle(
                 PrivacyPageAction::ToggleCloudConversationStorage,
             )),
-            &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
+            &(context.clone()
+                & id!(flags::IS_ANY_AI_ENABLED)
+                & id!(flags::CLOUD_CONVERSATION_STORAGE_EDITABLE_FLAG)),
             flags::CLOUD_CONVERSATION_STORAGE_FLAG,
         )
         .with_enabled(|| FeatureFlag::CloudConversations.is_enabled()),
