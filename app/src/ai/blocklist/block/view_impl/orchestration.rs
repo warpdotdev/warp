@@ -34,7 +34,7 @@ use crate::ai::blocklist::inline_action::inline_action_header::{
 };
 use crate::ai::blocklist::inline_action::inline_action_icons::{self, icon_size};
 use crate::ai::blocklist::inline_action::requested_action::{
-    render_requested_action_row, render_requested_action_row_for_text,
+    render_requested_action_row, render_requested_action_row_for_text, FormattedTextOrElement,
 };
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::appearance::Appearance;
@@ -510,22 +510,22 @@ pub(super) fn render_send_message(
         header_text = header_text.with_color(dimmed_text_color);
     }
 
-    let has_message = !message.is_empty();
-    let chevron = if has_message {
-        render_collapse_chevron(message_id, props, app)
-    } else {
-        None
-    };
-
     let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-    column.add_child(render_requested_action_row(
-        header_text.into(),
-        Some(action_icon(action_id, props.action_model, props.model, app).finish()),
-        chevron,
-        false,
-        false,
-        app,
-    ));
+    let status_icon = action_icon(action_id, props.action_model, props.model, app).finish();
+    let has_message = !message.is_empty();
+    let header_row = if has_message {
+        render_collapsible_requested_action_row(header_text, status_icon, message_id, props, app)
+    } else {
+        render_requested_action_row(
+            header_text.into(),
+            Some(status_icon),
+            None,
+            false,
+            false,
+            app,
+        )
+    };
+    column.add_child(header_row);
 
     // Collapsible body: message text with max height
     if has_message {
@@ -602,23 +602,28 @@ pub(super) fn render_start_agent(
             ),
         };
 
-        let has_prompt = !prompt.is_empty();
-        let chevron = if has_prompt {
-            render_collapse_chevron(message_id, props, app)
-        } else {
-            None
-        };
-
         let header_text = render_formatted_text_element(label_fragments, app);
         let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-        column.add_child(render_requested_action_row(
-            header_text.into(),
-            Some(status_icon),
-            chevron,
-            false,
-            false,
-            app,
-        ));
+        let has_prompt = !prompt.is_empty();
+        let header_row = if has_prompt {
+            render_collapsible_requested_action_row(
+                header_text,
+                status_icon,
+                message_id,
+                props,
+                app,
+            )
+        } else {
+            render_requested_action_row(
+                header_text.into(),
+                Some(status_icon),
+                None,
+                false,
+                false,
+                app,
+            )
+        };
+        column.add_child(header_row);
 
         if has_prompt {
             let prompt_element = render_collapsible_text_body(
@@ -682,22 +687,22 @@ pub(super) fn render_start_agent(
         header_text = header_text.with_color(dimmed_text_color);
     }
 
-    let has_prompt = !prompt.is_empty();
-    let chevron = if has_prompt {
-        render_collapse_chevron(message_id, props, app)
-    } else {
-        None
-    };
-
     let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-    column.add_child(render_requested_action_row(
-        header_text.into(),
-        Some(action_icon(action_id, props.action_model, props.model, app).finish()),
-        chevron,
-        false,
-        false,
-        app,
-    ));
+    let status_icon = action_icon(action_id, props.action_model, props.model, app).finish();
+    let has_prompt = !prompt.is_empty();
+    let header_row = if has_prompt {
+        render_collapsible_requested_action_row(header_text, status_icon, message_id, props, app)
+    } else {
+        render_requested_action_row(
+            header_text.into(),
+            Some(status_icon),
+            None,
+            false,
+            false,
+            app,
+        )
+    };
+    column.add_child(header_row);
 
     // Collapsible body: prompt text with max height
     if has_prompt {
@@ -830,8 +835,8 @@ fn available_conversation_title_for_id(
     }
 }
 
-/// Renders a chevron toggle for collapsing/expanding orchestration block bodies.
-fn render_collapse_chevron(
+/// Renders a chevron icon for collapsible orchestration action headers.
+fn render_collapse_chevron_icon(
     message_id: &MessageId,
     props: Props,
     app: &AppContext,
@@ -852,24 +857,59 @@ fn render_collapse_chevron(
         Icon::ChevronRight
     };
 
+    Some(
+        ConstrainedBox::new(chevron_icon.to_warpui_icon(text_color).finish())
+            .with_width(icon_sz)
+            .with_height(icon_sz)
+            .finish(),
+    )
+}
+
+/// Renders an orchestration action header whose full row toggles the collapsible body.
+fn render_collapsible_requested_action_row(
+    header_text: FormattedTextElement,
+    status_icon: Box<dyn Element>,
+    message_id: &MessageId,
+    props: Props,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let Some(state) = props.collapsible_block_states.get(message_id) else {
+        log::error!(
+            "Missing collapsible state for orchestration message {:?}",
+            message_id
+        );
+        return render_requested_action_row(
+            header_text.into(),
+            Some(status_icon),
+            None,
+            false,
+            false,
+            app,
+        );
+    };
     let toggle_mouse_state = state.expansion_toggle_mouse_state.clone();
     let message_id_clone = message_id.clone();
+    let header_text = header_text
+        .set_selectable(false)
+        .disable_mouse_interaction();
+    let chevron = render_collapse_chevron_icon(message_id, props, app);
+    let row = render_requested_action_row(
+        FormattedTextOrElement::from(header_text),
+        Some(status_icon),
+        chevron,
+        false,
+        false,
+        app,
+    );
 
-    Some(
-        Hoverable::new(toggle_mouse_state, move |_| {
-            ConstrainedBox::new(chevron_icon.to_warpui_icon(text_color).finish())
-                .with_width(icon_sz)
-                .with_height(icon_sz)
-                .finish()
-        })
+    Hoverable::new(toggle_mouse_state, move |_| row)
         .with_cursor(Cursor::PointingHand)
         .on_click(move |ctx, _, _| {
             ctx.dispatch_typed_action(AIBlockAction::ToggleCollapsibleBlockExpanded(
                 message_id_clone.clone(),
             ));
         })
-        .finish(),
-    )
+        .finish()
 }
 
 /// Renders the collapsible body content with max height and scroll, or None if collapsed.
