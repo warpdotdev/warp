@@ -61,8 +61,9 @@ use crate::terminal::shared_session::{
     SharedSessionStatus, COPY_LINK_TEXT,
 };
 use crate::terminal::view::{
-    ContextMenuAction, Event, InlineBannerItem, InlineBannerType, RichContentInsertionPosition,
-    SharedSessionBanners, SizeUpdateBuilder, TerminalAction, TerminalView,
+    ContextMenuAction, Event, InlineBannerItem, InlineBannerType, PendingUserQueryKind,
+    RichContentInsertionPosition, SharedSessionBanners, SizeUpdateBuilder, TerminalAction,
+    TerminalView,
 };
 use crate::terminal::TerminalModel;
 use crate::view_components::{DismissibleToast, ToastFlavor};
@@ -1746,6 +1747,17 @@ impl TerminalView {
             }
         });
         let tombstone_view_id = tombstone_view_handle.id();
+        // The cloud-mode queued-prompt block is pinned to the bottom so it stays below any
+        // streaming agent output. When inserting the conversation-ended tombstone we want the
+        // tombstone below the queued prompt instead, so unpin the queued prompt first.
+        if self.pending_user_query_kind == Some(PendingUserQueryKind::CloudMode) {
+            if let Some(pending_query_view_id) = self.pending_user_query_view_id {
+                self.model
+                    .lock()
+                    .block_list_mut()
+                    .unpin_rich_content_from_bottom(pending_query_view_id);
+            }
+        }
         self.insert_rich_content(
             None,
             tombstone_view_handle,

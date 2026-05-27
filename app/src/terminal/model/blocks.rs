@@ -1047,6 +1047,12 @@ impl BlockList {
         self.pinned_to_bottom = Some(view_id);
     }
 
+    pub(in crate::terminal) fn unpin_rich_content_from_bottom(&mut self, view_id: EntityId) {
+        if self.pinned_to_bottom == Some(view_id) {
+            self.pinned_to_bottom = None;
+        }
+    }
+
     /// If a rich content item is pinned to the bottom, removes it from its
     /// current position and re-appends it so it remains last in the blocklist.
     fn maintain_pinned_to_bottom(&mut self) {
