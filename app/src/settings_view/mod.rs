@@ -162,6 +162,24 @@ pub(super) fn editor_text_colors(appearance: &Appearance) -> TextColors {
     }
 }
 
+/// Small inline pill rendered next to a settings label to mark a feature as beta.
+/// Used for experimental features (i.e. AsyncFind) that are enabled for Friends of Warp (i.e. Dogfood/Preview) and toggleable by others.
+pub(super) fn render_beta_chip(appearance: &Appearance) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let chip_color = theme.sub_text_color(theme.surface_3()).into_solid();
+    Container::new(
+        Text::new_inline("BETA", appearance.ui_font_family(), 10.)
+            .with_color(chip_color)
+            .finish(),
+    )
+    .with_background(theme.surface_3())
+    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.)))
+    .with_horizontal_padding(4.)
+    .with_vertical_padding(1.)
+    .with_margin_left(8.)
+    .finish()
+}
+
 /// Renders a horizontal row of pill-shaped chips for model labels.
 /// Used by custom inference endpoint cards and the remove confirmation dialog.
 pub(super) fn render_model_chips(

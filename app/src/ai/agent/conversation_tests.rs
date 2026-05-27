@@ -1,13 +1,22 @@
+use ai::api_keys::ApiKeyManager;
 use std::collections::HashMap;
 
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
+use warpui::{App, SingletonEntity};
 
 use super::{
-    artifact_from_fork_proto, AIConversation, AIConversationAutoexecuteMode, AIConversationId,
+    artifact_from_fork_proto, footer_model_token_usage, AIConversation,
+    AIConversationAutoexecuteMode, AIConversationId,
 };
 use crate::ai::artifacts::Artifact;
+use crate::ai::llms::LLMPreferences;
+use crate::auth::{auth_manager::AuthManager, AuthStateProvider};
+use crate::network::NetworkStatus;
 use crate::persistence::model::AgentConversationData;
+use crate::server::server_api::ServerApiProvider;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 fn restored_conversation(conversation_data: Option<AgentConversationData>) -> AIConversation {
     AIConversation::new_restored(
@@ -87,6 +96,41 @@ fn restored_conversation_with_queries(queries: &[&str]) -> AIConversation {
     .unwrap()
 }
 
+fn initialize_custom_endpoint_usage_test_app(app: &mut App) {
+    initialize_settings_for_tests(app);
+    app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+    app.add_singleton_model(|_| NetworkStatus::new());
+    app.add_singleton_model(UserWorkspaces::default_mock);
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    app.add_singleton_model(AuthManager::new_for_test);
+}
+
+#[allow(deprecated)]
+fn custom_endpoint_usage_metadata(
+    config_key: &str,
+    total_tokens: u32,
+) -> api::response_event::stream_finished::ConversationUsageMetadata {
+    let category = "primary_agent".to_string();
+    api::response_event::stream_finished::ConversationUsageMetadata {
+        context_window_usage: 0.0,
+        credits_spent: 0.0,
+        platform_credits_spent: 0.0,
+        summarized: false,
+        token_usage: vec![],
+        tool_usage_metadata: None,
+        warp_token_usage: HashMap::new(),
+        byok_token_usage: HashMap::new(),
+        custom_endpoint_token_usage: HashMap::from([(
+            config_key.to_string(),
+            api::response_event::stream_finished::ModelTokenUsage {
+                model_id: config_key.to_string(),
+                total_tokens,
+                token_usage_by_category: HashMap::from([(category, total_tokens)]),
+            },
+        )]),
+    }
+}
+
 #[test]
 fn latest_user_query_returns_latest_non_empty_user_query() {
     let conversation =
@@ -155,6 +199,212 @@ fn child_conversation_detection_uses_parent_agent_id() {
 
     assert!(conversation.is_child_agent_conversation());
     assert_eq!(conversation.parent_conversation_id(), None);
+}
+
+#[test]
+fn update_cost_and_usage_resolves_custom_endpoint_alias_for_footer_usage() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.add_custom_endpoint(
+                "Endpoint".to_string(),
+                "https://custom.example".to_string(),
+                "key".to_string(),
+                vec![(
+                    "raw-model".to_string(),
+                    Some("Friendly alias".to_string()),
+                    Some("config-key".to_string()),
+                )],
+                ctx,
+            );
+        });
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation = AIConversation::new(false, false);
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(
+                    None,
+                    vec![],
+                    Some(custom_endpoint_usage_metadata("config-key", 6)),
+                    false,
+                    ctx,
+                )
+                .expect("custom endpoint usage should update");
+        });
+
+        let usage = conversation
+            .token_usage()
+            .iter()
+            .find(|usage| usage.model_id == "Friendly alias")
+            .expect("custom endpoint alias should resolve into footer usage");
+        assert_eq!(usage.custom_endpoint_tokens, 6);
+        assert_eq!(usage.byok_tokens, 0);
+        assert_eq!(
+            usage
+                .custom_endpoint_token_usage_by_category
+                .get("primary_agent"),
+            Some(&6)
+        );
+    });
+}
+
+#[test]
+fn update_cost_and_usage_uses_fallback_label_for_unknown_custom_endpoint() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation = AIConversation::new(false, false);
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(
+                    None,
+                    vec![],
+                    Some(custom_endpoint_usage_metadata("missing-config-key", 9)),
+                    false,
+                    ctx,
+                )
+                .expect("fallback custom endpoint usage should update");
+        });
+
+        let usage = conversation
+            .token_usage()
+            .iter()
+            .find(|usage| usage.model_id == "Custom endpoint")
+            .expect("unknown custom endpoint usage should use the fallback label");
+        assert_eq!(usage.custom_endpoint_tokens, 9);
+        assert_eq!(usage.byok_tokens, 0);
+        assert_eq!(
+            usage
+                .custom_endpoint_token_usage_by_category
+                .get("primary_agent"),
+            Some(&9)
+        );
+    });
+}
+
+#[allow(deprecated)]
+#[test]
+fn footer_model_token_usage_keeps_custom_endpoint_usage_distinct_from_same_labeled_models() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.add_custom_endpoint(
+                "Endpoint".to_string(),
+                "https://custom.example".to_string(),
+                "key".to_string(),
+                vec![(
+                    "raw-model".to_string(),
+                    Some("Resolved custom".to_string()),
+                    Some("config-key".to_string()),
+                )],
+                ctx,
+            );
+        });
+        app.add_singleton_model(LLMPreferences::new);
+
+        let category = "primary_agent".to_string();
+        let usage_metadata = api::response_event::stream_finished::ConversationUsageMetadata {
+            context_window_usage: 0.0,
+            credits_spent: 0.0,
+            platform_credits_spent: 0.0,
+            summarized: false,
+            #[allow(deprecated)]
+            token_usage: vec![],
+            tool_usage_metadata: None,
+            warp_token_usage: HashMap::new(),
+            byok_token_usage: HashMap::from([(
+                "Resolved custom".to_string(),
+                api::response_event::stream_finished::ModelTokenUsage {
+                    model_id: "Resolved custom".to_string(),
+                    total_tokens: 4,
+                    token_usage_by_category: HashMap::from([(category.clone(), 4)]),
+                },
+            )]),
+            custom_endpoint_token_usage: HashMap::from([(
+                "config-key".to_string(),
+                api::response_event::stream_finished::ModelTokenUsage {
+                    model_id: "config-key".to_string(),
+                    total_tokens: 6,
+                    token_usage_by_category: HashMap::from([(category.clone(), 6)]),
+                },
+            )]),
+        };
+
+        let model_usage =
+            app.read(|ctx| footer_model_token_usage(&usage_metadata, LLMPreferences::as_ref(ctx)));
+        let byok_usage = model_usage
+            .iter()
+            .find(|usage| usage.model_id == "Resolved custom" && usage.byok_tokens == 4)
+            .expect("existing model usage should be present");
+        let custom_usage = model_usage
+            .iter()
+            .find(|usage| usage.model_id == "Resolved custom" && usage.custom_endpoint_tokens == 6)
+            .expect("custom endpoint usage should remain distinct");
+
+        assert_eq!(model_usage.len(), 2);
+        assert_eq!(
+            byok_usage.byok_token_usage_by_category.get(&category),
+            Some(&4)
+        );
+        assert_eq!(
+            custom_usage
+                .custom_endpoint_token_usage_by_category
+                .get(&category),
+            Some(&6)
+        );
+        assert_eq!(byok_usage.warp_tokens, 0);
+        assert_eq!(custom_usage.warp_tokens, 0);
+        assert_eq!(custom_usage.byok_tokens, 0);
+    });
+}
+#[allow(deprecated)]
+#[test]
+fn footer_model_token_usage_preserves_unresolved_custom_endpoint_usage_with_fallback_label() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let category = "primary_agent".to_string();
+        let usage_metadata = api::response_event::stream_finished::ConversationUsageMetadata {
+            context_window_usage: 0.0,
+            credits_spent: 0.0,
+            platform_credits_spent: 0.0,
+            summarized: false,
+            #[allow(deprecated)]
+            token_usage: vec![],
+            tool_usage_metadata: None,
+            warp_token_usage: HashMap::new(),
+            byok_token_usage: HashMap::new(),
+            custom_endpoint_token_usage: HashMap::from([(
+                "missing-config-key".to_string(),
+                api::response_event::stream_finished::ModelTokenUsage {
+                    model_id: "missing-config-key".to_string(),
+                    total_tokens: 9,
+                    token_usage_by_category: HashMap::from([(category.clone(), 9)]),
+                },
+            )]),
+        };
+
+        let model_usage =
+            app.read(|ctx| footer_model_token_usage(&usage_metadata, LLMPreferences::as_ref(ctx)));
+        let custom_usage = model_usage
+            .iter()
+            .find(|usage| usage.model_id == "Custom endpoint")
+            .expect("fallback custom endpoint usage should be present");
+
+        assert_eq!(model_usage.len(), 1);
+        assert_eq!(custom_usage.custom_endpoint_tokens, 9);
+        assert_eq!(custom_usage.byok_tokens, 0);
+        assert_eq!(
+            custom_usage
+                .custom_endpoint_token_usage_by_category
+                .get(&category),
+            Some(&9)
+        );
+        assert_eq!(custom_usage.warp_tokens, 0);
+    });
 }
 
 #[test]

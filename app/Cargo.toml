@@ -654,6 +654,7 @@ default = [
     "custom_inference_endpoints",
     "billing_and_usage_page_v2",
     "remote_code_review",
+    "git_operations_in_code_review",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.

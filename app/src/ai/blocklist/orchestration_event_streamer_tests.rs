@@ -4,7 +4,7 @@ use mockall::predicate::eq;
 use warpui::App;
 
 use super::*;
-use crate::ai::agent::conversation::AIConversation;
+use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
 use crate::ai::agent_events::{
     agent_event_backoff, agent_event_failures_exceeded_threshold, AgentEventConsumerControlFlow,
     DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS,
@@ -1228,6 +1228,85 @@ fn on_conversation_removed_prunes_killed_child_run_id_from_parent_but_keeps_tomb
 }
 
 #[test]
+fn reevaluate_eligibility_does_not_reconnect_when_watched_run_ids_unchanged() {
+    App::test((), |mut app| async move {
+        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let own_run_id = "550e8400-e29b-41d4-a716-446655440401";
+        let child_run_id = "550e8400-e29b-41d4-a716-446655440402";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(own_run_id.to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        let mock = MockAIClient::new();
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+
+        let poller = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        // Open SSE (gen 0) with watched set == connected snapshot.
+        let (_, rx) = futures::channel::mpsc::unbounded::<SseStreamItem>();
+        let consumer_id = warpui::EntityId::new();
+        poller.update(&mut app, |me, _| {
+            let stream = me.streams.entry(conversation_id).or_default();
+            stream.event_cursor = 0;
+            stream.watched_run_ids.insert(own_run_id.to_string());
+            stream.watched_run_ids.insert(child_run_id.to_string());
+            stream.consumers.insert(consumer_id);
+            let (abort_handle, _) = futures::future::AbortHandle::new_pair();
+            let mut connected_run_ids = HashSet::new();
+            connected_run_ids.insert(own_run_id.to_string());
+            connected_run_ids.insert(child_run_id.to_string());
+            stream.sse_connection = Some(SseConnectionState {
+                event_receiver: rx,
+                generation: 0,
+                abort_handle,
+                connected_run_ids,
+            });
+            me.next_sse_generation = 1;
+        });
+
+        // Fire a status transition; should reach `reevaluate_eligibility`
+        // (true, true) without changing the run_id set.
+        history_model.update(&mut app, |model, ctx| {
+            model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::Success,
+                ctx,
+            );
+        });
+
+        poller.read(&app, |me, _| {
+            let generation = me
+                .streams
+                .get(&conversation_id)
+                .and_then(|s| s.sse_connection.as_ref())
+                .map(|c| c.generation);
+            assert_eq!(
+                generation,
+                Some(0),
+                "SSE must not reconnect when watched_run_ids is unchanged; got generation={generation:?}"
+            );
+        });
+    });
+}
+
+#[test]
 fn finish_restore_fetch_reconnects_sse_when_children_added_to_open_connection() {
     // When a status transition races with the restore fetch and opens SSE
     // before children are known, finish_restore_fetch must reconnect SSE
@@ -1283,10 +1362,13 @@ fn finish_restore_fetch_reconnects_sse_when_children_added_to_open_connection() 
             stream.watched_run_ids.insert(own_run_id.to_string());
             stream.consumers.insert(consumer_id);
             let (abort_handle, _) = futures::future::AbortHandle::new_pair();
+            let mut connected_run_ids = HashSet::new();
+            connected_run_ids.insert(own_run_id.to_string());
             stream.sse_connection = Some(SseConnectionState {
                 event_receiver: rx,
                 generation: 0,
                 abort_handle,
+                connected_run_ids,
             });
             me.next_sse_generation = 1;
         });

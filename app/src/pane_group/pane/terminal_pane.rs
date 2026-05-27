@@ -1282,6 +1282,11 @@ fn handle_terminal_view_event(
                 group.pane_with_open_environment_setup_mode_selector = is_open.then_some(pane_id);
                 ctx.notify();
             }
+            Event::AuthSecretDeleteConfirmationDialogToggled { is_open } => {
+                group.pane_with_open_auth_secret_delete_confirmation_dialog =
+                    is_open.then_some(pane_id);
+                ctx.notify();
+            }
             Event::AnonymousUserSignup => ctx.emit(pane_group::Event::AnonymousUserSignup),
             #[cfg(feature = "local_fs")]
             Event::OpenFileWithTarget {
@@ -2042,7 +2047,7 @@ fn launch_remote_child(
             Some(orchestration_harness),
             ctx,
         );
-        // Mark as remote so the parent's TaskStatusSyncModel skips status
+        // Mark as remote so the parent's LocalAgentTaskSyncModel skips status
         // reporting — the remote worker handles it.
         history_model.mark_conversation_as_remote_child(id, ctx);
         id

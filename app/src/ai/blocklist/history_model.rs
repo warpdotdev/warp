@@ -1546,6 +1546,7 @@ impl BlocklistAIHistoryModel {
                 token_usage,
                 usage_metadata,
                 was_user_initiated_request,
+                ctx,
             ) {
                 log::warn!(
                     "Failed to update request cost for conversation {conversation_id}: {e:#}"
@@ -1691,28 +1692,32 @@ impl BlocklistAIHistoryModel {
         let active_conversation_id = self
             .active_conversation_for_terminal_view
             .remove(&terminal_view_id);
-        if let Some(cleared_conversation_ids) = self
+        let mut cleared_conversation_ids: Vec<AIConversationId> = Vec::new();
+        if let Some(ids) = self
             .live_conversation_ids_for_terminal_view
             .remove(&terminal_view_id)
         {
+            cleared_conversation_ids.extend(ids.iter().copied());
             self.cleared_conversation_ids_for_terminal_view
                 .entry(terminal_view_id)
-                .and_modify(|existing| existing.extend(cleared_conversation_ids.clone()))
-                .or_insert(cleared_conversation_ids);
+                .and_modify(|existing| existing.extend(ids.clone()))
+                .or_insert(ids);
         }
-        let cleared_conversation_ids = self
+        if let Some(ids) = self
             .live_conversation_ids_for_terminal_view
-            .remove(&terminal_view_id);
-        if let Some(cleared_conversation_ids) = cleared_conversation_ids {
+            .remove(&terminal_view_id)
+        {
+            cleared_conversation_ids.extend(ids.iter().copied());
             self.cleared_conversation_ids_for_terminal_view
                 .entry(terminal_view_id)
-                .and_modify(|existing| existing.extend(cleared_conversation_ids.clone()))
-                .or_insert(cleared_conversation_ids);
+                .and_modify(|existing| existing.extend(ids.clone()))
+                .or_insert(ids);
         }
         ctx.emit(
             BlocklistAIHistoryEvent::ClearedConversationsInTerminalView {
                 terminal_view_id,
                 active_conversation_id,
+                cleared_conversation_ids,
             },
         );
     }
@@ -2431,6 +2436,9 @@ pub enum BlocklistAIHistoryEvent {
     ClearedConversationsInTerminalView {
         terminal_view_id: EntityId,
         active_conversation_id: Option<AIConversationId>,
+        /// All conversation ids that were live in `terminal_view_id` before the clear.
+        /// Subscribers (e.g. `QueuedQueryModel`) use this to drop per-conversation state.
+        cleared_conversation_ids: Vec<AIConversationId>,
     },
 
     UpdatedTodoList {

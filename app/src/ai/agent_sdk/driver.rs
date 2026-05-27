@@ -46,10 +46,10 @@ use crate::ai::ambient_agents::{
     conversation_output_status_from_conversation, AmbientAgentTaskId, AmbientConversationStatus,
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::{
     register_agent_event_consumer, unregister_agent_event_consumer,
 };
-use crate::ai::blocklist::task_status_sync_model::TaskStatusSyncModel;
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIPermissions,
 };
@@ -732,7 +732,7 @@ impl AgentDriver {
             async move {
                 // Mark the task as IN_PROGRESS before starting work. This covers
                 // the gap during environment setup, MCP startup, etc. — before any
-                // conversation exists and TaskStatusSyncModel can fire.
+                // conversation exists and LocalAgentTaskSyncModel can fire.
                 if let Some(task_id) = task_id {
                     if let Err(e) = server_api
                         .update_agent_task(
@@ -790,8 +790,8 @@ impl AgentDriver {
 
             // Report driver-level errors directly to the server. These errors
             // occur before or outside a conversation (e.g. bootstrap, MCP startup,
-            // environment setup) so TaskStatusSyncModel never fires for them.
-            // Success/blocked/cancelled are handled by TaskStatusSyncModel.
+            // environment setup) so LocalAgentTaskSyncModel never fires for them.
+            // Success/blocked/cancelled are handled by LocalAgentTaskSyncModel.
             if let (Some(task_id), Err(err)) = (task_id, &result) {
                 report_driver_error(task_id, err, &server_api_for_error).await;
 
@@ -2831,7 +2831,7 @@ impl AgentDriver {
     /// Subscribe to the singleton `CLIAgentSessionsModel` so that idle-on-complete
     /// timers are driven by CLI agent session status changes.
     ///
-    /// Task state reporting is handled centrally by `TaskStatusSyncModel`;
+    /// Task state reporting is handled centrally by `LocalAgentTaskSyncModel`;
     /// the driver only registers the `terminal_view_id → task_id` mapping
     /// so that the sync model can look up the task for each session.
     fn subscribe_to_cli_agent_session_events(
@@ -2841,10 +2841,10 @@ impl AgentDriver {
     ) {
         let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
 
-        // Register this session with TaskStatusSyncModel so CLI agent
+        // Register this session with LocalAgentTaskSyncModel so CLI agent
         // status changes are reported to the server.
         if let Some(task_id) = self.task_id {
-            TaskStatusSyncModel::handle(ctx).update(ctx, |model, ctx| {
+            LocalAgentTaskSyncModel::handle(ctx).update(ctx, |model, ctx| {
                 model.register_cli_session(terminal_view_id, task_id, ctx);
             });
         }
@@ -3208,7 +3208,7 @@ pub(super) fn write_run_started(run_id: &str, output_format: OutputFormat) {
 ///
 /// Used for errors that occur before or outside a conversation. Errors
 /// that occur while the agent is running should be reported through
-/// the `TaskStatusSyncModel`.
+/// the `LocalAgentTaskSyncModel`.
 pub(super) async fn report_driver_error(
     task_id: AmbientAgentTaskId,
     err: &AgentDriverError,

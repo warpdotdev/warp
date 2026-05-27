@@ -891,6 +891,8 @@ pub struct PaneGroup {
 
     /// Pane with an open environment setup mode selector modal (rendered at tab level).
     pane_with_open_environment_setup_mode_selector: Option<PaneId>,
+    /// Pane with an open auth-secret delete confirmation dialog (rendered at tab level).
+    pane_with_open_auth_secret_delete_confirmation_dialog: Option<PaneId>,
     /// Pane with an open agent-assisted environment modal (rendered at tab level).
     pane_with_open_agent_assisted_environment_modal: Option<PaneId>,
 
@@ -3094,6 +3096,7 @@ impl PaneGroup {
             active_file_model,
             terminal_with_open_summarization_dialog: None,
             pane_with_open_environment_setup_mode_selector: None,
+            pane_with_open_auth_secret_delete_confirmation_dialog: None,
             pane_with_open_agent_assisted_environment_modal: None,
             right_panel_open: false,
             left_panel_open: false,
@@ -5292,6 +5295,9 @@ impl PaneGroup {
 
             if self.pane_with_open_environment_setup_mode_selector == Some(pane_id) {
                 self.pane_with_open_environment_setup_mode_selector = None;
+            }
+            if self.pane_with_open_auth_secret_delete_confirmation_dialog == Some(pane_id) {
+                self.pane_with_open_auth_secret_delete_confirmation_dialog = None;
             }
             if self.pane_with_open_agent_assisted_environment_modal == Some(pane_id) {
                 self.pane_with_open_agent_assisted_environment_modal = None;
@@ -8504,6 +8510,18 @@ impl View for PaneGroup {
             }
         }
 
+        // Render auth-secret delete confirmation at tab level when open.
+        if let Some(pane_id) = self.pane_with_open_auth_secret_delete_confirmation_dialog {
+            if let Some(dialog) = self
+                .terminal_view_from_pane_id(pane_id, app)
+                .and_then(|tv| {
+                    tv.as_ref(app)
+                        .auth_secret_delete_confirmation_dialog_element(app)
+                })
+            {
+                stack.add_child(dialog);
+            }
+        }
         // Render agent-assisted environment modal at tab level when open.
         if let Some(pane_id) = self.pane_with_open_agent_assisted_environment_modal {
             if let Some(handle) = self

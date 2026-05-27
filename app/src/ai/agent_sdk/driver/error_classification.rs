@@ -2,7 +2,7 @@ use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
 use super::terminal::ShareSessionError;
 use super::AgentDriverError;
-use crate::ai::blocklist::task_status_sync_model::classify_renderable_error;
+use crate::ai::blocklist::local_agent_task_sync_model::classify_renderable_error;
 use crate::server::server_api::ai::TaskStatusUpdate;
 
 /// Classify an `AgentDriverError` into a task state and a `TaskStatusUpdate`
@@ -171,7 +171,7 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
         // --- Conversation errors ---
         // Delegate to classify_renderable_error for proper ERROR vs FAILED
         // distinction and PlatformErrorCode. This is a belt-and-suspenders
-        // fallback — TaskStatusSyncModel handles most conversation errors,
+        // fallback — LocalAgentTaskSyncModel handles most conversation errors,
         // but the driver catches them too if the conversation ends with an error.
         AgentDriverError::ConversationError { error } => {
             let (state, update) = classify_renderable_error(error);

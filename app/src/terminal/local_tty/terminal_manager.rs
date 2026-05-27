@@ -1576,7 +1576,7 @@ impl TerminalManager {
                     Self::stream_historical_agent_conversations(&terminal_view, &model, ctx);
                 }
 
-                // `LocalSharedSessionLinkModel` fires the (task_id,
+                // `LocalAgentTaskSyncModel` fires the (task_id,
                 // session_id) link in response to the event emitted above.
             }
             NetworkEvent::FailedToCreateSharedSession {

@@ -176,6 +176,7 @@ fn main() -> Result<()> {
     warp_logging::init(warp_logging::LogConfig {
         is_cli: false,
         log_destination: None,
+        ..Default::default()
     })?;
 
     let app_builder =

@@ -27,7 +27,7 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::{
     AIBlockResponseRating, CommandExecutionPermissionAllowedReason, InputType,
-    InputTypeAutoDetectionSource,
+    InputTypeAutoDetectionSource, QueuedQueryOrigin,
 };
 use crate::ai::execution_profiles::AskUserQuestionPermission;
 use crate::ai::mcp::TemplateVariable;
@@ -1182,6 +1182,26 @@ pub enum SlashMenuSource {
 pub enum LoginEventSource {
     OnboardingSlide,
     AuthModal,
+}
+
+/// Origin of a queued prompt, mirrored for telemetry so we don't pull serde derives onto the
+/// canonical `QueuedQueryOrigin` enum (which doesn't otherwise need them).
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TelemetryQueuedQueryOrigin {
+    InitialCloudMode,
+    QueueSlashCommand,
+    AutoQueueToggle,
+}
+
+impl From<QueuedQueryOrigin> for TelemetryQueuedQueryOrigin {
+    fn from(origin: QueuedQueryOrigin) -> Self {
+        match origin {
+            QueuedQueryOrigin::InitialCloudMode => Self::InitialCloudMode,
+            QueuedQueryOrigin::QueueSlashCommand => Self::QueueSlashCommand,
+            QueuedQueryOrigin::AutoQueueToggle => Self::AutoQueueToggle,
+        }
+    }
 }
 
 /// Details about which type of slash command was accepted
@@ -2918,6 +2938,25 @@ pub enum TelemetryEvent {
         requested_count: usize,
         remote_os: Option<String>,
         remote_arch: Option<String>,
+    },
+    /// Emitted when the user commits a non-empty edit to a queued prompt row.
+    QueuedPromptEdited {
+        origin: TelemetryQueuedQueryOrigin,
+    },
+    /// Emitted when the user deletes a queued prompt row via the trash button or the
+    /// commit-empty edit shortcut.
+    QueuedPromptDeleted {
+        origin: TelemetryQueuedQueryOrigin,
+    },
+    /// Emitted when the user reorders a queued prompt row via drag-and-drop.
+    QueuedPromptReordered {
+        origin: TelemetryQueuedQueryOrigin,
+        from_index: usize,
+        to_index: usize,
+    },
+    /// Emitted when the user toggles the queued prompts panel collapse state.
+    QueuedPromptPanelCollapseToggled {
+        collapsed: bool,
     },
 }
 
@@ -4741,6 +4780,24 @@ impl TelemetryEvent {
             | TelemetryEvent::OpenAuthPrivacySettings { source } => Some(json!({
                 "source": source,
             })),
+            TelemetryEvent::QueuedPromptEdited { origin } => Some(json!({
+                "origin": origin,
+            })),
+            TelemetryEvent::QueuedPromptDeleted { origin } => Some(json!({
+                "origin": origin,
+            })),
+            TelemetryEvent::QueuedPromptReordered {
+                origin,
+                from_index,
+                to_index,
+            } => Some(json!({
+                "origin": origin,
+                "from_index": from_index,
+                "to_index": to_index,
+            })),
+            TelemetryEvent::QueuedPromptPanelCollapseToggled { collapsed } => Some(json!({
+                "collapsed": collapsed,
+            })),
         }
     }
 
@@ -5165,6 +5222,10 @@ impl TelemetryEvent {
             | TelemetryEvent::OutOfCreditsBannerClosed { .. }
             | TelemetryEvent::AutoReloadModalClosed { .. }
             | TelemetryEvent::AutoReloadToggledFromBillingSettings { .. }
+            | TelemetryEvent::QueuedPromptEdited { .. }
+            | TelemetryEvent::QueuedPromptDeleted { .. }
+            | TelemetryEvent::QueuedPromptReordered { .. }
+            | TelemetryEvent::QueuedPromptPanelCollapseToggled { .. }
             | TelemetryEvent::CLISubagentControlStateChanged { .. }
             | TelemetryEvent::CLISubagentResponsesToggled { .. }
             | TelemetryEvent::CLISubagentInputDismissed { .. }
@@ -5791,6 +5852,12 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             | Self::RemoteCodebaseAutoIndexRequested => {
                 EnablementState::Flag(FeatureFlag::SshRemoteServer)
             }
+            Self::QueuedPromptEdited
+            | Self::QueuedPromptDeleted
+            | Self::QueuedPromptReordered
+            | Self::QueuedPromptPanelCollapseToggled => {
+                EnablementState::Flag(FeatureFlag::QueueSlashCommand)
+            }
         }
     }
 
@@ -6203,6 +6270,10 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::RemoteServerReconnectExhausted => "RemoteServer.ReconnectExhausted",
             Self::RemoteCodebaseIndexStatusChanged => "RemoteCodebaseIndex.StatusChanged",
             Self::RemoteCodebaseAutoIndexRequested => "RemoteCodebaseIndex.AutoIndexRequested",
+            Self::QueuedPromptEdited => "QueuedPrompt.Edited",
+            Self::QueuedPromptDeleted => "QueuedPrompt.Deleted",
+            Self::QueuedPromptReordered => "QueuedPrompt.Reordered",
+            Self::QueuedPromptPanelCollapseToggled => "QueuedPrompt.PanelCollapseToggled",
             #[cfg(windows)]
             Self::WSLRegistryError => "WSL Distribution Registry Error",
             #[cfg(windows)]
@@ -7267,6 +7338,16 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::RemoteCodebaseIndexStatusChanged => "The remote codebase index status changed",
             Self::RemoteCodebaseAutoIndexRequested => {
                 "Remote codebase auto-indexing requested one or more repositories"
+            }
+            Self::QueuedPromptEdited => {
+                "User committed a non-empty edit to a queued prompt row"
+            }
+            Self::QueuedPromptDeleted => "User deleted a queued prompt row",
+            Self::QueuedPromptReordered => {
+                "User reordered a queued prompt row via drag-and-drop"
+            }
+            Self::QueuedPromptPanelCollapseToggled => {
+                "User toggled the queued prompts panel collapse state"
             }
         }
     }

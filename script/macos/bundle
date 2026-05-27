@@ -353,7 +353,7 @@ if [[ "$ARTIFACT" == cli ]]; then
   FEATURES="$FEATURES,standalone"
 elif [[ "$ARTIFACT" == app ]]; then
   FEATURES="$FEATURES,gui"
-  if [[ "$RELEASE_CHANNEL" == "local" || "$RELEASE_CHANNEL" == "dev" ]]; then
+  if [[ "$RELEASE_CHANNEL" == "local" || "$RELEASE_CHANNEL" == "dev" || "$RELEASE_CHANNEL" == "preview" ]]; then
     FEATURES="$FEATURES,nld_classifier_v2,nld_heuristic_v2"
   else
     FEATURES="$FEATURES,nld_classifier_v1,nld_heuristic_v1"
