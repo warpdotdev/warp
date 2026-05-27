@@ -1114,11 +1114,11 @@ pub fn render_text_sections<V: View, A: Action>(
                 // Carve off a subslice of the pre-allocated handles for just
                 // this group, and advance the counter so subsequent image
                 // sections pick up handles from later in the slice.
-                let handle_start = *props.starting_image_section_index;
-                let handle_end = (handle_start + image_group.images.len())
-                    .min(props.image_section_tooltip_handles.len());
-                let handles_for_group =
-                    &props.image_section_tooltip_handles[handle_start..handle_end];
+                let handles_for_group = image_tooltip_handles_for_group(
+                    props.image_section_tooltip_handles,
+                    *props.starting_image_section_index,
+                    image_group.images.len(),
+                );
                 *props.starting_image_section_index += image_group.images.len();
                 let render_context = ImageRenderContext {
                     detected_links: props.detected_links,
@@ -1292,6 +1292,17 @@ fn text_sections_with_indices(
         .iter()
         .enumerate()
         .map(move |(offset, section)| (starting_text_section_index + offset, section))
+}
+
+fn image_tooltip_handles_for_group(
+    tooltip_handles: &[MouseStateHandle],
+    starting_image_section_index: usize,
+    image_group_len: usize,
+) -> &[MouseStateHandle] {
+    let available_handles = tooltip_handles
+        .get(starting_image_section_index..)
+        .unwrap_or(&[]);
+    &available_handles[..available_handles.len().min(image_group_len)]
 }
 
 #[derive(Clone, Copy)]
