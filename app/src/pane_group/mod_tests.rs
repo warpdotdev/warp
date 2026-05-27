@@ -756,6 +756,52 @@ fn test_insert_hidden_child_agent_pane_keeps_focus_and_active_session() {
 }
 
 #[test]
+fn test_swapping_to_child_agent_from_maximized_pane_keeps_maximized_state() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            panes.add_terminal_pane(Direction::Right, None, ctx);
+            panes.focus_pane(parent_pane_id, true, ctx);
+
+            let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+            let child = create_hidden_child_agent_conversation(
+                panes,
+                HiddenChildAgentConversationRequest {
+                    parent_pane_id,
+                    name: "Agent 1".to_string(),
+                    parent_conversation_id,
+                    orchestration_harness: None,
+                    env_vars: HashMap::new(),
+                    task_context: None,
+                    is_shared_session_creator: IsSharedSessionCreator::No,
+                },
+                ctx,
+            )
+            .expect("fresh hidden child conversation should be created");
+            let child_pane_id = panes
+                .child_agent_panes
+                .get(&child.conversation_id)
+                .copied()
+                .expect("fresh hidden child pane should be tracked");
+
+            panes.toggle_maximize_pane(ctx);
+            assert!(panes.is_focused_pane_maximized(ctx));
+
+            panes.swap_active_pane_to_conversation(parent_pane_id, child.conversation_id, ctx);
+
+            assert_eq!(panes.focused_pane_id(ctx), child_pane_id);
+            assert!(panes.is_focused_pane_maximized(ctx));
+            assert_eq!(
+                split_pane_state(panes, child_pane_id, ctx),
+                SplitPaneState::InSplitPane(PaneState::Maximized),
+            );
+        });
+    });
+}
+#[test]
 fn test_insert_hidden_ambient_child_agent_pane_suppresses_details_auto_open() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

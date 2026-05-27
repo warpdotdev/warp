@@ -7450,7 +7450,7 @@ impl PaneGroup {
         if let Some(replacement_id) = self.panes.replacement_pane_for_original(target_pane_id) {
             self.revert_swap_clearing_split_off(replacement_id, ctx);
             self.handle_pane_count_change(ctx);
-            self.focus_pane(target_pane_id, true, ctx);
+            self.focus_pane_preserving_maximized_state(target_pane_id, true, ctx);
             for pane_id in [replacement_id, target_pane_id] {
                 if let Some(terminal_view) = self.terminal_view_from_pane_id(pane_id, ctx) {
                     terminal_view.update(ctx, |view, ctx| {
@@ -7476,7 +7476,7 @@ impl PaneGroup {
         // If revert landed us on the target, just focus and return.
         if anchor == target_pane_id {
             self.handle_pane_count_change(ctx);
-            self.focus_pane(anchor, true, ctx);
+            self.focus_pane_preserving_maximized_state(anchor, true, ctx);
             if let Some(terminal_view) = self.terminal_view_from_pane_id(anchor, ctx) {
                 terminal_view.update(ctx, |view, ctx| {
                     view.update_agent_view_back_button_state(ctx);
@@ -7491,7 +7491,7 @@ impl PaneGroup {
         if self.panes.is_pane_in_tree(target_pane_id) && !self.panes.is_pane_hidden(&target_pane_id)
         {
             self.handle_pane_count_change(ctx);
-            self.focus_pane(target_pane_id, true, ctx);
+            self.focus_pane_preserving_maximized_state(target_pane_id, true, ctx);
             if let Some(terminal_view) = self.terminal_view_from_pane_id(target_pane_id, ctx) {
                 terminal_view.update(ctx, |view, ctx| {
                     view.update_agent_view_back_button_state(ctx);
@@ -7513,7 +7513,7 @@ impl PaneGroup {
         }
 
         self.handle_pane_count_change(ctx);
-        self.focus_pane(target_pane_id, true, ctx);
+        self.focus_pane_preserving_maximized_state(target_pane_id, true, ctx);
 
         // Refresh the back-button label on both swapped panes; otherwise
         // a stale label would persist until the next agent-view entry.
@@ -7906,6 +7906,21 @@ impl PaneGroup {
         true
     }
 
+    fn focus_pane_preserving_maximized_state(
+        &mut self,
+        id: PaneId,
+        focus_pane_contents: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let was_maximized = self.is_focused_pane_maximized(ctx);
+        let focused = self.focus_pane(id, focus_pane_contents, ctx);
+        if focused && was_maximized {
+            self.focus_state.update(ctx, |focus_state, ctx| {
+                focus_state.set_focused_pane_maximized(true, ctx);
+            });
+        }
+        focused
+    }
     fn focus_pane_and_record_in_history(
         &mut self,
         id: PaneId,
