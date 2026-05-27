@@ -2484,7 +2484,10 @@ fn render_grouped_tabs_header(
     .with_height(VERTICAL_TABS_ICON_SIZE)
     .finish();
 
-    let title_text = group.name.clone().unwrap_or_else(|| "New Group".to_string());
+    let title_text = group
+        .name
+        .clone()
+        .unwrap_or_else(|| "New Group".to_string());
     let title_element: Box<dyn Element> = Text::new_inline(title_text, font_family, 12.)
         .with_clip(ClipConfig::ellipsis())
         .with_color(main_text_color.into())
@@ -2651,7 +2654,7 @@ fn render_grouped_tab_container(
                     tab,
                     member.filtered_pane_ids,
                     drag_state,
-                    true, 
+                    true,
                     app,
                 );
                 content.add_child(
