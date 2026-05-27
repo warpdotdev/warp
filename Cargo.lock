@@ -6222,6 +6222,7 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+ "warp_core",
  "warpui",
 ]
 
