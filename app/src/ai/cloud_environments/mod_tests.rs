@@ -18,6 +18,7 @@ fn deserialize_legacy_environment_without_providers() {
         BaseImage::DockerImage("ubuntu:latest".into())
     );
     assert_eq!(env.setup_commands, vec!["echo hello"]);
+    assert_eq!(env.secrets, None);
 }
 
 #[test]
@@ -125,6 +126,43 @@ fn serialize_with_providers_none_omits_field() {
 
     let json = serde_json::to_value(&env).unwrap();
     assert!(!json.as_object().unwrap().contains_key("providers"));
+}
+#[test]
+fn new_environment_serializes_empty_secrets() {
+    let env = AmbientAgentEnvironment::new(
+        "test-env".into(),
+        None,
+        vec![],
+        "ubuntu:latest".into(),
+        vec![],
+    );
+
+    assert_eq!(env.secrets, Some(vec![]));
+    let json = serde_json::to_value(&env).unwrap();
+    assert_eq!(json.get("secrets"), Some(&serde_json::json!([])));
+}
+
+#[test]
+fn roundtrip_serde_with_secrets() {
+    let mut env = AmbientAgentEnvironment::new(
+        "secret-env".into(),
+        None,
+        vec![],
+        "ubuntu:latest".into(),
+        vec![],
+    );
+    env.secrets = Some(vec![
+        EnvironmentSecretRef {
+            name: "API_KEY".into(),
+        },
+        EnvironmentSecretRef {
+            name: "DATABASE_URL".into(),
+        },
+    ]);
+
+    let serialized = serde_json::to_string(&env).unwrap();
+    let deserialized: AmbientAgentEnvironment = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(env, deserialized);
 }
 
 #[test]

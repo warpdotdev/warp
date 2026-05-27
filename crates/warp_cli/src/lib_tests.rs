@@ -1273,6 +1273,36 @@ fn environment_create_accepts_description() {
     assert_eq!(description.as_deref(), Some("A test environment"));
     assert_eq!(docker_image.as_deref(), Some("ubuntu:latest"));
 }
+#[test]
+fn environment_create_accepts_secrets() {
+    let args = Args::try_parse_from([
+        "warp",
+        "environment",
+        "create",
+        "--name",
+        "test-env",
+        "--docker-image",
+        "ubuntu:latest",
+        "--secret",
+        "API_KEY",
+        "--secret",
+        "  DATABASE_URL  ",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp environment create` command");
+    };
+    let CliCommand::Environment(EnvironmentCommand::Create { secret, .. }) = boxed_cmd.as_ref()
+    else {
+        panic!("Expected `warp environment create` command");
+    };
+
+    assert_eq!(
+        secret,
+        &vec!["API_KEY".to_string(), "DATABASE_URL".to_string()]
+    );
+}
 
 #[test]
 fn environment_create_description_max_length() {
@@ -1377,6 +1407,119 @@ fn environment_update_accepts_remove_description() {
     assert_eq!(id, "env-id");
     assert!(description.is_none());
     assert!(remove_description);
+}
+#[test]
+fn environment_update_accepts_secret_changes() {
+    let args = Args::try_parse_from([
+        "warp",
+        "environment",
+        "update",
+        "env-id",
+        "--secret",
+        "API_KEY",
+        "--remove-secret",
+        "DATABASE_URL",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp environment update` command");
+    };
+    let CliCommand::Environment(EnvironmentCommand::Update {
+        secret,
+        remove_secret,
+        clear_secrets,
+        ..
+    }) = boxed_cmd.as_ref()
+    else {
+        panic!("Expected `warp environment update` command");
+    };
+
+    assert_eq!(secret, &vec!["API_KEY".to_string()]);
+    assert_eq!(remove_secret, &vec!["DATABASE_URL".to_string()]);
+    assert!(!clear_secrets);
+}
+
+#[test]
+fn environment_update_accepts_clear_secrets() {
+    let args = Args::try_parse_from(["warp", "environment", "update", "env-id", "--clear-secrets"])
+        .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp environment update` command");
+    };
+    let CliCommand::Environment(EnvironmentCommand::Update {
+        secret,
+        remove_secret,
+        clear_secrets,
+        ..
+    }) = boxed_cmd.as_ref()
+    else {
+        panic!("Expected `warp environment update` command");
+    };
+
+    assert!(secret.is_empty());
+    assert!(remove_secret.is_empty());
+    assert!(clear_secrets);
+}
+
+#[test]
+fn environment_update_clear_secrets_conflicts_with_secret_changes() {
+    assert!(
+        Args::try_parse_from([
+            "warp",
+            "environment",
+            "update",
+            "env-id",
+            "--clear-secrets",
+            "--secret",
+            "API_KEY",
+        ])
+        .is_err()
+    );
+
+    assert!(
+        Args::try_parse_from([
+            "warp",
+            "environment",
+            "update",
+            "env-id",
+            "--clear-secrets",
+            "--remove-secret",
+            "API_KEY",
+        ])
+        .is_err()
+    );
+}
+
+#[test]
+fn environment_secret_names_must_not_be_blank() {
+    assert!(
+        Args::try_parse_from([
+            "warp",
+            "environment",
+            "create",
+            "--name",
+            "test-env",
+            "--docker-image",
+            "ubuntu:latest",
+            "--secret",
+            "   ",
+        ])
+        .is_err()
+    );
+
+    assert!(
+        Args::try_parse_from([
+            "warp",
+            "environment",
+            "update",
+            "env-id",
+            "--remove-secret",
+            "",
+        ])
+        .is_err()
+    );
 }
 
 #[test]

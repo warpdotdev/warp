@@ -22,7 +22,7 @@ use crate::ai::agent_sdk::oauth_flow::poll_oauth_until_terminal;
 use crate::ai::agent_sdk::output::{self, TableFormat};
 use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, BaseImage, CloudAmbientAgentEnvironment,
-    CloudAmbientAgentEnvironmentModel, GithubRepo,
+    CloudAmbientAgentEnvironmentModel, EnvironmentSecretRef, GithubRepo,
 };
 use crate::auth::UserUid;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
@@ -55,6 +55,27 @@ fn parse_repos(repo_strings: Vec<String>) -> anyhow::Result<Vec<GithubRepo>> {
         .collect()
 }
 
+fn secret_refs_from_names(names: Vec<String>) -> Vec<EnvironmentSecretRef> {
+    let mut seen = HashSet::new();
+    names
+        .into_iter()
+        .filter(|name| seen.insert(name.clone()))
+        .map(|name| EnvironmentSecretRef { name })
+        .collect()
+}
+
+fn format_secrets(secrets: &Option<Vec<EnvironmentSecretRef>>) -> String {
+    match secrets {
+        Some(secret_refs) if secret_refs.is_empty() => "None".to_string(),
+        Some(secret_refs) => secret_refs
+            .iter()
+            .map(|secret| secret.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+        None => "Not configured".to_string(),
+    }
+}
+
 /// Handle environment-related CLI commands.
 pub fn run(
     ctx: &mut AppContext,
@@ -73,6 +94,7 @@ pub fn run(
             docker_image,
             repo,
             setup_command,
+            secret,
             scope,
         } => {
             let repos = parse_repos(repo)?;
@@ -84,6 +106,7 @@ pub fn run(
                     docker_image,
                     repos,
                     setup_command,
+                    secret,
                     scope,
                     ctx,
                 )
@@ -104,6 +127,9 @@ pub fn run(
             setup_command,
             remove_repo,
             remove_setup_command,
+            secret,
+            remove_secret,
+            clear_secrets,
             force,
         } => {
             let repos = parse_repos(repo)?;
@@ -120,6 +146,9 @@ pub fn run(
                     setup_command,
                     remove_repos,
                     remove_setup_command,
+                    secret,
+                    remove_secret,
+                    clear_secrets,
                     force,
                     ctx,
                 )
@@ -208,6 +237,7 @@ impl EnvironmentCommandRunner {
                     let base_image = environment.model().string_model.base_image.clone();
                     let github_repos = environment.model().string_model.github_repos.clone();
                     let setup_commands = environment.model().string_model.setup_commands.clone();
+                    let secrets = environment.model().string_model.secrets.clone();
 
                     let creator_email = environment
                         .metadata()
@@ -241,6 +271,7 @@ impl EnvironmentCommandRunner {
                         base_image,
                         github_repos,
                         setup_commands,
+                        secrets,
                         creator_email,
                         last_edited,
                         last_edited_utc,
@@ -321,6 +352,7 @@ impl EnvironmentCommandRunner {
                 println!("  {}. {}", i + 1, cmd);
             }
         }
+        println!("Secrets: {}", format_secrets(&env.secrets));
     }
 
     /// Handle inquire errors, returning true if the error was handled (and caller should return early).
@@ -424,9 +456,11 @@ impl EnvironmentCommandRunner {
         docker_image: Option<String>,
         github_repos: Vec<GithubRepo>,
         setup_commands: Vec<String>,
+        secret_names: Vec<String>,
         scope: warp_cli::scope::ObjectScope,
         ctx: &mut ModelContext<Self>,
     ) {
+        let secrets = secret_refs_from_names(secret_names);
         if let Some(image) = docker_image {
             Self::create_with_image(
                 name,
@@ -434,6 +468,7 @@ impl EnvironmentCommandRunner {
                 image,
                 github_repos,
                 setup_commands,
+                secrets,
                 scope,
                 ctx,
             );
@@ -446,6 +481,7 @@ impl EnvironmentCommandRunner {
                         image,
                         github_repos,
                         setup_commands,
+                        secrets,
                         scope,
                         ctx,
                     );
@@ -462,6 +498,7 @@ impl EnvironmentCommandRunner {
         docker_image: String,
         github_repos: Vec<GithubRepo>,
         setup_commands: Vec<String>,
+        secrets: Vec<EnvironmentSecretRef>,
         scope: warp_cli::scope::ObjectScope,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -490,6 +527,7 @@ impl EnvironmentCommandRunner {
                         github_repos,
                         docker_image,
                         setup_commands,
+                        secrets,
                         scope,
                         ctx,
                     );
@@ -719,22 +757,25 @@ impl EnvironmentCommandRunner {
     }
 
     // Helper function to create environment after successful auth check
+    #[allow(clippy::too_many_arguments)]
     fn create_environment_after_auth_check(
         name: String,
         description: Option<String>,
         github_repos: Vec<GithubRepo>,
         docker_image: String,
         setup_commands: Vec<String>,
+        secrets: Vec<EnvironmentSecretRef>,
         scope: ObjectScope,
         ctx: &mut ModelContext<Self>,
     ) {
-        let environment = AmbientAgentEnvironment::new(
+        let mut environment = AmbientAgentEnvironment::new(
             name,
             description,
             github_repos,
             docker_image,
             setup_commands,
         );
+        environment.secrets = Some(secrets);
         let client_id = ClientId::default();
 
         let owner = match super::common::resolve_owner(scope.team, scope.personal, ctx) {
@@ -844,6 +885,9 @@ impl EnvironmentCommandRunner {
         add_setup_commands: Vec<String>,
         remove_repos: Vec<GithubRepo>,
         remove_setup_commands: Vec<String>,
+        add_secret_names: Vec<String>,
+        remove_secret_names: Vec<String>,
+        clear_secrets: bool,
         force: bool,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -887,6 +931,7 @@ impl EnvironmentCommandRunner {
             // confirmed with the user and checked on auth.
             let environment_clone = environment.clone();
             let repos_clone = add_repos.clone();
+            let add_secrets = secret_refs_from_names(add_secret_names);
             let execute_update = move |ctx: &mut ModelContext<Self>| {
                 Self::update_environment_after_auth_check(
                     &environment_clone,
@@ -899,6 +944,9 @@ impl EnvironmentCommandRunner {
                     add_setup_commands,
                     remove_repos,
                     remove_setup_commands,
+                    add_secrets,
+                    remove_secret_names,
+                    clear_secrets,
                     ctx,
                 );
             };
@@ -936,6 +984,9 @@ impl EnvironmentCommandRunner {
         add_setup_commands: Vec<String>,
         remove_repos: Vec<GithubRepo>,
         remove_setup_commands: Vec<String>,
+        add_secrets: Vec<EnvironmentSecretRef>,
+        remove_secret_names: Vec<String>,
+        clear_secrets: bool,
         ctx: &mut ModelContext<Self>,
     ) {
         let mut updated_env = environment.model().string_model.clone();
@@ -984,6 +1035,29 @@ impl EnvironmentCommandRunner {
                     "Warning: setup command '{cmd}' not found in environment, skipping removal"
                 );
             }
+        }
+        if clear_secrets {
+            updated_env.secrets = Some(Vec::new());
+        } else if !add_secrets.is_empty() || !remove_secret_names.is_empty() {
+            let mut secrets = updated_env.secrets.take().unwrap_or_default();
+
+            for secret_name in &remove_secret_names {
+                if let Some(pos) = secrets.iter().position(|s| s.name == *secret_name) {
+                    secrets.remove(pos);
+                } else {
+                    eprintln!(
+                        "Warning: secret '{secret_name}' not found in environment, skipping removal"
+                    );
+                }
+            }
+
+            for secret in add_secrets {
+                if !secrets.iter().any(|s| s.name == secret.name) {
+                    secrets.push(secret);
+                }
+            }
+
+            updated_env.secrets = Some(secrets);
         }
 
         // Update the environment via UpdateManager
@@ -1124,6 +1198,8 @@ struct EnvironmentInfo {
     base_image: BaseImage,
     github_repos: Vec<GithubRepo>,
     setup_commands: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    secrets: Option<Vec<EnvironmentSecretRef>>,
     creator_email: String,
     #[serde(skip_serializing)]
     last_edited: String,
@@ -1141,6 +1217,7 @@ impl TableFormat for EnvironmentInfo {
             Cell::new("Base image"),
             Cell::new("Git repos"),
             Cell::new("Setup commands"),
+            Cell::new("Secrets"),
             Cell::new("Creator"),
             Cell::new("Last edited"),
             Cell::new("Scope"),
@@ -1156,6 +1233,7 @@ impl TableFormat for EnvironmentInfo {
             .join(", ");
         let setup_commands_display = self.setup_commands.join("\n");
         let description_display = self.description.as_deref().unwrap_or("");
+        let secrets_display = format_secrets(&self.secrets);
 
         vec![
             Cell::new(&self.id),
@@ -1164,6 +1242,7 @@ impl TableFormat for EnvironmentInfo {
             Cell::new(self.base_image.to_string()),
             Cell::new(github_repos_display),
             Cell::new(setup_commands_display),
+            Cell::new(secrets_display),
             Cell::new(&self.creator_email),
             Cell::new(&self.last_edited),
             Cell::new(&self.scope),

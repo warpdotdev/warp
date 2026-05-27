@@ -18,6 +18,16 @@ fn validate_description(s: &str) -> Result<String, String> {
     }
 }
 
+/// Validates and normalizes a managed secret name.
+fn validate_secret_name(s: &str) -> Result<String, String> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        Err("Secret name must not be empty".to_string())
+    } else {
+        Ok(trimmed.to_string())
+    }
+}
+
 /// Environment-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
 #[command(group(ArgGroup::new("scope").required(false)))]
@@ -46,6 +56,9 @@ pub enum EnvironmentCommand {
         /// Accept multiple setup command args to be run after cloning
         #[arg(long = "setup-command", short = 'c', action = ArgAction::Append)]
         setup_command: Vec<String>,
+        /// Managed secret name to make available by default in this environment (can be specified multiple times)
+        #[arg(long = "secret", short = 's', action = ArgAction::Append, value_parser = validate_secret_name)]
+        secret: Vec<String>,
 
         #[command(flatten)]
         scope: ObjectScope,
@@ -95,6 +108,15 @@ pub enum EnvironmentCommand {
         /// Setup command to remove from the list (can be specified multiple times)
         #[arg(long, action = ArgAction::Append)]
         remove_setup_command: Vec<String>,
+        /// Managed secret name to make available by default in this environment (can be specified multiple times)
+        #[arg(long = "secret", short = 's', action = ArgAction::Append, value_parser = validate_secret_name)]
+        secret: Vec<String>,
+        /// Managed secret name to remove from this environment (can be specified multiple times)
+        #[arg(long, action = ArgAction::Append, value_parser = validate_secret_name, conflicts_with = "clear_secrets")]
+        remove_secret: Vec<String>,
+        /// Remove all default secrets from this environment
+        #[arg(long, default_value_t = false, conflicts_with_all = ["secret", "remove_secret"])]
+        clear_secrets: bool,
         /// Force update without checking for integration usage
         #[arg(long, default_value_t = false)]
         force: bool,
