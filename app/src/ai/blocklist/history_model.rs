@@ -52,7 +52,11 @@ pub use conversation_loader::{
     CLIAgentConversation, CloudConversationData,
 };
 
-pub(super) const MAX_HISTORICAL_CONVERSATIONS: usize = 100;
+/// Symmetric with [`crate::persistence::agent::MAX_PERSISTED_CONVERSATION_COUNT`].
+/// Bumped from 100 to 500 alongside the tree-aware prune fix so we don't
+/// arbitrarily clip the in-memory historical view to a smaller window than
+/// what's actually retained on disk.
+pub(super) const MAX_HISTORICAL_CONVERSATIONS: usize = 500;
 
 /// Metadata for conversations
 /// When created from local DB, has_local_data=true and server_metadata=None.
