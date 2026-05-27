@@ -1,3 +1,4 @@
+use crate::localization;
 use settings::Setting;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
@@ -164,7 +165,9 @@ impl AmbientAgentEntryBlock {
             .and_then(|title| Self::meaningful_title(&title))
             .or_else(|| self.title_from_task_data(app))
             .or_else(|| self.title_from_spawn_request(app))
-            .unwrap_or_else(|| DEFAULT_CLOUD_AGENT_TITLE.to_owned())
+            .unwrap_or_else(|| {
+                localization::text_for_app(app, "terminal.agent_title.new_cloud_agent")
+            })
     }
 
     fn ambient_agent_view_model<'a>(
@@ -178,14 +181,29 @@ impl AmbientAgentEntryBlock {
     }
 
     /// Gets the detail text to display based on the ambient agent status.
-    fn detail_text(&self, app: &AppContext) -> Option<&'static str> {
+    fn detail_text(&self, app: &AppContext) -> Option<String> {
         match self.ambient_agent_view_model(app)?.status() {
             Status::Setup | Status::Composing => None,
-            Status::WaitingForSession { .. } => Some("Starting environment..."),
-            Status::AgentRunning => Some("Agent is working on task"),
-            Status::Failed { .. } => Some("Agent failed"),
-            Status::NeedsGithubAuth { .. } => Some("Authentication required"),
-            Status::Cancelled { .. } => Some("Cancelled"),
+            Status::WaitingForSession { .. } => Some(localization::text_for_app(
+                app,
+                "terminal.ambient_agent.detail.starting_environment",
+            )),
+            Status::AgentRunning => Some(localization::text_for_app(
+                app,
+                "terminal.ambient_agent.detail.working_on_task",
+            )),
+            Status::Failed { .. } => Some(localization::text_for_app(
+                app,
+                "terminal.ambient_agent.detail.failed",
+            )),
+            Status::NeedsGithubAuth { .. } => Some(localization::text_for_app(
+                app,
+                "terminal.ambient_agent.detail.authentication_required",
+            )),
+            Status::Cancelled { .. } => Some(localization::text_for_app(
+                app,
+                "terminal.ambient_agent.detail.cancelled",
+            )),
         }
     }
 
@@ -197,7 +215,10 @@ impl AmbientAgentEntryBlock {
             }
             Status::Failed { .. } => Some(ConversationStatus::Error),
             Status::NeedsGithubAuth { .. } => Some(ConversationStatus::Blocked {
-                blocked_action: "GitHub authentication required".to_owned(),
+                blocked_action: localization::text_for_app(
+                    app,
+                    "terminal.ambient_agent.detail.github_auth_required",
+                ),
             }),
             Status::Cancelled { .. } => Some(ConversationStatus::Cancelled),
         }

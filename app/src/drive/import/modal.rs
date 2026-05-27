@@ -1,3 +1,4 @@
+use crate::localization;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
@@ -27,6 +28,10 @@ const CLOSE_BUTTON_SIZE: f32 = 24.;
 const HEADER_FONT_SIZE: f32 = 16.;
 const MODAL_CORNER_RADIUS: f32 = 8.;
 pub const BODY_HEIGHT: f32 = 244.;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 #[derive(Debug)]
 pub enum ImportModalAction {
@@ -228,9 +233,13 @@ impl ImportModal {
                 Shrinkable::new(
                     1.0,
                     Align::new(
-                        Text::new_inline("Import", appearance.ui_font_family(), HEADER_FONT_SIZE)
-                            .with_color(appearance.theme().active_ui_text_color().into())
-                            .finish(),
+                        Text::new_inline(
+                            text(app, "drive.import.title"),
+                            appearance.ui_font_family(),
+                            HEADER_FONT_SIZE,
+                        )
+                        .with_color(appearance.theme().active_ui_text_color().into())
+                        .finish(),
                     )
                     .left()
                     .finish(),
@@ -282,9 +291,9 @@ impl ImportModal {
 
     fn render_footer(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let button_text = if !self.import_modal.as_ref(app).upload_in_progress(app) {
-            "Close".to_string()
+            text(app, "code_review.action.close_panel")
         } else {
-            "Cancel".to_string()
+            text(app, "code_review.action.cancel")
         };
 
         Container::new(

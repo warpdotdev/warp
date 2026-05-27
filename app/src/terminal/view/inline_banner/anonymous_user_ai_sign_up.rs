@@ -1,9 +1,11 @@
+use crate::localization;
 use warpui::elements::{
     Container, CornerRadius, CrossAxisAlignment, Flex, Icon, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
 };
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::AppContext;
 use warpui::Element;
 
 use super::{
@@ -14,11 +16,6 @@ use crate::appearance::Appearance;
 use crate::terminal::view::{InlineBannerId, TerminalAction};
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon as UiIcon;
-
-const TITLE: &str = "Login for AI";
-const CONTENT: &str =
-    "AI features are unavailable for logged-out users. Create an account to use AI.";
-const SIGN_UP_BUTTON_TEXT: &str = "Sign Up";
 
 // Layout constants for three-column banner
 const ICON_SIZE_OFFSET: f32 = 3.0;
@@ -48,12 +45,12 @@ impl AnonymousUserAISignUpBannerState {
         }
     }
 
-    pub fn render(&self, appearance: &Appearance) -> Box<dyn Element> {
+    pub fn render(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         render_three_column_inline_banner(
             appearance,
-            TITLE,
-            CONTENT,
-            SIGN_UP_BUTTON_TEXT,
+            localization::text_for_app(app, "terminal.inline_banner.anonymous_ai.title"),
+            localization::text_for_app(app, "terminal.inline_banner.anonymous_ai.content"),
+            localization::text_for_app(app, "terminal.inline_banner.anonymous_ai.sign_up"),
             self.sign_up_button_mouse_state.clone(),
             self.close_button_mouse_state.clone(),
         )
@@ -66,9 +63,9 @@ impl AnonymousUserAISignUpBannerState {
 /// - Column 3: Buttons (Sign Up + Close)
 fn render_three_column_inline_banner(
     appearance: &Appearance,
-    title: &str,
-    content: &str,
-    button_text: &str,
+    title: String,
+    content: String,
+    button_text: String,
     button_mouse_state: MouseStateHandle,
     close_button_mouse_state: MouseStateHandle,
 ) -> Box<dyn Element> {

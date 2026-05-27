@@ -1,3 +1,15 @@
+use crate::{
+    appearance::Appearance,
+    code_review::{
+        code_review_view::{
+            code_review_text, get_discard_button_disabled_tooltip, CodeReviewAction, LoadedState,
+        },
+        diff_state::DiffStateModel,
+    },
+    menu::Menu,
+    ui_components::icons::Icon,
+    view_components::action_button::ActionButton,
+};
 mod header_revamp;
 
 use pathfinder_geometry::vector::vec2f;
@@ -14,15 +26,9 @@ use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlign
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, ModelHandle, ViewHandle};
 
-use crate::appearance::Appearance;
-use crate::code_review::code_review_view::{
-    get_discard_button_disabled_tooltip, CodeReviewAction, CodeReviewHeaderFields, CodeReviewView,
-    LoadedState, CONTENT_TOP_MARGIN,
-};
-use crate::code_review::diff_state::DiffStateModel;
-use crate::menu::Menu;
-use crate::ui_components::icons::Icon;
-use crate::view_components::action_button::ActionButton;
+use crate::code_review::code_review_view::CodeReviewHeaderFields;
+use crate::code_review::code_review_view::CodeReviewView;
+use crate::code_review::code_review_view::CONTENT_TOP_MARGIN;
 
 // This is a best effort guess of the size of all of the elements in the header to know when we should start to wrap to the second row
 const HEADER_WRAP_BREAKPOINT: f32 = 450.;
@@ -135,7 +141,8 @@ impl CodeReviewHeader {
                     code_review_header_fields.header_menu_open,
                 ));
             } else {
-                right_section_wide.add_child(self.render_add_diff_set_context_button(appearance));
+                right_section_wide
+                    .add_child(self.render_add_diff_set_context_button(appearance, app));
             }
         }
 
@@ -217,7 +224,7 @@ impl CodeReviewHeader {
                 ));
             } else {
                 right_subsection_compact
-                    .add_child(self.render_add_diff_set_context_button(appearance));
+                    .add_child(self.render_add_diff_set_context_button(appearance, app));
             }
         }
 
@@ -320,7 +327,7 @@ impl CodeReviewHeader {
             .with_text_and_icon_label(
                 TextAndIcon::new(
                     TextAndIconAlignment::IconFirst,
-                    "Discard all".to_string(),
+                    code_review_text(app, "code_review.action.discard_all"),
                     Icon::ReverseLeft.to_warpui_icon(warp_core::ui::theme::Fill::Solid(
                         sub_text_color.into_solid(),
                     )),
@@ -350,7 +357,7 @@ impl CodeReviewHeader {
         let button_element = button_hoverable.finish();
 
         if is_disabled {
-            let tooltip_text = get_discard_button_disabled_tooltip(git_operation_blocked);
+            let tooltip_text = get_discard_button_disabled_tooltip(git_operation_blocked, app);
             Container::new(CodeReviewHeader::wrap_disabled_button_with_tooltip(
                 button_element,
                 tooltip_text,
@@ -405,9 +412,14 @@ impl CodeReviewHeader {
         .finish()
     }
 
-    fn render_add_diff_set_context_button(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_add_diff_set_context_button(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let ui_builder = appearance.ui_builder().clone();
+        let tooltip_text = code_review_text(app, "code_review.menu.add_diff_set_context");
 
         let button = ui_builder
             .button(
@@ -431,12 +443,7 @@ impl CodeReviewHeader {
                 left: 6.,
                 right: 6.,
             }))
-            .with_tooltip(move || {
-                ui_builder
-                    .tool_tip("Add diff set as context".to_owned())
-                    .build()
-                    .finish()
-            })
+            .with_tooltip(move || ui_builder.tool_tip(tooltip_text.clone()).build().finish())
             .with_tooltip_position(warpui::ui_components::button::ButtonTooltipPosition::AboveLeft)
             .build()
             .on_click(|ctx, _, _| {
@@ -489,6 +496,7 @@ impl CodeReviewHeader {
     fn get_header_text(diff_state_model: &ModelHandle<DiffStateModel>, app: &AppContext) -> String {
         let branch_name =
             diff_state_model.read(app, |model, ctx| model.get_current_branch_name(ctx));
-        branch_name.unwrap_or("Reviewing open changes".to_string())
+        branch_name
+            .unwrap_or_else(|| code_review_text(app, "code_review.header.reviewing_open_changes"))
     }
 }

@@ -4,6 +4,7 @@ use warpui::{AppContext, SingletonEntity};
 
 use crate::auth::AuthStateProvider;
 use crate::features::FeatureFlag;
+use crate::localization;
 use crate::settings::AISettings;
 use crate::ui_components::icons::Icon;
 use crate::workspace::tab_settings::TabSettings;
@@ -34,13 +35,17 @@ pub enum HeaderToolbarItemKind {
 }
 
 impl HeaderToolbarItemKind {
-    pub fn display_label(&self) -> &'static str {
+    pub fn display_label(&self, app: &AppContext) -> String {
+        localization::text_for_app(app, self.display_label_key())
+    }
+
+    fn display_label_key(&self) -> &'static str {
         match self {
-            Self::TabsPanel => "Tabs Panel",
-            Self::ToolsPanel => "Tools Panel",
-            Self::AgentManagement => "Agent Management",
-            Self::CodeReview => "Code Review",
-            Self::NotificationsMailbox => "Notifications",
+            Self::TabsPanel => "workspace.header_toolbar.item.tabs_panel",
+            Self::ToolsPanel => "workspace.header_toolbar.item.tools_panel",
+            Self::AgentManagement => "workspace.header_toolbar.item.agent_management",
+            Self::CodeReview => "workspace.header_toolbar.item.code_review",
+            Self::NotificationsMailbox => "workspace.header_toolbar.item.notifications",
         }
     }
 

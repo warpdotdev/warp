@@ -1,3 +1,4 @@
+use crate::localization;
 use std::sync::Arc;
 
 use pathfinder_color::ColorU;
@@ -160,7 +161,9 @@ impl GenericMenuItem for EnvironmentMenuItem {
 
 /// Menu item for the "New Environment" footer option.
 #[derive(Debug, Clone)]
-struct NewEnvironmentMenuItem;
+struct NewEnvironmentMenuItem {
+    name: String,
+}
 
 impl GenericMenuItem for NewEnvironmentMenuItem {
     fn as_any(&self) -> &dyn std::any::Any {
@@ -168,7 +171,7 @@ impl GenericMenuItem for NewEnvironmentMenuItem {
     }
 
     fn name(&self) -> String {
-        "New environment".to_string()
+        self.name.clone()
     }
 
     fn icon(&self, _app: &AppContext) -> Option<Icon> {
@@ -202,10 +205,12 @@ impl EnvironmentSelector {
         target: EnvironmentSelectorTarget,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let button = ctx.add_typed_action_view(|_ctx| {
+        let choose_environment_tooltip =
+            crate::localization::text_for_app(ctx, "agent.input_footer.choose_environment");
+        let button = ctx.add_typed_action_view(move |_ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::Globe4)
-                .with_tooltip("Choose an environment")
+                .with_tooltip(choose_environment_tooltip.clone())
                 .with_size(ButtonSize::AgentInputButton)
                 .with_disabled_theme(DisabledTheme)
                 .on_click(|ctx| {
@@ -216,7 +221,9 @@ impl EnvironmentSelector {
         let dropdown = ctx.add_typed_action_view(move |ctx| {
             DisplayChipMenu::new(
                 Vec::<EnvironmentMenuItem>::new(),
-                Some(FixedFooter::new(Arc::new(NewEnvironmentMenuItem))),
+                Some(FixedFooter::new(Arc::new(NewEnvironmentMenuItem {
+                    name: localization::text_for_app(ctx, "agent.input_footer.new_environment"),
+                }))),
                 ChipMenuType::Environments,
                 ctx,
             )
@@ -430,9 +437,11 @@ impl EnvironmentSelector {
         let label = if let Some(id) = self.target.selected_environment_id(ctx) {
             CloudAmbientAgentEnvironment::get_by_id(&id, ctx)
                 .map(|env| env.model().string_model.display_name())
-                .unwrap_or_else(|| "New environment".to_string())
+                .unwrap_or_else(|| {
+                    localization::text_for_app(ctx, "agent.input_footer.new_environment")
+                })
         } else {
-            "New environment".to_string()
+            localization::text_for_app(ctx, "agent.input_footer.new_environment")
         };
 
         let is_configuring = self.is_configuring(ctx);
@@ -441,9 +450,15 @@ impl EnvironmentSelector {
             button.set_label(label, ctx);
             button.set_tooltip(
                 if is_configuring {
-                    Some("Choose an environment")
+                    Some(localization::text_for_app(
+                        ctx,
+                        "agent.input_footer.choose_environment",
+                    ))
                 } else {
-                    Some("Agent environment")
+                    Some(localization::text_for_app(
+                        ctx,
+                        "agent.input_footer.agent_environment",
+                    ))
                 },
                 ctx,
             );

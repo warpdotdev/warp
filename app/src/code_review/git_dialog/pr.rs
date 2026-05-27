@@ -4,7 +4,28 @@
 //! with expandable per-file stats. On confirm, spawns `create_pr` and shows
 //! a toast with a clickable "Open PR" link.
 
+use crate::{
+    ai::generate_code_review_content::api::{GenerateCodeReviewContentRequest, OutputType},
+    code_review::{
+        code_review_view::code_review_text,
+        git_dialog::{
+            interactive_path_future, render_branch_section, render_file_changes_box,
+            should_send_git_ops_ai_request, show_toast, user_facing_git_error, GitDialog,
+            GitDialogAction, GitDialogEvent, GitDialogMode,
+        },
+        telemetry_event::{CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind},
+    },
+    server::server_api::{ai::AIClient, ServerApiProvider},
+    ui_components::icons::Icon,
+    util::git::{
+        create_pr, get_branch_commit_messages, get_branch_diff_entries, get_diff_for_pr,
+        FileChangeEntry, PrInfo,
+    },
+    view_components::{DismissibleToast, ToastLink},
+    workspace::ToastStack,
+};
 use std::path::Path;
+use warpui::AppContext;
 
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
@@ -12,25 +33,6 @@ use warpui::elements::{
     ClippedScrollStateHandle, Container, Element, Flex, MouseStateHandle, ParentElement, Text,
 };
 use warpui::{SingletonEntity, ViewContext};
-
-use crate::ai::generate_code_review_content::api::{GenerateCodeReviewContentRequest, OutputType};
-use crate::code_review::git_dialog::{
-    interactive_path_future, render_branch_section, render_file_changes_box,
-    should_send_git_ops_ai_request, show_toast, user_facing_git_error, GitDialog, GitDialogAction,
-    GitDialogEvent, GitDialogMode,
-};
-use crate::code_review::telemetry_event::{
-    CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind,
-};
-use crate::server::server_api::ai::AIClient;
-use crate::server::server_api::ServerApiProvider;
-use crate::ui_components::icons::Icon;
-use crate::util::git::{
-    create_pr, get_branch_commit_messages, get_branch_diff_entries, get_diff_for_pr,
-    FileChangeEntry, PrInfo,
-};
-use crate::view_components::{DismissibleToast, ToastLink};
-use crate::workspace::ToastStack;
 
 /// PR-mode sub-actions, dispatched wrapped in `GitDialogAction::Pr`.
 #[derive(Clone, Debug, PartialEq)]
@@ -46,8 +48,8 @@ pub struct PrState {
     changes_scroll_state: ClippedScrollStateHandle,
 }
 
-pub(super) fn confirm_label_for() -> &'static str {
-    "Create PR"
+pub(super) fn confirm_label_key() -> &'static str {
+    "code_review.git.create_pr"
 }
 
 pub(super) fn confirm_icon_for() -> Icon {
@@ -55,7 +57,7 @@ pub(super) fn confirm_icon_for() -> Icon {
 }
 
 fn loading_label_for() -> &'static str {
-    "Creating\u{2026}"
+    "code_review.git_dialog.pr.creating"
 }
 
 /// PR mode has no prerequisites beyond a branch with commits; confirm is
@@ -156,7 +158,7 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
                 }
                 Err(err) => {
                     log::error!("Failed to create PR: {err}");
-                    show_toast(user_facing_git_error(&err.to_string()), ctx);
+                    show_toast(user_facing_git_error(&err.to_string(), ctx), ctx);
                 }
             }
             send_telemetry_from_ctx!(
@@ -234,9 +236,11 @@ pub(super) fn show_pr_created_toast(pr_info: &PrInfo, ctx: &mut ViewContext<GitD
     let window_id = ctx.window_id();
     let url = pr_info.url.clone();
     ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-        let link = ToastLink::new("Open PR".to_string()).with_href(url);
+        let link = ToastLink::new(code_review_text(ctx, "code_review.git_dialog.pr.open_pr"))
+            .with_href(url);
         let toast =
-            DismissibleToast::default("PR successfully created.".to_string()).with_link(link);
+            DismissibleToast::default(code_review_text(ctx, "code_review.git_dialog.pr.created"))
+                .with_link(link);
         toast_stack.add_ephemeral_toast(toast, window_id, ctx);
     });
 }
@@ -245,28 +249,34 @@ pub(super) fn render_body(
     state: &PrState,
     branch_name: &str,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let base_branch = state
         .base_branch_name
         .as_deref()
-        .unwrap_or("default branch");
+        .map(str::to_string)
+        .unwrap_or_else(|| code_review_text(app, "code_review.git_dialog.pr.default_branch"));
     let branch_name = format!("{branch_name} \u{2192} {base_branch}");
     Flex::column()
         .with_child(
-            Container::new(render_branch_section(branch_name, appearance))
+            Container::new(render_branch_section(branch_name, appearance, app))
                 .with_margin_bottom(16.)
                 .finish(),
         )
-        .with_child(render_changes_section(state, appearance))
+        .with_child(render_changes_section(state, appearance, app))
         .finish()
 }
 
-fn render_changes_section(state: &PrState, appearance: &Appearance) -> Box<dyn Element> {
+fn render_changes_section(
+    state: &PrState,
+    appearance: &Appearance,
+    app: &AppContext,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
     let main_color = theme.main_text_color(theme.surface_1()).into_solid();
 
     let label = Text::new(
-        "Changes",
+        code_review_text(app, "code_review.git_dialog.changes"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )

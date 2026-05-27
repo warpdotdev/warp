@@ -1,3 +1,5 @@
+use crate::localization;
+use chrono::{DateTime, Utc};
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::color::internal_colors;
@@ -27,7 +29,6 @@ use crate::ui_components::agent_icon::agent_conversation_entry_icon_variant;
 use crate::ui_components::icon_with_status::render_icon_with_status;
 use crate::ui_components::icons::Icon;
 use crate::ui_components::menu_button::{icon_button_with_context_menu, MenuDirection};
-use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::util::truncation::truncate_from_end;
 use crate::workspace::view::conversation_list::view::ConversationListViewAction;
 
@@ -124,7 +125,7 @@ pub fn render_static_item(props: StaticItemProps<'_>, app: &AppContext) -> Box<d
     .finish();
 
     let title_text = Text::new_inline(
-        "New conversation",
+        localization::text_for_app(app, "workspace.conversation.new"),
         appearance.ui_font_family(),
         appearance.ui_font_size() + 2.,
     )
@@ -234,7 +235,7 @@ pub fn render_item(props: ItemProps<'_>, app: &AppContext) -> Box<dyn Element> {
     .finish();
 
     let timestamp = Text::new_inline(
-        format_approx_duration_from_now_utc(conversation.display.last_updated),
+        format_conversation_timestamp(app, conversation.display.last_updated),
         font_family,
         font_size - 2.,
     )
@@ -425,6 +426,53 @@ pub fn render_item(props: ItemProps<'_>, app: &AppContext) -> Box<dyn Element> {
     }
 
     SavePosition::new(item_stack.finish(), &position_id).finish()
+}
+
+fn format_conversation_timestamp(app: &AppContext, datetime: DateTime<Utc>) -> String {
+    const MIN_TO_MS: f64 = 60_000.;
+    const HOUR_TO_MS: f64 = 60. * MIN_TO_MS;
+    const DAY_TO_MS: f64 = 24. * HOUR_TO_MS;
+    const WEEK_TO_MS: f64 = 7. * DAY_TO_MS;
+    const MONTH_TO_MS: f64 = 30.44 * DAY_TO_MS;
+    const YEAR_TO_MS: f64 = 365.25 * DAY_TO_MS;
+
+    let ms = Utc::now()
+        .signed_duration_since(datetime)
+        .num_milliseconds()
+        .max(0) as f64;
+
+    if ms >= YEAR_TO_MS {
+        return format_quantity_time(app, "year", ms / YEAR_TO_MS);
+    }
+    if ms >= MONTH_TO_MS {
+        return format_quantity_time(app, "month", ms / MONTH_TO_MS);
+    }
+    if ms >= WEEK_TO_MS {
+        return format_quantity_time(app, "week", ms / WEEK_TO_MS);
+    }
+    if ms >= DAY_TO_MS {
+        return format_quantity_time(app, "day", ms / DAY_TO_MS);
+    }
+    if ms >= HOUR_TO_MS {
+        return format_quantity_time(app, "hour", ms / HOUR_TO_MS);
+    }
+    if ms >= MIN_TO_MS {
+        let count = (ms / MIN_TO_MS) as i32;
+        return localization::text_for_app_with_args(
+            app,
+            "workspace.conversation_list.time.minute",
+            &[("count", &count.to_string())],
+        );
+    }
+
+    localization::text_for_app(app, "workspace.conversation_list.time.just_now")
+}
+
+fn format_quantity_time(app: &AppContext, unit: &str, quantity: f64) -> String {
+    let count = quantity as i32;
+    let key_suffix = if count == 1 { "one" } else { "many" };
+    let key = format!("workspace.conversation_list.time.{unit}_{key_suffix}");
+    localization::text_for_app_with_args(app, &key, &[("count", &count.to_string())])
 }
 
 /// Returns the secondary label for a conversation list item:

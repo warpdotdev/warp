@@ -541,7 +541,9 @@ impl PresenceManager {
 
         let Some(participant) = participant else {
             if self.id != update.participant_id {
-                log::warn!("Received shared session participant presence update for participant that doesn't exist");
+                log::warn!(
+                    "Received shared session participant presence update for participant that doesn't exist"
+                );
             }
             return;
         };
@@ -562,7 +564,9 @@ impl PresenceManager {
             self.role = Some(role);
         } else {
             let Some(participant) = self.present_viewers.get_mut(participant_id) else {
-                log::warn!("Received shared session participant role update for participant that doesn't exist");
+                log::warn!(
+                    "Received shared session participant role update for participant that doesn't exist"
+                );
                 return;
             };
             participant.role = Some(role);

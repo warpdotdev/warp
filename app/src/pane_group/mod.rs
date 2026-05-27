@@ -1,3 +1,4 @@
+use crate::localization;
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -34,7 +35,7 @@ use warpui::elements::{
     ChildView, Clipped, CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Flex,
     MainAxisSize, ParentElement, Shrinkable, Stack,
 };
-use warpui::keymap::{Context, EditableBinding, FixedBinding};
+use warpui::keymap::{BindingDescription, Context, EditableBinding, FixedBinding};
 use warpui::notification::NotificationSendError;
 use warpui::windowing::WindowManager;
 use warpui::{
@@ -347,14 +348,17 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "pane_group:close_current_session",
-            "Close Current Session",
+            binding_description(
+                "Close Current Session",
+                "pane_group.binding.close_current_session",
+            ),
             PaneGroupAction::RemoveActive,
         )
         .with_custom_action(CustomAction::CloseCurrentSession)
         .with_context_predicate(id!("PaneGroup")),
         EditableBinding::new(
             "pane_group:add_left",
-            "Split pane left",
+            binding_description("Split pane left", "pane_group.binding.split_pane_left"),
             PaneGroupAction::Add(Direction::Left),
         )
         .with_context_predicate(id!("PaneGroup") & !id!("PaneGroup_PaneDragging"))
@@ -362,7 +366,7 @@ pub fn init(app: &mut AppContext) {
         .with_enabled(|| ContextFlag::CreateNewSession.is_enabled()),
         EditableBinding::new(
             "pane_group:add_up",
-            "Split pane up",
+            binding_description("Split pane up", "pane_group.binding.split_pane_up"),
             PaneGroupAction::Add(Direction::Up),
         )
         .with_context_predicate(id!("PaneGroup") & !id!("PaneGroup_PaneDragging"))
@@ -451,7 +455,7 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "pane_group:add_down",
-            "Split pane down",
+            binding_description("Split pane down", "pane_group.binding.split_pane_down"),
             PaneGroupAction::Add(Direction::Down),
         )
         .with_context_predicate(id!("PaneGroup") & !id!("PaneGroup_PaneDragging"))
@@ -459,7 +463,7 @@ pub fn init(app: &mut AppContext) {
         .with_enabled(|| ContextFlag::CreateNewSession.is_enabled()),
         EditableBinding::new(
             "pane_group:add_right",
-            "Split pane right",
+            binding_description("Split pane right", "pane_group.binding.split_pane_right"),
             PaneGroupAction::Add(Direction::Right),
         )
         .with_context_predicate(id!("PaneGroup") & !id!("PaneGroup_PaneDragging"))
@@ -467,7 +471,10 @@ pub fn init(app: &mut AppContext) {
         .with_enabled(|| ContextFlag::CreateNewSession.is_enabled()),
         EditableBinding::new(
             "pane_group:toggle_maximize_pane",
-            "Toggle Maximize Active Pane",
+            binding_description(
+                "Toggle Maximize Active Pane",
+                "pane_group.binding.toggle_maximize_active_pane",
+            ),
             PaneGroupAction::ToggleMaximizePane,
         )
         .with_context_predicate(id!("PaneGroup") & !id!("PaneGroup_PaneDragging"))
@@ -3005,14 +3012,19 @@ impl PaneGroup {
             ctx.notify();
         });
 
-        let user_default_shell_changed_banner = ctx.add_typed_action_view(|_| {
+        let user_default_shell_changed_banner = ctx.add_typed_action_view(|ctx| {
             Banner::<PaneGroupAction>::new_permanently_dismissible(
                 BannerTextContent::formatted_text(vec![
-                    FormattedTextFragment::plain_text(
-                        "Warp doesn't currently support your default shell, falling back to zsh.  ",
+                    FormattedTextFragment::plain_text(localization::text_for_app(
+                        ctx,
+                        "pane_group.banner.unsupported_shell.fallback",
+                    )),
+                    FormattedTextFragment::hyperlink(
+                        localization::text_for_app(ctx, "auth.learn_more"),
+                        WARP_SHELL_COMPATIBILITY_DOCS,
                     ),
-                    FormattedTextFragment::hyperlink("Learn more", WARP_SHELL_COMPATIBILITY_DOCS),
                 ]),
+                localization::text_for_app(ctx, "agent.block.action.dont_show_again"),
             )
         });
 
@@ -8342,6 +8354,11 @@ impl PaneGroup {
 
 impl Entity for PaneGroup {
     type Event = Event;
+}
+
+fn binding_description(fallback: &'static str, key: &'static str) -> BindingDescription {
+    BindingDescription::new(fallback)
+        .with_dynamic_override(move |app| Some(localization::text_for_app(app, key)))
 }
 
 impl TypedActionView for PaneGroup {

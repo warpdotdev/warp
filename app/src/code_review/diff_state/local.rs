@@ -1981,7 +1981,10 @@ impl LocalDiffStateModel {
                         })?;
                         files.push((path.to_string(), status));
                     } else {
-                        log::warn!("Invalid format for changed entry: '{token}' - expected at least 9 parts, got {}", parts.len());
+                        log::warn!(
+                            "Invalid format for changed entry: '{token}' - expected at least 9 parts, got {}",
+                            parts.len()
+                        );
                     }
                 }
                 '2' => {
@@ -2018,7 +2021,10 @@ impl LocalDiffStateModel {
                         files.push((path.to_string(), status));
                         i += 1; // Skip the old path token
                     } else {
-                        log::warn!("Invalid format for renamed/copied entry: '{token}' - expected at least 10 parts, got {}", parts.len());
+                        log::warn!(
+                            "Invalid format for renamed/copied entry: '{token}' - expected at least 10 parts, got {}",
+                            parts.len()
+                        );
                     }
                 }
                 'u' => {
@@ -2029,7 +2035,11 @@ impl LocalDiffStateModel {
                         let path = parts[10];
                         files.push((path.to_string(), GitFileStatus::Conflicted));
                     } else {
-                        log::warn!("Invalid format for unmerged entry: '{}' - expected at least 11 parts, got {}", token, parts.len());
+                        log::warn!(
+                            "Invalid format for unmerged entry: '{}' - expected at least 11 parts, got {}",
+                            token,
+                            parts.len()
+                        );
                     }
                 }
                 '?' => {
@@ -2038,7 +2048,9 @@ impl LocalDiffStateModel {
                         let path = &token[2..]; // Skip "? "
                         files.push((path.to_string(), GitFileStatus::Untracked));
                     } else {
-                        log::warn!("Invalid format for untracked entry: '{token}' - expected path after '? '");
+                        log::warn!(
+                            "Invalid format for untracked entry: '{token}' - expected path after '? '"
+                        );
                     }
                 }
                 '!' => {

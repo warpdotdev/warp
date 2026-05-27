@@ -1,3 +1,11 @@
+use crate::{
+    appearance::Appearance,
+    debounce::debounce,
+    editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions},
+    localization,
+    ui_components::icons::Icon,
+    view_components::find::{CASE_SENSITIVE_LABEL, FIND_BAR_WIDTH, REGEX_TOGGLE_LABEL},
+};
 use std::fmt::Write;
 use std::time::Duration;
 
@@ -23,14 +31,6 @@ use warpui::{
 
 use super::model::NotebooksEditorModel;
 use super::view::{EditorViewEvent, RichTextEditorView};
-use crate::appearance::Appearance;
-use crate::debounce::debounce;
-use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions};
-use crate::ui_components::icons::Icon;
-use crate::view_components::find::{
-    CASE_SENSITIVE_LABEL, CASE_SENSITIVE_TOOLTIP, FIND_BAR_WIDTH, REGEX_TOGGLE_LABEL,
-    REGEX_TOGGLE_TOOLTIP,
-};
 
 /// View for the find bar within a notebook.
 pub struct FindBar {
@@ -187,7 +187,7 @@ impl FindBar {
         if searcher.has_query() {
             let match_count = searcher.match_count();
             let text = if match_count == 0 {
-                "No matches".to_string()
+                text(app, "notebook.editor.find.no_matches")
             } else {
                 let mut text = String::new();
                 match searcher.selected_match() {
@@ -411,7 +411,7 @@ impl View for FindBar {
                 ),
                 self.render_toggle_button(
                     REGEX_TOGGLE_LABEL,
-                    REGEX_TOGGLE_TOOLTIP,
+                    &text(app, "code.find.tooltip.regex_toggle"),
                     FindBarAction::ToggleRegex,
                     searcher.is_regex(),
                     self.button_handles.regex_toggle.clone(),
@@ -420,7 +420,7 @@ impl View for FindBar {
                 ),
                 self.render_toggle_button(
                     CASE_SENSITIVE_LABEL,
-                    CASE_SENSITIVE_TOOLTIP,
+                    &text(app, "code.find.tooltip.case_sensitive"),
                     FindBarAction::ToggleCaseSensitive,
                     searcher.is_case_sensitive(),
                     self.button_handles.case_sensitive_toggle.clone(),
@@ -628,4 +628,8 @@ impl FindBarState {
         ctx.focus_self();
         ctx.notify();
     }
+}
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
 }

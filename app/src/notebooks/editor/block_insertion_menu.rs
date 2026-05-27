@@ -1,3 +1,4 @@
+use crate::localization;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,10 @@ use crate::server::ids::SyncId;
 use crate::themes::theme::Fill;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 /// The saved position ID for the block insertion button.
 const BLOCK_INSERT_BUTTON_ID: &str = "notebook_block_insertion_button";
@@ -86,7 +91,7 @@ impl BlockInsertionMenuState {
 
         for block_type in BlockType::code_block_types() {
             menu.add_item(
-                MenuItemFields::new(block_type.label())
+                MenuItemFields::new(block_type.localized_label(ctx))
                     .with_icon(block_type.icon())
                     .with_on_select_action(EditorViewAction::InsertBlock(
                         warp_editor::content::text::BlockType::Text(block_type.into()),
@@ -97,7 +102,7 @@ impl BlockInsertionMenuState {
 
         if embedded_objects_enabled {
             menu.add_item(
-                MenuItemFields::new("Embed")
+                MenuItemFields::new(text(ctx, "notebook.block.embed"))
                     .with_icon(Icon::EmbedBlock)
                     .with_on_select_action(EditorViewAction::OpenEmbeddedObjectSearch)
                     .into_item(),
@@ -105,7 +110,7 @@ impl BlockInsertionMenuState {
         }
 
         for block_type in BlockType::text_block_types() {
-            let mut item_fields = MenuItemFields::new(block_type.label())
+            let mut item_fields = MenuItemFields::new(block_type.localized_label(ctx))
                 .with_icon(block_type.icon())
                 .with_on_select_action(EditorViewAction::InsertBlock(
                     warp_editor::content::text::BlockType::Text(block_type.into()),
@@ -117,7 +122,7 @@ impl BlockInsertionMenuState {
         }
 
         menu.add_item(
-            MenuItemFields::new("Divider")
+            MenuItemFields::new(text(ctx, "notebook.block.divider"))
                 .with_icon(Icon::HorizontalRuleBlock)
                 .with_on_select_action(EditorViewAction::InsertBlock(
                     warp_editor::content::text::BlockType::Item(BufferBlockItem::HorizontalRule),
@@ -292,6 +297,7 @@ impl RichTextEditorView {
     fn render_button(&self, stack: &mut Stack, app: &AppContext) {
         let appearance = Appearance::as_ref(app);
         let ui_builder = appearance.ui_builder().clone();
+        let tooltip = text(app, "notebook.block.insert_tooltip");
         let button = icon_button(
             appearance,
             Icon::Plus,
@@ -304,12 +310,7 @@ impl RichTextEditorView {
             border_color: Some(appearance.theme().surface_3().into()),
             ..Default::default()
         })
-        .with_tooltip(move || {
-            ui_builder
-                .tool_tip("Insert block".to_string())
-                .build()
-                .finish()
-        })
+        .with_tooltip(move || ui_builder.tool_tip(tooltip.clone()).build().finish())
         // Position the tooltip above the insertion button to ensure they don't overlap if the
         // button is towards the bottom of the screen.
         .with_tooltip_position(ButtonTooltipPosition::Above)

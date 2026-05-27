@@ -90,14 +90,14 @@ pub trait AppExt {
     fn set_dev_icon(&mut self, value: Cow<'static, [u8]>);
 
     /// Sets the main menu bar constructor function.
-    fn set_menu_bar_builder(&mut self, value: impl FnOnce(&mut AppContext) -> MenuBar + 'static);
+    fn set_menu_bar_builder(&mut self, value: impl Fn(&mut AppContext) -> MenuBar + 'static);
 
     /// Sets the macOS dock menu constructor function.
-    fn set_dock_menu_builder(&mut self, value: impl FnOnce(&mut AppContext) -> Menu + 'static);
+    fn set_dock_menu_builder(&mut self, value: impl Fn(&mut AppContext) -> Menu + 'static);
 }
 
-type MenuBarBuilderFn = Box<dyn FnOnce(&mut AppContext) -> MenuBar>;
-type DockMenuBuilderFn = Box<dyn FnOnce(&mut AppContext) -> Menu>;
+type MenuBarBuilderFn = Box<dyn Fn(&mut AppContext) -> MenuBar>;
+type DockMenuBuilderFn = Box<dyn Fn(&mut AppContext) -> Menu>;
 
 /// The actual application, from the perspective of the platform and the
 /// main event loop.  This is the true owner of all application state.
@@ -214,14 +214,14 @@ impl AppExt for AppBuilder {
         }
     }
 
-    fn set_menu_bar_builder(&mut self, value: impl FnOnce(&mut AppContext) -> MenuBar + 'static) {
+    fn set_menu_bar_builder(&mut self, value: impl Fn(&mut AppContext) -> MenuBar + 'static) {
         match self.as_inner_mut() {
             AppBackend::CurrentPlatform(app) => app.menu_bar_builder = Some(Box::new(value)),
             AppBackend::Headless(_) => (),
         }
     }
 
-    fn set_dock_menu_builder(&mut self, value: impl FnOnce(&mut AppContext) -> Menu + 'static) {
+    fn set_dock_menu_builder(&mut self, value: impl Fn(&mut AppContext) -> Menu + 'static) {
         match self.as_inner_mut() {
             AppBackend::CurrentPlatform(app) => app.dock_menu_builder = Some(Box::new(value)),
             AppBackend::Headless(_) => (),
@@ -239,6 +239,63 @@ pub(super) fn callback_dispatcher() -> &'static mut AppCallbackDispatcher {
         let app = get_warp_app();
         let app = get_app(&mut *app);
         &mut app.callbacks
+    }
+}
+
+fn rebuild_menu_bar(app: &mut App) {
+    let Some(menu_bar_builder) = app.menu_bar_builder.as_ref() else {
+        return;
+    };
+
+    let menu_bar = app
+        .callbacks
+        .with_mutable_app_context(|ctx| menu_bar_builder(ctx));
+    apply_menu_bar(menu_bar);
+}
+
+fn rebuild_dock_menu(app: &mut App) {
+    let Some(dock_menu_builder) = app.dock_menu_builder.as_ref() else {
+        return;
+    };
+
+    let dock_menu = app
+        .callbacks
+        .with_mutable_app_context(|ctx| dock_menu_builder(ctx));
+    apply_dock_menu(dock_menu);
+}
+
+fn apply_menu_bar(menu_bar: MenuBar) {
+    unsafe {
+        let pool = NSAutoreleasePool::new(nil);
+        let nsmenu = make_main_menu(menu_bar);
+        let _: () = msg_send![NSApp(), setMainMenu: nsmenu];
+        let _: () = msg_send![pool, drain];
+    }
+}
+
+fn apply_dock_menu(dock_menu: Menu) {
+    unsafe {
+        let pool = NSAutoreleasePool::new(nil);
+        let app_delegate: id = msg_send![NSApp(), delegate];
+        let nsmenu = make_dock_menu(dock_menu);
+        let _: () = msg_send![app_delegate, setDockMenu: nsmenu];
+        let _: () = msg_send![pool, drain];
+    }
+}
+
+#[allow(dead_code)]
+pub fn rebuild_native_menus(app_ctx: &mut AppContext) {
+    unsafe {
+        let app = get_warp_app();
+        let app = get_app(&mut *app);
+
+        if let Some(menu_bar_builder) = app.menu_bar_builder.as_ref() {
+            apply_menu_bar(menu_bar_builder(app_ctx));
+        }
+
+        if let Some(dock_menu_builder) = app.dock_menu_builder.as_ref() {
+            apply_dock_menu(dock_menu_builder(app_ctx));
+        }
     }
 }
 
@@ -289,17 +346,8 @@ pub unsafe extern "C-unwind" fn warp_app_will_finish_launching(this: &mut Object
         let _: () = msg_send![app_delegate, setReachabilityListener];
     }
 
-    if let Some(menu_bar_builder) = app.menu_bar_builder.take() {
-        let menu_bar = app.callbacks.with_mutable_app_context(menu_bar_builder);
-        let nsmenu = make_main_menu(menu_bar);
-        let () = msg_send![NSApp(), setMainMenu: nsmenu];
-    }
-
-    if let Some(dock_menu_builder) = app.dock_menu_builder.take() {
-        let dock_menu = app.callbacks.with_mutable_app_context(dock_menu_builder);
-        let nsmenu = make_dock_menu(dock_menu);
-        let _: () = msg_send![app_delegate, setDockMenu: nsmenu];
-    }
+    rebuild_menu_bar(app);
+    rebuild_dock_menu(app);
 }
 
 #[no_mangle]

@@ -23,6 +23,7 @@ use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerE
 use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISubagentEvent};
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::skills::{SkillDescriptor, SkillManager};
+use crate::localization;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::slash_command_menu::fuzzy_match::SlashCommandFuzzyMatchResult;
@@ -611,11 +612,16 @@ impl InlineItem {
         app: &AppContext,
     ) -> Self {
         let appearance = Appearance::as_ref(app);
+        let description_key = slash_command_localization_key(command.name, "description");
         Self {
             action: AcceptSlashCommandOrSavedPrompt::SlashCommand { id: *command_id },
             icon_path: command.icon_path,
             name: command.name.to_owned(),
-            description: Some(command.description.to_owned()),
+            description: Some(localization::text_for_app_or(
+                app,
+                &description_key,
+                command.description,
+            )),
             font_family: appearance.monospace_font_family(),
             name_match_result: None,
             description_match_result: None,
@@ -696,6 +702,11 @@ impl InlineItem {
         self.compact_layout = compact;
         self
     }
+}
+
+pub(crate) fn slash_command_localization_key(command_name: &str, suffix: &str) -> String {
+    let key_name = command_name.trim_start_matches('/').replace('-', "_");
+    format!("terminal.slash.command.{key_name}.{suffix}")
 }
 
 #[cfg(test)]

@@ -1,3 +1,4 @@
+use crate::localization;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -34,7 +35,6 @@ use crate::ui_components::buttons::{highlight, icon_button};
 use crate::ui_components::icons::{self, Icon};
 use crate::workflows::workflow::ArgumentType;
 
-const ARGUMENT_DEFAULT_VALUE_PLACEHOLDER_TEXT: &str = "Default value (optional)";
 const ARGUMENT_EDITOR_FONT_SIZE: f32 = 14.;
 const DROPDOWN_PADDING: f32 = 8.;
 const DROPDOWN_BORDER_RADIUS: f32 = 6.;
@@ -494,7 +494,10 @@ impl WorkflowArgSelector {
         let should_show_placeholder = self.text_editor.as_ref(app).is_empty(app);
 
         let text_label = match should_show_placeholder {
-            true => ARGUMENT_DEFAULT_VALUE_PLACEHOLDER_TEXT.to_string(),
+            true => localization::text_for_app(
+                app,
+                "workflow.arguments.placeholder.default_value_optional",
+            ),
             false => self.text_editor.as_ref(app).buffer_text(app),
         };
 
@@ -640,7 +643,7 @@ impl WorkflowArgSelector {
     }
 
     // Render the entire section that drops below the text editor
-    fn render_dropdown(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_dropdown(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let toggle_default = Some(self.get_arg_type_idx(ArgumentSelectType::default()));
 
         let mut dropdown = Flex::column().with_child(
@@ -675,7 +678,7 @@ impl WorkflowArgSelector {
         );
 
         if let Some(type_dropdown) =
-            self.render_arg_type_dropdown(appearance, self.get_selected_type())
+            self.render_arg_type_dropdown(appearance, self.get_selected_type(), app)
         {
             dropdown.add_child(type_dropdown);
         }
@@ -694,9 +697,10 @@ impl WorkflowArgSelector {
         &self,
         appearance: &Appearance,
         arg_type: ArgumentSelectType,
+        app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         match arg_type {
-            ArgumentSelectType::Enum => Some(self.render_enum_menu(appearance)),
+            ArgumentSelectType::Enum => Some(self.render_enum_menu(appearance, app)),
             _ => None,
         }
     }
@@ -791,12 +795,12 @@ impl WorkflowArgSelector {
         menu_items.collect()
     }
 
-    fn render_enum_menu(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_enum_menu(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let mut flex_col = Flex::column();
 
         let mut menu = Hoverable::new(self.enum_menu_mouse_state.clone(), |state| {
             let button = Text::new_inline(
-                "New".to_string(),
+                localization::text_for_app(app, "workflow.arg_selector.new"),
                 appearance.ui_font_family(),
                 ARGUMENT_EDITOR_FONT_SIZE,
             )
@@ -906,7 +910,7 @@ impl View for WorkflowArgSelector {
             .with_constrain_absolute_children()
             .with_child(self.render_text_editor(appearance, app));
         if self.is_expanded {
-            let dropdown = self.render_dropdown(appearance);
+            let dropdown = self.render_dropdown(appearance, app);
 
             stack.add_positioned_overlay_child(
                 dropdown,

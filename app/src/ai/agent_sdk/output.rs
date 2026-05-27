@@ -13,6 +13,19 @@ use serde::Serialize;
 use tabwriter::TabWriter;
 use warp_cli::agent::OutputFormat;
 use warp_cli::json_filter::{JqFilter, JsonOutput};
+use warp_localization::LocaleId;
+use warpui::AppContext;
+
+use crate::localization;
+
+fn default_text(key: &str) -> String {
+    localization::text_for_locale(LocaleId::EnUs, key)
+}
+
+fn default_text_with_args(key: &str, args: &[(&str, &str)]) -> String {
+    warp_localization::replace_placeholders(&default_text(key), args)
+        .expect("localized text template arguments must match the catalog")
+}
 
 pub fn standard_table() -> Table {
     let mut table = Table::new();
@@ -28,9 +41,26 @@ pub trait TableFormat {
     fn header() -> Vec<Cell>;
 
     fn row(&self) -> Vec<Cell>;
+
+    fn header_for_app(_app: &AppContext) -> Vec<Cell> {
+        Self::header()
+    }
+
+    fn row_for_app(&self, _app: &AppContext) -> Vec<Cell> {
+        self.row()
+    }
+
+    fn header_for_locale(_locale: LocaleId) -> Vec<Cell> {
+        Self::header()
+    }
+
+    fn row_for_locale(&self, _locale: LocaleId) -> Vec<Cell> {
+        self.row()
+    }
 }
 
 /// Print a list of items to stdout, respecting the `output_format`.
+#[allow(dead_code)]
 pub fn print_list<I, T>(items: I, output_format: OutputFormat)
 where
     I: IntoIterator<Item = T>,
@@ -42,13 +72,38 @@ where
     }
 }
 
+/// Print a list of items to stdout using localized table labels.
+pub fn print_list_for_app<I, T>(items: I, output_format: OutputFormat, app: &AppContext)
+where
+    I: IntoIterator<Item = T>,
+    T: TableFormat + Serialize,
+{
+    if let Err(err) = write_list_for_app(items, output_format, &mut std::io::stdout(), app) {
+        // If we can't write to stdout, try reporting to the log file.
+        log::warn!("Unable to write to stdout: {err}");
+    }
+}
+
+/// Print a list of items to stdout using localized table labels for an already resolved locale.
+pub fn print_list_for_locale<I, T>(items: I, output_format: OutputFormat, locale: LocaleId)
+where
+    I: IntoIterator<Item = T>,
+    T: TableFormat + Serialize,
+{
+    if let Err(err) = write_list_for_locale(items, output_format, &mut std::io::stdout(), locale) {
+        // If we can't write to stdout, try reporting to the log file.
+        log::warn!("Unable to write to stdout: {err}");
+    }
+}
+
 /// Write a serializable value to `output` as pretty JSON.
 pub fn write_json<T, W>(value: &T, mut output: W) -> anyhow::Result<()>
 where
     T: Serialize,
     W: std::io::Write,
 {
-    serde_json::to_writer_pretty(&mut output, value).context("unable to write JSON output")?;
+    serde_json::to_writer_pretty(&mut output, value)
+        .context(default_text("agent_sdk.output.error.write_json"))?;
     writeln!(&mut output)?;
     Ok(())
 }
@@ -59,7 +114,8 @@ where
     T: Serialize,
     W: std::io::Write,
 {
-    serde_json::to_writer(&mut output, value).context("unable to write JSON output")?;
+    serde_json::to_writer(&mut output, value)
+        .context(default_text("agent_sdk.output.error.write_json"))?;
     writeln!(&mut output)?;
     Ok(())
 }
@@ -176,7 +232,7 @@ pub fn print_raw_json(value: serde_json::Value, json_output: &JsonOutput) -> any
     match json_output.filter.as_ref() {
         None => {
             serde_json::to_writer_pretty(&mut out, &value)
-                .context("unable to write JSON output")?;
+                .context(default_text("agent_sdk.output.error.write_json"))?;
             writeln!(&mut out)?;
         }
         Some(filter) => run_jq_filter(value, filter, &mut out)?,
@@ -213,11 +269,23 @@ fn run_jq_filter<W: std::io::Write>(
         Default::default(),
         [input_result].into_iter(),
         // Callback to format invalid input errors.
-        |err| anyhow::anyhow!("Invalid data: {err}"),
+        |err| {
+            let error = err.to_string();
+            anyhow::anyhow!(default_text_with_args(
+                "agent_sdk.output.error.invalid_data",
+                &[("error", &error)]
+            ))
+        },
         // Callback to handle filter outputs.
         |result| match result {
             Ok(val) => write_filter_output(&val, out),
-            Err(err) => anyhow::bail!("jq filter error: {err}"),
+            Err(err) => {
+                let error = err.to_string();
+                anyhow::bail!(default_text_with_args(
+                    "agent_sdk.output.error.jq_filter",
+                    &[("error", &error)]
+                ))
+            }
         },
     )?;
 
@@ -256,7 +324,7 @@ fn write_filter_output<W: std::io::Write>(val: &Val, out: &mut W) -> anyhow::Res
         }
         Val::Arr(_) | Val::Obj(_) => {
             jaq_write::write(&mut *out, &pretty_pp(), 0, val)
-                .context("unable to write jq output as JSON")?;
+                .context(default_text("agent_sdk.output.error.write_jq_json"))?;
             writeln!(out)?;
         }
     }
@@ -264,6 +332,7 @@ fn write_filter_output<W: std::io::Write>(val: &Val, out: &mut W) -> anyhow::Res
 }
 
 /// Write a list of items to `output`, respecting the `output_format`.
+#[allow(dead_code)]
 pub fn write_list<I, T, W>(
     items: I,
     output_format: OutputFormat,
@@ -274,32 +343,92 @@ where
     T: TableFormat + Serialize,
     W: std::io::Write,
 {
+    write_list_with_table_cells(items, output_format, &mut output, T::header, T::row)
+}
+
+/// Write a list of items to `output`, using localized table labels when applicable.
+pub fn write_list_for_app<I, T, W>(
+    items: I,
+    output_format: OutputFormat,
+    mut output: W,
+    app: &AppContext,
+) -> anyhow::Result<()>
+where
+    I: IntoIterator<Item = T>,
+    T: TableFormat + Serialize,
+    W: std::io::Write,
+{
+    write_list_with_table_cells(
+        items,
+        output_format,
+        &mut output,
+        || T::header_for_app(app),
+        |item| item.row_for_app(app),
+    )
+}
+
+/// Write a list of items to `output`, using localized table labels for an already resolved locale.
+pub fn write_list_for_locale<I, T, W>(
+    items: I,
+    output_format: OutputFormat,
+    mut output: W,
+    locale: LocaleId,
+) -> anyhow::Result<()>
+where
+    I: IntoIterator<Item = T>,
+    T: TableFormat + Serialize,
+    W: std::io::Write,
+{
+    write_list_with_table_cells(
+        items,
+        output_format,
+        &mut output,
+        || T::header_for_locale(locale),
+        |item| item.row_for_locale(locale),
+    )
+}
+
+fn write_list_with_table_cells<I, T, W, H, R>(
+    items: I,
+    output_format: OutputFormat,
+    output: &mut W,
+    header: H,
+    row: R,
+) -> anyhow::Result<()>
+where
+    I: IntoIterator<Item = T>,
+    T: Serialize,
+    W: std::io::Write,
+    H: Fn() -> Vec<Cell>,
+    R: Fn(&T) -> Vec<Cell>,
+{
     match output_format {
         OutputFormat::Json => {
             let items = items.into_iter().collect::<Vec<_>>();
-            serde_json::to_writer(&mut output, &items).context("unable to write JSON output")
+            serde_json::to_writer(output, &items)
+                .context(default_text("agent_sdk.output.error.write_json"))
         }
         OutputFormat::Ndjson => {
             for item in items {
-                write_json_line(&item, &mut output)?;
+                write_json_line(&item, &mut *output)?;
             }
             Ok(())
         }
         OutputFormat::Pretty => {
             // Use comfy-table to print a table with terminal formatting.
             let mut table = standard_table();
-            table.set_header(T::header());
+            table.set_header(header());
             for item in items {
-                table.add_row(T::row(&item));
+                table.add_row(row(&item));
             }
-            writeln!(&mut output, "{table}")?;
+            writeln!(output, "{table}")?;
             Ok(())
         }
         OutputFormat::Text => {
             // Print a plain-text table.
             let mut tw = TabWriter::new(output);
 
-            for (idx, column) in T::header().iter().enumerate() {
+            for (idx, column) in header().iter().enumerate() {
                 if idx > 0 {
                     write!(&mut tw, "\t")?;
                 }
@@ -308,7 +437,7 @@ where
             writeln!(&mut tw)?;
 
             for item in items {
-                for (idx, column) in T::row(&item).iter().enumerate() {
+                for (idx, column) in row(&item).iter().enumerate() {
                     if idx > 0 {
                         write!(&mut tw, "\t")?;
                     }

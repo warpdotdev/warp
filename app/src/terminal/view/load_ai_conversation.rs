@@ -1,3 +1,4 @@
+use crate::localization;
 use std::ops::Not;
 use std::path::Path;
 use std::rc::Rc;
@@ -21,7 +22,6 @@ use crate::ai::agent::{
     AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, CreateDocumentsRequest,
     CreateDocumentsResult, EditDocumentsResult,
 };
-use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use crate::ai::blocklist::agent_view::{
     AgentViewEntryBlockParams, AgentViewEntryOrigin, DismissalStrategy, EphemeralMessage,
 };
@@ -361,6 +361,10 @@ impl TerminalView {
                                         // Create a mapping from document index to title
                                         let document_titles: Vec<String> =
                                             documents.iter().map(|doc| doc.title.clone()).collect();
+                                        let default_title = crate::localization::text_for_app(
+                                            ctx,
+                                            "ai_document.title.default",
+                                        );
 
                                         document_model.update(ctx, |doc_model, doc_ctx| {
                                             for (index, doc_context) in
@@ -369,9 +373,7 @@ impl TerminalView {
                                                 let title = document_titles
                                                     .get(index)
                                                     .cloned()
-                                                    .unwrap_or_else(|| {
-                                                        DEFAULT_PLANNING_DOCUMENT_TITLE.to_string()
-                                                    });
+                                                    .unwrap_or_else(|| default_title.clone());
 
                                                 doc_model.restore_document(
                                                     doc_context.document_id,
@@ -854,18 +856,26 @@ impl TerminalView {
 
         match &restore_context_state {
             RestorationDirState::MissingOriginalDir => {
-                items.push(MessageItem::text(
-                    "couldn't find original conversation directory ",
-                ));
+                items.push(MessageItem::text(localization::text_for_app(
+                    ctx,
+                    "terminal.restore_context.missing_original_dir_prefix",
+                )));
                 items.push(open_repo_hint.clone());
-                items.push(MessageItem::text(" change repos"));
+                items.push(MessageItem::text(localization::text_for_app(
+                    ctx,
+                    "terminal.restore_context.change_repos",
+                )));
             }
             RestorationDirState::NeedsCd { .. } => {
-                items.push(MessageItem::text(
-                    "changed directory to continue conversation ",
-                ));
+                items.push(MessageItem::text(localization::text_for_app(
+                    ctx,
+                    "terminal.restore_context.changed_directory_prefix",
+                )));
                 items.push(open_repo_hint.clone());
-                items.push(MessageItem::text(" change repos"));
+                items.push(MessageItem::text(localization::text_for_app(
+                    ctx,
+                    "terminal.restore_context.change_repos",
+                )));
             }
             RestorationDirState::Unchanged => {}
         }

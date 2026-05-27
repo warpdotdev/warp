@@ -2732,7 +2732,7 @@ fn test_random_concurrent_operations() {
                 let replica_id = replica_ids[replica_index].clone();
                 let (buffer, ops_rx) = &buffers[replica_index];
                 let mut ops_rx = ops_rx.clone();
-                if mutation_count > 0 && rng.gen() {
+                if mutation_count > 0 && rng.r#gen() {
                     let mutation_type = buffer.update(&mut app, |buffer, ctx| {
                         buffer.randomly_mutate(&mut rng, ctx)
                     });

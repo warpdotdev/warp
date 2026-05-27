@@ -1,3 +1,4 @@
+use crate::localization;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -61,6 +62,10 @@ use crate::workspace::view::{
 };
 use crate::workspace::WorkspaceAction;
 use crate::TelemetryEvent;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 #[derive(Default)]
 struct MouseStateHandles {
@@ -402,7 +407,7 @@ impl LeftPanelView {
                 ToolbeltButtonConfig {
                     icon: Icon::FileCopy,
                     active_icon: None,
-                    tooltip_text: "Project explorer".to_string(),
+                    tooltip_text: text(ctx, "workspace.panel.project_explorer"),
                     action: LeftPanelAction::ProjectExplorer,
                     render_with_active_state: false,
                     tooltip_keybinding: toolbelt_tooltip_keybinding(&tooltip_keybinding_names, ctx),
@@ -418,7 +423,7 @@ impl LeftPanelView {
                 ToolbeltButtonConfig {
                     icon: Icon::Search,
                     active_icon: None,
-                    tooltip_text: "Global search".to_string(),
+                    tooltip_text: text(ctx, "workspace.panel.global_search"),
                     action: LeftPanelAction::GlobalSearch {
                         entry_focus: GlobalSearchEntryFocus::QueryEditor,
                     },
@@ -436,7 +441,7 @@ impl LeftPanelView {
                 ToolbeltButtonConfig {
                     icon: Icon::WarpDrive,
                     active_icon: None,
-                    tooltip_text: "Warp Drive".to_string(),
+                    tooltip_text: text(ctx, "workspace.panel.warp_drive"),
                     action: LeftPanelAction::WarpDrive,
                     render_with_active_state: false,
                     tooltip_keybinding: toolbelt_tooltip_keybinding(&tooltip_keybinding_names, ctx),
@@ -452,7 +457,7 @@ impl LeftPanelView {
                 ToolbeltButtonConfig {
                     icon: Icon::Conversation,
                     active_icon: Some(Icon::Conversation),
-                    tooltip_text: "Agent conversations".to_string(),
+                    tooltip_text: text(ctx, "workspace.panel.agent_conversations"),
                     action: LeftPanelAction::ConversationListView,
                     render_with_active_state: false,
                     tooltip_keybinding: toolbelt_tooltip_keybinding(&tooltip_keybinding_names, ctx),
@@ -827,12 +832,12 @@ impl LeftPanelView {
 
         let tooltip = if let Some(keybinding) = tooltip_keybinding {
             ui_builder
-                .tool_tip_with_sublabel("Close panel".to_string(), keybinding)
+                .tool_tip_with_sublabel(text(app, "workspace.panel.close"), keybinding)
                 .build()
                 .finish()
         } else {
             ui_builder
-                .tool_tip("Close panel".to_string())
+                .tool_tip(text(app, "workspace.panel.close"))
                 .build()
                 .finish()
         };

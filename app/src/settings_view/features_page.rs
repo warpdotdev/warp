@@ -110,11 +110,11 @@ use crate::{report_if_error, send_telemetry_from_ctx, themes, GlobalResourceHand
 
 cfg_if::cfg_if! {
     if #[cfg(target_os = "macos")] {
-        static EXTRA_META_KEYS_LEFT_TEXT: &str = "Left Option key is Meta";
-        static EXTRA_META_KEYS_RIGHT_TEXT: &str = "Right Option key is Meta";
+        static EXTRA_META_KEYS_LEFT_KEY: &str = "settings.features.extra_meta_keys.left_option";
+        static EXTRA_META_KEYS_RIGHT_KEY: &str = "settings.features.extra_meta_keys.right_option";
     } else {
-        static EXTRA_META_KEYS_LEFT_TEXT: &str = "Left Alt key is Meta";
-        static EXTRA_META_KEYS_RIGHT_TEXT: &str = "Right Alt key is Meta";
+        static EXTRA_META_KEYS_LEFT_KEY: &str = "settings.features.extra_meta_keys.left_alt";
+        static EXTRA_META_KEYS_RIGHT_KEY: &str = "settings.features.extra_meta_keys.right_alt";
     }
 }
 
@@ -127,16 +127,18 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 
     // Add all of the toggle settings from the Features Page that you want to show up on the Command Palette here.
     let mut toggle_binding_pairs = vec![
-        ToggleSettingActionPair::new(
-            "copy on select within the terminal",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.copy_on_select.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleCopyOnSelect,
             )),
             context,
             flags::COPY_ON_SELECT_CONTEXT_FLAG,
         ),
-        ToggleSettingActionPair::new(
-            "linux selection clipboard",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.linux_selection_clipboard.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleLinuxClipboardSelection,
             )),
@@ -148,8 +150,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 .linux_selection_clipboard
                 .is_supported_on_current_platform(),
         ),
-        ToggleSettingActionPair::new(
-            "autocomplete quotes, parentheses, and brackets",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.autocomplete_symbols.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleAutocompleteSymbols,
             )),
@@ -161,16 +164,18 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 .autocomplete_symbols
                 .is_supported_on_current_platform(),
         ),
-        ToggleSettingActionPair::new(
-            "restore windows, tabs, and panes on startup",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.session_restoration.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleRestoreSession,
             )),
             context,
             flags::RESTORE_SESSION_CONTEXT_FLAG,
         ),
-        ToggleSettingActionPair::new(
-            EXTRA_META_KEYS_LEFT_TEXT,
+        ToggleSettingActionPair::new_localized(
+            app,
+            EXTRA_META_KEYS_LEFT_KEY,
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleLeftMetaKey,
             )),
@@ -182,8 +187,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 .extra_meta_keys
                 .is_supported_on_current_platform(),
         ),
-        ToggleSettingActionPair::new(
-            EXTRA_META_KEYS_RIGHT_TEXT,
+        ToggleSettingActionPair::new_localized(
+            app,
+            EXTRA_META_KEYS_RIGHT_KEY,
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleRightMetaKey,
             )),
@@ -195,8 +201,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 .extra_meta_keys
                 .is_supported_on_current_platform(),
         ),
-        ToggleSettingActionPair::new(
-            "scroll reporting",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.scroll_reporting.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleScrollReporting,
             )),
@@ -208,8 +215,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 .scroll_reporting_enabled
                 .is_supported_on_current_platform(),
         ),
-        ToggleSettingActionPair::new(
-            "completions while typing",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.completions_while_typing.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleCompletionsOpenWhileTyping,
             )),
@@ -221,8 +229,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 .completions_open_while_typing
                 .is_supported_on_current_platform(),
         ),
-        ToggleSettingActionPair::new(
-            "command corrections",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.command_corrections.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleCommandCorrections,
             )),
@@ -234,8 +243,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 .command_corrections
                 .is_supported_on_current_platform(),
         ),
-        ToggleSettingActionPair::new(
-            "error underlining",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.error_underlining.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleErrorUnderlining,
             )),
@@ -247,8 +257,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 .error_underlining
                 .is_supported_on_current_platform(),
         ),
-        ToggleSettingActionPair::new(
-            "syntax highlighting",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.syntax_highlighting.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleSyntaxHighlighting,
             )),
@@ -260,8 +271,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 .syntax_highlighting
                 .is_supported_on_current_platform(),
         ),
-        ToggleSettingActionPair::new(
-            "audible terminal bell",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.audible_bell.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleUseAudibleBell,
             )),
@@ -273,16 +285,18 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 .use_audible_bell
                 .is_supported_on_current_platform(),
         ),
-        ToggleSettingActionPair::new(
-            "autosuggestions",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.ai.active.natural_language_autosuggestions.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleAutosuggestions,
             )),
             context,
             flags::AUTOSUGGESTIONS_ENABLED_FLAG,
         ),
-        ToggleSettingActionPair::new(
-            "autosuggestion keybinding hint",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.autosuggestion_keybinding_hint.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleAutosuggestionKeybindingHint,
             )),
@@ -292,8 +306,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     ];
 
     if !FeatureFlag::SSHTmuxWrapper.is_enabled() {
-        toggle_binding_pairs.push(ToggleSettingActionPair::new(
-            "Warp SSH wrapper",
+        toggle_binding_pairs.push(ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.ssh_wrapper.label",
             builder(SettingsAction::FeaturesPageToggle(
                 #[allow(deprecated)]
                 FeaturesPageAction::ToggleSshWrapper,
@@ -304,8 +319,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         ))
     }
 
-    toggle_binding_pairs.push(ToggleSettingActionPair::new(
-        "show tooltip on click on links",
+    toggle_binding_pairs.push(ToggleSettingActionPair::new_localized(
+        app,
+        "settings.features.link_tooltip.label",
         builder(SettingsAction::FeaturesPageToggle(
             FeaturesPageAction::ToggleLinkTooltip,
         )),
@@ -314,8 +330,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     ));
 
     toggle_binding_pairs.push(
-        ToggleSettingActionPair::new(
-            "quit warning modal",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.quit_warning.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleShowWarningBeforeQuitting,
             )),
@@ -330,8 +347,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     );
 
     toggle_binding_pairs.push(
-        ToggleSettingActionPair::new(
-            "alias expansion",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.alias_expansion.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleAliasExpansion,
             )),
@@ -346,8 +364,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     );
 
     toggle_binding_pairs.push(
-        ToggleSettingActionPair::new(
-            "middle-click paste",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.middle_click_paste.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleMiddleClickPaste,
             )),
@@ -362,8 +381,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     );
 
     toggle_binding_pairs.push(
-        ToggleSettingActionPair::new(
-            "code as default editor",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.external_editor.code_default.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleCodeAsDefaultEditor,
             )),
@@ -378,8 +398,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     );
 
     toggle_binding_pairs.push(
-        ToggleSettingActionPair::new(
-            "input hint text",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.ai.input.show_hint_text.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleShowInputHintText,
             )),
@@ -394,8 +415,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     );
 
     toggle_binding_pairs.push(
-        ToggleSettingActionPair::new(
-            "editing commands with Vim keybindings",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.vim_mode.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleVimMode,
             )),
@@ -410,8 +432,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     );
 
     toggle_binding_pairs.push(
-        ToggleSettingActionPair::new(
-            "Vim unnamed register as system clipboard",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.vim_mode.system_clipboard.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleVimUnnamedSystemClipboard,
             )),
@@ -426,8 +449,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     );
 
     toggle_binding_pairs.push(
-        ToggleSettingActionPair::new(
-            "Vim status bar",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.vim_mode.status_bar.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleVimStatusBar,
             )),
@@ -442,8 +466,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     );
 
     toggle_binding_pairs.push(
-        ToggleSettingActionPair::new(
-            "focus reporting",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.focus_reporting.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleFocusReporting,
             )),
@@ -457,8 +482,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         ),
     );
 
-    toggle_binding_pairs.push(ToggleSettingActionPair::new(
-        "smart select",
+    toggle_binding_pairs.push(ToggleSettingActionPair::new_localized(
+        app,
+        "settings.features.smart_select.label",
         builder(SettingsAction::FeaturesPageToggle(
             FeaturesPageAction::ToggleSmartSelection,
         )),
@@ -467,8 +493,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     ));
 
     toggle_binding_pairs.push(
-        ToggleSettingActionPair::new(
-            "terminal input message line",
+        ToggleSettingActionPair::new_localized(
+            app,
+            "settings.features.terminal_input_message_line.label",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleShowTerminalInputMessageLine,
             )),
@@ -480,8 +507,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 
     if FeatureFlag::AgentView.is_enabled() && AISettings::as_ref(app).is_any_ai_enabled(app) {
         toggle_binding_pairs.push(
-            ToggleSettingActionPair::new(
-                "slash commands in terminal mode",
+            ToggleSettingActionPair::new_localized(
+                app,
+                "settings.features.slash_commands.label",
                 builder(SettingsAction::FeaturesPageToggle(
                     FeaturesPageAction::ToggleSlashCommandsInTerminalMode,
                 )),
@@ -498,8 +526,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 
     if GPUState::as_ref(app).is_low_power_gpu_available() {
         toggle_binding_pairs.push(
-            ToggleSettingActionPair::new(
-                "integrated GPU rendering (low power)",
+            ToggleSettingActionPair::new_localized(
+                app,
+                "settings.features.gpu.low_power.label",
                 builder(SettingsAction::FeaturesPageToggle(
                     FeaturesPageAction::TogglePreferLowPowerGPU,
                 )),
@@ -518,8 +547,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     {
         if windowing_system_is_customizable(app) {
             toggle_binding_pairs.push(
-                ToggleSettingActionPair::new(
-                    "Wayland for window management",
+                ToggleSettingActionPair::new_localized(
+                    app,
+                    "settings.features.window_system.wayland.label",
                     builder(SettingsAction::FeaturesPageToggle(
                         FeaturesPageAction::ToggleForceX11,
                     )),
@@ -537,7 +567,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(toggle_binding_pairs, app);
 
     app.register_fixed_bindings([FixedBinding::empty(
-        "Configure Global Hotkey",
+        feature_text(app, "settings.features.global_hotkey.configure"),
         WorkspaceAction::ScrollToSettingsWidget {
             page: SettingsSection::Features,
             widget_id: GlobalHotkeyWidget::static_widget_id(),
@@ -547,7 +577,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 
     if DefaultTerminal::can_warp_become_default() {
         app.register_fixed_bindings([FixedBinding::empty(
-            "Make Warp the default terminal",
+            feature_text(app, "settings.features.default_terminal.make_default"),
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::MakeWarpDefaultTerminal,
             )),
@@ -689,16 +719,80 @@ fn max_max_grid_size() -> usize {
     }
 }
 
-fn block_maximum_rows_description() -> String {
-    let max_rows = if ChannelState::enable_debug_features() {
-        "10 million"
+fn block_maximum_rows_description(app: &AppContext) -> String {
+    if ChannelState::enable_debug_features() {
+        crate::localization::text_for_app(app, "settings.features.block_limit.description_debug")
     } else {
-        "1 million"
-    };
+        crate::localization::text_for_app(app, "settings.features.block_limit.description_release")
+    }
+}
 
-    format!(
-        "Setting the limit above 100k lines may impact performance. Maximum rows supported is {max_rows}."
-    )
+fn feature_text(app: &AppContext, key: &str) -> String {
+    crate::localization::text_for_app(app, key)
+}
+
+fn feature_text_with_value(app: &AppContext, key: &str, value: &str) -> String {
+    feature_text(app, key).replace("{value}", value)
+}
+
+fn tab_behavior_dropdown_label(app: &AppContext, behavior: TabBehavior) -> String {
+    let key = match behavior {
+        TabBehavior::Completions => "settings.features.tab_key_behavior.option.completions",
+        TabBehavior::Autosuggestions => "settings.features.tab_key_behavior.option.autosuggestions",
+        TabBehavior::UserDefined => "settings.features.tab_key_behavior.option.user_defined",
+    };
+    feature_text(app, key)
+}
+
+fn default_session_mode_display_name(app: &AppContext, mode: DefaultSessionMode) -> String {
+    let key = match mode {
+        DefaultSessionMode::Terminal => "settings.features.default_session_mode.option.terminal",
+        DefaultSessionMode::Agent => "settings.features.default_session_mode.option.agent",
+        DefaultSessionMode::CloudAgent => {
+            "settings.features.default_session_mode.option.cloud_agent"
+        }
+        DefaultSessionMode::TabConfig => "settings.features.default_session_mode.option.tab_config",
+        DefaultSessionMode::DockerSandbox => {
+            "settings.features.default_session_mode.option.docker_sandbox"
+        }
+    };
+    feature_text(app, key)
+}
+
+fn ctrl_tab_behavior_dropdown_label(app: &AppContext, behavior: CtrlTabBehavior) -> String {
+    let key = match behavior {
+        CtrlTabBehavior::ActivatePrevNextTab => {
+            "settings.features.ctrl_tab_behavior.option.activate_prev_next_tab"
+        }
+        CtrlTabBehavior::CycleMostRecentSession => {
+            "settings.features.ctrl_tab_behavior.option.cycle_most_recent_session"
+        }
+        CtrlTabBehavior::CycleMostRecentTab => {
+            "settings.features.ctrl_tab_behavior.option.cycle_most_recent_tab"
+        }
+    };
+    feature_text(app, key)
+}
+
+fn global_hotkey_mode_dropdown_label(app: &AppContext, mode: GlobalHotkeyMode) -> String {
+    let key = match mode {
+        GlobalHotkeyMode::Disabled => "settings.features.global_hotkey.option.disabled",
+        GlobalHotkeyMode::QuakeMode => "settings.features.global_hotkey.option.quake_mode",
+        GlobalHotkeyMode::ActivationHotkey => {
+            "settings.features.global_hotkey.option.activation_hotkey"
+        }
+    };
+    feature_text(app, key)
+}
+
+fn quake_pin_position_dropdown_label(app: &AppContext, position: QuakeModePinPosition) -> String {
+    let key = match position {
+        QuakeModePinPosition::Top => "settings.features.quake_mode.pin_position.top",
+        QuakeModePinPosition::Bottom => "settings.features.quake_mode.pin_position.bottom",
+        QuakeModePinPosition::Left => "settings.features.quake_mode.pin_position.left",
+        QuakeModePinPosition::Right => "settings.features.quake_mode.pin_position.right",
+    };
+    feature_text(app, key)
 }
 
 fn to_string(b: bool) -> String {
@@ -2076,22 +2170,22 @@ impl FeaturesPageView {
             let mut dropdown = Dropdown::new(ctx);
 
             let top = DropdownItem::new(
-                "Pin to top",
+                quake_pin_position_dropdown_label(ctx, QuakeModePinPosition::Top),
                 FeaturesPageAction::QuakeEditorSetPinPosition(QuakeModePinPosition::Top),
             );
 
             let bottom = DropdownItem::new(
-                "Pin to bottom",
+                quake_pin_position_dropdown_label(ctx, QuakeModePinPosition::Bottom),
                 FeaturesPageAction::QuakeEditorSetPinPosition(QuakeModePinPosition::Bottom),
             );
 
             let left = DropdownItem::new(
-                "Pin to left",
+                quake_pin_position_dropdown_label(ctx, QuakeModePinPosition::Left),
                 FeaturesPageAction::QuakeEditorSetPinPosition(QuakeModePinPosition::Left),
             );
 
             let right = DropdownItem::new(
-                "Pin to right",
+                quake_pin_position_dropdown_label(ctx, QuakeModePinPosition::Right),
                 FeaturesPageAction::QuakeEditorSetPinPosition(QuakeModePinPosition::Right),
             );
 
@@ -2746,18 +2840,24 @@ impl FeaturesPageView {
         }
 
         let categories = vec![
-            Category::new("General", general_widgets),
-            Category::new("Session", session_widgets),
-            Category::new("Keys", keys_widgets),
-            Category::new("Text Editing", text_editing_widgets),
-            Category::new("Terminal Input", editor_widgets),
-            Category::new("Terminal", terminal_widgets),
-            Category::new("Notifications", notifications_widgets),
-            Category::new(
-                "Workflows",
+            Category::new_localized("settings.features.category.general", general_widgets),
+            Category::new_localized("settings.features.category.session", session_widgets),
+            Category::new_localized("settings.features.category.keys", keys_widgets),
+            Category::new_localized(
+                "settings.features.category.text_editing",
+                text_editing_widgets,
+            ),
+            Category::new_localized("settings.features.category.terminal_input", editor_widgets),
+            Category::new_localized("settings.features.category.terminal", terminal_widgets),
+            Category::new_localized(
+                "settings.features.category.notifications",
+                notifications_widgets,
+            ),
+            Category::new_localized(
+                "settings.features.category.workflows",
                 vec![Box::new(WorkflowsInCommandSearch::default())],
             ),
-            Category::new("System", system_widgets),
+            Category::new_localized("settings.features.category.system", system_widgets),
         ];
 
         PageType::new_categorized(categories, None)
@@ -2791,7 +2891,7 @@ impl FeaturesPageView {
                     .into_iter()
                     .map(|val| {
                         DropdownItem::new(
-                            val.as_dropdown_label(),
+                            ctrl_tab_behavior_dropdown_label(ctx, val),
                             FeaturesPageAction::SetCtrlTabBehavior(val),
                         )
                     })
@@ -2828,7 +2928,7 @@ impl FeaturesPageView {
                     .into_iter()
                     .map(|val| {
                         DropdownItem::new(
-                            Self::new_tab_placement_dropdown_item_label(val),
+                            Self::new_tab_placement_dropdown_item_label_localized(ctx, val),
                             FeaturesPageAction::SetNewTabPlacement(val),
                         )
                     })
@@ -2860,7 +2960,10 @@ impl FeaturesPageView {
         }
         // the selected item needs to update if the settings gets changed via the command palette
         self.global_hotkey_dropdown.update(ctx, |dropdown, ctx| {
-            dropdown.set_selected_by_name(global_hotkey_mode.as_dropdown_label(), ctx);
+            dropdown.set_selected_by_name(
+                global_hotkey_mode_dropdown_label(ctx, global_hotkey_mode),
+                ctx,
+            );
             ctx.notify();
         });
         ctx.notify();
@@ -3179,7 +3282,7 @@ impl FeaturesPageView {
         self.graphics_backend_dropdown.update(ctx, |dropdown, ctx| {
             if let Some(window) = ctx.windows().platform_window(ctx.window_id()) {
                 let mut items = vec![DropdownItem::new(
-                    "Default",
+                    feature_text(ctx, "settings.features.graphics_backend.option.default"),
                     FeaturesPageAction::SetPreferredGraphicsBackend(None),
                 )];
                 items.extend(window.supported_backends().into_iter().map(|backend| {
@@ -3191,13 +3294,13 @@ impl FeaturesPageView {
                 dropdown.set_items(items, ctx);
             }
             let gpu_settings = GPUSettings::as_ref(ctx);
-            dropdown.set_selected_by_name(
-                gpu_settings
-                    .preferred_backend
-                    .map(|backend| backend.to_label())
-                    .unwrap_or("Default"),
-                ctx,
-            );
+            let selected_backend = gpu_settings
+                .preferred_backend
+                .map(|backend| backend.to_label().to_string())
+                .unwrap_or_else(|| {
+                    feature_text(ctx, "settings.features.graphics_backend.option.default")
+                });
+            dropdown.set_selected_by_name(selected_backend, ctx);
         });
     }
 
@@ -3206,11 +3309,11 @@ impl FeaturesPageView {
         self.tab_behavior_dropdown.update(ctx, |dropdown, ctx| {
             let mut items = vec![
                 DropdownItem::new(
-                    TabBehavior::Completions.dropdown_item_label(),
+                    tab_behavior_dropdown_label(ctx, TabBehavior::Completions),
                     FeaturesPageAction::SetTabBehavior(TabBehavior::Completions),
                 ),
                 DropdownItem::new(
-                    TabBehavior::Autosuggestions.dropdown_item_label(),
+                    tab_behavior_dropdown_label(ctx, TabBehavior::Autosuggestions),
                     FeaturesPageAction::SetTabBehavior(TabBehavior::Autosuggestions),
                 ),
             ];
@@ -3219,12 +3322,13 @@ impl FeaturesPageView {
             // selectable option from the dropdown.
             if matches!(*self.tab_behavior, TabBehavior::UserDefined) {
                 items.push(DropdownItem::new(
-                    TabBehavior::UserDefined.dropdown_item_label(),
+                    tab_behavior_dropdown_label(ctx, TabBehavior::UserDefined),
                     FeaturesPageAction::SetTabBehavior(TabBehavior::UserDefined),
                 ));
             }
             dropdown.set_items(items, ctx);
-            dropdown.set_selected_by_name(self.tab_behavior.dropdown_item_label(), ctx);
+            dropdown
+                .set_selected_by_name(tab_behavior_dropdown_label(ctx, *self.tab_behavior), ctx);
         });
     }
 
@@ -3289,11 +3393,17 @@ impl FeaturesPageView {
         self.refresh_tab_behavior_state(ctx);
     }
 
-    fn new_tab_placement_dropdown_item_label(val: NewTabPlacement) -> &'static str {
-        match val {
-            NewTabPlacement::AfterAllTabs => "After all tabs",
-            NewTabPlacement::AfterCurrentTab => "After current tab",
-        }
+    fn new_tab_placement_dropdown_item_label_localized(
+        app: &AppContext,
+        val: NewTabPlacement,
+    ) -> String {
+        let key = match val {
+            NewTabPlacement::AfterAllTabs => "settings.features.new_tab_placement.after_all_tabs",
+            NewTabPlacement::AfterCurrentTab => {
+                "settings.features.new_tab_placement.after_current_tab"
+            }
+        };
+        feature_text(app, key)
     }
 
     fn set_new_tab_placement(&mut self, value: &NewTabPlacement, ctx: &mut ViewContext<Self>) {
@@ -3331,7 +3441,7 @@ impl FeaturesPageView {
                     })
                     .map(|val| {
                         DropdownItem::new(
-                            val.display_name(),
+                            default_session_mode_display_name(ctx, val),
                             FeaturesPageAction::SetDefaultSessionMode(val),
                         )
                     })
@@ -3362,8 +3472,10 @@ impl FeaturesPageView {
                                 .is_some_and(|p| p.to_string_lossy() == current_tab_config_path)
                         })
                         .map(|c| c.name.clone())
-                        .unwrap_or_else(|| DefaultSessionMode::Terminal.display_name().to_string()),
-                    other => other.display_name().to_string(),
+                        .unwrap_or_else(|| {
+                            default_session_mode_display_name(ctx, DefaultSessionMode::Terminal)
+                        }),
+                    other => default_session_mode_display_name(ctx, other),
                 };
                 dropdown.set_selected_by_name(&selected_name, ctx);
             },
@@ -3398,6 +3510,7 @@ impl FeaturesPageView {
         cancel_action: FeaturesPageAction,
         save_action: FeaturesPageAction,
         record_keystroke: T,
+        app: &AppContext,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         Hoverable::new(outer_button_mouse_state, |state| {
@@ -3413,6 +3526,7 @@ impl FeaturesPageView {
                         keybinding,
                         keybinding_editor_state,
                         record_keystroke,
+                        app,
                         appearance,
                     )
                 } else {
@@ -3424,6 +3538,7 @@ impl FeaturesPageView {
                         cancel_action,
                         save_action,
                         record_keystroke,
+                        app,
                         appearance,
                     )
                 })
@@ -3458,6 +3573,7 @@ impl FeaturesPageView {
     fn render_quake_width_height_editor(
         &self,
         quake_mode_settings: &QuakeModeSettings,
+        app: &AppContext,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -3474,7 +3590,7 @@ impl FeaturesPageView {
                         .with_child(
                             Container::new(
                                 Text::new_inline(
-                                    "Width %",
+                                    feature_text(app, "settings.features.quake_mode.width"),
                                     appearance.ui_font_family(),
                                     appearance.ui_font_size(),
                                 )
@@ -3512,7 +3628,7 @@ impl FeaturesPageView {
                         .with_child(
                             Container::new(
                                 Text::new_inline(
-                                    "Height %",
+                                    feature_text(app, "settings.features.quake_mode.height"),
                                     appearance.ui_font_family(),
                                     appearance.ui_font_size(),
                                 )
@@ -3546,6 +3662,7 @@ impl FeaturesPageView {
             )
             .with_child({
                 let button = build_reset_button(
+                    app,
                     appearance,
                     self.button_mouse_states
                         .quake_mode_width_height_reset
@@ -3567,6 +3684,7 @@ impl FeaturesPageView {
     fn render_quake_mode_pin_window_toggle_row(
         &self,
         quake_mode_settings: &QuakeModeSettings,
+        app: &AppContext,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         Container::new(
@@ -3590,7 +3708,7 @@ impl FeaturesPageView {
                 .with_child(
                     appearance
                         .ui_builder()
-                        .span("Autohides on loss of keyboard focus")
+                        .span(feature_text(app, "settings.features.quake_mode.autohide"))
                         .build()
                         .with_margin_left(5.)
                         .finish(),
@@ -3605,6 +3723,7 @@ impl FeaturesPageView {
     fn render_quake_mode_position_row(
         &self,
         quake_mode_settings: &QuakeModeSettings,
+        app: &AppContext,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         Flex::row()
@@ -3628,7 +3747,7 @@ impl FeaturesPageView {
                 .with_padding_right(30.)
                 .finish(),
             )
-            .with_child(self.render_quake_width_height_editor(quake_mode_settings, appearance))
+            .with_child(self.render_quake_width_height_editor(quake_mode_settings, app, appearance))
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .finish()
     }
@@ -3636,6 +3755,7 @@ impl FeaturesPageView {
     fn render_long_running_notifications_setting(
         &self,
         notification_settings: &Notifications,
+        app: &AppContext,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -3686,7 +3806,10 @@ impl FeaturesPageView {
                 Container::new(
                     Align::new(
                         Text::new_inline(
-                            "When a command takes longer than",
+                            feature_text(
+                                app,
+                                "settings.features.notifications.long_running.prefix",
+                            ),
                             appearance.ui_font_family(),
                             font_size,
                         )
@@ -3722,7 +3845,10 @@ impl FeaturesPageView {
                 Container::new(
                     Align::new(
                         Text::new_inline(
-                            "seconds to complete",
+                            feature_text(
+                                app,
+                                "settings.features.notifications.long_running.suffix",
+                            ),
                             appearance.ui_font_family(),
                             font_size,
                         )
@@ -3739,12 +3865,11 @@ impl FeaturesPageView {
     fn render_notification_toggle(
         &self,
         is_enabled: bool,
-        text: &str,
+        text: String,
         toggle_action: FeaturesPageAction,
         mouse_state: Arc<Mutex<MouseState>>,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let text = text.to_string();
         let font_size = appearance.ui_font_size() - 2.;
         let font_color = if is_enabled {
             appearance.theme().active_ui_text_color()
@@ -3795,6 +3920,7 @@ impl FeaturesPageView {
         keybinding: &KeyBindingModifyingState,
         keybinding_editor_state: KeybindingEditorState,
         record_keystroke: T,
+        app: &AppContext,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let element = Container::new(
@@ -3804,9 +3930,13 @@ impl FeaturesPageView {
                     Shrinkable::new(
                         2.,
                         Align::new(
-                            Text::new_inline("Keybinding", appearance.ui_font_family(), 13.)
-                                .with_color(appearance.theme().active_ui_text_color().into())
-                                .finish(),
+                            Text::new_inline(
+                                feature_text(app, "settings.features.keybinding.label"),
+                                appearance.ui_font_family(),
+                                13.,
+                            )
+                            .with_color(appearance.theme().active_ui_text_color().into())
+                            .finish(),
                         )
                         .left()
                         .finish(),
@@ -3825,7 +3955,10 @@ impl FeaturesPageView {
                         } else {
                             appearance
                                 .ui_builder()
-                                .paragraph("Click to set global hotkey".to_string())
+                                .paragraph(feature_text(
+                                    app,
+                                    "settings.features.keybinding.click_to_set",
+                                ))
                                 .build()
                                 .finish()
                         })
@@ -3871,6 +4004,7 @@ impl FeaturesPageView {
         cancel_action: FeaturesPageAction,
         save_action: FeaturesPageAction,
         record_keystroke: T,
+        app: &AppContext,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let cancel_button = appearance
@@ -3880,7 +4014,7 @@ impl FeaturesPageView {
                 padding: Some(Coords::default().right(10.)),
                 ..Default::default()
             })
-            .with_text_label("Cancel".to_string())
+            .with_text_label(feature_text(app, "settings.action.cancel"))
             .build()
             .on_click(move |ctx, _, _| {
                 ctx.dispatch_typed_action(cancel_action.clone());
@@ -3892,7 +4026,7 @@ impl FeaturesPageView {
             appearance
                 .ui_builder()
                 .button(ButtonVariant::Text, save_button_mouse_state)
-                .with_text_label("Save".to_string())
+                .with_text_label(feature_text(app, "settings.action.save"))
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(save_action.clone());
@@ -3907,6 +4041,7 @@ impl FeaturesPageView {
                     keybinding,
                     keybinding_editor_state,
                     record_keystroke,
+                    app,
                     appearance,
                 ))
                 .with_child(
@@ -3916,7 +4051,10 @@ impl FeaturesPageView {
                                 2.,
                                 Align::new(
                                     Text::new_inline(
-                                        "Press new keyboard shortcut",
+                                        feature_text(
+                                            app,
+                                            "settings.features.keybinding.press_shortcut",
+                                        ),
                                         appearance.ui_font_family(),
                                         13.,
                                     )
@@ -3953,6 +4091,7 @@ impl FeaturesPageView {
     fn render_change_keybinding_button(
         &self,
         keybinding_name: &str,
+        app: &AppContext,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let keybinding_name = keybinding_name.to_string();
@@ -3967,9 +4106,13 @@ impl FeaturesPageView {
                 }
 
                 Container::new(
-                    Text::new_inline("Change keybinding", appearance.ui_font_family(), 12.)
-                        .with_color(button_color)
-                        .finish(),
+                    Text::new_inline(
+                        feature_text(app, "settings.features.keybinding.change"),
+                        appearance.ui_font_family(),
+                        12.,
+                    )
+                    .with_color(button_color)
+                    .finish(),
                 )
                 .with_border(border)
                 .finish()
@@ -3986,10 +4129,11 @@ impl FeaturesPageView {
 
     fn render_setting_subgroup_item(
         &self,
+        app: &AppContext,
         appearance: &Appearance,
         local_only_icon_state: LocalOnlyIconState,
         switch: Box<dyn Element>,
-        label_text: String,
+        label_text: impl Into<String>,
     ) -> Box<dyn Element> {
         Container::new(
             Flex::row()
@@ -3998,7 +4142,8 @@ impl FeaturesPageView {
                         1.0,
                         Container::new(
                             Align::new(render_body_item_label::<FeaturesPageAction>(
-                                label_text,
+                                app,
+                                label_text.into(),
                                 None,
                                 None,
                                 local_only_icon_state,
@@ -4113,21 +4258,21 @@ fn init_global_hotkey_dropdown(
 ) {
     let items = vec![
         DropdownItem::new(
-            GlobalHotkeyMode::Disabled.as_dropdown_label(),
+            global_hotkey_mode_dropdown_label(ctx, GlobalHotkeyMode::Disabled),
             FeaturesPageAction::SetGlobalHotkeyMode(GlobalHotkeyMode::Disabled),
         ),
         DropdownItem::new(
-            GlobalHotkeyMode::QuakeMode.as_dropdown_label(),
+            global_hotkey_mode_dropdown_label(ctx, GlobalHotkeyMode::QuakeMode),
             FeaturesPageAction::SetGlobalHotkeyMode(GlobalHotkeyMode::QuakeMode),
         ),
         DropdownItem::new(
-            GlobalHotkeyMode::ActivationHotkey.as_dropdown_label(),
+            global_hotkey_mode_dropdown_label(ctx, GlobalHotkeyMode::ActivationHotkey),
             FeaturesPageAction::SetGlobalHotkeyMode(GlobalHotkeyMode::ActivationHotkey),
         ),
     ];
 
     dropdown.set_items(items, ctx);
-    dropdown.set_selected_by_name(hotkey_mode.as_dropdown_label(), ctx);
+    dropdown.set_selected_by_name(global_hotkey_mode_dropdown_label(ctx, hotkey_mode), ctx);
 }
 
 fn init_display_count_dropdown(
@@ -4137,7 +4282,7 @@ fn init_display_count_dropdown(
     ctx: &mut ViewContext<Dropdown<FeaturesPageAction>>,
 ) {
     let no_preference = DropdownItem::new(
-        "Active Screen",
+        feature_text(ctx, "settings.features.quake_mode.pin_screen.active_screen"),
         //|| {
         FeaturesPageAction::QuakeEditorSetPinScreen(None), //}
     );
@@ -4161,7 +4306,10 @@ fn init_display_count_dropdown(
         Some(idx) if idx.is_valid_given_display_count(display_count) => {
             dropdown.set_selected_by_name(format!("{idx}"), ctx)
         }
-        _ => dropdown.set_selected_by_name("Active Screen", ctx),
+        _ => dropdown.set_selected_by_name(
+            feature_text(ctx, "settings.features.quake_mode.pin_screen.active_screen"),
+            ctx,
+        ),
     };
 }
 
@@ -4186,14 +4334,15 @@ impl SettingsWidget for NativeRedirectWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Open links in desktop app".into(),
+            crate::localization::text_for_app(app, "settings.features.native_redirect.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
                 on_click_action: None,
                 secondary_text: None,
-                tooltip_override_text: Some(
-                    "Automatically open links in desktop app whenever possible.".into(),
-                ),
+                tooltip_override_text: Some(crate::localization::text_for_app(
+                    app,
+                    "settings.features.native_redirect.tooltip",
+                )),
             }),
             LocalOnlyIconState::for_setting(
                 UserNativeRedirectPreference::storage_key(),
@@ -4256,7 +4405,7 @@ impl SettingsWidget for SessionRestorationWidget {
             .finish();
 
         let labeled_switch = render_body_item::<FeaturesPageAction>(
-            "Restore windows, tabs, and panes on startup".into(),
+            crate::localization::text_for_app(app, "settings.features.session_restoration.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
                 on_click_action: Some(FeaturesPageAction::OpenUrl(
@@ -4282,7 +4431,10 @@ impl SettingsWidget for SessionRestorationWidget {
 
         if app.is_wayland() {
             let message = Text::new_inline(
-                "Window positions won't be restored on Wayland. ",
+                crate::localization::text_for_app(
+                    app,
+                    "settings.features.session_restoration.wayland_warning",
+                ),
                 appearance.ui_font_family(),
                 CONTENT_FONT_SIZE,
             )
@@ -4291,7 +4443,10 @@ impl SettingsWidget for SessionRestorationWidget {
 
             let link = ui_builder
                 .link(
-                    "See docs.".to_owned(),
+                    crate::localization::text_for_app(
+                        app,
+                        "settings.features.session_restoration.docs_link",
+                    ),
                     Some("https://docs.warp.dev/terminal/sessions/session-restoration".to_owned()),
                     None,
                     self.docs_link.clone(),
@@ -4341,7 +4496,7 @@ impl SettingsWidget for SnackbarHeaderWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Show sticky command header".into(),
+            crate::localization::text_for_app(app, "settings.features.sticky_command_header.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
                 on_click_action: Some(FeaturesPageAction::OpenUrl(
@@ -4394,7 +4549,7 @@ impl SettingsWidget for LinkTooltipWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Show tooltip on click on links".into(),
+            crate::localization::text_for_app(app, "settings.features.link_tooltip.label"),
             None,
             LocalOnlyIconState::for_setting(
                 LinkTooltip::storage_key(),
@@ -4463,7 +4618,7 @@ impl SettingsWidget for QuitWarningModalWidget {
         let general_settings = GeneralSettings::as_ref(app);
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Show warning before quitting/logging out".into(),
+            crate::localization::text_for_app(app, "settings.features.quit_warning.label"),
             None,
             LocalOnlyIconState::for_setting(
                 ShowWarningBeforeQuitting::storage_key(),
@@ -4510,11 +4665,12 @@ impl SettingsWidget for LoginItemWidget {
         let general_settings = GeneralSettings::as_ref(app);
         let ui_builder = appearance.ui_builder();
         #[cfg(target_os = "macos")]
-        let label = "Start Warp at login (requires macOS 13+)";
+        let label =
+            crate::localization::text_for_app(app, "settings.features.login_item.label_macos");
         #[cfg(not(target_os = "macos"))]
-        let label = "Start Warp at login";
+        let label = crate::localization::text_for_app(app, "settings.features.login_item.label");
         render_body_item::<FeaturesPageAction>(
-            label.into(),
+            label,
             None,
             LocalOnlyIconState::for_setting(
                 LoginItem::storage_key(),
@@ -4561,7 +4717,10 @@ impl SettingsWidget for QuitWhenAllWindowsClosedWidget {
         let general_settings = GeneralSettings::as_ref(app);
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Quit when all windows are closed".into(),
+            crate::localization::text_for_app(
+                app,
+                "settings.features.quit_on_last_window_closed.label",
+            ),
             None,
             LocalOnlyIconState::for_setting(
                 QuitOnLastWindowClosed::storage_key(),
@@ -4608,7 +4767,10 @@ impl SettingsWidget for ShowChangelogWidget {
         let changelog_settings = ChangelogSettings::as_ref(app);
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Show changelog toast after updates".into(),
+            crate::localization::text_for_app(
+                app,
+                "settings.features.changelog_after_update.label",
+            ),
             None,
             LocalOnlyIconState::for_setting(
                 ShowChangelogAfterUpdate::storage_key(),
@@ -4681,7 +4843,13 @@ impl SettingsWidget for MouseScrollMultiplierWidget {
                 } else {
                     appearance
                         .ui_builder()
-                        .wrappable_text("Allowed Values: 1-20", true)
+                        .wrappable_text(
+                            crate::localization::text_for_app(
+                                app,
+                                "settings.features.mouse_scroll.allowed_values",
+                            ),
+                            true,
+                        )
                         .with_style(UiComponentStyles {
                             font_color: Some(themes::theme::Fill::error().into_solid()),
                             ..Default::default()
@@ -4694,14 +4862,15 @@ impl SettingsWidget for MouseScrollMultiplierWidget {
             .finish();
 
         render_body_item::<FeaturesPageAction>(
-            "Lines scrolled by mouse wheel interval".into(),
+            crate::localization::text_for_app(app, "settings.features.mouse_scroll.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
                 on_click_action: None,
                 secondary_text: None,
-                tooltip_override_text: Some(
-                    "Supports floating point values between 1 and 20.".to_string(),
-                ),
+                tooltip_override_text: Some(crate::localization::text_for_app(
+                    app,
+                    "settings.features.mouse_scroll.tooltip",
+                )),
             }),
             LocalOnlyIconState::for_setting(
                 MouseScrollMultiplier::storage_key(),
@@ -4741,7 +4910,7 @@ impl SettingsWidget for AutoOpenCodeReviewPaneWidget {
         let general_settings = GeneralSettings::as_ref(app);
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Auto open code review panel".into(),
+            crate::localization::text_for_app(app, "settings.features.auto_open_code_review.label"),
             None,
             LocalOnlyIconState::for_setting(
                 AutoOpenCodeReviewPaneOnFirstAgentChange::storage_key(),
@@ -4762,7 +4931,10 @@ impl SettingsWidget for AutoOpenCodeReviewPaneWidget {
                     ctx.dispatch_typed_action(FeaturesPageAction::ToggleAutoOpenCodeReviewPane);
                 })
                 .finish(),
-            Some("When this setting is on, the code review panel will open on the first accepted diff of a conversation".into()),
+            Some(crate::localization::text_for_app(
+                app,
+                "settings.features.auto_open_code_review.description",
+            )),
         )
     }
 }
@@ -4789,7 +4961,13 @@ impl SettingsWidget for DefaultTerminalWidget {
         let default_terminal = DefaultTerminal::as_ref(app);
         if default_terminal.is_warp_default() {
             ui_builder
-                .wrappable_text("Warp is the default terminal", true)
+                .wrappable_text(
+                    crate::localization::text_for_app(
+                        app,
+                        "settings.features.default_terminal.current",
+                    ),
+                    true,
+                )
                 .with_style(UiComponentStyles {
                     font_color: Some(appearance.theme().disabled_ui_text_color().into()),
                     margin: Some(Coords::default().bottom(16.)),
@@ -4800,7 +4978,10 @@ impl SettingsWidget for DefaultTerminalWidget {
         } else {
             ui_builder
                 .link(
-                    "Make Warp the default terminal".to_string(),
+                    crate::localization::text_for_app(
+                        app,
+                        "settings.features.default_terminal.make_default",
+                    ),
                     None,
                     Some(Box::new(|ctx| {
                         ctx.dispatch_typed_action(FeaturesPageAction::MakeWarpDefaultTerminal);
@@ -4853,7 +5034,7 @@ impl SettingsWidget for BlockLimitWidget {
             .finish();
 
         render_body_item::<FeaturesPageAction>(
-            "Maximum rows in a block".into(),
+            crate::localization::text_for_app(app, "settings.features.block_limit.label"),
             None,
             LocalOnlyIconState::for_setting(
                 MaximumGridSize::storage_key(),
@@ -4867,7 +5048,7 @@ impl SettingsWidget for BlockLimitWidget {
             ToggleState::Enabled,
             appearance,
             input_field,
-            Some(block_maximum_rows_description()),
+            Some(block_maximum_rows_description(app)),
         )
     }
 }
@@ -4893,14 +5074,17 @@ impl SettingsWidget for SSHWrapperWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Warp SSH Wrapper".into(),
+            crate::localization::text_for_app(app, "settings.features.ssh_wrapper.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
                 on_click_action: Some(FeaturesPageAction::OpenUrl(
                     "https://docs.warp.dev/terminal/warpify/ssh-legacy#implementation".into(),
                 )),
                 secondary_text: if view.ssh_wrapper_toggled {
-                    Some("This change will take effect in new sessions".to_string())
+                    Some(crate::localization::text_for_app(
+                        app,
+                        "settings.features.ssh_wrapper.restart_note",
+                    ))
                 } else {
                     None
                 },
@@ -4954,7 +5138,7 @@ impl SettingsWidget for DesktopNotificationsWidget {
         let ui_builder = appearance.ui_builder();
         let mut column = Flex::column();
         column.add_child(render_body_item::<FeaturesPageAction>(
-            "Receive desktop notifications from Warp".into(),
+            crate::localization::text_for_app(app, "settings.features.notifications.desktop.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
                 on_click_action: Some(FeaturesPageAction::OpenUrl(NOTIFICATIONS_DOCS_URL.into())),
@@ -4995,7 +5179,10 @@ impl SettingsWidget for DesktopNotificationsWidget {
                     session_settings
                         .notifications
                         .is_agent_task_completed_enabled,
-                    "Notify when an agent completes a task",
+                    crate::localization::text_for_app(
+                        app,
+                        "settings.features.notifications.agent_completed",
+                    ),
                     FeaturesPageAction::ToggleAgentTaskCompletedNotifications,
                     view.button_mouse_states
                         .agent_task_completed_notifications_checkbox
@@ -5004,11 +5191,15 @@ impl SettingsWidget for DesktopNotificationsWidget {
                 ),
                 view.render_long_running_notifications_setting(
                     &session_settings.notifications,
+                    app,
                     appearance,
                 ),
                 view.render_notification_toggle(
                     session_settings.notifications.is_needs_attention_enabled,
-                    "Notify when a command or agent needs your attention to continue",
+                    crate::localization::text_for_app(
+                        app,
+                        "settings.features.notifications.agent_needs_attention",
+                    ),
                     FeaturesPageAction::ToggleNeedsAttentionNotifications,
                     view.button_mouse_states
                         .agent_needs_attention_notifications_checkbox
@@ -5020,7 +5211,10 @@ impl SettingsWidget for DesktopNotificationsWidget {
                 {
                     view.render_notification_toggle(
                         session_settings.notifications.play_notification_sound,
-                        "Play notification sounds",
+                        crate::localization::text_for_app(
+                            app,
+                            "settings.features.notifications.play_sound",
+                        ),
                         FeaturesPageAction::ToggleNotificationSound,
                         view.button_mouse_states.notification_sound_checkbox.clone(),
                         appearance,
@@ -5035,7 +5229,10 @@ impl SettingsWidget for DesktopNotificationsWidget {
             let ai_settings = AISettings::as_ref(app);
             let show_agent_notifications = *ai_settings.show_agent_notifications;
             column.add_child(render_body_item::<FeaturesPageAction>(
-                "Show in-app agent notifications".into(),
+                crate::localization::text_for_app(
+                    app,
+                    "settings.features.notifications.in_app_agent.label",
+                ),
                 None,
                 LocalOnlyIconState::Hidden,
                 ToggleState::Enabled,
@@ -5074,7 +5271,10 @@ impl SettingsWidget for DesktopNotificationsWidget {
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_child(
                         Text::new_inline(
-                            "Toast notifications stay visible for",
+                            crate::localization::text_for_app(
+                                app,
+                                "settings.features.notifications.toast_duration.label",
+                            ),
                             appearance.ui_font_family(),
                             font_size,
                         )
@@ -5103,9 +5303,16 @@ impl SettingsWidget for DesktopNotificationsWidget {
                         .finish(),
                     )
                     .with_child(
-                        Text::new_inline("seconds", appearance.ui_font_family(), font_size)
-                            .with_color(font_color.into())
-                            .finish(),
+                        Text::new_inline(
+                            crate::localization::text_for_app(
+                                app,
+                                "settings.features.notifications.toast_duration.seconds",
+                            ),
+                            appearance.ui_font_family(),
+                            font_size,
+                        )
+                        .with_color(font_color.into())
+                        .finish(),
                     )
                     .finish();
 
@@ -5138,8 +5345,9 @@ impl SettingsWidget for StartupShellWidget {
         Flex::column()
             .with_children([
                 render_sub_sub_header(
+                    app,
                     appearance,
-                    "Default shell for new sessions".to_string(),
+                    crate::localization::text_for_app(app, "settings.features.default_shell.label"),
                     Some(LocalOnlyIconState::for_setting(
                         StartupShellOverride::storage_key(),
                         StartupShellOverride::sync_to_cloud(),
@@ -5177,8 +5385,12 @@ impl SettingsWidget for WorkingDirectoryWidget {
         Flex::column()
             .with_children([
                 render_sub_sub_header(
+                    app,
                     appearance,
-                    "Working directory for new sessions".to_string(),
+                    crate::localization::text_for_app(
+                        app,
+                        "settings.features.working_directory.label",
+                    ),
                     Some(LocalOnlyIconState::for_setting(
                         WorkingDirectoryConfig::storage_key(),
                         WorkingDirectoryConfig::sync_to_cloud(),
@@ -5236,7 +5448,10 @@ impl SettingsWidget for ConfirmCloseSharedSessionWidget {
         let ui_builder = appearance.ui_builder();
         let session_settings = SessionSettings::as_ref(app);
         render_body_item::<FeaturesPageAction>(
-            "Confirm before closing shared session".into(),
+            crate::localization::text_for_app(
+                app,
+                "settings.features.confirm_close_shared_session.label",
+            ),
             None,
             LocalOnlyIconState::for_setting(
                 ShouldConfirmCloseSession::storage_key(),
@@ -5289,7 +5504,7 @@ impl SettingsWidget for ExtraMetaKeysWidget {
             .borrow_mut();
         Flex::column()
             .with_child(render_body_item::<FeaturesPageAction>(
-                EXTRA_META_KEYS_LEFT_TEXT.into(),
+                EXTRA_META_KEYS_LEFT_KEY.into(),
                 None,
                 LocalOnlyIconState::for_setting(
                     crate::terminal::keys_settings::ExtraMetaKeys::storage_key(),
@@ -5310,7 +5525,7 @@ impl SettingsWidget for ExtraMetaKeysWidget {
                 None,
             ))
             .with_child(render_body_item::<FeaturesPageAction>(
-                EXTRA_META_KEYS_RIGHT_TEXT.into(),
+                EXTRA_META_KEYS_RIGHT_KEY.into(),
                 None,
                 LocalOnlyIconState::for_setting(
                     crate::terminal::keys_settings::ExtraMetaKeys::storage_key(),
@@ -5354,7 +5569,7 @@ impl SettingsWidget for GlobalHotkeyWidget {
         let ui_builder = appearance.ui_builder();
         if app.is_wayland() {
             column.add_child(render_body_item::<FeaturesPageAction>(
-                "Global hotkey:".to_owned(),
+                crate::localization::text_for_app(app, "settings.features.global_hotkey.label"),
                 None,
                 // Fine not to show local only icon state for this, as it's not a supported setting.
                 LocalOnlyIconState::Hidden,
@@ -5363,12 +5578,18 @@ impl SettingsWidget for GlobalHotkeyWidget {
                 Flex::row()
                     .with_children([
                         ui_builder
-                            .span("Not supported on Wayland. ")
+                            .span(crate::localization::text_for_app(
+                                app,
+                                "settings.features.global_hotkey.unsupported_wayland",
+                            ))
                             .build()
                             .finish(),
                         ui_builder
                             .link(
-                                "See docs.".to_owned(),
+                                crate::localization::text_for_app(
+                                    app,
+                                    "settings.features.global_hotkey.docs_link",
+                                ),
                                 Some(
                                     "https://docs.warp.dev/terminal/windows/global-hotkey"
                                         .to_owned(),
@@ -5388,9 +5609,13 @@ impl SettingsWidget for GlobalHotkeyWidget {
                 &mut column,
                 &KeysSettings::as_ref(app).activation_hotkey_enabled,
                 || {
+                    let label = crate::localization::text_for_app(
+                        app,
+                        "settings.features.global_hotkey.label",
+                    );
                     render_dropdown_item(
                         appearance,
-                        "Global hotkey:",
+                        &label,
                         None,
                         None,
                         LocalOnlyIconState::for_setting(
@@ -5431,16 +5656,19 @@ impl SettingsWidget for GlobalHotkeyWidget {
                                     FeaturesPageAction::QuakeKeystrokeDefined(keystroke),
                                 )
                             },
+                            app,
                             appearance,
                         ),
                         view.render_quake_mode_position_row(
                             KeysSettings::as_ref(app).quake_mode_settings.value(),
+                            app,
                             appearance,
                         ),
                         // This feature is only supported on MacOS.
                         if QUAKE_WINDOW_AUTOHIDE_SUPPORTED {
                             view.render_quake_mode_pin_window_toggle_row(
                                 KeysSettings::as_ref(app).quake_mode_settings.value(),
+                                app,
                                 appearance,
                             )
                         } else {
@@ -5467,6 +5695,7 @@ impl SettingsWidget for GlobalHotkeyWidget {
                             keystroke,
                         ))
                     },
+                    app,
                     appearance,
                 )],
                 appearance,
@@ -5497,7 +5726,7 @@ impl SettingsWidget for AutocompleteSymbolsWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Autocomplete quotes, parentheses, and brackets".into(),
+            feature_text(app, "settings.features.autocomplete_symbols.label"),
             None,
             LocalOnlyIconState::for_setting(
                 AutocompleteSymbols::storage_key(),
@@ -5543,7 +5772,7 @@ impl SettingsWidget for ErrorUnderliningWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Error underlining for commands".into(),
+            feature_text(app, "settings.features.error_underlining.label"),
             None,
             LocalOnlyIconState::for_setting(
                 ErrorUnderliningEnabled::storage_key(),
@@ -5589,7 +5818,7 @@ impl SettingsWidget for SyntaxHighlightingWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Syntax highlighting for commands".into(),
+            feature_text(app, "settings.features.syntax_highlighting.label"),
             None,
             LocalOnlyIconState::for_setting(
                 SyntaxHighlighting::storage_key(),
@@ -5635,7 +5864,7 @@ impl SettingsWidget for CompletionsMenuWhileTypingWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Open completions menu as you type".into(),
+            feature_text(app, "settings.features.completions_while_typing.label"),
             None,
             LocalOnlyIconState::for_setting(
                 CompletionsOpenWhileTyping::storage_key(),
@@ -5685,7 +5914,7 @@ impl SettingsWidget for CommandCorrectionsWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Suggest corrected commands".into(),
+            feature_text(app, "settings.features.command_corrections.label"),
             None,
             LocalOnlyIconState::for_setting(
                 CommandCorrections::storage_key(),
@@ -5732,7 +5961,7 @@ impl SettingsWidget for AliasExpansionWidget {
         let alias_expansion_settings = AliasExpansionSettings::as_ref(app);
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Expand aliases as you type".into(),
+            feature_text(app, "settings.features.alias_expansion.label"),
             None,
             LocalOnlyIconState::for_setting(
                 AliasExpansionEnabled::storage_key(),
@@ -5779,7 +6008,7 @@ impl SettingsWidget for MiddleClickPasteWidget {
         let ui_builder = appearance.ui_builder();
         let selection_settings = SelectionSettings::as_ref(app);
         render_body_item::<FeaturesPageAction>(
-            "Middle-click to paste".into(),
+            feature_text(app, "settings.features.middle_click_paste.label"),
             None,
             LocalOnlyIconState::for_setting(
                 MiddleClickPasteEnabled::storage_key(),
@@ -5831,7 +6060,7 @@ impl SettingsWidget for VimModeWidget {
         let app_editor_settings = AppEditorSettings::as_ref(app);
         let vim_mode_enabled = *app_editor_settings.vim_mode.value();
         column.add_child(render_body_item::<FeaturesPageAction>(
-            "Edit code and commands with Vim keybindings".into(),
+            feature_text(app, "settings.features.vim_mode.label"),
             None,
             LocalOnlyIconState::for_setting(
                 VimModeEnabled::storage_key(),
@@ -5868,6 +6097,7 @@ impl SettingsWidget for VimModeWidget {
                 })
                 .finish();
             let clipboard_setting = view.render_setting_subgroup_item(
+                app,
                 appearance,
                 LocalOnlyIconState::for_setting(
                     VimUnnamedSystemClipboard::storage_key(),
@@ -5879,7 +6109,7 @@ impl SettingsWidget for VimModeWidget {
                     app,
                 ),
                 clipboard_switch,
-                "Set unnamed register as system clipboard".into(),
+                feature_text(app, "settings.features.vim_mode.system_clipboard.label"),
             );
 
             let vim_status_bar = *app_editor_settings.vim_status_bar.value();
@@ -5892,6 +6122,7 @@ impl SettingsWidget for VimModeWidget {
                 })
                 .finish();
             let status_bar_setting = view.render_setting_subgroup_item(
+                app,
                 appearance,
                 LocalOnlyIconState::for_setting(
                     VimStatusBar::storage_key(),
@@ -5903,7 +6134,7 @@ impl SettingsWidget for VimModeWidget {
                     app,
                 ),
                 status_bar_switch,
-                "Show Vim status bar".into(),
+                feature_text(app, "settings.features.vim_mode.status_bar.label"),
             );
 
             column.add_child(render_group(
@@ -5936,7 +6167,7 @@ impl SettingsWidget for AtContextMenuInTerminalModeWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Enable '@' context menu in terminal mode".into(),
+            feature_text(app, "settings.features.at_context_menu.label"),
             None,
             LocalOnlyIconState::for_setting(
                 AtContextMenuInTerminalMode::storage_key(),
@@ -5992,7 +6223,7 @@ impl SettingsWidget for SlashCommandsInTerminalModeWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Enable slash commands in terminal mode".into(),
+            feature_text(app, "settings.features.slash_commands.label"),
             None,
             LocalOnlyIconState::for_setting(
                 EnableSlashCommandsInTerminal::storage_key(),
@@ -6044,7 +6275,7 @@ impl SettingsWidget for OutlineCodebaseSymbolsForAtContextMenuWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Outline codebase symbols for '@' context menu".into(),
+            feature_text(app, "settings.features.outline_codebase_symbols.label"),
             None,
             LocalOnlyIconState::for_setting(
                 OutlineCodebaseSymbolsForAtContextMenu::storage_key(),
@@ -6096,7 +6327,7 @@ impl SettingsWidget for ShowTerminalInputMessageLineWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Show terminal input message line".into(),
+            feature_text(app, "settings.features.terminal_input_message_line.label"),
             None,
             LocalOnlyIconState::for_setting(
                 ShowTerminalInputMessageBar::storage_key(),
@@ -6149,7 +6380,10 @@ impl SettingsWidget for AutosuggestionKeybindingHintWidget {
         let autosuggestion_keybinding_hint =
             *app_editor_settings.autosuggestion_keybinding_hint.value();
         column.add_child(render_body_item::<FeaturesPageAction>(
-            "Show autosuggestion keybinding hint".into(),
+            feature_text(
+                app,
+                "settings.features.autosuggestion_keybinding_hint.label",
+            ),
             None,
             LocalOnlyIconState::for_setting(
                 AutosuggestionKeybindingHint::storage_key(),
@@ -6205,7 +6439,7 @@ impl SettingsWidget for AutosuggestionIgnoreButtonWidget {
             .show_autosuggestion_ignore_button
             .value();
         column.add_child(render_body_item::<FeaturesPageAction>(
-            "Show autosuggestion ignore button".into(),
+            feature_text(app, "settings.features.autosuggestion_ignore_button.label"),
             None,
             LocalOnlyIconState::for_setting(
                 ShowAutosuggestionIgnoreButton::storage_key(),
@@ -6250,36 +6484,54 @@ impl TabKeyBehaviorWidget {
             TabBehavior::Completions if view.autosuggestions_keystroke.is_empty() => {
                 // If the "Accept autosuggestions" keybinding is unbound, the
                 // user can always still accept with right arrow.
-                Some("→ accepts autosuggestions.".into())
+                Some(feature_text(
+                    app,
+                    "settings.features.tab_key_behavior.accepts_autosuggestions_arrow",
+                ))
             }
-            TabBehavior::Completions => Some(format!(
-                "{} accepts autosuggestions.",
-                *view.autosuggestions_keystroke
+            TabBehavior::Completions => Some(feature_text_with_value(
+                app,
+                "settings.features.tab_key_behavior.accepts_autosuggestions",
+                &view.autosuggestions_keystroke,
             )),
             TabBehavior::Autosuggestions
                 if *input_settings.completions_open_while_typing.value() =>
             {
                 if view.completions_keystroke.is_empty() {
-                    Some("Completions open as you type.".into())
+                    Some(feature_text(
+                        app,
+                        "settings.features.tab_key_behavior.completions_open_as_you_type",
+                    ))
                 } else {
-                    Some(format!(
-                        "Completions open as you type (or {}).",
-                        *view.completions_keystroke
+                    Some(feature_text_with_value(
+                        app,
+                        "settings.features.tab_key_behavior.completions_open_as_you_type_or",
+                        &view.completions_keystroke,
                     ))
                 }
             }
             TabBehavior::Autosuggestions if view.completions_keystroke.is_empty() => {
-                Some("Opening the completion menu is unbound.".into())
+                Some(feature_text(
+                    app,
+                    "settings.features.tab_key_behavior.completion_menu_unbound",
+                ))
             }
-            TabBehavior::Autosuggestions => Some(format!(
-                "{} opens completion menu.",
-                *view.completions_keystroke
+            TabBehavior::Autosuggestions => Some(feature_text_with_value(
+                app,
+                "settings.features.tab_key_behavior.opens_completion_menu",
+                &view.completions_keystroke,
             )),
             TabBehavior::UserDefined => None,
         };
         let other_keybinding_name = match *view.tab_behavior {
-            TabBehavior::Completions => Some("Accept Autosuggestion"),
-            TabBehavior::Autosuggestions => Some("Open Completions Menu"),
+            TabBehavior::Completions => Some(feature_text(
+                app,
+                "settings.features.tab_key_behavior.option.autosuggestions",
+            )),
+            TabBehavior::Autosuggestions => Some(feature_text(
+                app,
+                "settings.features.tab_key_behavior.option.completions",
+            )),
             TabBehavior::UserDefined => None,
         };
 
@@ -6301,9 +6553,11 @@ impl TabKeyBehaviorWidget {
                         .finish(),
                 )
                 .with_child(
-                    Container::new(
-                        view.render_change_keybinding_button(other_keybinding_name, appearance),
-                    )
+                    Container::new(view.render_change_keybinding_button(
+                        &other_keybinding_name,
+                        app,
+                        appearance,
+                    ))
                     .with_margin_left(4.)
                     .finish(),
                 )
@@ -6332,7 +6586,10 @@ impl SettingsWidget for TabKeyBehaviorWidget {
             .with_child(
                 appearance
                     .ui_builder()
-                    .span("Tab key behavior")
+                    .span(feature_text(
+                        app,
+                        "settings.features.tab_key_behavior.label",
+                    ))
                     .with_style(UiComponentStyles {
                         font_size: Some(CONTENT_FONT_SIZE + 1.),
                         ..Default::default()
@@ -6392,7 +6649,7 @@ impl SettingsWidget for CtrlTabBehaviorWidget {
             || {
                 render_dropdown_item(
                     appearance,
-                    "Ctrl+Tab behavior:",
+                    &feature_text(app, "settings.features.ctrl_tab_behavior.label"),
                     None,
                     None,
                     LocalOnlyIconState::for_setting(
@@ -6435,7 +6692,7 @@ impl SettingsWidget for MouseReportingWidget {
         let reporting_settings = AltScreenReporting::as_ref(app);
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Enable Mouse Reporting".into(),
+            feature_text(app, "settings.features.mouse_reporting.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
                 on_click_action: Some(FeaturesPageAction::OpenUrl(
@@ -6490,7 +6747,7 @@ impl SettingsWidget for ScrollReportingWidget {
         let reporting_settings = AltScreenReporting::as_ref(app);
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Enable Scroll Reporting".into(),
+            feature_text(app, "settings.features.scroll_reporting.label"),
             None,
             LocalOnlyIconState::for_setting(
                 ScrollReportingEnabled::storage_key(),
@@ -6548,7 +6805,7 @@ impl SettingsWidget for FocusReportingWidget {
         let reporting_settings = AltScreenReporting::as_ref(app);
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Enable Focus Reporting".into(),
+            feature_text(app, "settings.features.focus_reporting.label"),
             None,
             LocalOnlyIconState::for_setting(
                 FocusReportingEnabled::storage_key(),
@@ -6595,7 +6852,7 @@ impl SettingsWidget for AudibleBellWidget {
         let ui_builder = appearance.ui_builder();
         let terminal_settings = TerminalSettings::as_ref(app);
         render_body_item::<FeaturesPageAction>(
-            "Use Audible Bell".into(),
+            feature_text(app, "settings.features.audible_bell.label"),
             None,
             LocalOnlyIconState::for_setting(
                 UseAudibleBell::storage_key(),
@@ -6632,6 +6889,7 @@ impl SmartSelectWidget {
     fn render_word_char_config(
         &self,
         view: &FeaturesPageView,
+        app: &AppContext,
         appearance: &Appearance,
         non_default: bool,
     ) -> Box<dyn Element> {
@@ -6639,7 +6897,10 @@ impl SmartSelectWidget {
         Flex::column()
             .with_child(
                 ui_builder
-                    .label("Characters considered part of a word".to_string())
+                    .label(feature_text(
+                        app,
+                        "settings.features.smart_select.word_characters.label",
+                    ))
                     .with_style(UiComponentStyles {
                         margin: Some(Coords {
                             top: 10.0,
@@ -6669,6 +6930,7 @@ impl SmartSelectWidget {
             )
             .with_child(
                 build_reset_button(
+                    app,
                     appearance,
                     self.word_char_allowlist_reset_state.clone(),
                     non_default,
@@ -6700,7 +6962,7 @@ impl SettingsWidget for SmartSelectWidget {
         let selection = SemanticSelection::as_ref(app);
         let mut column = Flex::column();
         column.add_child(render_body_item::<FeaturesPageAction>(
-            "Double-click smart selection".into(),
+            feature_text(app, "settings.features.smart_select.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
                 on_click_action: Some(FeaturesPageAction::OpenUrl(
@@ -6735,6 +6997,7 @@ impl SettingsWidget for SmartSelectWidget {
             column.add_child(render_group(
                 [self.render_word_char_config(
                     view,
+                    app,
                     appearance,
                     selection.word_char_allowlist_changed_from_default(),
                 )],
@@ -6776,7 +7039,7 @@ impl SettingsWidget for ShowTerminalZeroStateBlockWidget {
         let ui_builder = appearance.ui_builder();
         let terminal_settings = TerminalSettings::as_ref(app);
         render_body_item::<FeaturesPageAction>(
-            "Show help block in new sessions".into(),
+            feature_text(app, "settings.features.zero_state_block.label"),
             None,
             LocalOnlyIconState::for_setting(
                 ShowTerminalZeroStateBlock::storage_key(),
@@ -6818,7 +7081,7 @@ impl SettingsWidget for CopyOnSelectWidget {
         let ui_builder = appearance.ui_builder();
         let copy_on_select_enabled = SelectionSettings::as_ref(app).copy_on_select_enabled();
         render_body_item::<FeaturesPageAction>(
-            "Copy on select".into(),
+            feature_text(app, "settings.features.copy_on_select.label"),
             None,
             LocalOnlyIconState::for_setting(
                 CopyOnSelect::storage_key(),
@@ -6862,7 +7125,7 @@ impl SettingsWidget for NewTabPlacementWidget {
     ) -> Box<dyn Element> {
         render_dropdown_item(
             appearance,
-            "New tab placement",
+            &feature_text(app, "settings.features.new_tab_placement.label"),
             None,
             None,
             LocalOnlyIconState::for_setting(
@@ -6897,7 +7160,8 @@ impl SettingsWidget for DefaultSessionModeWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let label = render_dropdown_item_label(
-            "Default mode for new sessions".to_string(),
+            app,
+            feature_text(app, "settings.features.default_session_mode.label"),
             None,
             LocalOnlyIconState::for_setting(
                 DefaultSessionMode::storage_key(),
@@ -6951,7 +7215,7 @@ impl SettingsWidget for WorkflowsInCommandSearch {
         let ui_builder = appearance.ui_builder();
         let workflow_settings = CommandSearchSettings::as_ref(app);
         render_body_item::<FeaturesPageAction>(
-            "Show Global Workflows in Command Search (ctrl-r)".into(),
+            feature_text(app, "settings.features.global_workflows.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
                 on_click_action: Some(FeaturesPageAction::OpenUrl(
@@ -7006,14 +7270,15 @@ impl SettingsWidget for LinuxSelectionClipboardWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         render_body_item::<FeaturesPageAction>(
-            "Honor linux selection clipboard".into(),
+            feature_text(app, "settings.features.linux_selection_clipboard.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
                 on_click_action: None,
                 secondary_text: None,
-                tooltip_override_text: Some(
-                    "Whether the Linux primary clipboard should be supported.".into(),
-                ),
+                tooltip_override_text: Some(feature_text(
+                    app,
+                    "settings.features.linux_selection_clipboard.tooltip",
+                )),
             }),
             LocalOnlyIconState::for_setting(
                 LinuxSelectionClipboard::storage_key(),
@@ -7060,7 +7325,7 @@ impl SettingsWidget for GPUWidget {
     ) -> Box<dyn Element> {
         let gpu_settings = GPUSettings::as_ref(app);
         let mut col = Flex::column().with_child(render_body_item::<FeaturesPageAction>(
-            "Prefer rendering new windows with integrated GPU (low power)".into(),
+            feature_text(app, "settings.features.gpu.low_power.label"),
             None,
             LocalOnlyIconState::for_setting(
                 PreferLowPowerGPU::storage_key(),
@@ -7090,7 +7355,10 @@ impl SettingsWidget for GPUWidget {
                 Container::new(
                     appearance
                         .ui_builder()
-                        .wrappable_text("Changes will apply to new windows.", true)
+                        .wrappable_text(
+                            feature_text(app, "settings.features.restart.new_windows"),
+                            true,
+                        )
                         .with_style(UiComponentStyles {
                             font_color: Some(theme.sub_text_color(theme.background()).into_solid()),
                             ..Default::default()
@@ -7130,12 +7398,15 @@ impl SettingsWidget for WindowSystemWidget {
         let mut children = Flex::column();
         let force_x11 = *LinuxAppConfiguration::as_ref(app).force_x11.value();
         children.add_child(render_body_item::<FeaturesPageAction>(
-            "Use Wayland for window management".into(),
+            feature_text(app, "settings.features.window_system.wayland.label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
                 on_click_action: None,
                 secondary_text: None,
-                tooltip_override_text: Some("Enables the use of Wayland".to_string()),
+                tooltip_override_text: Some(feature_text(
+                    app,
+                    "settings.features.window_system.wayland.tooltip",
+                )),
             }),
             LocalOnlyIconState::for_setting(
                 ForceX11::storage_key(),
@@ -7161,11 +7432,10 @@ impl SettingsWidget for WindowSystemWidget {
         ));
 
         let mut secondary_text =
-            "Enabling this setting disables global hotkey support. When disabled, text \
-                    may be blurry if your Wayland compositor is using fraction scaling (ex: 125%)."
-                .to_string();
+            feature_text(app, "settings.features.window_system.wayland.description");
         if view.force_x11_changed {
-            secondary_text.push_str("\n\nRestart Warp for changes to take effect.");
+            secondary_text.push_str("\n\n");
+            secondary_text.push_str(&feature_text(app, "settings.features.restart.warp"));
         }
         let warp_theme = appearance.theme();
         children.add_child(
@@ -7206,7 +7476,7 @@ impl SettingsWidget for GraphicsBackendWidget {
         let theme = appearance.theme();
         let dropdown = render_dropdown_item(
             appearance,
-            "Preferred graphics backend",
+            &feature_text(app, "settings.features.graphics_backend.label"),
             None,
             None,
             LocalOnlyIconState::for_setting(
@@ -7227,7 +7497,14 @@ impl SettingsWidget for GraphicsBackendWidget {
             col.add_child(
                 appearance
                     .ui_builder()
-                    .wrappable_text(format!("Current backend: {}", backend.to_label()), true)
+                    .wrappable_text(
+                        feature_text_with_value(
+                            app,
+                            "settings.features.graphics_backend.current",
+                            backend.to_label(),
+                        ),
+                        true,
+                    )
                     .with_style(UiComponentStyles {
                         font_color: Some(theme.sub_text_color(theme.background()).into_solid()),
                         ..Default::default()
@@ -7241,7 +7518,10 @@ impl SettingsWidget for GraphicsBackendWidget {
                 Container::new(
                     appearance
                         .ui_builder()
-                        .wrappable_text("Changes will apply to new windows.", true)
+                        .wrappable_text(
+                            feature_text(app, "settings.features.restart.new_windows"),
+                            true,
+                        )
                         .with_style(UiComponentStyles {
                             font_color: Some(theme.sub_text_color(theme.background()).into_solid()),
                             ..Default::default()

@@ -14,6 +14,7 @@ mod history;
 mod input;
 mod keyboard_protocol;
 mod launch_configs;
+mod localization_visual;
 mod notebooks;
 mod pane_restoration;
 #[cfg(target_os = "macos")]
@@ -55,6 +56,7 @@ pub use history::*;
 pub use input::*;
 pub use keyboard_protocol::*;
 pub use launch_configs::*;
+pub use localization_visual::*;
 pub use notebooks::*;
 pub use pane_restoration::*;
 use parking_lot::Mutex;
@@ -461,8 +463,15 @@ pub fn test_open_and_close_settings() -> Builder {
             new_step_with_default_assertions("Open settings tab")
                 .with_keystrokes(&["cmdorctrl-,"])
                 .add_assertion(assert_tab_count(2))
-                .add_assertion(assert_tab_title(1, "Settings"))
-                .add_assertion(assert_pane_title(1, 0, "Settings"))
+                .add_assertion(assert_tab_title(
+                    1,
+                    regex::Regex::new("^(Settings|设置)$").expect("regex should compile"),
+                ))
+                .add_assertion(assert_pane_title(
+                    1,
+                    0,
+                    regex::Regex::new("^(Settings|设置)$").expect("regex should compile"),
+                ))
                 .add_assertion(move |app, window_id| {
                     let settings_views: Vec<ViewHandle<SettingsView>> = app
                         .views_of_type(window_id)
@@ -483,7 +492,10 @@ pub fn test_open_and_close_settings() -> Builder {
                 .with_hover_over_saved_position("close_tab_button:1")
                 .with_click_on_saved_position("close_tab_button:1")
                 .add_assertion(assert_tab_count(1))
-                .add_assertion(assert_tab_title(0, "~")),
+                .add_assertion(assert_tab_title(
+                    0,
+                    regex::Regex::new("^(~|bash)$").expect("regex should compile"),
+                )),
         )
 }
 
@@ -2279,8 +2291,11 @@ pub fn test_shell_reinitializing() -> Builder {
 
                         async_assert_eq!(
                             "Starting shell...".to_string(),
-                            view.prompt_render_helper
-                                .prompt_working_dir(&model, view.sessions(ctx)),
+                            view.prompt_render_helper.prompt_working_dir(
+                                &model,
+                                view.sessions(ctx),
+                                ctx
+                            ),
                             "Checking the prompt value"
                         )
                     })

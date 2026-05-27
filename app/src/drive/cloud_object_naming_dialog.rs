@@ -1,3 +1,4 @@
+use crate::localization;
 use warpui::elements::{
     Border, Clipped, Container, CornerRadius, Dismiss, Empty, Flex, MainAxisSize, MouseStateHandle,
     ParentElement, Radius, Shrinkable, Text,
@@ -28,13 +29,6 @@ const BORDER_WIDTH: f32 = 1.;
 const BUTTON_FONT_SIZE: f32 = 14.;
 const BUTTON_PADDING: f32 = 12.;
 const BUTTON_MARGIN_BETWEEN: f32 = 8.;
-
-const NOTEBOOK_TITLE: &str = "Notebook name";
-const FOLDER_TITLE: &str = "Folder name";
-const ENV_VAR_COLLECTION_TITLE: &str = "Collection name";
-const CREATE_BUTTON_TEXT: &str = "Create";
-const CANCEL_BUTTON_TEXT: &str = "Cancel";
-const RENAME_BUTTON_TEXT: &str = "Rename";
 
 /// Struct holding necessary information and states for the dialog
 /// that opens when creating or updating a folder or notebook.
@@ -137,11 +131,12 @@ impl CloudObjectNamingDialog {
         &self,
         object_type: DriveObjectType,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
-        let title = match object_type {
-            DriveObjectType::Notebook { .. } => NOTEBOOK_TITLE,
-            DriveObjectType::Folder => FOLDER_TITLE,
-            DriveObjectType::EnvVarCollection => ENV_VAR_COLLECTION_TITLE,
+        let title_key = match object_type {
+            DriveObjectType::Notebook { .. } => "cloud_object.naming.notebook_title",
+            DriveObjectType::Folder => "cloud_object.naming.folder_title",
+            DriveObjectType::EnvVarCollection => "cloud_object.naming.env_var_collection_title",
             // workflows and ai facts aren't a part of this dialog
             DriveObjectType::Workflow
             | DriveObjectType::AgentModeWorkflow
@@ -149,6 +144,11 @@ impl CloudObjectNamingDialog {
             | DriveObjectType::AIFactCollection
             | DriveObjectType::MCPServer
             | DriveObjectType::MCPServerCollection => "",
+        };
+        let title = if title_key.is_empty() {
+            String::new()
+        } else {
+            localization::text_for_app(app, title_key)
         };
 
         Text::new_inline(
@@ -223,8 +223,8 @@ impl CloudObjectNamingDialog {
         };
 
         let primary_button_text = match self.is_rename {
-            true => RENAME_BUTTON_TEXT,
-            false => CREATE_BUTTON_TEXT,
+            true => localization::text_for_app(app, "cloud_object.naming.rename"),
+            false => localization::text_for_app(app, "cloud_object.naming.create"),
         };
 
         let primary_button_action = self.current_primary_action();
@@ -239,7 +239,7 @@ impl CloudObjectNamingDialog {
                 Some(primary_hovered_and_clicked_styles),
                 Some(primary_disabled_styles),
             )
-            .with_text_label(primary_button_text.into());
+            .with_text_label(primary_button_text);
 
         if let Some(title) = self.title(app) {
             if title.is_empty() || !self.title_editor.as_ref(app).is_dirty(app) {
@@ -261,7 +261,10 @@ impl CloudObjectNamingDialog {
                                 padding: Some(Coords::uniform(BUTTON_PADDING)),
                                 ..Default::default()
                             })
-                            .with_text_label(CANCEL_BUTTON_TEXT.into())
+                            .with_text_label(localization::text_for_app(
+                                app,
+                                "cloud_object.naming.cancel",
+                            ))
                             .build()
                             .with_cursor(Cursor::PointingHand)
                             .on_click(move |ctx, _, _| {
@@ -310,7 +313,7 @@ impl CloudObjectNamingDialog {
         Dismiss::new(
             Container::new(
                 Flex::column()
-                    .with_child(self.render_text_header(object_type, appearance))
+                    .with_child(self.render_text_header(object_type, appearance, app))
                     .with_child(self.render_input(appearance))
                     .with_child(self.render_action_buttons(appearance, app))
                     .finish(),

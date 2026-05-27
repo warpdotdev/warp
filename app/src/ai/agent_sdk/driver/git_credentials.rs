@@ -1,3 +1,4 @@
+use crate::localization;
 /// Git credentials management for cloud agent sandboxes.
 ///
 /// This module handles:
@@ -11,6 +12,8 @@
 ///   server and overwrites the credential files, keeping long-running agents
 ///   authenticated for their entire duration.
 use std::{path::PathBuf, sync::Arc, time::Duration};
+use warp_localization::replace_placeholders;
+use warp_localization::LocaleId;
 
 use anyhow::{Context, Result};
 // Use the project's allowed Command wrapper (not std::process::Command, which is
@@ -27,8 +30,18 @@ const DEFAULT_GIT_NAME: &str = "Oz";
 const DEFAULT_GIT_EMAIL: &str = "oz-agent@warp.dev";
 const GH_HOSTS_FILENAME: &str = "hosts.yml";
 
+fn text(key: &str) -> String {
+    localization::text_for_locale(LocaleId::EnUs, key)
+}
+
+fn text_with_args(key: &str, args: &[(&str, &str)]) -> String {
+    replace_placeholders(&text(key), args)
+        .expect("localized text template arguments must match the catalog")
+}
+
 fn home_dir() -> Result<PathBuf> {
-    dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
+    dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!(text("agent_sdk.driver.git_credentials.error.home_dir")))
 }
 
 /// Write `content` to `path` using owner-only (0600) permissions.
@@ -47,16 +60,34 @@ fn write_secret_file(path: &std::path::Path, content: &str) -> Result<()> {
             .truncate(true)
             .mode(0o600)
             .open(path)
-            .with_context(|| format!("Failed to open {} for writing", path.display()))?;
+            .with_context(|| {
+                text_with_args(
+                    "agent_sdk.driver.git_credentials.error.open_for_writing",
+                    &[("path", &path.display().to_string())],
+                )
+            })?;
         file.set_permissions(std::fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("Failed to set permissions on {}", path.display()))?;
-        file.write_all(content.as_bytes())
-            .with_context(|| format!("Failed to write {}", path.display()))?;
+            .with_context(|| {
+                text_with_args(
+                    "agent_sdk.driver.git_credentials.error.set_permissions",
+                    &[("path", &path.display().to_string())],
+                )
+            })?;
+        file.write_all(content.as_bytes()).with_context(|| {
+            text_with_args(
+                "agent_sdk.driver.git_credentials.error.write",
+                &[("path", &path.display().to_string())],
+            )
+        })?;
     }
     #[cfg(not(unix))]
     {
-        std::fs::write(path, content)
-            .with_context(|| format!("Failed to write {}", path.display()))?;
+        std::fs::write(path, content).with_context(|| {
+            text_with_args(
+                "agent_sdk.driver.git_credentials.error.write",
+                &[("path", &path.display().to_string())],
+            )
+        })?;
     }
     Ok(())
 }
@@ -88,10 +119,12 @@ fn write_git_credentials_file(credentials: &[GitCredential]) -> Result<()> {
 
     write_secret_file(&tmp_path, &content)?;
     std::fs::rename(&tmp_path, &path).with_context(|| {
-        format!(
-            "Failed to rename {} to {}",
-            tmp_path.display(),
-            path.display()
+        text_with_args(
+            "agent_sdk.driver.git_credentials.error.rename",
+            &[
+                ("source", &tmp_path.display().to_string()),
+                ("destination", &path.display().to_string()),
+            ],
         )
     })?;
 
@@ -131,10 +164,12 @@ fn write_gh_hosts_yml(credentials: &[GitCredential], home: &std::path::Path) -> 
 
     write_secret_file(&tmp_path, &yaml)?;
     std::fs::rename(&tmp_path, &path).with_context(|| {
-        format!(
-            "Failed to rename {} to {}",
-            tmp_path.display(),
-            path.display()
+        text_with_args(
+            "agent_sdk.driver.git_credentials.error.rename",
+            &[
+                ("source", &tmp_path.display().to_string()),
+                ("destination", &path.display().to_string()),
+            ],
         )
     })?;
 
@@ -243,13 +278,17 @@ async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<()>
     let workload_token =
         warp_isolation_platform::issue_workload_token(Some(Duration::from_secs(5 * 60)))
             .await
-            .context("Failed to issue workload token for git credentials refresh")?
+            .context(text(
+                "agent_sdk.driver.git_credentials.error.issue_workload_token",
+            ))?
             .token;
 
     let credentials = ai_client
         .get_task_git_credentials(task_id.to_string(), workload_token)
         .await
-        .context("Failed to fetch git credentials from server")?;
+        .context(text(
+            "agent_sdk.driver.git_credentials.error.fetch_from_server",
+        ))?;
 
     if credentials.is_empty() {
         log::debug!("No git credentials returned during refresh; skipping file write");
@@ -257,7 +296,14 @@ async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<()>
     }
 
     if let Err(e) = write_git_credentials(&credentials) {
-        log::warn!("Failed to write refreshed git credentials: {e:#}");
+        let error = format!("{e:#}");
+        log::warn!(
+            "{}",
+            text_with_args(
+                "agent_sdk.driver.git_credentials.error.write_refreshed",
+                &[("error", &error)]
+            )
+        );
     } else {
         log::info!("Git credentials refreshed successfully");
     }

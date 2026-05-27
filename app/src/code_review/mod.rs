@@ -22,13 +22,14 @@ pub(crate) mod diff_selector;
 pub(crate) mod file_invalidation_queue;
 
 use code_review_view::CodeReviewAction;
-use warpui::keymap::{EditableBinding, FixedBinding};
+use warpui::keymap::{BindingDescription, EditableBinding, FixedBinding};
 use warpui::{
     id, AppContext, Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle, WindowId,
 };
 
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
+use crate::localization;
 use crate::terminal::view::TerminalView;
 use crate::terminal::CLIAgent;
 use crate::util::bindings::CustomAction;
@@ -84,13 +85,18 @@ pub fn init(app: &mut AppContext) {
     app.register_fixed_bindings([FixedBinding::custom(
         CustomAction::Undo,
         CodeReviewAction::UndoRevert,
-        "Undo",
+        binding_description("Undo", "code_review.action.undo"),
         id!("CodeReviewView") & !id!("IMEOpen"),
     )]);
 
     diff_menu::init(app);
     diff_selector::init(app);
     git_dialog::init(app);
+}
+
+fn binding_description(fallback: &'static str, key: &'static str) -> BindingDescription {
+    BindingDescription::new(fallback)
+        .with_dynamic_override(move |app| Some(localization::text_for_app(app, key)))
 }
 
 /// Uses heuristics to determine if a file is auto-generated.

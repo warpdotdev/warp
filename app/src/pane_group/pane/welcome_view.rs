@@ -29,13 +29,17 @@ use crate::util::bindings::{keybinding_name_to_display_string, BindingGroup, Cus
 use crate::view_components::DismissibleToast;
 use crate::workspace::{ToastStack, Workspace};
 
+fn text(app: &AppContext, key: &str) -> String {
+    crate::localization::text_for_app(app, key)
+}
+
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
 
     app.register_editable_bindings([
         EditableBinding::new(
             "workspace:new_tab",
-            "Terminal session",
+            text(app, "welcome.binding.terminal_session"),
             WelcomeViewAction::CreateTerminalSession,
         )
         .with_context_predicate(id!("WelcomeView"))
@@ -44,7 +48,7 @@ pub fn init(app: &mut AppContext) {
         .with_enabled(|| ContextFlag::CreateNewSession.is_enabled()),
         EditableBinding::new(
             "welcome_view:open_project",
-            "Add repository",
+            text(app, "welcome.binding.add_repository"),
             WelcomeViewAction::OpenProject,
         )
         .with_context_predicate(id!("WelcomeView"))
@@ -71,7 +75,8 @@ pub struct WelcomeView {
 
 impl WelcomeView {
     pub fn new(startup_directory: Option<PathBuf>, ctx: &mut ViewContext<Self>) -> Self {
-        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("New tab"));
+        let pane_configuration =
+            ctx.add_model(|ctx| PaneConfiguration::new(text(ctx, "welcome.title.new_tab")));
         let window_id = ctx.window_id();
         let view_id = ctx.view_id();
         let palette = ctx.add_typed_action_view(|ctx| {
@@ -288,9 +293,9 @@ impl BackingView for WelcomeView {
     fn render_header_content(
         &self,
         _ctx: &view::HeaderRenderContext<'_>,
-        _app: &AppContext,
+        app: &AppContext,
     ) -> view::HeaderContent {
-        view::HeaderContent::simple("New tab")
+        view::HeaderContent::simple(text(app, "welcome.title.new_tab"))
     }
 
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {

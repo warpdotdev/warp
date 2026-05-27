@@ -1,3 +1,4 @@
+use crate::localization;
 use warp_core::send_telemetry_from_ctx;
 use warpui::elements::{ChildView, Flex, ParentElement as _};
 use warpui::{
@@ -17,11 +18,15 @@ pub enum CloneRepoEvent {
     Cancel,
 }
 
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
+
 impl CloneRepoView {
     pub fn new(is_ftux: bool, ctx: &mut ViewContext<Self>) -> Self {
         let editor = ctx.add_typed_action_view(|ctx| {
             GlowingEditor::new(
-                "Provide a repository URL e.g. \"git@github.com:username/project.git\"",
+                text(ctx, "coding_entrypoints.clone_repository.placeholder"),
                 ctx,
             )
         });

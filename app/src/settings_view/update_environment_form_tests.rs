@@ -411,7 +411,7 @@ fn test_render_repos_field_loading_state() {
             });
 
             let appearance = Appearance::as_ref(ctx);
-            let element = view_handle.as_ref(ctx).render_repos_field(appearance);
+            let element = view_handle.as_ref(ctx).render_repos_field(appearance, ctx);
             let text_content = element.debug_text_content().unwrap_or_default();
 
             assert!(
@@ -441,7 +441,7 @@ fn test_render_repos_field_authed_state() {
             });
 
             let appearance = Appearance::as_ref(ctx);
-            let element = view_handle.as_ref(ctx).render_repos_field(appearance);
+            let element = view_handle.as_ref(ctx).render_repos_field(appearance, ctx);
             let text_content = element.debug_text_content().unwrap_or_default();
 
             assert!(
@@ -474,7 +474,7 @@ fn test_render_repos_field_auth_required() {
             });
 
             let appearance = Appearance::as_ref(ctx);
-            let element = view_handle.as_ref(ctx).render_repos_field(appearance);
+            let element = view_handle.as_ref(ctx).render_repos_field(appearance, ctx);
             let text_content = element.debug_text_content().unwrap_or_default();
 
             assert!(
@@ -507,7 +507,7 @@ fn test_render_repos_field_error_state() {
             });
 
             let appearance = Appearance::as_ref(ctx);
-            let element = view_handle.as_ref(ctx).render_repos_field(appearance);
+            let element = view_handle.as_ref(ctx).render_repos_field(appearance, ctx);
             let text_content = element.debug_text_content().unwrap_or_default();
 
             assert!(
@@ -583,7 +583,7 @@ fn test_render_repos_field_with_selected_repos() {
             });
 
             let appearance = Appearance::as_ref(ctx);
-            let element = view_handle.as_ref(ctx).render_repos_field(appearance);
+            let element = view_handle.as_ref(ctx).render_repos_field(appearance, ctx);
             let text_content = element.debug_text_content().unwrap_or_default();
 
             assert!(
@@ -759,7 +759,7 @@ fn test_render_docker_image_field_shows_suggest_image_button_on_create() {
             let appearance = Appearance::as_ref(ctx);
             let element = view_handle
                 .as_ref(ctx)
-                .render_docker_image_field(appearance);
+                .render_docker_image_field(appearance, ctx);
             let text_content = element.debug_text_content().unwrap_or_default();
 
             assert!(
@@ -799,7 +799,7 @@ fn test_render_docker_image_field_shows_suggest_image_button_on_edit() {
             let appearance = Appearance::as_ref(ctx);
             let element = view_handle
                 .as_ref(ctx)
-                .render_docker_image_field(appearance);
+                .render_docker_image_field(appearance, ctx);
             let text_content = element.debug_text_content().unwrap_or_default();
 
             assert!(
@@ -834,7 +834,7 @@ fn test_render_docker_image_field_shows_generating_state() {
             let appearance = Appearance::as_ref(ctx);
             let element = view_handle
                 .as_ref(ctx)
-                .render_docker_image_field(appearance);
+                .render_docker_image_field(appearance, ctx);
             let text_content = element.debug_text_content().unwrap_or_default();
 
             assert!(
@@ -873,7 +873,7 @@ fn test_render_docker_image_field_shows_custom_image_warning() {
             let appearance = Appearance::as_ref(ctx);
             let element = view_handle
                 .as_ref(ctx)
-                .render_docker_image_field(appearance);
+                .render_docker_image_field(appearance, ctx);
             let text_content = element.debug_text_content().unwrap_or_default();
 
             assert!(
@@ -919,7 +919,7 @@ fn test_render_docker_image_field_shows_github_auth_required_message() {
             let appearance = Appearance::as_ref(ctx);
             let element = view_handle
                 .as_ref(ctx)
-                .render_docker_image_field(appearance);
+                .render_docker_image_field(appearance, ctx);
             let text_content = element.debug_text_content().unwrap_or_default();
 
             assert!(
@@ -1027,27 +1027,39 @@ fn test_environment_form_copy_orchestration_modal_overrides_settings_defaults() 
     let default_copy = EnvironmentFormCopy::default();
     let orchestration_copy = EnvironmentFormCopy::orchestration_modal();
 
-    assert_eq!(default_copy.name_placeholder, "Environment name");
-    assert_eq!(default_copy.docker_image_label, "Docker image reference");
+    assert_eq!(
+        default_copy.name_placeholder_key,
+        "settings.environment.form.name.placeholder"
+    );
+    assert_eq!(
+        default_copy.docker_image_label_key,
+        "settings.environment.form.docker_image.label"
+    );
     assert!(default_copy.show_description_character_count);
 
-    assert_eq!(orchestration_copy.name_placeholder, "e.g., dev-env");
     assert_eq!(
-        orchestration_copy.repos_placeholder_authed,
-        "Browse GitHub repos..."
-    );
-    assert_eq!(orchestration_copy.docker_image_label, "Docker image");
-    assert_eq!(
-        orchestration_copy.docker_image_placeholder,
-        "e.g., node:20-alpine"
+        orchestration_copy.name_placeholder_key,
+        "settings.environment.form.orchestration.name.placeholder"
     );
     assert_eq!(
-        orchestration_copy.setup_commands_placeholder,
-        "e.g., node start"
+        orchestration_copy.repos_placeholder_authed_key,
+        "settings.environment.form.orchestration.repos.placeholder_authed"
     );
     assert_eq!(
-        orchestration_copy.setup_commands_helper,
-        "Press Enter or click the submit button to add each command."
+        orchestration_copy.docker_image_label_key,
+        "settings.environment.form.orchestration.docker_image.label"
+    );
+    assert_eq!(
+        orchestration_copy.docker_image_placeholder_key,
+        "settings.environment.form.orchestration.docker_image.placeholder"
+    );
+    assert_eq!(
+        orchestration_copy.setup_commands_placeholder_key,
+        "settings.environment.form.orchestration.setup_commands.placeholder"
+    );
+    assert_eq!(
+        orchestration_copy.setup_commands_helper_key,
+        "settings.environment.form.orchestration.setup_commands.helper"
     );
     assert!(!orchestration_copy.show_description_character_count);
 }

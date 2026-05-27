@@ -1,4 +1,6 @@
+use crate::localization;
 use warpui::elements::Text;
+use warpui::AppContext;
 use warpui::Element;
 
 use super::{
@@ -8,6 +10,7 @@ use crate::appearance::Appearance;
 
 pub fn render_shell_process_terminated_banner(
     appearance: &Appearance,
+    app: &AppContext,
     was_premature_termination: bool,
 ) -> Box<dyn Element> {
     if was_premature_termination {
@@ -15,14 +18,20 @@ pub fn render_shell_process_terminated_banner(
             InlineBannerStyle::CallToAction,
             appearance,
             InlineBannerContent {
-                title: "Shell process exited prematurely!".to_string(),
+                title: localization::text_for_app(
+                    app,
+                    "terminal.inline_banner.shell_process.exited_prematurely",
+                ),
                 header_icon: Some(InlineBannerIcon {
                     asset_path: "bundled/svg/warning.svg",
                     aspect_ratio: 1.,
                     color_override: Some(appearance.theme().foreground().into_solid()),
                 }),
                 content: Some(vec![Text::new(
-                    "The output from Warp's initialization script is visible above to assist with debugging.",
+                    localization::text_for_app(
+                        app,
+                        "terminal.inline_banner.shell_process.debug_output_visible",
+                    ),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )]),
@@ -34,7 +43,10 @@ pub fn render_shell_process_terminated_banner(
             InlineBannerStyle::LowPriority,
             appearance,
             InlineBannerContent {
-                title: "Shell process exited".to_string(),
+                title: localization::text_for_app(
+                    app,
+                    "terminal.inline_banner.shell_process.exited",
+                ),
                 header_icon: Some(InlineBannerIcon {
                     asset_path: "bundled/svg/info.svg",
                     aspect_ratio: 1.,

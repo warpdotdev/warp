@@ -1,3 +1,4 @@
+use crate::localization;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::future::Future;
@@ -5,6 +6,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use anyhow::Context as _;
+use warp_localization::LocaleId;
 use warp_managed_secrets::{GcpCredentials, GcpFederationConfig};
 
 use super::{CloudProvider, CloudProviderSetupError, Result};
@@ -13,6 +15,10 @@ use crate::ai::cloud_environments::GcpProviderConfig;
 /// Token lifetime for GCP executable-sourced credentials. The GCP client
 /// libraries handle refreshing automatically, so we keep this short.
 const TOKEN_LIFETIME: Duration = Duration::from_secs(30 * 60);
+
+fn text(key: &str) -> String {
+    localization::text_for_locale(LocaleId::EnUs, key)
+}
 
 /// Provides GCP Workload Identity Federation credentials for the agent session.
 ///
@@ -36,7 +42,9 @@ impl GcpCloudProvider {
         };
 
         let credentials = GcpCredentials::federated(run_id, &federation_config)
-            .context("Failed to prepare GCP federation credentials")
+            .context(text(
+                "agent_sdk.driver.cloud_provider.gcp.error.prepare_federation_credentials",
+            ))
             .map_err(|error| CloudProviderSetupError::new(Self::PROVIDER_NAME, error))?;
 
         Ok(Self { credentials })
@@ -52,7 +60,9 @@ impl CloudProvider for GcpCloudProvider {
         Box::pin(async move {
             self.credentials
                 .cleanup()
-                .context("Failed to remove GCP credential files")
+                .context(text(
+                    "agent_sdk.driver.cloud_provider.gcp.error.remove_credential_files",
+                ))
                 .map_err(|err| CloudProviderSetupError::new(Self::PROVIDER_NAME, err))
         })
     }

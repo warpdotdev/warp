@@ -5,6 +5,7 @@ use warpui::keymap::Keystroke;
 use warpui::AppContext;
 
 use crate::editor::{SELECT_DOWN_ACTION_NAME, SELECT_UP_ACTION_NAME};
+use crate::localization;
 use crate::terminal::input::inline_menu::{
     InlineMenuAction, InlineMenuMessageArgs, InlineMenuRowAction,
 };
@@ -41,7 +42,10 @@ pub fn default_navigation_message_items<A: InlineMenuAction, T>(
     let mut items = vec![
         MessageItem::keystroke(navigation_keystrokes.0),
         MessageItem::keystroke(navigation_keystrokes.1),
-        MessageItem::text(" to navigate"),
+        MessageItem::text(localization::text_for_app(
+            args.app,
+            "terminal.inline_menu.navigation.to_navigate",
+        )),
     ];
 
     if args.inline_menu_model.tab_configs().len() > 1 {
@@ -50,7 +54,10 @@ pub fn default_navigation_message_items<A: InlineMenuAction, T>(
             shift: true,
             ..Default::default()
         }));
-        items.push(MessageItem::text(" to cycle tabs"));
+        items.push(MessageItem::text(localization::text_for_app(
+            args.app,
+            "terminal.inline_menu.navigation.to_cycle_tabs",
+        )));
     }
 
     items.push(MessageItem::clickable(
@@ -59,7 +66,10 @@ pub fn default_navigation_message_items<A: InlineMenuAction, T>(
                 key: "escape".to_owned(),
                 ..Default::default()
             }),
-            MessageItem::text(" to dismiss"),
+            MessageItem::text(localization::text_for_app(
+                args.app,
+                "terminal.inline_menu.navigation.to_dismiss",
+            )),
         ],
         |ctx| {
             ctx.dispatch_typed_action(InlineMenuRowAction::<A>::Dismiss);

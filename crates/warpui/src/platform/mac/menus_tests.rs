@@ -25,6 +25,8 @@ use warpui_core::actions::StandardAction;
 use warpui_core::keymap::Keystroke;
 use warpui_core::platform::menu::{MenuItem, MenuItemPropertyChanges};
 
+use crate::platform::mac::utils::nsstring_as_str;
+
 use super::{apply_changes, make_menu_item};
 
 /// How many outer pool cycles for the retain → autorelease test.
@@ -55,6 +57,21 @@ fn make_menu_item_standard_action_memory_behavior() {
             }
             pool.drain();
         }
+    }
+}
+
+#[test]
+fn make_menu_item_localized_standard_action_uses_custom_title() {
+    unsafe {
+        let pool = NSAutoreleasePool::new(nil);
+        let item = make_menu_item(MenuItem::localized_standard(
+            StandardAction::Minimize,
+            "最小化",
+        ));
+        let title: *mut Object = msg_send![item, title];
+        let title = nsstring_as_str(title).expect("title should be UTF-8");
+        assert_eq!(title, "最小化");
+        pool.drain();
     }
 }
 

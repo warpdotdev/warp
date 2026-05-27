@@ -1,3 +1,4 @@
+use crate::localization;
 use std::borrow::Cow;
 
 use chrono::{DateTime, Local};
@@ -110,7 +111,10 @@ impl SubjectExt for Subject {
             Subject::User(kind) => kind.name(app),
             Subject::PendingUser { email } => email.clone().map(Cow::from),
             Subject::Team(kind) => kind.display_name(app).map(Cow::from),
-            Subject::AnyoneWithLink(_) => Some(Cow::from("Anyone with the link")),
+            Subject::AnyoneWithLink(_) => Some(Cow::from(localization::text_for_app(
+                app,
+                "drive.sharing.anyone_with_link",
+            ))),
         }
     }
 

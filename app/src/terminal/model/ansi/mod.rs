@@ -1276,7 +1276,9 @@ where
                             );
                         }
                         _ => {
-                            log::warn!("Invalid Warp OSC marker parameter for completions match metadata: {parameter}");
+                            log::warn!(
+                                "Invalid Warp OSC marker parameter for completions match metadata: {parameter}"
+                            );
                         }
                     }
                 }
@@ -1736,7 +1738,9 @@ impl<'a, H: Handler + 'a, W: io::Write> TmuxPerformer<'a, H, W> {
         );
 
         let PrimaryPaneState::Pending { pane_output_map } = previous_pane_state else {
-            log::error!("Received primary pane initialization message after primary pane was already initialized!");
+            log::error!(
+                "Received primary pane initialization message after primary pane was already initialized!"
+            );
             return;
         };
 

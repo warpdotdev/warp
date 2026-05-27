@@ -1,3 +1,4 @@
+use crate::localization;
 use std::borrow::Cow;
 use std::mem;
 use std::ops::Range;
@@ -70,6 +71,10 @@ use crate::workflows::workflow::Workflow;
 use crate::workflows::WorkflowType;
 use crate::workspace::WorkspaceAction;
 use crate::ASSETS;
+
+fn notebook_text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 lazy_static! {
     static ref SUPPORTED_LANGUAGES: &'static [&'static str] = &[
@@ -656,6 +661,8 @@ impl RunnableCommandModel for NotebookCommand {
             let start_anchor_rendered = self.start.clone();
             let tooltip_builder_raw = appearance.ui_builder().clone();
             let tooltip_builder_rendered = appearance.ui_builder().clone();
+            let raw_tooltip = notebook_text(ctx, "notebook.code_block.display.raw");
+            let rendered_tooltip = notebook_text(ctx, "notebook.code_block.display.rendered");
 
             let active_highlight = UiComponentStyles {
                 background: Some(appearance.theme().surface_3().into()),
@@ -671,7 +678,7 @@ impl RunnableCommandModel for NotebookCommand {
             .with_active_styles(active_highlight)
             .with_tooltip(move || {
                 tooltip_builder_raw
-                    .tool_tip("Raw".to_string())
+                    .tool_tip(raw_tooltip.clone())
                     .build()
                     .finish()
             })
@@ -696,7 +703,7 @@ impl RunnableCommandModel for NotebookCommand {
             .with_active_styles(active_highlight)
             .with_tooltip(move || {
                 tooltip_builder_rendered
-                    .tool_tip("Rendered".to_string())
+                    .tool_tip(rendered_tooltip.clone())
                     .build()
                     .finish()
             })
@@ -771,7 +778,7 @@ impl RunnableCommandModel for NotebookCommand {
                     appearance,
                     Icon::Copy,
                     self.mouse_state_handles.copy_button_state.clone(),
-                    "Copy",
+                    notebook_text(ctx, "notebook.code_block.action.copy"),
                     custom_action_to_display(CustomAction::Copy),
                 )
                 .on_click(move |ctx, app, _| {
@@ -798,7 +805,7 @@ impl RunnableCommandModel for NotebookCommand {
                         appearance,
                         Icon::TerminalInput,
                         self.mouse_state_handles.insert_button_state.clone(),
-                        "Run in terminal",
+                        notebook_text(ctx, "notebook.code_block.action.run_in_terminal"),
                         NotebookKeybindings::as_ref(ctx).run_commands_keybinding(),
                     )
                     .on_click(move |ctx, app, _| {

@@ -1,5 +1,5 @@
 //! This module contains common utilities for rendering Blocklist AI UI.
-use std::sync::LazyLock;
+use crate::localization;
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
@@ -20,14 +20,6 @@ use crate::ui_components::icons::Icon;
 
 const PROVIDER_BUTTON_ICON_SIZE: f32 = 14.;
 const PROVIDER_BUTTON_ICON_TEXT_GAP: f32 = 8.;
-
-/// Text to use as a label throughout the app for user interactions that will attach selected
-/// block(s) or text selections to a new AI query.
-pub static ATTACH_AS_AGENT_MODE_CONTEXT_TEXT: LazyLock<&'static str> =
-    LazyLock::new(|| "Attach as agent context");
-
-/// Label we use for the the command palette action to create a new local Oz agent pane.
-pub static NEW_AGENT_PANE_LABEL: LazyLock<&'static str> = LazyLock::new(|| "New Agent Pane");
 
 /// Claude/Anthropic brand color (official brand orange #D97757).
 /// Reference: https://github.com/anthropics/skills/blob/main/skills/brand-guidelines/SKILL.md
@@ -78,7 +70,10 @@ pub fn render_ai_follow_up_icon(
             let tooltip_background = appearance.theme().tooltip_background();
             let tool_tip = appearance
                 .ui_builder()
-                .tool_tip("Follow up with existing conversation".to_owned())
+                .tool_tip(localization::text_for_app(
+                    app,
+                    "agent.view_util.follow_up_existing_conversation",
+                ))
                 .with_style(UiComponentStyles {
                     font_size: Some(12.),
                     background: Some(warpui::elements::Fill::Solid(tooltip_background)),

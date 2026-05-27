@@ -339,4 +339,6 @@ integration_tests! {
     // Video recording test — requires real display, run manually
     #[ignore = "Manual test: requires real display for frame capture"]
     test_video_recording,
+    #[ignore = "Manual test: requires real display for zh-CN screenshot capture"]
+    test_zh_cn_localization_visual_smoke,
 }

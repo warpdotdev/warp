@@ -26,6 +26,7 @@ use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpEscapeKey, PropagateAndNoOpNavigationKeys,
     SingleLineEditorOptions, TextOptions,
 };
+use crate::localization;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant};
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
 use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
@@ -55,12 +56,6 @@ const SEARCH_VERTICAL_PADDING: f32 = 4.;
 // of total breathing room above the divider line.
 const SEARCH_FOOTER_TOP_MARGIN: f32 = 4.;
 
-const SEARCH_PLACEHOLDER_TEXT: &str = "Search models";
-
-const BUTTON_TOOLTIP: &str = "Choose agent model";
-
-const NO_RESULTS_LABEL: &str = "No results";
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ModelSelectorAction {
     ToggleMenu,
@@ -77,6 +72,10 @@ pub enum ModelSelectorAction {
 
 pub enum ModelSelectorEvent {
     MenuVisibilityChanged { open: bool },
+}
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,10 +113,10 @@ impl ModelSelector {
         ambient_agent_model: Option<ModelHandle<AmbientAgentViewModel>>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let button = ctx.add_typed_action_view(|_ctx| {
+        let button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_size(ButtonSize::AgentInputButton)
-                .with_tooltip(BUTTON_TOOLTIP)
+                .with_tooltip(text(ctx, "terminal.ambient_agent.model_selector.tooltip"))
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(ModelSelectorAction::ToggleMenu);
                 })
@@ -137,7 +136,13 @@ impl ModelSelector {
                 },
                 ctx,
             );
-            editor.set_placeholder_text(SEARCH_PLACEHOLDER_TEXT, ctx);
+            editor.set_placeholder_text(
+                text(
+                    ctx,
+                    "terminal.ambient_agent.model_selector.search_placeholder",
+                ),
+                ctx,
+            );
             editor
         });
         ctx.subscribe_to_view(&search_editor, |me, _, event, ctx| {
@@ -396,7 +401,7 @@ impl ModelSelector {
                                 .map(|info| info.display_name.clone())
                         })
                 })
-                .unwrap_or_else(|| "default".to_string()),
+                .unwrap_or_else(|| text(ctx, "terminal.ambient_agent.model_selector.default")),
             _ => LLMPreferences::as_ref(ctx)
                 .get_active_base_model(ctx, Some(self.terminal_view_id))
                 .display_name
@@ -430,11 +435,14 @@ impl ModelSelector {
         if items.is_empty() {
             let no_results_text_color = internal_colors::text_sub(theme, theme.surface_2());
             items.push(MenuItem::Item(
-                MenuItemFields::new(NO_RESULTS_LABEL)
-                    .with_font_size_override(ITEM_FONT_SIZE)
-                    .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
-                    .with_override_text_color(no_results_text_color)
-                    .with_no_interaction_on_hover(),
+                MenuItemFields::new(text(
+                    ctx,
+                    "terminal.ambient_agent.model_selector.no_results",
+                ))
+                .with_font_size_override(ITEM_FONT_SIZE)
+                .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
+                .with_override_text_color(no_results_text_color)
+                .with_no_interaction_on_hover(),
             ));
         }
 
@@ -535,10 +543,14 @@ impl ModelSelector {
             model_id: String::new(),
             reasoning_level: None,
         };
+        let default_label = text(ctx, "terminal.ambient_agent.model_selector.default");
         let mut items: Vec<MenuItem<ModelSelectorAction>> = Vec::new();
-        if query.is_empty() || "default".contains(query) {
+        if query.is_empty()
+            || "default".contains(query)
+            || default_label.to_lowercase().contains(query)
+        {
             items.push(MenuItem::Item(
-                MenuItemFields::new("default")
+                MenuItemFields::new(default_label)
                     .with_icon(icon)
                     .with_icon_size_override(ITEM_ICON_SIZE)
                     .with_font_size_override(ITEM_FONT_SIZE)

@@ -52,7 +52,6 @@ use crate::ai::agent::{
     AIAgentActionType, AIAgentActionTypeDiscriminants, AIAgentExchange, AIAgentInput,
     CancellationReason, CreateDocumentsResult, EditDocumentsResult, RequestCommandOutputResult,
 };
-use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use crate::ai::blocklist::action_model::execute::suggest_new_conversation::SuggestNewConversationExecutor;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
@@ -1313,6 +1312,8 @@ impl BlocklistAIActionModel {
                     return;
                 };
                 let titles = conversation.get_document_titles_for_action(&result.id);
+                let default_title =
+                    crate::localization::text_for_app(ctx, "ai_document.title.default");
 
                 let doc_model = AIDocumentModel::handle(ctx);
                 doc_model.update(ctx, |doc_model, doc_ctx| {
@@ -1325,7 +1326,7 @@ impl BlocklistAIActionModel {
                             .as_ref()
                             .and_then(|t| t.get(index))
                             .cloned()
-                            .unwrap_or_else(|| DEFAULT_PLANNING_DOCUMENT_TITLE.to_string());
+                            .unwrap_or_else(|| default_title.clone());
 
                         doc_model.restore_document(
                             doc_context.document_id,

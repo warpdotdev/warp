@@ -276,6 +276,20 @@ unsafe fn make_submenu(menu_items: Vec<MenuItem>) -> id {
     nsmenu
 }
 
+unsafe fn make_standard_menu_item(standard_action: StandardAction, title: Option<String>) -> id {
+    let properties = resolve_standard_action(standard_action);
+    let nsmenu_item = NSMenuItem::alloc(nil)
+        .initWithTitle_action_keyEquivalent_(
+            make_nsstring(title.as_deref().unwrap_or(properties.title)),
+            selector(properties.action),
+            make_nsstring(properties.shortcut),
+        )
+        .autorelease();
+    nsmenu_item.setKeyEquivalentModifierMask_(properties.modifiers);
+    let _: id = msg_send![nsmenu_item, setTag: standard_action as libc::c_long];
+    nsmenu_item
+}
+
 unsafe fn make_menu_item(menu_item: MenuItem) -> id {
     match menu_item {
         MenuItem::Custom(custom_menu_item) => {
@@ -296,18 +310,9 @@ unsafe fn make_menu_item(menu_item: MenuItem) -> id {
 
             nsmenu_item
         }
-        MenuItem::Standard(standard_action) => {
-            let properties = resolve_standard_action(standard_action);
-            let nsmenu_item = NSMenuItem::alloc(nil)
-                .initWithTitle_action_keyEquivalent_(
-                    make_nsstring(properties.title),
-                    selector(properties.action),
-                    make_nsstring(properties.shortcut),
-                )
-                .autorelease();
-            nsmenu_item.setKeyEquivalentModifierMask_(properties.modifiers);
-            let _: id = msg_send![nsmenu_item, setTag: standard_action as libc::c_long];
-            nsmenu_item
+        MenuItem::Standard(standard_action) => make_standard_menu_item(standard_action, None),
+        MenuItem::LocalizedStandard { action, title } => {
+            make_standard_menu_item(action, Some(title))
         }
         MenuItem::Separator => NSMenuItem::separatorItem(nil),
         MenuItem::Services => make_services_menu_item(),

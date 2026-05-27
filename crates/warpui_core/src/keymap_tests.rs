@@ -506,11 +506,11 @@ fn test_binding_description_resolve_dynamic_override() {
     App::test((), |app| async move {
         let resolved = app.read(|ctx| {
             BindingDescription::new("static")
-                .with_dynamic_override(|_| Some("dynamic".into()))
+                .with_dynamic_override(|_| Some("dynamic AI label".into()))
                 .resolve(ctx, DescriptionContext::Default)
                 .into_owned()
         });
-        assert_eq!(resolved, "Dynamic");
+        assert_eq!(resolved, "dynamic AI label");
     });
 }
 
@@ -525,5 +525,33 @@ fn test_binding_description_resolve_dynamic_override_falls_back_to_custom_contex
                 .into_owned()
         });
         assert_eq!(resolved, "menu-static");
+    });
+}
+
+#[test]
+fn test_binding_description_contextual_dynamic_override() {
+    App::test((), |app| async move {
+        let desc = BindingDescription::new("static")
+            .with_custom_description(DescriptionContext::Custom("menu"), "menu-static")
+            .with_contextual_dynamic_override(|_, context| match context {
+                DescriptionContext::Default => Some("dynamic default".into()),
+                DescriptionContext::Custom("menu") => Some("dynamic menu".into()),
+                DescriptionContext::Custom(_) => None,
+            });
+
+        let resolved_default =
+            app.read(|ctx| desc.resolve(ctx, DescriptionContext::Default).into_owned());
+        let resolved_menu = app.read(|ctx| {
+            desc.resolve(ctx, DescriptionContext::Custom("menu"))
+                .into_owned()
+        });
+        let resolved_other = app.read(|ctx| {
+            desc.resolve(ctx, DescriptionContext::Custom("other"))
+                .into_owned()
+        });
+
+        assert_eq!(resolved_default, "dynamic default");
+        assert_eq!(resolved_menu, "dynamic menu");
+        assert_eq!(resolved_other, "Static");
     });
 }

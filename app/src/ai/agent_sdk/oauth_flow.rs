@@ -14,13 +14,13 @@ use crate::server::server_api::integrations::IntegrationsClient;
 pub async fn poll_oauth_until_terminal(
     integrations_client: Arc<dyn IntegrationsClient>,
     tx_id: String,
+    waiting_message: String,
+    timeout_message: String,
 ) -> Result<OauthConnectTxStatus> {
     const POLL_INTERVAL: Duration = Duration::from_secs(5);
     const MAX_ATTEMPTS: u32 = 120; // 10 minutes total
                                    // TODO(bens): render some kind of spinner here
-    println!(
-        "Waiting for authorization to complete... If this doesn't update after authorizing, please restart the command and try again.\n"
-    );
+    println!("{waiting_message}\n");
 
     for attempt in 1..=MAX_ATTEMPTS {
         Timer::after(POLL_INTERVAL).await;
@@ -43,5 +43,5 @@ pub async fn poll_oauth_until_terminal(
         }
     }
 
-    Err(anyhow!("Timed out waiting for OAuth authorization"))
+    Err(anyhow!(timeout_message))
 }

@@ -26,6 +26,7 @@ use crate::ai::blocklist::code_block::{
 };
 use crate::appearance::Appearance;
 use crate::completer::SessionAgnosticContext;
+use crate::localization;
 use crate::send_telemetry_from_ctx;
 use crate::view_components::action_button::{ActionButton, SecondaryTheme};
 use crate::workflows::workflow::{Argument, ArgumentType, Workflow};
@@ -117,9 +118,12 @@ impl CloudSetupGuideView {
             },
         );
 
-        let visit_oz_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Visit Oz", SecondaryTheme)
-                .on_click(|ctx| ctx.dispatch_typed_action(CloudSetupGuideAction::VisitOz))
+        let visit_oz_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(
+                localization::text_for_app(ctx, "agent_management.cloud_setup.action.visit_oz"),
+                SecondaryTheme,
+            )
+            .on_click(|ctx| ctx.dispatch_typed_action(CloudSetupGuideAction::VisitOz))
         });
 
         Self {
@@ -138,7 +142,7 @@ impl CloudSetupGuideView {
     }
 
     /// Render the main header for the setup guide.
-    fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_header(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let theme = appearance.theme();
         let title_font_size = 24.;
         let subtitle_font_size = 16.;
@@ -146,7 +150,7 @@ impl CloudSetupGuideView {
         let mut header_container = Flex::column().with_spacing(8.);
 
         let title = Text::new(
-            "Getting started with Oz cloud agents",
+            localization::text_for_app(app, "agent_management.cloud_setup.header.title"),
             appearance.ui_font_family(),
             title_font_size,
         )
@@ -156,7 +160,7 @@ impl CloudSetupGuideView {
         header_container.add_child(title);
 
         let subtitle = Text::new(
-            "Start Oz cloud agents directly in Warp from an integration (Linear, Slack), with an event (GitHub, built-in schedule), or programmatically with the Oz SDK or CLI.",
+            localization::text_for_app(app, "agent_management.cloud_setup.header.subtitle"),
             appearance.ui_font_family(),
             subtitle_font_size,
         )
@@ -168,7 +172,7 @@ impl CloudSetupGuideView {
         let docs_line = Flex::row()
             .with_child(
                 Text::new_inline(
-                    "Check out the ",
+                    localization::text_for_app(app, "agent_management.cloud_setup.docs.prefix"),
                     appearance.ui_font_family(),
                     subtitle_font_size,
                 )
@@ -179,7 +183,7 @@ impl CloudSetupGuideView {
                 appearance
                     .ui_builder()
                     .link(
-                        "Oz documentation".to_string(),
+                        localization::text_for_app(app, "agent_management.cloud_setup.docs.link"),
                         None,
                         Some(Box::new(|ctx| {
                             ctx.dispatch_typed_action(CloudSetupGuideAction::OpenDocs {
@@ -197,7 +201,7 @@ impl CloudSetupGuideView {
             )
             .with_child(
                 Text::new_inline(
-                    " to learn more.",
+                    localization::text_for_app(app, "agent_management.cloud_setup.docs.suffix"),
                     appearance.ui_font_family(),
                     subtitle_font_size,
                 )
@@ -210,12 +214,16 @@ impl CloudSetupGuideView {
     }
 
     /// Render the quick start banner with link to oz.warp.dev.
-    fn render_quick_start_banner(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_quick_start_banner(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let font_size = 16.;
 
         let text = Text::new_inline(
-            "Quick start: Visit oz.warp.dev for a UI-based setup experience.",
+            localization::text_for_app(app, "agent_management.cloud_setup.quick_start"),
             appearance.ui_font_family(),
             font_size,
         )
@@ -244,12 +252,16 @@ impl CloudSetupGuideView {
     }
 
     /// Render the manual setup section header.
-    fn render_manual_setup_header(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_manual_setup_header(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let font_size = 16.;
 
         Text::new(
-            "Manual setup: Create a Slack or Linear integration with the Oz CLI",
+            localization::text_for_app(app, "agent_management.cloud_setup.manual_header"),
             appearance.ui_font_family(),
             font_size,
         )
@@ -293,8 +305,8 @@ impl CloudSetupGuideView {
     /// Render a description that includes a link at the end
     /// (e.g. "Use warp's environment setup command to have an agent help you through it. LINK[Visit docs]")
     fn render_description_with_link(
-        prefix: &'static str,
-        link_text: &'static str,
+        prefix: String,
+        link_text: String,
         link_mouse_state: MouseStateHandle,
         telemetry_url: SetupGuideDocs,
         appearance: &Appearance,
@@ -303,7 +315,7 @@ impl CloudSetupGuideView {
         let link = appearance
             .ui_builder()
             .link(
-                link_text.to_string(),
+                link_text,
                 None,
                 Some(Box::new(move |ctx| {
                     ctx.dispatch_typed_action(CloudSetupGuideAction::OpenDocs {
@@ -347,39 +359,89 @@ impl CloudSetupGuideView {
         let Some((workflow, setup_step)) = (match code {
             CREATE_ENV_SLASH_CMD => Some((
                 WorkflowType::Local(
-                    Workflow::new("Create Environment", CREATE_ENV_SLASH_CMD).with_arguments(vec![
-                        Argument::new("github link or local filepath", ArgumentType::Text)
-                            .with_description("GitHub link or local filepath to the repository"),
-                    ]),
+                    Workflow::new(
+                        localization::text_for_app(
+                            app,
+                            "agent_management.cloud_setup.workflow.create_environment",
+                        ),
+                        CREATE_ENV_SLASH_CMD,
+                    )
+                    .with_arguments(vec![Argument::new(
+                        localization::text_for_app(
+                            app,
+                            "agent_management.cloud_setup.workflow.arg.repo",
+                        ),
+                        ArgumentType::Text,
+                    )
+                    .with_description(localization::text_for_app(
+                        app,
+                        "agent_management.cloud_setup.workflow.arg.repo_description",
+                    ))]),
                 ),
                 SetupGuideStep::CreateEnvironment,
             )),
             CREATE_ENV_CLI_CMD => Some((
                 WorkflowType::Local(
-                    Workflow::new("Create Environment (CLI)", CREATE_ENV_CLI_CMD).with_arguments(
-                        vec![
-                            Argument::new("NAME", ArgumentType::Text)
-                                .with_description("Name for the environment"),
-                            Argument::new("DOCKER_IMAGE", ArgumentType::Text)
-                                .with_description("Docker image to use for the environment"),
-                        ],
-                    ),
+                    Workflow::new(
+                        localization::text_for_app(
+                            app,
+                            "agent_management.cloud_setup.workflow.create_environment_cli",
+                        ),
+                        CREATE_ENV_CLI_CMD,
+                    )
+                    .with_arguments(vec![
+                        Argument::new("NAME", ArgumentType::Text).with_description(
+                            localization::text_for_app(
+                                app,
+                                "agent_management.cloud_setup.workflow.arg.name_description",
+                            ),
+                        ),
+                        Argument::new("DOCKER_IMAGE", ArgumentType::Text)
+                            .with_description(localization::text_for_app(
+                            app,
+                            "agent_management.cloud_setup.workflow.arg.docker_image_description",
+                        )),
+                    ]),
                 ),
                 SetupGuideStep::CreateEnvironmentCli,
             )),
             CREATE_SLACK_INTEGRATION_CMD => Some((
                 WorkflowType::Local(
-                    Workflow::new("Create Slack Integration", CREATE_SLACK_INTEGRATION_CMD)
-                        .with_arguments(vec![Argument::new("environment_id", ArgumentType::Text)
-                            .with_description("ID of the environment to integrate with")]),
+                    Workflow::new(
+                        localization::text_for_app(
+                            app,
+                            "agent_management.cloud_setup.workflow.create_slack_integration",
+                        ),
+                        CREATE_SLACK_INTEGRATION_CMD,
+                    )
+                    .with_arguments(vec![Argument::new(
+                        "environment_id",
+                        ArgumentType::Text,
+                    )
+                    .with_description(localization::text_for_app(
+                        app,
+                        "agent_management.cloud_setup.workflow.arg.environment_id_description",
+                    ))]),
                 ),
                 SetupGuideStep::CreateSlackIntegration,
             )),
             CREATE_LINEAR_INTEGRATION_CMD => Some((
                 WorkflowType::Local(
-                    Workflow::new("Create Linear Integration", CREATE_LINEAR_INTEGRATION_CMD)
-                        .with_arguments(vec![Argument::new("environment_id", ArgumentType::Text)
-                            .with_description("ID of the environment to integrate with")]),
+                    Workflow::new(
+                        localization::text_for_app(
+                            app,
+                            "agent_management.cloud_setup.workflow.create_linear_integration",
+                        ),
+                        CREATE_LINEAR_INTEGRATION_CMD,
+                    )
+                    .with_arguments(vec![Argument::new(
+                        "environment_id",
+                        ArgumentType::Text,
+                    )
+                    .with_description(localization::text_for_app(
+                        app,
+                        "agent_management.cloud_setup.workflow.arg.environment_id_description",
+                    ))]),
                 ),
                 SetupGuideStep::CreateLinearIntegration,
             )),
@@ -432,7 +494,7 @@ impl CloudSetupGuideView {
             .with_child(Self::render_step_number(1, appearance))
             .with_child(
                 Text::new(
-                    "Create an environment",
+                    localization::text_for_app(app, "agent_management.cloud_setup.step1.title"),
                     appearance.ui_font_family(),
                     step_title_font_size,
                 )
@@ -444,7 +506,7 @@ impl CloudSetupGuideView {
 
         let description = Container::new(
             Text::new(
-                "First, set up an environment to create an integration.",
+                localization::text_for_app(app, "agent_management.cloud_setup.step1.description"),
                 appearance.ui_font_family(),
                 step_desc_font_size,
             )
@@ -455,8 +517,8 @@ impl CloudSetupGuideView {
         .finish();
 
         let sub_description = Container::new(Self::render_description_with_link(
-            "Use Warp's environment setup command to have an agent help you through it. ",
-            "Visit docs",
+            localization::text_for_app(app, "agent_management.cloud_setup.step1.docs_prefix"),
+            localization::text_for_app(app, "agent_management.cloud_setup.step.docs_link"),
             self.env_docs_link_mouse_state.clone(),
             SetupGuideDocs::Environment,
             appearance,
@@ -475,7 +537,7 @@ impl CloudSetupGuideView {
 
         let or_text = Container::new(
             Text::new(
-                "Or, supply your own existing docker image.",
+                localization::text_for_app(app, "agent_management.cloud_setup.step1.or_existing"),
                 appearance.ui_font_family(),
                 step_desc_font_size,
             )
@@ -517,7 +579,7 @@ impl CloudSetupGuideView {
             .with_child(Self::render_step_number(2, appearance))
             .with_child(
                 Text::new(
-                    "Create an integration",
+                    localization::text_for_app(app, "agent_management.cloud_setup.step2.title"),
                     appearance.ui_font_family(),
                     step_title_font_size,
                 )
@@ -528,8 +590,8 @@ impl CloudSetupGuideView {
             .finish();
 
         let sub_description = Container::new(Self::render_description_with_link(
-            "Integrate Slack or Linear to assign Warp's Agent tasks with @Warp. ",
-            "Visit docs",
+            localization::text_for_app(app, "agent_management.cloud_setup.step2.docs_prefix"),
+            localization::text_for_app(app, "agent_management.cloud_setup.step.docs_link"),
             self.integration_docs_link_mouse_state.clone(),
             SetupGuideDocs::Integration,
             appearance,
@@ -587,9 +649,9 @@ impl View for CloudSetupGuideView {
             .with_spacing(24.)
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
-        content.add_child(self.render_header(appearance));
-        content.add_child(self.render_quick_start_banner(appearance));
-        content.add_child(self.render_manual_setup_header(appearance));
+        content.add_child(self.render_header(appearance, app));
+        content.add_child(self.render_quick_start_banner(appearance, app));
+        content.add_child(self.render_manual_setup_header(appearance, app));
         content.add_child(steps);
 
         let content = content.finish();

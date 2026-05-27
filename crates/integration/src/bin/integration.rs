@@ -462,6 +462,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
 
     // Video recording test (manual only)
     register_test!(test_video_recording);
+    register_test!(test_zh_cn_localization_visual_smoke);
 
     tests
 }

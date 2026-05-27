@@ -1,4 +1,6 @@
+use crate::localization;
 use warpui::elements::MouseStateHandle;
+use warpui::AppContext;
 use warpui::Element;
 
 use super::{
@@ -23,11 +25,12 @@ pub enum VimModeBannerAction {
 pub fn render_vim_mode_banner(
     state: &VimModeBannerState,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let active_ui_text_color = appearance.theme().active_ui_text_color();
 
     let buttons = vec![InlineBannerTextButton {
-        text: "Enable".to_owned(),
+        text: localization::text_for_app(app, "terminal.inline_banner.vim_mode.enable"),
         text_color: active_ui_text_color.into_solid(),
         button_state: InlineBannerButtonState {
             on_click_event: TerminalAction::VimModeBanner(VimModeBannerAction::Enable),
@@ -47,7 +50,7 @@ pub fn render_vim_mode_banner(
         InlineBannerStyle::LowPriority,
         appearance,
         InlineBannerContent {
-            title: "Enable Warp's Vim keybindings?".to_string(),
+            title: localization::text_for_app(app, "terminal.inline_banner.vim_mode.title"),
             buttons,
             close_button: Some(close_button),
             ..Default::default()

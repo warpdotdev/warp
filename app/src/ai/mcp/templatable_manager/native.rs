@@ -753,10 +753,10 @@ impl TemplatableMCPServerManager {
                 if let Some(window_id) = WindowManager::as_ref(ctx).active_window() {
                     ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                         toast_stack.add_ephemeral_toast(
-                            DismissibleToast::error(
-                                "PATH required to launch MCP server. Please open a new terminal session to autopopulate PATH."
-                                    .to_string(),
-                            ),
+                            DismissibleToast::error(crate::localization::text_for_app(
+                                ctx,
+                                "settings.mcp.toast.path_required",
+                            )),
                             window_id,
                             ctx,
                         );

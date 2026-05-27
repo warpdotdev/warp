@@ -1,4 +1,5 @@
 #![cfg_attr(target_family = "wasm", allow(dead_code, unused_imports))]
+use crate::localization;
 // Adding this file level gate as some of the code around editability is not used in WASM yet.
 
 use std::collections::{HashMap, HashSet};
@@ -86,6 +87,10 @@ pub use actions::init;
 pub(super) use actions::CodeEditorViewAction;
 
 mod vim_handler;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 /// Limit the keybindings that conflict with the Agent Mode embedded editor.
 const NON_EDITABLE_KEYMAP_CONTEXT: &str = "NonEditableKeymapContext";
@@ -656,7 +661,7 @@ impl CodeEditorView {
                 let trimmed = input.trim().to_string();
                 if trimmed.is_empty() {
                     self.goto_line_dialog.update(ctx, |dialog, ctx| {
-                        dialog.set_error("Please enter a line number".to_string(), ctx);
+                        dialog.set_error(text(ctx, "code.goto_line.error.empty_line"), ctx);
                     });
                     return;
                 }
@@ -668,7 +673,7 @@ impl CodeEditorView {
                     Ok(n) if n >= 1 => n,
                     _ => {
                         self.goto_line_dialog.update(ctx, |dialog, ctx| {
-                            dialog.set_error("Please enter a valid line number".to_string(), ctx);
+                            dialog.set_error(text(ctx, "code.goto_line.error.invalid_line"), ctx);
                         });
                         return;
                     }
@@ -679,7 +684,7 @@ impl CodeEditorView {
                         Err(_) => {
                             self.goto_line_dialog.update(ctx, |dialog, ctx| {
                                 dialog.set_error(
-                                    "Please enter a valid column number".to_string(),
+                                    text(ctx, "code.goto_line.error.invalid_column"),
                                     ctx,
                                 );
                             });
@@ -1805,9 +1810,7 @@ impl CodeEditorView {
                     first_replace = if first_replace.is_uppercase() {
                         first_replace
                     } else {
-                        {
-                            first_replace.to_uppercase().next().unwrap_or(first_replace)
-                        }
+                        first_replace.to_uppercase().next().unwrap_or(first_replace)
                     };
                     result.push(first_replace);
                     result.push_str(&replace_chars.collect::<String>().to_lowercase());

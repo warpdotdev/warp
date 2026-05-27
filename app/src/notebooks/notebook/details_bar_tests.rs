@@ -2,10 +2,11 @@ use warpui::{App, SingletonEntity};
 
 use super::editor_display_name;
 use crate::auth::UserUid;
+use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
 
 fn initialize_app(app: &mut App) {
-    app.update(crate::settings::init_and_register_user_preferences);
+    initialize_settings_for_tests(app);
     app.add_singleton_model(|_| UserProfiles::new(vec![]));
 }
 

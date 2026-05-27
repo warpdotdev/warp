@@ -71,13 +71,13 @@ impl AgentProgress {
         }
     }
 
-    pub fn setup_status_text(&self) -> &'static str {
+    pub fn setup_status_text_key(&self) -> &'static str {
         if self.harness_started_at.is_some() {
-            "Starting Environment (Step 3/3)"
+            "terminal.ambient_agent.loading.starting"
         } else if self.claimed_at.is_some() {
-            "Creating Environment (Step 2/3)"
+            "terminal.ambient_agent.loading.creating"
         } else {
-            "Connecting to Host (Step 1/3)"
+            "terminal.ambient_agent.loading.connecting"
         }
     }
 }
@@ -1300,9 +1300,13 @@ impl AmbientAgentViewModel {
                         | AmbientAgentTaskState::Error
                         | AmbientAgentTaskState::Blocked
                         | AmbientAgentTaskState::Unknown => {
-                            let error = status_message
-                                .map(|msg| msg.message)
-                                .unwrap_or_else(|| "Cloud agent failed".to_string());
+                            let error =
+                                status_message.map(|msg| msg.message).unwrap_or_else(|| {
+                                    crate::localization::text_for_app(
+                                        ctx,
+                                        "terminal.ambient_agent.error.default",
+                                    )
+                                });
                             self.handle_spawn_error(error, ctx);
                         }
                     }

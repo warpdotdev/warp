@@ -1,4 +1,5 @@
 //! Link-opening behavior for notebooks.
+use crate::localization;
 use std::borrow::Cow;
 use std::fmt;
 use std::future::{self, Future};
@@ -46,19 +47,20 @@ pub enum LinkTarget {
 
 impl LinkTarget {
     /// A secondary action to show in the tooltip for this link.
-    pub fn secondary_action(&self) -> Option<SecondaryAction> {
+    pub fn secondary_action(&self, app: &AppContext) -> Option<SecondaryAction> {
         match self {
             LinkTarget::LocalDirectory { .. } => Some(SecondaryAction {
-                label: "New session".into(),
-                tooltip: Some("Open a new terminal session in this directory".into()),
-                accessibility_content: "Open in terminal session".into(),
+                label: text(app, "notebook.link.action.new_session").into(),
+                tooltip: Some(text(app, "notebook.link.action.new_session_tooltip").into()),
+                accessibility_content: text(app, "notebook.link.action.open_in_terminal_session")
+                    .into(),
             }),
             LinkTarget::LocalFile {
                 is_markdown: true, ..
             } => Some(SecondaryAction {
-                label: "Open in editor".into(),
+                label: text(app, "notebook.link.action.open_in_editor").into(),
                 tooltip: None,
-                accessibility_content: "Edit Markdown file".into(),
+                accessibility_content: text(app, "notebook.link.action.edit_markdown_file").into(),
             }),
             LinkTarget::Url(_) | LinkTarget::LocalFile { .. } => None,
         }
@@ -103,6 +105,10 @@ impl fmt::Display for LinkTarget {
             LinkTarget::LocalDirectory { path, .. } => path.display().fmt(f),
         }
     }
+}
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
 }
 
 /// Model for resolving and opening links in a notebook, taking into account their context (for
@@ -407,6 +413,16 @@ impl fmt::Display for ResolveError {
             ResolveError::FileNotFound => f.write_str("File not found"),
             ResolveError::MissingContext => f.write_str("No base directory"),
             ResolveError::Unknown => f.write_str("Broken file link"),
+        }
+    }
+}
+
+impl ResolveError {
+    pub fn localized_message(&self, app: &AppContext) -> String {
+        match self {
+            ResolveError::FileNotFound => text(app, "notebook.link.error.file_not_found"),
+            ResolveError::MissingContext => text(app, "notebook.link.error.missing_context"),
+            ResolveError::Unknown => text(app, "notebook.link.error.unknown"),
         }
     }
 }

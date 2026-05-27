@@ -1,5 +1,6 @@
 //! Grid tooltips for the terminal view
 
+use super::{terminal_text, TerminalAction, TerminalView};
 use pathfinder_geometry::vector::vec2f;
 use warpui::elements::{
     ChildAnchor, Dismiss, MouseStateHandle, OffsetPositioning, PositionedElementAnchor,
@@ -7,7 +8,6 @@ use warpui::elements::{
 };
 use warpui::{AppContext, Element, EventContext};
 
-use super::{TerminalAction, TerminalView};
 use crate::appearance::Appearance;
 use crate::terminal::links::directly_open_link_keybinding_string;
 use crate::terminal::model::{ObfuscateSecrets, Secret};
@@ -59,7 +59,7 @@ fn open_in_warp_tooltip(
         None
     };
     Some(GridTooltipLink {
-        text: "Open in Warp".to_string(),
+        text: terminal_text(app, "terminal.menu.open_in_warp"),
         action: TerminalAction::OpenCodeInWarp {
             path,
             layout: *EditorSettings::as_ref(app).open_file_layout.value(),
@@ -76,15 +76,15 @@ fn open_in_warp_tooltip(
 fn show_in_file_explorer_tooltip(
     path: std::path::PathBuf,
     mouse_state: MouseStateHandle,
+    app: &AppContext,
 ) -> GridTooltipLink {
-    let text = if cfg!(target_os = "macos") {
-        "Show in Finder"
+    let text_key = if cfg!(target_os = "macos") {
+        "terminal.menu.show_in_finder"
     } else {
-        "Show containing folder"
-    }
-    .to_string();
+        "terminal.menu.show_containing_folder"
+    };
     GridTooltipLink {
-        text,
+        text: terminal_text(app, text_key),
         action: TerminalAction::ShowInFileExplorer(path),
         mouse_state,
         detail: None,
@@ -130,7 +130,7 @@ impl TerminalView {
 
                         if is_redacted {
                             links.push(GridTooltipLink {
-                                text: "Reveal secret".to_string(),
+                                text: terminal_text(app, "terminal.tooltip.reveal_secret"),
                                 action: TerminalAction::ToggleGridSecret {
                                     handle,
                                     show_secret: true,
@@ -140,7 +140,7 @@ impl TerminalView {
                             });
                         } else {
                             links.push(GridTooltipLink {
-                                text: "Hide secret".to_string(),
+                                text: terminal_text(app, "terminal.tooltip.hide_secret"),
                                 action: TerminalAction::ToggleGridSecret {
                                     handle,
                                     show_secret: false,
@@ -152,7 +152,7 @@ impl TerminalView {
                     }
 
                     links.push(GridTooltipLink {
-                        text: "Copy secret".to_string(),
+                        text: terminal_text(app, "terminal.tooltip.copy_secret"),
                         action: TerminalAction::CopyGridSecret(handle),
                         mouse_state: self.mouse_states.copy_secrets_tooltip.clone(),
                         detail: None,
@@ -172,7 +172,7 @@ impl TerminalView {
 
                         if is_obfuscated {
                             links.push(GridTooltipLink {
-                                text: "Reveal secret".to_string(),
+                                text: terminal_text(app, "terminal.tooltip.reveal_secret"),
                                 action: TerminalAction::ToggleRichContentSecret {
                                     rich_content_tooltip_info: tooltip_info.clone(),
                                     show_secret: true,
@@ -182,7 +182,7 @@ impl TerminalView {
                             });
                         } else {
                             links.push(GridTooltipLink {
-                                text: "Hide secret".to_string(),
+                                text: terminal_text(app, "terminal.tooltip.hide_secret"),
                                 action: TerminalAction::ToggleRichContentSecret {
                                     rich_content_tooltip_info: tooltip_info.clone(),
                                     show_secret: false,
@@ -194,7 +194,7 @@ impl TerminalView {
                     }
 
                     links.push(GridTooltipLink {
-                        text: "Copy secret".to_string(),
+                        text: terminal_text(app, "terminal.tooltip.copy_secret"),
                         action: TerminalAction::CopyRichContentSecret(tooltip_info.clone()),
                         mouse_state: self.mouse_states.copy_secrets_tooltip.clone(),
                         detail: None,
@@ -223,6 +223,7 @@ impl TerminalView {
                         show_in_file_explorer = Some(show_in_file_explorer_tooltip(
                             path,
                             self.mouse_states.show_in_file_explorer_tooltip.clone(),
+                            app,
                         ));
                     }
                 }
@@ -265,6 +266,7 @@ impl TerminalView {
                     show_in_file_explorer = Some(show_in_file_explorer_tooltip(
                         absolute_path.clone(),
                         self.mouse_states.show_in_file_explorer_tooltip.clone(),
+                        app,
                     ));
                 }
             }

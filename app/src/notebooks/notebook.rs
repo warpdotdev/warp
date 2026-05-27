@@ -1,3 +1,4 @@
+use crate::localization;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -98,15 +99,13 @@ mod details_bar;
 #[path = "notebook_tests.rs"]
 mod tests;
 
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
+
 const EDIT_BUTTON_MARGIN: f32 = 6.;
 const HEADER_MARGIN: f32 = 15.;
 const BANNER_VERTICAL_MARGIN: f32 = 10.;
-
-const CONFLICT_RESOLUTION_MESSAGE: &str =
-    "This notebook could not be saved because changes were made while you were editing. Please copy your work and refresh.";
-const REFRESH_BUTTON_TEXT: &str = "Refresh";
-
-const FEATURE_NOT_AVAILABLE_MESSAGE: &str = "This notebook could not be saved to the server because the feature is temporarily unavailable. The changes are saved locally. Please retry later.";
 
 /// The frequency at which we check for modifications and save the notebook to the server. This
 /// lets us trade off how quickly edits appear on other clients with the load on the server for RTC
@@ -355,7 +354,7 @@ impl NotebookView {
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("Untitled", ctx);
+            editor.set_placeholder_text(text(ctx, "notebook.placeholder.untitled"), ctx);
             editor
         });
         ctx.subscribe_to_view(&title, |notebook, _, event, ctx| {
@@ -798,10 +797,10 @@ impl NotebookView {
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
-                        DismissibleToast::error(
-                            "This notebook cannot be saved because its content contains secrets"
-                                .to_string(),
-                        ),
+                        DismissibleToast::error(text(
+                            ctx,
+                            "notebook.error.content_contains_secrets",
+                        )),
                         window_id,
                         ctx,
                     );
@@ -1385,13 +1384,16 @@ impl NotebookView {
                 match space {
                     Space::Personal => {
                         menu_items.extend(team_spaces.iter().map(|space| {
-                            MenuItemFields::new(format!("Move to {}", space.name(ctx)))
-                                .with_on_select_action(NotebookAction::MoveToSpace {
-                                    cloud_object_type_and_id: cloud_object_type,
-                                    new_space: *space,
-                                })
-                                .with_icon(Icon::Move)
-                                .into_item()
+                            MenuItemFields::new(
+                                text(ctx, "notebook.menu.move_to")
+                                    .replace("{space}", &space.name(ctx)),
+                            )
+                            .with_on_select_action(NotebookAction::MoveToSpace {
+                                cloud_object_type_and_id: cloud_object_type,
+                                new_space: *space,
+                            })
+                            .with_icon(Icon::Move)
+                            .into_item()
                         }));
                     }
                     Space::Shared => {} // TODO: Revisit these menu items with sharing in mind
@@ -1402,7 +1404,7 @@ impl NotebookView {
 
         if let Some(ai_document_id) = self.active_notebook_data.as_ref(ctx).ai_document_id(ctx) {
             menu_items.push(
-                MenuItemFields::new("Attach to active session")
+                MenuItemFields::new(text(ctx, "notebook.menu.attach_to_active_session"))
                     .with_on_select_action(NotebookAction::AttachPlanAsContext(ai_document_id))
                     .with_icon(icons::Icon::Paperclip)
                     .into_item(),
@@ -1412,7 +1414,7 @@ impl NotebookView {
         // Add "Copy Link" to menu
         if let Some(link) = self.notebook_link(ctx) {
             menu_items.push(
-                MenuItemFields::new("Copy link")
+                MenuItemFields::new(text(ctx, "notebook.menu.copy_link"))
                     .with_on_select_action(NotebookAction::CopyLink(link))
                     .with_icon(icons::Icon::Link)
                     .into_item(),
@@ -1429,7 +1431,7 @@ impl NotebookView {
             if let Some(link) = self.notebook_link(ctx) {
                 if let Ok(url) = Url::parse(&link) {
                     menu_items.push(
-                        MenuItemFields::new("Open on Desktop")
+                        MenuItemFields::new(text(ctx, "notebook.menu.open_on_desktop"))
                             .with_on_select_action(NotebookAction::OpenLinkOnDesktop(url))
                             .with_icon(icons::Icon::Laptop)
                             .into_item(),
@@ -1441,7 +1443,7 @@ impl NotebookView {
         // Add "Duplicate" to menu
         if active_notebook_data.space(ctx) != Some(Space::Shared) {
             menu_items.push(
-                MenuItemFields::new("Duplicate")
+                MenuItemFields::new(text(ctx, "notebook.menu.duplicate"))
                     .with_on_select_action(NotebookAction::Duplicate)
                     .with_icon(icons::Icon::Duplicate)
                     .into_item(),
@@ -1451,7 +1453,7 @@ impl NotebookView {
         #[cfg(feature = "local_fs")]
         {
             menu_items.push(
-                MenuItemFields::new("Export")
+                MenuItemFields::new(text(ctx, "notebook.menu.export"))
                     .with_on_select_action(NotebookAction::Export)
                     .with_icon(icons::Icon::Download)
                     .into_item(),
@@ -1463,7 +1465,7 @@ impl NotebookView {
             && (!FeatureFlag::SharedWithMe.is_enabled() || access_level.can_trash())
         {
             menu_items.push(
-                MenuItemFields::new("Trash")
+                MenuItemFields::new(text(ctx, "notebook.menu.trash"))
                     .with_on_select_action(NotebookAction::Trash)
                     .with_icon(icons::Icon::Trash)
                     .into_item(),
@@ -1726,10 +1728,7 @@ impl NotebookView {
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
-                        DismissibleToast::error(
-                            "This notebook cannot be saved because its title contains secrets"
-                                .to_string(),
-                        ),
+                        DismissibleToast::error(text(ctx, "notebook.error.title_contains_secrets")),
                         window_id,
                         ctx,
                     );
@@ -1908,10 +1907,10 @@ impl NotebookView {
 
         let mut stack = Stack::new();
 
-        let text = if deleted {
-            "You no longer have access to this notebook"
+        let banner_text = if deleted {
+            text(app, "notebook.trash_banner.no_access")
         } else {
-            "Notebook was moved to trash"
+            text(app, "notebook.trash_banner.moved_to_trash")
         };
         stack.add_child(
             Align::new(
@@ -1927,7 +1926,7 @@ impl NotebookView {
                         .finish(),
                         appearance
                             .ui_builder()
-                            .span(text)
+                            .span(banner_text)
                             .with_style(UiComponentStyles {
                                 font_size: Some(appearance.ui_font_size() + 2.),
                                 ..Default::default()
@@ -1958,6 +1957,8 @@ impl NotebookView {
                 || active_notebook_data.access_level(app).can_trash()
             {
                 let ui_builder = appearance.ui_builder().clone();
+                let restore_tooltip = text(app, "notebook.trash_banner.restore_tooltip");
+                let restore_label = text(app, "notebook.trash_banner.restore");
                 action_row.add_child(
                     Align::new(
                         appearance
@@ -1968,11 +1969,11 @@ impl NotebookView {
                             )
                             .with_tooltip(move || {
                                 ui_builder
-                                    .tool_tip("Restore notebook from trash".to_string())
+                                    .tool_tip(restore_tooltip.clone())
                                     .build()
                                     .finish()
                             })
-                            .with_text_label("Restore".to_string())
+                            .with_text_label(restore_label)
                             .build()
                             .on_click(|ctx, _, _| {
                                 ctx.dispatch_typed_action(NotebookAction::Untrash)
@@ -1985,6 +1986,9 @@ impl NotebookView {
 
             if active_notebook_data.space(app) != Some(Space::Personal) {
                 let ui_builder = appearance.ui_builder().clone();
+                let copy_to_personal_tooltip =
+                    text(app, "notebook.trash_banner.copy_to_personal_tooltip");
+                let copy_to_personal_label = text(app, "notebook.trash_banner.copy_to_personal");
                 action_row.add_child(
                     Container::new(
                         Align::new(
@@ -1998,14 +2002,11 @@ impl NotebookView {
                                 )
                                 .with_tooltip(move || {
                                     ui_builder
-                                        .tool_tip(
-                                            "Copy notebook contents into your personal workspace"
-                                                .to_string(),
-                                        )
+                                        .tool_tip(copy_to_personal_tooltip.clone())
                                         .build()
                                         .finish()
                                 })
-                                .with_text_label("Copy to Personal".to_string())
+                                .with_text_label(copy_to_personal_label)
                                 .build()
                                 .on_click(|ctx, _, _| {
                                     ctx.dispatch_typed_action(NotebookAction::CopyToPersonal)
@@ -2039,18 +2040,19 @@ impl NotebookView {
         &self,
         sync_error: NotebookSyncError,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
+        let banner_text = match sync_error {
+            NotebookSyncError::FeatureNotAvailable => {
+                text(app, "notebook.sync_banner.feature_not_available")
+            }
+            NotebookSyncError::InConflict => text(app, "notebook.sync_banner.conflict"),
+        };
         let banner = Shrinkable::new(
             1.,
             appearance
                 .ui_builder()
-                .wrappable_text(
-                    match sync_error {
-                        NotebookSyncError::FeatureNotAvailable => FEATURE_NOT_AVAILABLE_MESSAGE,
-                        NotebookSyncError::InConflict => CONFLICT_RESOLUTION_MESSAGE,
-                    },
-                    true,
-                )
+                .wrappable_text(banner_text, true)
                 .with_style(UiComponentStyles {
                     font_size: Some(appearance.ui_font_size() + 2.),
                     ..Default::default()
@@ -2070,6 +2072,8 @@ impl NotebookView {
             .with_cross_axis_alignment(CrossAxisAlignment::Center);
 
         let ui_builder = appearance.ui_builder().clone();
+        let copy_all_tooltip = text(app, "notebook.sync_banner.copy_all_tooltip");
+        let copy_all_label = text(app, "notebook.sync_banner.copy_all");
         action_row.add_child(
             Container::new(
                 Align::new(
@@ -2083,11 +2087,11 @@ impl NotebookView {
                         )
                         .with_tooltip(move || {
                             ui_builder
-                                .tool_tip("Copy notebook contents to your clipboard".to_string())
+                                .tool_tip(copy_all_tooltip.clone())
                                 .build()
                                 .finish()
                         })
-                        .with_text_label("Copy All".to_string())
+                        .with_text_label(copy_all_label)
                         .build()
                         .on_click(|ctx, _, _| {
                             ctx.dispatch_typed_action(NotebookAction::CopyToClipboard)
@@ -2104,6 +2108,8 @@ impl NotebookView {
 
         if matches!(sync_error, NotebookSyncError::InConflict) {
             let ui_builder = appearance.ui_builder().clone();
+            let refresh_tooltip = text(app, "notebook.sync_banner.refresh_tooltip");
+            let refresh_label = text(app, "notebook.sync_banner.refresh");
             action_row.add_child(
                 Container::new(
                     Align::new(
@@ -2117,11 +2123,11 @@ impl NotebookView {
                             )
                             .with_tooltip(move || {
                                 ui_builder
-                                    .tool_tip("Refresh notebook".to_string())
+                                    .tool_tip(refresh_tooltip.clone())
                                     .build()
                                     .finish()
                             })
-                            .with_text_label(REFRESH_BUTTON_TEXT.to_string())
+                            .with_text_label(refresh_label)
                             .build()
                             .on_click(|ctx, _, _| {
                                 ctx.dispatch_typed_action(
@@ -2220,11 +2226,14 @@ impl View for NotebookView {
             stack.add_child(self.render_sync_banner(
                 NotebookSyncError::FeatureNotAvailable,
                 Appearance::as_ref(app),
+                app,
             ));
         } else if self.active_notebook_data.as_ref(app).has_conflicts(app) {
-            stack.add_child(
-                self.render_sync_banner(NotebookSyncError::InConflict, Appearance::as_ref(app)),
-            );
+            stack.add_child(self.render_sync_banner(
+                NotebookSyncError::InConflict,
+                Appearance::as_ref(app),
+                app,
+            ));
         }
 
         self.context_menu.render(&mut stack);
@@ -2309,7 +2318,7 @@ impl TypedActionView for NotebookView {
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
-                        DismissibleToast::success("Link copied to clipboard".to_string()),
+                        DismissibleToast::success(text(ctx, "notebook.toast.link_copied")),
                         window_id,
                         ctx,
                     );

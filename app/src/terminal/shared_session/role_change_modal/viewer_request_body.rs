@@ -1,3 +1,4 @@
+use crate::localization;
 use session_sharing_protocol::common::Role;
 use warpui::elements::{
     Container, CrossAxisAlignment, Flex, MainAxisAlignment, MouseStateHandle, ParentElement, Text,
@@ -39,10 +40,10 @@ impl ViewerRequestBody {
         }
     }
 
-    fn role_label(&self) -> &str {
+    fn role_label(&self, app: &AppContext) -> String {
         match self.role {
-            Role::Executor => "edit",
-            _ => "view",
+            Role::Executor => text(app, "shared_session.role_change.role.edit"),
+            _ => text(app, "shared_session.role_change.role.view"),
         }
     }
 
@@ -64,13 +65,18 @@ impl View for ViewerRequestBody {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let header = format!("You have requested {} mode", self.role_label());
-        let text = format!("Waiting for {}...", self.display_name);
+        let header = text(app, "shared_session.role_change.viewer_requested_mode")
+            .replace("{role}", &self.role_label(app));
+        let waiting_text = text(app, "shared_session.role_change.waiting_for")
+            .replace("{display_name}", &self.display_name);
 
         let cancel_button = appearance
             .ui_builder()
             .button(ButtonVariant::Outlined, self.mouse_state_handle.clone())
-            .with_centered_text_label(String::from("Cancel request"))
+            .with_centered_text_label(text(
+                app,
+                "shared_session.role_change.action.cancel_request",
+            ))
             .with_style(UiComponentStyles {
                 font_size: Some(TEXT_FONT_SIZE),
                 font_weight: Some(Weight::Bold),
@@ -98,7 +104,7 @@ impl View for ViewerRequestBody {
                     .finish(),
                 )
                 .with_child(
-                    Text::new_inline(text, appearance.ui_font_family(), TEXT_FONT_SIZE)
+                    Text::new_inline(waiting_text, appearance.ui_font_family(), TEXT_FONT_SIZE)
                         .with_color(blended_colors::text_sub(
                             appearance.theme(),
                             appearance.theme().background(),
@@ -118,6 +124,10 @@ impl View for ViewerRequestBody {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .finish()
     }
+}
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
 }
 
 impl TypedActionView for ViewerRequestBody {

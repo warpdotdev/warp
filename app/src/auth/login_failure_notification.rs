@@ -7,9 +7,9 @@ use warpui::ui_components::components::UiComponent;
 use warpui::{Action, AppContext, Element, SingletonEntity};
 
 use crate::appearance::Appearance;
+use crate::localization;
 
-const LOGIN_TROUBLESHOOTING_DOCS_URL: &str =
-    "https://docs.warp.dev/support-and-community/troubleshooting-and-support/troubleshooting-login-issues";
+const LOGIN_TROUBLESHOOTING_DOCS_URL: &str = "https://docs.warp.dev/support-and-community/troubleshooting-and-support/troubleshooting-login-issues";
 
 /// Represents reasons why login failed.
 pub enum LoginFailureReason {
@@ -22,48 +22,68 @@ pub enum LoginFailureReason {
 
 impl LoginFailureReason {
     /// Returns an error message to be presented to the user when login fails.
-    pub(crate) fn to_formatted_text(&self) -> FormattedText {
+    pub(crate) fn to_formatted_text(&self, app: &AppContext) -> FormattedText {
         fn with_troubleshooting_text(
             mut fragments: Vec<FormattedTextFragment>,
+            app: &AppContext,
         ) -> Vec<FormattedTextFragment> {
             fragments.extend([
-                FormattedTextFragment::plain_text(" Not the first time? See our "),
+                FormattedTextFragment::plain_text(text(
+                    app,
+                    "auth.login_failure.troubleshooting_prefix",
+                )),
                 FormattedTextFragment::hyperlink(
-                    "troubleshooting docs",
+                    text(app, "auth.login_failure.troubleshooting_link"),
                     LOGIN_TROUBLESHOOTING_DOCS_URL,
                 ),
-                FormattedTextFragment::plain_text("."),
+                FormattedTextFragment::plain_text(text(
+                    app,
+                    "auth.login_failure.troubleshooting_suffix",
+                )),
             ]);
             fragments
         }
         let fragments = match self {
             LoginFailureReason::InvalidRedirectUrl { was_pasted } => {
-                let text = if *was_pasted {
-                    "An invalid auth token was entered into the modal."
+                let key = if *was_pasted {
+                    "auth.login_failure.invalid_token"
                 } else {
-                    "Failed to log in. Try manually copying the auth token from the \
-                        authentication web page and pasting into the modal."
+                    "auth.login_failure.manual_token"
                 };
-                with_troubleshooting_text(vec![FormattedTextFragment::plain_text(text)])
+                with_troubleshooting_text(
+                    vec![FormattedTextFragment::plain_text(text(app, key))],
+                    app,
+                )
             }
-            LoginFailureReason::FailedUserAuthentication => {
-                with_troubleshooting_text(vec![FormattedTextFragment::plain_text(
-                    "Request to log in failed.",
-                )])
-            }
-            LoginFailureReason::FailedMintCustomToken => {
-                with_troubleshooting_text(vec![FormattedTextFragment::plain_text(
-                    "Request to sign up failed.",
-                )])
-            }
-            LoginFailureReason::InvalidStateParameter | LoginFailureReason::MissingStateParameter => {
-                with_troubleshooting_text(vec![FormattedTextFragment::plain_text(
-                    "The redirect URL pasted did not originate from this app. Please click the button below to try again.",
-                )])
-            }
+            LoginFailureReason::FailedUserAuthentication => with_troubleshooting_text(
+                vec![FormattedTextFragment::plain_text(text(
+                    app,
+                    "auth.login_failure.login_failed",
+                ))],
+                app,
+            ),
+            LoginFailureReason::FailedMintCustomToken => with_troubleshooting_text(
+                vec![FormattedTextFragment::plain_text(text(
+                    app,
+                    "auth.login_failure.signup_failed",
+                ))],
+                app,
+            ),
+            LoginFailureReason::InvalidStateParameter
+            | LoginFailureReason::MissingStateParameter => with_troubleshooting_text(
+                vec![FormattedTextFragment::plain_text(text(
+                    app,
+                    "auth.login_failure.invalid_redirect_url",
+                ))],
+                app,
+            ),
         };
         FormattedText::new([FormattedTextLine::Line(fragments)])
     }
+}
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
 }
 
 /// Renders a dismissable notification with a message explaining why login failed.
@@ -101,7 +121,7 @@ pub fn render<A: Action + Clone>(
             1.,
             Container::new(
                 FormattedTextElement::new(
-                    login_failure_reason.to_formatted_text(),
+                    login_failure_reason.to_formatted_text(ctx),
                     appearance.ui_font_size(),
                     appearance.ui_font_family(),
                     appearance.monospace_font_family(),

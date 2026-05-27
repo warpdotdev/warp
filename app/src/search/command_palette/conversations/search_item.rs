@@ -18,6 +18,7 @@ use warpui::{AppContext, Element, Gradient, SingletonEntity};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::appearance::Appearance;
+use crate::localization;
 use crate::search::command_palette::conversations::search::MatchedConversation;
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::command_palette::render_util::render_search_item_icon;
@@ -68,7 +69,7 @@ impl ConversationSearchItem {
         Flex::row()
             .with_child(
                 Text::new_inline(
-                    "New conversation",
+                    localization::text_for_app(app, "workspace.conversation.new"),
                     appearance.ui_font_family(),
                     appearance.monospace_font_size(),
                 )
@@ -89,7 +90,7 @@ impl ConversationSearchItem {
         let appearance = Appearance::as_ref(app);
 
         let action_title = Text::new_inline(
-            "Fork current conversation",
+            localization::text_for_app(app, "workspace.conversation.fork_current"),
             appearance.ui_font_family(),
             appearance.monospace_font_size(),
         )
@@ -243,7 +244,10 @@ impl ConversationSearchItem {
 
             let fork_button_tool_tip = appearance
                 .ui_builder()
-                .tool_tip("Fork conversation".to_string())
+                .tool_tip(localization::text_for_app(
+                    app,
+                    "workspace.conversation.fork",
+                ))
                 .build();
 
             let fork_button_inner = icon_button(

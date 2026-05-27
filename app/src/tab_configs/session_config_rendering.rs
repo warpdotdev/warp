@@ -16,6 +16,7 @@ use warpui::ui_components::components::UiComponent;
 use warpui::{Element, EventContext};
 
 use crate::appearance::Appearance;
+use crate::localization;
 use crate::tab_configs::session_config::SessionType;
 use crate::ui_components::blended_colors;
 use crate::view_components::callout_bubble::{
@@ -25,6 +26,24 @@ use crate::view_components::callout_bubble::{
 };
 
 const PILL_GAP: f32 = 8.;
+
+pub struct WorktreeCheckboxState {
+    pub enabled: bool,
+    pub is_git_repo: bool,
+    pub checkbox_mouse_state: MouseStateHandle,
+    pub tooltip_mouse_state: MouseStateHandle,
+}
+
+pub struct AutogenerateWorktreeCheckboxState {
+    pub checked: bool,
+    pub enable_worktree: bool,
+    pub checkbox_mouse_state: MouseStateHandle,
+    pub tooltip_mouse_state: MouseStateHandle,
+}
+
+fn text(app: &warpui::AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 fn session_type_item_color(
     is_selected: bool,
@@ -54,6 +73,7 @@ pub fn render_session_type_pills<F>(
     pill_mouse_states: &[MouseStateHandle],
     on_select: F,
     appearance: &Appearance,
+    app: &warpui::AppContext,
 ) -> Box<dyn Element>
 where
     F: Fn(usize, &mut EventContext, Vector2F) + 'static,
@@ -65,6 +85,7 @@ where
         on_select,
         None,
         appearance,
+        app,
     )
 }
 
@@ -78,6 +99,7 @@ pub fn render_session_type_pills_with_background<F>(
     on_select: F,
     bg: Option<ColorU>,
     appearance: &Appearance,
+    app: &warpui::AppContext,
 ) -> Box<dyn Element>
 where
     F: Fn(usize, &mut EventContext, Vector2F) + 'static,
@@ -87,13 +109,17 @@ where
     let on_accent_bg = bg.is_some();
     let on_select = Arc::new(on_select);
 
-    let label = Text::new_inline("Session type".to_string(), appearance.ui_font_family(), 12.)
-        .with_color(if on_accent_bg {
-            callout_label_color(appearance)
-        } else {
-            blended_colors::text_disabled(theme, bg_fill)
-        })
-        .finish();
+    let label = Text::new_inline(
+        text(app, "tab_config.session_type"),
+        appearance.ui_font_family(),
+        12.,
+    )
+    .with_color(if on_accent_bg {
+        callout_label_color(appearance)
+    } else {
+        blended_colors::text_disabled(theme, bg_fill)
+    })
+    .finish();
 
     let mut pills_row = Flex::row().with_spacing(PILL_GAP);
 
@@ -114,7 +140,7 @@ where
         .finish();
 
         let name = Text::new_inline(
-            session_type.pill_label().to_string(),
+            session_type.localized_pill_label(app),
             appearance.ui_font_family(),
             14.,
         )
@@ -194,6 +220,7 @@ pub fn render_directory_picker<F>(
     mouse_state: MouseStateHandle,
     on_click: F,
     appearance: &Appearance,
+    app: &warpui::AppContext,
 ) -> Box<dyn Element>
 where
     F: Fn(&mut EventContext, Vector2F) + 'static,
@@ -204,6 +231,7 @@ where
         on_click,
         None,
         appearance,
+        app,
     )
 }
 
@@ -214,6 +242,7 @@ pub fn render_directory_picker_with_background<F>(
     on_click: F,
     bg: Option<ColorU>,
     appearance: &Appearance,
+    app: &warpui::AppContext,
 ) -> Box<dyn Element>
 where
     F: Fn(&mut EventContext, Vector2F) + 'static,
@@ -224,7 +253,7 @@ where
     let on_accent_bg = bg.is_some();
 
     let label = Text::new_inline(
-        "Select directory".to_string(),
+        text(app, "tab_config.select_directory"),
         appearance.ui_font_family(),
         12.,
     )
@@ -291,44 +320,46 @@ pub fn render_worktree_checkbox<F>(
     tooltip_mouse_state: MouseStateHandle,
     on_toggle: F,
     appearance: &Appearance,
+    app: &warpui::AppContext,
 ) -> Box<dyn Element>
 where
     F: Fn(&mut EventContext, Vector2F) + 'static,
 {
     render_worktree_checkbox_with_background(
-        enabled,
-        is_git_repo,
-        checkbox_mouse_state,
-        tooltip_mouse_state,
+        WorktreeCheckboxState {
+            enabled,
+            is_git_repo,
+            checkbox_mouse_state,
+            tooltip_mouse_state,
+        },
         on_toggle,
         None,
         appearance,
+        app,
     )
 }
 
 /// Renders a worktree checkbox with an optional background color override.
 pub fn render_worktree_checkbox_with_background<F>(
-    enabled: bool,
-    is_git_repo: bool,
-    checkbox_mouse_state: MouseStateHandle,
-    tooltip_mouse_state: MouseStateHandle,
+    state: WorktreeCheckboxState,
     on_toggle: F,
     bg: Option<ColorU>,
     appearance: &Appearance,
+    app: &warpui::AppContext,
 ) -> Box<dyn Element>
 where
     F: Fn(&mut warpui::EventContext, warpui::geometry::vector::Vector2F) + 'static,
 {
-    let disabled = !is_git_repo;
+    let disabled = !state.is_git_repo;
     let on_accent_bg = bg.is_some();
 
     let mut checkbox = if on_accent_bg {
-        callout_checkbox(checkbox_mouse_state, Some(10.5), appearance).check(enabled)
+        callout_checkbox(state.checkbox_mouse_state, Some(10.5), appearance).check(state.enabled)
     } else {
         appearance
             .ui_builder()
-            .checkbox(checkbox_mouse_state, Some(10.5))
-            .check(enabled)
+            .checkbox(state.checkbox_mouse_state, Some(10.5))
+            .check(state.enabled)
     };
 
     if disabled {
@@ -350,18 +381,15 @@ where
     let checkbox_el = if disabled {
         let theme = appearance.theme();
         let font_family = appearance.ui_font_family();
-        Hoverable::new(tooltip_mouse_state, move |state| {
+        let tooltip_text = text(app, "tab_config.worktree.disabled_tooltip");
+        Hoverable::new(state.tooltip_mouse_state, move |state| {
             let mut stack = Stack::new();
             stack.add_child(checkbox_el);
             if state.is_hovered() {
                 let tooltip = Container::new(
-                    Text::new_inline(
-                        "Select a git repository to enable worktree support".to_string(),
-                        font_family,
-                        12.,
-                    )
-                    .with_color(theme.background().into_solid())
-                    .finish(),
+                    Text::new_inline(tooltip_text.clone(), font_family, 12.)
+                        .with_color(theme.background().into_solid())
+                        .finish(),
                 )
                 .with_horizontal_padding(14.)
                 .with_vertical_padding(6.)
@@ -400,7 +428,7 @@ where
         blended_colors::text_sub(theme, theme.background())
     };
     let label = Text::new(
-        "Automatically create a worktree when opening a new tab",
+        text(app, "tab_config.worktree.label"),
         appearance.ui_font_family(),
         12.,
     )
@@ -422,44 +450,46 @@ pub fn render_autogenerate_worktree_branch_name_checkbox<F>(
     tooltip_mouse_state: MouseStateHandle,
     on_toggle: F,
     appearance: &Appearance,
+    app: &warpui::AppContext,
 ) -> Box<dyn Element>
 where
     F: Fn(&mut EventContext, Vector2F) + 'static,
 {
     render_autogenerate_worktree_branch_name_checkbox_with_background(
-        checked,
-        enable_worktree,
-        checkbox_mouse_state,
-        tooltip_mouse_state,
+        AutogenerateWorktreeCheckboxState {
+            checked,
+            enable_worktree,
+            checkbox_mouse_state,
+            tooltip_mouse_state,
+        },
         on_toggle,
         None,
         appearance,
+        app,
     )
 }
 
 /// Renders the autogenerate checkbox with an optional background color override.
 pub fn render_autogenerate_worktree_branch_name_checkbox_with_background<F>(
-    checked: bool,
-    enable_worktree: bool,
-    checkbox_mouse_state: MouseStateHandle,
-    tooltip_mouse_state: MouseStateHandle,
+    state: AutogenerateWorktreeCheckboxState,
     on_toggle: F,
     bg: Option<ColorU>,
     appearance: &Appearance,
+    app: &warpui::AppContext,
 ) -> Box<dyn Element>
 where
     F: Fn(&mut EventContext, Vector2F) + 'static,
 {
-    let disabled = !enable_worktree;
+    let disabled = !state.enable_worktree;
     let on_accent_bg = bg.is_some();
 
     let mut checkbox = if on_accent_bg {
-        callout_checkbox(checkbox_mouse_state, Some(10.5), appearance).check(checked)
+        callout_checkbox(state.checkbox_mouse_state, Some(10.5), appearance).check(state.checked)
     } else {
         appearance
             .ui_builder()
-            .checkbox(checkbox_mouse_state, Some(10.5))
-            .check(checked)
+            .checkbox(state.checkbox_mouse_state, Some(10.5))
+            .check(state.checked)
     };
 
     if disabled {
@@ -481,20 +511,15 @@ where
     let checkbox_el = if disabled {
         let theme = appearance.theme();
         let font_family = appearance.ui_font_family();
-        Hoverable::new(tooltip_mouse_state, move |state| {
+        let tooltip_text = text(app, "tab_config.worktree.autogenerate_disabled_tooltip");
+        Hoverable::new(state.tooltip_mouse_state, move |state| {
             let mut stack = Stack::new();
             stack.add_child(checkbox_el);
             if state.is_hovered() {
                 let tooltip = Container::new(
-                    Text::new_inline(
-                        "You must select that you want to automatically create a \
-                         worktree in order to select this"
-                            .to_string(),
-                        font_family,
-                        12.,
-                    )
-                    .with_color(theme.background().into_solid())
-                    .finish(),
+                    Text::new_inline(tooltip_text.clone(), font_family, 12.)
+                        .with_color(theme.background().into_solid())
+                        .finish(),
                 )
                 .with_horizontal_padding(14.)
                 .with_vertical_padding(6.)
@@ -534,7 +559,7 @@ where
     };
 
     let label = Text::new(
-        "Auto-generate worktree branch name",
+        text(app, "tab_config.worktree.autogenerate_label"),
         appearance.ui_font_family(),
         12.,
     )

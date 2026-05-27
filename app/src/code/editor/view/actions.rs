@@ -18,7 +18,9 @@ use warp_util::user_input::UserInput;
 use warpui::actions::StandardAction;
 use warpui::elements::Axis;
 use warpui::event::ModifiersState;
-use warpui::keymap::{EditableBinding, FixedBinding, Keystroke, PerPlatformKeystroke};
+use warpui::keymap::{
+    BindingDescription, EditableBinding, FixedBinding, Keystroke, PerPlatformKeystroke,
+};
 use warpui::units::Pixels;
 use warpui::{AppContext, TypedActionView, ViewContext, WeakViewHandle};
 
@@ -29,6 +31,7 @@ use crate::code::editor::view::{CodeEditorEvent, CodeEditorView, VimMode};
 use crate::code_review::comments::CommentId;
 use crate::editor::InteractionState;
 use crate::features::FeatureFlag;
+use crate::localization;
 use crate::notebooks::editor::model::word_unit;
 use crate::util::bindings::CustomAction;
 
@@ -268,19 +271,19 @@ pub fn init(app: &mut AppContext) {
         FixedBinding::custom(
             CustomAction::Cut,
             CodeEditorViewAction::Cut,
-            "Cut",
+            binding_description("Cut", "terminal.menu.cut"),
             text_entry.clone(),
         ),
         FixedBinding::custom(
             CustomAction::Undo,
             CodeEditorViewAction::Undo,
-            "Undo",
+            binding_description("Undo", "notebook.editor.binding.undo"),
             text_entry.clone(),
         ),
         FixedBinding::custom(
             CustomAction::Redo,
             CodeEditorViewAction::Redo,
-            "Redo",
+            binding_description("Redo", "notebook.editor.binding.redo"),
             text_entry.clone(),
         ),
         FixedBinding::new("escape", CodeEditorViewAction::Escape, text_entry.clone()),
@@ -607,12 +610,17 @@ pub fn init(app: &mut AppContext) {
     // Editable Go to Line keybinding
     app.register_editable_bindings([EditableBinding::new(
         "editor_view:go_to_line",
-        "Go to line",
+        binding_description("Go to line", "code.binding.go_to_line"),
         CodeEditorViewAction::ShowGoToLine,
     )
     .with_key_binding("ctrl-g") // Matches VSCode; editor-scoped via text_entry predicate
     .with_custom_action(CustomAction::GoToLine)
     .with_context_predicate(text_entry.clone())]);
+}
+
+fn binding_description(fallback: &'static str, key: &'static str) -> BindingDescription {
+    BindingDescription::new(fallback)
+        .with_dynamic_override(move |app| Some(localization::text_for_app(app, key)))
 }
 
 #[derive(Debug, Clone)]

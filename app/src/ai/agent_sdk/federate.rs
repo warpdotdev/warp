@@ -12,6 +12,15 @@ use warpui::platform::TerminationMode;
 use warpui::{AppContext, SingletonEntity as _};
 
 use super::common::set_ambient_task_context_from_run_id;
+use crate::localization;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
+
+fn text_with_args(app: &AppContext, key: &str, args: &[(&str, &str)]) -> String {
+    localization::text_for_app_with_args(app, key, args)
+}
 
 /// Run identity federation commands.
 pub fn run(
@@ -20,7 +29,10 @@ pub fn run(
     command: FederateCommand,
 ) -> Result<()> {
     if !FeatureFlag::OzIdentityFederation.is_enabled() {
-        return Err(anyhow::anyhow!("This feature is not enabled"));
+        return Err(anyhow::anyhow!(text(
+            ctx,
+            "agent_sdk.common.error.feature_not_enabled"
+        )));
     }
     match command {
         FederateCommand::IssueToken(args) => issue_token(ctx, args, global_options.output_format),
@@ -39,8 +51,12 @@ fn issue_token(
     let duration: std::time::Duration = args.duration.into();
     let audience = args.audience;
     let subject_template = match args.subject_template {
-        Some(template) => vec1::Vec1::try_from_vec(template)
-            .map_err(|_| anyhow::anyhow!("--subject-template requires at least one value"))?,
+        Some(template) => vec1::Vec1::try_from_vec(template).map_err(|_| {
+            anyhow::anyhow!(text(
+                ctx,
+                "agent_sdk.federate.error.subject_template_required"
+            ))
+        })?,
         None => vec1::vec1!["principal".to_owned()],
     };
 
@@ -71,9 +87,30 @@ fn issue_token(
                         println!("{token_value}");
                     }
                     OutputFormat::Pretty => {
-                        println!("Token: {token_value}");
-                        println!("Expires at: {expires_at}");
-                        println!("Issuer: {issuer}");
+                        println!(
+                            "{}",
+                            text_with_args(
+                                ctx,
+                                "agent_sdk.federate.output.token",
+                                &[("token", &token_value)]
+                            )
+                        );
+                        println!(
+                            "{}",
+                            text_with_args(
+                                ctx,
+                                "agent_sdk.federate.output.expires_at",
+                                &[("expires_at", &expires_at)]
+                            )
+                        );
+                        println!(
+                            "{}",
+                            text_with_args(
+                                ctx,
+                                "agent_sdk.federate.output.issuer",
+                                &[("issuer", &issuer)]
+                            )
+                        );
                     }
                 }
                 ctx.terminate_app(TerminationMode::ForceTerminate, None);
@@ -106,8 +143,11 @@ fn issue_gcp_token(ctx: &mut AppContext, args: IssueGcpTokenArgs) -> Result<()> 
                 // If we can't cache the token, report an error but don't fail the command.
                 if let Some(output_path) = output_file {
                     if let Err(err) = std::fs::write(&output_path, &output) {
-                        report_error!(anyhow!(err)
-                            .context(format!("Error writing GCP token to {output_path}")));
+                        report_error!(anyhow!(err).context(text_with_args(
+                            ctx,
+                            "agent_sdk.federate.error.write_gcp_token",
+                            &[("output_path", &output_path)]
+                        )));
                     }
                 }
 

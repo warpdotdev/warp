@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use warpui::elements::PositionedElementOffsetBounds;
+use warpui::App;
 use warpui::EntityId;
 
 use super::{
@@ -26,8 +27,10 @@ use crate::context_chips::display_chip::GitLineChanges;
 use crate::pane_group::pane::IPaneType;
 use crate::pane_group::{PaneId, TerminalPaneId};
 use crate::safe_triangle::SafeTriangle;
+use crate::settings::{init_and_register_user_preferences, AppLanguage, LanguageSettings};
 use crate::terminal::CLIAgent;
 use crate::workspace::tab_settings::VerticalTabsDisplayGranularity;
+use settings::{Setting as _, SettingsManager};
 
 fn label(text: &str) -> VerticalTabsSummaryPrimaryLabel {
     VerticalTabsSummaryPrimaryLabel {
@@ -39,6 +42,27 @@ fn label(text: &str) -> VerticalTabsSummaryPrimaryLabel {
 fn pane_id() -> PaneId {
     TerminalPaneId::dummy_terminal_pane_id().into()
 }
+
+fn register_language_settings(ctx: &mut warpui::AppContext, language: AppLanguage) {
+    init_and_register_user_preferences(ctx);
+    ctx.add_singleton_model(|_| SettingsManager::default());
+    let language_settings = LanguageSettings::register(ctx);
+    language_settings.update(ctx, |settings, ctx| {
+        settings
+            .app_language
+            .set_value(language, ctx)
+            .expect("test app language should be configurable");
+    });
+}
+
+fn primary_line_text(line: &TerminalPrimaryLineData) -> &str {
+    match line {
+        TerminalPrimaryLineData::DefaultText => "New session",
+        TerminalPrimaryLineData::StatusText { text, .. }
+        | TerminalPrimaryLineData::Text { text, .. } => text,
+    }
+}
+
 fn code_summary_kind(title: &str) -> SummaryPaneKind {
     SummaryPaneKind::Code {
         title: title.to_string(),
@@ -210,7 +234,7 @@ fn terminal_primary_line_uses_terminal_title_when_disabled_cli_has_only_prompt()
         Some("claude".to_string()),
     );
 
-    assert_eq!(line.text(), "Generated Claude Code title");
+    assert_eq!(primary_line_text(&line), "Generated Claude Code title");
     assert!(matches!(
         line,
         TerminalPrimaryLineData::Text {
@@ -263,7 +287,7 @@ fn terminal_primary_line_uses_cli_prompt_when_enabled_cli_has_prompt() {
         Some("claude".to_string()),
     );
 
-    assert_eq!(line.text(), "Latest CLI prompt");
+    assert_eq!(primary_line_text(&line), "Latest CLI prompt");
 }
 
 #[test]
@@ -289,7 +313,7 @@ fn terminal_primary_line_uses_cli_prompt_when_enabled_cli_is_long_running() {
         Some("claude".to_string()),
     );
 
-    assert_eq!(line.text(), "Latest CLI prompt");
+    assert_eq!(primary_line_text(&line), "Latest CLI prompt");
 }
 
 #[test]
@@ -648,7 +672,7 @@ fn terminal_primary_line_prefers_cli_agent_display_title() {
         Some("cargo nextest run".to_string()),
     );
 
-    assert_eq!(line.text(), "Review the failing tests");
+    assert_eq!(primary_line_text(&line), "Review the failing tests");
 }
 
 #[test]
@@ -663,7 +687,7 @@ fn terminal_primary_line_prefers_cli_agent_display_title_over_conversation_title
         Some("cargo nextest run".to_string()),
     );
 
-    assert_eq!(line.text(), "Summarize the failures");
+    assert_eq!(primary_line_text(&line), "Summarize the failures");
 }
 
 #[test]
@@ -678,7 +702,7 @@ fn terminal_primary_line_falls_through_to_terminal_title_when_cli_agent_has_no_p
         Some("cargo nextest run".to_string()),
     );
 
-    assert_eq!(line.text(), "codex - ~/warp");
+    assert_eq!(primary_line_text(&line), "codex - ~/warp");
 }
 
 #[test]
@@ -693,7 +717,10 @@ fn terminal_primary_line_uses_terminal_title_as_fallback() {
         Some("cargo nextest run".to_string()),
     );
 
-    assert_eq!(line.text(), "nvim src/workspace/view/vertical_tabs.rs");
+    assert_eq!(
+        primary_line_text(&line),
+        "nvim src/workspace/view/vertical_tabs.rs"
+    );
 }
 
 #[test]
@@ -708,7 +735,7 @@ fn terminal_primary_line_uses_last_completed_command_when_shell_title_matches_wo
         Some("cargo nextest run".to_string()),
     );
 
-    assert_eq!(line.text(), "cargo nextest run");
+    assert_eq!(primary_line_text(&line), "cargo nextest run");
 }
 
 #[test]
@@ -723,14 +750,66 @@ fn terminal_primary_line_falls_back_to_new_session() {
         None,
     );
 
-    assert_eq!(line.text(), "New session");
-    assert!(matches!(
-        line,
-        TerminalPrimaryLineData::Text {
-            font: TerminalPrimaryLineFont::Ui,
-            ..
-        }
-    ));
+    assert_eq!(primary_line_text(&line), "New session");
+    assert!(matches!(line, TerminalPrimaryLineData::DefaultText));
+}
+
+#[test]
+fn terminal_primary_line_preserves_literal_new_session_user_text_when_localized() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            register_language_settings(ctx, AppLanguage::SimplifiedChinese);
+        });
+
+        app.read(|ctx| {
+            let title_line = terminal_primary_line_data(
+                false,
+                None,
+                None,
+                "New session",
+                "~/warp",
+                TerminalPrimaryLineFont::Monospace,
+                None,
+            );
+            assert_eq!(title_line.display_text(ctx).into_owned(), "New session");
+
+            let conversation_line = terminal_primary_line_data(
+                false,
+                Some("New session".to_string()),
+                None,
+                "~/warp",
+                "~/warp",
+                TerminalPrimaryLineFont::Monospace,
+                None,
+            );
+            assert_eq!(
+                conversation_line.display_text(ctx).into_owned(),
+                "New session"
+            );
+
+            let command_line = terminal_primary_line_data(
+                false,
+                None,
+                None,
+                "~/warp",
+                "~/warp",
+                TerminalPrimaryLineFont::Monospace,
+                Some("New session".to_string()),
+            );
+            assert_eq!(command_line.display_text(ctx).into_owned(), "New session");
+
+            let fallback_line = terminal_primary_line_data(
+                false,
+                None,
+                None,
+                "~/warp",
+                "~/warp",
+                TerminalPrimaryLineFont::Monospace,
+                None,
+            );
+            assert_ne!(fallback_line.display_text(ctx).into_owned(), "New session");
+        });
+    });
 }
 
 #[test]
@@ -756,29 +835,37 @@ fn terminal_primary_line_uses_monospace_for_last_completed_command() {
 
 #[test]
 fn terminal_search_fragments_include_rendered_terminal_badges() {
-    let fragments = terminal_search_text_fragments(
-        "Review the failing tests".to_string(),
-        "~/warp".to_string(),
-        Some("main".to_string()),
-        terminal_kind_badge_label(false, Some(CLIAgent::Claude)),
-        Some(terminal_pull_request_badge_label(
-            "https://github.com/warpdotdev/warp-internal/pull/12345",
-        )),
-        Some(GitLineChanges {
-            files_changed: 1,
-            lines_added: 2,
-            lines_removed: 3,
-        }),
-    );
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            register_language_settings(ctx, AppLanguage::English);
+        });
 
-    assert!(search_fragments_contain_query(&fragments, "claude"));
-    assert!(search_fragments_contain_query(
-        &fragments,
-        "review the failing tests"
-    ));
-    assert!(search_fragments_contain_query(&fragments, "#12345"));
-    assert!(search_fragments_contain_query(&fragments, "+2"));
-    assert!(search_fragments_contain_query(&fragments, "-3"));
+        app.read(|ctx| {
+            let fragments = terminal_search_text_fragments(
+                "Review the failing tests".to_string(),
+                "~/warp".to_string(),
+                Some("main".to_string()),
+                terminal_kind_badge_label(false, Some(CLIAgent::Claude), ctx),
+                Some(terminal_pull_request_badge_label(
+                    "https://github.com/warpdotdev/warp-internal/pull/12345",
+                )),
+                Some(GitLineChanges {
+                    files_changed: 1,
+                    lines_added: 2,
+                    lines_removed: 3,
+                }),
+            );
+
+            assert!(search_fragments_contain_query(&fragments, "claude"));
+            assert!(search_fragments_contain_query(
+                &fragments,
+                "review the failing tests"
+            ));
+            assert!(search_fragments_contain_query(&fragments, "#12345"));
+            assert!(search_fragments_contain_query(&fragments, "+2"));
+            assert!(search_fragments_contain_query(&fragments, "-3"));
+        });
+    })
 }
 
 #[test]

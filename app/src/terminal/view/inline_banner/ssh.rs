@@ -1,4 +1,6 @@
+use crate::localization;
 use warpui::elements::MouseStateHandle;
+use warpui::AppContext;
 use warpui::Element;
 
 use super::{
@@ -33,23 +35,24 @@ pub struct SSHBannerState {
 pub fn render_inline_ssh_wrapper_banner(
     state: &SSHBannerState,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let label_text_color = appearance.theme().active_ui_text_color().into_solid();
 
     let (style, title) = if state.wrapper_enabled {
         (
             InlineBannerStyle::LowPriority,
-            "Warp SSH wrapper enabled".to_string(),
+            localization::text_for_app(app, "terminal.inline_banner.ssh.wrapper_enabled"),
         )
     } else {
         (
             InlineBannerStyle::VeryLowPriority,
-            "Warp SSH wrapper disabled".to_string(),
+            localization::text_for_app(app, "terminal.inline_banner.ssh.wrapper_disabled"),
         )
     };
     let buttons = vec![
         InlineBannerTextButton {
-            text: "Learn more".to_string(),
+            text: localization::text_for_app(app, "auth.learn_more"),
             text_color: label_text_color,
             button_state: InlineBannerButtonState {
                 on_click_event: TerminalAction::LegacySSHBanner(SSHBannerAction::LearnMore),
@@ -60,7 +63,7 @@ pub fn render_inline_ssh_wrapper_banner(
             variant: InlineBannerTextButtonVariant::Secondary,
         },
         InlineBannerTextButton {
-            text: "Settings".to_string(),
+            text: localization::text_for_app(app, "settings.title"),
             text_color: label_text_color,
             button_state: InlineBannerButtonState {
                 on_click_event: TerminalAction::LegacySSHBanner(SSHBannerAction::Settings),

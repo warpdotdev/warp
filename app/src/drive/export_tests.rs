@@ -17,6 +17,7 @@ use crate::cloud_object::{
 use crate::drive::CloudObjectTypeAndId;
 use crate::notebooks::{CloudNotebook, CloudNotebookModel, NotebookId};
 use crate::server::ids::SyncId;
+use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel, WorkflowId};
 use crate::workspace::ToastStack;
@@ -98,6 +99,7 @@ impl ExportTest {
 }
 
 fn initialize_app(app: &mut App) {
+    initialize_settings_for_tests(app);
     app.add_singleton_model(CloudModel::mock);
     app.add_singleton_model(ExportManager::new);
     app.add_singleton_model(UserWorkspaces::default_mock);

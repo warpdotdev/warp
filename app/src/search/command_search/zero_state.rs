@@ -1,3 +1,4 @@
+use crate::localization;
 use std::collections::HashMap;
 
 use lazy_static::lazy_static;
@@ -155,6 +156,7 @@ impl CommandSearchZeroStateView {
     /// clicked, the filter is emitted in a [`CommandSearchZeroStateEvent::FilterChipSelected`] event.
     fn render_filter_chips(
         &self,
+        app: &AppContext,
         appearance: &Appearance,
         valid_filters: &[QueryFilter],
     ) -> Box<dyn Element> {
@@ -164,6 +166,7 @@ impl CommandSearchZeroStateView {
             row.add_child(
                 Container::new(filter.render_filter_chip(
                     self.filter_chip_to_mouse_state_handle[filter].clone(),
+                    app,
                     appearance,
                     |event_ctx, filter| {
                         event_ctx.dispatch_typed_action(
@@ -192,7 +195,7 @@ impl View for CommandSearchZeroStateView {
 
         let command_search_text = Container::new(
             Text::new_inline(
-                "Command Search",
+                localization::text_for_app(app, "search.command_search.title"),
                 appearance.ui_font_family(),
                 styles::header_text_font_size(appearance),
             )
@@ -214,7 +217,7 @@ impl View for CommandSearchZeroStateView {
             .with_child(
                 Container::new(
                     Text::new_inline(
-                        "I'm looking for...",
+                        localization::text_for_app(app, "search.command_search.looking_for"),
                         appearance.ui_font_family(),
                         styles::subheader_text_font_size(appearance),
                     )
@@ -229,11 +232,11 @@ impl View for CommandSearchZeroStateView {
                 .with_margin_bottom(styles::FILTER_PREFIX_TEXT_MARGIN_BOTTOM)
                 .finish(),
             )
-            .with_child(self.render_filter_chips(appearance, &valid_filters))
+            .with_child(self.render_filter_chips(app, appearance, &valid_filters))
             .with_child(
                 Container::new(
                     Text::new_inline(
-                        "Example queries",
+                        localization::text_for_app(app, "search.command_search.example_queries"),
                         appearance.ui_font_family(),
                         styles::subheader_text_font_size(appearance),
                     )

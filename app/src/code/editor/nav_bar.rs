@@ -1,4 +1,5 @@
 #![cfg_attr(target_family = "wasm", allow(dead_code, unused_imports))]
+use crate::localization;
 // Adding this file level gate as some of the code around editability is not used in WASM yet.
 
 use warp_core::ui::appearance::Appearance;
@@ -30,6 +31,10 @@ const NAV_BAR_SEPARATOR_PADDING: f32 = 12.;
 
 // The ratio of rows to offset of when jumping to a diff nav (base is the total number of lines in viewport)
 const DIFF_NAV_OFFSET_PIXEL_RATIO: usize = 10;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum NavBarEvent {
@@ -71,15 +76,15 @@ impl NavBar {
             }
         });
 
-        let up_label_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Previous", NakedTheme)
+        let up_label_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(text(ctx, "code.nav.previous"), NakedTheme)
                 .with_size(ButtonSize::InlineActionHeader)
                 .with_icon(Icon::ArrowUp)
                 .on_click(|ctx| ctx.dispatch_typed_action(NavBarAction::NavigateUp))
         });
 
-        let down_label_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Next", NakedTheme)
+        let down_label_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(text(ctx, "code.nav.next"), NakedTheme)
                 .with_size(ButtonSize::InlineActionHeader)
                 .with_icon(Icon::ArrowDown)
                 .on_click(|ctx| ctx.dispatch_typed_action(NavBarAction::NavigateDown))
@@ -148,7 +153,7 @@ impl NavBar {
     ) -> Box<dyn Element> {
         let diff_text = appearance
             .ui_builder()
-            .span("Hunk:")
+            .span(text(app, "code.nav.hunk_label"))
             .with_style(UiComponentStyles {
                 font_color: Some(appearance.theme().sub_text_color(background).into()),
                 ..Default::default()
@@ -192,7 +197,7 @@ impl NavBar {
         .finish()
     }
 
-    fn render_revert_button(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_revert_button(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         Container::new(
             appearance
                 .ui_builder()
@@ -200,7 +205,7 @@ impl NavBar {
                     ButtonVariant::Outlined,
                     self.mouse_state_handles.revert_mouse_state.clone(),
                 )
-                .with_text_label("Reject".to_string())
+                .with_text_label(text(app, "code.action.reject"))
                 .build()
                 .on_click(|ctx, _, _| ctx.dispatch_typed_action(NavBarAction::Revert))
                 .finish(),
@@ -293,7 +298,7 @@ impl View for NavBar {
         // Do not render the revert button if there is nothing to revert or the editor is
         // not in an editable interaction state.
         if editable && total > 0 {
-            row.add_child(self.render_revert_button(appearance));
+            row.add_child(self.render_revert_button(appearance, app));
         }
 
         if matches!(self.behavior, NavBarBehavior::Closable) {

@@ -18,12 +18,17 @@ use crate::ai::blocklist::inline_action::requested_script::{
     self, RequestedScriptMouseStates, RequestedScriptStatus, TitledScript,
 };
 use crate::appearance::Appearance;
+use crate::localization;
 use crate::terminal::model::ansi::SystemDetails;
 use crate::terminal::model::escape_sequences;
 use crate::terminal::warpify::render;
 use crate::terminal::warpify::settings::WarpifySettings;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon as UiIcon;
+
+fn text(app: &AppContext, key: &str) -> String {
+    localization::text_for_app(app, key)
+}
 
 pub const WHY_INSTALL_TMUX_URL: &str =
     "https://docs.warp.dev/terminal/warpify/ssh#why-do-i-need-tmux-on-the-remote-machine";
@@ -258,11 +263,12 @@ impl SshInstallTmuxBlock {
         let package_manager = &self.system_details.package_manager;
         Container::new(requested_script::render_requested_scripts(
             TitledScript {
-                title: format!("Install with {package_manager}"),
+                title: text(app, "terminal.ssh.install_tmux.install_with")
+                    .replace("{package_manager}", package_manager),
                 content: tmux_system_install_script.to_string(),
             },
             TitledScript {
-                title: "Install to ~/.warp".to_string(),
+                title: text(app, "terminal.ssh.install_tmux.install_to_warp"),
                 content: self.tmux_local_install_script.clone(),
             },
             *is_first_script_active,
@@ -378,14 +384,17 @@ impl View for SshInstallTmuxBlock {
         );
 
         let explanation = if self.outdated_version {
-            "In order to Warpify your SSH session, a more recent version of tmux (>=3.0) must be installed. "
+            text(app, "terminal.ssh_install_tmux.description_outdated")
         } else {
-            "In order to Warpify your SSH session, tmux must be installed. "
+            text(app, "terminal.ssh_install_tmux.description_missing")
         };
 
         let warpify_description = vec![
             FormattedTextFragment::plain_text(explanation),
-            FormattedTextFragment::hyperlink("Why do I need tmux?", WHY_INSTALL_TMUX_URL),
+            FormattedTextFragment::hyperlink(
+                text(app, "terminal.ssh_install_tmux.why_link"),
+                WHY_INSTALL_TMUX_URL,
+            ),
         ];
 
         let text_color =

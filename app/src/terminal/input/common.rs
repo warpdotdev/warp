@@ -282,6 +282,7 @@ pub(super) fn add_input_suggestions_overlays(
                 input.render_dynamic_workflow_enum_menu(
                     appearance,
                     menu_positioning,
+                    app,
                     command.clone(),
                     dynamic_enum_status.clone(),
                     suggestions,
