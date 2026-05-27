@@ -3265,6 +3265,8 @@
   "settings.execution_profile.read_files": "Read files:",
   "settings.features.alias_expansion.label": "Expand aliases as you type",
   "settings.features.at_context_menu.label": "Enable '@' context menu in terminal mode",
+  "settings.features.async_find.description": "Use an improved implementation of find to keep the UI responsive while searching for matches on large outputs.",
+  "settings.features.async_find.label": "Asynchronous find",
   "settings.features.audible_bell.label": "Use Audible Bell",
   "settings.features.auto_open_code_review.description": "When this setting is on, the code review panel will open on the first accepted diff of a conversation",
   "settings.features.auto_open_code_review.label": "Auto open code review panel",

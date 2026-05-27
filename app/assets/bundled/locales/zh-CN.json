@@ -3265,6 +3265,8 @@
   "settings.execution_profile.read_files": "读取文件：",
   "settings.features.alias_expansion.label": "输入时展开别名",
   "settings.features.at_context_menu.label": "在终端模式中启用 '@' 上下文菜单",
+  "settings.features.async_find.description": "使用改进的查找实现，在大型输出中搜索匹配项时保持界面响应。",
+  "settings.features.async_find.label": "异步查找",
   "settings.features.audible_bell.label": "使用终端响铃",
   "settings.features.auto_open_code_review.description": "启用后，代码审查面板会在一次对话中首次接受 diff 时打开",
   "settings.features.auto_open_code_review.label": "自动打开代码审查面板",

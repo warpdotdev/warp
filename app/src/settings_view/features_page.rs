@@ -7583,7 +7583,8 @@ impl SettingsWidget for AsyncFindWidget {
         let ui_builder = appearance.ui_builder();
 
         let label = render_body_item_label::<FeaturesPageAction>(
-            "Asynchronous find".into(),
+            app,
+            feature_text(app, "settings.features.async_find.label").into(),
             None,
             None,
             LocalOnlyIconState::for_setting(
@@ -7618,10 +7619,7 @@ impl SettingsWidget for AsyncFindWidget {
             label_with_chip,
             switch,
             appearance,
-            Some(
-                "Use an improved implementation of find to keep the UI responsive while searching for matches on large outputs."
-                    .into(),
-            ),
+            Some(feature_text(app, "settings.features.async_find.description").into()),
         )
     }
 }

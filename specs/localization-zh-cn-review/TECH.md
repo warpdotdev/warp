@@ -8,17 +8,17 @@ localization work on branch `feat/localization-settings-upstream-rebuild`.
 ## Branch State
 
 - Branch: `feat/localization-settings-upstream-rebuild`
-- Validated upstream base: `8f8ff4a8`
-- Review branch comparison: one localization commit ahead of
-  `upstream/master`; `upstream/master` itself resolved to `8f8ff4a8` during the
-  validation run.
+- Validated upstream base: `2566f54a`
+- Review branch comparison: two local commits ahead of
+  `upstream/master`; `upstream/master` itself resolved to `2566f54a` during the
+  latest validation run.
 - Rebase state: no `.git/rebase-merge`, `.git/rebase-apply`, or
   `.git/index.lock`
 - Stash state: the May 27 rebase autostash remains as a safety backup, and the
   pre-existing May 19 stash remains
 - Review state: all localization changes were restored and validated against the
-  current `upstream/master` base with no unstaged or untracked files at the
-  final pre-commit audit.
+  current `upstream/master` base. The latest pass has a focused dirty
+  worktree for the async find upstream follow-up and this evidence document.
 
 ## Rebase Result
 
@@ -65,6 +65,14 @@ active rebase state.
 
 The dirty local worktree was protected during rebase and restored afterward.
 No user changes were intentionally reverted.
+
+
+After the `2566f54a` upstream refresh, the upstream async find feature toggle
+introduced two new direct English strings and one call-site argument mismatch.
+They are now backed by `settings.features.async_find.label` and
+`settings.features.async_find.description` in both locale catalogs, and
+`AsyncFindWidget` now passes `app` as the first `render_body_item_label`
+argument.
 
 ## Post-Rebase Fixes
 
@@ -137,7 +145,7 @@ The review fixed ordinary UI copy that was still English:
 - Conversation list section headers `ACTIVE` / `PAST` -> `当前` / `历史`
 - Conversation list timestamp `just now` -> `刚刚`
 
-The latest ASCII-only review checked the 67 ASCII-only zh-CN values. Remaining
+The latest ASCII-only review checked the 71 ASCII-only zh-CN values. Remaining
 ASCII-only values are intentional brand/product names, commands, table fields,
 placeholders, or formatting fragments such as `Agent`, `Notebook`, `Warp Drive`,
 `Cloud Oz`, `GitHub Action`, `nvm install node`, `Slug`, `ID`, `UUID`, `JSON`,
@@ -147,14 +155,14 @@ placeholders, or formatting fragments such as `Agent`, `Notebook`, `Warp Drive`,
 
 Current catalog stats after the latest visual-review fixes:
 
-- `en-US` keys: 5574
-- `zh-CN` keys: 5574
+- `en-US` keys: 5576
+- `zh-CN` keys: 5576
 - Missing in `zh-CN`: 0
 - Extra in `zh-CN`: 0
 - Placeholder mismatches: 0
-- Identical values: 61
-- ASCII-only zh-CN values: 67
-- ASCII-with-CJK zh-CN values: 2215
+- Identical values: 60
+- ASCII-only zh-CN values: 71
+- ASCII-with-CJK zh-CN values: 1745
 
 Term scan counts:
 
@@ -174,7 +182,7 @@ Term scan counts:
 
 ## Verification
 
-Commands run after the `8f8ff4a8` upstream refresh:
+Commands run after the `2566f54a` upstream refresh:
 
 ```bash
 git diff --check && git diff --cached --check && \
@@ -193,8 +201,9 @@ Result: pass.
 cargo test -p warp_localization -- --nocapture
 ```
 
-Result: pass, 20 tests on current `8f8ff4a8`. Latest run compiled in 13.85s
-and the catalog test binary finished in 109.68s.
+Result: pass, 20 tests on current `b563723c` plus the focused async find
+worktree changes. Latest run compiled in 9.21s and the catalog test binary
+finished in 20.00s.
 
 ```bash
 cargo test -p warp --lib localization_tests -- --nocapture
@@ -208,20 +217,23 @@ Actual app localization tests are registered under `localization::tests`.
 cargo test -p warp --lib localization::tests -- --nocapture
 ```
 
-Result: pass, 8 tests on current `8f8ff4a8`, with 4656 filtered. Latest run
-compiled in 4m 17s and the filtered test run finished in 4.86s.
+Result: pass, 8 tests on current `b563723c` plus the focused async find
+worktree changes, with 4656 filtered. Latest run compiled in 54m 05s and the
+filtered test run finished in 1.58s.
 
 ```bash
 cargo check -p warp --lib --message-format=short
 ```
 
-Result: pass on current `8f8ff4a8`, 13m 46s.
+Result: pass on current `b563723c` plus the focused async find worktree
+changes, 31m 29s.
 
 ```bash
 cargo build -p integration --bin integration
 ```
 
-Result: pass on current `8f8ff4a8`, 1m 16s.
+Result: pass on current `b563723c` plus the focused async find worktree
+changes, 62m 00s.
 
 The current-head visual smoke was then run directly through the built binary to
 avoid retriggering Cargo build/link work:
@@ -233,10 +245,11 @@ WARP_INTEGRATION=1 \
 target/debug/integration test_zh_cn_localization_visual_smoke
 ```
 
-Result: pass on current `8f8ff4a8`, exit code 0. The integration run used a
-real display, executed 15 steps, included the runtime app menu and Dock menu
-title assertion, and saved a fresh artifact set under
-`target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T13-59-39`.
+Result: pass on current `b563723c` plus the focused async find worktree
+changes, exit code 0. The integration run used a real display, executed 15
+steps, included the runtime app menu and Dock menu title assertion, and saved a
+fresh artifact set under
+`target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T18-02-47`.
 
 Earlier current-branch attempts through `cargo run -p integration --bin
 integration -- ...` and the ignored `cargo test -p integration --test
@@ -246,14 +259,14 @@ above is the current completed result.
 
 Latest completed visual artifacts:
 
-- `target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T13-59-39/settings-appearance-language-zh-cn.png`
-- `target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T13-59-39/terminal-input-zh-cn.png`
-- `target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T13-59-39/context-chips-zh-cn.png`
-- `target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T13-59-39/command-search-zh-cn.png`
-- `target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T13-59-39/agent-input-zh-cn.png`
-- `target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T13-59-39/command-palette-zh-cn.png`
-- `target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T13-59-39/toast-zh-cn.png`
-- `target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T13-59-39/dialog-launch-config-zh-cn.png`
+- `target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T18-02-47/settings-appearance-language-zh-cn.png`
+- `target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T18-02-47/terminal-input-zh-cn.png`
+- `target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T18-02-47/context-chips-zh-cn.png`
+- `target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T18-02-47/command-search-zh-cn.png`
+- `target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T18-02-47/agent-input-zh-cn.png`
+- `target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T18-02-47/command-palette-zh-cn.png`
+- `target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T18-02-47/toast-zh-cn.png`
+- `target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T18-02-47/dialog-launch-config-zh-cn.png`
 
 Each artifact is a `2560 x 1600` PNG.
 
@@ -265,7 +278,7 @@ conversation section header as `当前` and the row timestamp as `刚刚`.
 Goal item status against the current local branch:
 
 - Rebase or merge latest `upstream/master`: satisfied locally. The review
-  candidate is based directly on `upstream/master` at `8f8ff4a8`.
+  candidate is based directly on `upstream/master` at `2566f54a`.
 - App-level verification: satisfied locally. The listed `cargo test`,
   `cargo check`, `jq empty`, and `git diff --check` commands have passing
   results recorded above.
@@ -273,9 +286,9 @@ Goal item status against the current local branch:
   real-display smoke covers Settings language selection, menus/Dock assertions,
   Agent input, Terminal input, Search, Context chips, toast, and dialog
   screenshots, with fresh artifacts under
-  `target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T13-59-39`.
+  `target/zh-cn-visual-artifacts/test_zh_cn_localization_visual_smoke/2026-05-27T18-02-47`.
 - Terminology review: satisfied for the catalog-level review scope recorded
-  above. The 67 ASCII-only zh-CN values and ASCII-with-CJK values were reviewed;
+  above. The 71 ASCII-only zh-CN values and ASCII-with-CJK values were reviewed;
   remaining English fragments are intentional product, protocol, command, field,
   placeholder, or formatting text.
 - Terminology consistency: satisfied for the reviewed terms. Catalog term scans
@@ -283,10 +296,10 @@ Goal item status against the current local branch:
   `Copyright`, `pane`, `handoff`, `snapshot`, `payload`, and `pull request`
   matches in zh-CN values.
 - Key and placeholder integrity: satisfied. `en-US` and `zh-CN` both contain
-  5574 keys, with 0 missing keys, 0 extra keys, and 0 placeholder mismatches.
-- Local commit readiness: satisfied locally. `git diff --cached --name-only`
-  contained 550 files at the final pre-commit audit, and the review candidate
-  commit contains the same scoped change set.
+  5576 keys, with 0 missing keys, 0 extra keys, and 0 placeholder mismatches.
+- Local commit readiness: satisfied locally for this pass. The large
+  localization commit is already present locally, and the latest async find
+  follow-up plus this evidence update were validated together before commit.
 - PR creation or update: pending push.
 
 ## Review Handoff Draft
@@ -315,7 +328,7 @@ The original branch names referenced by the handoff are no longer the active
 completion basis for this local worktree:
 
 - Active local branch: `feat/localization-settings-upstream-rebuild`, based on
-  `upstream/master` at `8f8ff4a8`.
+  `upstream/master` at `2566f54a`.
 - `origin/feat/localization-settings` remains at `2f6fcabb`. Compared with the
   active branch, `git rev-list --left-right --count
   HEAD...origin/feat/localization-settings` returns `60 7`, with merge base
@@ -336,8 +349,8 @@ review setup.
 
 ## Remaining Risk
 
-- PR review remains pending until the candidate branch is pushed and linked in a
-  GitHub pull request.
+- PR review remains pending until the latest local follow-up is committed, the
+  candidate branch is pushed, and a GitHub pull request is linked.
 - The May 27 rebase autostash remains in the stash list as a conservative
   backup; it was not dropped during this pass.
 - Visual coverage now includes Settings language selection, terminal input,
