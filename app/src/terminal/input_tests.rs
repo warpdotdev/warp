@@ -7741,3 +7741,109 @@ fn editor_keymap_context_includes_ctrl_enter_enters_agent_view_when_rich_input_i
         });
     });
 }
+
+// ---------------------------------------------------------------------------
+// Issue #11588 — Enter must accept inline menus when submit_on_ctrl_enter=true
+// ---------------------------------------------------------------------------
+
+/// When `submit_on_ctrl_enter` is `true` and the CLI agent rich input is open,
+/// pressing Enter while the slash-commands menu is active must route to the
+/// menu-acceptance branch — **not** the newline-insertion branch.
+///
+/// The underlying bug: `update_cli_agent_enter_settings` was setting
+/// `enter = EnterAction::InsertNewLineIfMultiLine` when the toggle was on.
+/// That caused the editor's `enter()` function to call `newline_internal`
+/// directly, bypassing `input_enter` entirely.  All inline-menu acceptance
+/// (slash commands, prompts, skills, @ context) therefore failed silently.
+///
+/// After the fix, `enter` is always `EnterAction::Emit` so `input_enter` runs
+/// first and can check menu state before falling through to newline insertion.
+///
+/// Assertion strategy: directly set the suggestions mode to SlashCommands, then
+/// press Enter and verify no newline was appended to the buffer.  The slash
+/// commands view may have no items loaded (no session context), so `accept_selected_item`
+/// is a no-op — but the important invariant is that the newline-insertion path
+/// was NOT reached.
+#[test]
+fn enter_accepts_inline_menu_item_when_submit_on_ctrl_enter_is_true() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    App::test((), |mut app| async move {
+        let _cli_agent_flag = FeatureFlag::CLIAgentRichInput.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .submit_on_ctrl_enter
+                .set_value(true, ctx)
+                .expect("setting value must succeed");
+        });
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        open_rich_input_for_terminal(&terminal, &mut app);
+
+        // Track whether a submit event fired (it must not).
+        let submitted: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let submitted_clone = submitted.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event, _| {
+                if let Event::SubmitCLIAgentInput { text } = event {
+                    submitted_clone.borrow_mut().push(text.clone());
+                }
+            });
+        });
+
+        // Insert some text so we can detect whether a newline was appended.
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("hello", ctx);
+        });
+
+        // Simulate the slash-commands menu being open.  In production this
+        // happens when the user types `/`; here we set it directly so the test
+        // doesn't depend on command-registry data being loaded.
+        input.update(&mut app, |input, ctx| {
+            input.suggestions_mode_model.update(ctx, |model, ctx| {
+                model.set_mode(InputSuggestionsMode::SlashCommands, ctx);
+            });
+        });
+
+        // Verify the mode is set as expected before pressing Enter.
+        input.read(&app, |input, ctx| {
+            assert!(
+                matches!(
+                    input.suggestions_mode_model.as_ref(ctx).mode(),
+                    InputSuggestionsMode::SlashCommands
+                ),
+                "slash-commands mode should be active before Enter"
+            );
+        });
+
+        // Press Enter — this must dispatch to the slash-commands acceptance
+        // branch, NOT the newline-insertion branch.
+        input.update(&mut app, |input, ctx| {
+            input.input_enter(ctx);
+        });
+
+        // No submission should have occurred.
+        assert!(
+            submitted.borrow().is_empty(),
+            "Enter must NOT submit when the slash-commands menu is open"
+        );
+
+        // The buffer must NOT contain a newline — that would mean the
+        // newline-insertion branch fired instead of the menu-acceptance branch.
+        input.read(&app, |input, ctx| {
+            let text = input.buffer_text(ctx);
+            assert!(
+                !text.contains('\n'),
+                "Enter must NOT insert a newline when the slash-commands menu is open \
+                 (submit_on_ctrl_enter=true); got buffer: {text:?}"
+            );
+        });
+    });
+}

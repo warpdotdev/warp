@@ -100,6 +100,24 @@ pub fn rich_input_buffer_contains_newline(
     })
 }
 
+/// Asserts that the Rich Input buffer text for `tab_index` does NOT contain a
+/// newline character.  Used to verify that Enter dispatched to a menu-acceptance
+/// branch rather than the newline-insertion branch.
+pub fn rich_input_buffer_does_not_contain_newline(
+    tab_index: usize,
+) -> warpui::integration::AssertionCallback {
+    Box::new(move |app, window_id| {
+        let input_view = single_input_view_for_tab(app, window_id, tab_index);
+        input_view.read(app, |view, ctx| {
+            let text = view.buffer_text(ctx);
+            warpui::async_assert!(
+                !text.contains('\n'),
+                "Expected Rich Input buffer to NOT contain a newline; got: {text:?}"
+            )
+        })
+    })
+}
+
 /// Asserts that the Rich Input buffer text for `tab_index` is NOT empty.
 pub fn rich_input_buffer_is_not_empty(tab_index: usize) -> warpui::integration::AssertionCallback {
     Box::new(move |app, window_id| {

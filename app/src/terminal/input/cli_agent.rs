@@ -20,7 +20,6 @@ use crate::appearance::Appearance;
 use crate::context_chips::spacing;
 use crate::editor::{EnterAction, EnterSettings, TextColors};
 use crate::features::FeatureFlag;
-use crate::settings::AISettings;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::view::TerminalAction;
 
@@ -196,31 +195,25 @@ impl Input {
 
     /// Configures the editor's enter-key behaviour for the CLI agent rich input.
     ///
-    /// When the rich input is open and `submit_on_ctrl_enter` is `true`:
-    ///   - `enter`       → `InsertNewLineIfMultiLine`  (Enter inserts a newline)
-    ///   - `ctrl_enter`  → `Emit`                      (Ctrl+Enter submits; no buffer mutation)
+    /// Both `enter` and `ctrl_enter` are always `Emit` so the editor never
+    /// inserts a newline directly — newline insertion (when
+    /// `submit_on_ctrl_enter` is `true`) is handled in `Input::input_enter`
+    /// after all inline-menu acceptance branches have had a chance to run.
+    /// This ensures that pressing Enter while an `@`-context, prompt, skill,
+    /// or slash-command menu is open always accepts the highlighted item rather
+    /// than inserting a newline.
     ///
-    /// In all other cases (rich input closed, or setting `false`):
-    ///   - `enter`       → `Emit`                      (Enter submits the command)
-    ///   - `ctrl_enter`  → `Emit`                      (Ctrl+Enter passes through)
-    ///
-    /// `ctrl_enter` is always `Emit` — never `InsertNewLineIfMultiLine` — so the
-    /// editor never replaces an active selection with `\n` on Ctrl+Enter.
+    /// The `EnterSettings` values this function writes depend only on whether
+    /// the rich input is currently open, not on the `submit_on_ctrl_enter`
+    /// setting — so callers do not need to re-invoke it when that setting
+    /// changes.
     pub(super) fn update_cli_agent_enter_settings(&mut self, ctx: &mut ViewContext<Self>) {
-        let rich_input_open =
-            CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id);
-        let submit_on_ctrl_enter = *AISettings::as_ref(ctx).submit_on_ctrl_enter;
-
-        let enter_action = if rich_input_open && submit_on_ctrl_enter {
-            EnterAction::InsertNewLineIfMultiLine
-        } else {
-            EnterAction::Emit
-        };
-
         let settings = EnterSettings {
-            enter: enter_action,
-            // ctrl_enter is always Emit: we never want the editor to mutate
-            // the buffer (and thereby drop any active selection) on Ctrl+Enter.
+            // Always Emit so that input_enter runs and can handle the
+            // submit_on_ctrl_enter toggle and all inline-menu branches.
+            enter: EnterAction::Emit,
+            // Always Emit: we never want the editor to mutate the buffer
+            // (and thereby drop any active selection) on Ctrl+Enter.
             ctrl_enter: EnterAction::Emit,
             ..Default::default()
         };

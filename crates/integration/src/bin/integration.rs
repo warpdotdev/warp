@@ -470,6 +470,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_rich_input_ctrl_enter_submits_when_ctrl_enter_setting_is_true);
     // Regression: Ctrl+Enter with selection must not drop selected text (PR #11723)
     register_test!(test_rich_input_ctrl_enter_preserves_selection);
+    // Regression: Enter must accept inline menus (not insert newline) when toggle=true (PR #11723)
+    register_test!(test_rich_input_enter_accepts_menu_item_when_toggle_is_true);
 
     tests
 }

@@ -26,7 +26,8 @@ use warp::{
     integration_testing::{
         input::{
             open_cli_agent_rich_input, rich_input_buffer_contains_newline,
-            rich_input_buffer_is_not_empty, rich_input_buffer_text_is_empty,
+            rich_input_buffer_does_not_contain_newline, rich_input_buffer_is_not_empty,
+            rich_input_buffer_text_is_empty,
         },
         step::new_step_with_default_assertions,
         terminal::wait_until_bootstrapped_single_pane_for_tab,
@@ -196,5 +197,42 @@ pub fn test_rich_input_ctrl_enter_submits_when_ctrl_enter_setting_is_true() -> B
             .with_keystrokes(&["ctrl-enter"])
             // Submit fires → clear_buffer_and_reset_undo_stack → buffer is empty.
             .add_assertion(rich_input_buffer_text_is_empty(0)),
+        )
+}
+
+// ---------------------------------------------------------------------------
+// Setting = true: Enter while slash-commands menu is open accepts the menu
+// ---------------------------------------------------------------------------
+
+/// With `submit_on_ctrl_enter = true`, typing `/` opens the slash-commands
+/// menu and pressing Enter must route to the menu-acceptance branch rather
+/// than inserting a newline.
+///
+/// Observable proxy: the buffer must NOT contain a `\n` character after Enter.
+///
+/// This is the end-to-end regression test for the second bug in issue #11588:
+/// before the fix, `update_cli_agent_enter_settings` set
+/// `enter = InsertNewLineIfMultiLine` which caused the editor to call
+/// `newline_internal` directly, bypassing `input_enter` and all its
+/// menu-acceptance branches.
+pub fn test_rich_input_enter_accepts_menu_item_when_toggle_is_true() -> Builder {
+    FeatureFlag::CLIAgentRichInput.set_enabled(true);
+
+    new_builder()
+        .with_user_defaults(HashMap::from([(
+            SubmitRichInputOnCtrlEnter::storage_key().to_string(),
+            true.to_string(),
+        )]))
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(open_cli_agent_rich_input(0))
+        .with_step(
+            new_step_with_default_assertions(
+                "Type '/', press Enter — buffer must NOT contain a newline (menu branch taken)",
+            )
+            // Typing '/' opens the slash-commands menu.
+            .with_typed_characters(&["/"])
+            // Enter must route to the menu-acceptance branch, not newline insertion.
+            .with_keystrokes(&["enter"])
+            .add_assertion(rich_input_buffer_does_not_contain_newline(0)),
         )
 }

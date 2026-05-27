@@ -2598,8 +2598,9 @@ impl Input {
             // Sync the editor text colors with the (now active or inactive)
             // alt-screen CLI agent background so input text stays legible.
             me.update_cli_agent_editor_text_colors(ctx);
-            // Sync enter_settings so Enter/Ctrl+Enter behave correctly for
-            // the new input state and the current submit_on_ctrl_enter value.
+            // Ensure enter_settings are applied for this input instance.
+            // Both enter and ctrl_enter are always Emit; see the function
+            // docstring for why the submit_on_ctrl_enter toggle is irrelevant.
             me.update_cli_agent_enter_settings(ctx);
             me.set_zero_state_hint_text(ctx);
             ctx.notify();
@@ -6512,9 +6513,10 @@ impl Input {
                 self.update_voice_transcription_options(ctx);
             }
             AISettingsChangedEvent::SubmitRichInputOnCtrlEnter { .. } => {
-                // Re-sync enter_settings whenever the toggle changes so that
-                // Ctrl+Enter / Enter behave correctly without a reload.
-                self.update_cli_agent_enter_settings(ctx);
+                // No need to re-sync enter_settings here: both enter and
+                // ctrl_enter are always EnterAction::Emit regardless of the
+                // toggle value. The newline-vs-submit decision for Enter is
+                // made inside input_enter after all inline-menu branches run.
             }
             _ => {}
         }
@@ -12511,6 +12513,14 @@ impl Input {
 
             // When submit_on_ctrl_enter is enabled, Enter inserts a newline
             // rather than submitting (Ctrl+Enter handles submission in that mode).
+            //
+            // Note: user_initiated_insert replaces any active selection with the
+            // inserted text, which is the correct behaviour here — the user
+            // explicitly asked for a newline edit.
+            // Asymmetry: Ctrl+Enter preserves selections (it's a
+            // submit-on-Ctrl+Enter, not edit-on-Ctrl+Enter); Enter does not
+            // preserve selections because the user explicitly asked for a newline
+            // edit.
             if *AISettings::as_ref(ctx).submit_on_ctrl_enter {
                 self.editor.update(ctx, |editor, ctx| {
                     editor.user_initiated_insert("\n", PlainTextEditorViewAction::NewLine, ctx);

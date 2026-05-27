@@ -346,4 +346,6 @@ integration_tests! {
     test_rich_input_enter_inserts_newline_when_ctrl_enter_setting_is_true,
     test_rich_input_ctrl_enter_submits_when_ctrl_enter_setting_is_true,
     test_rich_input_ctrl_enter_preserves_selection,
+    // Regression: Enter must accept inline menus (not insert newline) when toggle=true
+    test_rich_input_enter_accepts_menu_item_when_toggle_is_true,
 }
