@@ -5,7 +5,7 @@ use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
-    CacheOption, Dismiss, DispatchEventResult, EventHandler, Image, Shrinkable,
+    CacheOption, Debug, Dismiss, DispatchEventResult, EventHandler, Image, Shrinkable,
 };
 use warpui::keymap::Keystroke;
 use warpui::prelude::stack::*;
@@ -153,6 +153,7 @@ impl Component for Lightbox {
                     let image = ConstrainedBox::new(
                         Image::new(asset_source.clone(), CacheOption::Original)
                             .contain()
+                            .layout_using_paint_bounds()
                             .before_load(Align::new(loading_element(appearance)).finish())
                             .finish(),
                     )
@@ -192,17 +193,18 @@ impl Component for Lightbox {
             central_content
         };
 
-        let centered_content = Align::new(content_with_description).finish();
-
-        let scrim = Container::new(
-            Dismiss::new(centered_content)
+        let centered_content = Align::new(
+            Dismiss::new(content_with_description)
                 .prevent_interaction_with_other_elements()
                 .on_dismiss(move |ctx, app| on_dismiss(ctx, app))
                 .finish(),
         )
-        .with_background_color(scrim_color())
-        .with_uniform_padding(SCRIM_PADDING)
         .finish();
+
+        let scrim = Container::new(centered_content)
+            .with_background_color(scrim_color())
+            .with_uniform_padding(SCRIM_PADDING)
+            .finish();
 
         // Stack the scrim, close button, and optional navigation arrows.
         let mut content = Stack::new().with_child(scrim);

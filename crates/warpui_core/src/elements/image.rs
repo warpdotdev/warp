@@ -41,6 +41,7 @@ pub struct Image {
     size: Option<Vector2F>,
     origin: Option<Point>,
     fit_type: FitType,
+    layout_using_paint_bounds: bool,
     animated_image_behavior: AnimatedImageBehavior,
     cache_option: CacheOption,
     started_at: Option<Instant>,
@@ -91,6 +92,7 @@ impl Image {
             failed_to_load_element: None,
             load_timeout: None,
             requested_repaint_after_load: false,
+            layout_using_paint_bounds: false,
             #[cfg(debug_assertions)]
             constructor_location: Some(std::panic::Location::caller()),
         }
@@ -141,6 +143,16 @@ impl Image {
     /// and the empty space should appear on the left rather than being split on both sides.
     pub fn right_aligned(mut self) -> Self {
         self.right_aligned = true;
+        self
+    }
+
+    /// Uses the paint boundary of the image as the laid-out size.
+    ///
+    /// By default, the [`Image`] element bounds will be the incoming max constraint.
+    /// For some cases, we'd prefer for the element's laid-out size to match the painted
+    /// image size.
+    pub fn layout_using_paint_bounds(mut self) -> Self {
+        self.layout_using_paint_bounds = true;
         self
     }
 
@@ -393,7 +405,16 @@ impl Element for Image {
         ctx: &mut LayoutContext,
         app: &AppContext,
     ) -> Vector2F {
-        let size = constraint.max;
+        let mut size = constraint.max;
+        // If we want to lay out the image using the
+        if self.layout_using_paint_bounds {
+            let asset_cache = AssetCache::as_ref(app);
+            let image_size = ImageCache::as_ref(app).image_size(self.source.clone(), asset_cache);
+            if let Some(image_size) = image_size {
+                size = dimensions(image_size.to_f32(), size, self.fit_type);
+            }
+        }
+
         self.size = Some(size);
 
         if let Some(before_load_element) = self.before_load_element.as_mut() {
