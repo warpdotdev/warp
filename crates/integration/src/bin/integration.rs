@@ -468,6 +468,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_rich_input_ctrl_enter_passthrough_when_ctrl_enter_setting_is_false);
     register_test!(test_rich_input_enter_inserts_newline_when_ctrl_enter_setting_is_true);
     register_test!(test_rich_input_ctrl_enter_submits_when_ctrl_enter_setting_is_true);
+    // Regression: Ctrl+Enter with selection must not drop selected text (PR #11723)
+    register_test!(test_rich_input_ctrl_enter_preserves_selection);
 
     tests
 }

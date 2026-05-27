@@ -7554,6 +7554,97 @@ fn ctrl_enter_with_shell_mode_locked_prepends_prefix_and_exits_shell_mode_when_s
 }
 
 // ---------------------------------------------------------------------------
+// Issue #11588 — Selection-preservation regression (PR #11723)
+// ---------------------------------------------------------------------------
+
+/// When `submit_on_ctrl_enter` is `true`, text is selected in the Rich Input,
+/// and the user presses Ctrl+Enter, the submitted message must contain the
+/// **full** buffer text — including the selected portion.
+///
+/// Under the broken (pre-fix) implementation:
+///   1. The editor's `ctrl_enter` handler called `newline_internal`, which
+///      called `insert("\n", …)`.  `insert` replaces any active selection with
+///      the inserted text, so "world" became "\n".
+///   2. `input_ctrl_enter` then called `editor.backspace()` to strip the `\n`.
+///   3. The submitted text was "hello " — "world" was silently lost.
+///
+/// After the fix, `enter_settings.ctrl_enter = Emit` so the editor never
+/// calls `newline_internal`, the selection is untouched, and the full buffer
+/// text "hello world" is submitted.
+#[test]
+fn ctrl_enter_with_selection_preserves_selection_in_submit_when_setting_is_true() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    App::test((), |mut app| async move {
+        let _cli_agent_flag = FeatureFlag::CLIAgentRichInput.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .submit_on_ctrl_enter
+                .set_value(true, ctx)
+                .expect("setting value must succeed");
+        });
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        open_rich_input_for_terminal(&terminal, &mut app);
+
+        let submitted: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let submitted_clone = submitted.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event, _| {
+                if let Event::SubmitCLIAgentInput { text } = event {
+                    submitted_clone.borrow_mut().push(text.clone());
+                }
+            });
+        });
+
+        // Insert "hello world" into the buffer.
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("hello world", ctx);
+        });
+
+        // Programmatically select "world" (columns 6–11 on the single line).
+        input.update(&mut app, |input, ctx| {
+            input.editor.update(ctx, |editor, ctx| {
+                editor
+                    .select_ranges(vec![DisplayPoint::new(0, 6)..DisplayPoint::new(0, 11)], ctx)
+                    .expect("select_ranges should succeed");
+            });
+        });
+
+        // Trigger Ctrl+Enter via the submit handler (same pattern as existing tests).
+        input.update(&mut app, |input, ctx| {
+            input.input_ctrl_enter(ctx);
+        });
+
+        assert_eq!(
+            submitted.borrow().len(),
+            1,
+            "Ctrl+Enter should submit exactly once"
+        );
+        assert_eq!(
+            submitted.borrow()[0],
+            "hello world",
+            "submitted text must equal the full buffer — selected text must not be dropped"
+        );
+
+        // Buffer should be empty after submission.
+        input.read(&app, |input, ctx| {
+            assert!(
+                input.buffer_text(ctx).is_empty(),
+                "buffer should be cleared after submit"
+            );
+        });
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Issue #11588 — Keymap-context predicate tests
 //
 // These two tests pin the `keymap_context_modifier` closure behaviour for the

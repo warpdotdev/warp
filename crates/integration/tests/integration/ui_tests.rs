@@ -345,4 +345,5 @@ integration_tests! {
     test_rich_input_ctrl_enter_passthrough_when_ctrl_enter_setting_is_false,
     test_rich_input_enter_inserts_newline_when_ctrl_enter_setting_is_true,
     test_rich_input_ctrl_enter_submits_when_ctrl_enter_setting_is_true,
+    test_rich_input_ctrl_enter_preserves_selection,
 }

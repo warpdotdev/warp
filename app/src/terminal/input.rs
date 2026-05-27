@@ -2598,6 +2598,9 @@ impl Input {
             // Sync the editor text colors with the (now active or inactive)
             // alt-screen CLI agent background so input text stays legible.
             me.update_cli_agent_editor_text_colors(ctx);
+            // Sync enter_settings so Enter/Ctrl+Enter behave correctly for
+            // the new input state and the current submit_on_ctrl_enter value.
+            me.update_cli_agent_enter_settings(ctx);
             me.set_zero_state_hint_text(ctx);
             ctx.notify();
         });
@@ -6508,6 +6511,11 @@ impl Input {
             AISettingsChangedEvent::VoiceInputEnabled { .. } => {
                 self.update_voice_transcription_options(ctx);
             }
+            AISettingsChangedEvent::SubmitRichInputOnCtrlEnter { .. } => {
+                // Re-sync enter_settings whenever the toggle changes so that
+                // Ctrl+Enter / Enter behave correctly without a reload.
+                self.update_cli_agent_enter_settings(ctx);
+            }
             _ => {}
         }
     }
@@ -10235,23 +10243,7 @@ impl Input {
             }
             EditorEvent::Enter => self.input_enter(ctx),
             EditorEvent::CmdEnter => self.input_cmd_enter(ctx),
-            EditorEvent::CtrlEnter => {
-                // When the user has opted in to Ctrl+Enter submission and the CLI
-                // agent rich input is open, treat Ctrl+Enter as the submit key.
-                // The editor already inserted a trailing newline (its default
-                // InsertNewLineIfMultiLine behaviour), so we backspace it out
-                // before submitting.
-                if CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id)
-                    && *AISettings::as_ref(ctx).submit_on_ctrl_enter
-                {
-                    self.editor.update(ctx, |editor, ctx| {
-                        // EditorEvent::CtrlEnter triggers the editor's default InsertNewLineIfMultiLine,
-                        // which inserts a trailing newline. Strip it before submit so the message is clean.
-                        editor.backspace(ctx);
-                    });
-                }
-                self.input_ctrl_enter(ctx);
-            }
+            EditorEvent::CtrlEnter => self.input_ctrl_enter(ctx),
             EditorEvent::Escape => self.editor_escape(ctx),
             EditorEvent::CtrlC { cleared_buffer_len } => {
                 self.close_input_suggestions(/*should_focus_input=*/ true, ctx);

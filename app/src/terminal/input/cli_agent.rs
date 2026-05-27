@@ -18,8 +18,9 @@ use super::{
 };
 use crate::appearance::Appearance;
 use crate::context_chips::spacing;
-use crate::editor::TextColors;
+use crate::editor::{EnterAction, EnterSettings, TextColors};
 use crate::features::FeatureFlag;
+use crate::settings::AISettings;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::view::TerminalAction;
 
@@ -190,6 +191,42 @@ impl Input {
 
         self.editor.update(ctx, |editor, ctx| {
             editor.set_text_colors(text_colors, ctx);
+        });
+    }
+
+    /// Configures the editor's enter-key behaviour for the CLI agent rich input.
+    ///
+    /// When the rich input is open and `submit_on_ctrl_enter` is `true`:
+    ///   - `enter`       → `InsertNewLineIfMultiLine`  (Enter inserts a newline)
+    ///   - `ctrl_enter`  → `Emit`                      (Ctrl+Enter submits; no buffer mutation)
+    ///
+    /// In all other cases (rich input closed, or setting `false`):
+    ///   - `enter`       → `Emit`                      (Enter submits the command)
+    ///   - `ctrl_enter`  → `Emit`                      (Ctrl+Enter passes through)
+    ///
+    /// `ctrl_enter` is always `Emit` — never `InsertNewLineIfMultiLine` — so the
+    /// editor never replaces an active selection with `\n` on Ctrl+Enter.
+    pub(super) fn update_cli_agent_enter_settings(&mut self, ctx: &mut ViewContext<Self>) {
+        let rich_input_open =
+            CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id);
+        let submit_on_ctrl_enter = *AISettings::as_ref(ctx).submit_on_ctrl_enter;
+
+        let enter_action = if rich_input_open && submit_on_ctrl_enter {
+            EnterAction::InsertNewLineIfMultiLine
+        } else {
+            EnterAction::Emit
+        };
+
+        let settings = EnterSettings {
+            enter: enter_action,
+            // ctrl_enter is always Emit: we never want the editor to mutate
+            // the buffer (and thereby drop any active selection) on Ctrl+Enter.
+            ctrl_enter: EnterAction::Emit,
+            ..Default::default()
+        };
+
+        self.editor.update(ctx, |editor, _ctx| {
+            editor.set_enter_settings(settings);
         });
     }
 }

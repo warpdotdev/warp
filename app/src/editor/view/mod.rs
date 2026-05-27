@@ -3609,6 +3609,15 @@ impl EditorView {
         self.autogrow = autogrow;
     }
 
+    /// Replaces the editor's enter-key settings at runtime.
+    ///
+    /// Use this to change how Enter / Ctrl+Enter are handled without
+    /// re-constructing the view.  The new settings take effect on the
+    /// next keystroke.
+    pub fn set_enter_settings(&mut self, settings: EnterSettings) {
+        self.enter_settings = settings;
+    }
+
     /// Clears the transient editor-height shrink-delay state.
     ///
     /// The shrink-delay is useful when height briefly drops during autosuggestion churn, but
