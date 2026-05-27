@@ -28,6 +28,7 @@ use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
+use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::{
     BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIHistoryEvent,
     BlocklistAIHistoryModel,
@@ -1633,10 +1634,7 @@ impl TerminalManager {
              consumer_id={consumer_id:?}"
         );
         if FeatureFlag::OrchestrationViewerStreamer.is_enabled() {
-            crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer::handle(
-                ctx,
-            )
-            .update(ctx, move |streamer, _ctx| {
+            OrchestrationEventStreamer::handle(ctx).update(ctx, move |streamer, _ctx| {
                 streamer.unregister_viewer_mode_consumer(parent_task_id, consumer_id);
             });
         }

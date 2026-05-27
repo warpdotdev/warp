@@ -1011,23 +1011,16 @@ impl AIConversation {
         self.parent_conversation_id = Some(id);
     }
 
-    /// Returns the last observed v2 orchestration event sequence number, if any.
-    ///
-    /// For owner-side conversations (the orchestrator process), this is the
-    /// highest sequence seen on this conversation's `watched_run_ids` set
-    /// — a per-conversation cursor.
-    ///
-    /// For viewer-mode conversations (`is_viewing_shared_session()` true)
-    /// this is the highest sequence seen across the parent's *direct child
-    /// set* — a different scope. Both numbers come from the same server
-    /// event log so they're comparable, but they live on different
-    /// conversation rows so the two readings never collide.
+    /// Returns the last observed v2 orchestration event sequence number,
+    /// if any. The cursor is per-conversation: the highest sequence the
+    /// streamer has seen on the run-ids this conversation watches
+    /// (`watched_run_ids` for owner-side conversations, the ancestor
+    /// subtree for viewer-mode orchestrator placeholders).
     pub fn last_event_sequence(&self) -> Option<i64> {
         self.last_event_sequence
     }
 
     /// Updates the last observed v2 orchestration event sequence number.
-    /// See [`Self::last_event_sequence`] for the scope of the value.
     pub fn set_last_event_sequence(&mut self, sequence: i64) {
         self.last_event_sequence = Some(sequence);
     }

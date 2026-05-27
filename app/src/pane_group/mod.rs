@@ -5173,8 +5173,7 @@ impl PaneGroup {
             });
         }
 
-        let revert_target = self.panes.original_pane_for_replacement(child_pane_id);
-        if let Some(original_pane_id) = revert_target {
+        if let Some(original_pane_id) = self.panes.original_pane_for_replacement(child_pane_id) {
             self.panes.revert_temporary_replacement(child_pane_id);
             if was_focused {
                 self.focus_pane(original_pane_id, true, ctx);
