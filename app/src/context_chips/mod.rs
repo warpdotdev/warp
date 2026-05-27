@@ -96,10 +96,11 @@ impl std::fmt::Display for ChipValue {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GithubPullRequestChipValue {
-    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_github_pr_url")]
     pub url: String,
-    #[serde(default, deserialize_with = "deserialize_github_pr_number")]
+    #[serde(deserialize_with = "deserialize_github_pr_number")]
     pub number: i32,
     #[serde(default)]
     pub state: String,
@@ -116,13 +117,9 @@ impl GithubPullRequestChipValue {
             return None;
         }
 
-        let mut value = serde_json::from_str::<Self>(text)
+        serde_json::from_str::<Self>(text)
             .ok()
-            .or_else(|| Self::from_url(text))?;
-        if value.number <= 0 {
-            value.number = github_pr_number_from_url(&value.url)?;
-        }
-        (value.number > 0).then_some(value)
+            .or_else(|| Self::from_url(text))
     }
 
     pub fn from_url(url: &str) -> Option<Self> {
@@ -137,27 +134,34 @@ impl GithubPullRequestChipValue {
     }
 }
 
+fn deserialize_github_pr_url<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let url = String::deserialize(deserializer)?.trim().to_string();
+    if url.is_empty() {
+        return Err(serde::de::Error::custom(
+            "pull request URL must not be empty",
+        ));
+    }
+    Ok(url)
+}
 fn deserialize_github_pr_number<'de, D>(deserializer: D) -> Result<i32, D::Error>
 where
     D: Deserializer<'de>,
 {
     let value = serde_json::Value::deserialize(deserializer)?;
-    match value {
-        serde_json::Value::Null => Ok(0),
-        serde_json::Value::String(s) => Ok(parse_github_pr_number(&s).unwrap_or_default()),
-        serde_json::Value::Number(n) => {
-            let Some(number) = n.as_i64() else {
-                return Ok(0);
-            };
-            Ok(i32::try_from(number)
-                .ok()
-                .filter(|number| *number > 0)
-                .unwrap_or_default())
-        }
+    let number = match value {
+        serde_json::Value::String(s) => parse_github_pr_number(&s),
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .and_then(|number| i32::try_from(number).ok())
+            .filter(|number| *number > 0),
         value => Err(serde::de::Error::custom(format!(
             "expected string or number for pull request number, got {value}"
-        ))),
-    }
+        )))?,
+    };
+    number.ok_or_else(|| serde::de::Error::custom("pull request number must be positive"))
 }
 
 impl From<String> for ChipValue {

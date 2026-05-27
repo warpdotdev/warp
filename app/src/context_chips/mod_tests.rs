@@ -1,4 +1,4 @@
-use super::GithubPullRequestChipValue;
+use super::{ChipValue, GithubPullRequestChipValue};
 
 #[test]
 fn github_pull_request_chip_value_parses_structured_json() {
@@ -45,4 +45,50 @@ fn github_pull_request_chip_value_rejects_invalid_number_without_url_fallback() 
         r#"{"url":"","number":"not-a-number","state":"OPEN","draft":false,"base_branch":"main"}"#,
     )
     .is_none());
+}
+
+#[test]
+fn chip_value_deserializes_structured_github_pull_request() {
+    let value = serde_json::from_str::<ChipValue>(
+        r#"{"url":"https://github.com/warpdotdev/warp-internal/pull/123","number":123}"#,
+    )
+    .expect("expected structured PR chip value");
+
+    assert_eq!(
+        value.as_github_pull_request().map(|pr| pr.number),
+        Some(123)
+    );
+}
+
+#[test]
+fn chip_value_rejects_unknown_object_as_github_pull_request() {
+    assert!(serde_json::from_str::<ChipValue>(r#"{"unknown":"value"}"#).is_err());
+}
+
+#[test]
+fn chip_value_rejects_github_pull_request_with_extra_fields() {
+    assert!(
+        serde_json::from_str::<ChipValue>(
+            r#"{"url":"https://github.com/warpdotdev/warp-internal/pull/123","number":123,"unknown":"value"}"#,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn chip_value_rejects_github_pull_request_without_url_or_number() {
+    assert!(serde_json::from_str::<ChipValue>(
+        r#"{"url":"https://github.com/warpdotdev/warp-internal/pull/123"}"#,
+    )
+    .is_err());
+    assert!(serde_json::from_str::<ChipValue>(r#"{"number":123}"#).is_err());
+}
+
+#[test]
+fn chip_value_rejects_github_pull_request_with_default_url_or_number() {
+    assert!(serde_json::from_str::<ChipValue>(r#"{"url":"","number":123}"#).is_err());
+    assert!(serde_json::from_str::<ChipValue>(
+        r#"{"url":"https://github.com/warpdotdev/warp-internal/pull/123","number":0}"#,
+    )
+    .is_err());
 }
