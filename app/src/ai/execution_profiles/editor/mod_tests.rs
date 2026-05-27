@@ -130,17 +130,20 @@ fn openai_direct_long_context_warning_starts_above_threshold() {
     assert!(!should_show_long_context_pricing_warning(
         &model,
         Some(200_000),
-        false
+        false,
+        true
     ));
     assert!(!should_show_long_context_pricing_warning(
         &model,
         Some(272_000),
-        false
+        false,
+        true
     ));
     assert!(should_show_long_context_pricing_warning(
         &model,
         Some(272_001),
-        false
+        false,
+        true
     ));
 }
 
@@ -150,10 +153,13 @@ fn custom_endpoint_fixed_context_does_not_expose_control_or_warning() {
     model.context_window.is_configurable = false;
     model.context_window.max = 200_000;
 
-    assert!(!has_effective_configurable_context_window(&model, false));
+    assert!(!has_effective_configurable_context_window(
+        &model, false, false
+    ));
     assert!(!should_show_long_context_pricing_warning(
         &model,
         Some(1_000_000),
+        false,
         false
     ));
 }
@@ -162,10 +168,13 @@ fn custom_endpoint_fixed_context_does_not_expose_control_or_warning() {
 fn openai_byok_suppresses_expanded_control_and_stale_limit_warning() {
     let model = configurable_model(LLMProvider::OpenAI, true);
 
-    assert!(!has_effective_configurable_context_window(&model, true));
+    assert!(!has_effective_configurable_context_window(
+        &model, true, true
+    ));
     assert!(!should_show_long_context_pricing_warning(
         &model,
         Some(1_000_000),
+        true,
         true
     ));
 }
@@ -174,22 +183,43 @@ fn openai_byok_suppresses_expanded_control_and_stale_limit_warning() {
 fn openai_without_direct_host_suppresses_expanded_control_and_warning() {
     let model = configurable_model(LLMProvider::OpenAI, false);
 
-    assert!(!has_effective_configurable_context_window(&model, false));
+    assert!(!has_effective_configurable_context_window(
+        &model, false, true
+    ));
     assert!(!should_show_long_context_pricing_warning(
         &model,
         Some(1_000_000),
+        false,
+        true
+    ));
+}
+
+#[test]
+fn openai_expanded_context_is_hidden_while_feature_flag_is_off() {
+    let model = configurable_model(LLMProvider::OpenAI, true);
+
+    assert!(!has_effective_configurable_context_window(
+        &model, false, false
+    ));
+    assert!(!should_show_long_context_pricing_warning(
+        &model,
+        Some(1_000_000),
+        false,
         false
     ));
 }
 
 #[test]
-fn non_openai_configurable_context_does_not_show_openai_pricing_warning() {
+fn non_openai_configurable_context_ignores_gpt_flag_and_does_not_show_openai_warning() {
     let model = configurable_model(LLMProvider::Anthropic, true);
 
-    assert!(has_effective_configurable_context_window(&model, false));
+    assert!(has_effective_configurable_context_window(
+        &model, false, false
+    ));
     assert!(!should_show_long_context_pricing_warning(
         &model,
         Some(1_000_000),
+        false,
         false
     ));
 }

@@ -118,7 +118,11 @@ impl AIExecutionProfileAppExt for AIExecutionProfile {
     fn configurable_context_window(&self, app: &AppContext) -> Option<LLMContextWindow> {
         let llm = effective_base_model(self, app);
         let uses_openai_api_key = is_using_api_key_for_provider(&LLMProvider::OpenAI, app);
-        if has_effective_configurable_context_window(llm, uses_openai_api_key) {
+        if has_effective_configurable_context_window(
+            llm,
+            uses_openai_api_key,
+            FeatureFlag::GPTConfigurableContextWindow.is_enabled(),
+        ) {
             Some(llm.context_window.clone())
         } else {
             None
@@ -140,6 +144,7 @@ impl AIExecutionProfileAppExt for AIExecutionProfile {
                     .unwrap_or(llm.context_window.default_max),
             ),
             uses_openai_api_key,
+            FeatureFlag::GPTConfigurableContextWindow.is_enabled(),
         )
     }
 }
@@ -147,13 +152,16 @@ impl AIExecutionProfileAppExt for AIExecutionProfile {
 pub(crate) fn has_effective_configurable_context_window(
     llm: &LLMInfo,
     uses_openai_api_key: bool,
+    gpt_configurable_context_window_enabled: bool,
 ) -> bool {
     if !llm.context_window.is_configurable || llm.context_window.max == 0 {
         return false;
     }
 
     if is_expanded_openai_model(llm) {
-        is_expanded_openai_direct_model(llm) && !uses_openai_api_key
+        gpt_configurable_context_window_enabled
+            && is_expanded_openai_direct_model(llm)
+            && !uses_openai_api_key
     } else {
         true
     }
@@ -163,8 +171,10 @@ pub(crate) fn should_show_long_context_pricing_warning(
     llm: &LLMInfo,
     selected_limit: Option<u32>,
     uses_openai_api_key: bool,
+    gpt_configurable_context_window_enabled: bool,
 ) -> bool {
-    is_expanded_openai_direct_model(llm)
+    gpt_configurable_context_window_enabled
+        && is_expanded_openai_direct_model(llm)
         && !uses_openai_api_key
         && selected_limit.is_some_and(|limit| limit > LONG_CONTEXT_WARNING_THRESHOLD)
 }
