@@ -4,7 +4,6 @@ use warpui::{App, EntityId};
 use super::*;
 use crate::ai::blocklist::handoff::HandoffLaunchAttachments;
 use crate::ai::llms::LLMPreferences;
-use crate::server::server_api::ai::OrchestrationHandoffInfo;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 fn attachment() -> AttachmentInput {
@@ -49,7 +48,7 @@ fn pending_handoff_fresh_launch() -> PendingHandoff {
     }
 }
 
-fn pending_handoff_with_orchestration(info: OrchestrationHandoffInfo) -> PendingHandoff {
+fn pending_handoff_with_orchestration() -> PendingHandoff {
     PendingHandoff {
         forked_conversation_id: Some("forked-conversation".to_owned()),
         title: None,
@@ -57,7 +56,7 @@ fn pending_handoff_with_orchestration(info: OrchestrationHandoffInfo) -> Pending
         snapshot_upload: SnapshotUploadStatus::Pending,
         submission_state: HandoffSubmissionState::Idle,
         auto_submit: Some(pending_launch()),
-        orchestration_handoff: Some(info),
+        orchestration_handoff: Some(true),
     }
 }
 
@@ -407,116 +406,26 @@ fn handoff_request_omits_orchestration_handoff_when_pending_handoff_has_none() {
 }
 
 #[test]
-fn handoff_request_carries_orchestration_handoff_for_child_source() {
+fn handoff_request_carries_universal_orchestration_handoff_marker() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let model = add_model(&mut app);
 
         model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(
-                Some(pending_handoff_with_orchestration(
-                    OrchestrationHandoffInfo {
-                        had_parent: true,
-                        had_children: false,
-                    },
-                )),
-                ctx,
-            );
+            model.set_pending_handoff(Some(pending_handoff_with_orchestration()), ctx);
             model.queue_handoff_auto_submit(ctx);
         });
 
         model.read(&app, |model, _| {
             let request = model.request().expect("request should be populated");
-            let info = request
-                .orchestration_handoff
-                .as_ref()
-                .expect("orchestration handoff should be set");
-            assert!(info.had_parent);
-            assert!(!info.had_children);
+            assert_eq!(request.orchestration_handoff, Some(true));
 
             let json = serde_json::to_value(request).expect("request should serialize to JSON");
-            let oh = json
-                .get("orchestration_handoff")
-                .expect("orchestration_handoff should serialize");
-            assert_eq!(oh.get("had_parent").and_then(|v| v.as_bool()), Some(true));
-            // had_children is false and omitted via skip_serializing_if.
-            assert!(oh.get("had_children").is_none());
-        });
-    });
-}
-
-#[test]
-fn handoff_request_carries_orchestration_handoff_for_parent_source() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(
-                Some(pending_handoff_with_orchestration(
-                    OrchestrationHandoffInfo {
-                        had_parent: false,
-                        had_children: true,
-                    },
-                )),
-                ctx,
+            assert_eq!(
+                json.get("orchestration_handoff")
+                    .and_then(serde_json::Value::as_bool),
+                Some(true)
             );
-            model.queue_handoff_auto_submit(ctx);
-        });
-
-        model.read(&app, |model, _| {
-            let request = model.request().expect("request should be populated");
-            let info = request
-                .orchestration_handoff
-                .as_ref()
-                .expect("orchestration handoff should be set");
-            assert!(!info.had_parent);
-            assert!(info.had_children);
-
-            let json = serde_json::to_value(request).expect("request should serialize to JSON");
-            let oh = json
-                .get("orchestration_handoff")
-                .expect("orchestration_handoff should serialize");
-            assert!(oh.get("had_parent").is_none());
-            assert_eq!(oh.get("had_children").and_then(|v| v.as_bool()), Some(true));
-        });
-    });
-}
-
-#[test]
-fn handoff_request_carries_orchestration_handoff_when_both_bits_set() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(
-                Some(pending_handoff_with_orchestration(
-                    OrchestrationHandoffInfo {
-                        had_parent: true,
-                        had_children: true,
-                    },
-                )),
-                ctx,
-            );
-            model.queue_handoff_auto_submit(ctx);
-        });
-
-        model.read(&app, |model, _| {
-            let request = model.request().expect("request should be populated");
-            let info = request
-                .orchestration_handoff
-                .as_ref()
-                .expect("orchestration handoff should be set");
-            assert!(info.had_parent);
-            assert!(info.had_children);
-
-            let json = serde_json::to_value(request).expect("request should serialize to JSON");
-            let oh = json
-                .get("orchestration_handoff")
-                .expect("orchestration_handoff should serialize");
-            assert_eq!(oh.get("had_parent").and_then(|v| v.as_bool()), Some(true));
-            assert_eq!(oh.get("had_children").and_then(|v| v.as_bool()), Some(true));
         });
     });
 }

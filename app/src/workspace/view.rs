@@ -308,8 +308,6 @@ use crate::server::cloud_objects::update_manager::{
 use crate::server::ids::{ObjectUid, ServerId, SyncId};
 use crate::server::network_log_pane_manager::NetworkLogPaneManager;
 use crate::server::server_api::ai::AIClient;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::server::server_api::ai::OrchestrationHandoffInfo;
 use crate::server::server_api::auth::AuthClient;
 use crate::server::server_api::{ServerApi, ServerApiEvent, ServerApiProvider, ServerTime};
 use crate::server::telemetry::{
@@ -14072,19 +14070,14 @@ impl Workspace {
             });
         }
 
-        // Annotate the handoff when the source conversation had any orchestration
-        // relationships, so the server can inject a first-turn message telling the
-        // cloud agent that those prior relationships no longer reach it.
-        let had_parent = source_conversation.has_parent_agent();
-        let had_children = !history_model
-            .as_ref(ctx)
-            .child_conversation_ids_of(&source_conversation.id())
-            .is_empty();
-        let orchestration_handoff =
-            (had_parent || had_children).then_some(OrchestrationHandoffInfo {
-                had_parent,
-                had_children,
-            });
+        // Mark handoff from any orchestrated source so the server can inject
+        // the universal first-turn orchestration handoff message.
+        let orchestration_handoff = (source_conversation.has_parent_agent()
+            || !history_model
+                .as_ref(ctx)
+                .child_conversation_ids_of(&source_conversation.id())
+                .is_empty())
+        .then_some(true);
 
         // Keep handoff state on the cloud model until snapshot prep and submit finish.
         let pending = PendingHandoff {

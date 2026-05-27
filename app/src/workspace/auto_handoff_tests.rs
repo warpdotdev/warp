@@ -93,14 +93,3 @@ fn auto_handoff_skips_conversations_that_cannot_handoff_to_cloud() {
         Some(AutoCloudHandoffSkipReason::CloudHandoffUnavailable)
     );
 }
-
-#[test]
-fn auto_handoff_eligible_when_orchestration_no_longer_gates_cloud_handoff() {
-    // Orchestration state no longer gates cloud handoff. An orchestrated
-    // conversation that is otherwise eligible (in-progress, synced, not
-    // viewing a shared session, not previously attempted) must report no skip
-    // reason. The eligibility struct is the same as a non-orchestrated
-    // conversation; this test pins that behavior so any future re-introduction
-    // of an orchestration gate fails loudly here.
-    assert_eq!(eligibility().skip_reason(), None);
-}
