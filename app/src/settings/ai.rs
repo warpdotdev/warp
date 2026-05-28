@@ -10,7 +10,7 @@ use cfg_if::cfg_if;
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use lazy_static::lazy_static;
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use settings::{
@@ -499,7 +499,14 @@ enum AgentModeCommandExecutionPredicateType {
 impl AgentModeCommandExecutionPredicateType {
     fn new_regex(regex: &str) -> Result<Self, regex::Error> {
         // Redundant anchors aren't a problem so we can unconditionally add them.
-        let anchored_regex = Regex::new(&format!("^{regex}$"))?;
+        // Cap DFA size to 64 KB per pattern (down from the default ~2 MB) to
+        // reduce the ~8 MB cumulative startup memory cost of compiling all 24
+        // allowlist + denylist patterns.  The regex engine transparently falls
+        // back to a hybrid NFA strategy for patterns that exceed the limit,
+        // which is fine for simple command-name matching.
+        let anchored_regex = RegexBuilder::new(&format!("^{regex}$"))
+            .dfa_size_limit(64 * 1024)
+            .build()?;
         Ok(Self::AnchoredRegex(anchored_regex))
     }
 

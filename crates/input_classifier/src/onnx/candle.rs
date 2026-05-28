@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use anyhow::{Context as _, Result, ensure};
 use candle_core::{IndexOp as _, Tensor};
@@ -10,17 +11,53 @@ use warp_completer::ParsedTokensSnapshot;
 use super::{ClassificationResult, Model};
 use crate::InputClassifierDecisionSource;
 
-pub struct InferenceRunner {
+/// Holds the decoded ONNX model and tokenizer. Loaded lazily on first
+/// inference to avoid a ~23 MB allocation spike at startup.
+struct LoadedModel {
     model: ModelProto,
     tokenizer: Tokenizer,
 }
 
+pub struct InferenceRunner {
+    model_spec: Model,
+    loaded: OnceLock<LoadedModel>,
+}
+
 impl InferenceRunner {
     pub fn new(model: Model) -> Result<Self> {
+        // Validate that the embedded model files exist without decoding them.
+        // The expensive decode + tokenizer parse is deferred to first inference.
+        anyhow::ensure!(
+            model.bytes().is_some(),
+            "Model file not found for {:?}",
+            model
+        );
+        anyhow::ensure!(
+            model.tokenizer_bytes().is_some(),
+            "Tokenizer file not found for {:?}",
+            model
+        );
         Ok(Self {
-            model: Self::load_model(model)?,
-            tokenizer: Self::load_tokenizer(model)?,
+            model_spec: model,
+            loaded: OnceLock::new(),
         })
+    }
+
+    /// Returns the lazily-loaded model and tokenizer, initializing them on first
+    /// call. Since the model bytes are embedded in the binary via `RustEmbed`,
+    /// a load failure is deterministic and will be retried on each call.
+    fn ensure_loaded(&self) -> Result<&LoadedModel> {
+        if let Some(loaded) = self.loaded.get() {
+            return Ok(loaded);
+        }
+
+        let model = Self::load_model(self.model_spec)?;
+        let tokenizer = Self::load_tokenizer(self.model_spec)?;
+        // Another thread may have initialized concurrently; use its value if so.
+        let _ = self.loaded.set(LoadedModel { model, tokenizer });
+        self.loaded
+            .get()
+            .context("loaded model should be initialized")
     }
 
     fn load_model(model: Model) -> Result<ModelProto> {
@@ -42,8 +79,10 @@ impl InferenceRunner {
 
 impl super::InferenceRunner for InferenceRunner {
     fn run_inference(&self, input: &ParsedTokensSnapshot) -> Result<ClassificationResult> {
+        let loaded = self.ensure_loaded()?;
+
         // Encode the input text into tokens.
-        let encoding = self
+        let encoding = loaded
             .tokenizer
             .encode_fast(input.buffer_text.as_str(), true)
             .map_err(|e| anyhow::anyhow!(e))?;
@@ -74,7 +113,7 @@ impl super::InferenceRunner for InferenceRunner {
 
         // Run inference.
         let outputs = candle_onnx::simple_eval(
-            &self.model,
+            &loaded.model,
             HashMap::from([
                 ("input_ids".to_string(), input_ids.unsqueeze(0)?),
                 ("attention_mask".to_string(), attention_mask.unsqueeze(0)?),
