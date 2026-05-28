@@ -1416,12 +1416,12 @@ impl TerminalModel {
     /// short-circuiting an empty-prompt handoff via `skip_initial_turn`).
     /// Viewers use this to clear `BlockList::is_executing_oz_environment_startup_commands`
     /// and tear down the "Running setup commands…" chip.
-    pub fn send_ambient_setup_phase_ended_for_shared_session(&mut self) {
+    pub fn send_cloud_mode_setup_phase_ended_for_shared_session(&mut self) {
         if self.shared_session_status().is_sharer() {
             if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx {
-                if let Err(e) = tx.try_send(OrderedTerminalEventType::AmbientSetupPhaseEnded) {
+                if let Err(e) = tx.try_send(OrderedTerminalEventType::CloudModeSetupPhaseEnded) {
                     log::warn!(
-                        "Failed to send OrderedTerminalEventType::AmbientSetupPhaseEnded: {e}"
+                        "Failed to send OrderedTerminalEventType::CloudModeSetupPhaseEnded: {e}"
                     );
                 }
             }

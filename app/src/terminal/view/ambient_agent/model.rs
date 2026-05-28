@@ -386,7 +386,7 @@ impl AmbientAgentViewModel {
     }
 
     /// Tear down the active "Running setup commands…" chip in response to the
-    /// `AmbientSetupPhaseEnded` shared-session marker. Idempotent: the inner
+    /// `CloudModeSetupPhaseEnded` shared-session marker. Idempotent: the inner
     /// `finish_setup_command_group` no-ops when the group is not running, and
     /// `set_setup_command_group_visibility(false)` no-ops when already collapsed.
     pub(crate) fn tear_down_active_setup_command_group(&mut self, ctx: &mut ModelContext<Self>) {

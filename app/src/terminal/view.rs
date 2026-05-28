@@ -7492,7 +7492,7 @@ impl TerminalView {
     /// ambient setup command group. Owns both pieces of state so callers
     /// (the shared-session viewer arm, legacy fallbacks) don't have to
     /// orchestrate two unrelated mutations. Idempotent across both.
-    pub(crate) fn tear_down_ambient_setup_phase(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn tear_down_cloud_mode_setup_phase(&mut self, ctx: &mut ViewContext<Self>) {
         self.model
             .lock()
             .block_list_mut()

@@ -1008,32 +1008,32 @@ fn test_synchronized_output_sharing_session_split_batch() {
 }
 
 #[test]
-fn ambient_setup_phase_ended_emits_when_sharing() {
+fn cloud_mode_setup_phase_ended_emits_when_sharing() {
     let mut terminal: TerminalModel = TerminalModel::mock(None, None);
     terminal.set_shared_session_status(SharedSessionStatus::ActiveSharer);
     let (tx, rx) = async_channel::unbounded();
     terminal.set_ordered_terminal_events_for_shared_session_tx(tx);
 
-    terminal.send_ambient_setup_phase_ended_for_shared_session();
+    terminal.send_cloud_mode_setup_phase_ended_for_shared_session();
 
     rx.close();
     let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert_eq!(events.len(), 1);
     assert!(matches!(
         events[0],
-        OrderedTerminalEventType::AmbientSetupPhaseEnded
+        OrderedTerminalEventType::CloudModeSetupPhaseEnded
     ));
 }
 
 #[test]
-fn ambient_setup_phase_ended_does_not_emit_when_not_sharing() {
+fn cloud_mode_setup_phase_ended_does_not_emit_when_not_sharing() {
     let mut terminal: TerminalModel = TerminalModel::mock(None, None);
     // No `set_shared_session_status(ActiveSharer)` here — the helper must
     // bail before reaching the channel.
     let (tx, rx) = async_channel::unbounded();
     terminal.set_ordered_terminal_events_for_shared_session_tx(tx);
 
-    terminal.send_ambient_setup_phase_ended_for_shared_session();
+    terminal.send_cloud_mode_setup_phase_ended_for_shared_session();
 
     rx.close();
     let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();

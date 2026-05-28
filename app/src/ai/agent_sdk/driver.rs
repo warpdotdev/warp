@@ -2502,7 +2502,7 @@ impl AgentDriver {
         let restored_conversation_id = self.restored_conversation_id;
 
         // ServerSide prompts enter the agent view and emit
-        // `AmbientSetupPhaseEnded` to tear down the Cloud Mode Setup V2 chip.
+        // `CloudModeSetupPhaseEnded` to tear down the Cloud Mode Setup V2 chip.
         // (Local prompts have no cloud setup phase; they enter the view with
         // the user prompt below.)
         //
@@ -2524,7 +2524,7 @@ impl AgentDriver {
                     terminal
                         .model
                         .lock()
-                        .send_ambient_setup_phase_ended_for_shared_session();
+                        .send_cloud_mode_setup_phase_ended_for_shared_session();
                 })
             });
             if self.skip_initial_turn {

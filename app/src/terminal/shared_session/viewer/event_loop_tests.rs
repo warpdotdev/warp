@@ -620,7 +620,7 @@ fn test_pty_bytes_buffered_before_command_execution_started() {
 }
 
 #[test]
-fn test_ambient_setup_phase_ended_clears_setup_state() {
+fn test_cloud_mode_setup_phase_ended_clears_setup_state() {
     App::test((), |mut app| async move {
         let terminal_view = cloud_mode_terminal_view(&mut app);
         // Share the view's own `TerminalModel` with the event loop so the
@@ -683,7 +683,7 @@ fn test_ambient_setup_phase_ended_clears_setup_state() {
             event_loop.process_ordered_terminal_event(
                 OrderedTerminalEvent {
                     event_no: 0,
-                    event_type: OrderedTerminalEventType::AmbientSetupPhaseEnded,
+                    event_type: OrderedTerminalEventType::CloudModeSetupPhaseEnded,
                 },
                 ctx,
             );
@@ -706,7 +706,7 @@ fn test_ambient_setup_phase_ended_clears_setup_state() {
 }
 
 #[test]
-fn test_ambient_setup_phase_ended_when_flag_already_false() {
+fn test_cloud_mode_setup_phase_ended_when_flag_already_false() {
     App::test((), |mut app| async move {
         let terminal_view = cloud_mode_terminal_view(&mut app);
         let model = terminal_view.read(&app, |view, _| view.model.clone());
@@ -748,7 +748,7 @@ fn test_ambient_setup_phase_ended_when_flag_already_false() {
             event_loop.process_ordered_terminal_event(
                 OrderedTerminalEvent {
                     event_no: 0,
-                    event_type: OrderedTerminalEventType::AmbientSetupPhaseEnded,
+                    event_type: OrderedTerminalEventType::CloudModeSetupPhaseEnded,
                 },
                 ctx,
             );
@@ -773,7 +773,7 @@ fn test_ambient_setup_phase_ended_when_flag_already_false() {
 }
 
 #[test]
-fn test_ambient_setup_phase_ended_is_idempotent() {
+fn test_cloud_mode_setup_phase_ended_is_idempotent() {
     App::test((), |mut app| async move {
         let terminal_view = cloud_mode_terminal_view(&mut app);
         let model = terminal_view.read(&app, |view, _| view.model.clone());
@@ -813,7 +813,7 @@ fn test_ambient_setup_phase_ended_is_idempotent() {
             event_loop.process_ordered_terminal_event(
                 OrderedTerminalEvent {
                     event_no: 0,
-                    event_type: OrderedTerminalEventType::AmbientSetupPhaseEnded,
+                    event_type: OrderedTerminalEventType::CloudModeSetupPhaseEnded,
                 },
                 ctx,
             );
@@ -825,7 +825,7 @@ fn test_ambient_setup_phase_ended_is_idempotent() {
             event_loop.process_ordered_terminal_event(
                 OrderedTerminalEvent {
                     event_no: 1,
-                    event_type: OrderedTerminalEventType::AmbientSetupPhaseEnded,
+                    event_type: OrderedTerminalEventType::CloudModeSetupPhaseEnded,
                 },
                 ctx,
             );

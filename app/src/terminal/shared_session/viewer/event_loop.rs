@@ -362,13 +362,13 @@ impl EventLoop {
                         });
                     }
                 }
-                OrderedTerminalEventType::AmbientSetupPhaseEnded => {
+                OrderedTerminalEventType::CloudModeSetupPhaseEnded => {
                     // Canonical setup-complete signal from the sharer. Legacy
                     // AppendedExchange-driven teardowns remain idempotently as
                     // a fallback for pre-feature sharers.
                     if let Some(view) = self.terminal_view.upgrade(ctx) {
                         view.update(ctx, |view, ctx| {
-                            view.tear_down_ambient_setup_phase(ctx);
+                            view.tear_down_cloud_mode_setup_phase(ctx);
                         });
                     }
                 }
