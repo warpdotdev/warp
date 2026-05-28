@@ -25,7 +25,7 @@ const PLATFORM_MARKETPLACE_REPO: &str = "warpdotdev/claude-code-warp-internal";
 // (See the Versioning section of that repo's README.)
 const MINIMUM_PLUGIN_VERSION: &str = "2.1.0";
 // Keep in sync with the oz-harness-support plugin version in warpdotdev/claude-code-warp-internal.
-const MINIMUM_PLATFORM_PLUGIN_VERSION: &str = "1.1.4";
+const MINIMUM_PLATFORM_PLUGIN_VERSION: &str = "1.1.3";
 
 pub(super) struct ClaudeCodePluginManager {
     executor: LocalCommandExecutor,

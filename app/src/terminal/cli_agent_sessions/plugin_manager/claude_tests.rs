@@ -33,7 +33,7 @@ fn installed_platform_plugin_version_returns_version_when_present() {
 
     let json = serde_json::json!({
         "plugins": {
-            "oz-harness-support@claude-code-warp": [{"version": "1.1.4"}]
+            "oz-harness-support@claude-code-warp": [{"version": "1.1.3"}]
         }
     });
     fs::write(
@@ -44,7 +44,7 @@ fn installed_platform_plugin_version_returns_version_when_present() {
 
     assert_eq!(
         installed_platform_plugin_version(dir.path()).as_deref(),
-        Some("1.1.4")
+        Some("1.1.3")
     );
 }
 
@@ -56,7 +56,7 @@ fn platform_plugin_installed_when_platform_plugin_present() {
 
     let json = serde_json::json!({
         "plugins": {
-            "oz-harness-support@claude-code-warp": [{"version": "1.1.4"}]
+            "oz-harness-support@claude-code-warp": [{"version": "1.1.3"}]
         }
     });
     fs::write(
@@ -77,7 +77,7 @@ fn platform_plugin_needs_update_via_trait_when_version_below_minimum() {
 
     let json = serde_json::json!({
         "plugins": {
-            "oz-harness-support@claude-code-warp": [{"version": "1.1.3"}]
+            "oz-harness-support@claude-code-warp": [{"version": "1.1.2"}]
         }
     });
     fs::write(
@@ -102,7 +102,7 @@ fn platform_plugin_does_not_need_update_via_trait_when_current() {
 
     let json = serde_json::json!({
         "plugins": {
-            "oz-harness-support@claude-code-warp": [{"version": "1.1.4"}]
+            "oz-harness-support@claude-code-warp": [{"version": "1.1.3"}]
         }
     });
     fs::write(
