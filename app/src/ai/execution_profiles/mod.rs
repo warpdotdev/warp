@@ -13,7 +13,7 @@ use crate::cloud_object::{
     GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType, Revision, UniquePer,
 };
 use crate::server::sync_queue::QueueItem;
-use crate::settings::{AISettings, DEFAULT_COMMAND_EXECUTION_ALLOWLIST};
+use crate::settings::AISettings;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub mod editor;
@@ -68,6 +68,7 @@ pub fn resolve_cloud_agent_computer_use_state(ctx: &AppContext) -> CloudAgentCom
     }
 }
 
+#[cfg(not(feature = "agent_mode_evals"))]
 pub fn create_default_from_legacy_settings(app: &AppContext) -> AIExecutionProfile {
     // Note that the legacy "Autonomy" and "Code Access" settings are not imported here.
     // The "Code Access" setting defaulted to "Always Ask", which is the most restrictive, so
@@ -83,7 +84,7 @@ pub fn create_default_from_legacy_settings(app: &AppContext) -> AIExecutionProfi
         command_allowlist: ai_settings
             .agent_mode_command_execution_allowlist
             .iter()
-            .filter(|cmd| !DEFAULT_COMMAND_EXECUTION_ALLOWLIST.contains(cmd))
+            .filter(|cmd| !crate::settings::DEFAULT_COMMAND_EXECUTION_ALLOWLIST.contains(cmd))
             .cloned()
             .collect(),
         directory_allowlist: ai_settings.agent_mode_coding_file_read_allowlist.clone(),

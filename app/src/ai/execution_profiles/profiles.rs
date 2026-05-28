@@ -10,8 +10,7 @@ use warp_core::user_preferences::GetUserPreferences;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::{
-    create_default_from_legacy_settings, AIExecutionProfile, ActionPermission,
-    CloudAIExecutionProfileModel, WriteToPtyPermission,
+    AIExecutionProfile, ActionPermission, CloudAIExecutionProfileModel, WriteToPtyPermission,
 };
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
@@ -167,7 +166,7 @@ impl AIExecutionProfilesModel {
                         }
                         None => DefaultProfileState::Unsynced {
                             id: ClientProfileId::new(),
-                            profile: create_default_from_legacy_settings(ctx),
+                            profile: super::create_default_from_legacy_settings(ctx),
                         },
                     },
                     // When running as a CLI, we ignore the GUI default and use a more permissive default.
@@ -183,7 +182,7 @@ impl AIExecutionProfilesModel {
                     // exhaustively.
                     LaunchMode::RemoteServerProxy | LaunchMode::RemoteServerDaemon { .. } => DefaultProfileState::Unsynced {
                         id: ClientProfileId::new(),
-                        profile: create_default_from_legacy_settings(ctx),
+                        profile: super::create_default_from_legacy_settings(ctx),
                     },
                 };
             }

@@ -401,7 +401,7 @@ command = { workspace = true, features = ["test-util"] }
 ctor = "0.1.18"
 cloud_object_client = { workspace = true, features = ["test-util"] }
 http_client = { workspace = true, features = ["test-util"] }
-mockall = "0.13.1"
+mockall.workspace = true
 mockito.workspace = true
 serial_test = "0.8.0"
 sum_tree = { workspace = true, features = ["test-util"] }

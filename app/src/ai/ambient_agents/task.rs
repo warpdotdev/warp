@@ -1,7 +1,7 @@
 //! Ambient agent task types and utilities.
 
 use anyhow::anyhow;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 pub use cloud_object_models::{
     AgentConfigSnapshot, HarnessAuthSecretsConfig, HarnessConfig, HarnessModelConfig,
 };

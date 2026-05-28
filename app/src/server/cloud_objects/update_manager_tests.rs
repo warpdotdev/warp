@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use cloud_object_client::MockObjectClient;
 use cloud_object_models::JsonSerializer;
 use futures_lite::future;
 use settings::{RespectUserSyncSetting, SyncToCloud};
@@ -47,8 +48,6 @@ use crate::server::cloud_objects::update_manager::{
 use crate::server::ids::{
     ClientId, HashableId, ObjectUid, ServerId, ServerIdAndType, SyncId, ToServerId,
 };
-#[cfg(test)]
-use crate::server::server_api::object::MockObjectClient;
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::{CloudPreferenceModel, Preference};
 use crate::workflows::workflow::{Argument, ArgumentType, Workflow};

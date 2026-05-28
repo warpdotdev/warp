@@ -4,8 +4,8 @@ use anyhow::{anyhow, Context, Result};
 use async_channel::Sender;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-#[cfg(any(test, feature = "test-util"))]
-pub use cloud_object_client::MockObjectClient;
+// #[cfg(any(test, feature = "test-util"))]
+// pub use cloud_object_client::MockObjectClient;
 use cloud_object_client::{
     GetCloudObjectResponse, InitialLoadResponse, ObjectActionHistory, ObjectActionType,
     ObjectDeleteResult, ObjectMetadataUpdateResult, ObjectPermissionUpdateResult,

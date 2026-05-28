@@ -13,7 +13,7 @@ async-trait.workspace = true
 chrono.workspace = true
 cloud_object_models.workspace = true
 cloud_objects.workspace = true
-mockall = { version = "0.13.1", optional = true }
+mockall = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
@@ -22,3 +22,6 @@ warp_graphql.workspace = true
 
 [features]
 test-util = ["dep:mockall", "cloud_object_models/test-util", "cloud_objects/test-util"]
+
+[dev-dependencies]
+mockall.workspace = true
