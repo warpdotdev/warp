@@ -201,9 +201,7 @@ settings::macros::implement_setting_for_enum!(
 impl DirectoryTabColors {
     /// Returns the configured tab color for a directory using longest-prefix matching.
     /// Returns `None` if no configured directory is a prefix of `dir`.
-    ///
-    /// The caller should provide an already-canonical path (e.g. from
-    /// `CanonicalizedPath`) to avoid filesystem I/O on every render frame.
+    /// The caller should provide an already-canonicalized path.
     pub fn color_for_directory(&self, dir: &Path) -> Option<DirectoryTabColor> {
         self.0
             .iter()

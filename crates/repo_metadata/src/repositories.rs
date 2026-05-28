@@ -238,12 +238,6 @@ impl DetectedRepositories {
         }
     }
 
-    /// Given an already-canonical local path, return its repo root **without** any filesystem I/O.
-    /// The path is only normalized (`.`/`..` collapsed), not re-canonicalized.
-    ///
-    /// Callers must ensure `path` is already canonical (e.g. from `CanonicalizedPath`,
-    /// `dunce::canonicalize`, or a path that was previously stored as canonical). Non-canonical
-    /// paths may silently fail to match cached repo roots.
     pub fn get_local_root_for_canonical_path(&self, path: &CanonicalizedPath) -> Option<PathBuf> {
         let std_path = StandardizedPath::try_from_local(path.as_path()).ok()?;
         self.find_local_repository_root(&std_path)

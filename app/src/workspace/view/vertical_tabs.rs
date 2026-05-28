@@ -4528,7 +4528,7 @@ fn compute_tab_group_color_mode(
         .iter()
         .map(|&pane_id| {
             let color = if let Some(tv) = pane_group.terminal_view_from_pane_id(pane_id, app) {
-                // Terminal pane: determine color from canonical CWD (no I/O).
+                // Terminal pane: determine color from CWD.
                 tv.as_ref(app).canonical_pwd_if_local().and_then(|cwd| {
                     dir_colors
                         .color_for_directory(cwd.as_path())

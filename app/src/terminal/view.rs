@@ -22427,8 +22427,6 @@ impl TerminalView {
             .map(|path| path.display().to_string())
     }
 
-    /// Returns the cached canonical CWD without any filesystem I/O.
-    /// Populated once per [`ModelEvent::BlockMetadataReceived`] event for local sessions.
     pub fn canonical_pwd_if_local(&self) -> Option<&CanonicalizedPath> {
         self.canonical_pwd.as_ref()
     }
