@@ -5,27 +5,27 @@ use std::time::Duration;
 use ai::agent::action::{AskUserQuestionItem, AskUserQuestionOption, AskUserQuestionType};
 use ai::agent::action_result::{AskUserQuestionAnswerItem, AskUserQuestionResult};
 use itertools::Itertools;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::WarpTheme;
-use warpui::elements::new_scrollable::SingleAxisConfig;
+use warp_core::ui::theme::color::internal_colors;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::elements::{
-    Border, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Expanded, Fill, Flex, FormattedTextElement, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, ParentElement, Radius, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    Border, ChildView, Container, CornerRadius, CrossAxisAlignment, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    Flex, FormattedTextElement, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
+    Radius, Text,
 };
 use warpui::keymap::{FixedBinding, Keystroke};
-use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::ui_components::components::Coords;
-use warpui::units::Pixels;
 use warpui::{
     AppContext, Element, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity,
     TypedActionView, View, ViewContext, ViewHandle,
 };
 
+use crate::Appearance;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::icons::yellow_stop_icon;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{AIAgentActionId, AIAgentActionResult, AIAgentActionResultType};
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::action_model::{
     AIActionStatus, BlocklistAIActionEvent, BlocklistAIActionModel,
 };
@@ -34,21 +34,17 @@ use crate::ai::blocklist::block::number_shortcut_buttons::{
     self, NumberShortcutButtonBuilder, NumberShortcutButtons, NumberShortcutButtonsConfig,
 };
 use crate::ai::blocklist::block::view_impl::{
-    render_autonomy_dropdown_setting_speedbump_footer, CONTENT_HORIZONTAL_PADDING,
-    CONTENT_ITEM_VERTICAL_MARGIN,
+    CONTENT_HORIZONTAL_PADDING, CONTENT_ITEM_VERTICAL_MARGIN,
+    render_autonomy_dropdown_setting_speedbump_footer,
 };
 use crate::ai::blocklist::inline_action::inline_action_header::{
-    ExpandedConfig, HeaderConfig, InteractionMode, INLINE_ACTION_HEADER_VERTICAL_PADDING,
-    INLINE_ACTION_HORIZONTAL_PADDING,
+    ExpandedConfig, HeaderConfig, INLINE_ACTION_HORIZONTAL_PADDING, InteractionMode,
 };
 use crate::ai::blocklist::inline_action::inline_action_icons::{self, icon_size};
 use crate::ai::blocklist::inline_action::requested_action::CTRL_C_KEYSTROKE;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::AskUserQuestionPermission;
-use crate::terminal::input::message_bar::common::{
-    render_standard_message, standard_message_bar_height, styles,
-};
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::terminal::input::message_bar::common::{render_standard_message, styles};
 use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
@@ -57,59 +53,13 @@ use crate::view_components::action_button::{
 };
 use crate::view_components::compactible_action_button::CompactibleActionButton;
 use crate::view_components::dropdown::{Dropdown, DropdownItem};
-use crate::Appearance;
 
 const ASK_USER_QUESTION_ACTIVE: &str = "AskUserQuestionActive";
 
 pub(crate) const ASK_USER_QUESTION_AUTO_ADVANCE_DELAY: Duration = Duration::from_millis(300);
-pub(crate) const ASK_USER_QUESTION_MAX_CONTAINER_HEIGHT: f32 = 320.;
-pub(crate) const ASK_USER_QUESTION_OPTION_BUTTON_VERTICAL_SPACING: f32 = 4.;
 pub(crate) const ASK_USER_QUESTION_TEXT_TOP_PADDING: f32 = 16.;
 pub(crate) const ASK_USER_QUESTION_TEXT_BOTTOM_PADDING: f32 = 8.;
 pub(crate) const ASK_USER_QUESTION_OPTIONS_BOTTOM_PADDING: f32 = 16.;
-
-// Assumes single-line labels; wrapped text will be taller but the container
-// caps at ASK_USER_QUESTION_MAX_CONTAINER_HEIGHT and scrolls on overflow.
-fn estimated_min_height_for_all_options(max_option_count: usize, monospace_font_size: f32) -> f32 {
-    (max_option_count as f32 * (monospace_font_size + 16.))
-        + (max_option_count.saturating_sub(1) as f32
-            * ASK_USER_QUESTION_OPTION_BUTTON_VERTICAL_SPACING)
-        + ASK_USER_QUESTION_OPTIONS_BOTTOM_PADDING
-}
-
-fn ask_user_question_text_height(appearance: &Appearance, app: &AppContext) -> f32 {
-    app.font_cache().line_height(
-        appearance.monospace_font_size(),
-        appearance.line_height_ratio(),
-    ) + ASK_USER_QUESTION_TEXT_TOP_PADDING
-        + ASK_USER_QUESTION_TEXT_BOTTOM_PADDING
-}
-
-fn ask_user_question_header_height(appearance: &Appearance, app: &AppContext) -> f32 {
-    let title_line_height = app.font_cache().line_height(
-        appearance.monospace_font_size(),
-        appearance.line_height_ratio(),
-    );
-    title_line_height
-        .max(icon_size(app))
-        .max(ButtonSize::InlineActionHeader.button_height(appearance, app))
-        + (2. * INLINE_ACTION_HEADER_VERTICAL_PADDING)
-}
-
-fn ask_user_question_container_height(
-    max_option_count: usize,
-    appearance: &Appearance,
-    has_nav_footer: bool,
-    app: &AppContext,
-) -> f32 {
-    let mut natural_height = ask_user_question_header_height(appearance, app)
-        + ask_user_question_text_height(appearance, app)
-        + estimated_min_height_for_all_options(max_option_count, appearance.monospace_font_size());
-    if has_nav_footer {
-        natural_height += standard_message_bar_height(app) + 1.;
-    }
-    natural_height.min(ASK_USER_QUESTION_MAX_CONTAINER_HEIGHT)
-}
 
 fn ask_user_question_auto_advance_enabled(is_multiselect: bool, is_last_question: bool) -> bool {
     is_last_question || !is_multiselect
@@ -419,14 +369,6 @@ impl AskUserQuestionSession {
         }
     }
 
-    fn max_option_count(&self) -> usize {
-        self.questions
-            .iter()
-            .map(AskUserQuestionItem::numbered_option_count)
-            .max()
-            .unwrap_or(1)
-    }
-
     // Centralize all state transitions so the view layer only maps UI events to actions and then
     // applies the returned effect.
     fn apply(&mut self, action: AskUserQuestionAction) -> AskUserQuestionEffect {
@@ -726,7 +668,6 @@ pub(crate) struct AskUserQuestionView {
     session: AskUserQuestionSession,
     buttons: ViewHandle<NumberShortcutButtons>,
     text_input: Option<ViewHandle<compact_agent_input::CompactAgentInput>>,
-    options_scroll_state: ClippedScrollStateHandle,
     auto_advance_timer_handle: Option<SpawnedFutureHandle>,
     pending_auto_advance_question_index: Option<usize>,
     is_expanded: bool,
@@ -752,17 +693,10 @@ impl AskUserQuestionView {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let session = AskUserQuestionSession::new(questions);
-        let options_scroll_state = ClippedScrollStateHandle::new();
         let AskUserQuestionInteractiveViews {
             buttons,
             text_input,
-        } = Self::build_interactive_views(
-            session.current(),
-            None,
-            None,
-            options_scroll_state.clone(),
-            ctx,
-        );
+        } = Self::build_interactive_views(session.current(), None, None, ctx);
         let skip_button = CompactibleActionButton::new(
             "Skip all".to_string(),
             Some(KeystrokeSource::Fixed(CTRL_C_KEYSTROKE.clone())),
@@ -791,7 +725,6 @@ impl AskUserQuestionView {
             session,
             buttons,
             text_input,
-            options_scroll_state,
             auto_advance_timer_handle: None,
             pending_auto_advance_question_index: None,
             is_expanded: false,
@@ -945,7 +878,6 @@ impl AskUserQuestionView {
         current: Option<AskUserQuestionCurrent<'_>>,
         existing_text_input: Option<ViewHandle<compact_agent_input::CompactAgentInput>>,
         selected_button_index: Option<usize>,
-        options_scroll_state: ClippedScrollStateHandle,
         ctx: &mut ViewContext<Self>,
     ) -> AskUserQuestionInteractiveViews {
         let view_state = ask_user_question_view_state(current);
@@ -969,8 +901,7 @@ impl AskUserQuestionView {
                     selected_button_index,
                     NumberShortcutButtonsConfig::new()
                         .with_keyboard_navigation()
-                        .with_enter_to_activate(false)
-                        .with_scroll_state(options_scroll_state),
+                        .with_enter_to_activate(false),
                     ctx,
                 )
             }),
@@ -1137,7 +1068,6 @@ impl AskUserQuestionView {
             current,
             self.text_input.clone(),
             selected_button_index,
-            self.options_scroll_state.clone(),
             ctx,
         );
 
@@ -1245,7 +1175,6 @@ impl AskUserQuestionView {
             }
             AskUserQuestionEffect::ShowQuestion => {
                 self.rebuild_current_question(AskUserQuestionRebuildMode::ResetSelection, ctx);
-                self.options_scroll_state.scroll_to(Pixels::zero());
                 ctx.focus(&self.buttons);
             }
             AskUserQuestionEffect::ScheduleAutoAdvance => {
@@ -1267,16 +1196,8 @@ impl AskUserQuestionView {
             question_text.push_str(" (select all that apply)");
         }
         let has_nav_footer = self.session.has_multiple_questions();
-        let container_height = ask_user_question_container_height(
-            self.session.max_option_count(),
-            appearance,
-            has_nav_footer,
-            app,
-        );
 
-        let mut content = Flex::column()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+        let mut content = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
         let mut header_right = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
         header_right.add_child(ChildView::new(self.skip_button.expanded_button()).finish());
@@ -1291,13 +1212,7 @@ impl AskUserQuestionView {
                 .with_corner_radius_override(CornerRadius::with_top(Radius::Pixels(8.)))
                 .render_header(app, Some(header_right.finish())),
         );
-        content.add_child(
-            Expanded::new(
-                1.,
-                self.render_question_body(&question_text, appearance, theme),
-            )
-            .finish(),
-        );
+        content.add_child(self.render_question_body(&question_text, appearance, theme));
 
         if has_nav_footer {
             content.add_child(self.render_nav_footer(appearance, theme, app));
@@ -1305,15 +1220,11 @@ impl AskUserQuestionView {
 
         let border_color = blended_colors::neutral_4(theme);
         Some(
-            wrap_with_content_item_spacing(
-                ConstrainedBox::new(content.finish())
-                    .with_height(container_height)
-                    .finish(),
-            )
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-            .with_background_color(theme.background().into_solid())
-            .with_border(Border::all(1.).with_border_fill(border_color))
-            .finish(),
+            wrap_with_content_item_spacing(content.finish())
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+                .with_background_color(theme.background().into_solid())
+                .with_border(Border::all(1.).with_border_fill(border_color))
+                .finish(),
         )
     }
 
@@ -1499,18 +1410,7 @@ impl AskUserQuestionView {
             .with_child(self.render_options_list())
             .finish();
 
-        let scrollable = warpui::elements::NewScrollable::vertical(
-            SingleAxisConfig::Clipped {
-                handle: self.options_scroll_state.clone(),
-                child: body,
-            },
-            theme.nonactive_ui_detail().into(),
-            theme.active_ui_detail().into(),
-            Fill::None,
-        )
-        .finish();
-
-        Container::new(Clipped::new(scrollable).finish())
+        Container::new(body)
             .with_margin_left(INLINE_ACTION_HORIZONTAL_PADDING)
             .with_margin_right(12.)
             .finish()

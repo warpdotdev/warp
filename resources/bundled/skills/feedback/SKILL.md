@@ -119,11 +119,9 @@ GH_PAGER=cat gh issue list \
 
 ### 8. Ask for final filing confirmation
 
-- Before invoking `scripts/file_feedback_issue.py` or otherwise opening a public GitHub issue form, use the `ask_user_question` tool to ask whether the user wants the issue filed.
-- The confirmation question must include the exact issue title and issue description/body that will be filed before asking for confirmation. Present them as a prerequisite to the question, using a concise format like:
-  - `Issue title: <title>`
-  - `Issue description:` followed by the drafted body.
-  - `Would you like me to file this issue publicly in warpdotdev/warp?`
+- Before invoking `scripts/file_feedback_issue.py` or otherwise opening a public GitHub issue form, present the exact issue title and issue description/body in a normal assistant message as rendered Markdown.
+- After presenting the draft, use the `ask_user_question` tool to ask a short confirmation question only, such as `Would you like me to file this issue publicly in warpdotdev/warp?`.
+- Do not put the full issue title or issue description/body inside the `ask_user_question` question text or answer labels. The question block should stay concise so the confirmation buttons are easy to find.
 - Provide clear answer options, including a positive confirmation such as `Yes, file this issue` and a negative option such as `No, do not file it`.
 - Do not call the helper script, open the browser issue form, or create an issue unless the user explicitly chooses the positive confirmation option.
 - If the user declines or does not clearly confirm, respond that no issue was filed. If they request edits to the title or description instead, revise the draft and repeat this final confirmation step before filing.
