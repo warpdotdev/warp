@@ -5,7 +5,7 @@ use std::cell::OnceCell;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 #[allow(unused_imports)]
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -23,8 +23,6 @@ use ui_components::{button, Component as _, Options as _};
 use warp_core::channel::ChannelState;
 use warp_core::ui::theme::color::internal_colors;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
-#[allow(unused_imports)]
-use warp_util::path::{common_path, CleanPathResult};
 use warpui::elements::new_scrollable::SingleAxisConfig;
 use warpui::elements::{
     Align, Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
@@ -103,13 +101,14 @@ use crate::ai::blocklist::view_util::format_credits;
 use crate::ai::blocklist::{AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView};
 use crate::ai::paths::shell_native_absolute_path;
 use crate::ai::skills::{
-    icon_override_for_skill_name, render_skill_button, skill_path_from_file_path, SkillManager,
+    icon_override_for_skill_name, render_skill_button, skill_path_from_location, SkillManager,
     SkillOpenOrigin,
 };
 use crate::appearance::Appearance;
 use crate::code::diff_viewer::DisplayMode;
 use crate::code::editor_management::CodeSource;
 use crate::settings_view::SettingsSection;
+use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::ShellLaunchData;
 use crate::ui_components::blended_colors;
@@ -134,6 +133,7 @@ pub(crate) struct Props<'a> {
     pub(super) action_buttons: &'a HashMap<AIAgentActionId, ActionButtons>,
     pub(super) view_screenshot_buttons: &'a HashMap<AIAgentActionId, ui_components::button::Button>,
     pub(crate) action_model: &'a ModelHandle<BlocklistAIActionModel>,
+    pub(crate) active_session: &'a ModelHandle<ActiveSession>,
     pub(super) editor_views: &'a [EmbeddedCodeEditorView],
     pub(super) current_working_directory: Option<&'a String>,
     pub(super) shell_launch_data: Option<&'a ShellLaunchData>,
@@ -488,14 +488,23 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                         .collect_vec(),
                                 };
 
-                                let file_paths = files.iter().map(|file| {
-                                    PathBuf::from(shell_native_absolute_path(
-                                        &file.name,
-                                        props.shell_launch_data,
-                                        props.current_working_directory,
-                                    ))
+                                let file_locations = files
+                                    .iter()
+                                    .map(|file| {
+                                        let path = shell_native_absolute_path(
+                                            &file.name,
+                                            props.shell_launch_data,
+                                            props.current_working_directory,
+                                        );
+                                        props
+                                            .active_session
+                                            .as_ref(app)
+                                            .location_for_path(&path, app)
+                                    })
+                                    .collect::<Option<Vec<_>>>();
+                                let skill = file_locations.and_then(|file_locations| {
+                                    parsed_skill_for_common_locations(file_locations, app)
                                 });
-                                let skill = parsed_skill_for_common_local_paths(file_paths, app);
                                 output_items.add_child(render_read_files(
                                     props,
                                     id,
@@ -1494,9 +1503,18 @@ fn render_search_codebase(
                                 .render(app)
                                 .finish()
                             } else {
-                                let file_paths =
-                                    files.iter().map(|file| PathBuf::from(&file.file_name));
-                                let skill = parsed_skill_for_common_local_paths(file_paths, app);
+                                let file_locations = files
+                                    .iter()
+                                    .map(|file| {
+                                        props
+                                            .active_session
+                                            .as_ref(app)
+                                            .location_for_path(&file.file_name, app)
+                                    })
+                                    .collect::<Option<Vec<_>>>();
+                                let skill = file_locations.and_then(|file_locations| {
+                                    parsed_skill_for_common_locations(file_locations, app)
+                                });
                                 let grouped = group_file_contexts_for_display(files, None, None);
                                 return Some(render_read_files(
                                     props,
@@ -1865,16 +1883,20 @@ fn render_read_files(
     renderable_action.render(app).finish()
 }
 
-fn parsed_skill_for_common_local_paths(
-    file_paths: impl IntoIterator<Item = PathBuf>,
+fn parsed_skill_for_common_locations(
+    file_locations: impl IntoIterator<Item = LocalOrRemotePath>,
     app: &AppContext,
 ) -> Option<&ai::skills::ParsedSkill> {
-    let file_paths = file_paths.into_iter().collect_vec();
-    common_path(&file_paths)
-        .and_then(|common| skill_path_from_file_path(&common))
-        .and_then(|skill_path| {
-            SkillManager::as_ref(app).skill_by_path(&LocalOrRemotePath::Local(skill_path))
-        })
+    let skill_paths = file_locations
+        .into_iter()
+        .map(|location| skill_path_from_location(&location))
+        .collect::<Option<Vec<_>>>()?;
+    let first_skill_path = skill_paths.first()?;
+    skill_paths
+        .iter()
+        .all(|skill_path| skill_path == first_skill_path)
+        .then(|| SkillManager::as_ref(app).skill_by_path(first_skill_path))
+        .flatten()
 }
 
 fn maybe_render_edit_document(

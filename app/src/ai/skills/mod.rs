@@ -24,7 +24,7 @@ pub use listed_skill::SkillDescriptor;
 mod skill_utils;
 pub use skill_utils::{
     icon_override_for_skill_name, list_skills_if_changed, render_skill_button,
-    skill_path_from_file_path, skill_path_from_location,
+    skill_path_from_location,
 };
 pub trait SkillPathQuery {
     fn to_skill_location(&self) -> LocalOrRemotePath;

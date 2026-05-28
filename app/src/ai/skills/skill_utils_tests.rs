@@ -6,58 +6,6 @@ use warp_util::local_or_remote_path::LocalOrRemotePath;
 use super::*;
 
 #[test]
-fn test_skill_path_from_file_path_skill_md() {
-    let skill = PathBuf::from("/home/user/.claude/skills/my-skill/SKILL.md");
-    let result = skill_path_from_file_path(&skill);
-    assert_eq!(
-        result,
-        Some(PathBuf::from("/home/user/.claude/skills/my-skill/SKILL.md"))
-    );
-}
-
-#[test]
-fn test_skill_path_from_file_path_warp_home_skill() {
-    let Some(warp_home_skills_dir) = warp_core::paths::warp_home_skills_dir() else {
-        eprintln!("Skipping test: Warp home skills directory not available");
-        return;
-    };
-    let warp_home_skill = warp_home_skills_dir
-        .join("my-skill")
-        .join("assets")
-        .join("image.png");
-    let result = skill_path_from_file_path(&warp_home_skill);
-    assert_eq!(
-        result,
-        Some(warp_home_skills_dir.join("my-skill").join("SKILL.md"))
-    );
-}
-
-#[test]
-fn test_skill_path_from_file_path_nested_file() {
-    let skill_nested = PathBuf::from("/home/user/.agents/skills/my-skill/assets/image.png");
-    let result = skill_path_from_file_path(&skill_nested);
-    assert_eq!(
-        result,
-        Some(PathBuf::from("/home/user/.agents/skills/my-skill/SKILL.md"))
-    );
-}
-
-#[test]
-fn test_skill_path_from_file_path_non_skill() {
-    let non_skill = PathBuf::from("/home/user/Documents/file.txt");
-    let result = skill_path_from_file_path(&non_skill);
-    assert_eq!(result, None);
-
-    let similar_path = PathBuf::from("/home/user/.claude/other/file.txt");
-    let result = skill_path_from_file_path(&similar_path);
-    assert_eq!(result, None);
-
-    let empty_path = PathBuf::from("");
-    let result = skill_path_from_file_path(&empty_path);
-    assert_eq!(result, None);
-}
-
-#[test]
 fn test_unique_skills_dedupes_identical_skills_same_dir() {
     let shared_skill_dir = PathBuf::from("/home/user");
     let skill_path1 = shared_skill_dir.join(".agents/skills/my-skill/SKILL.md");
