@@ -941,6 +941,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::DragTabsToWindows,
     FeatureFlag::RemoteCodebaseIndexing,
     FeatureFlag::GroupedTabs,
+    FeatureFlag::GPTConfigurableContextWindow,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
