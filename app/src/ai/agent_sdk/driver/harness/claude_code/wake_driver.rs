@@ -25,7 +25,8 @@ use crate::server::server_api::harness_support::ResolvePromptRequest;
 use crate::server::server_api::ServerApi;
 use crate::terminal::CLIAgent;
 
-const CLAUDE_WAKE_PROMPT: &str = "New lead-agent messages are available. Read the latest lead-agent updates and continue the task accordingly.";
+const CLAUDE_WAKE_PROMPT: &str =
+    "A lead agent mailbox message is available for this child run. Review the mailbox context and continue the task.";
 pub(super) const CLAUDE_WAKE_PROMPT_FILE_NAME: &str = "wake-turn-prompt.txt";
 
 #[derive(Debug)]

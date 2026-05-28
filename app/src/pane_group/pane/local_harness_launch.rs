@@ -144,15 +144,11 @@ pub(super) async fn prepare_local_harness_child_launch(
             prepare_claude_environment_config(&working_dir, &HashMap::new())
                 .map_err(|error| error.to_string())?;
             if let Some(manager) = plugin_manager_for(third_party_harness.cli_agent()) {
-                if manager.needs_update() {
-                    if let Err(error) = manager.update().await {
-                        log::warn!("Claude plugin update failed for child harness: {error}");
-                    }
-                } else if !manager.is_installed() {
-                    if let Err(error) = manager.install().await {
-                        log::warn!("Claude plugin installation failed for child harness: {error}");
-                    }
-                }
+                // Hidden local child panes do not need Claude Code's regular
+                // Warp notification plugin. Avoid installing/updating it here:
+                // that plugin lives in the public claude-code-warp marketplace,
+                // while the Oz platform plugin may be under a local/internal
+                // marketplace during development.
                 if manager.platform_plugin_needs_update() {
                     if let Err(error) = manager.update_platform_plugin().await {
                         log::warn!(

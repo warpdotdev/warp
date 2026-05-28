@@ -40,9 +40,10 @@ const PARENT_BRIDGE_HOOK_OUTPUT_FILE_NAME: &str = "pending-hook-output.json";
 const PARENT_BRIDGE_HOOK_OUTPUT_ACK_FILE_NAME: &str = "pending-hook-output.ack";
 const PARENT_BRIDGE_MAX_CONTEXT_CHARS_ENV: &str = "OZ_PARENT_MAX_CONTEXT_CHARS";
 const PARENT_BRIDGE_DEFAULT_MAX_CONTEXT_CHARS: usize = 6000;
-pub(super) const MESSAGE_BRIDGE_CONTEXT_PREAMBLE: &str = "Lead-agent updates arrived from Oz. Treat the latest lead-agent instructions below as authoritative.\n";
+pub(super) const MESSAGE_BRIDGE_CONTEXT_PREAMBLE: &str =
+    "Oz mailbox update for this child run.\nSource: lead agent\nContext type: user-level coordination messages\n";
 const PARENT_BRIDGE_REMAINING_MESSAGES_NOTE: &str =
-    "\n\nMore lead-agent messages are still staged and will be surfaced on a later turn.";
+    "\n\nAdditional lead agent mailbox messages remain queued and may be surfaced later.";
 
 pub(super) struct MessageBridge {
     run_id: String,
@@ -417,7 +418,7 @@ pub(super) fn render_parent_bridge_message_block(record: &MessageBridgeMessageRe
         record.subject.as_str()
     };
 
-    let mut block = String::from("---\nLead-agent message");
+    let mut block = String::from("---\nLead agent mailbox message");
     if record.sequence != 0 {
         let _ = write!(block, " #{}", record.sequence);
     }

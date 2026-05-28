@@ -25,7 +25,7 @@ const PLATFORM_MARKETPLACE_REPO: &str = "warpdotdev/claude-code-warp-internal";
 // (See the Versioning section of that repo's README.)
 const MINIMUM_PLUGIN_VERSION: &str = "2.1.0";
 // Keep in sync with the oz-harness-support plugin version in warpdotdev/claude-code-warp-internal.
-const MINIMUM_PLATFORM_PLUGIN_VERSION: &str = "1.1.3";
+const MINIMUM_PLATFORM_PLUGIN_VERSION: &str = "1.1.4";
 
 pub(super) struct ClaudeCodePluginManager {
     executor: LocalCommandExecutor,
@@ -167,13 +167,19 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
 
     async fn install_platform_plugin(&self) -> Result<(), PluginInstallError> {
         let mut log = String::new();
-        self.run_logged(
-            &["plugin", "marketplace", "add", PLATFORM_MARKETPLACE_REPO],
-            &mut log,
-        )
-        .await?;
-        self.run_logged(&["plugin", "install", PLATFORM_PLUGIN_KEY], &mut log)
+        if self
+            .run_logged(&["plugin", "install", PLATFORM_PLUGIN_KEY], &mut log)
+            .await
+            .is_err()
+        {
+            self.run_logged(
+                &["plugin", "marketplace", "add", PLATFORM_MARKETPLACE_REPO],
+                &mut log,
+            )
             .await?;
+            self.run_logged(&["plugin", "install", PLATFORM_PLUGIN_KEY], &mut log)
+                .await?;
+        }
         let still_outdated = claude_home_dir()
             .ok()
             .and_then(|dir| installed_platform_plugin_version(&dir))
