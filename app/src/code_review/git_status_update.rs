@@ -103,12 +103,7 @@ impl GitStatusUpdateModel {
 
         // Create a new sub-model.
         let Some(repository_model) =
-            repo_metadata::CanonicalizedPath::try_from(repo_path)
-                .ok()
-                .and_then(|cp| {
-                    DetectedRepositories::as_ref(ctx)
-                        .get_local_watched_repo_for_path(&cp, ctx)
-                })
+            DetectedRepositories::as_ref(ctx).get_local_watched_repo_for_path(repo_path, ctx)
         else {
             anyhow::bail!(
                 "No watched repository found for path: {}",

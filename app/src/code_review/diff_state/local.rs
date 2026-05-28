@@ -280,13 +280,8 @@ impl LocalDiffStateModel {
 
             ctx.spawn(fut, move |me, repo_path, ctx| {
                 if let Some(repo_path) = &repo_path {
-                    if let Some(repo_handle) =
-                        repo_metadata::CanonicalizedPath::try_from(repo_path.as_path())
-                            .ok()
-                            .and_then(|cp| {
-                                DetectedRepositories::as_ref(ctx)
-                                    .get_local_watched_repo_for_path(&cp, ctx)
-                            })
+                    if let Some(repo_handle) = DetectedRepositories::as_ref(ctx)
+                        .get_local_watched_repo_for_path(repo_path, ctx)
                     {
                         me.set_active_repository(repo_handle, ctx);
                         return;
