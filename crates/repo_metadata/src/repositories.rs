@@ -215,26 +215,42 @@ impl DetectedRepositories {
         path: &Path,
         ctx: &AppContext,
     ) -> Option<ModelHandle<Repository>> {
-        let root = self.get_root_for_path(&LocalOrRemotePath::Local(path.to_path_buf()))?;
-        let local_path = root.to_local_path()?;
-        let canonical = CanonicalizedPath::try_from(local_path).ok()?;
-        DirectoryWatcher::as_ref(ctx).get_watched_directory_for_path(&canonical)
+        let canonical = CanonicalizedPath::try_from(path).ok()?;
+        let root = self.get_local_root_for_canonical_path(&canonical)?;
+        let root_canonical = CanonicalizedPath::try_from(root).ok()?;
+        DirectoryWatcher::as_ref(ctx).get_watched_directory_for_path(&root_canonical)
     }
 
-    /// Given a local or remote path, return its corresponding repo root.
-    /// This does not run the check against the actual file system.
-    /// Instead it checks against our cached path to root mapping.
+    /// Given a local or remote path, return its corresponding repo root. Checks against the cached
+    /// path→root mapping.
     ///
-    /// For local paths, the caller should provide an already-canonical path
-    /// (e.g. from `CanonicalizedPath`) to avoid a filesystem round-trip.
+    /// For local paths this canonicalizes via `dunce::canonicalize` to ensure symlinked or
+    /// non-normalized paths match the canonical repo roots in the cache. Use
+    /// [`Self::get_local_root_for_canonical_path`] when the caller already holds a canonical local
+    /// path to avoid the filesystem round-trip.
     pub fn get_root_for_path(&self, path: &LocalOrRemotePath) -> Option<LocalOrRemotePath> {
         match path {
             LocalOrRemotePath::Local(local_path) => {
-                let std_path = StandardizedPath::try_from_local(local_path).ok()?;
+                let std_path = StandardizedPath::from_local_canonicalized(local_path).ok()?;
                 self.find_local_repository_root(&std_path)
             }
             LocalOrRemotePath::Remote(remote_path) => self.find_remote_repository_root(remote_path),
         }
+    }
+
+    /// Given an already-canonical local path, return its repo root **without** any filesystem I/O.
+    /// The path is only normalized (`.`/`..` collapsed), not re-canonicalized.
+    ///
+    /// Callers must ensure `path` is already canonical (e.g. from `CanonicalizedPath`,
+    /// `dunce::canonicalize`, or a path that was previously stored as canonical). Non-canonical
+    /// paths may silently fail to match cached repo roots.
+    pub fn get_local_root_for_canonical_path(
+        &self,
+        path: &CanonicalizedPath,
+    ) -> Option<PathBuf> {
+        let std_path = StandardizedPath::try_from_local(path.as_path()).ok()?;
+        self.find_local_repository_root(&std_path)
+            .and_then(|r| PathBuf::try_from(r).ok())
     }
 
     /// Find the local repository that contains the given path, if any.

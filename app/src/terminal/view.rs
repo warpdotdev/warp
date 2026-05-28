@@ -11058,6 +11058,15 @@ impl TerminalView {
                             active_directory.to_string()
                         };
 
+                        self.canonical_pwd = if is_local {
+                            CanonicalizedPath::try_from(
+                                PathBuf::from(&directory_for_detection).as_path(),
+                            )
+                            .ok()
+                        } else {
+                            None
+                        };
+
                         let fut = detect_possible_git_repo(
                             session_type,
                             &directory_for_detection,
@@ -11120,17 +11129,9 @@ impl TerminalView {
                                     #[cfg(feature = "local_fs")]
                                     {
                                         let Some(active_directory) =
-                                            me.active_session_path_if_local(ctx)
+                                            me.canonical_pwd.clone()
                                         else {
                                             me.clear_git_repo_status(ctx);
-                                            return;
-                                        };
-
-                                        let Ok(active_directory) =
-                                            CanonicalizedPath::try_from(
-                                                active_directory,
-                                            )
-                                        else {
                                             return;
                                         };
 

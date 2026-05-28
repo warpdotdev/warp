@@ -146,7 +146,10 @@ impl RepoOutlines {
             // Add all working directories to the queue and start processing.
             for dir in all_working_directories(ctx).into_iter() {
                 if let Some(repository) =
-                    DetectedRepositories::as_ref(ctx).get_local_watched_repo_for_path(&dir, ctx)
+                    CanonicalizedPath::try_from(dir.as_path()).ok().and_then(|cp| {
+                        DetectedRepositories::as_ref(ctx)
+                            .get_local_watched_repo_for_path(&cp, ctx)
+                    })
                 {
                     me.index_repo(repository, ctx);
                 }

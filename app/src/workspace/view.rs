@@ -8739,7 +8739,12 @@ impl Workspace {
             // repo counts here, and it keeps linked-worktree filtering scoped to the
             // only UI that currently needs it.
             let Some(repository) =
-                DetectedRepositories::as_ref(ctx).get_local_watched_repo_for_path(repo_path, ctx)
+                repo_metadata::CanonicalizedPath::try_from(repo_path)
+                    .ok()
+                    .and_then(|cp| {
+                        DetectedRepositories::as_ref(ctx)
+                            .get_local_watched_repo_for_path(&cp, ctx)
+                    })
             else {
                 return true;
             };

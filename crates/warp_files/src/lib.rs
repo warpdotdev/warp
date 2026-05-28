@@ -947,8 +947,9 @@ impl FileModel {
         }
 
         // Try to find a repository for this path
+        let canonical = repo_metadata::CanonicalizedPath::try_from(file_path).ok()?;
         let repository =
-            DetectedRepositories::as_ref(ctx).get_local_watched_repo_for_path(file_path, ctx)?;
+            DetectedRepositories::as_ref(ctx).get_local_watched_repo_for_path(&canonical, ctx)?;
 
         let repo_root = repository.as_ref(ctx).root_dir().to_local_path_lossy();
 
