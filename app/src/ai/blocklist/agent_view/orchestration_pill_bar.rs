@@ -2039,7 +2039,6 @@ fn render_overflow_button(
     SavePosition::new(button, &overflow_button_position_id(conversation_id)).finish()
 }
 
-/// Figma `4073:26593`: rounded-square holder, badge BR flush at lockup BR.
 const PILL_BADGE_STYLE: StatusBadgeStyle = StatusBadgeStyle {
     ring_ratio: 0.57,
     icon_ratio: 0.36,
