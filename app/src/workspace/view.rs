@@ -6974,6 +6974,7 @@ impl Workspace {
     ) {
         if self.show_tab_right_click_menu.is_some() {
             self.show_tab_right_click_menu = None;
+            self.hide_move_to_group_sidecar(ctx);
             ctx.notify();
             return;
         }
