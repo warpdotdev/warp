@@ -248,16 +248,12 @@ impl LocalDiffStateModel {
                         ctx.emit(DiffStateModelEvent::SingleFileUpdated { path, diff });
                     }
                     Err(err) => {
-                        let safe_error = err.safe_message();
-                        warp_core::safe_error!(
-                            safe: ("File invalidation error: {safe_error}"),
-                            full: ("File invalidation error: {err}")
-                        );
+                        warp_core::report_error!(err.as_ref());
                         send_telemetry_from_ctx!(
                             CodeReviewTelemetryEvent::LoadDiffFailed {
                                 is_local: Some(true),
                                 mode: me.mode.clone(),
-                                error: safe_error.to_string(),
+                                error: err.kind.to_string(),
                                 // Per-file invalidation errors are not tied to a full
                                 // tracked load, so `load_duration` is intentionally `None`.
                                 load_duration: None,
