@@ -358,9 +358,8 @@ impl DiffStateModel {
     /// session-agnostic and is keyed by `(host_id, repo, mode)`; the
     /// `RemoteServerManager` resolves a connected session for the host at
     /// every outbound RPC, so the wrapper does not need to thread a
-    /// `SessionId` through. If no session for the host is currently
-    /// connected, the underlying `RemoteDiffStateModel` starts in
-    /// `Disconnected` and self-heals once a session becomes available.
+    /// `SessionId` through. Callers must ensure a session for the host is
+    /// connected before constructing.
     pub fn new_remote(remote_path: RemotePath, ctx: &mut ModelContext<Self>) -> Self {
         let remote =
             ctx.add_model(|ctx| RemoteDiffStateModel::new(remote_path, DiffMode::default(), ctx));

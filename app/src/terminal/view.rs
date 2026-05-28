@@ -4626,6 +4626,17 @@ impl TerminalView {
                         DetectedRepositories::handle(ctx).update(ctx, |repos, _| {
                             repos.remove_roots_for_host(host_id);
                         });
+
+                        // Drop and broadcast the stale remote repo so downstream consumers
+                        // stop acting on a host with no live client.
+                        let matches_host = matches!(
+                            me.current_repo_path.as_ref(),
+                            Some(LocalOrRemotePath::Remote(rp)) if &rp.host_id == host_id,
+                        );
+                        if matches_host {
+                            me.current_repo_path = None;
+                            ctx.emit(Event::Pane(PaneEvent::RepoChanged));
+                        }
                     }
                     RemoteServerManagerEvent::SessionConnecting { .. }
                     | RemoteServerManagerEvent::HostConnected { .. }

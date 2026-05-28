@@ -61,38 +61,27 @@ impl RemoteDiffStateModel {
     /// Identity is `(host_id, repo_path, mode)`. The model is session-agnostic:
     /// the manager picks a connected session for the host at every outbound
     /// RPC, and host-level connect/disconnect events drive subscription
-    /// lifecycle. If no session for the host is currently connected the
-    /// model starts in `Disconnected` and self-heals once a session becomes
-    /// available; otherwise it starts in `Loading` and issues the initial
-    /// `GetDiffState` request.
+    /// lifecycle.
+    ///
+    /// A session for this host is required at construction time. The model starts in `Loading` and
+    /// issues the initial `GetDiffState` request. Runtime disconnects transition the model through
+    /// `mark_disconnected`; subsequent reconnects re-subscribe via the `HostConnected` event handler.
     pub fn new(remote_path: RemotePath, mode: DiffMode, ctx: &mut ModelContext<Self>) -> Self {
         // Subscribe to RemoteServerManager push events and filter by remote_path and diff_mode
         let mgr_handle = RemoteServerManager::handle(ctx);
         ctx.subscribe_to_model(&mgr_handle, Self::handle_manager_event);
 
-        // Decide initial state based on whether a session for this host is
-        // already connected. If so, kick off the GetDiffState request now;
-        // otherwise wait for HostConnected to arrive.
-        let host_connected = mgr_handle
-            .as_ref(ctx)
-            .client_for_host(&remote_path.host_id)
-            .is_some();
-        let state = if host_connected {
-            let host_id = remote_path.host_id.clone();
-            let repo_path = remote_path.path.clone();
-            let mode_clone = mode.clone();
-            mgr_handle.update(ctx, |mgr, ctx| {
-                mgr.get_diff_state(host_id, repo_path, proto::DiffMode::from(&mode_clone), ctx);
-            });
-            InternalRemoteDiffState::Loading
-        } else {
-            InternalRemoteDiffState::Disconnected
-        };
+        let host_id = remote_path.host_id.clone();
+        let repo_path = remote_path.path.clone();
+        let mode_clone = mode.clone();
+        mgr_handle.update(ctx, |mgr, ctx| {
+            mgr.get_diff_state(host_id, repo_path, proto::DiffMode::from(&mode_clone), ctx);
+        });
 
         Self {
             remote_path,
             mode,
-            state,
+            state: InternalRemoteDiffState::Loading,
             metadata: None,
             tracked_diff_load_start_time: None,
         }
@@ -446,10 +435,6 @@ impl RemoteDiffStateModel {
 
     /// Sends `UnsubscribeDiffState` to the server. Call before dropping the
     /// model (the wrapper calls it during mode switch / pane close).
-    ///
-    /// The manager handles the "no connected client" case internally; the
-    /// server-side subscription is also cleaned up automatically when the
-    /// underlying connection drops, so this is a best-effort notification.
     pub fn unsubscribe(&self, ctx: &mut ModelContext<Self>) {
         RemoteServerManager::handle(ctx)
             .as_ref(ctx)

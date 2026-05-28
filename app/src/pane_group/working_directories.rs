@@ -9,6 +9,8 @@ use std::path::PathBuf;
 #[cfg(feature = "local_fs")]
 use indexmap::IndexSet;
 #[cfg(feature = "local_fs")]
+use remote_server::manager::RemoteServerManager;
+#[cfg(feature = "local_fs")]
 use repo_metadata::repositories::DetectedRepositories;
 #[cfg(feature = "local_fs")]
 use warp_util::remote_path::RemotePath;
@@ -374,9 +376,9 @@ impl WorkingDirectoriesModel {
     /// Get or create a DiffStateModel for a specific repository.
     ///
     /// If the model doesn't exist, it will be created. For remote
-    /// repositories the model is created unconditionally; it starts in
-    /// `Disconnected` when no session for the host is connected yet and
-    /// self-heals once one becomes available via `HostConnected`.
+    /// repositories we require a connected session for the host; returns
+    /// `None` when none exists so callers treat the panel as unavailable
+    /// for that repo rather than producing a model that cannot subscribe.
     pub fn get_or_create_diff_state_model(
         &mut self,
         key: LocalOrRemotePath,
@@ -392,6 +394,10 @@ impl WorkingDirectoriesModel {
                 ctx.add_model(|ctx| DiffStateModel::new_local(path, ctx))
             }
             LocalOrRemotePath::Remote(remote_path) => {
+                let mgr_handle = RemoteServerManager::handle(ctx);
+                mgr_handle
+                    .as_ref(ctx)
+                    .client_for_host(&remote_path.host_id)?;
                 let remote_path = remote_path.clone();
                 ctx.add_model(|ctx| DiffStateModel::new_remote(remote_path, ctx))
             }
