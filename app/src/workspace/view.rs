@@ -6754,12 +6754,11 @@ impl Workspace {
         }
         let previous_group_id = tab.group_id;
 
-        self.tabs[tab_index].group_id = Some(group_id);
-
         let target_index = group_member_indices(&self.tabs, group_id)
             .last()
             .map(|i| i + 1)
             .unwrap_or(self.tabs.len());
+        self.tabs[tab_index].group_id = Some(group_id);
         self.move_tab_to_index(tab_index, target_index, ctx);
 
         if let Some(prev) = previous_group_id {
@@ -6785,11 +6784,9 @@ impl Workspace {
 
         self.tabs[tab_index].group_id = None;
 
-        let target_index = group_member_indices(&self.tabs, previous_group_id)
-            .last()
-            .map(|i| i + 1)
-            .unwrap_or(self.tabs.len());
-        self.move_tab_to_index(tab_index, target_index, ctx);
+        if let Some(last) = group_member_indices(&self.tabs, previous_group_id).last() {
+            self.move_tab_to_index(tab_index, last + 1, ctx);
+        }
 
         self.prune_empty_tab_group(previous_group_id, ctx);
 
