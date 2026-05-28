@@ -26,16 +26,12 @@ use crate::{
 
 #[cfg(not(target_family = "wasm"))]
 fn format_upload_artifact_error(err: &anyhow::Error) -> String {
-    let root_cause = err
-        .chain()
-        .last()
-        .map(ToString::to_string)
-        .unwrap_or_else(|| err.to_string());
+    let error_chain = format!("{err:#}");
 
-    if root_cause != err.to_string() {
-        format!("Artifact upload failed: {root_cause}")
+    if error_chain != err.to_string() {
+        format!("Artifact upload failed: {error_chain}")
     } else {
-        root_cause
+        error_chain
     }
 }
 

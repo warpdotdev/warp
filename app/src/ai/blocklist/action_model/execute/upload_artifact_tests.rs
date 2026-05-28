@@ -127,7 +127,7 @@ fn test_shell_launch_data() -> ShellLaunchData {
 }
 
 #[test]
-fn format_upload_artifact_error_preserves_actionable_root_cause() {
+fn format_upload_artifact_error_preserves_full_error_chain() {
     let err = anyhow::anyhow!(
         "Artifact upload limit reached: this conversation already has the maximum allowed number of file artifacts (10). Remove an existing artifact or upload fewer files."
     )
@@ -135,7 +135,7 @@ fn format_upload_artifact_error_preserves_actionable_root_cause() {
 
     assert_eq!(
         format_upload_artifact_error(&err),
-        "Artifact upload failed: Artifact upload limit reached: this conversation already has the maximum allowed number of file artifacts (10). Remove an existing artifact or upload fewer files."
+        "Artifact upload failed: Failed to create file artifact upload target: Artifact upload limit reached: this conversation already has the maximum allowed number of file artifacts (10). Remove an existing artifact or upload fewer files."
     );
 }
 
