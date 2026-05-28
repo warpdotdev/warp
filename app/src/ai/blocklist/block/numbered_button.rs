@@ -11,6 +11,8 @@ use warpui::{AppContext, Element, SingletonEntity, ViewHandle};
 
 use super::compact_agent_input::CompactAgentInput;
 use crate::context_chips::spacing;
+const NUMBER_BADGE_BORDER_WIDTH: f32 = 1.;
+const NUMBER_BADGE_VERTICAL_PADDING: f32 = 1.;
 
 fn render_number_badge(
     number: usize,
@@ -34,8 +36,8 @@ fn render_number_badge(
         .finish(),
     )
     .with_horizontal_padding(5.)
-    .with_vertical_padding(1.)
-    .with_border(Border::all(1.).with_border_color(badge_border_color))
+    .with_vertical_padding(NUMBER_BADGE_VERTICAL_PADDING)
+    .with_border(Border::all(NUMBER_BADGE_BORDER_WIDTH).with_border_color(badge_border_color))
     .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.)))
     .with_background(badge_background)
     .finish()
@@ -85,6 +87,7 @@ pub(super) fn build_numbered_button(
 ) -> Button {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
+    let font_size = appearance.monospace_font_size();
 
     let mut button = base_numbered_button(mouse_state, app);
 
@@ -105,12 +108,25 @@ pub(super) fn build_numbered_button(
     }
 
     let badge = render_number_badge(number, is_checked, appearance);
+    let badge_font_size = font_size.max(4.) - 1.;
+    let content_top_margin = ((badge_font_size * DEFAULT_UI_LINE_HEIGHT_RATIO)
+        + (NUMBER_BADGE_VERTICAL_PADDING + NUMBER_BADGE_BORDER_WIDTH) * 2.
+        - (font_size * DEFAULT_UI_LINE_HEIGHT_RATIO))
+        .max(0.)
+        / 2.;
 
     let row = Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_cross_axis_alignment(CrossAxisAlignment::Start)
         .with_child(badge)
         .with_child(
-            Shrinkable::new(1., Container::new(content).with_margin_left(8.).finish()).finish(),
+            Shrinkable::new(
+                1.,
+                Container::new(content)
+                    .with_margin_left(8.)
+                    .with_margin_top(content_top_margin)
+                    .finish(),
+            )
+            .finish(),
         )
         .finish();
 
