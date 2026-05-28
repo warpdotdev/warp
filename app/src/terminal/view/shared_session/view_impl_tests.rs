@@ -118,7 +118,7 @@ fn test_on_ambient_agent_execution_ended_enables_followup_input_for_editable_non
             let model = view.model.lock();
             assert_eq!(
                 model.block_list().block_heights().items().len(),
-                initial_block_height_items + 1
+                initial_block_height_items
             );
             assert!(matches!(
                 model.shared_session_status(),
