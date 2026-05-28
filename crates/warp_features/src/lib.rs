@@ -953,6 +953,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GroupedTabs,
     FeatureFlag::AsyncFind,
     FeatureFlag::OrchestrationViewerStreamer,
+    FeatureFlag::GPTConfigurableContextWindow,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
