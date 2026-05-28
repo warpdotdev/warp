@@ -96,6 +96,65 @@ fn test_handle_repository_update_single_skill_added() {
 }
 
 #[test]
+fn test_stale_project_skill_refresh_result_is_ignored() {
+    let (tx, rx) = async_channel::unbounded();
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new_for_testing);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        let skill_watcher_handle = app.add_model(|ctx| SkillWatcher::new_for_testing(ctx, tx));
+
+        let temp_dir = TempDir::new().unwrap();
+        let skill = create_skill_file(&temp_dir, "stale", "Stale skill", "Old content");
+        let repo_id = RepositoryIdentifier::try_local(temp_dir.path()).unwrap();
+
+        skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
+            let stale_generation = skill_watcher.advance_project_skill_refresh_generation(&repo_id);
+            skill_watcher.advance_project_skill_refresh_generation(&repo_id);
+            skill_watcher.emit_project_skills_if_current(
+                &repo_id,
+                stale_generation,
+                vec![skill],
+                ctx,
+            );
+        });
+
+        assert!(rx.try_recv().is_err());
+    });
+}
+
+#[test]
+fn test_removing_project_repo_invalidates_pending_refresh_result() {
+    let (tx, rx) = async_channel::unbounded();
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new_for_testing);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        let skill_watcher_handle = app.add_model(|ctx| SkillWatcher::new_for_testing(ctx, tx));
+
+        let temp_dir = TempDir::new().unwrap();
+        let skill = create_skill_file(&temp_dir, "removed", "Removed skill", "Old content");
+        let repo_id = RepositoryIdentifier::try_local(temp_dir.path()).unwrap();
+
+        skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
+            let pending_generation =
+                skill_watcher.advance_project_skill_refresh_generation(&repo_id);
+            skill_watcher.remove_project_skills_for_repo(&repo_id);
+            skill_watcher.emit_project_skills_if_current(
+                &repo_id,
+                pending_generation,
+                vec![skill],
+                ctx,
+            );
+        });
+
+        assert!(rx.try_recv().is_err());
+    });
+}
+
+#[test]
 #[cfg(unix)]
 fn test_refresh_project_skills_for_repo_loads_symlinked_project_skill_directory() {
     let (tx, rx) = async_channel::unbounded();

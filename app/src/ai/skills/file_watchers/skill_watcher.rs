@@ -36,6 +36,13 @@ pub struct SkillWatcher {
     /// Last known project skill files by repository. Project skill counts are small,
     /// so repo metadata changes trigger a full refresh instead of a subtree diff.
     project_skill_files_by_repo: HashMap<RepositoryIdentifier, HashSet<LocalOrRemotePath>>,
+    /// Latest full project-skill refresh generation by repository. Repo metadata refreshes
+    /// parse local files asynchronously, so results from superseded tree snapshots must
+    /// not re-add deleted skills or overwrite newer parsed content.
+    project_skill_refresh_generations: HashMap<RepositoryIdentifier, u64>,
+    /// Allocates refresh generations that cannot be reused if a repository is removed
+    /// and subsequently re-added while an old task is still in flight.
+    next_project_skill_refresh_generation: u64,
     /// Failed local repos still need the project file watcher path because
     /// repo metadata indexing can fail for oversized repos. This replaces the
     /// previous `watched_repos` set so we only subscribe when fallback is active
@@ -192,6 +199,8 @@ impl SkillWatcher {
         Self {
             repository_message_tx,
             project_skill_files_by_repo: HashMap::new(),
+            project_skill_refresh_generations: HashMap::new(),
+            next_project_skill_refresh_generation: 0,
             failed_local_project_watchers: HashMap::new(),
             watcher_event_tx,
             home_provider_watchers,
@@ -205,6 +214,7 @@ impl SkillWatcher {
         repo_id: &RepositoryIdentifier,
         ctx: &mut ModelContext<Self>,
     ) {
+        let refresh_generation = self.advance_project_skill_refresh_generation(repo_id);
         let current_skill_files: HashSet<LocalOrRemotePath> = {
             let repo_metadata = RepoMetadataModel::as_ref(ctx);
             let mut skill_files = find_skill_files_in_tree(repo_id, repo_metadata, ctx);
@@ -249,10 +259,22 @@ impl SkillWatcher {
         // changed subtree. This keeps local and remote project-skill behavior on
         // the same RepoMetadataModel path and avoids a separate FileWatcher update
         // path for local repos.
-        Self::spawn_read_skills_from_files(skill_files, ctx);
+        self.spawn_read_project_skills_from_files(
+            repo_id.clone(),
+            refresh_generation,
+            skill_files,
+            ctx,
+        );
 
         self.project_skill_files_by_repo
             .insert(repo_id.clone(), current_skill_files);
+    }
+
+    fn advance_project_skill_refresh_generation(&mut self, repo_id: &RepositoryIdentifier) -> u64 {
+        self.next_project_skill_refresh_generation += 1;
+        self.project_skill_refresh_generations
+            .insert(repo_id.clone(), self.next_project_skill_refresh_generation);
+        self.next_project_skill_refresh_generation
     }
 
     fn fallback_to_local_project_watcher(
@@ -335,6 +357,45 @@ impl SkillWatcher {
         );
     }
 
+    fn spawn_read_project_skills_from_files(
+        &mut self,
+        repo_id: RepositoryIdentifier,
+        refresh_generation: u64,
+        skill_files: impl IntoIterator<Item = PathBuf>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let skill_files: Vec<_> = skill_files.into_iter().collect();
+        if skill_files.is_empty() {
+            return;
+        }
+
+        ctx.spawn(
+            async move { read_skills_from_files(skill_files) },
+            move |me, skills, ctx| {
+                me.emit_project_skills_if_current(&repo_id, refresh_generation, skills, ctx);
+            },
+        );
+    }
+
+    fn emit_project_skills_if_current(
+        &mut self,
+        repo_id: &RepositoryIdentifier,
+        refresh_generation: u64,
+        skills: Vec<ParsedSkill>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.project_skill_refresh_generations.get(repo_id) != Some(&refresh_generation) {
+            return;
+        }
+
+        if !skills.is_empty() {
+            self.register_symlink_watches(&skills, ctx);
+            let _ = self
+                .watcher_event_tx
+                .try_send(SkillWatcherEvent::SkillsAdded { skills });
+        }
+    }
+
     fn stop_failed_local_project_watcher(
         &mut self,
         repo_id: &RepositoryIdentifier,
@@ -358,6 +419,10 @@ impl SkillWatcher {
     }
 
     fn remove_project_skills_for_repo(&mut self, repo_id: &RepositoryIdentifier) {
+        // Invalidate an in-flight full refresh before deleting its currently cached skills.
+        // New refreshes use globally increasing generations, so the entry can be dropped
+        // without colliding if the same repository is later re-added.
+        self.project_skill_refresh_generations.remove(repo_id);
         let Some(skill_files) = self.project_skill_files_by_repo.remove(repo_id) else {
             return;
         };
@@ -386,28 +451,6 @@ impl SkillWatcher {
 
         ctx.spawn(
             async move { read_skills_from_directories(skill_dirs) },
-            move |me, skills, ctx| {
-                if !skills.is_empty() {
-                    me.register_symlink_watches(&skills, ctx);
-                    let _ = me
-                        .watcher_event_tx
-                        .try_send(SkillWatcherEvent::SkillsAdded { skills });
-                }
-            },
-        );
-    }
-
-    fn spawn_read_skills_from_files(
-        skill_files: impl IntoIterator<Item = PathBuf>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let skill_files: Vec<_> = skill_files.into_iter().collect();
-        if skill_files.is_empty() {
-            return;
-        }
-
-        ctx.spawn(
-            async move { read_skills_from_files(skill_files) },
             move |me, skills, ctx| {
                 if !skills.is_empty() {
                     me.register_symlink_watches(&skills, ctx);
