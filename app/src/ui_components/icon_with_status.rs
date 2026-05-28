@@ -28,10 +28,47 @@ const OZ_AMBIENT_BACKGROUND_COLOR: ColorU = ColorU {
 // pre-render their own avatar can size it consistently with the other variants.
 pub(crate) const CIRCLE_RATIO: f32 = 0.76;
 const ICON_RATIO: f32 = 0.43;
-const BADGE_RATIO: f32 = 0.57;
-const BADGE_ICON_RATIO: f32 = 0.34;
+const DEFAULT_BADGE_RATIO: f32 = 0.57;
+const DEFAULT_BADGE_ICON_RATIO: f32 = 0.34;
 const CLOUD_RATIO: f32 = 0.57;
 const STATUS_IN_CLOUD_RATIO: f32 = 0.285;
+
+/// Configurable knobs for the cutout-ring status badge attached to the BR of an
+/// icon-with-status lockup. Callers pass [`StatusBadgeStyle::DEFAULT`] to get today's
+/// geometry; the orchestration pill bar passes a more emphasized style so the badge
+/// reads at small total sizes (see the pill bar's `render_avatar_with_status_overlay`
+/// for the override values it uses).
+#[derive(Clone, Copy)]
+pub(crate) struct StatusBadgeStyle {
+    /// Cutout-ring diameter as a fraction of `total_size`.
+    pub ring_ratio: f32,
+    /// Status-icon glyph diameter as a fraction of `total_size`.
+    pub icon_ratio: f32,
+    /// Inner badge container shape (the holder beneath the cutout ring).
+    pub inner_shape: BadgeInnerShape,
+}
+
+/// Shape of the inner badge container that holds the status glyph.
+#[derive(Clone, Copy)]
+pub(crate) enum BadgeInnerShape {
+    /// Fully rounded — the default treatment used on the pane header, vertical tabs,
+    /// run cards, notifications, etc.
+    Circle,
+    /// Rounded square with the given corner radius in pixels. Matches Figma's
+    /// `notiStatus.dispatchJobStatus` `rounded-[2px]` treatment used by the
+    /// orchestration pill bar.
+    RoundedSquare { radius_px: f32 },
+}
+
+impl StatusBadgeStyle {
+    /// Default badge geometry: matches every existing call site so passing
+    /// `StatusBadgeStyle::DEFAULT` is a no-op visually.
+    pub(crate) const DEFAULT: Self = Self {
+        ring_ratio: DEFAULT_BADGE_RATIO,
+        icon_ratio: DEFAULT_BADGE_ICON_RATIO,
+        inner_shape: BadgeInnerShape::Circle,
+    };
+}
 
 // Neutral variants have no overlay, so they fill the full `total_size` bounding box. The
 // inner glyph occupies `NEUTRAL_GLYPH_RATIO * total_size`, matching the old sizing where
@@ -51,16 +88,16 @@ fn circle_padding(total: f32) -> f32 {
     (circle_size(total) - icon_size(total)) / 2.
 }
 
-fn badge_size(total: f32) -> f32 {
-    total * BADGE_RATIO
+fn badge_size(total: f32, style: StatusBadgeStyle) -> f32 {
+    total * style.ring_ratio
 }
 
-fn badge_icon_size(total: f32) -> f32 {
-    total * BADGE_ICON_RATIO
+fn badge_icon_size(total: f32, style: StatusBadgeStyle) -> f32 {
+    total * style.icon_ratio
 }
 
-fn badge_padding(total: f32) -> f32 {
-    (badge_size(total) - badge_icon_size(total)) / 4.
+fn badge_padding(total: f32, style: StatusBadgeStyle) -> f32 {
+    (badge_size(total, style) - badge_icon_size(total, style)) / 4.
 }
 
 fn cloud_icon_size(total: f32) -> f32 {
@@ -143,6 +180,27 @@ pub(crate) fn render_icon_with_status(
     theme: &WarpTheme,
     status_container_background: WarpThemeFill,
 ) -> Box<dyn Element> {
+    render_icon_with_status_with_badge_style(
+        variant,
+        total_size,
+        overlay_extra_overhang_ratio,
+        StatusBadgeStyle::DEFAULT,
+        theme,
+        status_container_background,
+    )
+}
+
+/// Variant of [`render_icon_with_status`] that lets the caller override the status
+/// badge's ring/icon ratios and inner shape via [`StatusBadgeStyle`]. The cloud-lobe
+/// path (`is_ambient`) ignores `badge_style` and continues to use its own constants.
+pub(crate) fn render_icon_with_status_with_badge_style(
+    variant: IconWithStatusVariant,
+    total_size: f32,
+    overlay_extra_overhang_ratio: f32,
+    badge_style: StatusBadgeStyle,
+    theme: &WarpTheme,
+    status_container_background: WarpThemeFill,
+) -> Box<dyn Element> {
     let sub_text = theme.sub_text_color(theme.background());
 
     match variant {
@@ -188,6 +246,7 @@ pub(crate) fn render_icon_with_status(
                 is_ambient,
                 total_size,
                 overlay_extra_overhang_ratio,
+                badge_style,
                 theme,
                 status_container_background,
             )
@@ -215,6 +274,7 @@ pub(crate) fn render_icon_with_status(
                 is_ambient,
                 total_size,
                 overlay_extra_overhang_ratio,
+                badge_style,
                 theme,
                 status_container_background,
             )
@@ -229,6 +289,7 @@ pub(crate) fn render_icon_with_status(
             is_ambient,
             total_size,
             overlay_extra_overhang_ratio,
+            badge_style,
             theme,
             status_container_background,
         ),
@@ -284,12 +345,15 @@ fn render_neutral_circle(
 
 /// Wraps a brand circle with the appropriate status overlay (badge for non-ambient runs,
 /// cloud lobe for ambient runs). Both overlays are derived from `total_size`.
+#[allow(clippy::too_many_arguments)] // Internal fan-out helper; refactoring into a struct
+                                     // would add ceremony without clarity for a single call site.
 fn attach_status_overlay(
     circle: Box<dyn Element>,
     status: Option<&ConversationStatus>,
     is_ambient: bool,
     total_size: f32,
     overlay_extra_overhang_ratio: f32,
+    badge_style: StatusBadgeStyle,
     theme: &WarpTheme,
     status_container_background: WarpThemeFill,
 ) -> Box<dyn Element> {
@@ -307,6 +371,7 @@ fn attach_status_overlay(
             status,
             total_size,
             overlay_extra_overhang_ratio,
+            badge_style,
             theme,
             status_container_background,
         )
@@ -388,6 +453,7 @@ fn render_with_optional_status_badge(
     status: Option<&ConversationStatus>,
     total_size: f32,
     overlay_extra_overhang_ratio: f32,
+    badge_style: StatusBadgeStyle,
     theme: &WarpTheme,
     status_container_background: WarpThemeFill,
 ) -> Box<dyn Element> {
@@ -401,17 +467,23 @@ fn render_with_optional_status_badge(
             .finish();
     };
     let (icon, color) = status.status_icon_and_color(theme, StatusColorStyle::Standard);
-    let badge_icon_diameter = badge_icon_size(total_size);
-    let pad = badge_padding(total_size);
+    let badge_icon_diameter = badge_icon_size(total_size, badge_style);
+    let pad = badge_padding(total_size, badge_style);
     let badge_icon = ConstrainedBox::new(icon.to_warpui_icon(WarpThemeFill::Solid(color)).finish())
         .with_width(badge_icon_diameter)
         .with_height(badge_icon_diameter)
         .finish();
+    let inner_radius = match badge_style.inner_shape {
+        BadgeInnerShape::Circle => Radius::Percentage(50.),
+        BadgeInnerShape::RoundedSquare { radius_px } => Radius::Pixels(radius_px),
+    };
     let badge = Container::new(badge_icon)
         .with_uniform_padding(pad)
-        .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
+        .with_corner_radius(CornerRadius::with_all(inner_radius))
         .finish();
-    // Cutout ring that visually separates the badge from the circle.
+    // Cutout ring that visually separates the badge from the circle. Always a circle
+    // — only the inner badge holder switches between circle and rounded-square per
+    // `badge_style.inner_shape`.
     let badge_with_ring = Container::new(badge)
         .with_uniform_padding(pad)
         .with_background(status_container_background)

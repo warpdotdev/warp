@@ -64,7 +64,8 @@ use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::pane_group::pane::view::PaneHeaderAction;
 use crate::terminal::view::TerminalAction;
 use crate::ui_components::icon_with_status::{
-    self, render_icon_with_status, IconWithStatusVariant,
+    self, render_icon_with_status_with_badge_style, BadgeInnerShape, IconWithStatusVariant,
+    StatusBadgeStyle,
 };
 use crate::ui_components::icons::Icon;
 use crate::workspace::WorkspaceAction;
@@ -2042,6 +2043,24 @@ fn render_overflow_button(
 
 /// Pill avatar with a status badge (cloud-shaped when remote), delegated to
 /// the shared icon-with-status helper.
+///
+/// The pill bar overrides the helper's default badge geometry so the status badge
+/// reads at the pill's small total size (Petra/Peter feedback: the default
+/// proportions render an "almost invisible" dot at 20px lockups):
+/// * ring ~70% of total → ~14px ring at `total_size = 20`, matching the pane
+///   header's absolute badge size (~14.8px) minus ~1px per Peter's spec.
+/// * icon ~40% of total → ~8px status glyph, matching pane header (~8.8px) minus ~1px.
+/// * rounded-square inner shape (radius 2px) to match Figma
+///   `notiStatus.dispatchJobStatus` `rounded-[2px]`.
+/// * overhang ratio `0.18` pushes the badge BR past the lockup BR so the larger
+///   badge sits outside the avatar circle rather than swallowing it.
+const PILL_BADGE_STYLE: StatusBadgeStyle = StatusBadgeStyle {
+    ring_ratio: 0.7,
+    icon_ratio: 0.4,
+    inner_shape: BadgeInnerShape::RoundedSquare { radius_px: 2.0 },
+};
+const PILL_BADGE_OVERHANG_RATIO: f32 = 0.18;
+
 fn render_avatar_with_status_overlay(
     avatar_color: ColorU,
     glyph: AvatarGlyph,
@@ -2062,14 +2081,15 @@ fn render_avatar_with_status_overlay(
         appearance,
     ))
     .finish();
-    render_icon_with_status(
+    render_icon_with_status_with_badge_style(
         IconWithStatusVariant::CustomAvatar {
             avatar,
             status: Some(status),
             is_ambient: is_remote_child,
         },
         AVATAR_WITH_STATUS_TOTAL_SIZE,
-        0.0,
+        PILL_BADGE_OVERHANG_RATIO,
+        PILL_BADGE_STYLE,
         theme,
         // Cutout ring color for the local badge; ignored by the cloud path.
         pill_background.into(),
