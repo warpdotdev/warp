@@ -226,7 +226,7 @@ impl AppearanceManager {
                 return;
             };
             let plugin_name = ns_string!("WarpDockTilePlugin.docktileplugin");
-            let plugin_path = plugins_path.stringByAppendingPathComponent(&plugin_name);
+            let plugin_path = plugins_path.stringByAppendingPathComponent(plugin_name);
             let Some(plugin_bundle) = NSBundle::bundleWithPath(&plugin_path) else {
                 log::warn!("Failed to get dock tile plugin bundle");
                 return;
@@ -236,7 +236,7 @@ impl AppearanceManager {
             let image_name = NSString::from_str(icon_name);
             let extension = ns_string!("png");
             let Some(image_path) =
-                plugin_bundle.pathForResource_ofType(Some(&image_name), Some(&extension))
+                plugin_bundle.pathForResource_ofType(Some(&image_name), Some(extension))
             else {
                 log::warn!("Failed to get image path for icon: {icon_name}");
                 return;
