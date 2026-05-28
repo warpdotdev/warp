@@ -861,6 +861,9 @@ impl BlocklistAIHistoryModel {
 
     /// Sets the active conversation ID for a terminal view and transfers ownership
     /// from any other terminal view that currently holds it.
+    ///
+    /// For automatic follow-ups and request-stream bookkeeping, use
+    /// [`Self::mark_active_conversation_id`] instead.
     pub fn set_active_conversation_id(
         &mut self,
         conversation_id: AIConversationId,
@@ -915,6 +918,39 @@ impl BlocklistAIHistoryModel {
                 previous_terminal_view_id,
                 new_terminal_view_id: terminal_view_id,
             });
+        }
+
+        self.active_conversation_for_terminal_view
+            .insert(terminal_view_id, conversation_id);
+
+        ctx.emit(BlocklistAIHistoryEvent::SetActiveConversation {
+            conversation_id,
+            terminal_view_id,
+        });
+    }
+    /// Marks a conversation as the active conversation for a terminal view
+    /// without removing it from other views.
+    ///
+    /// This is the non-transferring counterpart to [`Self::set_active_conversation_id`].
+    /// Use this during automatic follow-ups and request sending where the
+    /// conversation already belongs to this view and we only need to update
+    /// the "most recently streamed" pointer.
+    pub fn mark_active_conversation_id(
+        &mut self,
+        conversation_id: AIConversationId,
+        terminal_view_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !self
+            .live_conversation_ids_for_terminal_view
+            .get(&terminal_view_id)
+            .is_some_and(|conversation_ids| conversation_ids.contains(&conversation_id))
+        {
+            log::warn!(
+                "mark_active_conversation_id: conversation {conversation_id:?} is not in \
+                 terminal view {terminal_view_id:?} live list, skipping"
+            );
+            return;
         }
 
         self.active_conversation_for_terminal_view
