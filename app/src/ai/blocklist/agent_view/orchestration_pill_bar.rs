@@ -1852,7 +1852,7 @@ fn render_pill(
                     })
                     .finish()
                 } else if let Some(ref status) = status {
-                    render_avatar_slot(render_avatar_with_status_overlay(
+                    render_avatar_with_status_overlay(
                         avatar_color,
                         avatar_glyph,
                         status.clone(),
@@ -1860,7 +1860,7 @@ fn render_pill(
                         background,
                         theme,
                         appearance,
-                    ))
+                    )
                 } else {
                     render_avatar_slot(render_avatar_disc(
                         avatar_color,
@@ -2055,18 +2055,16 @@ fn render_avatar_with_status_overlay(
     theme: &WarpTheme,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    // `Align` centers the disc in the helper's `total_size` box; without it
-    // the disc anchors top-left and sits ~2.5px higher than the orchestrator
-    // pill's plain avatar.
-    let avatar = Align::new(render_avatar_disc(
+    // Top-left anchor inside the helper's `total_size` box so the disc sits
+    // where Figma places it (TL of the slot, leaving the BR for the badge).
+    let avatar = render_avatar_disc(
         avatar_color,
         glyph,
         icon_with_status::circle_size(AVATAR_WITH_STATUS_TOTAL_SIZE),
         theme,
         appearance,
-    ))
-    .finish();
-    render_icon_with_status_with_badge_style(
+    );
+    let lockup = render_icon_with_status_with_badge_style(
         IconWithStatusVariant::CustomAvatar {
             avatar,
             status: Some(status),
@@ -2078,7 +2076,20 @@ fn render_avatar_with_status_overlay(
         theme,
         // Cutout ring color for the local badge; ignored by the cloud path.
         pill_background.into(),
+    );
+    // Bottom-anchor the lockup in the pill so the badge BR sits flush with
+    // the pill's bottom edge (matches Figma).
+    ConstrainedBox::new(
+        Flex::column()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::End)
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(lockup)
+            .finish(),
     )
+    .with_width(PILL_AVATAR_SLOT_SIZE)
+    .with_height(PILL_HEIGHT)
+    .finish()
 }
 
 /// Renders the avatar circle as a colored disc with a centered glyph (letter
