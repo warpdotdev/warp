@@ -6,7 +6,7 @@ use anyhow::Result;
 use cocoa::base::id;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString};
-use objc2_foundation::{NSArray, NSData, NSString};
+use objc2_foundation::{ns_string, NSArray, NSData, NSString};
 use warpui_core::clipboard::{ClipboardContent, ImageData};
 
 extern "C" {
@@ -25,16 +25,15 @@ impl Clipboard {
     }
 }
 
-fn pasteboard_type_for_image_mime_type(mime_type: &str) -> Option<Retained<NSString>> {
-    let pasteboard_type = match mime_type {
-        "image/png" => "public.png",
-        "image/jpeg" => "public.jpeg",
-        "image/gif" => "public.gif",
-        "image/webp" => "public.webp",
-        "image/svg+xml" => "public.svg-image",
+fn pasteboard_type_for_image_mime_type(mime_type: &str) -> Option<&'static NSString> {
+    match mime_type {
+        "image/png" => Some(ns_string!("public.png")),
+        "image/jpeg" => Some(ns_string!("public.jpeg")),
+        "image/gif" => Some(ns_string!("public.gif")),
+        "image/webp" => Some(ns_string!("public.webp")),
+        "image/svg+xml" => Some(ns_string!("public.svg-image")),
         _ => return None,
-    };
-    Some(NSString::from_str(pasteboard_type))
+    }
 }
 
 impl crate::Clipboard for Clipboard {
@@ -132,17 +131,17 @@ impl Clipboard {
             // macOS pasteboard type identifiers for supported image formats
             // Ordered by preference for web compatibility
             let supported_pasteboard_types = [
-                NSString::from_str("public.png"),
-                NSString::from_str("public.jpeg"),
-                NSString::from_str("public.gif"),
-                NSString::from_str("public.webp"),
-                NSString::from_str("public.svg-image"),
-                NSString::from_str("com.compuserve.gif"),
+                ns_string!("public.png"),
+                ns_string!("public.jpeg"),
+                ns_string!("public.gif"),
+                ns_string!("public.webp"),
+                ns_string!("public.svg-image"),
+                ns_string!("com.compuserve.gif"),
             ];
 
             let mut images = Vec::new();
 
-            for pasteboard_type in &supported_pasteboard_types {
+            for pasteboard_type in supported_pasteboard_types {
                 if let Some(data) = self.0.dataForType(pasteboard_type) {
                     let length = data.len();
                     if length > 0 {
