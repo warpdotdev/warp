@@ -928,6 +928,7 @@ impl BlocklistAIHistoryModel {
             terminal_view_id,
         });
     }
+
     /// Marks a conversation as the active conversation for a terminal view
     /// without removing it from other views.
     ///
