@@ -18812,24 +18812,22 @@ impl Workspace {
     fn compute_tab_bar_left_padding(&self, ctx: &AppContext) -> f32 {
         let zoom_factor = WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor();
         let traffic_light_data = traffic_light_data(ctx, self.window_id);
+        let left_traffic_light_width = traffic_light_data
+            .as_ref()
+            .filter(|data| data.side == TrafficLightSide::Left)
+            .map(|data| data.width(zoom_factor));
         let is_window_fullscreen = ctx
             .windows()
             .platform_window(self.window_id)
             .map(|window| window.fullscreen_state() == FullscreenState::Fullscreen)
             .unwrap_or(false);
-        if self.current_workspace_state.is_left_panel_open() {
-            0.
-        } else if is_window_fullscreen && cfg!(target_os = "macos") {
-            // Full-screen mode on MacOS does not need as much padding (traffic lights are hidden).
-            TAB_BAR_PADDING_LEFT
-        } else {
-            traffic_light_data
-                .as_ref()
-                .filter(|data| data.side == TrafficLightSide::Left)
-                .map(|data| data.width(zoom_factor))
-                .unwrap_or(0.)
-                + 16.
-        }
+
+        compute_tab_bar_left_padding_value(
+            left_traffic_light_width,
+            is_window_fullscreen,
+            cfg!(target_os = "macos"),
+            self.current_workspace_state.is_left_panel_open(),
+        )
     }
 
     /// Renders the tab bar contents, wrapped in hover and drag-drop behaviors.
@@ -25458,6 +25456,25 @@ impl Workspace {
 
 fn should_reserve_traffic_light_space_in_tab_bar(side: TrafficLightSide) -> bool {
     side == TrafficLightSide::Right
+}
+
+fn compute_tab_bar_left_padding_value(
+    left_traffic_light_width: Option<f32>,
+    is_window_fullscreen: bool,
+    is_macos: bool,
+    is_left_panel_open: bool,
+) -> f32 {
+    if is_window_fullscreen && is_macos {
+        // Full-screen mode on MacOS does not need as much padding (traffic lights are hidden).
+        TAB_BAR_PADDING_LEFT
+    } else if is_left_panel_open && left_traffic_light_width.is_none() {
+        // Left panels visually align with the window edge on platforms without left-side
+        // traffic lights. If left-side traffic lights exist, the title bar still needs
+        // to reserve that safe area even while a workspace-level left panel is open.
+        0.
+    } else {
+        left_traffic_light_width.unwrap_or(0.) + 16.
+    }
 }
 
 /// Returns every tab-bar-equivalent rect laid out in `window_id` (horizontal

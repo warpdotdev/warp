@@ -3141,6 +3141,30 @@ fn test_standard_tab_context_menu_shows_hover_only_tab_bar() {
 }
 
 #[test]
+fn test_tab_bar_left_padding_preserves_left_traffic_lights_when_left_panel_is_open() {
+    assert_eq!(
+        compute_tab_bar_left_padding_value(Some(64.), false, true, true),
+        80.
+    );
+}
+
+#[test]
+fn test_tab_bar_left_padding_removes_left_panel_padding_without_left_traffic_lights() {
+    assert_eq!(
+        compute_tab_bar_left_padding_value(None, false, false, true),
+        0.
+    );
+}
+
+#[test]
+fn test_tab_bar_left_padding_uses_minimal_macos_fullscreen_padding() {
+    assert_eq!(
+        compute_tab_bar_left_padding_value(Some(64.), true, true, true),
+        TAB_BAR_PADDING_LEFT
+    );
+}
+
+#[test]
 fn test_open_cloud_agent_setup_guide_action_opens_management_view_and_is_idempotent() {
     let _agent_management_guard = FeatureFlag::AgentManagementView.override_enabled(true);
 
