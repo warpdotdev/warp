@@ -9,10 +9,14 @@ use crate::ai::llms::{
     LLMContextWindow, LLMInfo, LLMModelHost, LLMProvider, LLMUsageMetadata, RoutingHostConfig,
 };
 
-fn configurable_model(provider: LLMProvider, direct_host_enabled: bool) -> LLMInfo {
+fn configurable_model(
+    provider: LLMProvider,
+    base_model_name: &str,
+    direct_host_enabled: bool,
+) -> LLMInfo {
     LLMInfo {
         display_name: "test model".to_string(),
-        base_model_name: "test model".to_string(),
+        base_model_name: base_model_name.to_string(),
         id: "test-model".into(),
         reasoning_level: None,
         usage_metadata: LLMUsageMetadata {
@@ -126,131 +130,141 @@ fn snap_values_keep_count_reasonable_for_huge_range() {
 
 #[test]
 fn openai_direct_long_context_warning_starts_above_threshold() {
-    let model = configurable_model(LLMProvider::OpenAI, true);
+    let model = configurable_model(LLMProvider::OpenAI, "gpt-5.4", true);
 
     assert!(!should_show_long_context_pricing_warning(
         &model,
         Some(200_000),
-        false,
         true
     ));
     assert!(!should_show_long_context_pricing_warning(
         &model,
         Some(272_000),
-        false,
         true
     ));
     assert!(should_show_long_context_pricing_warning(
         &model,
         Some(272_001),
-        false,
         true
     ));
 }
 
 #[test]
 fn openai_direct_request_limit_is_clamped_when_expanded_context_is_available() {
-    let model = configurable_model(LLMProvider::OpenAI, true);
+    let model = configurable_model(LLMProvider::OpenAI, "gpt-5.4", true);
 
     assert_eq!(
-        sanitize_context_window_limit_for_request(&model, Some(1_500_000), false, true),
+        sanitize_context_window_limit_for_request(&model, Some(1_500_000), true),
         Some(1_000_000)
     );
 }
 
 #[test]
 fn custom_endpoint_fixed_context_does_not_expose_control_or_warning() {
-    let mut model = configurable_model(LLMProvider::Unknown, false);
+    let mut model = configurable_model(LLMProvider::Unknown, "custom-endpoint", false);
     model.context_window.is_configurable = false;
     model.context_window.max = 200_000;
-
-    assert!(!has_effective_configurable_context_window(
-        &model, false, false
-    ));
+    assert!(!has_effective_configurable_context_window(&model, false));
     assert_eq!(
-        sanitize_context_window_limit_for_request(&model, Some(1_000_000), false, false),
+        sanitize_context_window_limit_for_request(&model, Some(1_000_000), false),
         None
     );
     assert!(!should_show_long_context_pricing_warning(
         &model,
         Some(1_000_000),
-        false,
         false
     ));
 }
 
 #[test]
-fn openai_byok_suppresses_expanded_control_and_stale_limit_warning() {
-    let model = configurable_model(LLMProvider::OpenAI, true);
+fn eligible_openai_model_families_expose_expanded_context() {
+    for base_model_name in ["gpt-5.4", "gpt-5.5", "grape"] {
+        let model = configurable_model(LLMProvider::OpenAI, base_model_name, true);
 
-    assert!(!has_effective_configurable_context_window(
-        &model, true, true
-    ));
+        assert!(has_effective_configurable_context_window(&model, true));
+        assert_eq!(
+            sanitize_context_window_limit_for_request(&model, Some(1_000_000), true),
+            Some(1_000_000)
+        );
+    }
+}
+
+#[test]
+fn openai_byok_does_not_change_expanded_context_behavior() {
+    let model = configurable_model(LLMProvider::OpenAI, "gpt-5.4", true);
+
+    assert!(has_effective_configurable_context_window(&model, true));
     assert_eq!(
-        sanitize_context_window_limit_for_request(&model, Some(1_000_000), true, true),
+        sanitize_context_window_limit_for_request(&model, Some(1_000_000), true),
+        Some(1_000_000)
+    );
+    assert!(should_show_long_context_pricing_warning(
+        &model,
+        Some(1_000_000),
+        true
+    ));
+}
+
+#[test]
+fn ineligible_openai_model_does_not_expose_configurable_context_from_metadata() {
+    let model = configurable_model(LLMProvider::OpenAI, "gpt-5.2", true);
+
+    assert!(!has_effective_configurable_context_window(&model, true));
+    assert_eq!(
+        sanitize_context_window_limit_for_request(&model, Some(1_000_000), true),
         None
     );
     assert!(!should_show_long_context_pricing_warning(
         &model,
         Some(1_000_000),
-        true,
         true
     ));
 }
 
 #[test]
 fn openai_without_direct_host_suppresses_expanded_control_and_warning() {
-    let model = configurable_model(LLMProvider::OpenAI, false);
+    let model = configurable_model(LLMProvider::OpenAI, "gpt-5.4", false);
 
-    assert!(!has_effective_configurable_context_window(
-        &model, false, true
-    ));
+    assert!(!has_effective_configurable_context_window(&model, true));
     assert_eq!(
-        sanitize_context_window_limit_for_request(&model, Some(1_000_000), false, true),
+        sanitize_context_window_limit_for_request(&model, Some(1_000_000), true),
         None
     );
     assert!(!should_show_long_context_pricing_warning(
         &model,
         Some(1_000_000),
-        false,
         true
     ));
 }
 
 #[test]
 fn openai_expanded_context_is_hidden_while_feature_flag_is_off() {
-    let model = configurable_model(LLMProvider::OpenAI, true);
+    let model = configurable_model(LLMProvider::OpenAI, "gpt-5.4", true);
 
-    assert!(!has_effective_configurable_context_window(
-        &model, false, false
-    ));
+    assert!(!has_effective_configurable_context_window(&model, false));
     assert_eq!(
-        sanitize_context_window_limit_for_request(&model, Some(1_000_000), false, false),
+        sanitize_context_window_limit_for_request(&model, Some(1_000_000), false),
         None
     );
     assert!(!should_show_long_context_pricing_warning(
         &model,
         Some(1_000_000),
-        false,
         false
     ));
 }
 
 #[test]
 fn non_openai_configurable_context_ignores_gpt_flag_and_does_not_show_openai_warning() {
-    let model = configurable_model(LLMProvider::Anthropic, true);
+    let model = configurable_model(LLMProvider::Anthropic, "claude-opus-4-6", true);
 
-    assert!(has_effective_configurable_context_window(
-        &model, false, false
-    ));
+    assert!(has_effective_configurable_context_window(&model, false));
     assert_eq!(
-        sanitize_context_window_limit_for_request(&model, Some(1_000_000), false, false),
+        sanitize_context_window_limit_for_request(&model, Some(1_000_000), false),
         Some(1_000_000)
     );
     assert!(!should_show_long_context_pricing_warning(
         &model,
         Some(1_000_000),
-        false,
         false
     ));
 }
