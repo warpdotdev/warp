@@ -625,6 +625,7 @@ fn project_state(repo: &std::path::Path, skill: Option<&ParsedSkill>) -> FileTre
     FileTreeState::new(root, Vec::new(), None)
 }
 
+#[cfg(unix)]
 fn project_provider_state(repo: &std::path::Path) -> FileTreeState {
     let skills_dir = Entry::Directory(DirectoryEntry {
         path: StandardizedPath::try_from_local(&repo.join(".agents/skills")).unwrap(),
