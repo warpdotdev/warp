@@ -1218,16 +1218,6 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.warp_agent.other.should_show_oz_updates_in_zero_state",
         description: "Whether the \"What's new\" section is shown in the agent view.",
     }
-    // Controls whether Warp's built-in feedback skill is available to the Warp Agent.
-    feedback_bundled_skill_enabled: FeedbackBundledSkillEnabled {
-        type: bool,
-        default: true,
-        supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        private: false,
-        toml_path: "agents.warp_agent.other.feedback_bundled_skill_enabled",
-        description: "Whether Warp's built-in feedback skill is available to the Warp Agent.",
-    }
 
     // Whether or not the user has enabled fallback to Warp credits for user-provided models.
     can_use_warp_credits_for_fallback: CanUseWarpCreditsForFallback {
