@@ -30,7 +30,7 @@ use super::{
     ExecuteActionInput, PreprocessActionInput,
 };
 
-fn build_git_ls_files_command(
+pub(crate) fn build_git_ls_files_command(
     patterns: &[String],
     target_path: &str,
     shell_launch_data: Option<&ShellLaunchData>,
@@ -52,7 +52,7 @@ fn build_git_ls_files_command(
     format!("git ls-files -c -o --exclude-standard -- {pattern_args}")
 }
 
-fn build_find_command(patterns: &[String], target_path: &str) -> String {
+pub(crate) fn build_find_command(patterns: &[String], target_path: &str) -> String {
     let shell_family = ShellFamily::Posix;
     let pattern_args = patterns
         .iter()
@@ -62,7 +62,10 @@ fn build_find_command(patterns: &[String], target_path: &str) -> String {
     format!("find {escaped_target} -type f {pattern_args}")
 }
 
-fn build_powershell_get_childitem_command(patterns: &[String], target_path: &str) -> String {
+pub(crate) fn build_powershell_get_childitem_command(
+    patterns: &[String],
+    target_path: &str,
+) -> String {
     let shell_family = ShellFamily::PowerShell;
     let pattern_args = patterns
         .iter()

@@ -33,7 +33,11 @@ use crate::{send_telemetry_from_app_ctx, PrivacySettings, TelemetryEvent};
 const GREP_TIMEOUT: Duration = Duration::from_secs(10);
 const NON_ZERO_EXIT_CODE_ERROR: &str = "Grep command exited with non-zero exit code";
 
-fn build_git_grep_command(queries: &[String], target_path: &str, shell_type: ShellType) -> String {
+pub(crate) fn build_git_grep_command(
+    queries: &[String],
+    target_path: &str,
+    shell_type: ShellType,
+) -> String {
     let shell_family = ShellFamily::from(shell_type);
     // This command works on all the shells we support (even PowerShell).
     let mut grep_command = "git --no-pager grep --color=never --untracked -nIE".to_string();
@@ -46,7 +50,7 @@ fn build_git_grep_command(queries: &[String], target_path: &str, shell_type: She
     grep_command
 }
 
-fn build_grep_command(queries: &[String], target_path: &str) -> String {
+pub(crate) fn build_grep_command(queries: &[String], target_path: &str) -> String {
     let shell_family = ShellFamily::Posix;
     // Summary of the options we use:
     // * "--color=never" ensures we don't get colorized output which is harder to parse due to escape sequences
@@ -65,7 +69,7 @@ fn build_grep_command(queries: &[String], target_path: &str) -> String {
     grep_command
 }
 
-fn build_select_string_command(queries: &[String], target_path: &str) -> String {
+pub(crate) fn build_select_string_command(queries: &[String], target_path: &str) -> String {
     let shell_family = ShellFamily::PowerShell;
     let escaped_target = shell_family.shell_escape(target_path);
     let escaped_patterns = queries
