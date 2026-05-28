@@ -286,7 +286,7 @@ impl FileDataSource {
                 .collect();
 
             // If no files matched and we have a valid query and current directory,
-            // add a "Create <filename>..." option
+            // add a "Create a file named <filename>..." option
             if results.is_empty() && !query_file_name.trim().is_empty() {
                 if let Some(current_dir) = current_directory {
                     let create_item = CreateFileSearchItem {
