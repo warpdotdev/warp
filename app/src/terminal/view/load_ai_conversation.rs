@@ -940,6 +940,9 @@ impl TerminalView {
             pinned: false,
         };
 
+        // We already early-return for empty `tasks` above, so the strict
+        // constructor is safe here and matches the other cloud-style entry
+        // points.
         match AIConversation::new_restored(conversation_id, tasks, Some(conversation_data)) {
             Ok(conversation) => {
                 // Use live appearance for cloud conversation viewer

@@ -85,7 +85,14 @@ pub fn convert_persisted_conversation_to_ai_conversation_with_metadata(
 
     let conversation_data = serde_json::from_str::<AgentConversationData>(&conversation_data).ok();
 
-    match AIConversation::new_restored(conversation_id, tasks, conversation_data) {
+    // Local-DB restore: an empty `agent_tasks` row is the normal shape of a
+    // child conversation persisted before its first server response, so
+    // synthesize a fresh optimistic root rather than failing the restore.
+    match AIConversation::new_restored_synthesizing_on_empty(
+        conversation_id,
+        tasks,
+        conversation_data,
+    ) {
         Ok(conversation) => Some(conversation),
         Err(e) => {
             log::warn!("Failed to convert persisted conversation to AIConversation: {e:?}");

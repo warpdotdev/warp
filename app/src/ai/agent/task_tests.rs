@@ -378,20 +378,6 @@ fn test_splice_messages_optimistic_task_not_initialized() {
 }
 
 #[test]
-fn test_restored_optimistic_root_can_upgrade_to_server_created_task() {
-    let task =
-        Task::new_restored_optimistic_root("optimistic-root".to_string(), std::iter::empty());
-
-    let task = task
-        .into_server_created_task(create_api_task("server-root", vec![]), None, None, None)
-        .expect("restored optimistic root should upgrade");
-
-    assert_eq!(task.id().to_string(), "server-root");
-    assert!(!task.is_optimistic_root_task());
-    assert!(task.source().is_some());
-}
-
-#[test]
 fn test_splice_messages_from_beginning() {
     let task_id = "task1";
     let api_task = create_api_task(
