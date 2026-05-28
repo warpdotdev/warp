@@ -2041,19 +2041,8 @@ fn render_overflow_button(
     SavePosition::new(button, &overflow_button_position_id(conversation_id)).finish()
 }
 
-/// Pill avatar with a status badge (cloud-shaped when remote), delegated to
-/// the shared icon-with-status helper.
-///
-/// The pill bar overrides the helper's default badge geometry so the status badge
-/// reads at the pill's small total size (Petra/Peter feedback: the default
-/// proportions render an "almost invisible" dot at 20px lockups):
-/// * ring ~70% of total → ~14px ring at `total_size = 20`, matching the pane
-///   header's absolute badge size (~14.8px) minus ~1px per Peter's spec.
-/// * icon ~40% of total → ~8px status glyph, matching pane header (~8.8px) minus ~1px.
-/// * rounded-square inner shape (radius 2px) to match Figma
-///   `notiStatus.dispatchJobStatus` `rounded-[2px]`.
-/// * overhang ratio `0.18` pushes the badge BR past the lockup BR so the larger
-///   badge sits outside the avatar circle rather than swallowing it.
+/// Bigger, rounded-square status badge pushed outside the avatar so it actually
+/// reads at the pill's 20px lockup.
 const PILL_BADGE_STYLE: StatusBadgeStyle = StatusBadgeStyle {
     ring_ratio: 0.7,
     icon_ratio: 0.4,
