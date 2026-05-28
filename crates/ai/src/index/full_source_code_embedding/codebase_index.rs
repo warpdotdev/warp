@@ -24,9 +24,9 @@ use super::manager::{
     RetrieveFileError,
 };
 use super::merkle_tree::{MerkleTree, SerializedCodebaseIndex};
-use super::search_shaping::{
-    build_fragments_from_file_contents, fragments_to_context_locations, ReadFragmentResult,
-};
+#[cfg(feature = "local_fs")]
+use super::search_shaping::build_fragments_from_file_contents;
+use super::search_shaping::{fragments_to_context_locations, ReadFragmentResult};
 use super::store_client::StoreClient;
 use super::sync_client::{FlushFragmentResult, SyncOperationError};
 use super::{
