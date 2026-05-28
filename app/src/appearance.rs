@@ -7,7 +7,7 @@ mod macos_app_icon {
     pub use objc2::rc::autoreleasepool;
     pub use objc2::{AnyThread, MainThreadMarker};
     pub use objc2_app_kit::{NSApplication, NSImage, NSWorkspace, NSWorkspaceIconCreationOptions};
-    pub use objc2_foundation::{NSBundle, NSString};
+    pub use objc2_foundation::{ns_string, NSBundle, NSString};
     pub use warp_core::channel::{Channel, ChannelState};
 
     pub use crate::settings::app_icon::{AppIcon, AppIconSettings, AppIconSettingsChangedEvent};
@@ -225,7 +225,7 @@ impl AppearanceManager {
                 log::warn!("Failed to get dock tile plugin bundle");
                 return;
             };
-            let plugin_name = NSString::from_str("WarpDockTilePlugin.docktileplugin");
+            let plugin_name = ns_string!("WarpDockTilePlugin.docktileplugin");
             let plugin_path = plugins_path.stringByAppendingPathComponent(&plugin_name);
             let Some(plugin_bundle) = NSBundle::bundleWithPath(&plugin_path) else {
                 log::warn!("Failed to get dock tile plugin bundle");
@@ -234,7 +234,7 @@ impl AppearanceManager {
 
             // Read the images from the plugin bundle.
             let image_name = NSString::from_str(icon_name);
-            let extension = NSString::from_str("png");
+            let extension = ns_string!("png");
             let Some(image_path) =
                 plugin_bundle.pathForResource_ofType(Some(&image_name), Some(&extension))
             else {
