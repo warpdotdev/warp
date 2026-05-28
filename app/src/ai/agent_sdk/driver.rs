@@ -2082,7 +2082,14 @@ impl AgentDriver {
             if let Err(e) = manager.install().await {
                 log::warn!("Plugin installation failed (continuing): {e}");
             }
-            if let Err(e) = manager.install_platform_plugin().await {
+            let platform_plugin_result = if manager.platform_plugin_needs_update() {
+                manager.update_platform_plugin().await
+            } else if !manager.is_platform_plugin_installed() {
+                manager.install_platform_plugin().await
+            } else {
+                Ok(())
+            };
+            if let Err(e) = platform_plugin_result {
                 log::warn!("Platform plugin installation failed (continuing): {e}");
             }
         }
