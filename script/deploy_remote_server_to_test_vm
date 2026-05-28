@@ -22,10 +22,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$WORKSPACE_ROOT/script/cargo_bundle_features.sh"
 
 TARGET="x86_64-unknown-linux-musl"
 CARGO_PROFILE="dev-remote"
-FEATURES="crash_reporting,standalone,agent_mode_debug,remote_codebase_indexing"
+FEATURES="$(resolve_cargo_bundle_features "$WORKSPACE_ROOT" "remote_server.integration")"
 WARP_BIN="integration"
 # The integration test runner uses Channel::Integration, which maps to
 # cli_command_name() = "oz-integration", remote_server_dir() = "~/.warp-dev/remote-server",

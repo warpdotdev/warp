@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: script/check_cargo_build_profiles [--all] [--profile PROFILE]
+
+Validate Cargo build profiles declared in app/Cargo.toml.
+
+Options:
+  --all              Validate every package.metadata.warp.build_profiles entry.
+  --profile PROFILE  Resolve one dot-path profile, e.g. linux.oss.app.
+  -h, --help         Show this help.
+
+When --profile is used, the resolved comma-separated feature list is printed.
+USAGE
+}
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+MANIFEST_PATH="$WORKSPACE_ROOT_DIR/app/Cargo.toml"
+JQ_FILTER="$SCRIPT_DIR/cargo_build_profiles.jq"
+VALIDATE_ALL=0
+PROFILE_PATH=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --all)
+      VALIDATE_ALL=1
+      shift
+      ;;
+    --profile)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --profile requires a value" >&2
+        exit 1
+      fi
+      PROFILE_PATH="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Error: unknown argument: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ $VALIDATE_ALL -eq 1 && -n "$PROFILE_PATH" ]]; then
+  echo "Error: use either --all or --profile, not both" >&2
+  exit 1
+fi
+
+if [[ $VALIDATE_ALL -eq 0 && -z "$PROFILE_PATH" ]]; then
+  usage >&2
+  exit 1
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "Error: jq is required to validate Cargo build profiles." >&2
+  exit 1
+fi
+
+METADATA_JSON="$(cargo metadata --format-version 1 --no-deps --locked --manifest-path "$MANIFEST_PATH")"
+
+resolve_profile() {
+  local profile_path="$1"
+  printf '%s' "$METADATA_JSON" | jq -er --arg profile_path "$profile_path" -f "$JQ_FILTER"
+}
+
+list_profile_paths() {
+  printf '%s' "$METADATA_JSON" | jq -r '
+    .packages[]
+    | select(.name == "warp")
+    | .metadata.warp.build_profiles
+    | paths(objects) as $path
+    | getpath($path) as $value
+    | select(
+        ($value | type) == "object"
+        and (($value | has("base")) or ($value | has("groups")) or ($value | has("features")))
+      )
+    | $path
+    | map(tostring)
+    | join(".")
+  '
+}
+
+if [[ -n "$PROFILE_PATH" ]]; then
+  resolve_profile "$PROFILE_PATH"
+  exit 0
+fi
+
+PROFILE_COUNT=0
+while IFS= read -r profile_path; do
+  [[ -z "$profile_path" ]] && continue
+  resolve_profile "$profile_path" >/dev/null
+  PROFILE_COUNT=$((PROFILE_COUNT + 1))
+done < <(list_profile_paths)
+
+if [[ $PROFILE_COUNT -eq 0 ]]; then
+  echo "Error: no Cargo build profiles found in app/Cargo.toml" >&2
+  exit 1
+fi
+
+echo "Validated $PROFILE_COUNT Cargo build profiles."
