@@ -5,18 +5,12 @@ use crate::ai::execution_profiles::{
     has_effective_configurable_context_window, sanitize_context_window_limit_for_request,
     should_show_long_context_pricing_warning,
 };
-use crate::ai::llms::{
-    LLMContextWindow, LLMInfo, LLMModelHost, LLMProvider, LLMUsageMetadata, RoutingHostConfig,
-};
+use crate::ai::llms::{LLMContextWindow, LLMInfo, LLMProvider, LLMUsageMetadata};
 
-fn configurable_model(
-    provider: LLMProvider,
-    base_model_name: &str,
-    direct_host_enabled: bool,
-) -> LLMInfo {
+fn configurable_model(provider: LLMProvider) -> LLMInfo {
     LLMInfo {
         display_name: "test model".to_string(),
-        base_model_name: base_model_name.to_string(),
+        base_model_name: "test model".to_string(),
         id: "test-model".into(),
         reasoning_level: None,
         usage_metadata: LLMUsageMetadata {
@@ -28,13 +22,7 @@ fn configurable_model(
         vision_supported: false,
         spec: None,
         provider,
-        host_configs: HashMap::from([(
-            LLMModelHost::DirectApi,
-            RoutingHostConfig {
-                enabled: direct_host_enabled,
-                model_routing_host: LLMModelHost::DirectApi,
-            },
-        )]),
+        host_configs: HashMap::new(),
         discount_percentage: None,
         context_window: LLMContextWindow {
             is_configurable: true,
@@ -129,8 +117,8 @@ fn snap_values_keep_count_reasonable_for_huge_range() {
 }
 
 #[test]
-fn openai_direct_long_context_warning_starts_above_threshold() {
-    let model = configurable_model(LLMProvider::OpenAI, "gpt-5.4", true);
+fn openai_long_context_warning_starts_above_threshold() {
+    let model = configurable_model(LLMProvider::OpenAI);
 
     assert!(!should_show_long_context_pricing_warning(
         &model,
@@ -150,8 +138,8 @@ fn openai_direct_long_context_warning_starts_above_threshold() {
 }
 
 #[test]
-fn openai_direct_request_limit_is_clamped_when_expanded_context_is_available() {
-    let model = configurable_model(LLMProvider::OpenAI, "gpt-5.4", true);
+fn openai_request_limit_is_clamped_when_configurable_context_is_available() {
+    let model = configurable_model(LLMProvider::OpenAI);
 
     assert_eq!(
         sanitize_context_window_limit_for_request(&model, Some(1_500_000), true),
@@ -161,7 +149,7 @@ fn openai_direct_request_limit_is_clamped_when_expanded_context_is_available() {
 
 #[test]
 fn custom_endpoint_fixed_context_does_not_expose_control_or_warning() {
-    let mut model = configurable_model(LLMProvider::Unknown, "custom-endpoint", false);
+    let mut model = configurable_model(LLMProvider::Unknown);
     model.context_window.is_configurable = false;
     model.context_window.max = 200_000;
     assert!(!has_effective_configurable_context_window(&model, false));
@@ -177,21 +165,45 @@ fn custom_endpoint_fixed_context_does_not_expose_control_or_warning() {
 }
 
 #[test]
-fn eligible_openai_model_families_expose_expanded_context() {
-    for base_model_name in ["gpt-5.4", "gpt-5.5", "grape"] {
-        let model = configurable_model(LLMProvider::OpenAI, base_model_name, true);
-
-        assert!(has_effective_configurable_context_window(&model, true));
-        assert_eq!(
-            sanitize_context_window_limit_for_request(&model, Some(1_000_000), true),
-            Some(1_000_000)
-        );
-    }
+fn openai_configurable_context_uses_server_metadata_without_model_or_host_allowlist() {
+    let mut model = configurable_model(LLMProvider::OpenAI);
+    model.base_model_name = "new-server-configurable-model".to_string();
+    assert!(has_effective_configurable_context_window(&model, true));
+    assert_eq!(
+        sanitize_context_window_limit_for_request(&model, Some(1_000_000), true),
+        Some(1_000_000)
+    );
+    assert!(should_show_long_context_pricing_warning(
+        &model,
+        Some(1_000_000),
+        true
+    ));
 }
 
 #[test]
-fn openai_byok_does_not_change_expanded_context_behavior() {
-    let model = configurable_model(LLMProvider::OpenAI, "gpt-5.4", true);
+fn openai_fixed_context_metadata_does_not_expose_control_or_warning() {
+    let mut model = configurable_model(LLMProvider::OpenAI);
+    model.context_window = LLMContextWindow {
+        is_configurable: false,
+        min: 272_000,
+        max: 272_000,
+        default_max: 272_000,
+    };
+    assert!(!has_effective_configurable_context_window(&model, true));
+    assert_eq!(
+        sanitize_context_window_limit_for_request(&model, Some(1_000_000), true),
+        None
+    );
+    assert!(!should_show_long_context_pricing_warning(
+        &model,
+        Some(1_000_000),
+        true
+    ));
+}
+
+#[test]
+fn openai_configurable_context_does_not_require_direct_host_metadata() {
+    let model = configurable_model(LLMProvider::OpenAI);
 
     assert!(has_effective_configurable_context_window(&model, true));
     assert_eq!(
@@ -206,40 +218,8 @@ fn openai_byok_does_not_change_expanded_context_behavior() {
 }
 
 #[test]
-fn ineligible_openai_model_does_not_expose_configurable_context_from_metadata() {
-    let model = configurable_model(LLMProvider::OpenAI, "gpt-5.2", true);
-
-    assert!(!has_effective_configurable_context_window(&model, true));
-    assert_eq!(
-        sanitize_context_window_limit_for_request(&model, Some(1_000_000), true),
-        None
-    );
-    assert!(!should_show_long_context_pricing_warning(
-        &model,
-        Some(1_000_000),
-        true
-    ));
-}
-
-#[test]
-fn openai_without_direct_host_suppresses_expanded_control_and_warning() {
-    let model = configurable_model(LLMProvider::OpenAI, "gpt-5.4", false);
-
-    assert!(!has_effective_configurable_context_window(&model, true));
-    assert_eq!(
-        sanitize_context_window_limit_for_request(&model, Some(1_000_000), true),
-        None
-    );
-    assert!(!should_show_long_context_pricing_warning(
-        &model,
-        Some(1_000_000),
-        true
-    ));
-}
-
-#[test]
 fn openai_expanded_context_is_hidden_while_feature_flag_is_off() {
-    let model = configurable_model(LLMProvider::OpenAI, "gpt-5.4", true);
+    let model = configurable_model(LLMProvider::OpenAI);
 
     assert!(!has_effective_configurable_context_window(&model, false));
     assert_eq!(
@@ -255,7 +235,7 @@ fn openai_expanded_context_is_hidden_while_feature_flag_is_off() {
 
 #[test]
 fn non_openai_configurable_context_ignores_gpt_flag_and_does_not_show_openai_warning() {
-    let model = configurable_model(LLMProvider::Anthropic, "claude-opus-4-6", true);
+    let model = configurable_model(LLMProvider::Anthropic);
 
     assert!(has_effective_configurable_context_window(&model, false));
     assert_eq!(
