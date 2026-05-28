@@ -940,6 +940,7 @@ pub struct Workspace {
     pub(crate) tab_groups: HashMap<TabGroupId, TabGroup>,
     tab_rename_editor: ViewHandle<EditorView>,
     pane_rename_editor: ViewHandle<EditorView>,
+    tab_group_rename_editor: ViewHandle<EditorView>,
     vertical_tabs_search_input: ViewHandle<EditorView>,
     tips_completed: ModelHandle<TipsCompleted>,
     user_default_shell_unsupported_banner_model_handle: ModelHandle<BannerState>,
@@ -1327,6 +1328,21 @@ impl Workspace {
         editor
     }
 
+    fn tab_group_rename_editor(ctx: &mut ViewContext<Self>) -> ViewHandle<EditorView> {
+        let editor = ctx.add_typed_action_view(|ctx| {
+            let appearance = Appearance::as_ref(ctx);
+            let options = SingleLineEditorOptions {
+                text: TextOptions::ui_text(Some(12.), appearance),
+                ..Default::default()
+            };
+            EditorView::single_line(options, ctx)
+        });
+        ctx.subscribe_to_view(&editor, move |me, _, event, ctx| {
+            me.handle_tab_group_rename_editor_event(event, ctx);
+        });
+        editor
+    }
+
     pub fn handle_tab_rename_editor_event(
         &mut self,
         event: &EditorEvent,
@@ -1357,6 +1373,27 @@ impl Workspace {
                 }
                 EditorEvent::Escape => {
                     self.cancel_pane_rename(ctx);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub fn handle_tab_group_rename_editor_event(
+        &mut self,
+        event: &EditorEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self
+            .current_workspace_state
+            .is_any_tab_group_being_renamed()
+        {
+            match event {
+                EditorEvent::Blurred | EditorEvent::Enter => {
+                    self.finish_tab_group_rename(ctx);
+                }
+                EditorEvent::Escape => {
+                    self.cancel_tab_group_rename(ctx);
                 }
                 _ => {}
             }
@@ -1413,6 +1450,37 @@ impl Workspace {
             self.current_workspace_state.clear_pane_being_renamed();
             self.clear_pane_name_editor(ctx);
             self.focus_pane(locator, ctx);
+            ctx.notify();
+        }
+    }
+
+    fn finish_tab_group_rename(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(group_id) = self.current_workspace_state.tab_group_being_renamed() else {
+            return;
+        };
+        self.current_workspace_state.clear_tab_group_being_renamed();
+        let title = self.tab_group_rename_editor.as_ref(ctx).buffer_text(ctx);
+        let trimmed = title.trim();
+        // If the user cleared the input, keep the existing name (mirror tab/pane rename behavior).
+        if !trimmed.is_empty() {
+            if let Some(group) = self.tab_groups.get_mut(&group_id) {
+                group.name = Some(trimmed.to_string());
+            }
+        }
+        self.clear_tab_group_name_editor(ctx);
+        self.focus_active_tab(ctx);
+        ctx.dispatch_global_action("workspace:save_app", ());
+        ctx.notify();
+    }
+
+    fn cancel_tab_group_rename(&mut self, ctx: &mut ViewContext<Self>) {
+        if self
+            .current_workspace_state
+            .is_any_tab_group_being_renamed()
+        {
+            self.current_workspace_state.clear_tab_group_being_renamed();
+            self.clear_tab_group_name_editor(ctx);
+            self.focus_active_tab(ctx);
             ctx.notify();
         }
     }
@@ -3093,6 +3161,7 @@ impl Workspace {
             tab_groups: HashMap::new(),
             tab_rename_editor: Self::tab_rename_editor(ctx),
             pane_rename_editor: Self::pane_rename_editor(ctx),
+            tab_group_rename_editor: Self::tab_group_rename_editor(ctx),
             vertical_tabs_search_input: Self::vertical_tabs_search_input(ctx),
             tips_completed,
             user_default_shell_unsupported_banner_model_handle,
@@ -6646,6 +6715,8 @@ impl Workspace {
 
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
+
+        ctx.dispatch_typed_action_deferred(WorkspaceAction::RenameTabGroup(group_id));
     }
 
     /// Closes every tab in the given group and removes the group.
@@ -6684,6 +6755,37 @@ impl Workspace {
         }
     }
 
+    /// Opens the inline rename editor over the given group's header.
+    pub fn rename_tab_group(&mut self, group_id: TabGroupId, ctx: &mut ViewContext<Self>) {
+        let Some(group) = self.tab_groups.get(&group_id) else {
+            return;
+        };
+        // Seed the editor with the existing name, or the "New Group" default
+        // label when the group is unnamed. `insert_selected_text` selects the
+        // seeded text so the user can type to replace it instantly.
+        let seed_text = group
+            .name
+            .clone()
+            .unwrap_or_else(|| "New Group".to_string());
+
+        self.current_workspace_state
+            .set_tab_group_being_renamed(group_id);
+        self.clear_tab_group_name_editor(ctx);
+        self.tab_group_rename_editor
+            .update(ctx, move |editor, ctx| {
+                editor.insert_selected_text(&seed_text, ctx);
+            });
+        ctx.focus(&self.tab_group_rename_editor);
+        ctx.notify();
+    }
+
+    fn clear_tab_group_name_editor(&mut self, ctx: &mut ViewContext<Self>) {
+        self.tab_group_rename_editor
+            .update(ctx, move |editor, ctx| {
+                editor.clear_buffer_and_reset_undo_stack(ctx);
+            });
+    }
+
     /// Creates a new group containing the tab and moves it to the top of
     /// the tab list.
     fn new_tab_group_from_tab(&mut self, tab_index: usize, ctx: &mut ViewContext<Self>) {
@@ -6710,6 +6812,8 @@ impl Workspace {
 
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
+
+        ctx.dispatch_typed_action_deferred(WorkspaceAction::RenameTabGroup(group_id));
     }
 
     /// Moves the tab into `group_id`, appending it to the end of the
@@ -21462,6 +21566,7 @@ impl TypedActionView for Workspace {
             }
             CloseTabGroup(group_id) => self.close_tab_group(*group_id, ctx),
             ToggleTabGroupCollapsed(group_id) => self.toggle_tab_group_collapsed(*group_id, ctx),
+            RenameTabGroup(group_id) => self.rename_tab_group(*group_id, ctx),
             NewTabGroupFromTab(tab_index) => self.new_tab_group_from_tab(*tab_index, ctx),
             MoveTabToGroup {
                 tab_index,

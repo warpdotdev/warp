@@ -174,6 +174,8 @@ pub enum WorkspaceAction {
     CloseTabGroup(TabGroupId),
     /// Toggle collapsed state for the given tab group.
     ToggleTabGroupCollapsed(TabGroupId),
+    /// Opens an inline editor over the given group's header for renaming.
+    RenameTabGroup(TabGroupId),
     /// Creates a new tab group containing the tab at the given index.
     NewTabGroupFromTab(usize),
     /// Moves the tab at `tab_index` into `group_id`, appending it to the
@@ -807,6 +809,7 @@ impl WorkspaceAction {
             | CloseTabsRightActiveTab
             | CloseTabGroup(_)
             | ToggleTabGroupCollapsed(_)
+            | RenameTabGroup(_)
             | NewTabGroupFromTab(_)
             | MoveTabToGroup { .. }
             | RemoveTabFromGroup(_)
