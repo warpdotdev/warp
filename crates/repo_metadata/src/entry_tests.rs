@@ -3,6 +3,124 @@ use std::fs;
 use ignore::gitignore::Gitignore;
 
 use super::{Entry, IgnoredPathStrategy};
+
+#[cfg(feature = "local_fs")]
+mod watch_filter {
+    use std::fs;
+    use std::path::Path;
+
+    use ignore::gitignore::Gitignore;
+
+    use crate::entry::{
+        gitignores_for_directory, should_descend_into_directory, should_emit_event_for_path,
+    };
+
+    /// Sets up a temp directory with a `.gitignore` containing `patterns`.
+    /// Returns `(tempdir, root, gitignores)` so callers can build absolute
+    /// paths under `root` and pass `gitignores` to the predicates.
+    fn setup_repo(patterns: &str) -> (tempfile::TempDir, std::path::PathBuf, Vec<Gitignore>) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = dunce::canonicalize(tmp.path()).expect("canonicalize tempdir");
+        fs::write(root.join(".gitignore"), patterns).expect("write .gitignore");
+        let gitignores = gitignores_for_directory(&root);
+        (tmp, root, gitignores)
+    }
+
+    #[test]
+    fn descend_prunes_gitignored_node_modules() {
+        let (_tmp, root, gitignores) = setup_repo("node_modules/\n");
+        let node_modules = root.join("node_modules");
+        let nested = node_modules.join(".pnpm").join("@some/pkg");
+        assert!(
+            !should_descend_into_directory(&node_modules, &gitignores),
+            "descend should reject the gitignored node_modules root"
+        );
+        assert!(
+            !should_descend_into_directory(&nested, &gitignores),
+            "descend should reject any path under a gitignored directory"
+        );
+    }
+
+    #[test]
+    fn descend_still_allows_normal_directories() {
+        let (_tmp, root, gitignores) = setup_repo("node_modules/\n");
+        let src = root.join("src");
+        let nested = src.join("deeply").join("nested");
+        assert!(should_descend_into_directory(&src, &gitignores));
+        assert!(should_descend_into_directory(&nested, &gitignores));
+    }
+
+    #[test]
+    fn descend_still_blocks_git_internal_paths() {
+        let (_tmp, root, gitignores) = setup_repo("node_modules/\n");
+        // `.git/objects/` is pruned regardless of gitignore contents.
+        let objects = root.join(".git").join("objects");
+        assert!(!should_descend_into_directory(&objects, &gitignores));
+        // Allowlisted `.git/refs/heads/` still descends through.
+        let heads = root.join(".git").join("refs").join("heads");
+        assert!(should_descend_into_directory(&heads, &gitignores));
+    }
+
+    #[test]
+    fn emit_drops_events_for_gitignored_files() {
+        let (_tmp, root, gitignores) = setup_repo("node_modules/\n");
+        let file_under_node_modules = root
+            .join("node_modules")
+            .join(".pnpm")
+            .join("foo")
+            .join("index.js");
+        assert!(!should_emit_event_for_path(
+            &file_under_node_modules,
+            &gitignores,
+        ));
+    }
+
+    #[test]
+    fn emit_keeps_events_for_normal_files() {
+        let (_tmp, root, gitignores) = setup_repo("node_modules/\n");
+        let normal = root.join("src").join("main.rs");
+        assert!(should_emit_event_for_path(&normal, &gitignores));
+    }
+
+    #[test]
+    fn emit_still_allows_allowlisted_git_paths() {
+        let (_tmp, root, gitignores) = setup_repo("node_modules/\n");
+        // Allowlisted git internals (HEAD, refs/heads/*, index.lock, etc.)
+        // must still emit so commit/ref detection works.
+        let head = root.join(".git").join("HEAD");
+        let refs_main = root.join(".git").join("refs").join("heads").join("main");
+        let lock = root.join(".git").join("index.lock");
+        assert!(should_emit_event_for_path(&head, &gitignores));
+        assert!(should_emit_event_for_path(&refs_main, &gitignores));
+        assert!(should_emit_event_for_path(&lock, &gitignores));
+    }
+
+    #[test]
+    fn emit_still_drops_non_allowlisted_git_paths() {
+        let (_tmp, root, gitignores) = setup_repo("");
+        let objects = root.join(".git").join("objects").join("abc");
+        let commit_editmsg = root.join(".git").join("COMMIT_EDITMSG");
+        assert!(!should_emit_event_for_path(&objects, &gitignores));
+        assert!(!should_emit_event_for_path(&commit_editmsg, &gitignores));
+    }
+
+    #[test]
+    fn empty_gitignore_preserves_pre_fix_behavior() {
+        // Without any gitignore patterns the new filter must behave exactly
+        // like the old single-predicate filter: only `.git/` allowlisting
+        // applies; everything else watches and emits.
+        let empty: Vec<Gitignore> = Vec::new();
+        let src_main = Path::new("/home/user/repo/src/main.rs");
+        let node_modules = Path::new("/home/user/repo/node_modules/foo");
+        let src_dir = Path::new("/home/user/repo/src");
+
+        assert!(should_descend_into_directory(src_dir, &empty));
+        // node_modules has no special handling without gitignore patterns.
+        assert!(should_descend_into_directory(node_modules, &empty));
+        assert!(should_emit_event_for_path(src_main, &empty));
+        assert!(should_emit_event_for_path(node_modules, &empty));
+    }
+}
 #[test]
 fn test_git_path_filtering_allowlist() {
     use std::path::Path;

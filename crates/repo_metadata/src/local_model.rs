@@ -423,10 +423,11 @@ impl LocalRepoMetadataModel {
         {
             if let Some(ref watcher) = self.watcher {
                 let watch_path = local_path.clone();
+                let gitignores = Arc::new(gitignores_for_directory(&watch_path));
                 watcher.update(ctx, |watcher, _ctx| {
                     std::mem::drop(watcher.register_path(
                         &watch_path,
-                        repo_watch_filter(),
+                        repo_watch_filter(gitignores),
                         RecursiveMode::Recursive,
                     ));
                 });

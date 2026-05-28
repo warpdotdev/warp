@@ -703,23 +703,65 @@ fn descend_allowlist_matches(suffix: &[Component<'_>]) -> bool {
     }
 }
 
+/// Descend predicate for [`repo_watch_filter`]. Returns `true` when the
+/// recursive watcher should register a watcher for the given path.
+///
+/// Combines the `.git/` allowlist (see [`should_watch_directory_in_git_path`])
+/// with a gitignore check so gitignored directories are pruned from the watch tree.
+#[cfg(feature = "local_fs")]
+pub(crate) fn should_descend_into_directory(path: &Path, gitignores: &[Gitignore]) -> bool {
+    if !should_watch_directory_in_git_path(path) {
+        return false;
+    }
+    // Skip gitignored directories so we never register watches inside them.
+    // Directories are always passed `is_dir=true` here
+    // because the watcher only invokes this predicate for directories
+    // it is about to descend into.
+    !matches_gitignores(
+        path, true, /* is_dir */
+        gitignores, true, /* check_ancestors */
+    )
+}
+
+/// Emit predicate for [`repo_watch_filter`]. Returns `true` when an event
+/// for `path` should be forwarded to repository subscribers.
+///
+/// Drops events inside the non-allowlisted parts of `.git/` (see
+/// [`should_ignore_git_path`]) and events for gitignored files.
+#[cfg(feature = "local_fs")]
+pub(crate) fn should_emit_event_for_path(path: &Path, gitignores: &[Gitignore]) -> bool {
+    if should_ignore_git_path(path) {
+        return false;
+    }
+    !matches_gitignores(
+        path,
+        path.is_dir(),
+        gitignores,
+        true, /* check_ancestors */
+    )
+}
+
 /// Returns the [`WatchFilter`] used by repository file watchers.
 ///
 /// Emit predicate: forwards events for everything outside `.git/` plus the
 /// allowlisted files inside `.git/` (HEAD, refs/heads/*, index.lock,
-/// config, config.worktree, refs/remotes/<r>/*, and worktree equivalents).
+/// config, config.worktree, refs/remotes/<r>/*, and worktree equivalents),
+/// excluding any path matched by the supplied gitignore stack.
 ///
 /// Descend predicate: prunes `.git/objects/`, `.git/hooks/`, `.git/logs/`,
 /// `.git/info/`, `.git/lfs/`, etc. so the recursive walk does not register
 /// watches on those subtrees, but still descends into `.git/`,
 /// `.git/refs/heads/`, `.git/refs/remotes/<r>/`, and `.git/worktrees/<n>/`
 /// so the allowlisted children remain reachable on Linux.
+/// Also prunes gitignored directories so the recursive walk never registers watchers inside them.
+/// This helps reduce the watched-inode count and prevents cross-repo events leaking in via symlinks.
 #[cfg(feature = "local_fs")]
-pub fn repo_watch_filter() -> WatchFilter {
-    WatchFilter::with_filter(
-        Arc::new(should_watch_directory_in_git_path),
-        Arc::new(|path: &Path| !should_ignore_git_path(path)),
-    )
+pub fn repo_watch_filter(gitignores: Arc<Vec<Gitignore>>) -> WatchFilter {
+    let gitignores_for_descend = gitignores.clone();
+    let descend =
+        Arc::new(move |path: &Path| should_descend_into_directory(path, &gitignores_for_descend));
+    let emit = Arc::new(move |path: &Path| should_emit_event_for_path(path, &gitignores));
+    WatchFilter::with_filter(descend, emit)
 }
 
 /// Determines whether a file should be parsed by a treesitter query. For now the main criteria is it shouldn't

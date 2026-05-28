@@ -15,11 +15,15 @@ use crate::{RepoMetadataError, Repository};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
+        use std::sync::Arc;
+
+        use notify_debouncer_full::notify::RecursiveMode;
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
         use crate::entry::{
-            extract_worktree_git_dir, is_commit_related_git_file, is_git_internal_path,
-            is_common_git_config, is_index_lock_file, is_remote_tracking_ref,
-            is_shared_git_ref, is_tracking_state_git_file,
+            extract_worktree_git_dir, gitignores_for_directory, is_commit_related_git_file,
+            is_git_internal_path, is_common_git_config, is_index_lock_file,
+            is_remote_tracking_ref, is_shared_git_ref, is_tracking_state_git_file,
+            repo_watch_filter,
         };
         /// Duration between filesystem watch events in milliseconds
         const FILESYSTEM_WATCHER_DEBOUNCE_MILLI_SECS: u64 = 500;
@@ -321,14 +325,11 @@ impl DirectoryWatcher {
         let local_path = directory_path.to_local_path();
         let registration_future = if let Some(ref watcher) = self.watcher {
             if let Some(local_path) = local_path.clone() {
+                let gitignores = Arc::new(gitignores_for_directory(&local_path));
                 watcher.update(ctx, |watcher, _ctx| {
-                    use notify_debouncer_full::notify::RecursiveMode;
-
-                    use crate::entry::repo_watch_filter;
-
                     Some(watcher.register_path(
                         &local_path,
-                        repo_watch_filter(),
+                        repo_watch_filter(gitignores),
                         RecursiveMode::Recursive,
                     ))
                 })
