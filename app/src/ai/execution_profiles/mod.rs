@@ -5,7 +5,7 @@ use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity};
 
-use super::llms::{LLMContextWindow, LLMId, LLMInfo, LLMModelHost, LLMPreferences, LLMProvider};
+use super::llms::{LLMContextWindow, LLMId, LLMInfo, LLMPreferences, LLMProvider};
 use crate::cloud_object::model::generic_string_model::{
     GenericStringModel, GenericStringObjectId, StringModel,
 };
@@ -506,12 +506,7 @@ pub(crate) fn has_effective_configurable_context_window(
 ) -> bool {
     llm.context_window.is_configurable
         && llm.context_window.max > 0
-        && (llm.provider != LLMProvider::OpenAI
-            || (is_eligible_expanded_openai_model(llm)
-                && can_use_expanded_openai_context_window(
-                    llm,
-                    gpt_configurable_context_window_enabled,
-                )))
+        && (llm.provider != LLMProvider::OpenAI || gpt_configurable_context_window_enabled)
 }
 
 pub(crate) fn should_show_long_context_pricing_warning(
@@ -519,28 +514,9 @@ pub(crate) fn should_show_long_context_pricing_warning(
     selected_limit: Option<u32>,
     gpt_configurable_context_window_enabled: bool,
 ) -> bool {
-    is_eligible_expanded_openai_model(llm)
-        && can_use_expanded_openai_context_window(llm, gpt_configurable_context_window_enabled)
-        && selected_limit.is_some_and(|limit| limit > LONG_CONTEXT_WARNING_THRESHOLD)
-}
-fn can_use_expanded_openai_context_window(
-    llm: &LLMInfo,
-    gpt_configurable_context_window_enabled: bool,
-) -> bool {
-    gpt_configurable_context_window_enabled
-        && llm
-            .host_configs
-            .get(&LLMModelHost::DirectApi)
-            .is_some_and(|config| config.enabled)
-}
-fn is_eligible_expanded_openai_model(llm: &LLMInfo) -> bool {
     llm.provider == LLMProvider::OpenAI
-        && matches!(
-            llm.base_model_name.as_str(),
-            "gpt-5.4" | "gpt-5.5" | "grape"
-        )
-        && llm.context_window.is_configurable
-        && llm.context_window.max > LONG_CONTEXT_WARNING_THRESHOLD
+        && has_effective_configurable_context_window(llm, gpt_configurable_context_window_enabled)
+        && selected_limit.is_some_and(|limit| limit > LONG_CONTEXT_WARNING_THRESHOLD)
 }
 
 pub type CloudAIExecutionProfile =
