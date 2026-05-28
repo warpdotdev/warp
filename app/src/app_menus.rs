@@ -473,6 +473,10 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
             updateable_custom_item_without_checkmark(CustomAction::DecreaseZoom, ctx),
             updateable_custom_item_without_checkmark(CustomAction::ResetZoom, ctx),
             MenuItem::Separator,
+            updateable_custom_item_without_checkmark(CustomAction::IncreaseFontSize, ctx),
+            updateable_custom_item_without_checkmark(CustomAction::DecreaseFontSize, ctx),
+            updateable_custom_item_without_checkmark(CustomAction::ResetFontSize, ctx),
+            MenuItem::Separator,
         ]);
     } else {
         items.extend([

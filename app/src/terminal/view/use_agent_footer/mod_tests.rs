@@ -168,7 +168,6 @@ fn insert_pending_ai_block(
             view.agent_view_controller.clone(),
             view.ambient_agent_view_model.clone(),
             view.view_handle.clone(),
-            None,
             view.id(),
             ctx,
         )

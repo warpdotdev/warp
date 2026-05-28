@@ -258,7 +258,6 @@ impl WarpifySuccessBlock {
                 }
             })),
             Some(auto_warpify_snippet.code_snippet_handles.clone()),
-            Appearance::as_ref(app).monospace_font_size(),
             app,
         );
 

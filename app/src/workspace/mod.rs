@@ -315,6 +315,27 @@ pub fn init(app: &mut AppContext) {
                 id!("Workspace"),
             )
             .with_group(bindings::BindingGroup::Settings.as_str()),
+            FixedBinding::custom(
+                CustomAction::IncreaseFontSize,
+                WorkspaceAction::IncreaseFontSize,
+                "Increase font size",
+                id!("Workspace"),
+            )
+            .with_group(bindings::BindingGroup::Settings.as_str()),
+            FixedBinding::custom(
+                CustomAction::DecreaseFontSize,
+                WorkspaceAction::DecreaseFontSize,
+                "Decrease font size",
+                id!("Workspace"),
+            )
+            .with_group(bindings::BindingGroup::Settings.as_str()),
+            FixedBinding::custom(
+                CustomAction::ResetFontSize,
+                WorkspaceAction::ResetFontSize,
+                "Reset font size",
+                id!("Workspace"),
+            )
+            .with_group(bindings::BindingGroup::Settings.as_str()),
         ]);
     } else {
         app.register_fixed_bindings([
@@ -417,7 +438,9 @@ pub fn init(app: &mut AppContext) {
                 WorkspaceAction::ResetFontSize,
             )
             .with_group(bindings::BindingGroup::Settings.as_str())
-            .with_context_predicate(id!("Workspace")),
+            .with_context_predicate(id!("Workspace"))
+            .with_key_binding("ctrl-shift-0")
+            .with_custom_action(CustomAction::ResetFontSize),
         ]);
     } else {
         app.register_editable_bindings([

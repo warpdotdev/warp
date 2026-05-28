@@ -16,6 +16,7 @@ use warpui::keymap::{
 use warpui::platform::OperatingSystem;
 use warpui::{Action, AppContext, SingletonEntity};
 
+use crate::features::FeatureFlag;
 use crate::keyboard::{remove_custom_keybinding, write_custom_keybinding, UserDefinedKeybinding};
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
 
@@ -285,9 +286,27 @@ pub fn custom_tag_to_keystroke(custom: CustomTag) -> Option<Keystroke> {
         CustomAction::CommandSearch => Keystroke::parse("ctrl-r").ok(),
         CustomAction::Workflows => Keystroke::parse("ctrl-shift-R").ok(),
         CustomAction::History => Keystroke::parse("up").ok(),
-        CustomAction::IncreaseFontSize => Keystroke::parse("shift-cmdorctrl-+").ok(),
-        CustomAction::DecreaseFontSize => Keystroke::parse("shift-cmdorctrl-_").ok(),
-        CustomAction::ResetFontSize => Keystroke::parse("cmdorctrl-0").ok(),
+        CustomAction::IncreaseFontSize => {
+            if FeatureFlag::UIZoom.is_enabled() {
+                Keystroke::parse("ctrl-shift->").ok()
+            } else {
+                Keystroke::parse("shift-cmdorctrl-+").ok()
+            }
+        }
+        CustomAction::DecreaseFontSize => {
+            if FeatureFlag::UIZoom.is_enabled() {
+                Keystroke::parse("ctrl-shift-<").ok()
+            } else {
+                Keystroke::parse("shift-cmdorctrl-_").ok()
+            }
+        }
+        CustomAction::ResetFontSize => {
+            if FeatureFlag::UIZoom.is_enabled() {
+                Keystroke::parse("ctrl-shift-0").ok()
+            } else {
+                Keystroke::parse("cmdorctrl-0").ok()
+            }
+        }
         CustomAction::IncreaseZoom => Keystroke::parse("cmdorctrl-=").ok(),
         CustomAction::DecreaseZoom => Keystroke::parse("cmdorctrl--").ok(),
         CustomAction::ResetZoom => Keystroke::parse("cmdorctrl-0").ok(),

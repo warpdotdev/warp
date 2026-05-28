@@ -3156,7 +3156,6 @@ impl TerminalView {
                                         );
                                     }
                                 }
-                                let focus_handle = me.focus_handle.clone();
                                 let agent_view_zero_state = ctx.add_typed_action_view(|ctx| {
                                     AgentViewZeroStateBlock::new(
                                         *conversation_id,
@@ -3167,7 +3166,6 @@ impl TerminalView {
                                         me.model.clone(),
                                         &me.model_events_handle,
                                         should_show_init_callout,
-                                        focus_handle,
                                         ctx,
                                     )
                                 });
@@ -3354,7 +3352,6 @@ impl TerminalView {
                         // speedbump', an entry block should always be inserted.
                         || matches!(origin, AgentViewEntryOrigin::AgentRequestedNewConversation);
                     if should_insert {
-                        let focus_handle = me.focus_handle.clone();
                         me.insert_agent_view_entry_block(
                             AgentViewEntryBlockParams {
                                 conversation_id: *conversation_id,
@@ -3362,7 +3359,6 @@ impl TerminalView {
                                 is_restored: false, /* is_restored */
                                 origin: *origin,
                                 agent_view_controller: me.agent_view_controller.clone(),
-                                focus_handle,
                             },
                             RichContentInsertionPosition::Append {
                                 insert_below_long_running_block: true,
@@ -4119,7 +4115,7 @@ impl TerminalView {
             )
         });
         let orchestration_pill_bar = ctx.add_typed_action_view(|ctx| {
-            OrchestrationPillBar::new(agent_view_controller.clone(), None, ctx)
+            OrchestrationPillBar::new(agent_view_controller.clone(), ctx)
         });
         ctx.subscribe_to_view(&orchestration_pill_bar, |_, _, _, ctx| ctx.notify());
 
@@ -5751,7 +5747,6 @@ impl TerminalView {
                         self.agent_view_controller.clone(),
                         self.ambient_agent_view_model.clone(),
                         self.view_handle.clone(),
-                        self.focus_handle.clone(),
                         self.view_id,
                         ctx,
                     )
@@ -6222,7 +6217,6 @@ impl TerminalView {
 
                     // In the case that the user has taken control and already exited the agent view,
                     // we insert the corresponding agent view block on command finish instead.
-                    let focus_handle = self.focus_handle.clone();
                     self.insert_agent_view_entry_block(
                         AgentViewEntryBlockParams {
                             conversation_id: *conversation_id,
@@ -6230,7 +6224,6 @@ impl TerminalView {
                             is_restored: false,
                             origin: AgentViewEntryOrigin::LongRunningCommand,
                             agent_view_controller: self.agent_view_controller.clone(),
-                            focus_handle,
                         },
                         RichContentInsertionPosition::Append {
                             insert_below_long_running_block: true,
@@ -22128,7 +22121,6 @@ impl TerminalView {
                 self.agent_view_controller.clone(),
                 self.ambient_agent_view_model.clone(),
                 self.view_handle.clone(),
-                self.focus_handle.clone(),
                 ctx.view_id(),
                 ctx,
             )

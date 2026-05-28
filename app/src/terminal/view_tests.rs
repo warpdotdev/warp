@@ -592,7 +592,6 @@ fn restoring_conversation_to_new_pane_transfers_blocks_from_previous_owner() {
                     is_restored: false,
                     origin: AgentViewEntryOrigin::AgentViewBlock,
                     agent_view_controller: view.agent_view_controller().clone(),
-                    focus_handle: None,
                 },
                 RichContentInsertionPosition::Append {
                     insert_below_long_running_block: false,
@@ -706,7 +705,6 @@ fn clicking_old_banner_for_open_conversation_focuses_current_owner_without_trans
                     is_restored: false,
                     origin: AgentViewEntryOrigin::AgentViewBlock,
                     agent_view_controller: view.agent_view_controller().clone(),
-                    focus_handle: None,
                 },
                 RichContentInsertionPosition::Append {
                     insert_below_long_running_block: false,
