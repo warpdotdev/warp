@@ -720,10 +720,7 @@ impl TryFrom<AIAgentActionResult> for api::request::input::user_inputs::user_inp
 
 fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
     let mut api_context = api::InputContext::default();
-    let mut git_head = None;
-    let mut git_branch = None;
-    let mut git_repository = None;
-    let mut git_pull_request = None;
+    let mut git_context = None;
     for context in context.iter().cloned() {
         match context {
             AIAgentContext::Block(block) => {
@@ -807,11 +804,15 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
                 }
             }
             AIAgentContext::Git { head, branch } => {
-                git_head = Some(head);
-                git_branch = branch;
+                let api_git_context =
+                    git_context.get_or_insert_with(api::input_context::Git::default);
+                api_git_context.head = head;
+                api_git_context.branch = branch.unwrap_or_default();
             }
             AIAgentContext::Repository { name, owner } => {
-                git_repository = Some(api::input_context::git::Repository {
+                let api_git_context =
+                    git_context.get_or_insert_with(api::input_context::Git::default);
+                api_git_context.repository = Some(api::input_context::git::Repository {
                     name,
                     owner: owner.unwrap_or_default(),
                 });
@@ -833,7 +834,9 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
                     state: state as i32,
                     base_branch,
                 };
-                git_pull_request = Some(pull_request);
+                let api_git_context =
+                    git_context.get_or_insert_with(api::input_context::Git::default);
+                api_git_context.pull_request = Some(pull_request);
             }
             AIAgentContext::Skills { skills } => {
                 api_context.updated_skills_context = Some(api::input_context::SkillsContext {
@@ -851,27 +854,8 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
             }
         }
     }
-    api_context.git =
-        create_api_git_context(git_head, git_branch, git_repository, git_pull_request);
+    api_context.git = git_context;
     api_context
-}
-
-fn create_api_git_context(
-    head: Option<String>,
-    branch: Option<String>,
-    repository: Option<api::input_context::git::Repository>,
-    pull_request: Option<api::input_context::git::PullRequest>,
-) -> Option<api::input_context::Git> {
-    if head.is_none() && branch.is_none() && repository.is_none() && pull_request.is_none() {
-        return None;
-    }
-
-    Some(api::input_context::Git {
-        head: head.unwrap_or_default(),
-        branch: branch.unwrap_or_default(),
-        repository,
-        pull_request,
-    })
 }
 
 /// Maps a GitHub PR state plus draft flag to the proto `State` enum.
