@@ -8,7 +8,10 @@ use uuid::Uuid;
 use warp_cli::agent::Harness;
 
 use crate::ai::agent_sdk::driver::harness::claude_code::prepare_claude_environment_config;
-use crate::ai::agent_sdk::driver::harness::{harness_kind, harness_model_env_vars, HarnessKind};
+use crate::ai::agent_sdk::driver::harness::{
+    harness_kind, harness_model_env_vars, remove_claude_externally_managed_listener_env_vars,
+    HarnessKind,
+};
 use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::agent_sdk::{task_env_vars, validate_cli_installed};
 use crate::ai::ambient_agents::task::{
@@ -201,6 +204,13 @@ pub(super) async fn prepare_local_harness_child_launch(
         })?;
 
     let mut env_vars = task_env_vars(Some(&task_id), parent_run_id.as_deref(), harness);
+    if harness == Harness::Claude {
+        // Local Claude child panes are launched directly in hidden terminals,
+        // not through AgentDriver's ClaudeHarnessRunner. Let the Claude plugin
+        // manage its own listener instead of waiting for a non-existent
+        // external MessageBridge.
+        remove_claude_externally_managed_listener_env_vars(&mut env_vars);
+    }
     // Propagate the selected model to Claude Code via ANTHROPIC_MODEL.
     // Codex local children never receive a model override — the UI
     // ensures model_id is empty for local Codex.

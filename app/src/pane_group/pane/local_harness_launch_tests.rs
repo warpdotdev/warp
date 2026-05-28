@@ -10,6 +10,7 @@ use super::{
     build_local_opencode_child_command, local_child_task_config, normalize_local_child_harness,
     prepare_local_harness_child_launch, validate_local_harness_shell,
 };
+use crate::ai::agent_sdk::driver::OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV;
 use crate::ai::ambient_agents::task::{normalize_orchestrator_agent_name, HarnessConfig};
 use crate::server::server_api::ai::MockAIClient;
 use crate::terminal::shell::ShellType;
@@ -288,6 +289,12 @@ async fn prepare_local_claude_child_merges_anthropic_model_env_var() {
         prepared.env_vars.get(&OsString::from("ANTHROPIC_MODEL")),
         Some(&OsString::from("opus"))
     );
+    assert!(!prepared
+        .env_vars
+        .contains_key(&OsString::from(OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV)));
+    assert!(!prepared
+        .env_vars
+        .contains_key(&OsString::from("OZ_PARENT_LISTENER_MANAGED_EXTERNALLY")));
 }
 
 #[tokio::test]
