@@ -176,7 +176,10 @@ impl PaneGroupRepositoryRoots {
 
         // Drop pane_group_id from the reverse map for paths it no longer
         // references; collect the paths whose reverse entry became empty.
-        self.remove_pane_group_from_reverse(pane_group_id, removed)
+        removed
+            .into_iter()
+            .filter(|path| self.remove_path(pane_group_id, path))
+            .collect()
     }
 
     /// Drop all entries for a pane group (used when a tab is closed or the
@@ -187,29 +190,30 @@ impl PaneGroupRepositoryRoots {
     /// no orphans" from "not present" in a single call.
     fn remove_pane_group(&mut self, pane_group_id: EntityId) -> Option<Vec<LocalOrRemotePath>> {
         let paths = self.pane_group_to_paths.remove(&pane_group_id)?;
-        Some(self.remove_pane_group_from_reverse(pane_group_id, paths))
+        Some(
+            paths
+                .into_iter()
+                .filter(|path| self.remove_path(pane_group_id, path))
+                .collect(),
+        )
     }
 
-    /// Helper: for each path in `paths`, remove `pane_group_id` from its
-    /// reverse-map entry. Returns the paths whose entry became empty (and
-    /// were removed from the reverse map entirely).
-    fn remove_pane_group_from_reverse(
-        &mut self,
-        pane_group_id: EntityId,
-        paths: impl IntoIterator<Item = LocalOrRemotePath>,
-    ) -> Vec<LocalOrRemotePath> {
-        let mut orphans = Vec::new();
-        for path in paths {
-            let became_empty = self.path_to_pane_groups.get_mut(&path).is_some_and(|set| {
-                set.remove(&pane_group_id);
-                set.is_empty()
-            });
-            if became_empty {
-                self.path_to_pane_groups.remove(&path);
-                orphans.push(path);
-            }
+    /// Remove `pane_group_id` from the reverse-map entry for `path`.
+    /// Returns `true` if removing this reference left `path` with no pane groups
+    /// referencing it — i.e. the path is now globally orphaned.
+    ///
+    /// This only mutates the reverse map; callers are responsible for
+    /// removing `path` from `pane_group_id`'s forward entry before (or
+    /// after) calling this.
+    fn remove_path(&mut self, pane_group_id: EntityId, path: &LocalOrRemotePath) -> bool {
+        let became_empty = self.path_to_pane_groups.get_mut(path).is_some_and(|set| {
+            set.remove(&pane_group_id);
+            set.is_empty()
+        });
+        if became_empty {
+            self.path_to_pane_groups.remove(path);
         }
-        orphans
+        became_empty
     }
 }
 
