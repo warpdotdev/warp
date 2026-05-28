@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use warp_util::path::ShellFamily;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::r#async::FutureExt as AsyncFutureExt;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
@@ -32,19 +33,8 @@ use crate::{send_telemetry_from_app_ctx, PrivacySettings, TelemetryEvent};
 const GREP_TIMEOUT: Duration = Duration::from_secs(10);
 const NON_ZERO_EXIT_CODE_ERROR: &str = "Grep command exited with non-zero exit code";
 
-/// Builds the `git grep` command emitted by [`run_git_grep_command`]. Both
-/// `queries` (regex patterns) and `target_path` are agent-controlled; without
-/// shell escaping a query like `$(touch /tmp/PWNED)` or a path containing
-/// `$(...)` / backticks would be re-interpreted by the shell before the
-/// underlying `git grep` ever runs. Queries are escaped with `ShellFamily::escape`
-/// (no tilde preservation) since they are literal regex bodies; the path uses
-/// `shell_escape` so a legitimate `~/...` argument still resolves to `$HOME`.
-pub(crate) fn build_git_grep_command(
-    queries: &[String],
-    target_path: &str,
-    shell_type: ShellType,
-) -> String {
-    let shell_family = warp_util::path::ShellFamily::from(shell_type);
+fn build_git_grep_command(queries: &[String], target_path: &str, shell_type: ShellType) -> String {
+    let shell_family = ShellFamily::from(shell_type);
     // This command works on all the shells we support (even PowerShell).
     let mut grep_command = "git --no-pager grep --color=never --untracked -nIE".to_string();
     for query in queries {
@@ -56,10 +46,8 @@ pub(crate) fn build_git_grep_command(
     grep_command
 }
 
-/// Builds the POSIX `grep` command emitted by [`run_grep_command`]. See
-/// [`build_git_grep_command`] for the threat model.
-pub(crate) fn build_grep_command(queries: &[String], target_path: &str) -> String {
-    let shell_family = warp_util::path::ShellFamily::Posix;
+fn build_grep_command(queries: &[String], target_path: &str) -> String {
+    let shell_family = ShellFamily::Posix;
     // Summary of the options we use:
     // * "--color=never" ensures we don't get colorized output which is harder to parse due to escape sequences
     // * "-n" includes line numbers
@@ -77,11 +65,8 @@ pub(crate) fn build_grep_command(queries: &[String], target_path: &str) -> Strin
     grep_command
 }
 
-/// Builds the PowerShell `Select-String` command emitted by
-/// [`run_select_string_command`]. See [`build_git_grep_command`] for the
-/// threat model.
-pub(crate) fn build_select_string_command(queries: &[String], target_path: &str) -> String {
-    let shell_family = warp_util::path::ShellFamily::PowerShell;
+fn build_select_string_command(queries: &[String], target_path: &str) -> String {
+    let shell_family = ShellFamily::PowerShell;
     let escaped_target = shell_family.shell_escape(target_path);
     let escaped_patterns = queries
         .iter()
