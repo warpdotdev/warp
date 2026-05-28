@@ -196,8 +196,7 @@ const OVERFLOW_MENU_WIDTH: f32 = 200.;
 /// Size in logical pixels of the 3-dot button at the trailing edge of each
 /// child pill.
 const OVERFLOW_BUTTON_SIZE: f32 = PILL_ICON_BUTTON_SIZE;
-/// How much of the label slot the overflow button overlays:
-/// `size + right_offset - right_padding`.
+/// How much of the label slot the overflow button overlays.
 const OVERFLOW_BUTTON_LABEL_RESERVE: f32 =
     OVERFLOW_BUTTON_SIZE + PILL_OVERFLOW_BUTTON_RIGHT_OFFSET - PILL_HORIZONTAL_PADDING_RIGHT;
 
@@ -1126,8 +1125,7 @@ impl View for OrchestrationPillBar {
         for pill in pinned_pills {
             row.add_child(pill);
         }
-        // Figma separates the leading section (orchestrator plus any pinned
-        // children) from the unpinned child agents.
+        // Divider between leading section (orchestrator + pinned) and unpinned.
         if has_unpinned {
             row.add_child(render_pinned_divider(app));
         }
@@ -2041,8 +2039,7 @@ fn render_overflow_button(
     SavePosition::new(button, &overflow_button_position_id(conversation_id)).finish()
 }
 
-/// Bigger, rounded-square status badge pushed outside the avatar so it actually
-/// reads at the pill's 20px lockup.
+/// Bigger rounded-square badge nudged past the avatar so it reads at 20px.
 const PILL_BADGE_STYLE: StatusBadgeStyle = StatusBadgeStyle {
     ring_ratio: 0.7,
     icon_ratio: 0.4,
