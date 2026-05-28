@@ -32,7 +32,7 @@ fn pasteboard_type_for_image_mime_type(mime_type: &str) -> Option<&'static NSStr
         "image/gif" => Some(ns_string!("public.gif")),
         "image/webp" => Some(ns_string!("public.webp")),
         "image/svg+xml" => Some(ns_string!("public.svg-image")),
-        _ => return None,
+        _ => None,
     }
 }
 
@@ -63,8 +63,8 @@ impl crate::Clipboard for Clipboard {
                     // `Retained` releases our reference when it drops at the loop end.
                     let data = NSData::with_bytes(&image.data);
                     self.0
-                        .addTypes_owner(&NSArray::from_slice(&[&*pasteboard_type]), None);
-                    self.0.setData_forType(Some(&data), &pasteboard_type);
+                        .addTypes_owner(&NSArray::from_slice(&[pasteboard_type]), None);
+                    self.0.setData_forType(Some(&data), pasteboard_type);
                 }
             }
         }
