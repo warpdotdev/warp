@@ -1479,14 +1479,18 @@ fn render_hover_card(
     // harness (always when known). Hidden entirely when no chip applies.
     let mut chips: Vec<Box<dyn Element>> = Vec::new();
 
-    // Harness chip: defaults to Warp Agent (Oz) when server metadata
-    // hasn't loaded yet so the chip slot stays useful for in-progress
-    // local conversations. The brand color matches `harness_display`
+    // Harness chip: defaults to Warp Agent (Oz) when nothing else is
+    // known so the chip slot stays useful for in-progress local
+    // conversations. The brand color matches `harness_display`
     // (e.g. orange for Claude Code, blue for Gemini CLI).
-    let harness = conversation
-        .server_metadata()
-        .map(|m| Harness::from(m.harness))
-        .unwrap_or(Harness::Oz);
+    //
+    // Use `orchestration_harness()` so child agents spawned with a
+    // specific harness (e.g. Claude Code via `run_agents`) report that
+    // harness immediately via the `orchestration_harness_type` field —
+    // `server_metadata` alone isn't reliable for local children because
+    // it's None until the cloud sync round-trips and otherwise reflects
+    // the parent conversation's harness rather than the child's.
+    let harness = conversation.orchestration_harness().unwrap_or(Harness::Oz);
     let harness_icon = harness_display::icon_for(harness);
     let harness_label = harness_display::display_name(harness).to_string();
     let harness_color = harness_display::brand_color(harness).unwrap_or(sub_text);
