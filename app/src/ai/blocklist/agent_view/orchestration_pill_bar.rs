@@ -2039,13 +2039,13 @@ fn render_overflow_button(
     SavePosition::new(button, &overflow_button_position_id(conversation_id)).finish()
 }
 
-/// Bigger rounded-square badge nudged past the avatar so it reads at 20px.
+/// Figma `4073:26593`: rounded-square holder, badge BR flush at lockup BR.
 const PILL_BADGE_STYLE: StatusBadgeStyle = StatusBadgeStyle {
-    ring_ratio: 0.7,
-    icon_ratio: 0.4,
+    ring_ratio: 0.57,
+    icon_ratio: 0.36,
     inner_shape: BadgeInnerShape::RoundedSquare { radius_px: 2.0 },
 };
-const PILL_BADGE_OVERHANG_RATIO: f32 = 0.18;
+const PILL_BADGE_OVERHANG_RATIO: f32 = 0.05;
 
 fn render_avatar_with_status_overlay(
     avatar_color: ColorU,
