@@ -5,6 +5,7 @@
 set -e
 
 WORKSPACE_ROOT_DIR="$(pwd)"
+source "$WORKSPACE_ROOT_DIR/script/cargo_bundle_features.sh"
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORKSPACE_ROOT_DIR/target}"
 DIST_DIR="$CARGO_TARGET_DIR/dist"
 
@@ -21,7 +22,6 @@ trap cleanup EXIT
 
 # By default we build dev bundles.
 RELEASE_CHANNEL="dev"
-FEATURES="release_bundle,crash_reporting"
 EXTRA_FEATURES=""
 PACKAGES=( appimage )
 BUILD="true"
@@ -163,23 +163,16 @@ if [[ $RELEASE_CHANNEL = "local" ]]; then
   WARP_BIN="warp"
   BINARY_NAME="warp-local"
   APP_NAME="WarpLocal"
-  FEATURES="$FEATURES,agent_mode_debug"
   export HANDLE_MARKDOWN=1
 elif [[ $RELEASE_CHANNEL = "dev" ]]; then
   WARP_BIN="dev"
   BINARY_NAME="warp-dev"
   APP_NAME="WarpDev"
-  FEATURES="$FEATURES,agent_mode_debug"
-  # Enable heap usage tracking & profiling using jemalloc through pprof.
-  FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
   export HANDLE_MARKDOWN=1
 elif [[ $RELEASE_CHANNEL = "preview" ]]; then
   WARP_BIN="preview"
   BINARY_NAME="warp-preview"
   APP_NAME="WarpPreview"
-  FEATURES="$FEATURES,preview_channel"
-  # Enable heap usage tracking & profiling using jemalloc through pprof.
-  FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
 elif [[ $RELEASE_CHANNEL = "stable" ]]; then
   WARP_BIN="stable"
   BINARY_NAME="warp"
@@ -188,9 +181,8 @@ elif [[ $RELEASE_CHANNEL = "oss" ]]; then
   WARP_BIN="warp-oss"
   BINARY_NAME="warp-oss"
   APP_NAME="WarpOss"
-  # The OSS channel does not ship Sentry, so drop the crash_reporting feature
-  # (which would otherwise pull in the Sentry SDK as a dependency).
-  FEATURES="release_bundle"
+  # The OSS channel's Cargo build profile does not ship Sentry, so it omits the
+  # crash_reporting feature that would otherwise pull in the Sentry SDK.
 fi
 
 # Artifact-specific binary naming
@@ -206,19 +198,14 @@ elif [[ "$ARTIFACT" == "warpctrl" ]]; then
   PACKAGES=()
 fi
 
-# Artifact-specific configuration
-if [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
-  FEATURES="$FEATURES,standalone"
-  if [[ "$ARTIFACT" == "warpctrl" ]]; then
-    FEATURES="$FEATURES,warp_control_cli"
-  fi
-elif [[ "$ARTIFACT" == "app" ]]; then
-  # All channels ship the v3 classifier and v2 heuristic.
-  FEATURES="$FEATURES,gui,nld_classifier_v3,nld_heuristic_v2"
-fi
+# Artifact-specific Cargo features are captured by the metadata profile below.
+
+CARGO_FEATURE_PROFILE="linux.${RELEASE_CHANNEL}.${ARTIFACT}"
+FEATURES="$(resolve_cargo_bundle_features "$WORKSPACE_ROOT_DIR" "$CARGO_FEATURE_PROFILE")"
 if [[ -n "$EXTRA_FEATURES" ]]; then
   FEATURES="$FEATURES,$EXTRA_FEATURES"
 fi
+echo "Using Cargo build profile $CARGO_FEATURE_PROFILE with features: $FEATURES"
 
 BUNDLE_ID="dev.warp.$APP_NAME"
 EXECUTABLE_PATH="$CARGO_TARGET_OUTPUT_DIR/$WARP_BIN"

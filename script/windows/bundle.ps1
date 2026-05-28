@@ -14,7 +14,8 @@ Param (
 
     [Alias('release-tag')]
     [String]$RELEASE_TAG = '',
-    [String]$FEATURES = 'release_bundle,crash_reporting,gui',
+    # Additional Cargo features to append to the Cargo.toml profile.
+    [String]$FEATURES = '',
 
     # Builds only the Warp binary, skips the installer.
     [Switch]$SKIP_BUILD_INSTALLER = $False,
@@ -62,6 +63,29 @@ $ErrorActionPreference = 'Stop'
 $WORKSPACE_ROOT_DIR = $(Get-Location).Path
 $CARGO_TARGET_DIR = $WORKSPACE_ROOT_DIR + '\target'
 $WINDOWS_INSTALLER_DIR = $WORKSPACE_ROOT_DIR + '\script\windows'
+$EXTRA_FEATURES = $FEATURES
+
+function Resolve-CargoBundleFeatures {
+    param(
+        [Parameter(Mandatory = $true)]
+        [String]$WorkspaceRootDir,
+        [Parameter(Mandatory = $true)]
+        [String]$ProfilePath
+    )
+
+    if (-Not (Get-Command -Name jq -Type Application -ErrorAction SilentlyContinue)) {
+        throw 'jq is required to resolve Cargo build profiles. Run script\windows\bootstrap.ps1 to install build dependencies.'
+    }
+
+    $jqFilter = Join-Path $WorkspaceRootDir 'script\cargo_build_profiles.jq'
+    $features = cargo metadata --format-version 1 --no-deps --locked --manifest-path "$WorkspaceRootDir\app\Cargo.toml" |
+        jq -er --arg profile_path $ProfilePath -f $jqFilter
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to resolve Cargo build profile: $ProfilePath"
+    }
+
+    return $features.Trim()
+}
 
 if ($DEBUG_BUILD) {
     $CARGO_PROFILE = 'dev'
@@ -96,12 +120,10 @@ if ("$CHANNEL" -eq 'local') {
     $WARP_BIN = 'dev'
     $BINARY_NAME = 'dev.exe'
     $APP_NAME = 'WarpDev'
-    $FEATURES = "$FEATURES,agent_mode_debug"
 } elseif ("$CHANNEL" -eq 'preview') {
     $WARP_BIN = 'preview'
     $BINARY_NAME = 'preview.exe'
     $APP_NAME = 'WarpPreview'
-    $FEATURES = "$FEATURES,preview_channel"
 } elseif ("$CHANNEL" -eq 'stable') {
     $WARP_BIN = 'stable'
     $BINARY_NAME = 'warp.exe'
@@ -110,13 +132,13 @@ if ("$CHANNEL" -eq 'local') {
     $WARP_BIN = 'warp-oss'
     $BINARY_NAME = 'warp-oss.exe'
     $APP_NAME = 'WarpOss'
-    # The OSS channel does not ship Sentry, so drop the crash_reporting feature
-    # (which would otherwise pull in the Sentry SDK as a dependency).
-    $FEATURES = 'release_bundle,gui'
 }
 
-# All channels ship the v3 classifier and v2 heuristic.
-$FEATURES = "$FEATURES,nld_classifier_v3,nld_heuristic_v2"
+$FEATURES = Resolve-CargoBundleFeatures -WorkspaceRootDir $WORKSPACE_ROOT_DIR -ProfilePath "windows.$CHANNEL.app"
+if ($EXTRA_FEATURES) {
+    $FEATURES = "$FEATURES,$EXTRA_FEATURES"
+}
+Write-Output "Using Cargo build profile windows.$CHANNEL.app with features: $FEATURES"
 
 $BINARY_PATH = "$CARGO_TARGET_OUTPUT_DIR\$BINARY_NAME"
 $BUNDLE_ID = "dev.warp.$APP_NAME"

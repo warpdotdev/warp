@@ -1021,6 +1021,224 @@ handoff_cloud_cloud = ["cloud_mode_setup_v2"]
 git_credential_refresh = []
 prompt_cache_expiry_warning = []
 
+# Declarative packaging build profiles consumed by `flake.nix` and the bundle
+# scripts. Feature atoms stay in `build_feature_groups`; profiles combine
+# composable cross-cutting groups plus optional direct `features`.
+[package.metadata.warp.build_feature_groups]
+# Artifact shape.
+app = [
+    "release_bundle",
+    "gui",
+]
+cli = [
+    "release_bundle",
+    "standalone",
+]
+gui_entrypoint = [
+    "gui",
+]
+release_artifact = [
+    "release_bundle",
+]
+
+# Platform/official-distribution features.
+linux_official = [
+    "crash_reporting",
+]
+windows_official = [
+    "crash_reporting",
+]
+macos_official = [
+    "cocoa_sentry",
+]
+macos_common = [
+    "extern_plist",
+]
+
+# Additional build behavior.
+agent_debug = [
+    "agent_mode_debug",
+]
+linux_dev_diagnostics = [
+    "agent_mode_debug",
+    "jemalloc_pprof",
+    "heap_usage_tracking",
+]
+linux_heap_diagnostics = [
+    "jemalloc_pprof",
+    "heap_usage_tracking",
+]
+macos_dev_diagnostics = [
+    "agent_mode_debug",
+    "jemalloc_pprof",
+    "heap_usage_tracking",
+]
+macos_heap_diagnostics = [
+    "jemalloc_pprof",
+    "heap_usage_tracking",
+]
+preview_channel = [
+    "preview_channel",
+]
+remote_tty = [
+    "remote_tty",
+]
+remote_server = [
+    "crash_reporting",
+    "standalone",
+    "agent_mode_debug",
+    "remote_codebase_indexing",
+]
+warp_control = [
+    "warp_control_cli",
+]
+nld_v1 = [
+    "nld_classifier_v1",
+    "nld_heuristic_v1",
+]
+nld_v2 = [
+    "nld_classifier_v2",
+    "nld_heuristic_v2",
+]
+nld_v3 = [
+    "nld_classifier_v3",
+    "nld_heuristic_v2",
+]
+
+[package.metadata.warp.build_profiles.linux.local.app]
+groups = ["app", "linux_official", "agent_debug", "nld_v3"]
+
+[package.metadata.warp.build_profiles.linux.dev.app]
+groups = ["app", "linux_official", "linux_dev_diagnostics", "nld_v3"]
+
+[package.metadata.warp.build_profiles.linux.preview.app]
+groups = ["app", "linux_official", "preview_channel", "linux_heap_diagnostics", "nld_v3"]
+
+[package.metadata.warp.build_profiles.linux.stable.app]
+groups = ["app", "linux_official", "nld_v3"]
+
+[package.metadata.warp.build_profiles.linux.oss.app]
+groups = ["app", "nld_v3"]
+
+[package.metadata.warp.build_profiles.linux.local.cli]
+groups = ["cli", "linux_official", "agent_debug"]
+
+[package.metadata.warp.build_profiles.linux.dev.cli]
+groups = ["cli", "linux_official", "linux_dev_diagnostics"]
+
+[package.metadata.warp.build_profiles.linux.preview.cli]
+groups = ["cli", "linux_official", "preview_channel", "linux_heap_diagnostics"]
+
+[package.metadata.warp.build_profiles.linux.stable.cli]
+groups = ["cli", "linux_official"]
+
+[package.metadata.warp.build_profiles.linux.oss.cli]
+groups = ["cli"]
+
+[package.metadata.warp.build_profiles.linux.local.warpctrl]
+groups = ["cli", "linux_official", "agent_debug", "warp_control"]
+
+[package.metadata.warp.build_profiles.linux.dev.warpctrl]
+groups = ["cli", "linux_official", "linux_dev_diagnostics", "warp_control"]
+
+[package.metadata.warp.build_profiles.linux.preview.warpctrl]
+groups = ["cli", "linux_official", "preview_channel", "linux_heap_diagnostics", "warp_control"]
+
+[package.metadata.warp.build_profiles.linux.stable.warpctrl]
+groups = ["cli", "linux_official", "warp_control"]
+
+[package.metadata.warp.build_profiles.linux.oss.warpctrl]
+groups = ["cli", "warp_control"]
+
+[package.metadata.warp.build_profiles.macos.local.app]
+groups = ["app", "macos_common", "macos_official", "agent_debug", "nld_v3"]
+
+[package.metadata.warp.build_profiles.macos.dev.app]
+groups = ["app", "macos_common", "macos_official", "macos_dev_diagnostics", "warp_control", "nld_v3"]
+
+[package.metadata.warp.build_profiles.macos.preview.app]
+groups = ["app", "macos_common", "macos_official", "preview_channel", "macos_heap_diagnostics", "nld_v3"]
+
+[package.metadata.warp.build_profiles.macos.stable.app]
+groups = ["app", "macos_common", "macos_official", "macos_heap_diagnostics", "nld_v3"]
+
+[package.metadata.warp.build_profiles.macos.oss.app]
+groups = ["app", "macos_common", "nld_v3"]
+
+[package.metadata.warp.build_profiles.macos.local.cli]
+groups = ["cli", "macos_common", "macos_official", "agent_debug"]
+
+[package.metadata.warp.build_profiles.macos.dev.cli]
+groups = ["cli", "macos_common", "macos_official", "macos_dev_diagnostics", "warp_control"]
+
+[package.metadata.warp.build_profiles.macos.preview.cli]
+groups = ["cli", "macos_common", "macos_official", "preview_channel", "macos_heap_diagnostics"]
+
+[package.metadata.warp.build_profiles.macos.stable.cli]
+groups = ["cli", "macos_common", "macos_official", "macos_heap_diagnostics"]
+
+[package.metadata.warp.build_profiles.macos.oss.cli]
+groups = ["cli", "macos_common"]
+
+[package.metadata.warp.build_profiles.macos.local.warpctrl]
+groups = ["cli", "macos_common", "macos_official", "agent_debug", "warp_control"]
+
+[package.metadata.warp.build_profiles.macos.dev.warpctrl]
+groups = ["cli", "macos_common", "macos_official", "macos_dev_diagnostics", "warp_control"]
+
+[package.metadata.warp.build_profiles.macos.preview.warpctrl]
+groups = ["cli", "macos_common", "macos_official", "preview_channel", "macos_heap_diagnostics", "warp_control"]
+
+[package.metadata.warp.build_profiles.macos.stable.warpctrl]
+groups = ["cli", "macos_common", "macos_official", "macos_heap_diagnostics", "warp_control"]
+
+[package.metadata.warp.build_profiles.macos.oss.warpctrl]
+groups = ["cli", "macos_common", "warp_control"]
+
+[package.metadata.warp.build_profiles.windows.local.app]
+groups = ["app", "windows_official", "nld_v3"]
+
+[package.metadata.warp.build_profiles.windows.dev.app]
+groups = ["app", "windows_official", "agent_debug", "nld_v3"]
+
+[package.metadata.warp.build_profiles.windows.preview.app]
+groups = ["app", "windows_official", "preview_channel", "nld_v3"]
+
+[package.metadata.warp.build_profiles.windows.stable.app]
+groups = ["app", "windows_official", "nld_v3"]
+
+[package.metadata.warp.build_profiles.windows.oss.app]
+groups = ["app", "nld_v3"]
+
+# Run-entrypoint feature profiles used by `script/run`.
+[package.metadata.warp.build_profiles.run.local]
+groups = ["gui_entrypoint"]
+
+[package.metadata.warp.build_profiles.run.oss]
+groups = ["gui_entrypoint"]
+
+# Additional build profiles used by web/remote-server packaging paths.
+[package.metadata.warp.build_profiles.wasm.local]
+groups = ["app", "remote_tty"]
+
+[package.metadata.warp.build_profiles.wasm.dev]
+groups = ["app"]
+
+[package.metadata.warp.build_profiles.wasm.preview]
+groups = ["app", "preview_channel"]
+
+[package.metadata.warp.build_profiles.wasm.stable]
+groups = ["app"]
+
+[package.metadata.warp.build_profiles.wasm.oss]
+groups = ["app"]
+
+[package.metadata.warp.build_profiles.remote_server.deploy]
+groups = ["release_artifact", "remote_server"]
+
+[package.metadata.warp.build_profiles.remote_server.integration]
+groups = ["remote_server"]
+
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"
 copyright = "© 2025, Denver Technologies, Inc"

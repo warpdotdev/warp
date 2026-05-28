@@ -16,13 +16,13 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
 fi
 
 WORKSPACE_ROOT_DIR="$(pwd)"
+source "$WORKSPACE_ROOT_DIR/script/cargo_bundle_features.sh"
 CARGO_TARGET_DIR="$WORKSPACE_ROOT_DIR/target/wasm32-unknown-unknown"
 
 # By default we build dev bundles.
 RELEASE_CHANNEL="dev"
 # TODO: We should enable crash_reporting and before enabling for trusted testers.
 # https://linear.app/warpdotdev/issue/PLAT-428/crash-reporting-on-web
-FEATURES="release_bundle,gui"
 DEBUG=false
 
 PARAMS=""
@@ -118,21 +118,22 @@ mkdir -p "$EXTRAS_DIR"
 # N.B. The bundled outputs will always be warp.js and warp_bg.wasm.
 if [[ $RELEASE_CHANNEL = "local" ]]; then
   WARP_BIN="warp"
-  FEATURES="$FEATURES,remote_tty"
 elif [[ $RELEASE_CHANNEL = "dev" ]]; then
   WARP_BIN="dev"
 elif [[ $RELEASE_CHANNEL = "preview" ]]; then
   WARP_BIN="preview"
-  FEATURES="$FEATURES,preview_channel"
 elif [[ $RELEASE_CHANNEL = "stable" ]]; then
   WARP_BIN="stable"
 elif [[ $RELEASE_CHANNEL = "oss" ]]; then
   WARP_BIN="warp-oss"
 fi
 
+CARGO_FEATURE_PROFILE="wasm.${RELEASE_CHANNEL}"
+FEATURES="$(resolve_cargo_bundle_features "$WORKSPACE_ROOT_DIR" "$CARGO_FEATURE_PROFILE")"
 if [ -n "${FEATURES_OVERRIDE+x}" ]; then
   FEATURES="$FEATURES_OVERRIDE"
 fi
+echo "Using Cargo build profile $CARGO_FEATURE_PROFILE with features: $FEATURES"
 
 # If we only want to check that compilation will succeed, perform the checks
 # then exit.  We use this script to invoke `cargo check` to ensure that we are
