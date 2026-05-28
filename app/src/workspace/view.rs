@@ -14667,28 +14667,6 @@ impl Workspace {
             }
         };
 
-        if !AISettings::as_ref(ctx)
-            .is_cloud_handoff_enabled_for_conversation(source_conversation.as_ref(), ctx)
-        {
-            if show_user_feedback {
-                Self::restore_source_handoff_draft(&source_view, launch, environment_id, ctx);
-                let window_id = ctx.window_id();
-                WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    toast_stack.add_ephemeral_toast(
-                        DismissibleToast::error(
-                            "Cloud handoff isn't available for orchestrated agent conversations."
-                                .to_owned(),
-                        ),
-                        window_id,
-                        ctx,
-                    );
-                });
-            } else {
-                Self::record_automatic_handoff_failed(intent, ctx);
-            }
-            return;
-        }
-
         // Chip, `&` Enter, and `/handoff` with no arg dispatch `launch: None`;
         // synthesize an empty `PendingCloudLaunch` so auto-submit fires. The
         // empty-prompt substitution happens in `build_handoff_spawn_request`.
