@@ -1195,16 +1195,6 @@ define_settings_group!(AISettings, settings: [
         private: true,
     }
 
-    // Tracks whether we've done the one-time auto-open of the conversation list for discoverability.
-    // Once set to true, the conversation list visibility will be restored from workspace state.
-    has_auto_opened_conversation_list: HasAutoOpenedConversationList {
-        type: bool,
-        default: false,
-        supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        private: true,
-    }
-
     // Whether the ambient agent trial widget has been dismissed by the user.
     //
     // Not a user-visible setting - we model it as a setting so we can track state.
