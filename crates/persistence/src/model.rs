@@ -1045,7 +1045,13 @@ pub struct AgentConversationData {
     /// agent executing on a remote worker.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_remote_child: bool,
-    /// Whether the root task was still optimistic when this conversation was persisted.
+    /// Legacy marker that previously recorded whether the root task was still
+    /// optimistic when this conversation was persisted. Retained on the struct
+    /// for backward-compatible deserialization of rows written by older builds;
+    /// new writes always emit `None` and restore code ignores the value.
+    ///
+    // TODO: Remove this field once no live local DBs still contain
+    // `Some(true)` rows that legacy code paths might trip over.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_task_is_optimistic: Option<bool>,
     /// The server-assigned run identifier (`ai_tasks.id`) for v2 orchestration.
