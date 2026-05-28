@@ -18,3 +18,4 @@ pub use skill_provider::{
     SkillScope, SKILL_PROVIDER_DEFINITIONS,
 };
 pub use skill_reference::SkillReference;
+pub(crate) use skill_reference::{decode_api_path_reference, encode_api_path_reference};
