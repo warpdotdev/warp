@@ -446,7 +446,7 @@ fn agent_run_accepts_prompt_only() {
 
     assert_eq!(run_args.prompt_arg.prompt.as_deref(), Some("hello"));
     assert!(run_args.prompt_arg.saved_prompt.is_none());
-    assert!(run_args.skill.is_none());
+    assert!(run_args.skill.is_empty());
     assert!(run_args.task_id.is_none());
 }
 
@@ -463,7 +463,7 @@ fn agent_run_accepts_saved_prompt_only() {
 
     assert!(run_args.prompt_arg.prompt.is_none());
     assert_eq!(run_args.prompt_arg.saved_prompt.as_deref(), Some("sp-123"));
-    assert!(run_args.skill.is_none());
+    assert!(run_args.skill.is_empty());
     assert!(run_args.task_id.is_none());
 }
 
@@ -479,8 +479,44 @@ fn agent_run_accepts_skill_only() {
     };
 
     assert!(run_args.prompt_arg.prompt.is_none());
-    assert!(run_args.skill.is_some());
+    assert_eq!(run_args.skill.len(), 1);
+    assert_eq!(
+        run_args.invoked_skill().unwrap().skill_identifier,
+        "my-skill"
+    );
     assert!(run_args.task_id.is_none());
+}
+
+#[test]
+fn agent_run_accepts_multiple_skills() {
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--skill",
+        "primary",
+        "--skill",
+        "repo:helper",
+        "--prompt",
+        "do stuff",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+
+    assert_eq!(run_args.skill.len(), 2);
+    assert_eq!(run_args.skill[0].skill_identifier, "primary");
+    assert_eq!(run_args.skill[1].repo.as_deref(), Some("repo"));
+    assert_eq!(run_args.skill[1].skill_identifier, "helper");
+    assert_eq!(
+        run_args.invoked_skill().unwrap().skill_identifier,
+        "primary"
+    );
 }
 
 #[test]
@@ -495,7 +531,7 @@ fn agent_run_accepts_task_id_only() {
     };
 
     assert!(run_args.prompt_arg.prompt.is_none());
-    assert!(run_args.skill.is_none());
+    assert!(run_args.skill.is_empty());
     assert_eq!(run_args.task_id.as_deref(), Some("tid-456"));
 }
 
@@ -514,7 +550,7 @@ fn agent_run_accepts_prompt_and_skill() {
     };
 
     assert_eq!(run_args.prompt_arg.prompt.as_deref(), Some("do stuff"));
-    assert!(run_args.skill.is_some());
+    assert_eq!(run_args.skill.len(), 1);
 }
 
 #[test]
@@ -538,7 +574,7 @@ fn agent_run_accepts_saved_prompt_and_skill() {
     };
 
     assert_eq!(run_args.prompt_arg.saved_prompt.as_deref(), Some("sp-1"));
-    assert!(run_args.skill.is_some());
+    assert_eq!(run_args.skill.len(), 1);
 }
 
 #[test]
@@ -590,7 +626,7 @@ fn agent_run_accepts_skill_and_task_id() {
     };
 
     assert!(run_args.prompt_arg.prompt.is_none());
-    assert!(run_args.skill.is_some());
+    assert_eq!(run_args.skill.len(), 1);
     assert_eq!(run_args.task_id.as_deref(), Some("tid-1"));
 }
 

@@ -23,6 +23,7 @@
 //! that aren't relevant to the handler's correctness).
 
 use std::collections::HashMap;
+
 use warp_core::ui::appearance::Appearance;
 use warpui::platform::WindowStyle;
 use warpui::App;

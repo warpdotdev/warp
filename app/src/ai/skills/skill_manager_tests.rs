@@ -14,6 +14,63 @@ use crate::settings::AISettings;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 
 // ============================================================================
+// Tests for explicit skill registration
+// ============================================================================
+
+#[test]
+fn handle_skills_added_registers_multiple_explicit_skills() {
+    let temp = TempDir::new().unwrap();
+    let repo = dunce::canonicalize(temp.path()).unwrap().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+
+    let primary_path = repo.join(".agents/skills/primary/SKILL.md");
+    let helper_path = repo.join(".agents/skills/helper/SKILL.md");
+    let skills = vec![
+        ParsedSkill {
+            name: "primary".to_string(),
+            description: "Primary skill".to_string(),
+            path: primary_path.clone(),
+            content: "# Primary".to_string(),
+            line_range: None,
+            provider: SkillProvider::Agents,
+            scope: SkillScope::Project,
+        },
+        ParsedSkill {
+            name: "helper".to_string(),
+            description: "Helper skill".to_string(),
+            path: helper_path.clone(),
+            content: "# Helper".to_string(),
+            line_range: None,
+            provider: SkillProvider::Agents,
+            scope: SkillScope::Project,
+        },
+    ];
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let skill_manager_handle = app.add_singleton_model(SkillManager::new);
+
+        skill_manager_handle.update(&mut app, |manager, _ctx| {
+            manager.handle_skills_added(skills);
+        });
+
+        let registered_paths = skill_manager_handle.read(&app, |manager, _ctx| {
+            (
+                manager.skill_paths_by_name("primary"),
+                manager.skill_paths_by_name("helper"),
+            )
+        });
+
+        assert_eq!(registered_paths.0, vec![primary_path]);
+        assert_eq!(registered_paths.1, vec![helper_path]);
+    });
+}
+
+// ============================================================================
 // Tests for get_skills_for_working_directory subdirectory scoping
 // ============================================================================
 

@@ -34,7 +34,7 @@ use warpui::{AppContext, Entity, ModelContext, ModelHandle, ModelSpawner, Single
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentActionResultType, AIAgentExchange, AIAgentInput, AIAgentOutput, CancellationReason,
-    RenderableAIError, RequestFileEditsResult,
+    InvokeSkillUserQuery, RenderableAIError, RequestFileEditsResult,
 };
 use crate::ai::agent_sdk::driver::harness::{
     harness_model_env_vars, task_env_vars, HarnessCleanupDisposition, HarnessKind, HarnessRunner,
@@ -365,6 +365,11 @@ struct GlobalSkillResolution {
 pub enum AgentRunPrompt {
     /// Prompt is provided locally (already resolved to a plain string).
     Local(String),
+    /// A local Oz run that invokes a skill using the skill-specific API input.
+    LocalSkill {
+        skill: ParsedSkill,
+        user_query: Option<InvokeSkillUserQuery>,
+    },
     /// Server resolves prompt from the task's stored prompt.
     /// Used when task_id is provided without an explicit prompt.
     ServerSide {
@@ -1858,6 +1863,20 @@ impl AgentDriver {
                     Self::load_global_skills(&foreground, global_skill_specs, global_skill_repos),
                 )
                 .await;
+
+            foreground
+                .spawn(|_, ctx| {
+                    // In all CLI runs, we should include all loaded skills from any source:
+                    // - The `--skill` flag
+                    // - Global skills
+                    // - Skills from cloned repos
+                    // Unlike in the desktop app, there aren't multiple terminal sessions with
+                    // different skill sets that we need to filter out.
+                    SkillManager::handle(ctx).update(ctx, |manager, _| {
+                        manager.set_cloud_environment(true);
+                    });
+                })
+                .await?;
         }
 
         let (task_id_for_refresh, ai_client_for_refresh) = foreground
@@ -2125,6 +2144,13 @@ impl AgentDriver {
             Option<String>,
         ) = match prompt {
             AgentRunPrompt::Local(text) => (Cow::Borrowed(text), None, None, None),
+            AgentRunPrompt::LocalSkill { skill, user_query } => {
+                let prompt = match user_query {
+                    Some(user_query) => format!("{}\n\n{}", skill.content, user_query.query),
+                    None => skill.content.clone(),
+                };
+                (Cow::Owned(prompt), None, None, None)
+            }
             AgentRunPrompt::ServerSide {
                 skill,
                 attachments_dir,
@@ -2778,6 +2804,27 @@ impl AgentDriver {
                             .input()
                             .update(ctx, |input, ctx| input.input_enter(ctx));
                     }
+                }
+                AgentRunPrompt::LocalSkill { skill, user_query } => {
+                    if FeatureFlag::AgentView.is_enabled() {
+                        terminal.enter_agent_view(
+                            None,
+                            restored_conversation_id,
+                            AgentViewEntryOrigin::Cli,
+                            ctx,
+                        );
+                    }
+
+                    terminal.ai_controller().update(ctx, |controller, ctx| {
+                        controller.send_ai_input_with_context(
+                            |context| AIAgentInput::InvokeSkill {
+                                context,
+                                skill: skill.clone(),
+                                user_query: user_query.clone(),
+                            },
+                            ctx,
+                        );
+                    });
                 }
                 AgentRunPrompt::ServerSide {
                     skill,

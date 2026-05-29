@@ -12,6 +12,7 @@ use anyhow::Context;
 pub(crate) use driver::harness::{task_env_vars, validate_cli_installed, ClaudeHarness};
 pub use driver::AgentDriver;
 use driver::AgentDriverError;
+use futures::future::try_join_all;
 use telemetry::CliTelemetryEvent;
 use warp_cli::agent::{
     AgentCommand, AgentProfileCommand, Harness, OutputFormat, Prompt, RunAgentArgs,
@@ -31,6 +32,7 @@ use warp_cli::share::ShareRequest;
 use warp_cli::task::{MessageCommand, TaskCommand};
 use warp_cli::{CliCommand, GlobalOptions, OZ_HARNESS_ENV};
 use warp_core::features::FeatureFlag;
+use warp_core::safe_info;
 use warp_graphql::object_permissions::OwnerType;
 use warp_isolation_platform::IsolationPlatformError;
 #[cfg(not(target_family = "wasm"))]
@@ -44,6 +46,7 @@ use crate::ai::agent::api::convert_conversation::{
 };
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::InvokeSkillUserQuery;
 use crate::ai::agent_sdk::driver::harness::{harness_kind, HarnessKind};
 use crate::ai::agent_sdk::driver::{AgentDriverOptions, AgentRunPrompt, Task};
 use crate::ai::agent_sdk::mcp_config::build_mcp_servers_from_specs;
@@ -58,7 +61,7 @@ use crate::ai::aws_credentials::refresh_aws_credentials;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::llms::LLMId;
 use crate::ai::skills::{
-    clone_repo_for_skill, resolve_skill_spec, ResolveSkillError, ResolvedSkill,
+    clone_repo_for_skill, resolve_skill_spec, ResolveSkillError, ResolvedSkill, SkillManager,
 };
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
@@ -255,7 +258,7 @@ fn run_agent(
                     "unexpected argument '--conversation' found"
                 ));
             }
-            if args.skill.is_some() && !FeatureFlag::OzPlatformSkills.is_enabled() {
+            if !args.skill.is_empty() && !FeatureFlag::OzPlatformSkills.is_enabled() {
                 return Err(anyhow::anyhow!("unexpected argument '--skill' found"));
             }
             if args.harness != Harness::Oz && !FeatureFlag::AgentHarness.is_enabled() {
@@ -415,23 +418,53 @@ fn build_merged_config_and_task(
     // Keep the task config snapshot aligned with the effective model selection.
     merged_config.model_id = model_override.clone().map(|id| id.to_string());
 
-    // Combine base_prompt with user prompt locally.
-    let local_prompt = match (merged_config.base_prompt.as_deref(), prompt) {
-        (Some(base_prompt), Some(Prompt::PlainText(user_prompt))) => {
-            Prompt::PlainText(format!("{base_prompt}\n\n{user_prompt}"))
+    let prompt = if args.harness == Harness::Oz {
+        if let Some(skill) = resolved_skill {
+            let user_query = prompt
+                .as_ref()
+                .map(|prompt| {
+                    resolve_prompt(prompt, ctx).map(|query| InvokeSkillUserQuery {
+                        query,
+                        referenced_attachments: Default::default(),
+                    })
+                })
+                .transpose()?;
+
+            AgentRunPrompt::LocalSkill {
+                skill: skill.parsed_skill.clone(),
+                user_query,
+            }
+        } else {
+            let local_prompt = match (merged_config.base_prompt.as_deref(), prompt) {
+                (Some(base_prompt), Some(Prompt::PlainText(user_prompt))) => {
+                    Prompt::PlainText(format!("{base_prompt}\n\n{user_prompt}"))
+                }
+                (Some(base_prompt), None) => Prompt::PlainText(base_prompt.to_string()),
+                (_, Some(p)) => p.clone(),
+                (None, None) => {
+                    return Err(anyhow::anyhow!(AgentDriverError::InvalidRuntimeState));
+                }
+            };
+            AgentRunPrompt::Local(resolve_prompt(&local_prompt, ctx)?)
         }
-        (Some(base_prompt), None) => {
-            // Skill-only invocation: use skill instructions as the prompt
-            Prompt::PlainText(base_prompt.to_string())
-        }
-        (_, Some(p)) => p.clone(),
-        (None, None) => {
-            return Err(anyhow::anyhow!(AgentDriverError::InvalidRuntimeState));
-        }
+    } else {
+        // Third-party harnesses do not use Warp's InvokeSkill input type, so keep passing
+        // skill instructions as prompt text for harness-native execution.
+        let local_prompt = match (merged_config.base_prompt.as_deref(), prompt) {
+            (Some(base_prompt), Some(Prompt::PlainText(user_prompt))) => {
+                Prompt::PlainText(format!("{base_prompt}\n\n{user_prompt}"))
+            }
+            (Some(base_prompt), None) => Prompt::PlainText(base_prompt.to_string()),
+            (_, Some(p)) => p.clone(),
+            (None, None) => {
+                return Err(anyhow::anyhow!(AgentDriverError::InvalidRuntimeState));
+            }
+        };
+        AgentRunPrompt::Local(resolve_prompt(&local_prompt, ctx)?)
     };
 
     let task = Task {
-        prompt: AgentRunPrompt::Local(resolve_prompt(&local_prompt, ctx)?),
+        prompt,
         model: model_override,
         profile: args.profile.clone(),
         mcp_specs: runtime_mcp_specs,
@@ -816,56 +849,100 @@ impl AgentDriverRunner {
         Ok(())
     }
 
-    /// Resolve the skill spec from args, if one was provided.
+    /// Resolve the skill specs from args, if any were provided.
     ///
-    /// In sandboxed mode with a fully-qualified spec (org + repo), the repo is
-    /// cloned first since it may not exist locally. Otherwise we resolve directly
-    /// against the local filesystem.
-    async fn resolve_skill(
+    /// In sandboxed mode with fully-qualified specs (org + repo), the
+    /// repos are cloned first since they may not exist locally. Otherwise we
+    /// resolve directly against the local filesystem. Every resolved skill is
+    /// also registered with `SkillManager` so the agent can read it later.
+    async fn resolve_skills(
         foreground: &ModelSpawner<Self>,
         args: &RunAgentArgs,
         working_dir: &Path,
         setup_events: &SetupClientEventReporter,
-    ) -> Result<Option<ResolvedSkill>, AgentDriverError> {
+    ) -> Result<Vec<ResolvedSkill>, AgentDriverError> {
         if !FeatureFlag::OzPlatformSkills.is_enabled() {
-            return Ok(None);
+            return Ok(Vec::new());
         }
-        let Some(skill_spec) = args.skill.clone() else {
-            return Ok(None);
-        };
+        if args.skill.is_empty() {
+            return Ok(Vec::new());
+        }
+        let skill_specs = args.skill.clone();
+        let mut repos_to_clone = Vec::new();
+        if args.sandboxed {
+            for skill_spec in &skill_specs {
+                let (Some(org), Some(repo_name)) = (&skill_spec.org, &skill_spec.repo) else {
+                    continue;
+                };
+                repos_to_clone.push((org.clone(), repo_name.clone()));
+            }
+            repos_to_clone.sort();
+            repos_to_clone.dedup();
+        }
 
-        // In sandboxed mode with a fully-qualified spec, clone the repo first.
-        let needs_clone = args.sandboxed && skill_spec.org.is_some() && skill_spec.repo.is_some();
-        if needs_clone {
-            let org = skill_spec.org.as_ref().expect("org checked above");
-            let repo_name = skill_spec.repo.as_ref().expect("repo checked above");
-            log::info!("Cloning {org}/{repo_name} for skill resolution in sandboxed mode");
-            setup_events
-                .record_result(SetupStep::SkillRepoClone, async {
-                    clone_repo_for_skill(org, repo_name, working_dir)
+        if !repos_to_clone.is_empty() {
+            let repos_for_log = repos_to_clone
+                .iter()
+                .map(|(org, repo_name)| format!("{org}/{repo_name}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            safe_info!(
+                safe: (
+                    "Cloning {} repo(s) for skill resolution in sandboxed mode",
+                    repos_to_clone.len()
+                ),
+                full: ("Cloning repos for skill resolution in sandboxed mode: {repos_for_log}")
+            );
+
+            let clone_futures = repos_to_clone
+                .into_iter()
+                .map(|(org, repo_name)| async move {
+                    clone_repo_for_skill(&org, &repo_name, working_dir)
                         .await
                         .map_err(|err| {
                             AgentDriverError::SkillResolutionFailed(format_skill_resolution_error(
                                 err,
                             ))
                         })
+                });
+            setup_events
+                .record_result(SetupStep::SkillRepoClone, async {
+                    try_join_all(clone_futures).await
                 })
                 .await?;
         }
 
-        let working_dir_buf = working_dir.to_path_buf();
-        let skill = foreground
-            .spawn(move |_, ctx| resolve_skill_spec(&skill_spec, &working_dir_buf, ctx))
-            .await?
-            .map_err(|err| {
-                AgentDriverError::SkillResolutionFailed(format_skill_resolution_error(err))
-            })?;
-        log::debug!(
-            "Resolved skill '{}' from {}",
-            skill.name,
-            skill.skill_path.display()
-        );
-        Ok(Some(skill))
+        let mut resolved_skills = Vec::with_capacity(skill_specs.len());
+        for skill_spec in skill_specs {
+            let working_dir_buf = working_dir.to_path_buf();
+            let skill = foreground
+                .spawn(move |_, ctx| resolve_skill_spec(&skill_spec, &working_dir_buf, ctx))
+                .await?
+                .map_err(|err| {
+                    AgentDriverError::SkillResolutionFailed(format_skill_resolution_error(err))
+                })?;
+            log::debug!(
+                "Resolved skill '{}' from {}",
+                skill.name,
+                skill.skill_path.display()
+            );
+            resolved_skills.push(skill);
+        }
+        if !resolved_skills.is_empty() {
+            let skills = resolved_skills
+                .iter()
+                .map(|skill| skill.parsed_skill.clone())
+                .collect::<Vec<_>>();
+            foreground
+                .spawn(move |_, ctx| {
+                    SkillManager::handle(ctx).update(ctx, |manager, _| {
+                        manager.handle_skills_added(skills);
+                    });
+                })
+                .await?;
+        }
+
+        Ok(resolved_skills)
     }
 
     /// Build the AgentDriverOptions and Task, handling task creation or existing task setup.
@@ -888,21 +965,22 @@ impl AgentDriverRunner {
         }
         .map_err(AgentDriverError::ConfigBuildFailed)?;
 
-        // Resolve the skill, if we have one
-        let resolved_skill =
-            Self::resolve_skill(foreground, &args, &working_dir, setup_events).await?;
+        // Resolve and register any explicitly requested skills. Only the first is invoked.
+        let resolved_skills =
+            Self::resolve_skills(foreground, &args, &working_dir, setup_events).await?;
+        let invoked_skill = resolved_skills.first().cloned();
 
         // Extract variables we want to use later before moving args into the closure
         let task_id_str = args.task_id.clone();
         let prompt = args.prompt_arg.to_prompt();
-        let skill = args.skill.clone();
+        let skill = args.invoked_skill().cloned();
 
         // Build the AgentConfigSnapshot, Task, and AgentDriverOptions
         let prompt_clone = prompt.clone();
         let (merged_config, mut task, mut driver_options) = foreground
             .spawn(move |_, ctx| -> anyhow::Result<_> {
                 let (merged_config, task) =
-                    build_merged_config_and_task(&args, &resolved_skill, &prompt_clone, ctx)?;
+                    build_merged_config_and_task(&args, &invoked_skill, &prompt_clone, ctx)?;
 
                 let task_id = args.task_id.as_ref().and_then(|s| s.parse().ok());
                 let should_share = (args.share.is_shared() || args.task_id.is_some())

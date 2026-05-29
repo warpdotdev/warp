@@ -222,6 +222,15 @@ fn extract_skill_parent_directory_different_providers() {
     }
 }
 
+#[cfg(target_os = "windows")]
+#[test]
+fn extract_skill_parent_directory_handles_mixed_windows_separators() {
+    let parent_directory = std::path::PathBuf::from(r"C:\repo");
+    let skill_path = std::path::PathBuf::from(r"C:\repo\.agents/skills/my-skill/SKILL.md");
+    let result = extract_skill_parent_directory(&skill_path);
+    assert_eq!(result.ok(), Some(parent_directory));
+}
+
 #[test]
 fn extract_skill_parent_directory_returns_none_for_non_skill() {
     let Some(home_dir) = dirs::home_dir() else {

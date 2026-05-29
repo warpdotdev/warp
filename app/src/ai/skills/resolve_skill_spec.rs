@@ -19,6 +19,7 @@ use ai::skills::{
 use command::blocking::Command;
 use command::r#async::Command as AsyncCommand;
 use warp_cli::skill::SkillSpec;
+use warp_core::{safe_debug, safe_info};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, SingletonEntity as _};
 
@@ -153,9 +154,12 @@ pub async fn clone_repo_for_skill(
     // Check if target already exists.
     if target_dir.exists() {
         if target_dir.join(".git").is_dir() {
-            log::info!(
-                "Target directory {} already exists and appears to be a git repo, skipping clone",
-                target_dir.display()
+            safe_info!(
+                safe: ("Target repo for skill resolution already exists, skipping clone"),
+                full: (
+                    "Target directory {} already exists and appears to be a git repo, skipping clone",
+                    target_dir.display()
+                )
             );
             return Ok(());
         }
@@ -170,11 +174,19 @@ pub async fn clone_repo_for_skill(
         });
     }
 
-    log::info!("Cloning {} into {}", repo_url, target_dir.display());
-    log::debug!(
-        "[GIT OPERATION] resolve_skill_spec.rs clone_repo_for_skill git clone {} {}",
-        repo_url,
-        target_dir.display()
+    safe_info!(
+        safe: ("Cloning repo for skill resolution"),
+        full: ("Cloning {} into {}", repo_url, target_dir.display())
+    );
+    safe_debug!(
+        safe: (
+            "[GIT OPERATION] resolve_skill_spec.rs clone_repo_for_skill git clone <repo-url> <target-dir>"
+        ),
+        full: (
+            "[GIT OPERATION] resolve_skill_spec.rs clone_repo_for_skill git clone {} {}",
+            repo_url,
+            target_dir.display()
+        )
     );
 
     let output = AsyncCommand::new("git")
@@ -199,7 +211,10 @@ pub async fn clone_repo_for_skill(
         });
     }
 
-    log::info!("Successfully cloned {org}/{repo}");
+    safe_info!(
+        safe: ("Successfully cloned repo for skill resolution"),
+        full: ("Successfully cloned {org}/{repo}")
+    );
     Ok(())
 }
 

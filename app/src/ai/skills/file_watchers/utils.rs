@@ -1,13 +1,10 @@
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 
 use ai::skills::{
     home_skills_path, parse_skill, read_skills, ParsedSkill, SkillProvider,
     SKILL_PROVIDER_DEFINITIONS,
 };
 use anyhow::Error;
-use regex::Regex;
 use repo_metadata::local_model::GetContentsArgs;
 use repo_metadata::{RepoContent, RepoMetadataModel, RepositoryIdentifier};
 use walkdir::{DirEntry, WalkDir};
@@ -197,52 +194,45 @@ pub fn is_skill_file(path: &Path) -> bool {
     extract_skill_parent_directory(path).is_ok()
 }
 
-static SKILL_PROVIDER_PATHS: LazyLock<HashSet<String>> = LazyLock::new(|| {
-    // Collect the skill provider paths from the definitions
-    SKILL_PROVIDER_DEFINITIONS
-        .iter()
-        .map(|p| p.skills_path.to_string_lossy().to_string())
-        .collect()
-});
-
-// Pattern: {prefix}/{provider_path}/{skill-name}/SKILL.md
-// where provider_path is 2 parts (e.g., ".agents/skills") and skill-name is 1 part
-#[cfg(not(target_os = "windows"))]
-static SKILL_FILE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(.+)/([^/]+/[^/]+)/[^/]+/SKILL\.md$")
-        .expect("Failed to compile skill file pattern")
-});
-
-// On windows, the path separator is \
-#[cfg(target_os = "windows")]
-static SKILL_FILE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(.+)\\([^\\]+\\[^\\]+)\\[^\\]+\\SKILL\.md$")
-        .expect("Failed to compile skill file pattern")
-});
-
 pub fn extract_skill_parent_directory(path: &Path) -> Result<PathBuf, Error> {
-    let is_warp_home_skill = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name == "SKILL.md")
-        && path
-            .parent()
-            .and_then(Path::parent)
-            .is_some_and(|parent| warp_managed_skill_dirs().iter().any(|dir| parent == dir));
-    if is_warp_home_skill {
+    if path.file_name().and_then(|name| name.to_str()) != Some("SKILL.md") {
+        return Err(anyhow::anyhow!("Not a skill path: {}", path.display()));
+    }
+
+    // Find the provider-specific skills directory. For example, if `path` is
+    // `path/to/project/.claude/skills/my-skill/SKILL.md`, `provider_skills_dir`
+    // is `path/to/project/.claude/skills`.
+    let Some(provider_skills_dir) = path.parent().and_then(Path::parent) else {
+        return Err(anyhow::anyhow!("Not a skill path: {}", path.display()));
+    };
+
+    if warp_managed_skill_dirs()
+        .iter()
+        .any(|dir| provider_skills_dir == dir)
+    {
         return dirs::home_dir()
             .ok_or_else(|| anyhow::anyhow!("Home directory not available for {}", path.display()));
     }
-    let path_str = path.to_string_lossy();
 
-    if let Some(captures) = SKILL_FILE_PATTERN.captures(&path_str) {
-        if let Some(provider_path) = captures.get(2) {
-            if SKILL_PROVIDER_PATHS.contains(provider_path.as_str()) {
-                if let Some(parent_directory) = captures.get(1) {
-                    return Ok(PathBuf::from(parent_directory.as_str()));
-                }
+    for provider in SKILL_PROVIDER_DEFINITIONS.iter() {
+        if !provider_skills_dir.ends_with(&provider.skills_path) {
+            continue;
+        }
+
+        let mut parent_directory = provider_skills_dir;
+        for _ in provider.skills_path.components() {
+            if let Some(parent) = parent_directory.parent() {
+                parent_directory = parent;
+            } else {
+                return Err(anyhow::anyhow!("Not a skill path: {}", path.display()));
             }
         }
+
+        if parent_directory.as_os_str().is_empty() {
+            return Err(anyhow::anyhow!("Not a skill path: {}", path.display()));
+        }
+
+        return Ok(parent_directory.to_path_buf());
     }
 
     Err(anyhow::anyhow!("Not a skill path: {}", path.display()))
