@@ -42,7 +42,6 @@ To resolve this, we must wire `CLIAgent::Antigravity` into the terminal's agent 
    - `icon()`: returns `Some(Icon::AntigravityLogo)`.
    - `brand_color()`: returns `Some(ColorU::from_rgb(0x63, 0x66, 0xF1))` (Indigo brand color).
    - `supported_skill_providers()`: returns `&[SkillProvider::Agents, SkillProvider::Antigravity]`.
-   - `from_harness()`: map `Harness::Antigravity` to `Some(CLIAgent::Antigravity)` (if added to harness proto APIs).
 
 ### 3b. Register Command Classifier (`crates/input_classifier/src/util.rs`)
 
@@ -130,7 +129,7 @@ This guarantees that launching the `agy` command is handled as a standard shell 
        skills_path: PathBuf::from(".antigravitycli").join("skills"),
    }
    ```
-3. Map it in `crates/ai/src/skills/conversion.rs` (`From<SkillProvider>` and `convert_provider` conversions). Note that since `warp_multi_agent_api` is imported from `warp-proto-apis` repository, we will need to update the proto module references if the upstream proto changes to include `Antigravity` as a provider type; otherwise we can fall back or handle it locally.
+3. Map it in `crates/ai/src/skills/conversion.rs` (`From<SkillProvider>` and `convert_provider` conversions). Since `warp_multi_agent_api` is imported from `warp-proto-apis`, if the proto does not yet contain `Antigravity` as a provider type, the implementation-safe behavior is to fall back by mapping it to the generic `Agent` provider type (or simply returning `None` and skipping remote sync) to prevent build failures.
 
 ## 4. End-to-End Flow
 
@@ -147,4 +146,5 @@ This guarantees that launching the `agy` command is handled as a standard shell 
 - **Unit tests**:
   - Add tests in `plugin_manager/antigravity_tests.rs` verifying `needs_update`, `is_installed`, and installation instruction steps.
   - Verify CLI agent detection works for prefix `agy` in `cli_agent_tests.rs`.
-- **Manual Verification**: Run Warp locally, trigger `agy`, and verify Agent Mode transition.
+  - Validate that `DefaultSessionListener` correctly processes OSC 777 notifications and constructs the session-model data flow for `agent: "agy"`.
+- **Manual Verification**: Run Warp locally, trigger `agy`, and verify Agent Mode transition and notification streaming.
