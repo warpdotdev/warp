@@ -4,13 +4,13 @@
 
 Restarting Warp left orchestration sessions in three distinct broken states. Local-local orchestration came back without the pill bar, and `send_message_to_agent` / `messages_received` rows rendered the child as `"Unknown agent"`. Local-remote orchestration restored the placeholder child pane as the empty `"New agent conversation"` shell instead of the cloud transcript that was actually streaming server-side. And a meaningful share (~50% in some traces) of local-no-harness Oz child conversations were silently dropped at read time entirely. Underneath all three symptoms, the on-disk eviction policy was splitting orchestration trees across restarts, so even a healthy read path would re-encounter partial state on the next boot.
 
-The subsystem-level explanation of restoration ↔ orchestration lives in the architecture report at `/Users/matthew/src/orch-restore/restoration-and-orchestration.md`. The PR body summarises the user-visible behaviour. This spec is the implementation-level account of the four code-level decisions that shipped.
+The subsystem-level explanation of restoration ↔ orchestration lives in the architecture report at `/Users/matthew/src/orch-restore/restoration-and-orchestration.md`. The PR body summarises the user-visible behaviour. This spec is the implementation-level account of the three code-level decisions that ship in this PR; the fourth (a read-time optimistic-stub filter) was superseded by upstream PR #11814 and dropped during the rebase — see change 3 below.
 
 ### Relevant code
 
 - `crates/persistence/src/schema.rs:11` — `agent_conversations` table.
 - `crates/persistence/src/schema.rs:20` — `agent_tasks` table.
-- `crates/persistence/src/model.rs (935-1054)` — `AgentConversation` plus the read-time helpers (`task_is_root_shaped`, `optimistic_stub_task_id`, `tasks_for_restore`, `into_tasks_for_restore`, `is_restorable`).
+- `crates/persistence/src/model.rs (935-1006)` — `AgentConversation::is_restorable` (the multi-root acceptance rules introduced by upstream PR #11814 cover the optimistic-stub case).
 - `app/src/persistence/agent.rs (38-233)` — disk-side prune entry point and `select_conversations_to_evict`.
 - `app/src/ai/restored_conversations.rs:17` — `RestoredAgentConversations`, the consume-once startup store.
 - `app/src/ai/blocklist/history_model.rs:55-68` — `MAX_HISTORICAL_CONVERSATIONS`.
@@ -28,7 +28,7 @@ The subsystem-level explanation of restoration ↔ orchestration lives in the ar
 
 ## Proposed changes
 
-The implementation breaks into four self-contained changes that share the read/write path described in the architecture report.
+The implementation now breaks into three self-contained changes that share the read/write path described in the architecture report. The fourth original change (a read-time optimistic-stub filter in `crates/persistence/src/model.rs`) has been superseded by upstream PR #11814 "Fix optimistic-root persistence breaking conversation restore (QUALITY-774)" and is no longer carried by this PR; the rationale lives below in change 3.
 
 ### 1. Eager orchestration-child hydration in `initialize_historical_conversations`
 
@@ -62,19 +62,13 @@ The async continuation guard inside `ctx.spawn` requires both `child_agent_panes
 
 Tradeoff. The plan considered widening `resolve_open_action` to expose a `HydrateRemoteChildPlaceholder` variant. Rejected for the reason above. The plan also considered keeping the dispatch inline inside `attempt_remote_child_hydration`; extracted into a free function so the four-way decision (Attachable, ActiveUnattachable + token, Inactive + token, Inactive + no token, plus the new empty-token-filter case) is unit-testable without standing up a `PaneGroup`.
 
-### 3. Optimistic-stub filter for local-no-harness Oz children
+### 3. Optimistic-stub handling (superseded by upstream PR #11814)
 
-Local-no-harness Oz children sometimes persist two root-shaped tasks: a 38-byte zero-payload optimistic stub created at child-spawn time, and a real upgraded root carrying the actual messages. `AgentConversation::is_restorable` previously saw two root-shaped tasks and rejected the row, silently dropping the conversation at the entry to `initialize_historical_conversations`. The fix is a read-time filter; disk rows are untouched.
+Local-no-harness Oz children sometimes persisted two root-shaped tasks: a 38-byte zero-payload optimistic stub created at child-spawn time, and a real upgraded root carrying the actual messages. `AgentConversation::is_restorable` saw two root-shaped tasks and rejected the row, silently dropping the conversation at the entry to `initialize_historical_conversations`.
 
-Added in `crates/persistence/src/model.rs`:
+Upstream PR #11814 ("Fix optimistic-root persistence breaking conversation restore", QUALITY-774) addresses the same symptom on two coordinated layers: `Task::source_for_persistence` returns `None` for `Optimistic(Root)` so no new stub rows are written, and `AIConversation::new_restored` deduplicates multi-root payloads by preferring the parentless task with non-empty `messages`. `AgentConversation::is_restorable` was relaxed to accept the multi-root [stub + real] shape so legacy DB rows still load through the restore path. The local-DB conversion entry point `convert_persisted_conversation_to_ai_conversation_with_metadata` now calls `AIConversation::new_restored_synthesizing_on_empty`, which synthesizes a fresh optimistic root when the persisted task list is empty.
 
-- `task_is_root_shaped` (`model.rs:943`) — extracts the "no dependencies, or empty `parent_task_id`" check that was previously inlined inside `is_restorable`.
-- `optimistic_stub_task_id` (`model.rs:963`) — returns `Some(stub_id)` for the exact "two root-shaped tasks, exactly one with zero messages" pattern; returns `None` for every other shape.
-- `AgentConversation::tasks_for_restore` (`model.rs:986`) — borrowed view that omits the stub when matched.
-- `AgentConversation::into_tasks_for_restore` (`model.rs:1002`) — owned `Vec<api::Task>` consumer; used by `convert_persisted_conversation_to_ai_conversation_with_metadata` (`conversation_loader.rs:64`) to hand a clean task list to `AIConversation::new_restored` without an extra clone.
-- `AgentConversation::is_restorable` (`model.rs:1023`) — now routes through `tasks_for_restore`, so the "two root tasks" rejection no longer trips on the stub pattern.
-
-Tradeoff. The plan considered deleting the stub at write time (when the optimistic task gets upgraded). Rejected for two reasons: (a) the upgrade path is in a code path we did not want to touch as part of this fix, and (b) a read-time filter is non-destructive — disk rows survive a Warp downgrade, and the filter can be relaxed or removed without a migration. The filter is also gated to the exact two-task pattern: three or more root-shaped tasks stay non-restorable, so we don't accidentally widen the original invariant.
+This PR's earlier read-time filter (`task_is_root_shaped`, `optimistic_stub_task_id`, `tasks_for_restore`, `into_tasks_for_restore`) and the seven unit tests pinning it have been removed during the rebase onto upstream. Upstream's restore-side dedupe (with a 50-iteration HashMap-order regression test in `app/src/ai/agent/conversation_tests.rs`) plus its relaxed `is_restorable` cover the same ground at the same layer with less surface area, so a parallel filter is redundant.
 
 ### 4. Tree-aware persisted-conversation prune
 
@@ -88,16 +82,16 @@ Tradeoffs.
 
 - **Freshest-tree exception.** The plan considered a strict cap that evicts even from the freshest tree. Rejected: a strict cap could split an active orchestration session in half on disk, regressing into the same "broken half-tree" failure mode that motivated this change. The unbounded freshest-tree case is documented as a known limitation below.
 - **Sharing the constant.** Two `const usize` values in two files is a soft drift hazard, but `crates/persistence` is upstream of `warp` in the workspace graph and cannot import from it. The reverse import would pull persistence-only code into the read-side path. Documented in `MAX_HISTORICAL_CONVERSATIONS`'s comment that the read cap is moot only as long as it stays ≥ the disk cap.
-- **Parse failure handling.** Rows whose `conversation_data` fails JSON parsing are treated as their own root rather than being silently linked into another tree. This matches the upstream optimistic-stub filter's read-time-no-mutation stance: the disk row is untouched, and the eviction algorithm just refuses to chain a malformed row into a tree.
+- **Parse failure handling.** Rows whose `conversation_data` fails JSON parsing are treated as their own root rather than being silently linked into another tree. The disk row is untouched and the eviction algorithm just refuses to chain a malformed row into a tree.
 
 ## End-to-end flow
 
-Tracing one boot through the four changes makes the causal chain visible:
+Tracing one boot through the three changes (with upstream PR #11814's stub handling sitting upstream of them) makes the causal chain visible:
 
 ```mermaid
 flowchart TD
     A[SQLite agent_conversations + agent_tasks] -->|read_agent_conversations| B[Vec<AgentConversation>]
-    B -->|into_tasks_for_restore| C[optimistic stub filtered out]
+    B -->|new_restored_synthesizing_on_empty<br/>+ multi-root dedupe<br/>(upstream PR #11814)| C[restored AIConversation]
     C --> D[RestoredAgentConversations]
     C --> E[initialize_historical_conversations]
     E -->|orchestration children| F[(conversations_by_id)]
@@ -115,21 +109,21 @@ flowchart TD
     O -.tree-aware.- A
 ```
 
-The optimistic-stub filter is upstream of every other change: it determines which rows survive `is_restorable` and therefore which rows enter `RestoredAgentConversations` and `initialize_historical_conversations`. The eager-child hydration is what surfaces children into `conversations_by_id` early enough for the pill bar / name resolver to see them and what creates the resolver-collision case that motivates direct `AmbientAgentTask` inspection in the hidden-pane hydration path. The tree-aware prune feeds back into the next boot: if the prune splits trees, the read path's invariants are violated regardless of how well the in-memory side is wired up.
+Upstream PR #11814 sits upstream of every other change: it determines which rows survive restore and therefore which rows enter `RestoredAgentConversations` and `initialize_historical_conversations`. The eager-child hydration is what surfaces children into `conversations_by_id` early enough for the pill bar / name resolver to see them and what creates the resolver-collision case that motivates direct `AmbientAgentTask` inspection in the hidden-pane hydration path. The tree-aware prune feeds back into the next boot: if the prune splits trees, the read path's invariants are violated regardless of how well the in-memory side is wired up.
 
 ## Testing and validation
 
 Unit coverage lives alongside each module:
 
-- Optimistic-stub filter (`crates/persistence/src/model.rs (1425-1721)`, seven cases): `restorable_with_single_root_task`, `restorable_with_root_plus_child`, `restorable_after_filtering_optimistic_stub`, `restorable_after_filtering_optimistic_stub_with_empty_parent_id`, `non_restorable_with_two_message_carrying_root_tasks`, `non_restorable_with_three_root_tasks`, `no_stub_match_when_both_root_tasks_are_empty`.
 - Tree-aware eviction (`app/src/persistence/agent.rs (348-566)`, eight cases): `prune_is_no_op_when_under_limit`, `keeps_fresh_tree_atomically_and_evicts_older_singletons`, `child_kept_drags_parent_along`, `parent_kept_drags_child_along`, `orphan_with_missing_parent_is_its_own_tree`, `single_tree_larger_than_limit_is_kept_in_full`, `parse_failure_row_is_treated_as_root_and_can_be_referenced_by_others`, `eviction_is_deterministic`.
+- Stub / multi-root restore coverage now lives in upstream PR #11814's tests: `is_restorable_*` in `crates/persistence/src/model.rs` (five cases covering single-root, multi-root with one real root, multi-root with multiple real roots, multi-root with no real root, empty/single-task) and the dedupe loop in `test_new_restored_prefers_parentless_task_with_messages_over_empty_stub` (`app/src/ai/agent/conversation_tests.rs`).
 - Eager orchestration-child hydration (`app/src/ai/blocklist/history_model_tests.rs`): `test_initialize_historical_conversations_eagerly_hydrates_orchestration_children` (line 332), plus `test_initialize_historical_conversations_resolves_parent_agent_id_children_via_seeded_run_ids` (line 258) covers the parent-resolution side path. The eager-hydration test asserts the child is in `conversations_by_id`, that the parent is NOT loaded eagerly, that child run-ids resolve via `conversation_id_for_agent_id`, and that child metadata is excluded from navigation.
 - Remote-child hydration dispatch (`app/src/pane_group/mod_tests.rs`): `decide_remote_child_hydration_action` covered with five cases — `LiveAttach` for `Attachable`, `LoadTranscript` for `Inactive` + token (with `task_is_terminal: true`), `LoadTranscript` for `ActiveUnattachable` + token (with `task_is_terminal: false`), `Fallback` for `Inactive` + no token, and `decide_remote_child_hydration_empty_token_falls_back` for the empty/whitespace filter added during review.
 - LoadTranscript → merge integration coverage (`app/src/ai/blocklist/history_model_tests.rs`): `merge_cloud_tasks_into_existing_conversation_preserves_placeholder_identity`. Builds a placeholder remote-child conversation with `parent_conversation_id` + `agent_name` + `run_id` + `is_remote_child`, drives `merge_cloud_tasks_into_existing_conversation` with a cloud transcript carrying a non-empty title and one user-query exchange, and asserts the merged conversation retains the placeholder's local id and orchestration linkage while surfacing the cloud transcript content. A second assertion exercises the precondition guard by calling merge against an unknown placeholder and asserting `Err`.
 
 Manual validation matrix (covers each change end-to-end on a restart):
 
-1. Local-local restart: pill bar renders with the correct agent names (no "Unknown agent" fallback); the optimistic-stub rows are correctly dropped at read time; conversation list UI is intact.
+1. Local-local restart: pill bar renders with the correct agent names (no "Unknown agent" fallback); the multi-root stub shape is silently healed by upstream restore dedupe; conversation list UI is intact.
 2. Tree-aware prune: orchestration trees stay together on disk across the cap.
 3. Local-remote restart: the cloud transcript merges onto the local placeholder; the "New agent conversation" placeholder bug is gone; live runs continue to attach.
 4. Baseline single-conversation restore: no regressions.
@@ -138,13 +132,11 @@ Validation commands: `cargo fmt -p warp -p persistence`, `cargo clippy -p warp -
 
 Deferred coverage:
 
-- The three-or-more-task optimistic-stub pattern (kept non-restorable by design; revisit if telemetry shows the shape).
 - A property test that asserts `select_conversations_to_evict` never produces an evict-list that splits an orchestration tree (currently inferred from the case tests).
 - An end-to-end PaneGroup restart test that exercises `hydrate_remote_child_transcript_in_place` against a mock cloud fetch (the existing test covers the smaller seam directly).
 
 ## Risks and mitigations
 
-- **Three-or-more-task optimistic-stub case.** `optimistic_stub_task_id` only matches the exact two-task / one-empty pattern. A pathological shape with two stubs and one real root would still be marked non-restorable. Mitigation: keep `is_restorable` strict by default; widen the filter only if real data demands it. Tests `non_restorable_with_three_root_tasks` and `no_stub_match_when_both_root_tasks_are_empty` pin the current contract.
 - **Unbounded freshest tree.** `select_conversations_to_evict` always retains the freshest tree intact, so a single very large orchestration session can push the on-disk row count above 200. Mitigation: the next session's prune evicts everything older, so the steady-state row count stays within the cap unless every session spawns a hundred-plus children. If this becomes a real problem, the freshest-tree exception can be replaced with an "evict the oldest tree members first" within-tree policy, but that re-introduces the half-tree failure mode and is deliberately deferred.
 - **Soft drift between `MAX_PERSISTED_CONVERSATION_COUNT` and `MAX_HISTORICAL_CONVERSATIONS`.** The two constants live in different files and crates. They happen to agree today, and the read-side cap's comment documents the invariant: the read cap is moot only as long as the disk cap is `≤` it. Mitigation: the comment, the symmetry of the test coverage, and a future single-const refactor (called out under Follow-ups).
 - **Eager-hydration sort-window asymmetry.** `initialize_historical_conversations` walks rows sorted freshest-first by `last_modified_at`, capped at `MAX_HISTORICAL_CONVERSATIONS`. In principle a fresh child could land inside the window without its (stale) parent. Mitigation: tree-aware disk eviction keeps parents fresh enough that this case hasn't been observed; the parent-resolution path tolerates parents that aren't in `conversations_by_id` by falling back to `children_by_parent`.
@@ -152,7 +144,6 @@ Deferred coverage:
 
 ## Follow-ups
 
-- Investigate the optimistic stub task lifecycle on the write side. If the local-no-harness upgrade can reliably delete the stub row from disk at upgrade time, the read-time filter becomes unnecessary and can be removed without changing behaviour. The current read-time filter is the conservative choice; the write-time delete is the right long-term shape.
 - Share the retention constant between `crates/persistence` and `warp` once the read cap might plausibly be raised independently (for example, if a future history view wants to surface more than the disk cap can hold). Today the read cap is moot, so a separate constant is acceptable; tomorrow it may need to be a single source of truth.
 - Add a property test that asserts `select_conversations_to_evict` never returns an evict-list that splits an orchestration tree across the kept/evicted boundary. The existing case tests cover the substantive shapes; a property test would shore them up under generated inputs.
 - Tighten `decide_remote_child_hydration_action` against `AmbientAgentLiveSessionState` variants added in future schema bumps. The function currently matches `Attachable` and `Inactive` explicitly; new variants fall into the `LoadTranscript` / `Fallback` decision based on whether the task has a server token. A `cfg`-gated exhaustiveness assertion would catch a new variant at compile time.
