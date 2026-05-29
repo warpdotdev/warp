@@ -51,7 +51,8 @@ use crate::ai::blocklist::agent_view::{
     agent_view_bg_color, AgentViewController, AgentViewControllerEvent,
 };
 use crate::ai::blocklist::orchestration_topology::{
-    aggregated_orchestrator_status, descendant_conversation_ids_in_spawn_order,
+    aggregated_orchestrator_status, descendant_conversation_ids_in_pill_order,
+    descendant_conversation_ids_in_spawn_order,
 };
 use crate::ai::blocklist::telemetry::{
     BlocklistOrchestrationTelemetryEvent, PillBarActionKind, PillBarInteractionEvent,
@@ -638,7 +639,7 @@ impl OrchestrationPillBar {
         // Walk the full descendant tree in pre-order, preserving each
         // parent's child registration order so nested branches stay
         // contiguous and grandchildren remain visible in the row.
-        let children: Vec<_> = descendant_conversation_ids_in_spawn_order(history, orchestrator_id)
+        let children: Vec<_> = descendant_conversation_ids_in_pill_order(history, orchestrator_id)
             .into_iter()
             .filter_map(|id| history.conversation(&id))
             .collect();

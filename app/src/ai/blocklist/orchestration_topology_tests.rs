@@ -77,6 +77,85 @@ fn descendant_conversation_ids_in_spawn_order_flattens_nested_children_preorder(
 }
 
 #[test]
+fn adjacent_orchestration_child_navigation_uses_pinned_first_order() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let orchestrator_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let child_a = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "child-a".to_string(),
+                orchestrator_id,
+                None,
+                ctx,
+            )
+        });
+        let child_b = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "child-b".to_string(),
+                orchestrator_id,
+                None,
+                ctx,
+            )
+        });
+        let child_c = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "child-c".to_string(),
+                orchestrator_id,
+                None,
+                ctx,
+            )
+        });
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.set_conversation_pinned(child_b, true, ctx);
+            history_model.set_conversation_pinned(child_c, true, ctx);
+        });
+
+        history_model.read(&app, |history_model, _| {
+            assert_eq!(
+                adjacent_orchestration_child_conversation_id(
+                    history_model,
+                    orchestrator_id,
+                    OrchestrationNavigationDirection::Next,
+                ),
+                Some(child_b),
+            );
+            assert_eq!(
+                adjacent_orchestration_child_conversation_id(
+                    history_model,
+                    child_b,
+                    OrchestrationNavigationDirection::Next,
+                ),
+                Some(child_c),
+            );
+            assert_eq!(
+                adjacent_orchestration_child_conversation_id(
+                    history_model,
+                    child_c,
+                    OrchestrationNavigationDirection::Next,
+                ),
+                Some(child_a),
+            );
+            assert_eq!(
+                adjacent_orchestration_child_conversation_id(
+                    history_model,
+                    child_a,
+                    OrchestrationNavigationDirection::Next,
+                ),
+                Some(orchestrator_id),
+            );
+        });
+    });
+}
+
+#[test]
 fn descendant_conversation_ids_in_spawn_order_returns_empty_without_children() {
     App::test((), |mut app| async move {
         initialize_history_persistence_for_tests(&mut app);
