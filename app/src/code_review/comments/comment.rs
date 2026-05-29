@@ -50,10 +50,13 @@ impl LineDiffContent {
     /// (which removes all leading occurrences) so that content characters are preserved.
     pub(crate) fn original_text(&self) -> String {
         let s = self.content.trim_end_matches('\n');
-        s.strip_prefix('+')
-            .or_else(|| s.strip_prefix('-'))
-            .unwrap_or(s)
-            .to_string()
+        if self.lines_added > LineCount::from(0) {
+            s.strip_prefix('+').unwrap_or(s).to_string()
+        } else if self.lines_removed > LineCount::from(0) {
+            s.strip_prefix('-').unwrap_or(s).to_string()
+        } else {
+            s.to_string()
+        }
     }
 
     pub(crate) fn from_content(diff_line: &str) -> Self {
