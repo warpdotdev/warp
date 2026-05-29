@@ -2,6 +2,7 @@ use settings::Setting as _;
 use warpui::{App, SingletonEntity as _};
 
 use super::SlashCommandEntryState;
+use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::QueuedQueryId;
 use crate::report_if_error;
 use crate::search::slash_command_menu::static_commands::commands;
@@ -463,6 +464,7 @@ fn test_submit_queued_prompt_routes_plain_text_to_conversation() {
         input.update(&mut app, |input, ctx| {
             input.submit_queued_prompt(
                 "fix the tests".to_string(),
+                AIConversationId::new(),
                 QueuedQueryId::new_for_test(),
                 ctx,
             );
@@ -497,7 +499,12 @@ fn test_submit_queued_prompt_detects_slash_command() {
             // submit_queued_prompt should detect the slash command and route through
             // execute_slash_command. This should not panic.
             input.update(&mut app, |input, ctx| {
-                input.submit_queued_prompt(command_text, QueuedQueryId::new_for_test(), ctx);
+                input.submit_queued_prompt(
+                    command_text,
+                    AIConversationId::new(),
+                    QueuedQueryId::new_for_test(),
+                    ctx,
+                );
             });
         }
     });
