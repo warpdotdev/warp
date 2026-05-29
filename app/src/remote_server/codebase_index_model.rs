@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
 use super::manager::{
@@ -87,6 +87,7 @@ pub struct RemoteCodebaseIndexModel {
     statuses: HashMap<RemotePath, RemoteCodebaseIndexStatus>,
     active_repos_by_host: HashMap<HostId, RemotePath>,
     host_labels: HashMap<HostId, String>,
+    connected_hosts: HashSet<HostId>,
     // Local settings-change auto-indexing replays all active terminal working
     // directories. Remote sessions on the same host can be in different git
     // repos, so track daemon-resolved git roots per session and let the shared
@@ -264,10 +265,9 @@ impl RemoteCodebaseIndexModel {
     }
 
     pub fn entries_for_settings(&self) -> Vec<RemoteCodebaseIndexSettingsEntry> {
-        let mut entries = self
-            .statuses
-            .iter()
-            .map(|(remote_path, status)| RemoteCodebaseIndexSettingsEntry {
+        let mut entries_by_host_and_path = HashMap::new();
+        for (remote_path, status) in &self.statuses {
+            let entry = RemoteCodebaseIndexSettingsEntry {
                 remote_path: remote_path.clone(),
                 status: status.clone(),
                 host_label: self
@@ -275,14 +275,50 @@ impl RemoteCodebaseIndexModel {
                     .get(&remote_path.host_id)
                     .cloned()
                     .unwrap_or_else(|| remote_path.host_id.to_string()),
-            })
-            .collect::<Vec<_>>();
+            };
+            let key = (
+                entry.host_label.clone(),
+                entry.remote_path.path.as_str().to_string(),
+            );
+            match entries_by_host_and_path.get_mut(&key) {
+                Some(existing) if self.prefer_settings_entry(&entry, existing) => {
+                    *existing = entry;
+                }
+                Some(_) => {}
+                None => {
+                    entries_by_host_and_path.insert(key, entry);
+                }
+            }
+        }
+        let mut entries = entries_by_host_and_path.into_values().collect::<Vec<_>>();
         entries.sort_by(|a, b| {
             a.host_label
                 .cmp(&b.host_label)
                 .then_with(|| a.remote_path.path.as_str().cmp(b.remote_path.path.as_str()))
         });
         entries
+    }
+
+    fn prefer_settings_entry(
+        &self,
+        candidate: &RemoteCodebaseIndexSettingsEntry,
+        existing: &RemoteCodebaseIndexSettingsEntry,
+    ) -> bool {
+        match (
+            self.connected_hosts
+                .contains(&candidate.remote_path.host_id),
+            self.connected_hosts.contains(&existing.remote_path.host_id),
+        ) {
+            (true, false) => return true,
+            (false, true) => return false,
+            (true, true) | (false, false) => {}
+        }
+
+        settings_status_priority(candidate.status.state)
+            > settings_status_priority(existing.status.state)
+            || (candidate.status.state == existing.status.state
+                && candidate.status.last_updated_epoch_millis
+                    > existing.status.last_updated_epoch_millis)
     }
     fn handle_remote_server_manager_event(
         &mut self,
@@ -359,7 +395,9 @@ impl RemoteCodebaseIndexModel {
                 }
             }
             RemoteServerManagerEvent::HostDisconnected { host_id } => {
-                if self.mark_host_unavailable(host_id) {
+                let was_connected = self.connected_hosts.remove(host_id);
+                let status_changed = self.mark_host_unavailable(host_id);
+                if was_connected || status_changed {
                     ctx.emit(RemoteCodebaseIndexModelEvent::SettingsEntriesChanged);
                 }
             }
@@ -373,7 +411,9 @@ impl RemoteCodebaseIndexModel {
                 attempt: _,
                 client: _,
             } => {
-                if self.record_host_label(host_id, ctx) {
+                let became_connected = self.connected_hosts.insert(host_id.clone());
+                let label_changed = self.record_host_label(host_id, ctx);
+                if became_connected || label_changed {
                     ctx.emit(RemoteCodebaseIndexModelEvent::SettingsEntriesChanged);
                 }
             }
@@ -809,6 +849,18 @@ impl Entity for RemoteCodebaseIndexModel {
 }
 
 impl SingletonEntity for RemoteCodebaseIndexModel {}
+fn settings_status_priority(state: RemoteCodebaseIndexState) -> u8 {
+    match state {
+        RemoteCodebaseIndexState::Ready => 7,
+        RemoteCodebaseIndexState::Stale => 6,
+        RemoteCodebaseIndexState::Indexing => 5,
+        RemoteCodebaseIndexState::Queued => 4,
+        RemoteCodebaseIndexState::Failed => 3,
+        RemoteCodebaseIndexState::NotEnabled => 2,
+        RemoteCodebaseIndexState::Disabled => 1,
+        RemoteCodebaseIndexState::Unavailable => 0,
+    }
+}
 
 fn search_availability_for_status(
     status: &RemoteCodebaseIndexStatus,

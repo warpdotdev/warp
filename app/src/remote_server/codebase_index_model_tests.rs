@@ -148,6 +148,92 @@ fn entries_for_settings_fall_back_to_host_id_without_label() {
 }
 
 #[test]
+fn entries_for_settings_dedupe_same_ssh_host_and_path() {
+    let mut model = RemoteCodebaseIndexModel::default();
+    let old_host = host_with_name("old-daemon");
+    let new_host = host_with_name("new-daemon");
+    model
+        .host_labels
+        .insert(old_host.clone(), "moira@remote-host".to_string());
+    model
+        .host_labels
+        .insert(new_host.clone(), "moira@remote-host".to_string());
+    model.apply_status_update(
+        remote_path_for_host(&old_host, "/repo"),
+        ready_status("/repo"),
+    );
+    model.apply_status_update(
+        remote_path_for_host(&new_host, "/repo"),
+        ready_status("/repo"),
+    );
+
+    let entries = model.entries_for_settings();
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].host_label, "moira@remote-host");
+    assert_eq!(entries[0].remote_path.path.as_str(), "/repo");
+}
+
+#[test]
+fn entries_for_settings_do_not_dedupe_different_ssh_hosts_or_paths() {
+    let mut model = RemoteCodebaseIndexModel::default();
+    let first_host = host_with_name("first-daemon");
+    let second_host = host_with_name("second-daemon");
+    model
+        .host_labels
+        .insert(first_host.clone(), "moira@first-host".to_string());
+    model
+        .host_labels
+        .insert(second_host.clone(), "moira@second-host".to_string());
+    model.apply_status_update(
+        remote_path_for_host(&first_host, "/repo"),
+        ready_status("/repo"),
+    );
+    model.apply_status_update(
+        remote_path_for_host(&second_host, "/repo"),
+        ready_status("/repo"),
+    );
+    model.apply_status_update(
+        remote_path_for_host(&first_host, "/other-repo"),
+        ready_status("/other-repo"),
+    );
+
+    let entries = model.entries_for_settings();
+
+    assert_eq!(entries.len(), 3);
+}
+
+#[test]
+fn entries_for_settings_prefer_connected_daemon_for_deduped_row() {
+    let mut model = RemoteCodebaseIndexModel::default();
+    let disconnected_host = host_with_name("disconnected-daemon");
+    let connected_host = host_with_name("connected-daemon");
+    for host in [&disconnected_host, &connected_host] {
+        model
+            .host_labels
+            .insert(host.clone(), "moira@remote-host".to_string());
+    }
+    model.apply_status_update(
+        remote_path_for_host(&disconnected_host, "/repo"),
+        ready_status("/repo"),
+    );
+    model.apply_status_update(
+        remote_path_for_host(&connected_host, "/repo"),
+        status_with_state("/repo", RemoteCodebaseIndexState::Unavailable),
+    );
+    model.connected_hosts.insert(connected_host.clone());
+
+    let entries = model.entries_for_settings();
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].remote_path.host_id, connected_host);
+    assert_eq!(
+        entries[0].status.state,
+        RemoteCodebaseIndexState::Unavailable
+    );
+}
+
+#[test]
 fn host_disconnect_marks_settings_entries_unavailable_without_removing_them() {
     let mut model = RemoteCodebaseIndexModel::default();
     let host = host();
