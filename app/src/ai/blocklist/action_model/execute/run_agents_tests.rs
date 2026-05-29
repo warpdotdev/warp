@@ -13,8 +13,8 @@ use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::task::TaskId;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
-use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::RunAgentsPermission;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -154,6 +154,24 @@ fn persist_default_auth_secret(app: &mut App, harness_config_name: &str, secret_
     });
 }
 
+fn persist_inherit_auth_secret(app: &mut App, harness_config_name: &str) {
+    CloudAgentSettings::handle(app).update(app, |settings, ctx| {
+        let mut secrets = settings.last_selected_auth_secret.value().clone();
+        secrets.remove(harness_config_name);
+        settings
+            .last_selected_auth_secret
+            .set_value(secrets, ctx)
+            .unwrap();
+
+        let mut inherit = settings.inherit_auth_secret_harnesses.value().clone();
+        inherit.insert(harness_config_name.to_string(), true);
+        settings
+            .inherit_auth_secret_harnesses
+            .set_value(inherit, ctx)
+            .unwrap();
+    });
+}
+
 #[test]
 fn should_autoexecute_when_plan_has_approved_orchestration_config() {
     App::test((), |mut app| async move {
@@ -274,7 +292,7 @@ fn execute_denies_never_allow_profile_setting() {
 }
 
 #[test]
-fn autonomous_mode_autoexecutes_and_does_not_deny_missing_api_key() {
+fn autonomous_mode_autoexecutes_but_denies_missing_remote_harness_api_key() {
     App::test((), |mut app| async move {
         let state = initialize_run_agents_test(&mut app, ExecutionMode::Sdk);
         set_run_agents_permission(&mut app, RunAgentsPermission::NeverAllow);
@@ -302,7 +320,16 @@ fn autonomous_mode_autoexecutes_and_does_not_deny_missing_api_key() {
                 )
                 .into()
         });
-        assert!(matches!(execution, AnyActionExecution::Async { .. }));
+        let AnyActionExecution::Sync(AIAgentActionResultType::RunAgents(RunAgentsResult::Denied {
+            reason,
+        })) = execution
+        else {
+            panic!("expected synchronous run_agents denial");
+        };
+        assert_eq!(
+            reason,
+            "Cloud child agents using the Codex harness require an API-key secret before they can run. Select a managed auth secret, choose Inherit key from environment for a configured environment, or use the Warp Agent harness."
+        );
     });
 }
 
@@ -359,7 +386,7 @@ fn execute_denies_remote_non_warp_harness_without_default_auth_secret() {
         };
         assert_eq!(
             reason,
-            "Cloud child agents using this harness require an API key before they can run."
+            "Cloud child agents using the Codex harness require an API-key secret before they can run. Select a managed auth secret, choose Inherit key from environment for a configured environment, or use the Warp Agent harness."
         );
     });
 }
@@ -391,6 +418,28 @@ fn should_autoexecute_remote_non_warp_harness_with_default_auth_secret() {
         let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
         set_run_agents_permission(&mut app, RunAgentsPermission::AlwaysAllow);
         persist_default_auth_secret(&mut app, "codex", "default-openai-key");
+        let action = remote_run_agents_action("codex");
+
+        let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {
+            executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: state.conversation_id,
+                },
+                ctx,
+            )
+        });
+
+        assert!(should_autoexecute);
+    });
+}
+
+#[test]
+fn should_autoexecute_remote_non_warp_harness_with_explicit_inherit_auth_secret() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        set_run_agents_permission(&mut app, RunAgentsPermission::AlwaysAllow);
+        persist_inherit_auth_secret(&mut app, "codex");
         let action = remote_run_agents_action("codex");
 
         let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {

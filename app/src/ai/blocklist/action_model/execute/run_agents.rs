@@ -12,8 +12,8 @@ use ai::agent::action_result::{
 };
 use ai::agent::orchestration_config::OrchestrationConfig;
 use ai::skills::SkillReference;
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use settings::Setting;
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
@@ -366,29 +366,32 @@ fn prepare_request_for_execution(
     parent_conversation_id: AIConversationId,
     terminal_view_id: EntityId,
     ctx: &ModelContext<RunAgentsExecutor>,
-) -> Option<&'static str> {
+) -> Option<String> {
     let status = resolve_request_from_approved_config(request, parent_conversation_id, ctx);
     populate_default_auth_secret_for_execution(request, ctx);
 
     if AppExecutionMode::as_ref(ctx).is_autonomous() {
+        if !can_execute_with_auth_secret(request, ctx) {
+            return Some(missing_auth_secret_message(request));
+        }
         return None;
     }
 
     if status.is_some_and(|status| status.is_disapproved()) {
-        return Some("Orchestration config was disapproved");
+        return Some("Orchestration config was disapproved".to_string());
     }
 
     if BlocklistAIPermissions::as_ref(ctx)
         .get_run_agents_setting(ctx, Some(terminal_view_id))
         .is_never_allow()
     {
-        return Some("Running child agents is disabled by the active execution profile.");
+        return Some(
+            "Running child agents is disabled by the active execution profile.".to_string(),
+        );
     }
 
     if !can_execute_with_auth_secret(request, ctx) {
-        return Some(
-            "Cloud child agents using this harness require an API key before they can run.",
-        );
+        return Some(missing_auth_secret_message(request));
     }
 
     None
@@ -418,7 +421,28 @@ fn can_execute_with_auth_secret(
     {
         return true;
     }
+    if inherit_auth_secret_chosen_for_harness(&request.harness_type, ctx) {
+        return true;
+    }
     default_auth_secret_name_for_harness(&request.harness_type, ctx).is_some()
+}
+
+fn missing_auth_secret_message(request: &RunAgentsRequest) -> String {
+    let harness_name = Harness::parse_orchestration_harness(&request.harness_type)
+        .map(|harness| harness.display_name().to_string())
+        .unwrap_or_else(|| {
+            let trimmed = request.harness_type.trim();
+            if trimmed.is_empty() {
+                "this".to_string()
+            } else {
+                trimmed.to_string()
+            }
+        });
+    format!(
+        "Cloud child agents using the {harness_name} harness require an API-key secret before \
+         they can run. Select a managed auth secret, choose Inherit key from environment for a \
+         configured environment, or use the Warp Agent harness."
+    )
 }
 
 fn default_auth_secret_name_for_harness(
@@ -435,6 +459,24 @@ fn default_auth_secret_name_for_harness(
         .get(harness.config_name())
         .cloned()
         .filter(|name| !name.trim().is_empty())
+}
+
+fn inherit_auth_secret_chosen_for_harness(
+    harness_type: &str,
+    ctx: &ModelContext<RunAgentsExecutor>,
+) -> bool {
+    let Some(harness) = Harness::parse_orchestration_harness(harness_type) else {
+        return false;
+    };
+    if harness == Harness::Oz {
+        return false;
+    }
+    CloudAgentSettings::as_ref(ctx)
+        .inherit_auth_secret_harnesses
+        .value()
+        .get(harness.config_name())
+        .copied()
+        .unwrap_or(false)
 }
 
 fn populate_default_auth_secret_for_execution(
