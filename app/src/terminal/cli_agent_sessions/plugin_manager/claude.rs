@@ -88,6 +88,13 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
         }
     }
 
+    fn has_local_marketplace_override(&self) -> bool {
+        let Ok(claude_dir) = claude_home_dir() else {
+            return false;
+        };
+        claude_code_marketplace_has_local_override(&claude_dir)
+    }
+
     /// Runs `claude plugin` CLI commands via the session shell.
     async fn install(&self) -> Result<(), PluginInstallError> {
         let mut log = String::new();
@@ -317,6 +324,45 @@ fn installed_plugin_version(claude_dir: &Path, plugin_key: &str) -> Option<Strin
         .get("version")?
         .as_str()
         .map(|s| s.to_owned())
+}
+
+fn claude_code_marketplace_has_local_override(claude_dir: &Path) -> bool {
+    let settings_path = claude_dir.join("settings.json");
+    let Ok(contents) = fs::read_to_string(settings_path) else {
+        return false;
+    };
+    let Ok(settings) = serde_json::from_str::<Value>(&contents) else {
+        return false;
+    };
+
+    settings
+        .get("extraKnownMarketplaces")
+        .and_then(|marketplaces| marketplaces.get(MARKETPLACE_NAME))
+        .map(marketplace_entry_has_local_path)
+        .unwrap_or(false)
+}
+
+fn marketplace_entry_has_local_path(entry: &Value) -> bool {
+    let Some(source) = entry.get("source") else {
+        return false;
+    };
+    match source {
+        Value::Object(source) => {
+            let source_kind = source.get("source").and_then(Value::as_str);
+            let path = source.get("path").and_then(Value::as_str);
+            source_kind == Some("directory") && path.map(is_local_marketplace_path).unwrap_or(false)
+        }
+        Value::String(source) => is_local_marketplace_path(source),
+        _ => false,
+    }
+}
+
+fn is_local_marketplace_path(source: &str) -> bool {
+    source.starts_with('/')
+        || source.starts_with("~/")
+        || source.starts_with("./")
+        || source.starts_with("../")
+        || source.starts_with("file://")
 }
 
 /// Checks `CLAUDE_HOME` env var first, falls back to `~/.claude`.

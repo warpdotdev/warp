@@ -170,6 +170,14 @@ pub(crate) trait CliAgentPluginManager: Send + Sync {
         false
     }
 
+    /// Whether the agent's plugin marketplace is currently overridden to a
+    /// local filesystem path. This is used by local test flows to avoid
+    /// clobbering a developer's marketplace override while still preserving
+    /// normal install/update behavior in staging and production.
+    fn has_local_marketplace_override(&self) -> bool {
+        false
+    }
+
     /// Install the Warp notification plugin.
     /// Default returns an error — only agents with `can_auto_install() == true` should override.
     async fn install(&self) -> Result<(), PluginInstallError> {

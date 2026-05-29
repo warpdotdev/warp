@@ -1,8 +1,9 @@
 use std::fs;
 
 use super::{
-    check_installed, check_platform_plugin_installed, installed_platform_plugin_version,
-    installed_version, ClaudeCodePluginManager, CliAgentPluginManager,
+    check_installed, check_platform_plugin_installed, claude_code_marketplace_has_local_override,
+    installed_platform_plugin_version, installed_version, ClaudeCodePluginManager,
+    CliAgentPluginManager,
 };
 
 #[test]
@@ -23,6 +24,74 @@ fn installed_when_plugin_present() {
     .unwrap();
 
     assert!(check_installed(dir.path()));
+}
+
+#[test]
+fn local_marketplace_override_detects_directory_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = serde_json::json!({
+        "extraKnownMarketplaces": {
+            "claude-code-warp": {
+                "source": {
+                    "path": "/Users/example/Developer/claude-code-warp-internal",
+                    "source": "directory"
+                }
+            }
+        }
+    });
+    fs::write(
+        dir.path().join("settings.json"),
+        serde_json::to_string(&settings).unwrap(),
+    )
+    .unwrap();
+
+    assert!(claude_code_marketplace_has_local_override(dir.path()));
+}
+
+#[test]
+fn local_marketplace_override_ignores_repo_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = serde_json::json!({
+        "extraKnownMarketplaces": {
+            "claude-code-warp": {
+                "source": "warpdotdev/claude-code-warp"
+            }
+        }
+    });
+    fs::write(
+        dir.path().join("settings.json"),
+        serde_json::to_string(&settings).unwrap(),
+    )
+    .unwrap();
+
+    assert!(!claude_code_marketplace_has_local_override(dir.path()));
+}
+
+#[test]
+#[serial_test::serial]
+fn local_marketplace_override_via_trait_uses_claude_home() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = serde_json::json!({
+        "extraKnownMarketplaces": {
+            "claude-code-warp": {
+                "source": {
+                    "path": "../claude-code-warp-internal",
+                    "source": "directory"
+                }
+            }
+        }
+    });
+    fs::write(
+        dir.path().join("settings.json"),
+        serde_json::to_string(&settings).unwrap(),
+    )
+    .unwrap();
+
+    std::env::set_var("CLAUDE_HOME", dir.path());
+    let result = ClaudeCodePluginManager::new(None, None, None).has_local_marketplace_override();
+    std::env::remove_var("CLAUDE_HOME");
+
+    assert!(result);
 }
 
 #[test]

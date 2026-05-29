@@ -21,6 +21,7 @@ use crate::ai::ambient_agents::{AgentConfigSnapshot, AmbientAgentTaskId};
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
 use crate::server::server_api::ai::AIClient;
 use crate::terminal::cli_agent_sessions::plugin_manager::plugin_manager_for;
+use crate::terminal::cli_agent_sessions::plugin_manager::CliAgentPluginManager;
 use crate::terminal::shell::ShellType;
 
 #[derive(Clone)]
@@ -29,6 +30,38 @@ pub(super) struct PreparedLocalHarnessLaunch {
     pub env_vars: HashMap<OsString, OsString>,
     pub run_id: String,
     pub task_id: AmbientAgentTaskId,
+}
+
+async fn ensure_local_claude_child_plugins(manager: &dyn CliAgentPluginManager) {
+    // Most environments should follow the standard Claude plugin setup path so
+    // hidden local children retain the same notification support as regular
+    // Claude sessions. The exception is local marketplace override testing:
+    // installing/updating the notification plugin re-adds the public
+    // claude-code-warp marketplace, which clobbers a developer's local
+    // claude-code-warp-internal override used for oz-harness-support testing.
+    if !manager.has_local_marketplace_override() {
+        let plugin_result = if manager.needs_update() {
+            manager.update().await
+        } else if !manager.is_installed() {
+            manager.install().await
+        } else {
+            Ok(())
+        };
+        if let Err(error) = plugin_result {
+            log::warn!("Claude notification plugin setup failed for child harness: {error}");
+        }
+    }
+
+    let platform_plugin_result = if manager.platform_plugin_needs_update() {
+        manager.update_platform_plugin().await
+    } else if !manager.is_platform_plugin_installed() {
+        manager.install_platform_plugin().await
+    } else {
+        Ok(())
+    };
+    if let Err(error) = platform_plugin_result {
+        log::warn!("Claude platform plugin setup failed for child harness: {error}");
+    }
 }
 
 pub(super) fn normalize_local_child_harness(harness_type: &str) -> Option<Harness> {
@@ -177,24 +210,7 @@ pub(super) async fn prepare_local_harness_child_launch(
             prepare_claude_environment_config(&working_dir, &HashMap::new())
                 .map_err(|error| error.to_string())?;
             if let Some(manager) = plugin_manager_for(third_party_harness.cli_agent()) {
-                // Hidden local child panes do not need Claude Code's regular
-                // Warp notification plugin. Avoid installing/updating it here:
-                // that plugin lives in the public claude-code-warp marketplace,
-                // while the Oz platform plugin may be under a local/internal
-                // marketplace during development.
-                if manager.platform_plugin_needs_update() {
-                    if let Err(error) = manager.update_platform_plugin().await {
-                        log::warn!(
-                            "Claude platform plugin update failed for child harness: {error}"
-                        );
-                    }
-                } else if !manager.is_platform_plugin_installed() {
-                    if let Err(error) = manager.install_platform_plugin().await {
-                        log::warn!(
-                            "Claude platform plugin installation failed for child harness: {error}"
-                        );
-                    }
-                }
+                ensure_local_claude_child_plugins(manager.as_ref()).await;
             }
 
             build_local_claude_child_command(&local_claude_child_prompt(&prompt))
