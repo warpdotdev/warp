@@ -894,19 +894,37 @@ the keymap. It uses bracketed paste:
     # present, otherwise calls the original behavior via
     #   zle _warp_orig_bracketed_paste
     ```
-    Plugins like `bracketed-paste-magic` compose by being
-    saved-and-re-installed in the same chain at their own
-    bootstrap time, the standard ZLE composition pattern.
+    The bootstrap loads after user zshrc by design (§1), so
+    Warp's wrapper sits outermost in any pre-existing widget
+    chain. Plugin-installed wrappers (`bracketed-paste-magic`,
+    etc.) run as part of `_warp_orig_bracketed_paste` when
+    Warp delegates to the saved original.
   - **bash.** readline has no separate paste-stage filter, so
     the bootstrap binds the bracketed-paste start sentinel to
-    a `bind -x` handler that reads until the end sentinel:
+    a `bind -x` handler that reads byte-by-byte until the
+    5-byte end sentinel arrives:
     ```sh
     _warp_bracketed_paste() {
-        # Read stdin via `read -d $'\e' -r` in a loop until
-        # the matching `[201~` arrives; assemble the content;
-        # strip the Warp sentinel if present; assign to
-        # READLINE_LINE.
-        ...
+        # Accumulate bytes until the matching `\e[201~`
+        # terminator arrives. `read -N 1` reads one byte at a
+        # time without interpreting delimiters; the 5-byte
+        # terminator is matched against a sliding window of
+        # the last 5 accumulated bytes. `read -d` is *not*
+        # used: it takes a single-character delimiter and
+        # would terminate at the first `\e` inside the
+        # pasted content.
+        local content='' byte
+        while IFS= read -r -N 1 byte; do
+            content+=$byte
+            [[ ${content: -5} == $'\e[201~' ]] && break
+        done
+        content=${content%$'\e[201~'}
+        if [[ ${content:0:21} == "$__warp_paste_sentinel" ]]; then
+            READLINE_LINE+=${content:21}
+            _warp_emit_buffer_state
+        else
+            READLINE_LINE+=$content
+        fi
     }
     bind -x '"\e[200~": _warp_bracketed_paste'
     ```
@@ -915,23 +933,36 @@ the keymap. It uses bracketed paste:
     paste-mode sequence (PTY input is a contiguous burst
     framed by `\e[200~` / `\e[201~`), not during free typing
     where ambiguous-prefix timeouts would matter.
-  - **fish.** Bind the bracketed-paste start sentinel
-    explicitly and have the handler consume up to the end
-    sentinel via `commandline`:
+  - **fish.** Wrap fish's internal bracketed-paste path so
+    the handler runs *after* fish has accumulated the pasted
+    content (binding `\e[200~` directly would fire the
+    handler at paste-start, before any content was
+    accumulated). Recent fish exposes `__fish_paste` as the
+    accumulation entry point:
     ```fish
-    function _warp_bracketed_paste
-        # Read pasted bytes via the buffer fish has just
-        # accumulated; strip the Warp sentinel if present;
-        # set the buffer via `commandline --replace`.
-        ...
+    functions --copy __fish_paste _warp_orig_fish_paste
+    function __fish_paste
+        # The pasted content arrives as $argv[1] (fish's
+        # standard paste calling convention). Strip the Warp
+        # sentinel if present; otherwise delegate to the
+        # saved original so user pastes from the OS clipboard
+        # behave as default fish.
+        set -l content $argv[1]
+        if string match -q "$__warp_paste_sentinel*" -- $content
+            commandline --insert -- (string sub --start 22 -- $content)
+            _warp_emit_buffer_state
+        else
+            _warp_orig_fish_paste $content
+        end
     end
-    bind \e\[200\~ _warp_bracketed_paste
     ```
-    Note this replaces fish's default bracketed-paste binding;
-    the bootstrap calls fish's internal paste path
-    (`commandline -i` for the content after sentinel
-    stripping) so the user-paste behavior matches default
-    fish when no Warp sentinel is present.
+    `functions --copy` preserves the original definition
+    composably; later user code that further wraps
+    `__fish_paste` still calls Warp's wrapper, which calls
+    the saved original. The bootstrap probes for both
+    `__fish_paste` and any documented successor name a future
+    fish release introduces, binding whichever is present and
+    emitting a diagnostic when neither is available.
 
   This approach avoids an app→shell signaling primitive that
   the shells don't natively support (binding OSC prefixes via
@@ -940,15 +971,24 @@ the keymap. It uses bracketed paste:
   encoding the marker inside the paste content sidesteps that
   entirely.
 - **Bracketed-paste capability is a v1 requirement on bash.**
-  The bash bootstrap detects the setting at startup by parsing
-  `bind -v` output for `set enable-bracketed-paste on` and
-  re-detects on every `precmd` re-snapshot (the user can flip
-  the setting mid-session via `bind 'set enable-bracketed-paste
-  off'`; the same `precmd` that re-snapshots `bind -X` for
-  Category C also re-reads `bind -v` for this flag). When the
-  setting is off (user has it disabled in `~/.inputrc` or in an
-  older readline, or flips it mid-session), the bootstrap emits
-  a one-time-per-state-change diagnostic *and a user-visible
+  Warp can emit the `\e[200~` / `\e[201~` markers regardless of
+  the readline setting, but the reason we need
+  `enable-bracketed-paste on` is what happens to the bytes
+  *between* the markers: with the setting off, readline
+  dispatches each byte through the normal keymap, so a newline
+  in the pasted content fires `accept-line` mid-sync and a
+  control character fires its bound widget. The setting being
+  on switches readline into a paste-mode read that the `bind
+  -x` handler above captures contiguously. The bash bootstrap
+  detects the setting at startup by parsing `bind -v` output
+  for `set enable-bracketed-paste on` and re-detects on every
+  `precmd` re-snapshot (the user can flip the setting mid-
+  session via `bind 'set enable-bracketed-paste off'`; the
+  same `precmd` that re-snapshots `bind -X` for Category C
+  also re-reads `bind -v` for this flag). When the setting is
+  off (user has it disabled in `~/.inputrc` or in an older
+  readline, or flips it mid-session), the bootstrap emits a
+  one-time-per-state-change diagnostic *and a user-visible
   toast on the affected tab* — "Category C bindings disabled
   on this tab — bracketed-paste was turned off; re-enable with
   `bind 'set enable-bracketed-paste on'`". Warp suppresses
