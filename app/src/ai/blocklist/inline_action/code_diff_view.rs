@@ -453,6 +453,105 @@ struct PendingDiff {
     tab_handle: MouseStateHandle,
 }
 
+/// Lightweight per-file metadata for deferred (not-yet-materialized) diffs.
+/// Stored instead of creating heavy CodeEditorView/InlineDiffView instances
+/// for restored conversations in a terminal state (Accepted/Rejected/Reverted).
+#[derive(Clone)]
+#[allow(dead_code)]
+struct DeferredDiffFileInfo {
+    file_path: String,
+    file_name: String,
+    diff_type_kind: DeferredDiffTypeKind,
+    lines_added: usize,
+    lines_removed: usize,
+    tab_handle: MouseStateHandle,
+}
+
+/// Lightweight diff type classification for header/tab rendering.
+#[derive(Clone, Debug)]
+enum DeferredDiffTypeKind {
+    Create,
+    Update { _rename_to: Option<PathBuf> },
+    Delete,
+}
+
+/// Holds deferred diff data: raw FileDiffs for potential later materialization
+/// and pre-computed metadata for header rendering without creating heavy views.
+#[derive(Clone)]
+struct DeferredDiffState {
+    file_diffs: Vec<FileDiff>,
+    metadata: Vec<DeferredDiffFileInfo>,
+}
+
+impl DeferredDiffState {
+    fn from_file_diffs(diffs: &[FileDiff]) -> Self {
+        let metadata = diffs
+            .iter()
+            .map(|diff| {
+                let file_path = diff.base.file_path.clone();
+                let file_name = Path::new(&file_path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_owned();
+
+                let (lines_added, lines_removed) =
+                    compute_line_counts_from_diff_type(&diff.diff_type);
+
+                let diff_type_kind = match &diff.diff_type {
+                    DiffType::Create { .. } => DeferredDiffTypeKind::Create,
+                    DiffType::Update { rename, .. } => DeferredDiffTypeKind::Update {
+                        _rename_to: rename.clone(),
+                    },
+                    DiffType::Delete { .. } => DeferredDiffTypeKind::Delete,
+                };
+
+                DeferredDiffFileInfo {
+                    file_path,
+                    file_name,
+                    diff_type_kind,
+                    lines_added,
+                    lines_removed,
+                    tab_handle: Default::default(),
+                }
+            })
+            .collect();
+
+        Self {
+            file_diffs: diffs.to_vec(),
+            metadata,
+        }
+    }
+}
+
+/// Compute lines added/removed directly from DiffType without creating editor views.
+fn compute_line_counts_from_diff_type(diff_type: &DiffType) -> (usize, usize) {
+    match diff_type {
+        DiffType::Create { delta } => (count_lines_in_insertion(&delta.insertion), 0),
+        DiffType::Delete { delta } => {
+            let removed = delta.replacement_line_range.end - delta.replacement_line_range.start;
+            (0, removed)
+        }
+        DiffType::Update { deltas, .. } => {
+            let mut added = 0;
+            let mut removed = 0;
+            for delta in deltas {
+                added += count_lines_in_insertion(&delta.insertion);
+                removed += delta.replacement_line_range.end - delta.replacement_line_range.start;
+            }
+            (added, removed)
+        }
+    }
+}
+
+/// Count the number of lines in an insertion string.
+fn count_lines_in_insertion(insertion: &str) -> usize {
+    if insertion.is_empty() {
+        return 0;
+    }
+    insertion.lines().count()
+}
+
 #[derive(Clone)]
 pub struct CodeDiffView {
     action_id: AIAgentActionId,
@@ -493,6 +592,11 @@ pub struct CodeDiffView {
     session_platform: Option<SessionPlatform>,
     /// Whether diffs target local disk or a remote host.
     diff_session_type: DiffSessionType,
+    /// When set, diff views have not been materialized yet. Stores the raw
+    /// FileDiff data and lightweight metadata so the collapsed header can render
+    /// without creating heavy CodeEditorView/InlineDiffView instances.
+    /// Materialized on first expand via `ToggleRequestedEditVisibility`.
+    deferred_state: Option<DeferredDiffState>,
 }
 
 impl CodeDiffView {
@@ -929,6 +1033,7 @@ impl CodeDiffView {
             should_show_speedbump,
             session_platform,
             diff_session_type: DiffSessionType::Local,
+            deferred_state: None,
         }
     }
 
@@ -941,11 +1046,27 @@ impl CodeDiffView {
     }
 
     pub fn is_pending_diffs_empty(&self) -> bool {
-        self.pending_diffs.is_empty()
+        self.pending_diffs.is_empty() && self.deferred_state.is_none()
+    }
+
+    /// Whether diffs exist but have not been materialized into views yet.
+    fn has_deferred_diffs(&self) -> bool {
+        self.deferred_state.is_some()
     }
 
     /// Returns the number of lines added and removed across all files.
     fn pending_diffs_line_counts(&self, app: &AppContext) -> (usize, usize) {
+        // Use deferred metadata when views haven't been materialized.
+        if let Some(deferred) = &self.deferred_state {
+            let mut total_added = 0;
+            let mut total_removed = 0;
+            for info in &deferred.metadata {
+                total_added += info.lines_added;
+                total_removed += info.lines_removed;
+            }
+            return (total_added, total_removed);
+        }
+
         let mut total_added = 0;
         let mut total_removed = 0;
         for pending_diff in &self.pending_diffs {
@@ -959,6 +1080,29 @@ impl CodeDiffView {
 
     pub fn is_passive(&self) -> bool {
         self.is_passive
+    }
+
+    /// Store diffs as deferred metadata without creating heavy editor views.
+    /// The views will only be materialized when the user expands the diff.
+    /// This saves significant memory for restored conversations in terminal state.
+    pub fn set_deferred_candidate_diffs(
+        &mut self,
+        diffs: Vec<FileDiff>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.deferred_state = Some(DeferredDiffState::from_file_diffs(&diffs));
+        ctx.emit(CodeDiffViewEvent::LoadedDiffs);
+        ctx.notify();
+    }
+
+    /// Materialize deferred diffs into full CodeEditorView/InlineDiffView instances.
+    /// Called when the user expands a previously-deferred diff.
+    fn materialize_deferred_diffs(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(deferred) = self.deferred_state.take() else {
+            return;
+        };
+        // Use the existing set_candidate_diffs to create the views.
+        self.set_candidate_diffs(deferred.file_diffs, ctx);
     }
 
     /// Sets the set of candidate diffs to be displayed to the user to accept.
@@ -1572,16 +1716,27 @@ impl CodeDiffView {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Min);
 
-        let file_paths: Vec<PathBuf> = self
-            .pending_diffs
-            .iter()
-            .filter_map(|diff| {
-                diff.diff_view
-                    .as_ref(app)
-                    .file_path()
-                    .and_then(|p| p.to_local_path())
-            })
-            .collect();
+        let file_paths: Vec<PathBuf> = if let Some(deferred) = &self.deferred_state {
+            deferred
+                .metadata
+                .iter()
+                .filter_map(|info| {
+                    PathBuf::from(&info.file_path)
+                        .is_absolute()
+                        .then(|| PathBuf::from(&info.file_path))
+                })
+                .collect()
+        } else {
+            self.pending_diffs
+                .iter()
+                .filter_map(|diff| {
+                    diff.diff_view
+                        .as_ref(app)
+                        .file_path()
+                        .and_then(|p| p.to_local_path())
+                })
+                .collect()
+        };
 
         // Renders the 'open skill' button if all edited files live in the same skill directory
         let skill = common_path(&file_paths)
@@ -2579,6 +2734,9 @@ impl CodeDiffView {
     }
 
     pub fn primary_file_path(&self, app: &AppContext) -> Option<String> {
+        if let Some(deferred) = &self.deferred_state {
+            return deferred.metadata.first().map(|info| info.file_path.clone());
+        }
         let first = self.pending_diffs.first()?;
         first
             .diff_view
@@ -2621,7 +2779,12 @@ impl View for CodeDiffView {
         let header = self.render_header(is_expanded, appearance, app);
         let mut flex = Flex::column().with_child(header);
 
-        if self.pending_diffs.is_empty() {
+        if self.is_pending_diffs_empty() {
+            return flex.finish();
+        }
+
+        // When diffs are deferred, only render the header (no editor/file tabs).
+        if self.has_deferred_diffs() {
             return flex.finish();
         }
 
@@ -2774,6 +2937,10 @@ impl TypedActionView for CodeDiffView {
             }
             CodeDiffViewAction::ToggleRequestedEditVisibility => {
                 self.should_expand_when_complete = !self.should_expand_when_complete;
+                // Materialize deferred diffs when expanding for the first time.
+                if self.should_expand_when_complete && self.has_deferred_diffs() {
+                    self.materialize_deferred_diffs(ctx);
+                }
                 ctx.emit(CodeDiffViewEvent::ToggledEditVisibility);
                 ctx.notify();
             }
