@@ -766,8 +766,10 @@ impl AmbientAgentViewModel {
         self.task_id
     }
 
-    pub(in crate::terminal::view) fn is_github_action_source(&self) -> bool {
-        self.source == Some(AgentSource::GitHubAction)
+    pub(in crate::terminal::view) fn blocks_cloud_followups(&self) -> bool {
+        self.source
+            .as_ref()
+            .is_some_and(AgentSource::blocks_cloud_followups)
     }
 
     /// Whether or not this terminal session is in the setup state (first-time environment creation).

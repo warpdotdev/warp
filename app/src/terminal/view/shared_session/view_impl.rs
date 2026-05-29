@@ -31,7 +31,7 @@ use super::sharer::Sharer;
 use super::viewer::Viewer;
 use super::{ConversationEndedTombstoneEvent, ConversationEndedTombstoneView};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
-use crate::ai::ambient_agents::{AgentSource, AmbientAgentTaskId};
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::auth::UserUid;
 use crate::context_chips::ContextChipKind;
@@ -145,7 +145,7 @@ impl TerminalView {
         }
     }
 
-    pub(in crate::terminal::view) fn is_github_action_ambient_agent_session_from_model(
+    pub(in crate::terminal::view) fn blocks_cloud_followups_for_ambient_agent_session_from_model(
         &self,
         model: &TerminalModel,
         ctx: &AppContext,
@@ -153,7 +153,7 @@ impl TerminalView {
         if self
             .ambient_agent_view_model
             .as_ref()
-            .is_some_and(|model| model.as_ref(ctx).is_github_action_source())
+            .is_some_and(|model| model.as_ref(ctx).blocks_cloud_followups())
         {
             return true;
         }
@@ -165,7 +165,7 @@ impl TerminalView {
 
         AgentConversationsModel::as_ref(ctx)
             .get_task_data(&task_id)
-            .is_some_and(|task| task.source == Some(AgentSource::GitHubAction))
+            .is_some_and(|task| task.blocks_cloud_followups())
     }
 
     pub(crate) fn owned_ambient_agent_task_id(
