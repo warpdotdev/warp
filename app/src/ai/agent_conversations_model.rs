@@ -198,6 +198,13 @@ pub enum CreatedOnFilter {
     LastWeek,
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub enum SubagentsFilter {
+    #[default]
+    All,
+    Hide,
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub enum EnvironmentFilter {
     #[default]
@@ -248,6 +255,8 @@ pub struct AgentManagementFilters {
     pub creator: CreatorFilter,
     pub artifact: ArtifactFilter,
     #[serde(default)]
+    pub subagents: SubagentsFilter,
+    #[serde(default)]
     pub environment: EnvironmentFilter,
     #[serde(default)]
     pub harness: HarnessFilter,
@@ -260,6 +269,7 @@ impl AgentManagementFilters {
         self.created_on = CreatedOnFilter::default();
         self.creator = CreatorFilter::default();
         self.artifact = ArtifactFilter::default();
+        self.subagents = SubagentsFilter::default();
         self.environment = EnvironmentFilter::default();
         self.harness = HarnessFilter::default();
     }
@@ -270,6 +280,7 @@ impl AgentManagementFilters {
             || self.created_on != CreatedOnFilter::default()
             || self.creator != CreatorFilter::default() && self.owners != OwnerFilter::PersonalOnly
             || self.artifact != ArtifactFilter::default()
+            || self.subagents != SubagentsFilter::default()
             || self.environment != EnvironmentFilter::default()
             || self.harness != HarnessFilter::default()
     }

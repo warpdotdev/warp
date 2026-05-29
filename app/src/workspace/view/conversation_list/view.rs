@@ -136,6 +136,7 @@ pub enum ConversationListViewAction {
     NewConversationInNewTab,
     ToggleSection(ConversationSection),
     ToggleViewAll,
+    ToggleSubagents,
     ForkConversation {
         conversation_id: AgentConversationEntryId,
         destination: ForkedConversationDestination,
@@ -156,6 +157,7 @@ pub struct ConversationListView {
     view_id: EntityId,
     view_model: ModelHandle<ConversationListViewModel>,
     query_editor: ViewHandle<EditorView>,
+    subagents_filter_button: ViewHandle<ActionButton>,
     toggle_view_all_button: ViewHandle<ActionButton>,
     item_overflow_menu: ViewHandle<Menu<ConversationListViewAction>>,
     /// Tracks the overflow menu state (which item it's open for and where to position it).
@@ -233,6 +235,16 @@ impl ConversationListView {
             me.handle_query_editor_event(event, ctx);
         });
 
+        let subagents_filter_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Subagents", SecondaryTheme)
+                .with_size(ButtonSize::Small)
+                .with_icon(Icon::Users)
+                .with_tooltip("Show subagent conversations")
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(ConversationListViewAction::ToggleSubagents);
+                })
+        });
+
         // We use this as both the "view all" and "show less" button
         // (switching out the text on-toggle).
         let toggle_view_all_button = ctx.add_typed_action_view(|_| {
@@ -272,6 +284,7 @@ impl ConversationListView {
             view_id: ctx.view_id(),
             view_model,
             query_editor,
+            subagents_filter_button,
             toggle_view_all_button,
             item_overflow_menu,
             overflow_menu_state: None,
@@ -781,6 +794,19 @@ fn render_search_box(query_editor: &ViewHandle<EditorView>, app: &AppContext) ->
         .finish()
 }
 
+fn render_filter_bar(subagents_filter_button: &ViewHandle<ActionButton>) -> Box<dyn Element> {
+    Container::new(
+        Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_spacing(4.)
+            .with_child(ChildView::new(subagents_filter_button).finish())
+            .finish(),
+    )
+    .with_horizontal_padding(12.)
+    .with_padding_bottom(4.)
+    .finish()
+}
+
 fn render_section_header(
     section: ConversationSection,
     is_collapsed: bool,
@@ -1128,6 +1154,23 @@ impl TypedActionView for ConversationListView {
 
                 ctx.notify();
             }
+            ConversationListViewAction::ToggleSubagents => {
+                let show_subagents = !self.view_model.as_ref(ctx).show_subagents();
+                self.subagents_filter_button.update(ctx, |button, ctx| {
+                    button.set_active(show_subagents, ctx);
+                    button.set_tooltip(
+                        Some(if show_subagents {
+                            "Hide subagent conversations"
+                        } else {
+                            "Show subagent conversations"
+                        }),
+                        ctx,
+                    );
+                });
+                self.view_model.update(ctx, |model, ctx| {
+                    model.set_show_subagents(show_subagents, ctx);
+                });
+            }
             ConversationListViewAction::ForkConversation {
                 conversation_id,
                 destination,
@@ -1339,6 +1382,7 @@ impl View for ConversationListView {
 
         if has_conversations {
             column = column.with_child(render_search_box(&self.query_editor, app));
+            column = column.with_child(render_filter_bar(&self.subagents_filter_button));
         }
 
         let column_element = column

@@ -4,7 +4,7 @@ use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentConversationEntryId, AgentConversationsModel,
     AgentConversationsModelEvent, AgentManagementFilters, ArtifactFilter, CreatedOnFilter,
-    CreatorFilter, OwnerFilter, SourceFilter, StatusFilter,
+    CreatorFilter, OwnerFilter, SourceFilter, StatusFilter, SubagentsFilter,
 };
 
 pub struct ConversationListViewModelEvent;
@@ -20,6 +20,7 @@ pub struct ConversationListViewModel {
     cached_entry_ids: Vec<AgentConversationEntryId>,
     filtered_items: Vec<ConversationEntry>,
     search_query: String,
+    show_subagents: bool,
 }
 
 impl Entity for ConversationListViewModel {
@@ -54,6 +55,7 @@ impl ConversationListViewModel {
             cached_entry_ids: Vec::new(),
             filtered_items: Vec::new(),
             search_query: String::new(),
+            show_subagents: false,
         };
         model.refresh_cached_items(ctx);
         model
@@ -77,6 +79,7 @@ impl ConversationListViewModel {
                     created_on: CreatedOnFilter::All,
                     creator: CreatorFilter::All,
                     artifact: ArtifactFilter::All,
+                    subagents: SubagentsFilter::All,
                     environment: Default::default(),
                     harness: Default::default(),
                 },
@@ -101,6 +104,20 @@ impl ConversationListViewModel {
         ctx.emit(ConversationListViewModelEvent);
     }
 
+    pub fn set_show_subagents(&mut self, show: bool, ctx: &mut ModelContext<Self>) {
+        if show == self.show_subagents {
+            return;
+        }
+
+        self.show_subagents = show;
+        self.apply_search_filter(ctx);
+        ctx.emit(ConversationListViewModelEvent);
+    }
+
+    pub fn show_subagents(&self) -> bool {
+        self.show_subagents
+    }
+
     fn apply_search_filter(&mut self, ctx: &mut ModelContext<Self>) {
         let search_query = self.search_query.trim().to_lowercase();
         let conversations_model = self.conversations_model.as_ref(ctx);
@@ -109,6 +126,12 @@ impl ConversationListViewModel {
             self.filtered_items = self
                 .cached_entry_ids
                 .iter()
+                .filter(|id| {
+                    self.show_subagents
+                        || conversations_model
+                            .get_entry_by_id(id, ctx)
+                            .is_none_or(|item| !item.is_subagent)
+                })
                 .map(|id| ConversationEntry {
                     id: *id,
                     highlight_indices: vec![],
@@ -120,6 +143,9 @@ impl ConversationListViewModel {
                 .iter()
                 .filter_map(|id| {
                     let item = conversations_model.get_entry_by_id(id, ctx)?;
+                    if !self.show_subagents && item.is_subagent {
+                        return None;
+                    }
 
                     match_indices_case_insensitive(&item.display.title, &search_query).map(
                         |result| {

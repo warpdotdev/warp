@@ -71,6 +71,7 @@ pub struct AgentConversationEntry {
     pub id: AgentConversationEntryId,
     pub identity: AgentConversationIdentity,
     pub provenance: AgentConversationProvenance,
+    pub is_subagent: bool,
     pub display: AgentConversationDisplayData,
     pub backing: AgentConversationBackingData,
     pub capabilities: AgentConversationCapabilities,
@@ -178,6 +179,7 @@ impl AgentConversationEntry {
             && self.matches_artifact(&filters.artifact)
             && self.matches_environment(&filters.environment)
             && self.matches_harness(&filters.harness)
+            && self.matches_subagent(&filters.subagents)
     }
 
     fn matches_owner_and_creator(
@@ -260,6 +262,13 @@ impl AgentConversationEntry {
         match harness_filter {
             HarnessFilter::All => true,
             HarnessFilter::Specific(harness) => self.display.harness == Some(*harness),
+        }
+    }
+
+    fn matches_subagent(&self, subagents_filter: &super::SubagentsFilter) -> bool {
+        match subagents_filter {
+            super::SubagentsFilter::All => true,
+            super::SubagentsFilter::Hide => !self.is_subagent,
         }
     }
 
@@ -436,6 +445,12 @@ pub(super) fn entry_for_task(
     let can_copy_link = task.has_active_execution()
         && task.active_run_execution().session_link.is_some()
         || server_conversation_token.is_some();
+    let is_subagent = task.parent_run_id.is_some()
+        || local_conversation_id.is_some_and(|id| {
+            history_model
+                .conversation(&id)
+                .is_some_and(|conversation| conversation.is_child_agent_conversation())
+        });
 
     AgentConversationEntry {
         id: AgentConversationEntryId::AmbientRun(task.task_id),
@@ -446,6 +461,7 @@ pub(super) fn entry_for_task(
             session_id: task_session_id(task),
         },
         provenance: AgentConversationProvenance::AmbientRun,
+        is_subagent,
         display: AgentConversationDisplayData {
             title: task.title.clone(),
             initial_query: Some(task.prompt.clone()),
@@ -567,6 +583,9 @@ fn entry_for_conversation_parts(
             session_id: None,
         },
         provenance,
+        is_subagent: history_model
+            .conversation(&conversation_id)
+            .is_some_and(|conversation| conversation.is_child_agent_conversation()),
         display: AgentConversationDisplayData {
             title: conversation_title(&metadata, history_model),
             initial_query: metadata.nav_data.initial_query.clone(),

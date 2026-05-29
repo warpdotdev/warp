@@ -17,7 +17,8 @@ use super::{
     record_earliest_rtc_task_refresh_timestamp, AgentConversationsModel,
     AgentConversationsModelEvent, AgentManagementFilters, AgentRunDisplayStatus, ArtifactFilter,
     ConversationMetadata, ConversationUpdateKind, EnvironmentFilter, HarnessFilter, OwnerFilter,
-    RtcTaskRefreshThrottleState, StatusFilter, TaskFetchState, MAX_PERSONAL_TASKS, MAX_TEAM_TASKS,
+    RtcTaskRefreshThrottleState, StatusFilter, SubagentsFilter, TaskFetchState, MAX_PERSONAL_TASKS,
+    MAX_TEAM_TASKS,
 };
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::api::ServerConversationToken;
@@ -665,6 +666,26 @@ fn all_owner_filters() -> AgentManagementFilters {
     }
 }
 
+fn default_conversation_data() -> AgentConversationData {
+    AgentConversationData {
+        server_conversation_token: None,
+        conversation_usage_metadata: None,
+        reverted_action_ids: None,
+        forked_from_server_conversation_token: None,
+        artifacts_json: None,
+        parent_agent_id: None,
+        agent_name: None,
+        orchestration_harness_type: None,
+        parent_conversation_id: None,
+        is_remote_child: false,
+        root_task_is_optimistic: None,
+        run_id: None,
+        autoexecute_override: None,
+        last_event_sequence: None,
+        pinned: false,
+    }
+}
+
 fn add_entry_projection_test_models(app: &mut App) {
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
@@ -775,6 +796,69 @@ fn test_get_entries_includes_local_only_entry() {
                 AgentConversationProvenance::LocalInteractive
             );
             assert_eq!(entry.display.title, "Local conversation");
+        });
+    });
+}
+
+#[test]
+fn test_get_entries_can_hide_local_subagent_conversation() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+
+        let conversation_id = AIConversationId::new();
+        let terminal_view_id = EntityId::new();
+        let mut conversation_data = default_conversation_data();
+        conversation_data.parent_agent_id = Some("parent-run-id".to_string());
+        let child_conversation =
+            create_restored_conversation(conversation_id, "child-task", conversation_data);
+
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![child_conversation], ctx);
+        });
+
+        let mut model = create_test_model();
+        model.conversations.insert(
+            conversation_id,
+            create_test_conversation_metadata(conversation_id, "Child conversation"),
+        );
+
+        app.update(|ctx| {
+            let all_entries = model.get_entries(&all_owner_filters(), ctx);
+            assert_eq!(all_entries.len(), 1);
+            assert!(all_entries[0].is_subagent);
+
+            let hidden_entries = model.get_entries(
+                &AgentManagementFilters {
+                    subagents: SubagentsFilter::Hide,
+                    ..all_owner_filters()
+                },
+                ctx,
+            );
+            assert!(hidden_entries.is_empty());
+        });
+    });
+}
+
+#[test]
+fn test_get_entries_can_hide_task_subagent() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+
+        let now = Utc::now();
+        let mut model = create_test_model();
+        let mut task = create_test_task(&make_uuid(8150), "user-a", now);
+        task.parent_run_id = Some("parent-run-id".to_string());
+        model.tasks.insert(task.task_id, task);
+
+        app.update(|ctx| {
+            let hidden_entries = model.get_entries(
+                &AgentManagementFilters {
+                    subagents: SubagentsFilter::Hide,
+                    ..all_owner_filters()
+                },
+                ctx,
+            );
+            assert!(hidden_entries.is_empty());
         });
     });
 }
@@ -2251,7 +2335,7 @@ fn test_get_or_async_fetch_task_data_skips_within_transient_cooldown() {
 
 #[test]
 fn test_agent_management_filters_serde_backwards_compat() {
-    // Persisted state from older clients has no `harness` key → deserializes to All.
+    // Persisted state from older clients has no newer filter keys -> deserializes to defaults.
     let legacy = r#"{
         "owners": "PersonalOnly",
         "status": "All",
@@ -2263,6 +2347,7 @@ fn test_agent_management_filters_serde_backwards_compat() {
     let decoded: AgentManagementFilters =
         serde_json::from_str(legacy).expect("legacy payload without harness must deserialize");
     assert_eq!(decoded.harness, HarnessFilter::All);
+    assert_eq!(decoded.subagents, SubagentsFilter::All);
 
     // Round trip a Specific(Claude) value.
     let original = AgentManagementFilters {
