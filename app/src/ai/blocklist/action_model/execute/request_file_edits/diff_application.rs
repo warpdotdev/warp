@@ -687,7 +687,12 @@ async fn apply_search_replace<F, Fut>(
             if fuzzy_match_diffs.warrants_failure() {
                 if let Some(failures) = fuzzy_match_diffs.failures.as_ref() {
                     safe_warn!(
-                        safe: ("Failure(s) applying diff: {failures:?}"),
+                        safe: (
+                            "Failure(s) applying diff: {} unmatched, {} noop, {} missing line numbers",
+                            failures.fuzzy_match_failures,
+                            failures.noop_deltas,
+                            failures.missing_line_numbers
+                        ),
                         full: ("Failure(s) applying diff for {absolute_path:?}: {failures:?}")
                     );
                     result.errors.push(DiffApplicationError::UnmatchedDiffs {
@@ -786,7 +791,12 @@ async fn apply_v4a_update<F, Fut>(
         if source_diffs.warrants_failure() {
             if let Some(failures) = source_diffs.failures.as_ref() {
                 safe_warn!(
-                    safe: ("Failure(s) applying V4A diff: {failures:?}"),
+                    safe: (
+                        "Failure(s) applying V4A diff: {} unmatched, {} noop, {} missing line numbers",
+                        failures.fuzzy_match_failures,
+                        failures.noop_deltas,
+                        failures.missing_line_numbers
+                    ),
                     full: ("Failure(s) applying V4A diff for {absolute_path:?}: {failures:?}")
                 );
                 result.errors.push(DiffApplicationError::UnmatchedDiffs {
@@ -847,7 +857,12 @@ async fn apply_v4a_update<F, Fut>(
         if diffs.warrants_failure() {
             if let Some(failures) = diffs.failures.as_ref() {
                 safe_warn!(
-                    safe: ("Failure(s) applying V4A diff: {failures:?}"),
+                    safe: (
+                        "Failure(s) applying V4A diff: {} unmatched, {} noop, {} missing line numbers",
+                        failures.fuzzy_match_failures,
+                        failures.noop_deltas,
+                        failures.missing_line_numbers
+                    ),
                     full: ("Failure(s) applying V4A diff for {absolute_path:?}: {failures:?}")
                 );
                 result.errors.push(DiffApplicationError::UnmatchedDiffs {
