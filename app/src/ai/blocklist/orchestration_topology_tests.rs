@@ -130,7 +130,7 @@ fn adjacent_orchestration_child_navigation_wraps_within_child_list() {
     App::test((), |mut app| async move {
         initialize_history_persistence_for_tests(&mut app);
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
-        let (_, _, child_a, child_b) =
+        let (_, orchestrator_id, child_a, child_b) =
             build_orchestrator_with_two_children(&mut app, &history_model);
 
         history_model.read(&app, |history_model, _| {
@@ -140,7 +140,7 @@ fn adjacent_orchestration_child_navigation_wraps_within_child_list() {
                     child_a,
                     OrchestrationNavigationDirection::Previous,
                 ),
-                Some(child_b),
+                Some(orchestrator_id),
             );
             assert_eq!(
                 adjacent_orchestration_child_conversation_id(
@@ -148,7 +148,7 @@ fn adjacent_orchestration_child_navigation_wraps_within_child_list() {
                     child_b,
                     OrchestrationNavigationDirection::Next,
                 ),
-                Some(child_a),
+                Some(orchestrator_id),
             );
         });
     });
@@ -189,7 +189,15 @@ fn adjacent_orchestration_child_navigation_noops_for_single_child() {
                     child_id,
                     OrchestrationNavigationDirection::Next,
                 ),
-                None,
+                Some(orchestrator_id),
+            );
+            assert_eq!(
+                adjacent_orchestration_child_conversation_id(
+                    history_model,
+                    child_id,
+                    OrchestrationNavigationDirection::Previous,
+                ),
+                Some(orchestrator_id),
             );
         });
     });
