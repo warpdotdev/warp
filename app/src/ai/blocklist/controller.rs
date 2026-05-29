@@ -31,7 +31,7 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonE
 use self::response_stream::{ResponseStream, ResponseStreamEvent};
 use super::action_model::{BlocklistAIActionEvent, BlocklistAIActionModel};
 use super::agent_view::{AgentViewController, AgentViewControllerEvent, AgentViewEntryOrigin};
-use super::context_model::{BlocklistAIContextModel, PendingAttachment};
+use super::context_model::{BlocklistAIContextModel, PendingAttachment, PendingFile};
 use super::history_model::BlocklistAIHistoryModel;
 use super::input_model::InputConfig;
 use super::orchestration_event_streamer::{
@@ -677,7 +677,19 @@ impl BlocklistAIController {
         }
 
         if let Some(slash_command_request) = SlashCommandRequest::from_query(query.as_str()) {
-            slash_command_request.send_request(self, is_queued_prompt, ctx);
+            // For a fired queued prompt (e.g. a queued `/compact`), route into the conversation
+            // the prompt was queued on rather than letting the slash request re-derive the target
+            // from the current UI selection. Direct submissions keep the selection-based behavior.
+            let conversation_id_override = input_query
+                .queued_query_id
+                .is_some()
+                .then_some(conversation_id);
+            slash_command_request.send_request(
+                self,
+                input_query.queued_query_id,
+                conversation_id_override,
+                ctx,
+            );
             return;
         }
 
@@ -1336,18 +1348,22 @@ impl BlocklistAIController {
         slash_command: SlashCommandRequest,
         ctx: &mut ModelContext<Self>,
     ) {
-        slash_command.send_request(self, /*is_queued_prompt*/ false, ctx);
+        slash_command.send_request(self, None, None, ctx);
     }
 
     /// Same as [`Self::send_slash_command_request`] but marks the emitted `SentRequest`
     /// event as a queued prompt submission so UI subscribers (e.g. the input editor)
-    /// don't clear the input buffer on the auto-send.
+    /// don't clear the input buffer on the auto-send. `conversation_id` is the conversation
+    /// the prompt was queued on, used to route the send and resolve the row's attachments
+    /// rather than re-deriving from the current UI selection.
     pub fn send_queued_slash_command_request(
         &mut self,
         slash_command: SlashCommandRequest,
+        queued_query_id: QueuedQueryId,
+        conversation_id: Option<AIConversationId>,
         ctx: &mut ModelContext<Self>,
     ) {
-        slash_command.send_request(self, /*is_queued_prompt*/ true, ctx);
+        slash_command.send_request(self, Some(queued_query_id), conversation_id, ctx);
     }
 
     /// Mark a conversation to follow up after its actions complete and attempt to send immediately
@@ -3164,9 +3180,23 @@ fn input_for_query(
         });
     let mut referenced_attachments = parse_context_attachments(&query, context_model, app);
     referenced_attachments.extend(additional_attachments);
+    add_pending_file_attachments(&mut referenced_attachments, file_attachments);
 
-    // Add file attachments as FilePathReference, de-duplicating basenames with (1), (2), ...
-    // suffixes to avoid collisions.
+    AIAgentInput::UserQuery {
+        query,
+        context,
+        static_query_type,
+        referenced_attachments,
+        user_query_mode,
+        running_command,
+        intended_agent,
+    }
+}
+
+pub(super) fn add_pending_file_attachments(
+    referenced_attachments: &mut HashMap<String, AIAgentAttachment>,
+    file_attachments: Vec<PendingFile>,
+) {
     for file in file_attachments {
         let attachment = AIAgentAttachment::FilePathReference {
             file_id: uuid::Uuid::new_v4().to_string(),
@@ -3185,16 +3215,6 @@ fn input_for_query(
             }
         }
         referenced_attachments.insert(key, attachment);
-    }
-
-    AIAgentInput::UserQuery {
-        query,
-        context,
-        static_query_type,
-        referenced_attachments,
-        user_query_mode,
-        running_command,
-        intended_agent,
     }
 }
 

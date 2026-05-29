@@ -5354,7 +5354,7 @@ impl Input {
     ///
     /// This enters AI mode, resolves the skill from SkillManager, and submits it.
     ///
-    /// When `is_queued_prompt` is true, this is the first send of a previously queued prompt:
+    /// When `queued_query_id` is `Some`, this is the first send of a previously queued prompt:
     /// the input buffer is left alone (the user may have typed new input while the agent was
     /// busy) and the emitted `SentRequest` event is tagged as a queued-prompt submission so
     /// other UI subscribers also skip their user-submission side effects.
@@ -5364,9 +5364,14 @@ impl Input {
         &mut self,
         reference: SkillReference,
         user_query: Option<String>,
-        is_queued_prompt: bool,
+        queued_query_id: Option<QueuedQueryId>,
+        // The conversation a fired queued skill was queued on, used to route the send and resolve
+        // the row's attachments instead of re-deriving from the current UI selection. `None` for
+        // direct (non-queued) skill invocations.
+        conversation_id_override: Option<AIConversationId>,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
+        let is_queued_prompt = queued_query_id.is_some();
         // Resolve the skill from SkillManager
         let skill = match SkillManager::handle(ctx)
             .as_ref(ctx)
@@ -5413,8 +5418,13 @@ impl Input {
         // Send the skill invocation request
         let request = SlashCommandRequest::InvokeSkill { skill, user_query };
         self.ai_controller.update(ctx, move |controller, ctx| {
-            if is_queued_prompt {
-                controller.send_queued_slash_command_request(request, ctx);
+            if let Some(query_id) = queued_query_id {
+                controller.send_queued_slash_command_request(
+                    request,
+                    query_id,
+                    conversation_id_override,
+                    ctx,
+                );
             } else {
                 controller.send_slash_command_request(request, ctx);
             }
@@ -13368,24 +13378,19 @@ impl Input {
     pub(crate) fn submit_queued_prompt(
         &mut self,
         prompt: String,
+        conversation_id: AIConversationId,
         query_id: QueuedQueryId,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let Some(conversation_id) = self
-            .ai_context_model
-            .as_ref(ctx)
-            .selected_conversation_id(ctx)
-        {
-            self.ai_controller.update(ctx, |controller, ctx| {
-                controller.cancel_conversation_progress(
-                    conversation_id,
-                    CancellationReason::FollowUpSubmitted {
-                        is_for_same_conversation: true,
-                    },
-                    ctx,
-                );
-            });
-        }
+        self.ai_controller.update(ctx, |controller, ctx| {
+            controller.cancel_conversation_progress(
+                conversation_id,
+                CancellationReason::FollowUpSubmitted {
+                    is_for_same_conversation: true,
+                },
+                ctx,
+            );
+        });
 
         let detected = self
             .slash_command_model
@@ -13405,14 +13410,13 @@ impl Input {
                     ctx,
                 )
             }
-            SlashCommandEntryState::SkillCommand(detected_skill) => {
-                self.execute_skill_command(
-                    detected_skill.reference,
-                    detected_skill.argument,
-                    /*is_queued_prompt*/ true,
-                    ctx,
-                )
-            }
+            SlashCommandEntryState::SkillCommand(detected_skill) => self.execute_skill_command(
+                detected_skill.reference,
+                detected_skill.argument,
+                Some(query_id),
+                Some(conversation_id),
+                ctx,
+            ),
             _ => false,
         };
 
@@ -13420,32 +13424,18 @@ impl Input {
             return;
         }
 
-        if let Some(conversation_id) = self
-            .ai_context_model
-            .as_ref(ctx)
-            .selected_conversation_id(ctx)
-        {
-            self.ai_controller.update(ctx, move |controller, ctx| {
-                controller.send_queued_user_query_in_conversation(
-                    prompt,
-                    conversation_id,
-                    None,
-                    query_id,
-                    ctx,
-                );
-            });
-        } else {
-            self.ai_controller.update(ctx, move |controller, ctx| {
-                controller.send_queued_user_query_in_new_conversation(
-                    prompt,
-                    None,
-                    EntrypointType::UserInitiated,
-                    None,
-                    query_id,
-                    ctx,
-                );
-            });
-        }
+        // A fired queued row always belongs to the existing conversation that finished, so we
+        // submit into that conversation directly rather than re-deriving from the current UI
+        // selection (which may point at a different conversation the user navigated to).
+        self.ai_controller.update(ctx, move |controller, ctx| {
+            controller.send_queued_user_query_in_conversation(
+                prompt,
+                conversation_id,
+                None,
+                query_id,
+                ctx,
+            );
+        });
 
         ctx.emit(Event::ExecuteAIQuery);
     }
@@ -13486,6 +13476,7 @@ impl Input {
     pub(crate) fn submit_queued_prompt_for_active_pane(
         &mut self,
         prompt: String,
+        conversation_id: AIConversationId,
         query_id: QueuedQueryId,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -13502,15 +13493,9 @@ impl Input {
         if is_ready_for_cloud_followup {
             // Cloud follow-up does not support attachments; a queued row's attachments are dropped
             // when the row is removed after dispatch.
-            let drops_attachments = self
-                .ai_context_model
-                .as_ref(ctx)
-                .selected_conversation_id(ctx)
-                .is_some_and(|conversation_id| {
-                    !QueuedQueryModel::as_ref(ctx)
-                        .attachments_for(conversation_id, query_id)
-                        .is_empty()
-                });
+            let drops_attachments = !QueuedQueryModel::as_ref(ctx)
+                .attachments_for(conversation_id, query_id)
+                .is_empty();
             if drops_attachments {
                 log::warn!(
                     "Dropping attachments on a queued cloud follow-up prompt; cloud follow-up does not support attachments"
@@ -13529,16 +13514,9 @@ impl Input {
         // clear it once the sharer acknowledges receipt. If the user has typed something locally,
         // we leave the buffer alone so their in-progress prompt is not clobbered.
         if self.model.lock().shared_session_status().is_viewer() {
-            let conversation_id = self
-                .ai_context_model
-                .as_ref(ctx)
-                .selected_conversation_id(ctx);
-            let server_conversation_token = conversation_id
-                .and_then(|id| {
-                    BlocklistAIHistoryModel::as_ref(ctx)
-                        .conversation(&id)
-                        .and_then(|conv| conv.server_conversation_token().cloned())
-                })
+            let server_conversation_token = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .and_then(|conv| conv.server_conversation_token().cloned())
                 .and_then(|token| {
                     token
                         .as_str()
@@ -13548,21 +13526,16 @@ impl Input {
                 });
 
             // Split the firing row's stored attachments into images/files for upload.
-            let (images, files) = conversation_id
-                .map(|conversation_id| {
-                    let mut images: Vec<ImageContext> = Vec::new();
-                    let mut files: Vec<PendingFile> = Vec::new();
-                    for attachment in
-                        QueuedQueryModel::as_ref(ctx).attachments_for(conversation_id, query_id)
-                    {
-                        match attachment {
-                            PendingAttachment::Image(image) => images.push(image.clone()),
-                            PendingAttachment::File(file) => files.push(file.clone()),
-                        }
-                    }
-                    (images, files)
-                })
-                .unwrap_or_default();
+            let mut images: Vec<ImageContext> = Vec::new();
+            let mut files: Vec<PendingFile> = Vec::new();
+            for attachment in
+                QueuedQueryModel::as_ref(ctx).attachments_for(conversation_id, query_id)
+            {
+                match attachment {
+                    PendingAttachment::Image(image) => images.push(image.clone()),
+                    PendingAttachment::File(file) => files.push(file.clone()),
+                }
+            }
 
             if self.editor.as_ref(ctx).buffer_text(ctx).is_empty() {
                 self.freeze_input_in_loading_state_with_text(&prompt, ctx);
@@ -13579,7 +13552,7 @@ impl Input {
         }
 
         // Local Agent Mode path.
-        self.submit_queued_prompt(prompt, query_id, ctx);
+        self.submit_queued_prompt(prompt, conversation_id, query_id, ctx);
     }
 
     /// Checks whether the current input should be queued instead of executed.
