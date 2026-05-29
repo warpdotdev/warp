@@ -161,6 +161,12 @@ impl OrchestrationViewerModel {
         event: &BlocklistAIHistoryEvent,
         ctx: &mut ModelContext<Self>,
     ) {
+        // Stamp `parent_agent_id` on any tracked children once the parent
+        // placeholder receives its server token. Children registered before
+        // the parent run_id was known would otherwise stay with
+        // `parent_agent_id = None` and break parent-conversation lookups.
+        self.maybe_backfill_parent_agent_ids(event, ctx);
+
         match event {
             BlocklistAIHistoryEvent::SetActiveConversation {
                 terminal_view_id, ..

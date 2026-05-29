@@ -331,6 +331,32 @@ impl OrchestrationEventStreamer {
         sequence: i64,
         ctx: &mut ModelContext<Self>,
     ) {
+        let (own_run_id, is_viewer_mode) = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .map(|conversation| {
+                (
+                    conversation.run_id(),
+                    conversation.is_viewing_shared_session(),
+                )
+            })
+            .unwrap_or((None, false));
+
+        // Always persist to SQLite. For owner-side conversations this is the
+        // resume cursor for the per-run SSE; for viewer-mode placeholders it
+        // tracks the highest sequence seen on the ancestor SSE so reconnects
+        // can resume from where we left off.
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
+            model.update_event_sequence(conversation_id, sequence, ctx);
+        });
+
+        // Viewer-mode placeholders do not participate in the owner-side
+        // `self.streams` map and must not push the cursor to the server
+        // (the orchestrator-owner's process is the authoritative writer of
+        // the server-side cursor for its run).
+        if is_viewer_mode {
+            return;
+        }
+
         let sequence = self
             .streams
             .get(&conversation_id)
@@ -341,29 +367,6 @@ impl OrchestrationEventStreamer {
             .or_default()
             .event_cursor = sequence;
 
-        BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
-            model.update_event_sequence(conversation_id, sequence, ctx);
-        });
-
-        // Viewer-mode conversations must NOT push the cursor to the server.
-        // The viewer does not own the task; writing to the server's task
-        // cursor would interfere with the orchestrator-owner's process
-        // resuming its own SSE. The local cursor is still persisted to
-        // SQLite above (it represents "highest sequence seen across the
-        // parent's direct child set" for viewer-mode conversations, a
-        // different scope from owner-side).
-        let (own_run_id, is_viewer_mode) = BlocklistAIHistoryModel::as_ref(ctx)
-            .conversation(&conversation_id)
-            .map(|conversation| {
-                (
-                    conversation.run_id(),
-                    conversation.is_viewing_shared_session(),
-                )
-            })
-            .unwrap_or((None, false));
-        if is_viewer_mode {
-            return;
-        }
         if let Some(run_id) = own_run_id {
             let ai_client = self.ai_client.clone();
             ctx.spawn(
