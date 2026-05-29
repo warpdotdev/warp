@@ -5,8 +5,8 @@ use command::Stdio;
 use tempfile::TempDir;
 
 use super::{
-    detect_current_branch, detect_current_branch_display, get_pr_for_branch, get_repository_info,
-    is_gh_auth_error, is_gh_missing_error, RepositoryInfo,
+    detect_current_branch, detect_current_branch_display, get_pr_for_branch, is_gh_auth_error,
+    is_gh_missing_error, RepositoryInfo,
 };
 
 /// Helper: run a git command inside the given repo directory.
@@ -108,7 +108,9 @@ async fn get_repository_info_reads_gh_repo_view() {
     );
 
     assert_eq!(
-        get_repository_info(&repo, Some(&path_env)).await.unwrap(),
+        super::get_repository_info(&repo, Some(&path_env))
+            .await
+            .unwrap(),
         Some(RepositoryInfo {
             name: "warp-internal".to_owned(),
             owner: Some("warpdotdev".to_owned()),
