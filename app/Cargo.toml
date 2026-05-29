@@ -286,7 +286,7 @@ tokio.workspace = true
 tokio-util.workspace = true
 
 # AWS SDK (loading credentials for BYO LLM)
-aws-config = { version = "1.8.12", features = ["credentials-login"] }
+aws-config = { version = "1.8.17", features = ["credentials-login"] }
 aws-credential-types = "1"
 aws-sdk-sts = "1"
 aws-types = "1"

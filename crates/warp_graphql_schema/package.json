@@ -4,14 +4,14 @@
     "generate": "graphql-codegen -r ts-node/register"
   },
   "dependencies": {
-    "graphql": "^16.8.1"
+    "graphql": "^16.14.0"
   },
   "devDependencies": {
-    "@graphql-codegen/cli": "^5.0.2",
-    "@graphql-tools/utils": "^10.1.2",
-    "cross-fetch": "^4.0.0",
+    "@graphql-codegen/cli": "^7.1.0",
+    "@graphql-tools/utils": "^11.1.0",
+    "cross-fetch": "^4.1.0",
     "ts-node": "^10.9.2",
-    "typescript": "^5.4.3"
+    "typescript": "^6.0.3"
   },
   "resolutions": {
     "immutable": "3.8.3",
