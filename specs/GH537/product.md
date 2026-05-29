@@ -543,13 +543,14 @@ inline. See #11.6.
        hysteretic state flips, inline-plugin output disappears (or
        appears) in a single frame. No fade, no partial paint.
 
-    d. **Explicit user override (lock).** A keyboard shortcut and a
-       small affordance in the input editor let the user lock the
-       current buffer to "shell mode" or "NL mode", disabling the
-       classifier for that buffer. Use case: the user knows what
-       they're typing and the classifier keeps getting it wrong.
-       The lock resets at the next agent turn (per-buffer, not
-       sticky across the conversation).
+    d. **Explicit user override (lock).** A keyboard shortcut
+       (default `Ctrl-Alt-L`, user-rebindable) and a small
+       affordance in the input editor let the user lock the
+       current buffer to "shell mode" or "NL mode", disabling
+       the classifier for that buffer. Use case: the user knows
+       what they're typing and the classifier keeps getting it
+       wrong. The lock resets at the next agent turn (per-buffer,
+       not sticky across the conversation).
 
     e. **Classifier output is observable for debugging.** A
        developer setting exposes the current classifier label and
@@ -628,3 +629,5 @@ tech spec must resolve:
 - Default-on vs feature-flagged staged rollout (#23).
 - (Resolved) Telemetry redaction policy for widget names — see #11; the
   rule is allowlist-or-bucket, never raw user-defined names.
+- (Resolved) Default keystroke for `agent-input.lock-mode` (#22.5d):
+  `Ctrl-Alt-L`, user-rebindable via the editable Warp keymap.

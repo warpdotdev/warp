@@ -1535,9 +1535,12 @@ When the bash capability flip happens:
     buffer.
   - **Lock action.** A new command `agent-input.lock-mode` toggles
     `LockedShell` / `LockedNL` / Auto for the current buffer.
-    Bind it to a default keystroke (TBD; suggest
-    `Ctrl-Shift-L`) and surface a chip in the input editor.
-    Lock state resets at the next agent turn boundary.
+    Default binding `Ctrl-Alt-L` (rarely bound natively in
+    shells, terminal emulators, or common IDE extensions; avoids
+    the macOS/Linux `Ctrl-Shift-L` clash with terminal "clear
+    selection" / line-select shortcuts). User-rebindable via
+    the editable Warp keymap. Surfaces a chip in the input
+    editor. Lock state resets at the next agent turn boundary.
   - **Telemetry.** Emit a counter `agent_input.classifier.flip`
     tagged with `{raw → effective}` and `agent_input.bind_dispatched_in_nl`
     counting Category C dispatches that happened while
