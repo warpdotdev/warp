@@ -12,7 +12,8 @@ use super::{
     QueuedQueryOrigin,
 };
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::agent::ImageContext;
+use crate::ai::blocklist::{BlocklistAIHistoryModel, PendingAttachment};
 use crate::test_util::settings::initialize_history_persistence_for_tests;
 
 /// Helper to drive the singleton `QueuedQueryModel` (plus its required `BlocklistAIHistoryModel`
@@ -49,6 +50,15 @@ fn initial_cloud_mode_query(text: &str) -> QueuedQuery {
     QueuedQuery::new(text.to_owned(), QueuedQueryOrigin::InitialCloudMode)
 }
 
+fn image_attachment(file_name: &str) -> PendingAttachment {
+    PendingAttachment::Image(ImageContext {
+        data: String::new(),
+        mime_type: "image/png".to_owned(),
+        file_name: file_name.to_owned(),
+        is_figma: false,
+    })
+}
+
 fn append_user(
     model: &warpui::ModelHandle<QueuedQueryModel>,
     app: &mut App,
@@ -80,7 +90,7 @@ fn initial_cloud_mode_head_rejects_user_mutations_and_autofire() {
             model.reorder(conv, followup_id, 0, ctx);
         });
 
-        let action = model.update(&mut app, |model, ctx| model.pop_for_autofire(conv, ctx));
+        let action = model.read(&app, |model, _| model.peek_autofire(conv));
         assert!(action.is_none());
 
         model.read(&app, |model, _| {
@@ -141,9 +151,9 @@ fn remove_initial_cloud_mode_row_only_removes_the_locked_head() {
         });
         assert!(removed_again.is_none());
 
-        let action = model.update(&mut app, |model, ctx| model.pop_for_autofire(conv, ctx));
+        let action = model.read(&app, |model, _| model.peek_autofire(conv));
         match action {
-            Some(AutofireAction::Submit { text }) => assert_eq!(text, "follow up"),
+            Some(AutofireAction::Submit { text, .. }) => assert_eq!(text, "follow up"),
             other => panic!("expected Submit, got {other:?}"),
         }
 
@@ -290,41 +300,78 @@ fn pop_front_removes_head_and_emits_removed() {
 }
 
 #[test]
-fn pop_for_autofire_returns_submit_for_user_managed_head() {
+fn peek_autofire_leaves_row_until_remove_fired_row_drops_it() {
     with_model(|mut app, model, _events| {
         let conv = AIConversationId::new();
-        append_user(&model, &mut app, conv, "first");
+        let first_id = append_user(&model, &mut app, conv, "first");
         append_user(&model, &mut app, conv, "second");
 
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(conv, ctx));
+        // peek_autofire reports the head's Submit action WITHOUT removing the row, so the send
+        // path can still read its attachments by id.
+        let action = model.read(&app, |model, _| model.peek_autofire(conv));
         match action {
-            Some(AutofireAction::Submit { text }) => assert_eq!(text, "first"),
+            Some(AutofireAction::Submit { query_id, text }) => {
+                assert_eq!(query_id, first_id);
+                assert_eq!(text, "first");
+            }
             other => panic!("expected Submit, got {other:?}"),
         }
+        model.read(&app, |model, _| assert_eq!(model.queue(conv).len(), 2));
 
+        // remove_fired_row drops the fired head once the synchronous send completes.
+        model.update(&mut app, |model, ctx| {
+            model.remove_fired_row(conv, first_id, ctx)
+        });
         model.read(&app, |model, _| {
-            assert_eq!(model.queue(conv).len(), 1);
+            let queue = model.queue(conv);
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue[0].text(), "second");
         });
     });
 }
 
 #[test]
-fn pop_for_autofire_returns_last_committed_text_when_first_row_is_in_edit_mode() {
-    // Per spec: even when the first row is in edit mode, auto-fire's PopFromEditMode action
-    // carries the row's last-committed text, not any uncommitted live-editor buffer text.
+fn peek_autofire_returns_pop_from_edit_mode_with_committed_text_and_attachments() {
+    // Per spec: when the first row is in edit mode, peek_autofire's PopFromEditMode action
+    // carries the row's last-committed text and its stored attachments (NOT any uncommitted
+    // live-editor buffer text). peek leaves edit state intact; remove_fired_row clears it.
     with_model(|mut app, model, _events| {
         let conv = AIConversationId::new();
-        let id_a = append_user(&model, &mut app, conv, "first");
+        let id_a = model.update(&mut app, |m, ctx| {
+            m.append(
+                conv,
+                QueuedQuery::new_with_attachments(
+                    "first".to_owned(),
+                    QueuedQueryOrigin::QueueSlashCommand,
+                    vec![image_attachment("a.png")],
+                ),
+                ctx,
+            )
+        });
         append_user(&model, &mut app, conv, "second");
         model.update(&mut app, |m, ctx| m.enter_edit_mode(conv, id_a, ctx));
 
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(conv, ctx));
+        let action = model.read(&app, |m, _| m.peek_autofire(conv));
         match action {
-            Some(AutofireAction::PopFromEditMode { text }) => assert_eq!(text, "first"),
+            Some(AutofireAction::PopFromEditMode {
+                query_id,
+                text,
+                attachments,
+            }) => {
+                assert_eq!(query_id, id_a);
+                assert_eq!(text, "first");
+                assert_eq!(attachments.len(), 1);
+                assert_eq!(attachments[0].file_name(), "a.png");
+            }
             other => panic!("expected PopFromEditMode, got {other:?}"),
         }
-        model.read(&app, |model, _| {
-            assert_eq!(model.editing_row(conv), None);
+        // peek does not mutate: the row is still in edit mode.
+        model.read(&app, |m, _| assert_eq!(m.editing_row(conv), Some(id_a)));
+
+        model.update(&mut app, |m, ctx| m.remove_fired_row(conv, id_a, ctx));
+        model.read(&app, |m, _| {
+            assert_eq!(m.editing_row(conv), None);
+            assert_eq!(m.queue(conv).len(), 1);
         });
     });
 }

@@ -144,7 +144,9 @@ use super::view::{
 use super::warpify::SubshellSource;
 use super::{prompt, History, HistoryEntry, SizeInfo, TerminalModel, UpArrowHistoryConfig};
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::{AIAgentContext, AIAgentExchangeId, CancellationReason, EntrypointType};
+use crate::ai::agent::{
+    AIAgentContext, AIAgentExchangeId, CancellationReason, EntrypointType, ImageContext,
+};
 use crate::ai::agent_conversations_model::{
     AgentConversationNavigationSubject, AgentConversationsModel,
 };
@@ -168,15 +170,14 @@ use crate::ai::blocklist::handoff::touched_repos::{
 use crate::ai::blocklist::handoff::{HandoffLaunchAttachments, PendingCloudLaunch};
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::PendingAttachment;
 use crate::ai::blocklist::{
     ai_brand_color, ai_indicator_height, render_ai_agent_mode_icon, render_ai_follow_up_icon,
     AttachmentType, BlocklistAIActionModel, BlocklistAIContextEvent, BlocklistAIContextModel,
     BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
     BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputType,
-    InputTypeAutoDetectionSource, QueuedQuery, QueuedQueryEvent, QueuedQueryModel,
-    QueuedQueryOrigin, SlashCommandRequest, BLOCK_CONTEXT_ATTACHMENT_REGEX,
+    InputTypeAutoDetectionSource, PendingAttachment, PendingFile, QueuedQuery, QueuedQueryEvent,
+    QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin, SlashCommandRequest,
+    BLOCK_CONTEXT_ATTACHMENT_REGEX,
     DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
@@ -13364,7 +13365,12 @@ impl Input {
     /// Cancels the in-flight stream first so slash/skill paths don't trip the in-flight assertion.
     /// `is_for_same_conversation: true` keeps the conversation status `InProgress` so the warping
     /// indicator stays visible.
-    pub(crate) fn submit_queued_prompt(&mut self, prompt: String, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn submit_queued_prompt(
+        &mut self,
+        prompt: String,
+        query_id: QueuedQueryId,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if let Some(conversation_id) = self
             .ai_context_model
             .as_ref(ctx)
@@ -13424,12 +13430,42 @@ impl Input {
                     prompt,
                     conversation_id,
                     None,
+                    query_id,
                     ctx,
                 );
             });
         } else {
             self.ai_controller.update(ctx, move |controller, ctx| {
                 controller.send_queued_user_query_in_new_conversation(
+                    prompt,
+                    None,
+                    EntrypointType::UserInitiated,
+                    None,
+                    query_id,
+                    ctx,
+                );
+            });
+        }
+
+        ctx.emit(Event::ExecuteAIQuery);
+    }
+
+    /// Submits `prompt` immediately as a regular (non-queued) user query — the same controller
+    /// path `submit_ai_query` uses for a typed-and-entered prompt. Used by the `/queue`
+    /// not-in-progress fallback and the legacy pending-user-query submission paths, which are
+    /// immediate sends (not queued-row fires) and therefore reset their live staging.
+    pub(crate) fn submit_user_query_now(&mut self, prompt: String, ctx: &mut ViewContext<Self>) {
+        if let Some(conversation_id) = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        {
+            self.ai_controller.update(ctx, move |controller, ctx| {
+                controller.send_user_query_in_conversation(prompt, conversation_id, None, ctx);
+            });
+        } else {
+            self.ai_controller.update(ctx, move |controller, ctx| {
+                controller.send_user_query_in_new_conversation(
                     prompt,
                     None,
                     EntrypointType::UserInitiated,
@@ -13450,6 +13486,7 @@ impl Input {
     pub(crate) fn submit_queued_prompt_for_active_pane(
         &mut self,
         prompt: String,
+        query_id: QueuedQueryId,
         ctx: &mut ViewContext<Self>,
     ) {
         // Cloud follow-up path: the cloud run has ended an execution and the next queued
@@ -13463,24 +13500,40 @@ impl Input {
                         .is_ready_for_cloud_followup_prompt()
                 });
         if is_ready_for_cloud_followup {
+            // Cloud follow-up does not support attachments; a queued row's attachments are dropped
+            // when the row is removed after dispatch.
+            let drops_attachments = self
+                .ai_context_model
+                .as_ref(ctx)
+                .selected_conversation_id(ctx)
+                .is_some_and(|conversation_id| {
+                    !QueuedQueryModel::as_ref(ctx)
+                        .attachments_for(conversation_id, query_id)
+                        .is_empty()
+                });
+            if drops_attachments {
+                log::warn!(
+                    "Dropping attachments on a queued cloud follow-up prompt; cloud follow-up does not support attachments"
+                );
+            }
             ctx.emit(Event::SubmitCloudFollowup { prompt });
             return;
         }
 
         // Shared-session viewer path (covers an in-flight cloud run from the owner's client).
-        // Send the prompt straight to the sharer via Event::SendAgentPrompt — no buffer
-        // replace, no pending-attachment piggyback. When the user's editor is empty we
-        // also surface the standard `"<prompt> ◌"` loading affordance so the queued
-        // submission has visible feedback while the sharer ack flight is in flight; the
-        // `NetworkEvent::AgentPromptRequestInFlight` -> `unfreeze_and_clear_agent_input`
-        // hop will clear it once the sharer acknowledges receipt. If the user has typed
-        // something locally, we leave the buffer alone so their in-progress prompt is
-        // not clobbered.
+        // Send the prompt straight to the sharer via Event::SendAgentPrompt, carrying the queued
+        // row's own attachments (uploaded when supported). When the user's editor is empty we
+        // also surface the standard `"<prompt> ◌"` loading affordance so the queued submission has
+        // visible feedback while the sharer ack flight is in flight; the
+        // `NetworkEvent::AgentPromptRequestInFlight` -> `unfreeze_and_clear_agent_input` hop will
+        // clear it once the sharer acknowledges receipt. If the user has typed something locally,
+        // we leave the buffer alone so their in-progress prompt is not clobbered.
         if self.model.lock().shared_session_status().is_viewer() {
-            let server_conversation_token = self
+            let conversation_id = self
                 .ai_context_model
                 .as_ref(ctx)
-                .selected_conversation_id(ctx)
+                .selected_conversation_id(ctx);
+            let server_conversation_token = conversation_id
                 .and_then(|id| {
                     BlocklistAIHistoryModel::as_ref(ctx)
                         .conversation(&id)
@@ -13493,19 +13546,40 @@ impl Input {
                         .ok()
                         .map(ServerConversationToken::from_uuid)
                 });
+
+            // Split the firing row's stored attachments into images/files for upload.
+            let (images, files) = conversation_id
+                .map(|conversation_id| {
+                    let mut images: Vec<ImageContext> = Vec::new();
+                    let mut files: Vec<PendingFile> = Vec::new();
+                    for attachment in
+                        QueuedQueryModel::as_ref(ctx).attachments_for(conversation_id, query_id)
+                    {
+                        match attachment {
+                            PendingAttachment::Image(image) => images.push(image.clone()),
+                            PendingAttachment::File(file) => files.push(file.clone()),
+                        }
+                    }
+                    (images, files)
+                })
+                .unwrap_or_default();
+
             if self.editor.as_ref(ctx).buffer_text(ctx).is_empty() {
                 self.freeze_input_in_loading_state_with_text(&prompt, ctx);
             }
-            ctx.emit(Event::SendAgentPrompt {
+            self.upload_and_send_viewer_prompt(
                 server_conversation_token,
                 prompt,
-                attachments: vec![],
-            });
+                vec![],
+                images,
+                files,
+                ctx,
+            );
             return;
         }
 
         // Local Agent Mode path.
-        self.submit_queued_prompt(prompt, ctx);
+        self.submit_queued_prompt(prompt, query_id, ctx);
     }
 
     /// Checks whether the current input should be queued instead of executed.
@@ -13589,11 +13663,18 @@ impl Input {
         self.editor.update(ctx, |editor, ctx| {
             editor.clear_buffer(ctx);
         });
+        let attachments = self.ai_context_model.update(ctx, |context_model, ctx| {
+            context_model.take_pending_attachments(ctx)
+        });
 
         QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
             model.append(
                 conversation_id,
-                QueuedQuery::new(prompt, QueuedQueryOrigin::AutoQueueToggle),
+                QueuedQuery::new_with_attachments(
+                    prompt,
+                    QueuedQueryOrigin::AutoQueueToggle,
+                    attachments,
+                ),
                 ctx,
             );
         });
@@ -13645,13 +13726,17 @@ impl Input {
         self.editor.update(ctx, |editor, ctx| {
             editor.clear_buffer(ctx);
         });
-        self.ai_context_model.update(ctx, |context_model, ctx| {
-            context_model.clear_pending_attachments(ctx);
+        let attachments = self.ai_context_model.update(ctx, |context_model, ctx| {
+            context_model.take_pending_attachments(ctx)
         });
         QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
             model.append(
                 conversation_id,
-                QueuedQuery::new(prompt, QueuedQueryOrigin::AutoQueueToggle),
+                QueuedQuery::new_with_attachments(
+                    prompt,
+                    QueuedQueryOrigin::AutoQueueToggle,
+                    attachments,
+                ),
                 ctx,
             );
         });
@@ -13866,11 +13951,7 @@ impl Input {
                     .map(ServerConversationToken::from_uuid)
             });
 
-        let ambient_agent_task_id = self
-            .ambient_agent_view_model()
-            .and_then(|ambient_agent_model| ambient_agent_model.as_ref(ctx).task_id());
-
-        // Collect attachments from ai_context_model
+        // Collect block/selected-text references from the context model.
         let attachments: Vec<AgentAttachment> = self
             .ai_context_model
             .as_ref(ctx)
@@ -13904,7 +13985,34 @@ impl Input {
             .cloned()
             .collect();
 
-        let has_uploads = (!pending_images.is_empty() || !pending_files.is_empty())
+        self.upload_and_send_viewer_prompt(
+            server_conversation_token,
+            prompt,
+            attachments,
+            pending_images,
+            pending_files,
+            ctx,
+        );
+
+        true
+    }
+
+    /// Uploads `images`/`files` (when the cloud pane supports it) and emits `Event::SendAgentPrompt`
+    /// with the resulting attachments. Shared by the immediate viewer submission and the queued
+    /// viewer drain so both go through the identical upload-then-send path.
+    fn upload_and_send_viewer_prompt(
+        &mut self,
+        server_conversation_token: Option<ServerConversationToken>,
+        prompt: String,
+        base_attachments: Vec<AgentAttachment>,
+        images: Vec<ImageContext>,
+        files: Vec<PendingFile>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let ambient_agent_task_id = self
+            .ambient_agent_view_model()
+            .and_then(|ambient_agent_model| ambient_agent_model.as_ref(ctx).task_id());
+        let has_uploads = (!images.is_empty() || !files.is_empty())
             && FeatureFlag::CloudModeImageContext.is_enabled();
 
         if let Some(task_id) = ambient_agent_task_id.filter(|_| has_uploads) {
@@ -13913,24 +14021,22 @@ impl Input {
                 task_id,
                 server_conversation_token,
                 prompt,
-                attachments,
-                &pending_images,
-                &pending_files,
+                base_attachments,
+                &images,
+                &files,
                 ctx,
             );
         } else {
             // No files to upload, send prompt immediately
-            if !pending_images.is_empty() || !pending_files.is_empty() {
+            if !images.is_empty() || !files.is_empty() {
                 log::warn!("Cannot upload files: no task_id available");
             }
             ctx.emit(Event::SendAgentPrompt {
                 server_conversation_token,
                 prompt,
-                attachments,
+                attachments: base_attachments,
             });
         }
-
-        true
     }
 
     /// Uploads image and file attachments to GCS via presigned URLs, then emits `SendAgentPrompt`
