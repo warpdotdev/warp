@@ -49,6 +49,7 @@ pub struct WarpServerConfig {
     pub firebase_auth_api_key: Cow<'static, str>,
     /// Configuration for GCP Identity-Aware Proxy authentication, present only on
     /// staging builds. [`None`] on production builds.
+    #[serde(default)]
     pub iap_config: Option<IapConfig>,
 }
 
