@@ -152,6 +152,13 @@ impl OrchestrationEditState {
             AuthSecretSelection::Inherit | AuthSecretSelection::Unset => None,
         }
     }
+
+    /// User picked "New API key…". Reset to `Unset` so the picker keeps the
+    /// "New API key…" label and Accept stays blocked until a key is created
+    /// or chosen.
+    pub fn select_create_new_auth_secret(&mut self) {
+        self.auth_secret_selection = AuthSecretSelection::Unset;
+    }
 }
 
 impl OrchestrationEditState {
@@ -1250,18 +1257,14 @@ pub fn apply_auth_secret_change<A: OrchestrationControlAction, V: View>(
     persist_auth_secret_selection(&state.harness_type, &state.auth_secret_selection, ctx);
 }
 
-/// No-op on `state` — the prior selection is preserved so cancelling the
-/// modal restores the user to a working configuration. Successful creation
-/// updates the selection via the `AuthSecretCreated` subscription's call
-/// to [`apply_created_auth_secret_if_matches`].
-///
-/// Kept as a named function so both card views call through the same
-/// path; a future revision can hook snapshot-and-restore behavior here
-/// without touching call sites.
+/// Resets the selection to `Unset` while the create-key modal is open so
+/// Accept matches what the picker shows. Does not persist, so a cancel can
+/// still re-resolve the prior choice. Shared by both card views.
 pub fn apply_create_new_auth_secret_requested<V: View>(
-    _state: &mut OrchestrationEditState,
+    state: &mut OrchestrationEditState,
     _ctx: &mut ViewContext<V>,
 ) {
+    state.select_create_new_auth_secret();
 }
 
 /// Adopts a freshly-created secret as the active selection when its
