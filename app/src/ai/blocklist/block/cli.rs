@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lazy_static::lazy_static;
-use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
+use markdown_parser::{parse_markdown, FormattedText, FormattedTextFragment, FormattedTextLine};
 use parking_lot::{FairMutex, RwLock};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
@@ -27,7 +27,7 @@ use warpui::elements::{
     PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition, SelectableArea,
     SelectionHandle, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
 };
-use warpui::fonts::{Properties, Style, Weight};
+use warpui::fonts::{Properties, Style};
 use warpui::keymap::{EditableBinding, Keystroke};
 use warpui::platform::{Cursor, OperatingSystem};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
@@ -84,7 +84,7 @@ use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::{ShellLaunchData, TerminalModel};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
-use crate::util::link_detection::{detect_links, DetectedLinksState};
+use crate::util::link_detection::{detect_all_links, DetectedLinksState};
 use crate::view_components::action_button::{
     ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
 };
@@ -844,34 +844,66 @@ impl CLISubagentView {
     }
 
     fn set_state_from_updated_inputs(&mut self, ctx: &mut ViewContext<Self>) {
-        // Clear existing link detection state
+        self.secret_redaction_state.clear_user_query_locations();
         self.link_detection_state.detected_links_by_location.clear();
 
         self.reset_input_dismiss_timer(ctx);
 
-        // Detect links in all user queries
+        let mut texts = vec![];
+        let mut hyperlinks = vec![];
         for (input_index, input) in self.model.inputs_to_render(ctx).iter().enumerate() {
             if let AIAgentInput::UserQuery { query, .. } = input {
-                detect_links(
-                    &mut self.link_detection_state,
-                    query,
-                    TextLocation::Query { input_index },
-                    self.current_working_directory.as_ref(),
-                    self.shell_launch_data.as_ref(),
-                );
-
-                // Run secret redaction on user queries
                 let secret_redaction_mode = get_secret_obfuscation_mode(ctx);
-                if secret_redaction_mode.should_redact_secret() {
-                    let should_obfuscate = secret_redaction_mode.is_visually_obfuscated();
-                    self.secret_redaction_state.run_redaction_for_location(
-                        query,
-                        TextLocation::Query { input_index },
-                        should_obfuscate,
-                    );
+                if let Ok(formatted_query) = parse_markdown(query) {
+                    for (line_index, line) in formatted_query.lines.iter().enumerate() {
+                        let location = TextLocation::Query {
+                            input_index,
+                            line_index,
+                        };
+                        let raw_text = line.raw_text().to_owned();
+                        texts.push((raw_text.clone(), location));
+
+                        let url_hyperlinks = line
+                            .hyperlinks(true)
+                            .into_iter()
+                            .filter_map(|(range, hyperlink)| hyperlink.url().map(|url| (range, url)))
+                            .collect::<Vec<_>>();
+                        if !url_hyperlinks.is_empty() {
+                            hyperlinks.push((location, url_hyperlinks));
+                        }
+
+                        if secret_redaction_mode.should_redact_secret() {
+                            self.secret_redaction_state.run_redaction_for_location(
+                                &raw_text,
+                                location,
+                                secret_redaction_mode.is_visually_obfuscated(),
+                            );
+                        }
+                    }
+                } else {
+                    let location = TextLocation::Query {
+                        input_index,
+                        line_index: 0,
+                    };
+                    texts.push((query.to_owned(), location));
+
+                    if secret_redaction_mode.should_redact_secret() {
+                        self.secret_redaction_state.run_redaction_for_location(
+                            query,
+                            location,
+                            secret_redaction_mode.is_visually_obfuscated(),
+                        );
+                    }
                 }
             }
         }
+        let all_links = detect_all_links(
+            &texts,
+            hyperlinks,
+            self.current_working_directory.as_ref(),
+            self.shell_launch_data.as_ref(),
+        );
+        self.link_detection_state.replace_all_links(all_links);
     }
 
     /// Clears text selections at the `CLISubagentView` level (e.g. user query text).
@@ -976,10 +1008,6 @@ impl View for CLISubagentView {
                         is_selecting: self.state_handles.query_selection_handle.is_selecting(),
                         is_ai_input_enabled: false,
                         find_context: None,
-                        font_properties: &Properties {
-                            style: Style::Normal,
-                            weight: Weight::Normal,
-                        },
                     },
                     app,
                 );
@@ -1000,7 +1028,7 @@ impl View for CLISubagentView {
                             ctx.dispatch_typed_action(CLISubagentAction::SelectText);
                         }
                     },
-                    text.finish(),
+                    text,
                 )
                 .with_word_boundaries_policy(semantic_selection.word_boundary_policy())
                 .with_smart_select_fn(semantic_selection.smart_select_fn());

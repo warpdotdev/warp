@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use itertools::Itertools;
-use markdown_parser::{FormattedText, FormattedTextInline, TableAlignment};
+use markdown_parser::{parse_markdown, FormattedText, FormattedTextInline, TableAlignment};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::channel::ChannelState;
@@ -1613,11 +1613,14 @@ pub(super) fn render_rich_text_output_text_section(
         props.detected_links,
         props.secret_redaction_state,
         props.find_context,
-        props.section_index,
+        |line_index| TextLocation::Output {
+            section_index: props.section_index,
+            line_index,
+        },
         line_count,
         appearance.theme(),
         props.is_selecting_text,
-        false,
+        None,
         app,
     );
 
@@ -3443,7 +3446,6 @@ pub struct UserQueryProps<'a> {
     pub is_selecting: bool,
     pub is_ai_input_enabled: bool,
     pub find_context: Option<FindContext<'a>>,
-    pub font_properties: &'a Properties,
 }
 pub(crate) fn user_query_mode_prefix_highlight_len(mode: UserQueryMode) -> Option<usize> {
     match mode {
@@ -3496,23 +3498,96 @@ pub(super) fn query_prefix_highlight_len(
     }
 }
 
-/// Renders query text with all interactive features: link detection, secret redaction, and highlights.
-/// Returns a text element ready to be placed in a layout.
-pub fn render_query_text(props: UserQueryProps<'_>, app: &AppContext) -> Text {
+pub fn render_query_text(props: UserQueryProps<'_>, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
+    let text_color = blended_colors::text_main(theme, theme.surface_1());
+
+    if let Ok(formatted_text) = parse_markdown(&props.text) {
+        let inline_code_bg_color = theme.background().into_solid();
+        let inline_code_text_color = theme.terminal_colors().normal.green.into();
+        let line_count = formatted_text.lines.len();
+        let mut rich_text_element = FormattedTextElement::new(
+            formatted_text,
+            appearance.monospace_font_size(),
+            appearance.ai_font_family(),
+            appearance.monospace_font_family(),
+            text_color,
+            Default::default(),
+        )
+        .with_selection_color(if props.is_ai_input_enabled {
+            theme.text_selection_as_context_color().into_solid()
+        } else {
+            theme.text_selection_color().into_solid()
+        })
+        .with_line_height_ratio(1.2)
+        .with_heading_to_font_size_multipliers(HeadingFontSizeMultipliers {
+            h1: 1.55,
+            h2: 1.4,
+            h3: 1.2,
+            ..Default::default()
+        })
+        .with_inline_code_properties(Some(inline_code_text_color), Some(inline_code_bg_color))
+        .set_selectable(true);
+
+        rich_text_element.register_handlers(|mut frame, (line_index, _)| {
+            let location = TextLocation::Query {
+                input_index: props.input_index,
+                line_index,
+            };
+            frame = add_link_detection_mouse_interactions(
+                frame,
+                props.detected_links_state,
+                LinkActionConstructors::<AIBlockAction>::build_ai_block_action(),
+                location,
+            );
+
+            let secret_redaction = get_secret_obfuscation_mode(app);
+            if secret_redaction.should_redact_secret() {
+                if let Some(secrets) = props.secret_redaction_state.secrets_for_location(&location)
+                {
+                    frame = redact_secrets_in_element(
+                        frame,
+                        secrets,
+                        location,
+                        secret_redaction.is_visually_obfuscated(),
+                    );
+                }
+            }
+            frame
+        });
+
+        rich_text_element = add_highlights_to_rich_text(
+            rich_text_element,
+            Some(props.detected_links_state),
+            props.secret_redaction_state,
+            props.find_context,
+            |line_index| TextLocation::Query {
+                input_index: props.input_index,
+                line_index,
+            },
+            line_count,
+            theme,
+            props.is_selecting,
+            props.query_prefix_highlight_len,
+            app,
+        );
+
+        return rich_text_element.finish();
+    }
 
     let location = TextLocation::Query {
         input_index: props.input_index,
+        line_index: 0,
     };
 
     let mut text_element = Text::new(
         props.text,
-        appearance.monospace_font_family(),
+        appearance.ai_font_family(),
         appearance.monospace_font_size(),
     )
-    .with_style(*props.font_properties)
-    .with_color(blended_colors::text_main(theme, theme.surface_1()))
+    .with_style(Properties::default().weight(appearance.monospace_font_weight()))
+    .with_color(text_color)
     .with_selection_color(if props.is_ai_input_enabled {
         theme.text_selection_as_context_color().into_solid()
     } else {
@@ -3544,12 +3619,11 @@ pub fn render_query_text(props: UserQueryProps<'_>, app: &AppContext) -> Text {
         props.find_context,
         location,
         props.is_selecting,
-        Some(*props.font_properties),
+        None,
         props.query_prefix_highlight_len,
         app,
     );
-
-    text_element
+    text_element.finish()
 }
 
 /// Renders a scrollable collapsible content area with auto-scroll-to-bottom

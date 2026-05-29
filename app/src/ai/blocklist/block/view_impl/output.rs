@@ -1701,11 +1701,14 @@ pub fn render_read_files_text<A: Action>(
         Some(render_read_file_args.render_context.detected_links_state),
         render_read_file_args.render_context.secret_redaction_state,
         render_read_file_args.find_context,
-        action_index,
+        |line_index| TextLocation::Action {
+            action_index,
+            line_index,
+        },
         file_names.lines().count(),
         theme,
         render_read_file_args.is_selecting_text,
-        true,
+        None,
         app,
     );
     formatted_files

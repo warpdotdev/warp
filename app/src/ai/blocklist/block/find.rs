@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use itertools::Itertools;
+use markdown_parser::parse_markdown;
 use regex::RegexBuilder;
 
 use super::{AIBlock, TextLocation};
@@ -51,17 +52,31 @@ impl FindableRichContentView for AIBlock {
         let mut new_match_ids = vec![];
         for (i, input) in self.model.inputs_to_render(ctx).iter().enumerate() {
             if let Some(query) = input.user_query() {
-                for find_match_range in compute_find_matches(&query, options).into_iter() {
-                    let id = RichContentMatchId::default();
-                    new_match_ids.push(id);
-                    self.find_state.matches.insert(
-                        id,
-                        FindMatchLocation {
-                            text_location: TextLocation::Query { input_index: i },
-                            char_range: find_match_range,
-                            message_id: None,
-                        },
-                    );
+                let query_matches = match parse_markdown(&query) {
+                    Ok(formatted_query) => formatted_query
+                        .lines
+                        .iter()
+                        .map(|line| compute_find_matches(&line.raw_text(), options))
+                        .collect_vec(),
+                    Err(_) => vec![compute_find_matches(&query, options)],
+                };
+
+                for (line_index, line_matches) in query_matches.into_iter().enumerate() {
+                    for find_match_range in line_matches {
+                        let id = RichContentMatchId::default();
+                        new_match_ids.push(id);
+                        self.find_state.matches.insert(
+                            id,
+                            FindMatchLocation {
+                                text_location: TextLocation::Query {
+                                    input_index: i,
+                                    line_index,
+                                },
+                                char_range: find_match_range,
+                                message_id: None,
+                            },
+                        );
+                    }
                 }
             }
         }

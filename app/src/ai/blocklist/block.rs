@@ -30,6 +30,7 @@ use cli_controller::{CLISubagentController, CLISubagentEvent};
 use find::FindState;
 use indexmap::IndexMap;
 use itertools::Itertools;
+use markdown_parser::parse_markdown;
 use model::AIBlockOutputStatus;
 use parking_lot::{FairMutex, Mutex, RwLock};
 use pathfinder_color::ColorU;
@@ -270,6 +271,7 @@ pub enum TextLocation {
     },
     Query {
         input_index: usize,
+        line_index: usize,
     },
     Action {
         action_index: usize,
@@ -1509,10 +1511,28 @@ impl AIBlock {
             let Some(query) = input.display_user_query(initial_conversation_query.as_ref()) else {
                 continue;
             };
-            if secret_redaction_mode.should_redact_secret() {
+            if !secret_redaction_mode.should_redact_secret() {
+                continue;
+            }
+
+            if let Ok(formatted_query) = parse_markdown(&query) {
+                for (line_index, line) in formatted_query.lines.iter().enumerate() {
+                    self.secret_redaction_state.run_redaction_for_location(
+                        &line.raw_text(),
+                        TextLocation::Query {
+                            input_index,
+                            line_index,
+                        },
+                        secret_redaction_mode.is_visually_obfuscated(),
+                    );
+                }
+            } else {
                 self.secret_redaction_state.run_redaction_for_location(
                     &query,
-                    TextLocation::Query { input_index },
+                    TextLocation::Query {
+                        input_index,
+                        line_index: 0,
+                    },
                     secret_redaction_mode.is_visually_obfuscated(),
                 );
             }
@@ -1535,7 +1555,7 @@ impl AIBlock {
         let output_guard = shared_output.as_ref().map(|o| o.get());
         let output = output_guard.as_deref();
 
-        let (mut texts, hyperlinks) = match output {
+        let (mut texts, mut hyperlinks) = match output {
             Some(output) => collect_output_data_for_link_detection(
                 output,
                 self.current_working_directory.as_ref(),
@@ -1550,7 +1570,32 @@ impl AIBlock {
             .and_then(|conversation| conversation.initial_user_query());
         for (input_index, input) in self.model.inputs_to_render(ctx).iter().enumerate() {
             if let Some(query) = input.display_user_query(initial_conversation_query.as_ref()) {
-                texts.push((query, TextLocation::Query { input_index }));
+                if let Ok(formatted_query) = parse_markdown(&query) {
+                    for (line_index, line) in formatted_query.lines.iter().enumerate() {
+                        let location = TextLocation::Query {
+                            input_index,
+                            line_index,
+                        };
+                        texts.push((line.raw_text().to_owned(), location));
+
+                        let url_hyperlinks = line
+                            .hyperlinks(true)
+                            .into_iter()
+                            .filter_map(|(range, hyperlink)| hyperlink.url().map(|url| (range, url)))
+                            .collect::<Vec<_>>();
+                        if !url_hyperlinks.is_empty() {
+                            hyperlinks.push((location, url_hyperlinks));
+                        }
+                    }
+                } else {
+                    texts.push((
+                        query,
+                        TextLocation::Query {
+                            input_index,
+                            line_index: 0,
+                        },
+                    ));
+                }
             }
         }
 

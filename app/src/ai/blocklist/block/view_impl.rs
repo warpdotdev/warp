@@ -148,6 +148,89 @@ fn add_slash_command_highlight(
     }
 }
 
+fn add_slash_command_prefix_highlights(
+    merged_highlighted_ranges: Vec<HighlightedRange>,
+    slash_command_prefix_len: Option<usize>,
+    app: &AppContext,
+) -> Vec<HighlightedRange> {
+    let Some(slash_command_prefix_len) = slash_command_prefix_len else {
+        return merged_highlighted_ranges;
+    };
+    let appearance = Appearance::as_ref(app);
+    let mut unhandled_prefix_indices: HashSet<usize> = (0..slash_command_prefix_len).collect();
+    let mut result = vec![];
+
+    for range in merged_highlighted_ranges {
+        let range_start = range.highlight_indices.first().cloned().unwrap_or(0);
+        let range_end = range
+            .highlight_indices
+            .last()
+            .cloned()
+            .unwrap_or(range_start);
+
+        if range_end < slash_command_prefix_len {
+            for &idx in &range.highlight_indices {
+                unhandled_prefix_indices.remove(&idx);
+            }
+            result.push(HighlightedRange {
+                highlight: add_slash_command_highlight(appearance, Some(range.highlight)),
+                highlight_indices: range.highlight_indices,
+            });
+        } else if range_start >= slash_command_prefix_len {
+            result.push(range);
+        } else {
+            let mut prefix_part_indices = vec![];
+            let mut after_part_indices = vec![];
+
+            for idx in range.highlight_indices {
+                if idx < slash_command_prefix_len {
+                    prefix_part_indices.push(idx);
+                    unhandled_prefix_indices.remove(&idx);
+                } else {
+                    after_part_indices.push(idx);
+                }
+            }
+
+            if !prefix_part_indices.is_empty() {
+                result.push(HighlightedRange {
+                    highlight: add_slash_command_highlight(appearance, Some(range.highlight)),
+                    highlight_indices: prefix_part_indices,
+                });
+            }
+            if !after_part_indices.is_empty() {
+                result.push(HighlightedRange {
+                    highlight: range.highlight,
+                    highlight_indices: after_part_indices,
+                });
+            }
+        }
+    }
+
+    if !unhandled_prefix_indices.is_empty() {
+        let mut sorted_indices: Vec<usize> = unhandled_prefix_indices.into_iter().collect();
+        sorted_indices.sort_unstable();
+
+        let mut current_group = vec![sorted_indices[0]];
+        for &idx in &sorted_indices[1..] {
+            if idx == current_group.last().unwrap() + 1 {
+                current_group.push(idx);
+            } else {
+                result.push(HighlightedRange {
+                    highlight: add_slash_command_highlight(appearance, None),
+                    highlight_indices: current_group,
+                });
+                current_group = vec![idx];
+            }
+        }
+        result.push(HighlightedRange {
+            highlight: add_slash_command_highlight(appearance, None),
+            highlight_indices: current_group,
+        });
+    }
+
+    result
+}
+
 /// Adds the appropriate highlighting for secrets and links to the given text element.
 #[allow(clippy::too_many_arguments)]
 fn add_highlights_to_text(
@@ -404,11 +487,11 @@ pub(crate) fn add_highlights_to_rich_text(
     detected_links_state: Option<&DetectedLinksState>,
     secret_redaction_state: &SecretRedactionState,
     find_context: Option<FindContext<'_>>,
-    location_index: usize,
+    location_for_line: impl Fn(usize) -> TextLocation,
     line_count: usize,
     theme: &WarpTheme,
     is_selecting: bool,
-    is_action: bool,
+    slash_command_prefix_len: Option<usize>,
     app: &AppContext,
 ) -> FormattedTextElement {
     let ansi_blue = theme.terminal_colors().normal.blue;
@@ -428,17 +511,7 @@ pub(crate) fn add_highlights_to_rich_text(
         Highlight::new().with_text_style(TextStyle::new().with_foreground_color(ansi_blue.into()));
 
     for i in 0..line_count {
-        let location = if is_action {
-            TextLocation::Action {
-                action_index: location_index,
-                line_index: i,
-            }
-        } else {
-            TextLocation::Output {
-                section_index: location_index,
-                line_index: i,
-            }
-        };
+        let location = location_for_line(i);
 
         let mut style_ranges = vec![];
         if let Some(detected_links_state) = detected_links_state {
@@ -591,7 +664,11 @@ pub(crate) fn add_highlights_to_rich_text(
             ));
         }
 
-        let merged_range = HighlightedRange::merge_overlapping_ranges(style_ranges);
+        let merged_range = add_slash_command_prefix_highlights(
+            HighlightedRange::merge_overlapping_ranges(style_ranges),
+            (i == 0).then_some(slash_command_prefix_len).flatten(),
+            app,
+        );
         let sorted_range = merged_range
             .into_iter()
             .sorted_by_key(|range| range.highlight_indices[0]);

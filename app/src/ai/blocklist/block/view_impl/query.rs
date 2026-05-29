@@ -9,7 +9,6 @@ use warpui::elements::{
     Container, CornerRadius, DispatchEventResult, EventHandler, Flex, MainAxisAlignment,
     MainAxisSize, ParentElement, Radius, Shrinkable, Wrap,
 };
-use warpui::fonts::{Properties, Style, Weight};
 use warpui::ui_components::chip::Chip;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, SingletonEntity};
@@ -83,10 +82,6 @@ pub(crate) fn render_query(
     .with_margin_right(16.)
     .finish();
 
-    let properties = Properties {
-        style: Style::Normal,
-        weight: Weight::Bold,
-    };
     // The query already includes the /plan prefix when in plan mode via display_user_query()
     let text_element = render_query_text(
         UserQueryProps {
@@ -98,13 +93,12 @@ pub(crate) fn render_query(
             is_selecting,
             is_ai_input_enabled,
             find_context,
-            font_properties: &properties,
         },
         app,
     );
 
     let appearance = Appearance::as_ref(app);
-    let mut query = Flex::column().with_child(text_element.finish());
+    let mut query = Flex::column().with_child(text_element);
 
     if FeatureFlag::ImageAsContext.is_enabled() {
         query = query.with_child(render_attachments(attachments, appearance));
