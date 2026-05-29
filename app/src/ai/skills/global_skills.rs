@@ -6,7 +6,7 @@ use std::{
     str::FromStr,
 };
 
-use ai::skills::{ParsedSkill, provider_rank};
+use ai::skills::{provider_rank, ParsedSkill};
 use warp_cli::skill::SkillSpec;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 

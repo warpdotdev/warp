@@ -207,6 +207,15 @@ fn make_ambient_task_with_event_seq(
     }
 }
 
+fn make_ambient_task_with_task_id(
+    task_id: AmbientAgentTaskId,
+    last_event_sequence: Option<i64>,
+) -> crate::ai::ambient_agents::AmbientAgentTask {
+    let mut task = make_ambient_task_with_event_seq(last_event_sequence);
+    task.task_id = task_id;
+    task
+}
+
 fn make_server_metadata_with_harness(
     harness: AIAgentHarness,
 ) -> crate::ai::agent::conversation::ServerAIConversationMetadata {
@@ -1227,6 +1236,380 @@ fn on_conversation_removed_prunes_killed_child_run_id_from_parent_but_keeps_tomb
     });
 }
 
+// ---- Viewer-mode bookkeeping surface ----
+//
+// The tests below cover the additive surface that supports the
+// viewer-mode ancestor SSE path: `conversation_status_from_lifecycle_event_type`,
+// `is_known_child`, the `register_viewer_mode_consumer` /
+// `unregister_viewer_mode_consumer` refcount, and the
+// `is_remote_run_view` flag-gated relaxation. These tests drive the
+// bookkeeping directly via pure-function calls or short App fixtures.
+
+#[test]
+fn lifecycle_event_type_in_progress_maps_to_in_progress() {
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::InProgress),
+        ConversationStatus::InProgress
+    );
+}
+
+#[test]
+fn lifecycle_event_type_succeeded_maps_to_success() {
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Succeeded),
+        ConversationStatus::Success
+    );
+}
+
+#[test]
+fn lifecycle_event_type_failed_maps_to_error() {
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Failed),
+        ConversationStatus::Error
+    );
+}
+
+#[test]
+fn lifecycle_event_type_errored_maps_to_error() {
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Errored),
+        ConversationStatus::Error
+    );
+}
+
+#[test]
+fn lifecycle_event_type_cancelled_maps_to_cancelled() {
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Cancelled),
+        ConversationStatus::Cancelled
+    );
+}
+
+#[test]
+fn lifecycle_event_type_blocked_maps_to_blocked_with_empty_action() {
+    // Matches the REST path on `AmbientAgentTaskState::Blocked`: empty
+    // `blocked_action`. The wire event does not currently carry a
+    // `blocked_action` payload.
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Blocked),
+        ConversationStatus::Blocked {
+            blocked_action: String::new(),
+        }
+    );
+}
+
+#[test]
+#[allow(deprecated)]
+fn lifecycle_event_type_legacy_started_maps_to_in_progress() {
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Started),
+        ConversationStatus::InProgress
+    );
+}
+
+#[test]
+#[allow(deprecated)]
+fn lifecycle_event_type_legacy_restarted_maps_to_in_progress() {
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Restarted),
+        ConversationStatus::InProgress
+    );
+}
+
+#[test]
+#[allow(deprecated)]
+fn lifecycle_event_type_legacy_idle_maps_to_success() {
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Idle),
+        ConversationStatus::Success
+    );
+}
+
+#[test]
+fn unknown_lifecycle_maps_to_error() {
+    // `Unspecified` is the proto's forward-compat catch-all. The viewer's
+    // `AmbientAgentTaskState::Unknown` similarly collapses to `Error`;
+    // matching that keeps the pill bar in a defined state for any future
+    // wire-level variant the client doesn't recognize.
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Unspecified),
+        ConversationStatus::Error
+    );
+}
+
+fn make_parent_task_id_for_test(byte: u8) -> AmbientAgentTaskId {
+    // Stable, distinct task IDs per byte; the UUID itself is not load-bearing.
+    let mut bytes = [0u8; 16];
+    bytes[0] = 0x55;
+    bytes[1] = 0x0e;
+    bytes[2] = 0x84;
+    bytes[3] = 0x00;
+    bytes[4] = 0xe2;
+    bytes[5] = 0x9b;
+    bytes[6] = 0x41;
+    bytes[7] = 0xd4;
+    bytes[8] = 0xa7;
+    bytes[9] = 0x16;
+    bytes[10] = 0x44;
+    bytes[11] = 0x66;
+    bytes[12] = 0x55;
+    bytes[13] = 0x44;
+    bytes[14] = 0x00;
+    bytes[15] = byte;
+    let uuid = uuid::Uuid::from_bytes(bytes);
+    let s = uuid.to_string();
+    s.parse().expect("valid task id")
+}
+
+#[test]
+fn is_known_child_dedupes_per_parent_after_first_observation() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let mock = MockAIClient::new();
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let parent_task_id = make_parent_task_id_for_test(0xa1);
+        let run_id = "child-run-1";
+
+        // Before any registration, the entry doesn't exist and the run is unknown.
+        streamer.read(&app, |me, _| {
+            assert!(
+                !me.is_known_child(parent_task_id, run_id),
+                "unknown parent_task_id must report run as not-known"
+            );
+        });
+
+        // Register a consumer to materialize the entry, then seed the known
+        // set (simulating the emission path that populates this on the
+        // first lifecycle event observed for a new run_id).
+        let consumer_id = warpui::EntityId::new();
+        let placeholder_conv_id =
+            crate::ai::agent::conversation::AIConversation::new(true, false).id();
+        streamer.update(&mut app, |me, ctx| {
+            me.register_viewer_mode_consumer(parent_task_id, placeholder_conv_id, consumer_id, ctx);
+        });
+
+        streamer.read(&app, |me, _| {
+            assert!(
+                !me.is_known_child(parent_task_id, run_id),
+                "newly-registered viewer-mode entry must report unseen run as not-known"
+            );
+        });
+
+        // First observation: seed `known_children` (emission path).
+        streamer.update(&mut app, |me, _| {
+            me.viewer_mode_orchestrators
+                .get_mut(&parent_task_id)
+                .expect("entry exists")
+                .known_children
+                .insert(run_id.to_string());
+        });
+
+        streamer.read(&app, |me, _| {
+            assert!(
+                me.is_known_child(parent_task_id, run_id),
+                "after first observation the run must be known"
+            );
+        });
+    });
+}
+
+#[test]
+fn is_known_child_isolated_per_parent() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let mock = MockAIClient::new();
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let parent_a = make_parent_task_id_for_test(0xb1);
+        let parent_b = make_parent_task_id_for_test(0xb2);
+        let shared_run_id = "child-run-shared";
+
+        let consumer_id = warpui::EntityId::new();
+        let placeholder_conv_id =
+            crate::ai::agent::conversation::AIConversation::new(true, false).id();
+        streamer.update(&mut app, |me, ctx| {
+            me.register_viewer_mode_consumer(parent_a, placeholder_conv_id, consumer_id, ctx);
+            me.register_viewer_mode_consumer(parent_b, placeholder_conv_id, consumer_id, ctx);
+            me.viewer_mode_orchestrators
+                .get_mut(&parent_a)
+                .expect("entry A")
+                .known_children
+                .insert(shared_run_id.to_string());
+        });
+
+        streamer.read(&app, |me, _| {
+            assert!(
+                me.is_known_child(parent_a, shared_run_id),
+                "run_id seeded under parent A must be known to parent A"
+            );
+            assert!(
+                !me.is_known_child(parent_b, shared_run_id),
+                "per-parent isolation: run_id seeded under parent A must NOT be known to parent B"
+            );
+        });
+    });
+}
+
+#[test]
+fn viewer_mode_consumer_refcount_handles_multiple_panes_and_double_unregister() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let mock = MockAIClient::new();
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let parent_task_id = make_parent_task_id_for_test(0xc1);
+        let consumer_a = warpui::EntityId::new();
+        let consumer_b = warpui::EntityId::new();
+        // Each pane has its own orchestrator-placeholder conversation; the
+        // recorded value is used to persist per-pane cursors.
+        let placeholder_a = crate::ai::agent::conversation::AIConversation::new(true, false).id();
+        let placeholder_b = crate::ai::agent::conversation::AIConversation::new(true, false).id();
+
+        // Register two panes for the same orchestrator. Refcount should be 2
+        // and both placeholders should be recorded.
+        streamer.update(&mut app, |me, ctx| {
+            me.register_viewer_mode_consumer(parent_task_id, placeholder_a, consumer_a, ctx);
+            me.register_viewer_mode_consumer(parent_task_id, placeholder_b, consumer_b, ctx);
+        });
+
+        streamer.read(&app, |me, _| {
+            let entry = me
+                .viewer_mode_orchestrators
+                .get(&parent_task_id)
+                .expect("entry must exist after registration");
+            assert_eq!(entry.consumers.len(), 2, "two viewer panes => refcount=2");
+            assert_eq!(entry.consumers.get(&consumer_a), Some(&placeholder_a));
+            assert_eq!(entry.consumers.get(&consumer_b), Some(&placeholder_b));
+        });
+
+        // Unregister pane A. Entry must stay alive (pane B still registered).
+        streamer.update(&mut app, |me, _| {
+            me.unregister_viewer_mode_consumer(parent_task_id, consumer_a);
+        });
+        streamer.read(&app, |me, _| {
+            let entry = me
+                .viewer_mode_orchestrators
+                .get(&parent_task_id)
+                .expect("entry must remain while at least one consumer is registered");
+            assert_eq!(entry.consumers.len(), 1);
+            assert!(entry.consumers.contains_key(&consumer_b));
+        });
+
+        // Unregister pane B. Entry should now be removed.
+        streamer.update(&mut app, |me, _| {
+            me.unregister_viewer_mode_consumer(parent_task_id, consumer_b);
+        });
+        streamer.read(&app, |me, _| {
+            assert!(
+                !me.viewer_mode_orchestrators.contains_key(&parent_task_id),
+                "entry must be removed once the last consumer unregisters"
+            );
+        });
+
+        // Double-unregister must be a no-op. Covers the `Drop` refcount race
+        // where a late `Drop` impl unregisters after the last consumer has
+        // already removed the entry.
+        streamer.update(&mut app, |me, _| {
+            me.unregister_viewer_mode_consumer(parent_task_id, consumer_a);
+            me.unregister_viewer_mode_consumer(parent_task_id, consumer_b);
+        });
+        streamer.read(&app, |me, _| {
+            assert!(
+                !me.viewer_mode_orchestrators.contains_key(&parent_task_id),
+                "entry must stay absent after double-unregister"
+            );
+        });
+    });
+}
+
+#[test]
+fn is_remote_run_view_excludes_shared_session_viewer() {
+    use crate::ai::agent::conversation::AIConversation;
+
+    App::test((), |mut app| async move {
+        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        // Build a shared-session viewer conversation by passing
+        // `is_viewing_shared_session = true` to `AIConversation::new`.
+        let conversation = AIConversation::new(true, false);
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let mock = MockAIClient::new();
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        streamer.read(&app, |me, ctx| {
+            assert!(
+                me.is_remote_run_view(conversation_id, ctx),
+                "shared-session viewer conversations are passive remote-run views"
+            );
+        });
+    });
+}
+
+#[test]
+fn is_remote_run_view_excludes_remote_child() {
+    use crate::ai::agent::conversation::AIConversation;
+
+    App::test((), |mut app| async move {
+        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let mut conversation = AIConversation::new(false, false);
+        conversation.mark_as_remote_child();
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let mock = MockAIClient::new();
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        streamer.read(&app, |me, ctx| {
+            assert!(
+                me.is_remote_run_view(conversation_id, ctx),
+                "remote-child conversations represent owner-side runs hosted elsewhere"
+            );
+        });
+    });
+}
+
 #[test]
 fn reevaluate_eligibility_does_not_reconnect_when_watched_run_ids_unchanged() {
     App::test((), |mut app| async move {
@@ -1407,5 +1790,186 @@ fn finish_restore_fetch_reconnects_sse_when_children_added_to_open_connection() 
                 "SSE must be reconnected (new generation) after children are discovered; got generation={generation:?}"
             );
         });
+    });
+}
+
+/// Captures `ChildSpawned` events emitted by the streamer so the regression
+/// tests below can assert exactly which children were broadcast.
+///
+/// Subscribes from the app context (mirrors the pattern in
+/// `notebooks/link_tests.rs`) so we don't need a real subscriber model.
+fn capture_child_spawns(
+    app: &mut App,
+    streamer: &warpui::ModelHandle<OrchestrationEventStreamer>,
+) -> std::sync::Arc<parking_lot::Mutex<Vec<(AmbientAgentTaskId, String)>>> {
+    let captured: std::sync::Arc<parking_lot::Mutex<Vec<(AmbientAgentTaskId, String)>>> =
+        std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let captured_for_closure = captured.clone();
+    app.update(|ctx| {
+        ctx.subscribe_to_model(streamer, move |_, event, _| {
+            if let OrchestrationEventStreamerEvent::ChildSpawned {
+                parent_task_id,
+                run_id,
+            } = event
+            {
+                captured_for_closure
+                    .lock()
+                    .push((*parent_task_id, run_id.clone()));
+            }
+        })
+    });
+    captured
+}
+
+#[test]
+fn finish_ancestor_seed_fetch_emits_child_spawned_for_each_seeded_child() {
+    // Regression test for the orchestration viewer pill bar in the
+    // remote-remote case: the cold-start REST seed must broadcast
+    // `ChildSpawned` for every seeded child so the viewer model materializes
+    // a pill placeholder per child. Previously the seed populated
+    // `known_children` and advanced the cursor but did not emit, so
+    // the pill bar stayed empty until a new lifecycle event arrived for
+    // a child the SSE had not yet replayed.
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let mock = MockAIClient::new();
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let parent_task_id = make_parent_task_id_for_test(0xd1);
+        let child_a = make_parent_task_id_for_test(0xd2);
+        let child_b = make_parent_task_id_for_test(0xd3);
+
+        // Register a viewer-mode consumer so the entry exists. The seed
+        // fetch is normally kicked off by registration; here we drive
+        // `finish_ancestor_seed_fetch` synchronously to control the input.
+        let consumer_id = warpui::EntityId::new();
+        let placeholder_conv_id =
+            crate::ai::agent::conversation::AIConversation::new(true, false).id();
+        streamer.update(&mut app, |me, ctx| {
+            me.register_viewer_mode_consumer(parent_task_id, placeholder_conv_id, consumer_id, ctx);
+        });
+
+        let captured_spawns = capture_child_spawns(&mut app, &streamer);
+
+        // Drive the seed-apply path directly with a parent-and-two-children
+        // payload (matching the REST endpoint shape that may include the
+        // parent itself in the response).
+        streamer.update(&mut app, |me, ctx| {
+            me.finish_ancestor_seed_fetch(
+                parent_task_id,
+                Ok(vec![
+                    make_ambient_task_with_task_id(parent_task_id, Some(5)),
+                    make_ambient_task_with_task_id(child_a, Some(11)),
+                    make_ambient_task_with_task_id(child_b, Some(7)),
+                ]),
+                ctx,
+            );
+        });
+
+        let spawns = captured_spawns.lock().clone();
+        let mut seen: Vec<String> = spawns
+            .iter()
+            .filter(|(parent, _)| *parent == parent_task_id)
+            .map(|(_, run_id)| run_id.clone())
+            .collect();
+        seen.sort();
+        let mut expected = vec![child_a.to_string(), child_b.to_string()];
+        expected.sort();
+        assert_eq!(
+            seen, expected,
+            "ChildSpawned must be emitted exactly once per seeded child \
+             (parent excluded)"
+        );
+
+        streamer.read(&app, |me, _| {
+            assert!(
+                me.is_known_child(parent_task_id, &child_a.to_string()),
+                "child_a should be in known_children after seed"
+            );
+            assert!(
+                me.is_known_child(parent_task_id, &child_b.to_string()),
+                "child_b should be in known_children after seed"
+            );
+            assert!(
+                !me.is_known_child(parent_task_id, &parent_task_id.to_string()),
+                "the parent's own task_id must NOT be tracked as a child"
+            );
+            let entry = me
+                .viewer_mode_orchestrators
+                .get(&parent_task_id)
+                .expect("viewer-mode entry exists after seed");
+            assert!(entry.seeded, "seeded flag must flip after seed apply");
+            assert_eq!(
+                entry.event_cursor, 11,
+                "event_cursor must advance to max(child.last_event_sequence)"
+            );
+        });
+    });
+}
+
+#[test]
+fn register_viewer_mode_consumer_replays_known_children_for_later_panes() {
+    // Regression for the late-arriving-consumer arm of the same bug: the
+    // shared-session viewer model often registers its viewer-mode consumer
+    // *after* the ancestor seed has already been applied (because the
+    // active parent placeholder isn't set on the terminal view at
+    // construction time). Without a replay, the new consumer never observes
+    // `ChildSpawned` for known children and the pill bar stays empty.
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let mock = MockAIClient::new();
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let parent_task_id = make_parent_task_id_for_test(0xe1);
+        let child_a = make_parent_task_id_for_test(0xe2);
+        let consumer_a = warpui::EntityId::new();
+        let consumer_b = warpui::EntityId::new();
+        let placeholder_a = crate::ai::agent::conversation::AIConversation::new(true, false).id();
+        let placeholder_b = crate::ai::agent::conversation::AIConversation::new(true, false).id();
+
+        // Pane A registers first and the seed lands.
+        streamer.update(&mut app, |me, ctx| {
+            me.register_viewer_mode_consumer(parent_task_id, placeholder_a, consumer_a, ctx);
+            me.finish_ancestor_seed_fetch(
+                parent_task_id,
+                Ok(vec![make_ambient_task_with_task_id(child_a, Some(3))]),
+                ctx,
+            );
+        });
+
+        // Subscribe AFTER the seed has been applied so only the replay
+        // emissions are captured.
+        let captured_spawns = capture_child_spawns(&mut app, &streamer);
+
+        // Pane B registers later — the entry is already seeded. The streamer
+        // must replay `ChildSpawned` for the already-known children so
+        // pane B materializes pill placeholders identical to pane A.
+        streamer.update(&mut app, |me, ctx| {
+            me.register_viewer_mode_consumer(parent_task_id, placeholder_b, consumer_b, ctx);
+        });
+
+        let spawns = captured_spawns.lock().clone();
+        let replayed: Vec<&(AmbientAgentTaskId, String)> = spawns
+            .iter()
+            .filter(|(parent, run_id)| *parent == parent_task_id && run_id == &child_a.to_string())
+            .collect();
+        assert_eq!(
+            replayed.len(),
+            1,
+            "second viewer-mode registration must replay ChildSpawned exactly once \
+             per known child (captured={spawns:?})"
+        );
     });
 }

@@ -795,6 +795,41 @@ impl ServerApi {
         Ok(request.eventsource())
     }
 
+    /// Opens an SSE stream against the ancestor-scoped endpoint that serves
+    /// every direct child of the supplied parent run. Mirrors
+    /// [`Self::stream_agent_events`] in transport, auth, and header handling.
+    pub async fn stream_agent_events_for_ancestor(
+        &self,
+        ancestor_run_id: &str,
+        since_sequence: i64,
+    ) -> Result<http_client::EventSourceStream> {
+        debug_assert!(
+            !ancestor_run_id.is_empty(),
+            "ancestor_run_id must not be empty"
+        );
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .context("Failed to get access token for SSE stream")?;
+
+        let url = format!(
+            "{}/api/v1/agent/events/stream?ancestor_run_id={}&since={since_sequence}",
+            ChannelState::rtc_http_url(),
+            urlencoding::encode(ancestor_run_id),
+        );
+
+        let mut request = self.client.get(&url);
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+
+        for (name, value) in self.ambient_agent_headers().await? {
+            request = request.header(name, value);
+        }
+
+        Ok(request.eventsource())
+    }
+
     pub async fn stream_agent_events_for_task(
         &self,
         task_id: &AmbientAgentTaskId,

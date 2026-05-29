@@ -4,7 +4,7 @@ use std::ops::Range;
 use std::path::Path;
 
 use super::parser::parse_markdown_content;
-use super::skill_provider::{SkillProvider, SkillScope, get_provider_for_path, get_scope_for_path};
+use super::skill_provider::{get_provider_for_path, get_scope_for_path, SkillProvider, SkillScope};
 use anyhow::Result;
 use lazy_static::lazy_static;
 use regex::Regex;

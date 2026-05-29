@@ -1,40 +1,21 @@
 use std::collections::HashMap;
 
-use session_sharing_protocol::common::ProfileData;
 use warpui::{Entity, SingletonEntity};
 
 use crate::auth::UserUid;
+pub use cloud_object_models::UserProfileWithUID;
 
 pub enum UserProfilesEvent {}
 
-/// Public struct for storing all the UserProfile data that's fed in from either sqlite or the server.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UserProfileWithUID {
-    pub firebase_uid: UserUid,
-    pub display_name: Option<String>,
-    pub email: String,
-    pub photo_url: String,
-}
-
-impl From<ProfileData> for UserProfileWithUID {
-    fn from(data: ProfileData) -> Self {
-        Self {
-            firebase_uid: UserUid::new(&data.firebase_uid),
-            display_name: Some(data.display_name),
-            email: data.email.unwrap_or_default(),
-            photo_url: data.photo_url.unwrap_or_default(),
-        }
-    }
-}
-
-impl From<crate::persistence::model::UserProfile> for UserProfileWithUID {
-    fn from(user_profile: crate::persistence::model::UserProfile) -> Self {
-        UserProfileWithUID {
-            firebase_uid: UserUid::new(&user_profile.firebase_uid),
-            display_name: user_profile.display_name,
-            email: user_profile.email,
-            photo_url: user_profile.photo_url,
-        }
+#[cfg(not(target_family = "wasm"))]
+pub fn user_profile_from_persistence(
+    user_profile: crate::persistence::model::UserProfile,
+) -> UserProfileWithUID {
+    UserProfileWithUID {
+        firebase_uid: UserUid::new(&user_profile.firebase_uid),
+        display_name: user_profile.display_name,
+        email: user_profile.email,
+        photo_url: user_profile.photo_url,
     }
 }
 

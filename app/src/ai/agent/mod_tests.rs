@@ -5,9 +5,9 @@ use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use warp_multi_agent_api::{FileContent, FileContentLineRange};
 
 use crate::ai::agent::{
-    AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentText, AIAgentTextSection,
-    AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram, AnyFileContent,
-    FileContext, FormattedTextWrapper, MessageId, ProgrammingLanguage,
+    AIAgentContext, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentText,
+    AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram,
+    AnyFileContent, FileContext, FormattedTextWrapper, MessageId, ProgrammingLanguage,
 };
 use crate::terminal::shell::ShellType;
 
@@ -46,6 +46,45 @@ fn formatted_text_wrapper_preserves_content() {
     assert_eq!(ft.lines.len(), 2);
 }
 
+fn deserialize_pull_request_number_from_json(number_json: &str) -> serde_json::Result<i32> {
+    let context = serde_json::from_str::<AIAgentContext>(&format!(
+        r#"{{"PullRequest":{{"number":{number_json}}}}}"#
+    ))?;
+    match context {
+        AIAgentContext::PullRequest { number, .. } => Ok(number),
+        other => panic!("expected pull request context, got {other:?}"),
+    }
+}
+
+#[test]
+fn pull_request_number_deserializer_accepts_positive_number_and_string() {
+    assert_eq!(deserialize_pull_request_number_from_json("42").unwrap(), 42);
+    assert_eq!(
+        deserialize_pull_request_number_from_json(r#""42""#).unwrap(),
+        42
+    );
+}
+
+#[test]
+fn pull_request_number_deserializer_defaults_invalid_numbers() {
+    for number_json in ["null", "0", "-1", "1.5", "2147483648", r#""""#, r#""abc""#] {
+        assert_eq!(
+            deserialize_pull_request_number_from_json(number_json).unwrap(),
+            0,
+            "expected {number_json} to deserialize to default pull request number",
+        );
+    }
+}
+
+#[test]
+fn pull_request_number_deserializer_rejects_unsupported_json_types() {
+    for number_json in ["true", "[]", "{}"] {
+        assert!(
+            deserialize_pull_request_number_from_json(number_json).is_err(),
+            "expected {number_json} to fail deserialization",
+        );
+    }
+}
 #[test]
 fn test_convert_files() {
     let a = FileContext::new(

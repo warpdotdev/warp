@@ -166,7 +166,7 @@ impl AIExecutionProfilesModel {
                         }
                         None => DefaultProfileState::Unsynced {
                             id: ClientProfileId::new(),
-                            profile: AIExecutionProfile::create_default_from_legacy_settings(ctx),
+                            profile: super::create_default_from_legacy_settings(ctx),
                         },
                     },
                     // When running as a CLI, we ignore the GUI default and use a more permissive default.
@@ -182,7 +182,7 @@ impl AIExecutionProfilesModel {
                     // exhaustively.
                     LaunchMode::RemoteServerProxy | LaunchMode::RemoteServerDaemon { .. } => DefaultProfileState::Unsynced {
                         id: ClientProfileId::new(),
-                        profile: AIExecutionProfile::create_default_from_legacy_settings(ctx),
+                        profile: super::create_default_from_legacy_settings(ctx),
                     },
                 };
             }

@@ -394,7 +394,9 @@ impl RemoteDiffStateModel {
         if branch_changed {
             ctx.emit(DiffStateModelEvent::CurrentBranchChanged);
         }
-        ctx.emit(DiffStateModelEvent::MetadataRefreshed(metadata.clone()));
+        ctx.emit(DiffStateModelEvent::MetadataRefreshed(Box::new(
+            metadata.clone(),
+        )));
     }
 
     fn apply_file_delta(

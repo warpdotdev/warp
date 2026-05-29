@@ -594,12 +594,20 @@ impl BlocklistAIController {
         }
         if FeatureFlag::OrchestrationV2.is_enabled() {
             let streamer = OrchestrationEventStreamer::handle(ctx);
-            ctx.subscribe_to_model(&streamer, move |me, event, ctx| {
-                let OrchestrationEventStreamerEvent::DormantClaudeWakeReady {
+            ctx.subscribe_to_model(&streamer, move |me, event, ctx| match event {
+                OrchestrationEventStreamerEvent::DormantClaudeWakeReady {
                     conversation_id,
                     wake_message,
-                } = event;
-                me.handle_dormant_claude_wake_ready(*conversation_id, wake_message.clone(), ctx);
+                } => {
+                    me.handle_dormant_claude_wake_ready(
+                        *conversation_id,
+                        wake_message.clone(),
+                        ctx,
+                    );
+                }
+                // Viewer-mode events are handled by `OrchestrationViewerModel`.
+                OrchestrationEventStreamerEvent::ChildSpawned { .. }
+                | OrchestrationEventStreamerEvent::ChildStatusChanged { .. } => {}
             });
         }
         Self {

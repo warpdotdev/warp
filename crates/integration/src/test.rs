@@ -5864,6 +5864,28 @@ pub fn test_copy_prompt_from_input_honor_ps1_disabled() -> Builder {
                 .add_assertion(assert_clipboard_contains_string("~".into())),
         )
 }
+pub fn test_warp_prompt_unsets_zsh_rprompt() -> Builder {
+    new_builder()
+        .set_should_run_test(|| {
+            let (starter, _) = current_shell_starter_and_version();
+            starter.shell_type() == shell::ShellType::Zsh
+        })
+        .with_user_defaults(HashMap::from([(
+            HonorPS1::storage_key().to_owned(),
+            false.to_string(),
+        )]))
+        .with_setup(|utils| {
+            let dir = utils.test_dir();
+            write_rc_files_for_test(&dir, r#"export RPROMPT="right prompt""#, [ShellRcType::Zsh]);
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "print -r -- ${+RPROMPT}".into(),
+            ExpectedExitStatus::Success,
+            ExactLine::from("0"),
+        ))
+}
 
 pub fn test_copy_prompt_from_input_honor_ps1_enabled() -> Builder {
     let prompt_text = "this is my custom prompt";

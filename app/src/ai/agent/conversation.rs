@@ -1012,7 +1012,11 @@ impl AIConversation {
         self.parent_conversation_id = Some(id);
     }
 
-    /// Returns the last observed v2 orchestration event sequence number, if any.
+    /// Returns the last observed v2 orchestration event sequence number,
+    /// if any. The cursor is per-conversation: the highest sequence the
+    /// streamer has seen on the run-ids this conversation watches
+    /// (`watched_run_ids` for owner-side conversations, the ancestor
+    /// subtree for viewer-mode orchestrator placeholders).
     pub fn last_event_sequence(&self) -> Option<i64> {
         self.last_event_sequence
     }

@@ -237,6 +237,7 @@ impl ParsedTemplatableMCPServerResult {
     /// Unlike [`from_user_json`], this only recognises servers under a known
     /// wrapper key (`mcpServers`, `servers`, etc.) and will **not** fall back to
     /// treating every top-level key as a server name.
+    #[cfg(not(target_family = "wasm"))]
     pub fn from_config_file_json(json: &str) -> serde_json::Result<Vec<Self>> {
         let json = json.trim();
         let json = if json.starts_with('{') {

@@ -28,12 +28,8 @@ use crate::notebooks::{CloudNotebookModel, NotebookId};
 use crate::server::cloud_objects::listener::ObjectUpdateMessage;
 use crate::server::cloud_objects::update_manager::InitialLoadResponse;
 use crate::server::ids::{ServerId, ServerIdAndType};
-#[cfg(test)]
-use crate::server::server_api::object::MockObjectClient;
 use crate::server::server_api::object::ObjectClient;
-#[cfg(test)]
 use crate::server::server_api::team::MockTeamClient;
-#[cfg(test)]
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
@@ -47,6 +43,7 @@ use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 use crate::{NetworkStatus, UpdateManager};
+use cloud_object_client::MockObjectClient;
 
 fn create_cloud_model(
     app: &mut App,
