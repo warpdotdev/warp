@@ -13,6 +13,8 @@ use super::AsInnerMut;
 pub enum AppBackend {
     CurrentPlatform(Box<super::current::App>),
     Headless(Box<super::headless::App>),
+    #[cfg(feature = "tui")]
+    Tui(Box<super::tui::App>),
 }
 
 impl AppBackend {
@@ -27,6 +29,8 @@ impl AppBackend {
                 Ok(())
             }
             AppBackend::Headless(inner) => inner.run(init_fn),
+            #[cfg(feature = "tui")]
+            AppBackend::Tui(inner) => inner.run(init_fn),
         }
     }
 }
@@ -70,6 +74,22 @@ impl AppBuilder {
         let inner = super::headless::App::new(callbacks, assets, test_driver.as_ref());
         Self {
             inner: AppBackend::Headless(Box::new(inner)),
+            test_driver,
+            custom_tag_to_keystroke_fn: None,
+            default_keystroke_trigger_for_custom_actions: None,
+        }
+    }
+
+    /// Constructs a new application using the terminal-UI (TUI) backend.
+    #[cfg(feature = "tui")]
+    pub fn new_tui(
+        callbacks: AppCallbacks,
+        assets: Box<dyn AssetProvider>,
+        test_driver: Option<TestDriver>,
+    ) -> Self {
+        let inner = super::tui::App::new(callbacks, assets, test_driver.as_ref());
+        Self {
+            inner: AppBackend::Tui(Box::new(inner)),
             test_driver,
             custom_tag_to_keystroke_fn: None,
             default_keystroke_trigger_for_custom_actions: None,

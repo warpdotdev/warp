@@ -204,6 +204,8 @@ impl AppExt for AppBuilder {
         match self.as_inner_mut() {
             AppBackend::CurrentPlatform(app) => app.activate_on_launch = value,
             AppBackend::Headless(_) => (),
+            #[cfg(feature = "tui")]
+            AppBackend::Tui(_) => (),
         }
     }
 
@@ -211,6 +213,8 @@ impl AppExt for AppBuilder {
         match self.as_inner_mut() {
             AppBackend::CurrentPlatform(app) => app.dev_icon = Some(value),
             AppBackend::Headless(_) => (),
+            #[cfg(feature = "tui")]
+            AppBackend::Tui(_) => (),
         }
     }
 
@@ -218,6 +222,8 @@ impl AppExt for AppBuilder {
         match self.as_inner_mut() {
             AppBackend::CurrentPlatform(app) => app.menu_bar_builder = Some(Box::new(value)),
             AppBackend::Headless(_) => (),
+            #[cfg(feature = "tui")]
+            AppBackend::Tui(_) => (),
         }
     }
 
@@ -225,6 +231,8 @@ impl AppExt for AppBuilder {
         match self.as_inner_mut() {
             AppBackend::CurrentPlatform(app) => app.dock_menu_builder = Some(Box::new(value)),
             AppBackend::Headless(_) => (),
+            #[cfg(feature = "tui")]
+            AppBackend::Tui(_) => (),
         }
     }
 }

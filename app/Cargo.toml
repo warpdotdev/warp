@@ -43,6 +43,12 @@ path = "src/bin/dev.rs"
 test = false
 
 [[bin]]
+name = "tui"
+path = "src/bin/tui.rs"
+required-features = ["tui"]
+test = false
+
+[[bin]]
 name = "preview"
 path = "src/bin/preview.rs"
 required-features = ["preview_channel"]
@@ -450,6 +456,8 @@ embed-resource = "3.0"
 # Note that we support channel-specific enables for these features
 [features]
 ai_resume_button = []
+# Experimental terminal-UI agent surface (src/tui + the `tui` bin).
+tui = ["warpui/tui"]
 autoupdate = []
 figma_detection = []
 bundled_skills = []

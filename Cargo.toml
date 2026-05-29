@@ -134,6 +134,7 @@ clap = { version = "4.5", features = ["derive"] }
 cocoa = "=0.26.0"
 ctrlc = "3.4.7"
 crc = "3.4.0"
+crossterm = "0.29"
 cynic = { version = "3" }
 cynic-codegen = { version = "3", features = ["rkyv"] }
 dashmap = "6.1.0"

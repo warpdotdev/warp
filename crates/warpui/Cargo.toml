@@ -25,12 +25,16 @@ settings_value = ["warpui_core/settings_value"]
 # Enables utilities for testing.
 test-util = ["warpui_core/test-util"]
 experimental-wgpu-renderer = ["dep:wgpu", "dep:bytemuck", "dep:version-compare"]
+# Enables the terminal-UI (TUI) platform backend.
+tui = ["dep:crossterm", "dep:unicode-width"]
 
 [dependencies]
 async-task.workspace = true
 anyhow.workspace = true
 bytemuck = { workspace = true, features = ["derive"], optional = true }
 cfg-if.workspace = true
+crossterm = { workspace = true, optional = true }
+unicode-width = { workspace = true, optional = true }
 dashmap.workspace = true
 derive_more.workspace = true
 futures.workspace = true
