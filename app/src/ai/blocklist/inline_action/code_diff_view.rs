@@ -1587,11 +1587,15 @@ impl CodeDiffView {
         let skill = common_path(&file_paths)
             .and_then(|common| skill_path_from_file_path(&common))
             .and_then(|skill_path| SkillManager::as_ref(app).skill_by_path(&skill_path));
-        if let Some(skill) = skill {
-            let skill_path = skill.path.clone();
+        if let Some((skill, skill_path)) = skill.and_then(|skill| {
+            skill
+                .path
+                .to_local_path()
+                .map(|path| (skill, path.to_path_buf()))
+        }) {
             let skill_reference = SkillManager::handle(app)
                 .as_ref(app)
-                .reference_for_skill_path(&skill_path);
+                .reference_for_skill_path(&skill.path);
             let skill_button_handle = self.button_mouse_states.skill_button_handle.clone();
 
             let skill_icon_override = icon_override_for_skill_name(&skill.name);

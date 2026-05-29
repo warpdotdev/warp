@@ -6,6 +6,7 @@ use ai::agent::action_result::{
     RunAgentsResult,
 };
 use ai::skills::SkillReference;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 use super::RunAgentsEditState;
 use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationEditState;
@@ -223,7 +224,9 @@ fn to_request_round_trips_request_fields() {
         },
         vec![
             SkillReference::BundledSkillId("writing-pr-descriptions".to_string()),
-            SkillReference::Path(PathBuf::from("/tmp/skill/SKILL.md")),
+            SkillReference::Path(LocalOrRemotePath::Local(PathBuf::from(
+                "/tmp/skill/SKILL.md",
+            ))),
         ],
     );
     req.plan_id = "plan-1".to_string();

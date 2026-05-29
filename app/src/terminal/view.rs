@@ -26587,7 +26587,9 @@ impl TypedActionView for TerminalView {
                     warp_md_path.push(WARP_MD_PATH);
                     #[cfg(feature = "local_fs")]
                     ctx.emit(Event::OpenCodeInWarp {
-                        source: CodeSource::ProjectRules { path: warp_md_path },
+                        source: CodeSource::ProjectRules {
+                            location: LocalOrRemotePath::Local(warp_md_path),
+                        },
                         layout: *crate::util::file::external_editor::EditorSettings::as_ref(ctx)
                             .open_file_layout
                             .value(),
@@ -26623,7 +26625,7 @@ impl TypedActionView for TerminalView {
                             ctx.emit(Event::OpenCodeInWarp {
                                 source: CodeSource::Skill {
                                     reference: skill_reference.clone(),
-                                    path: path.clone(),
+                                    location: path.clone(),
                                     origin: crate::ai::skills::SkillOpenOrigin::OpenSkillCommand,
                                 },
                                 layout:

@@ -3,6 +3,10 @@ use std::str::FromStr;
 
 use ai::skills::{get_provider_for_path, ParsedSkill, SkillProvider, SkillScope};
 use warp_cli::skill::SkillSpec;
+use warp_util::host_id::HostId;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
 
 use super::{filter_skills_by_spec, resolve_skill_repos};
 use crate::ai::cloud_environments::GithubRepo;
@@ -71,9 +75,56 @@ fn filter_skills_by_spec_only_loads_requested_simple_names() {
     ];
     let specs = global_specs(&["warpdotdev/warp-internal:read-google-doc".to_string()]);
 
-    let filtered = filter_skills_by_spec(repo_path, skills, &specs);
+    let filtered = filter_skills_by_spec(
+        &LocalOrRemotePath::Local(repo_path.to_path_buf()),
+        skills,
+        &specs,
+    );
 
     assert_eq!(skill_paths(filtered), vec![requested_skill_path]);
+}
+
+#[test]
+fn filter_skills_by_spec_matches_full_path_specs_for_remote_repos() {
+    let repo_path = remote_path("host-a", "/work/warp-internal");
+    let requested_skill_path = repo_path.join(".claude/skills/deploy/SKILL.md");
+    let other_host_skill_path =
+        remote_path("host-b", "/work/warp-internal").join(".claude/skills/deploy/SKILL.md");
+    let skills = vec![
+        parsed_skill_at_location(other_host_skill_path, "deploy", SkillProvider::Claude),
+        parsed_skill_at_location(
+            requested_skill_path.clone(),
+            "deploy",
+            SkillProvider::Claude,
+        ),
+    ];
+    let specs =
+        global_specs(&["warpdotdev/warp-internal:.claude/skills/deploy/SKILL.md".to_string()]);
+
+    let filtered = filter_skills_by_spec(&repo_path, skills, &specs);
+
+    assert_eq!(skill_locations(filtered), vec![requested_skill_path]);
+}
+
+#[test]
+fn filter_skills_by_spec_scopes_simple_remote_names_to_the_repo_host() {
+    let repo_path = remote_path("host-a", "/work/warp-internal");
+    let requested_skill_path = repo_path.join(".claude/skills/deploy/SKILL.md");
+    let other_host_skill_path =
+        remote_path("host-b", "/work/warp-internal").join(".agents/skills/deploy/SKILL.md");
+    let skills = vec![
+        parsed_skill_at_location(other_host_skill_path, "deploy", SkillProvider::Agents),
+        parsed_skill_at_location(
+            requested_skill_path.clone(),
+            "deploy",
+            SkillProvider::Claude,
+        ),
+    ];
+    let specs = global_specs(&["warpdotdev/warp-internal:deploy".to_string()]);
+
+    let filtered = filter_skills_by_spec(&repo_path, skills, &specs);
+
+    assert_eq!(skill_locations(filtered), vec![requested_skill_path]);
 }
 
 #[test]
@@ -86,8 +137,11 @@ fn filter_skills_by_spec_matches_simple_names_by_parsed_skill_name() {
         parsed_skill(directory_name_match_path, "unrelated-skill"),
     ];
     let specs = global_specs(&["warpdotdev/warp-internal:read-google-doc".to_string()]);
-
-    let filtered = filter_skills_by_spec(repo_path, skills, &specs);
+    let filtered = filter_skills_by_spec(
+        &LocalOrRemotePath::Local(repo_path.to_path_buf()),
+        skills,
+        &specs,
+    );
 
     assert_eq!(skill_paths(filtered), vec![requested_skill_path]);
 }
@@ -102,8 +156,11 @@ fn filter_skills_by_spec_uses_provider_precedence_for_simple_names() {
         parsed_skill(agents_skill_path.clone(), "deploy"),
     ];
     let specs = global_specs(&["warpdotdev/warp-internal:deploy".to_string()]);
-
-    let filtered = filter_skills_by_spec(repo_path, skills, &specs);
+    let filtered = filter_skills_by_spec(
+        &LocalOrRemotePath::Local(repo_path.to_path_buf()),
+        skills,
+        &specs,
+    );
 
     assert_eq!(skill_paths(filtered), vec![agents_skill_path]);
 }
@@ -125,8 +182,11 @@ fn filter_skills_by_spec_matches_full_path_specs() {
         "warpdotdev/warp-internal:{}",
         requested_relative_path.display()
     )]);
-
-    let filtered = filter_skills_by_spec(repo_path, skills, &specs);
+    let filtered = filter_skills_by_spec(
+        &LocalOrRemotePath::Local(repo_path.to_path_buf()),
+        skills,
+        &specs,
+    );
 
     assert_eq!(skill_paths(filtered), vec![requested_skill_path]);
 }
@@ -148,6 +208,14 @@ fn skill_path(repo_path: &Path, provider_dir: &str, skill_name: &str) -> PathBuf
 
 fn parsed_skill(path: PathBuf, name: &str) -> ParsedSkill {
     let provider = get_provider_for_path(&path).unwrap_or(SkillProvider::Agents);
+    parsed_skill_at_location(LocalOrRemotePath::Local(path), name, provider)
+}
+
+fn parsed_skill_at_location(
+    path: LocalOrRemotePath,
+    name: &str,
+    provider: SkillProvider,
+) -> ParsedSkill {
     ParsedSkill {
         path,
         name: name.to_string(),
@@ -160,7 +228,21 @@ fn parsed_skill(path: PathBuf, name: &str) -> ParsedSkill {
 }
 
 fn skill_paths(skills: Vec<ParsedSkill>) -> Vec<PathBuf> {
+    skills
+        .into_iter()
+        .map(|skill| skill.path.to_local_path().unwrap().to_path_buf())
+        .collect()
+}
+
+fn skill_locations(skills: Vec<ParsedSkill>) -> Vec<LocalOrRemotePath> {
     skills.into_iter().map(|skill| skill.path).collect()
+}
+
+fn remote_path(host_id: &str, path: &str) -> LocalOrRemotePath {
+    LocalOrRemotePath::Remote(RemotePath::new(
+        HostId::new(host_id.to_string()),
+        StandardizedPath::try_new(path).unwrap(),
+    ))
 }
 
 #[test]

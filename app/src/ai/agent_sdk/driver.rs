@@ -28,6 +28,7 @@ use warp_core::features::FeatureFlag;
 use warp_core::{report_error, report_if_error, safe_debug, safe_error, safe_info};
 use warp_graphql::ai::AgentTaskState;
 use warp_managed_secrets::ManagedSecretValue;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::r#async::{FutureExt, TimeoutError};
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
 
@@ -1505,7 +1506,7 @@ impl AgentDriver {
 
         let load_skills_result = foreground
             .spawn(move |_, ctx| {
-                let skills = SkillWatcher::read_skills_for_repos(&repo_paths, ctx);
+                let skills = SkillWatcher::read_local_skills_for_repos(&repo_paths, ctx);
                 if !skills.is_empty() {
                     log::info!("Loaded {} environment skill(s)", skills.len());
                 } else {
@@ -1552,7 +1553,11 @@ impl AgentDriver {
                         .iter()
                         .map(|def| repo_path.join(&def.skills_path));
                     let repo_skills = read_skills_from_directories(skill_dirs);
-                    let filtered = filter_skills_by_spec(&repo_path, repo_skills, &specs);
+                    let filtered = filter_skills_by_spec(
+                        &LocalOrRemotePath::Local(repo_path),
+                        repo_skills,
+                        &specs,
+                    );
                     all_skills.extend(filtered);
                 }
                 all_skills
@@ -2148,7 +2153,7 @@ impl AgentDriver {
                     .map(|parsed_skill| ResolvePromptAttachedSkill {
                         name: parsed_skill.name.clone(),
                         content: parsed_skill.content.clone(),
-                        path: Some(parsed_skill.path.to_string_lossy().to_string()),
+                        path: Some(parsed_skill.path.display_path()),
                     });
                 let request = ResolvePromptRequest {
                     skill,

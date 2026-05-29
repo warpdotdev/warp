@@ -1,18 +1,17 @@
-use repo_metadata::entry::{DirectoryEntry, Entry, FileMetadata};
-use repo_metadata::file_tree_store::FileTreeState;
-use repo_metadata::file_tree_update::{
-    DirectoryNodeMetadata, FileNodeMetadata, FileTreeEntryUpdate, RepoNodeMetadata,
-};
-use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::{
+    entry::{DirectoryEntry, Entry, FileMetadata},
+    file_tree_store::FileTreeState,
+    file_tree_update::{
+        DirectoryNodeMetadata, FileNodeMetadata, FileTreeEntryUpdate, RepoNodeMetadata,
+    },
+    repositories::DetectedRepositories,
     DirectoryWatcher, RepoMetadataModel, RepoMetadataUpdate, RepositoryIdentifier,
 };
-use std::path::Path;
 use virtual_fs::{Stub, VirtualFS};
-use warp_util::host_id::HostId;
-use warp_util::local_or_remote_path::LocalOrRemotePath;
-use warp_util::remote_path::RemotePath;
-use warp_util::standardized_path::StandardizedPath;
+use warp_util::{
+    host_id::HostId, local_or_remote_path::LocalOrRemotePath, remote_path::RemotePath,
+    standardized_path::StandardizedPath,
+};
 use warpui::App;
 
 use super::{
@@ -152,8 +151,11 @@ fn extract_skill_parent_directory_from_repo_root() {
         .join("skills")
         .join("my-skill")
         .join("SKILL.md");
-    let result = extract_skill_parent_directory(&skill_path);
-    assert_eq!(result.ok(), Some(parent_directory));
+    let result = extract_skill_parent_directory(&LocalOrRemotePath::Local(skill_path));
+    assert_eq!(
+        result.ok(),
+        Some(LocalOrRemotePath::Local(parent_directory))
+    );
 }
 
 #[test]
@@ -168,8 +170,11 @@ fn extract_skill_parent_directory_from_subdirectory() {
         .join("skills")
         .join("build")
         .join("SKILL.md");
-    let result = extract_skill_parent_directory(&skill_path);
-    assert_eq!(result.ok(), Some(parent_directory));
+    let result = extract_skill_parent_directory(&LocalOrRemotePath::Local(skill_path));
+    assert_eq!(
+        result.ok(),
+        Some(LocalOrRemotePath::Local(parent_directory))
+    );
 }
 
 #[test]
@@ -189,10 +194,10 @@ fn extract_skill_parent_directory_from_deep_subdirectory() {
         .join("skills")
         .join("test-skill")
         .join("SKILL.md");
-    let result = extract_skill_parent_directory(&skill_path);
+    let result = extract_skill_parent_directory(&LocalOrRemotePath::Local(skill_path.clone()));
     assert_eq!(
         result.ok(),
-        Some(parent_directory),
+        Some(LocalOrRemotePath::Local(parent_directory)),
         "Failed for path: {}",
         skill_path.display()
     );
@@ -212,10 +217,10 @@ fn extract_skill_parent_directory_different_providers() {
             .join("skills")
             .join("s")
             .join("SKILL.md");
-        let result = extract_skill_parent_directory(&path);
+        let result = extract_skill_parent_directory(&LocalOrRemotePath::Local(path.clone()));
         assert_eq!(
             result.ok(),
-            Some(repo.clone()),
+            Some(LocalOrRemotePath::Local(repo.clone())),
             "Failed for path: {}",
             path.display()
         );
@@ -236,7 +241,10 @@ fn extract_skill_parent_directory_returns_none_for_non_skill() {
         .join("skills")
         .join("my-skill")
         .join("README.md");
-    assert_eq!(extract_skill_parent_directory(&path).ok(), None);
+    assert_eq!(
+        extract_skill_parent_directory(&LocalOrRemotePath::Local(path)).ok(),
+        None
+    );
 
     // Wrong structure (skill directly in skills dir)
     let path = home_dir
@@ -244,7 +252,10 @@ fn extract_skill_parent_directory_returns_none_for_non_skill() {
         .join(".agents")
         .join("skills")
         .join("SKILL.md");
-    assert_eq!(extract_skill_parent_directory(&path).ok(), None);
+    assert_eq!(
+        extract_skill_parent_directory(&LocalOrRemotePath::Local(path)).ok(),
+        None
+    );
 
     // Too deeply nested
     let path = home_dir
@@ -254,11 +265,17 @@ fn extract_skill_parent_directory_returns_none_for_non_skill() {
         .join("a")
         .join("b")
         .join("SKILL.md");
-    assert_eq!(extract_skill_parent_directory(&path).ok(), None);
+    assert_eq!(
+        extract_skill_parent_directory(&LocalOrRemotePath::Local(path)).ok(),
+        None
+    );
 
     // Not in a skills directory
     let path = home_dir.join("repo").join("src").join("SKILL.md");
-    assert_eq!(extract_skill_parent_directory(&path).ok(), None);
+    assert_eq!(
+        extract_skill_parent_directory(&LocalOrRemotePath::Local(path)).ok(),
+        None
+    );
 }
 
 // ============================================================================
@@ -364,8 +381,8 @@ fn extract_skill_parent_directory_returns_home_dir_for_warp_home_skill() {
     };
 
     let skill_path = warp_home_skills_dir.join("test-skill").join("SKILL.md");
-    let result = extract_skill_parent_directory(&skill_path);
-    assert_eq!(result.ok(), Some(home_dir));
+    let result = extract_skill_parent_directory(&LocalOrRemotePath::Local(skill_path));
+    assert_eq!(result.ok(), Some(LocalOrRemotePath::Local(home_dir)));
 }
 
 #[test]
@@ -537,7 +554,8 @@ fn find_skill_files_in_tree_finds_root_skills() {
 
                 let local_skill_files = skill_files
                     .into_iter()
-                    .filter_map(|path| path.to_local_path().map(Path::to_path_buf));
+                    .filter_map(|path| path.to_local_path().map(|path| path.to_path_buf()))
+                    .collect::<Vec<_>>();
                 let skills = read_skills_from_files(local_skill_files);
                 assert_eq!(skills.len(), 2);
                 let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
@@ -689,7 +707,8 @@ fn find_skill_files_in_tree_finds_subdirectory_skills() {
 
                 let local_skill_files = skill_files
                     .into_iter()
-                    .filter_map(|path| path.to_local_path().map(Path::to_path_buf));
+                    .filter_map(|path| path.to_local_path().map(|path| path.to_path_buf()))
+                    .collect::<Vec<_>>();
                 let skills = read_skills_from_files(local_skill_files);
                 assert_eq!(skills.len(), 2);
                 let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();

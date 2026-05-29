@@ -1,10 +1,13 @@
 use std::path::PathBuf;
-
 use thiserror::Error;
 use warp_multi_agent_api as api;
+use warp_util::host_id::HostId;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
 
 use crate::agent::action_result::{AnyFileContent, FileContext};
-use crate::skills::{ParsedSkill, SkillProvider, SkillScope};
+use crate::skills::{ParsedSkill, SkillProvider, SkillReference, SkillScope};
 
 #[derive(Error, Debug)]
 pub enum SkillConversionError {
@@ -20,14 +23,98 @@ pub enum SkillConversionError {
     ProviderInvalid,
     #[error("Invalid content")]
     ContentInvalid,
+    #[error("Skill path origin is unavailable")]
+    PathOriginUnavailable,
+    #[error("Invalid remote skill path")]
+    RemotePathInvalid,
+}
+/// Identifies how a string skill path from an API payload should be interpreted.
+///
+/// Live agent responses can be decoded from the active session's location. Restored payloads do
+/// not carry enough session identity to safely reconstruct path-based skill locations, so callers
+/// must use [`SkillPathOrigin::Unavailable`] rather than silently assuming the local filesystem.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum SkillPathOrigin {
+    Local,
+    Remote {
+        host_id: HostId,
+    },
+    /// Path identity could not be restored, but the API payload already carries the skill
+    /// descriptor and content needed to render a historical transcript.
+    ///
+    /// This intentionally uses a local path wrapper only as a display-compatible identity for
+    /// restored conversation UI. Live execution paths should use [`SkillPathOrigin::Local`] or
+    /// [`SkillPathOrigin::Remote`] so local/remote provenance is preserved.
+    RestoredDisplayOnly,
+    Unavailable,
 }
 
+impl SkillPathOrigin {
+    pub fn location_for_path(
+        &self,
+        path: impl Into<String>,
+    ) -> Result<LocalOrRemotePath, SkillConversionError> {
+        let path = path.into();
+        match self {
+            SkillPathOrigin::Local | SkillPathOrigin::RestoredDisplayOnly => {
+                Ok(LocalOrRemotePath::Local(PathBuf::from(path)))
+            }
+            SkillPathOrigin::Remote { host_id } => {
+                let path = StandardizedPath::try_new(&path)
+                    .map_err(|_| SkillConversionError::RemotePathInvalid)?;
+                Ok(LocalOrRemotePath::Remote(RemotePath::new(
+                    host_id.clone(),
+                    path,
+                )))
+            }
+            SkillPathOrigin::Unavailable => Err(SkillConversionError::PathOriginUnavailable),
+        }
+    }
+}
+
+fn skill_reference_for_path(
+    path: impl Into<String>,
+    path_origin: &SkillPathOrigin,
+) -> Result<SkillReference, SkillConversionError> {
+    path_origin
+        .location_for_path(path)
+        .map(SkillReference::Path)
+}
+
+pub fn skill_reference_from_api_skill_ref(
+    skill_ref: api::SkillRef,
+    path_origin: &SkillPathOrigin,
+) -> Option<SkillReference> {
+    match skill_ref.skill_reference {
+        Some(api::skill_ref::SkillReference::Path(path)) => {
+            skill_reference_for_path(path, path_origin).ok()
+        }
+        Some(api::skill_ref::SkillReference::BundledSkillId(id)) => {
+            Some(SkillReference::BundledSkillId(id))
+        }
+        None => None,
+    }
+}
+
+pub fn skill_reference_from_read_skill_ref(
+    skill_reference: api::message::tool_call::read_skill::SkillReference,
+    path_origin: &SkillPathOrigin,
+) -> Result<SkillReference, SkillConversionError> {
+    match skill_reference {
+        api::message::tool_call::read_skill::SkillReference::SkillPath(path) => {
+            skill_reference_for_path(path, path_origin)
+        }
+        api::message::tool_call::read_skill::SkillReference::BundledSkillId(id) => {
+            Ok(SkillReference::BundledSkillId(id))
+        }
+    }
+}
 impl From<ParsedSkill> for api::Skill {
     fn from(skill: ParsedSkill) -> Self {
         api::Skill {
             descriptor: Some(api::SkillDescriptor {
                 skill_reference: Some(api::skill_descriptor::SkillReference::Path(
-                    skill.path.to_string_lossy().to_string(),
+                    skill.path.display_path(),
                 )),
                 name: skill.name,
                 description: skill.description,
@@ -35,7 +122,7 @@ impl From<ParsedSkill> for api::Skill {
                 provider: Some(skill.provider.into()),
             }),
             content: Some(api::FileContent {
-                file_path: skill.path.to_string_lossy().to_string(),
+                file_path: skill.path.display_path(),
                 content: skill.content,
                 line_range: skill
                     .line_range
@@ -87,6 +174,15 @@ impl TryFrom<api::Skill> for ParsedSkill {
     type Error = SkillConversionError;
 
     fn try_from(api_skill: api::Skill) -> Result<Self, Self::Error> {
+        Self::try_from_api_with_origin(api_skill, &SkillPathOrigin::Unavailable)
+    }
+}
+
+impl ParsedSkill {
+    pub fn try_from_api_with_origin(
+        api_skill: api::Skill,
+        path_origin: &SkillPathOrigin,
+    ) -> Result<Self, SkillConversionError> {
         let Some(descriptor) = api_skill.descriptor else {
             return Err(SkillConversionError::MissingDescriptor);
         };
@@ -119,7 +215,7 @@ impl TryFrom<api::Skill> for ParsedSkill {
         let line_range = context.line_range.as_ref();
 
         Ok(ParsedSkill {
-            path: PathBuf::from(&path),
+            path: path_origin.location_for_path(path)?,
             name: descriptor.name,
             description: descriptor.description,
             content,
@@ -162,3 +258,7 @@ fn convert_provider(
         api::skill_descriptor::provider::Type::OpenCode(_) => Ok(SkillProvider::OpenCode),
     }
 }
+
+#[cfg(test)]
+#[path = "conversion_tests.rs"]
+mod conversion_tests;

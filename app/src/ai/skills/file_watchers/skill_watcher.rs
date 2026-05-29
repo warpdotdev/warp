@@ -28,7 +28,7 @@ use crate::warp_managed_paths_watcher::{
 #[derive(Debug, PartialEq)]
 pub enum SkillWatcherEvent {
     SkillsAdded { skills: Vec<ParsedSkill> },
-    SkillsDeleted { paths: Vec<PathBuf> },
+    SkillsDeleted { paths: Vec<LocalOrRemotePath> },
 }
 pub struct SkillWatcher {
     // Channel for sending repository messages from subscribers.
@@ -65,11 +65,14 @@ pub struct SkillWatcher {
 }
 
 impl SkillWatcher {
-    /// Synchronously reads skills from the given repo paths.
+    /// Synchronously reads skills from the given local repo paths.
     /// Requires file trees to already be built (i.e. `RepositoryUpdated` has fired).
     /// Returns the parsed skills; the caller is responsible for feeding them into
     /// `SkillManager::handle_skills_added`.
-    pub fn read_skills_for_repos(repo_paths: &[PathBuf], ctx: &AppContext) -> Vec<ParsedSkill> {
+    pub fn read_local_skills_for_repos(
+        repo_paths: &[PathBuf],
+        ctx: &AppContext,
+    ) -> Vec<ParsedSkill> {
         let repo_metadata = RepoMetadataModel::as_ref(ctx);
         let skill_files: Vec<PathBuf> = repo_paths
             .iter()
@@ -241,7 +244,10 @@ impl SkillWatcher {
             let _ = self
                 .watcher_event_tx
                 .try_send(SkillWatcherEvent::SkillsDeleted {
-                    paths: deleted_paths,
+                    paths: deleted_paths
+                        .into_iter()
+                        .map(LocalOrRemotePath::Local)
+                        .collect(),
                 });
         }
 
@@ -435,7 +441,10 @@ impl SkillWatcher {
             let _ = self
                 .watcher_event_tx
                 .try_send(SkillWatcherEvent::SkillsDeleted {
-                    paths: deleted_paths,
+                    paths: deleted_paths
+                        .into_iter()
+                        .map(LocalOrRemotePath::Local)
+                        .collect(),
                 });
         }
     }
@@ -515,7 +524,10 @@ impl SkillWatcher {
             let _ = self
                 .watcher_event_tx
                 .try_send(SkillWatcherEvent::SkillsDeleted {
-                    paths: deleted_paths,
+                    paths: deleted_paths
+                        .into_iter()
+                        .map(LocalOrRemotePath::Local)
+                        .collect(),
                 });
         }
     }
@@ -679,7 +691,10 @@ impl SkillWatcher {
             let _ = self
                 .watcher_event_tx
                 .try_send(SkillWatcherEvent::SkillsDeleted {
-                    paths: deleted_paths,
+                    paths: deleted_paths
+                        .into_iter()
+                        .map(LocalOrRemotePath::Local)
+                        .collect(),
                 });
         }
     }
@@ -714,18 +729,20 @@ impl SkillWatcher {
     /// via `DirectoryWatcher` so that modifications to the real file are detected.
     fn register_symlink_watches(&mut self, skills: &[ParsedSkill], ctx: &mut ModelContext<Self>) {
         for skill in skills {
-            let original_path = &skill.path;
+            let Some(original_path) = skill.path.to_local_path() else {
+                continue;
+            };
             let Ok(canonical_path) = dunce::canonicalize(original_path) else {
                 continue;
             };
-            if canonical_path == *original_path {
+            if canonical_path == original_path {
                 continue; // Not a symlink
             }
 
             self.symlink_canonical_to_originals
                 .entry(canonical_path.clone())
                 .or_default()
-                .insert(original_path.clone());
+                .insert(original_path.to_path_buf());
 
             let Some(canonical_dir) = canonical_path.parent() else {
                 continue;
@@ -814,7 +831,10 @@ impl SkillWatcher {
             let _ = self
                 .watcher_event_tx
                 .try_send(SkillWatcherEvent::SkillsDeleted {
-                    paths: deleted_original_paths,
+                    paths: deleted_original_paths
+                        .into_iter()
+                        .map(LocalOrRemotePath::Local)
+                        .collect(),
                 });
         }
 
@@ -939,7 +959,10 @@ impl SkillWatcher {
             let _ = self
                 .watcher_event_tx
                 .try_send(SkillWatcherEvent::SkillsDeleted {
-                    paths: deleted_paths,
+                    paths: deleted_paths
+                        .into_iter()
+                        .map(LocalOrRemotePath::Local)
+                        .collect(),
                 });
         }
 

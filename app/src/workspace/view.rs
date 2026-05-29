@@ -13240,7 +13240,7 @@ impl Workspace {
                 if let Some((first, rest)) = rule_paths.split_first() {
                     self.open_code(
                         CodeSource::ProjectRules {
-                            path: first.clone(),
+                            location: LocalOrRemotePath::Local(first.clone()),
                         },
                         EditorLayout::SplitPane,
                         None,

@@ -12,7 +12,7 @@ use warp_multi_agent_api::response_event::{stream_finished, ClientActions};
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::response_stream::ResponseStreamId;
-use super::{BlocklistAIController, RequestInput};
+use super::{BlocklistAIController, RequestInput, SessionContext};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{AIAgentActionId, AIAgentAttachment, EntrypointType};
 use crate::ai::attachment_utils::{
@@ -312,6 +312,8 @@ impl BlocklistAIController {
         };
 
         self.update_directory_context_from_client_actions(&actions, ctx);
+        let skill_path_origin =
+            SessionContext::from_session(self.active_session.as_ref(ctx), ctx).skill_path_origin();
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         history_model.update(ctx, |history_model, ctx| {
             if let Err(e) = history_model.apply_client_actions(
@@ -319,6 +321,7 @@ impl BlocklistAIController {
                 actions.actions,
                 conversation_id,
                 self.terminal_view_id,
+                &skill_path_origin,
                 ctx,
             ) {
                 log::error!(

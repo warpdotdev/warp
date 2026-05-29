@@ -1739,7 +1739,7 @@ fn render_read_skill(
         if !skill.is_bundled() {
             let source = CodeSource::Skill {
                 reference: skill_reference.clone(),
-                path: skill.path.clone(),
+                location: skill.path.clone(),
                 origin: SkillOpenOrigin::ReadSkill,
             };
 
@@ -1844,7 +1844,7 @@ fn render_read_files(
             .reference_for_skill_path(&skill.path);
         let source = CodeSource::Skill {
             reference,
-            path: skill.path.clone(),
+            location: skill.path.clone(),
             origin: SkillOpenOrigin::ReadFiles,
         };
         let skill_icon_override = icon_override_for_skill_name(&skill.name);
