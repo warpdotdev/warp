@@ -6,8 +6,7 @@ use tempfile::TempDir;
 
 use super::{
     detect_current_branch, detect_current_branch_display, get_pr_for_branch, get_repository_info,
-    is_gh_auth_error, is_gh_missing_error, is_no_pr_for_branch_error,
-    repository_info_from_gh_output, RepositoryInfo,
+    is_gh_auth_error, is_gh_missing_error, RepositoryInfo,
 };
 
 /// Helper: run a git command inside the given repo directory.
@@ -23,10 +22,11 @@ async fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
+#[cfg(feature = "local_fs")]
 #[test]
 fn repository_info_from_gh_output_parses_name_and_owner() {
     assert_eq!(
-        repository_info_from_gh_output(
+        super::repository_info_from_gh_output(
             r#"{"name":"warp-internal","owner":{"login":"warpdotdev"}}"#
         )
         .unwrap(),
@@ -37,29 +37,37 @@ fn repository_info_from_gh_output_parses_name_and_owner() {
     );
 }
 
+#[cfg(feature = "local_fs")]
 #[test]
 fn repository_info_from_gh_output_rejects_missing_name() {
-    assert!(repository_info_from_gh_output(r#"{"owner":{"login":"warpdotdev"}}"#).is_err());
+    assert!(super::repository_info_from_gh_output(r#"{"owner":{"login":"warpdotdev"}}"#).is_err());
 }
 
+#[cfg(feature = "local_fs")]
 #[test]
 fn repository_info_from_gh_output_rejects_missing_owner_login() {
-    assert!(repository_info_from_gh_output(r#"{"name":"warp-internal","owner":{}}"#).is_err());
+    assert!(
+        super::repository_info_from_gh_output(r#"{"name":"warp-internal","owner":{}}"#).is_err()
+    );
 }
 
+#[cfg(feature = "local_fs")]
 #[test]
 fn repository_info_from_gh_output_rejects_empty_fields() {
     assert!(
-        repository_info_from_gh_output(r#"{"name":"","owner":{"login":"warpdotdev"}}"#).is_err()
+        super::repository_info_from_gh_output(r#"{"name":"","owner":{"login":"warpdotdev"}}"#)
+            .is_err()
     );
-    assert!(
-        repository_info_from_gh_output(r#"{"name":"warp-internal","owner":{"login":""}}"#).is_err()
-    );
+    assert!(super::repository_info_from_gh_output(
+        r#"{"name":"warp-internal","owner":{"login":""}}"#
+    )
+    .is_err());
 }
 
+#[cfg(feature = "local_fs")]
 #[test]
 fn repository_info_from_gh_output_rejects_malformed_json() {
-    assert!(repository_info_from_gh_output("not json").is_err());
+    assert!(super::repository_info_from_gh_output("not json").is_err());
 }
 
 /// Creates a temp git repo with one commit and returns `(dir_handle, repo_path)`.
@@ -75,7 +83,7 @@ async fn init_repo() -> (TempDir, std::path::PathBuf) {
     (dir, path)
 }
 
-#[cfg(unix)]
+#[cfg(all(feature = "local_fs", unix))]
 #[tokio::test]
 async fn get_repository_info_reads_gh_repo_view() {
     use std::fs;
@@ -125,20 +133,20 @@ fn detects_missing_gh_errors() {
     ));
 }
 
+#[cfg(feature = "local_fs")]
 #[test]
 fn detects_no_pr_for_branch_errors() {
-    assert!(is_no_pr_for_branch_error(
+    assert!(super::is_no_pr_for_branch_error(
         "gh command failed: no pull requests found for branch \"feature-a\""
     ));
-    assert!(is_no_pr_for_branch_error(
+    assert!(super::is_no_pr_for_branch_error(
         "gh command failed: no open pull requests found for branch \"feature-a\""
     ));
-    assert!(is_no_pr_for_branch_error(
+    assert!(super::is_no_pr_for_branch_error(
         "GraphQL: NO OPEN PULL REQUESTS FOUND FOR BRANCH feature-a"
     ));
-
-    assert!(!is_no_pr_for_branch_error("authentication required"));
-    assert!(!is_no_pr_for_branch_error("repository not found"));
+    assert!(!super::is_no_pr_for_branch_error("authentication required"));
+    assert!(!super::is_no_pr_for_branch_error("repository not found"));
 }
 
 #[tokio::test]

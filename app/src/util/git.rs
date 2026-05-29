@@ -693,6 +693,7 @@ pub struct RepositoryInfo {
     pub owner: Option<String>,
 }
 
+#[cfg(feature = "local_fs")]
 fn repository_info_from_gh_output(output: &str) -> Result<RepositoryInfo> {
     let parsed: serde_json::Value = serde_json::from_str(output.trim())
         .map_err(|e| anyhow!("Failed to parse gh output: {e}"))?;

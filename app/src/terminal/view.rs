@@ -4889,14 +4889,15 @@ impl TerminalView {
     }
 
     #[cfg(feature = "local_fs")]
-    fn needs_git_status_for_agent_context(&self) -> bool {
+    fn needs_git_status_for_agent_context(&self, ctx: &AppContext) -> bool {
         self.current_local_repo_path().is_some()
+            && self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
     }
 
     /// Returns whether this terminal view should subscribe to git status updates.
     #[cfg(feature = "local_fs")]
     fn should_subscribe_to_git_status(&self, ctx: &AppContext) -> bool {
-        self.needs_git_status_for_chip_ui(ctx) || self.needs_git_status_for_agent_context()
+        self.needs_git_status_for_chip_ui(ctx) || self.needs_git_status_for_agent_context(ctx)
     }
 
     /// Whether the terminal's prompt/footer chips need PR info.
@@ -6613,7 +6614,7 @@ impl TerminalView {
             BlocklistAIInputEvent::InputTypeChanged { config } => {
                 self.ai_render_context.borrow_mut().is_ai_input_enabled = config.input_type.is_ai();
                 #[cfg(feature = "local_fs")]
-                self.sync_pr_info_consumer_for_current_subscription(ctx);
+                self.update_git_status_subscription(ctx);
 
                 // Force re-render all AIBlocks to ensure that selected text is recolored properly
                 self.rerender_rich_content_blocks(ctx);
