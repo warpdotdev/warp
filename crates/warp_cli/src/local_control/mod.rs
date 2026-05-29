@@ -3,6 +3,7 @@ mod commands;
 mod completions;
 mod output;
 mod selectors;
+use std::ffi::OsString;
 
 use std::process::ExitCode;
 
@@ -19,6 +20,8 @@ use commands::{
 };
 use completions::generate_completions_to_stdout;
 use output::write_control_error;
+/// Hidden flag used by the channel-specific Warp app binary to enter `warpctrl` mode.
+pub const CONTROL_MODE_FLAG: &str = "--warpctrl";
 
 /// Parsed top-level arguments for `warpctrl`.
 #[derive(Debug, Parser)]
@@ -69,12 +72,53 @@ pub struct CatalogFilterArgs {
 
 impl ControlArgs {
     pub fn from_env() -> Self {
-        let matches = Self::clap_command().get_matches();
-        Self::from_arg_matches(&matches).unwrap_or_else(|err| err.exit())
+        let bin_name = crate::binary_name().unwrap_or_else(|| "warpctrl".to_owned());
+        Self::try_parse_from_args(std::env::args_os(), bin_name).unwrap_or_else(|err| err.exit())
+    }
+
+    pub fn from_control_mode_env() -> Option<Self> {
+        Self::try_parse_control_mode_from(std::env::args_os())
+            .map(|result| result.unwrap_or_else(|err| err.exit()))
+    }
+
+    pub fn try_parse_control_mode_from<I, T>(args: I) -> Option<Result<Self, clap::Error>>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString>,
+    {
+        let mut stripped_args = vec![OsString::from("warpctrl")];
+        let mut found_control_mode = false;
+
+        for arg in args {
+            let arg = arg.into();
+            if !found_control_mode {
+                if arg.to_str() == Some(CONTROL_MODE_FLAG) {
+                    found_control_mode = true;
+                }
+                continue;
+            }
+            stripped_args.push(arg);
+        }
+
+        found_control_mode.then(|| Self::try_parse_from_args(stripped_args, "warpctrl"))
     }
 
     pub fn clap_command() -> clap::Command {
         let bin_name = crate::binary_name().unwrap_or_else(|| "warpctrl".to_owned());
+        Self::clap_command_for_bin_name(bin_name)
+    }
+
+    fn try_parse_from_args<I, T>(args: I, bin_name: impl Into<String>) -> Result<Self, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        let matches = Self::clap_command_for_bin_name(bin_name).try_get_matches_from(args)?;
+        Self::from_arg_matches(&matches)
+    }
+
+    fn clap_command_for_bin_name(bin_name: impl Into<String>) -> clap::Command {
+        let bin_name = bin_name.into();
         <Self as CommandFactory>::command()
             .version(crate::version_string())
             .bin_name(bin_name.clone())
@@ -635,9 +679,17 @@ impl From<CliDriveObjectType> for local_control::DriveObjectType {
 }
 
 pub fn run(args: ControlArgs) -> ExitCode {
+    ExitCode::from(run_exit_code(args))
+}
+
+pub fn run_and_exit(args: ControlArgs) -> ! {
+    std::process::exit(i32::from(run_exit_code(args)))
+}
+
+fn run_exit_code(args: ControlArgs) -> u8 {
     let output_format = args.output_format;
     match run_inner(args) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => 0,
         Err(error) => {
             if let Err(write_error) = write_control_error(&error, output_format) {
                 eprintln!(
@@ -645,7 +697,7 @@ pub fn run(args: ControlArgs) -> ExitCode {
                     write_error.message
                 );
             }
-            ExitCode::FAILURE
+            1
         }
     }
 }
