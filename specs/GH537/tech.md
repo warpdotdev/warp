@@ -522,6 +522,34 @@ abandoned by a non-matching keystroke. Concrete change:
   old "single key, no match, drop pending" semantics — preserving
   current behavior for surfaces that don't want replay.
 
+**Contextual prefix-index (`full`-mode prerequisite).** When the
+matcher is in `full` mode (the input editor's terminal layer sets
+this via a new `Matcher::set_inject_mode(InjectMode::Full)` API),
+the matcher needs to distinguish three cases for an arriving key
+K:
+
+1. K commits or extends a Reserved/Editable/Fixed sequence — own
+   the prefix locally.
+2. K is single-key match against the Contextual tier (atuin's
+   `Ctrl-R`, etc.) and no local tier extends it — commit to
+   inject immediately, do not buffer.
+3. K both extends a local-tier sequence *and* is a prefix of
+   some Contextual sequence — buffer locally, but on
+   `AbandonedPrefix` route the replay through the inject path
+   (not back through the matcher), so ZLE's keymap takes over
+   the rest of the sequence.
+
+The "is K a Contextual prefix?" check requires a
+`contextual_prefixes: HashSet<SmallVec<[Keystroke; 4]>>` on the
+matcher, rebuilt every time `set_contextual()` is called. Each
+Contextual `Binding`'s key sequence contributes every non-empty
+prefix to the set. The matcher queries
+`contextual_prefixes.contains(&buffered_keys)` at every
+keystroke to decide between cases 2 and 3 above. In `batched`
+mode the index is unused (Contextual bindings dispatch through
+the regular `MatchOutcome` path) but is still maintained so a
+mid-session mode flip (§7.3) does not require rebuilding it.
+
 **Ambiguity timeout (PRODUCT #8).** When the accumulated keys both
 match a complete binding *and* prefix a longer one, the matcher
 returns `Pending` and the dispatcher arms a 500 ms timer. If the
@@ -696,12 +724,19 @@ blesh detected. The shell owns `$BUFFER`; Warp mirrors it.
    (tier 5).
 2. For `SelfInsert` of a printable K (the Else case above), Warp
    speculatively appends K to its mirror and renders one frame
-   immediately, hiding the PTY round-trip. For `Action(_)` or
-   `External(_)` injected to ZLE, no speculation: the pre-K
-   buffer remains rendered until the DCS report arrives.
-   Category A keystrokes go through the shell in this mode so
-   plugin wrappers around `self-insert` and the kill-ring
-   continue to see them; `$BUFFER` stays authoritative.
+   immediately, hiding the PTY round-trip. Speculation operates
+   on complete UTF-8 codepoints, not raw bytes — a multi-byte
+   codepoint (e.g. `é` = `0xC3 0xA9`) is buffered at the input
+   layer until the full codepoint is in hand and then speculated
+   as one unit; the mirror never briefly contains a partial
+   codepoint or a replacement character. Pastes that arrive as
+   multiple printable characters in one input event speculate the
+   whole burst at once. For `Action(_)` or `External(_)` injected
+   to ZLE, no speculation: the pre-K buffer remains rendered
+   until the DCS report arrives. Category A keystrokes go
+   through the shell in this mode so plugin wrappers around
+   `self-insert` and the kill-ring continue to see them;
+   `$BUFFER` stays authoritative.
 3. For tiers that inject (Contextual non-`SelfInsert` and the
    printable Else case), Warp writes the byte sequence for K
    into the PTY. The shell's line editor runs `self-insert` plus
@@ -805,36 +840,60 @@ Enter (§6.1 step 4) require Warp to install its locally-held
 mirror into the shell's `$BUFFER` before any bound keystroke
 fires. Injecting the mirror byte-for-byte through `self-insert`
 is unsafe: the mirror can contain newlines (would fire
-`accept-line` mid-sync), control characters bound to widgets
-(would dispatch them instead of inserting), and the cursor
-position needs to be set independently of buffer content.
+`accept-line` mid-sync) and control characters bound to widgets
+(would dispatch them instead of inserting).
 
 The sync path therefore does **not** route mirror bytes through
-the keymap. It uses two channels:
+the keymap. It uses bracketed paste:
 
 - **Bracketed paste for buffer content.** Warp wraps the mirror
   bytes in DEC-mode bracketed-paste markers
-  (`\e[200~` … `\e[201~`). zsh, bash (with `enable-bracketed-paste`,
-  on by default in modern readline), and fish all treat the
-  contents as literal text — no widget dispatch fires, newlines
-  do not trigger `accept-line`, control characters insert as
-  literal bytes. Plugins that hook `bracketed-paste-magic` (zsh)
-  remain composable because the paste delimiters fire the
-  paste-handler widget, not `self-insert`. The bootstrap installs
-  a sentinel paste handler that suppresses its own emit during
-  a Warp-driven paste so the post-paste `WarpBufferState` fires
-  once (not once per byte).
-- **Cursor positioning via shell-native commands.** After the
-  paste, the cursor sits at end-of-buffer. Warp positions it by
-  emitting the shell's own cursor-movement byte sequence —
-  `\e[D` per character of leftward travel — which the shell's
-  keymap interprets through its default `backward-char`
-  binding. v1 documents a small carve-out: if the user has
-  rebound `backward-char` (rare but possible), the cursor lands
-  at end-of-buffer and Warp emits a one-time diagnostic; the
-  Cat C widget still runs correctly with the full buffer
-  pre-populated, only the cursor position is wrong. Tracked as
-  follow-up for a literal cursor-set primitive once one exists.
+  (`\e[200~` … `\e[201~`). zsh, bash (with
+  `enable-bracketed-paste`, on by default in modern readline),
+  and fish all treat the contents as literal text — no widget
+  dispatch fires, newlines do not trigger `accept-line`, control
+  characters insert as literal bytes. Plugins that hook
+  `bracketed-paste-magic` (zsh) remain composable because the
+  paste delimiters fire the paste-handler widget, not
+  `self-insert`. The bootstrap installs a sentinel paste handler
+  that suppresses its own emit during a Warp-driven paste so the
+  post-paste `WarpBufferState` fires once (not once per byte).
+  The handler distinguishes Warp-driven pastes from user-driven
+  ones by checking a shell-local marker variable
+  (`__warp_paste_in_flight`) that Warp's bootstrap sets via a
+  zero-length DCS ping immediately before emitting `\e[200~`;
+  the post-paste path clears it. User pastes from the OS
+  clipboard never set the marker.
+- **Bracketed-paste capability is a v1 requirement on bash.**
+  The bash bootstrap detects the setting once at startup by
+  parsing `bind -v` output for `set enable-bracketed-paste on`.
+  When the setting is off (user has it disabled in `~/.inputrc`
+  or in an older readline), the bootstrap emits a one-time
+  diagnostic and Warp suppresses Category C dispatch from the
+  block-mode editor on that tab — the binding still parses and
+  appears in the debug view as `unsupported (bracketed-paste
+  disabled)`, but pressing the bound key falls through to
+  Warp's default for that key (PRODUCT #11/#16 fallthrough
+  applies). zsh and fish always have bracketed-paste available
+  in supported versions and need no detection. Lifting the
+  bash requirement is a follow-up gated on an explicit per-byte
+  literal-insert primitive landing in readline.
+
+**Cursor position is end-of-buffer (v1).** After the paste the
+cursor sits at end-of-buffer. Warp does not reposition it in v1
+— positioning via `\e[D` would have to navigate the user's
+active keymap (different bindings under emacs vs vi-cmd vs
+vi-insert; user-rebinds of `backward-char` further muddy it)
+and the timing of `\e` in vi command mode interacts with
+mode-switch detection. Category C widgets that the v1
+motivating cases use (atuin, fzf, `edit-command-line`) care
+about buffer content, not cursor position — atuin opens a TUI
+on the current buffer, fzf does the same — so end-of-buffer is
+correct for the cases this PR targets. The mirror's recorded
+cursor is restored to Warp's editor after the widget exits, so
+the user perceives the position they had pre-dispatch.
+Tracked as follow-up for a literal cursor-set primitive once
+one exists.
 
 The literal-paste path is used in `batched` mode only —
 in `full` mode the shell already owns `$BUFFER` continuously
@@ -884,30 +943,44 @@ Two options, picked per binding category:
     backslash-escaped quotes) and emits a structured
     `{key_bytes: Vec<u8>, body: String}` pair.
   - The wrapper is installed by a small bootstrap helper that
-    takes the structured pair and writes a function declaration
-    with the body literal in source position, not via
-    string-concatenation `eval`. Conceptually:
+    feeds the function declaration to bash through
+    `source <(printf …)` (process substitution + `source`),
+    not through string-concatenated `eval`. The body parses
+    when `source` reads the function declaration, in exactly
+    the same lexical context the original `bind -x`
+    declaration parsed it. Conceptually:
     ```bash
-    # Inputs come from the structured pair; key_bytes is
-    # re-quoted via bash printf %q, body is the literal
-    # parsed source.
-    __warp_wrap_001() {
-        _warp_emit_pre
-        __ORIGINAL_BODY_HERE__   # literal source from bind -X
-        _warp_emit_post
-    }
-    bind -x "$(printf '%q' "$key_bytes")": __warp_wrap_001
+    # $body is the literal parsed source from bind -X.
+    # $wrapper_name is bootstrap-generated and contains no
+    # user data.
+    source <(printf '%s() {\n_warp_emit_pre\n%s\n_warp_emit_post\n}\n' \
+        "$wrapper_name" "$body")
+
+    # bind -x expects a single argument of the form
+    # '"keyseq": shell-command' — quote-marks around the
+    # keyseq are part of the format, not a shell quoting.
+    # The argument is built explicitly:
+    printf -v __bind_arg '"%s": %s' "$keyseq" "$wrapper_name"
+    bind -x "$__bind_arg"
     ```
-    Bash parses the body when the function declaration runs, in
-    exactly the same lexical context the original `bind -x`
-    declaration parsed it. The wrapper does *not* re-eval the
-    body at invoke time, does not interpolate it into another
-    string, and does not invoke `eval` on attacker-controlled
-    data. Wrapper names (`__warp_wrap_NNN`) are bootstrap-
-    generated and contain no user data.
-  - Keys from `bind -X` are passed through `printf %q` before
-    being handed to the `bind -x` call so any control bytes in
-    the key string round-trip safely.
+    The safety property is "body parses once at bootstrap in
+    the same lexical context the original `bind -x` parsed
+    it" — not "no `eval`". `source <(…)` is `eval`-equivalent
+    by design, but it is `eval`-of-Warp-constructed-text whose
+    only user-controlled portion is `$body` itself (the same
+    code the user had already trusted readline to execute on
+    their behalf). The wrapper does *not* re-evaluate the body
+    at invoke time and does *not* re-interpolate it into any
+    further string.
+  - `$keyseq` is the readable form of the key sequence
+    (`\C-r`, `\M-x`, etc.) as it appears in `bind -X` output
+    after the parser has normalized escapes. It is composed of
+    a documented set of tokens, not arbitrary user bytes, so
+    no further escaping is required when building
+    `__bind_arg`. Keys whose `bind -X` representation falls
+    outside the documented token set are dropped with a
+    diagnostic (the original `bind -x` remains in effect; only
+    the Warp wrapper is skipped).
   - On re-snapshot at `precmd` (when the user has run another
     `bind -x` since the last snapshot), wrappers for keys that
     have disappeared are removed via `bind -r`; wrappers for
@@ -1157,6 +1230,24 @@ per-session diagnostic at tab start names the limitation:
 Category C bindings (atuin, fzf, custom widgets) work normally."
 The diagnostic is suppressed when the user has explicitly
 chosen `batched` on a capable shell — the opt-down case above.
+
+**Mid-session capability re-evaluation.** When the user installs
+or removes an inline-rendering plugin mid-session (`source
+~/.zsh/zsh-autosuggestions/zsh-autosuggestions.zsh` at the
+prompt, or `unfunction _zsh_autosuggest_self-insert`), the next
+`precmd` re-snapshot (§1's hash-driven re-query) picks up the
+new binding table. The bootstrap also re-runs the structural-
+capability test on that snapshot and emits the result alongside
+the `ShellBindings` payload. The app-side handler flips
+`injection_mode` for the tab if the new capability differs from
+the current mode and the user has not explicitly opted down via
+the setting — emit a one-time diagnostic naming the change
+("enabling inline-plugin rendering for this tab; latency
+budget §7.3 applies"). Users who set the setting explicitly
+(either direction) are not auto-flipped; the explicit choice
+sticks until they unset it. This keeps the "I just installed a
+plugin and it works" path smooth without overriding deliberate
+user preference.
 
 #### 7.4 What this is NOT
 
