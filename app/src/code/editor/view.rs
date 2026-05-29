@@ -1216,7 +1216,7 @@ impl CodeEditorView {
                 starting_line_number: self.display_options.starting_line_number,
                 mode: *editor_settings.code_editor_line_number_mode.value(),
                 active_line_number: self.active_cursor_line_for_line_numbers(ctx),
-                active_cursor_is_focused: self.is_focused(ctx),
+                active_cursor_is_visible: self.is_focused(ctx) && self.is_editable(ctx),
             })
         } else {
             None

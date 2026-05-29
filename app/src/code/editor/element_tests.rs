@@ -12,7 +12,7 @@ fn config(
         starting_line_number,
         mode,
         active_line_number,
-        active_cursor_is_focused: true,
+        active_cursor_is_visible: true,
     }
 }
 

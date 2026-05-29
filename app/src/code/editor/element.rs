@@ -351,7 +351,7 @@ pub struct LineNumberConfig {
     pub starting_line_number: Option<usize>,
     pub mode: CodeEditorLineNumberMode,
     pub active_line_number: Option<LineCount>,
-    pub active_cursor_is_focused: bool,
+    pub active_cursor_is_visible: bool,
 }
 impl LineNumberConfig {
     pub fn absolute_line_number(&self, line_count: LineCount) -> usize {
@@ -581,10 +581,9 @@ impl<V: EditorView> EditorWrapper<V> {
             return false;
         }
 
-        if self.diff_status.is_empty() {
-            return true;
-        }
-        line_number_config.active_cursor_is_focused
+        // Relative numbers follow the cursor: only show them when a cursor is
+        // actually drawn (editor focused and editable).
+        line_number_config.active_cursor_is_visible
     }
 
     /// Returning **no** gutter means the gutter shouldn't be rendered at all.
