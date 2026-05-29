@@ -32,7 +32,7 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
     AIConversation, AIConversationId, ConversationStatus, StatusColorStyle,
 };
-use crate::ai::agent_conversations_model::entry::PrincipalType;
+use crate::ai::agent_conversations_model::entry::{AgentConversationPrincipal, PrincipalType};
 use crate::ai::agent_conversations_model::{AgentConversationEntry, AgentRunDisplayStatus};
 use crate::ai::agent_management::details_action_buttons::{
     ActionButtonsConfig, AgentDetailsButtonEvent, ConversationActionButtonsRow,
@@ -77,6 +77,7 @@ const HARNESS_CIRCLE_SIZE: f32 = 16.0;
 const HARNESS_ICON_IN_CIRCLE: f32 = 9.0;
 const LABEL_VALUE_GAP: f32 = 4.0;
 const SECTION_HEADER_GAP: f32 = 8.0;
+const UNKNOWN_CREATOR_DISPLAY_NAME: &str = "Unknown creator";
 
 /// Panel rendering mode.
 #[derive(Debug, Clone, PartialEq)]
@@ -172,10 +173,84 @@ impl PrincipalInfo {
         }
     }
 
-    /// Create a PrincipalInfo with just the first character as a fallback.
-    fn from_uid_fallback(uid: &str) -> Self {
-        let first_char = uid.chars().next().unwrap_or('?').to_uppercase().to_string();
-        Self::new(first_char, None)
+    fn unknown_creator_with_uid(uid: &str, is_service_account: bool) -> Self {
+        Self {
+            display_name: UNKNOWN_CREATOR_DISPLAY_NAME.to_string(),
+            photo_url: None,
+            uid: Some(uid.to_string()),
+            is_service_account,
+        }
+    }
+
+    fn non_empty_display_name(display_name: String) -> Option<String> {
+        (!display_name.trim().is_empty()).then_some(display_name)
+    }
+
+    fn from_user_profile(uid: &str, app: &AppContext) -> Option<Self> {
+        let profile = UserProfiles::as_ref(app).profile_for_uid(UserUid::new(uid))?;
+        let display_name = Self::non_empty_display_name(profile.displayable_identifier())?;
+        let photo_url = Some(profile.photo_url.clone()).filter(|url| !url.is_empty());
+
+        Some(Self {
+            display_name,
+            photo_url,
+            uid: Some(uid.to_string()),
+            is_service_account: false,
+        })
+    }
+
+    fn from_creator_uid(uid: &str, app: &AppContext) -> Self {
+        Self::from_user_profile(uid, app)
+            .unwrap_or_else(|| Self::unknown_creator_with_uid(uid, false))
+    }
+
+    fn from_task_creator(p: &TaskPrincipalInfo, app: &AppContext) -> Self {
+        let is_service_account =
+            PrincipalType::parse(&p.creator_type).is_some_and(|pt| pt.is_service_account());
+
+        if let Some(display_name) = p
+            .display_name
+            .clone()
+            .and_then(Self::non_empty_display_name)
+        {
+            return Self {
+                display_name,
+                photo_url: None,
+                uid: Some(p.uid.clone()),
+                is_service_account,
+            };
+        }
+
+        Self::from_user_profile(&p.uid, app)
+            .map(|mut profile| {
+                profile.is_service_account = is_service_account;
+                profile
+            })
+            .unwrap_or_else(|| Self::unknown_creator_with_uid(&p.uid, is_service_account))
+    }
+
+    fn from_entry_creator(p: &AgentConversationPrincipal, app: &AppContext) -> Option<Self> {
+        let is_service_account = p.principal_type.is_some_and(|pt| pt.is_service_account());
+
+        if let Some(display_name) = p.name.clone().and_then(Self::non_empty_display_name) {
+            return Some(Self {
+                display_name,
+                photo_url: None,
+                uid: p.uid.clone(),
+                is_service_account,
+            });
+        }
+
+        let uid = p.uid.as_ref()?;
+
+        Some(
+            Self::from_user_profile(uid, app)
+                .map(|mut profile| {
+                    profile.is_service_account = is_service_account;
+                    profile
+                })
+                .unwrap_or_else(|| Self::unknown_creator_with_uid(uid, is_service_account)),
+        )
     }
 }
 
@@ -257,17 +332,7 @@ impl ConversationDetailsData {
         let mut creator = None;
         if let Some(server_metadata) = conversation.server_metadata() {
             if let Some(creator_uid_str) = &server_metadata.metadata.creator_uid {
-                let creator_uid = UserUid::new(creator_uid_str);
-                let user_profiles = UserProfiles::handle(app).as_ref(app);
-
-                if let Some(profile) = user_profiles.profile_for_uid(creator_uid) {
-                    let display_name = profile.displayable_identifier();
-                    let photo_url = Some(profile.photo_url.clone()).filter(|url| !url.is_empty());
-                    creator = Some(PrincipalInfo::new(display_name, photo_url));
-                } else {
-                    // Fallback to first character of UID
-                    creator = Some(PrincipalInfo::from_uid_fallback(creator_uid_str));
-                }
+                creator = Some(PrincipalInfo::from_creator_uid(creator_uid_str, app));
             }
 
             // Conversation ID (from server token)
@@ -387,8 +452,7 @@ impl ConversationDetailsData {
             creator: task
                 .creator
                 .as_ref()
-                .filter(|c| c.display_name.is_some())
-                .map(PrincipalInfo::from),
+                .map(|creator| PrincipalInfo::from_task_creator(creator, app)),
             executor: task.executor.as_ref().map(PrincipalInfo::from),
             source_prompt: Some(task.prompt.clone()),
             copy_link_url,
@@ -403,13 +467,9 @@ impl ConversationDetailsData {
         task: Option<&AmbientAgentTask>,
         open_action: Option<WorkspaceAction>,
         copy_link_url: Option<String>,
+        app: &AppContext,
     ) -> Self {
-        let creator = entry
-            .display
-            .creator
-            .name
-            .clone()
-            .map(|name| PrincipalInfo::new(name, None));
+        let creator = PrincipalInfo::from_entry_creator(&entry.display.creator, app);
         let executor = entry.display.executor.as_ref().and_then(|e| {
             let display_name = e.name.clone().or_else(|| e.uid.clone())?;
             Some(PrincipalInfo {

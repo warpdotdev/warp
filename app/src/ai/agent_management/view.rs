@@ -1338,6 +1338,7 @@ impl AgentManagementView {
             task.as_ref(),
             open_action,
             copy_link_url,
+            ctx,
         );
 
         self.details_panel.update(ctx, |p, ctx| {

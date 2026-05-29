@@ -1,17 +1,29 @@
 use std::collections::HashMap;
 
+use super::{ConversationDetailsData, PanelMode, UNKNOWN_CREATOR_DISPLAY_NAME};
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::{
+    AIAgentHarness, AIConversation, AIConversationId, ServerAIConversationMetadata,
+};
+use crate::ai::agent_conversations_model::entry::{
+    AgentConversationBackingData, AgentConversationCapabilities, AgentConversationDisplayData,
+    AgentConversationEntry, AgentConversationEntryId, AgentConversationIdentity,
+    AgentConversationPrincipal, AgentConversationProvenance, PrincipalType,
+};
+use crate::ai::agent_conversations_model::AgentRunDisplayStatus;
+use crate::ai::ambient_agents::task::{AgentConfigSnapshot, HarnessConfig, TaskPrincipalInfo};
+use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
+use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
+use crate::auth::UserUid;
+use crate::cloud_object::{Revision, ServerMetadata, ServerPermissions};
+use crate::server::ids::ServerId;
+use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
 use chrono::{Local, Utc};
-use persistence::model::AgentConversationData;
+use persistence::model::{AgentConversationData, ConversationUsageMetadata};
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, EntityId, SingletonEntity};
-
-use super::{ConversationDetailsData, PanelMode};
-use crate::ai::agent::conversation::{AIConversation, AIConversationId};
-use crate::ai::ambient_agents::task::{AgentConfigSnapshot, HarnessConfig, TaskPrincipalInfo};
-use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
-use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 
 fn create_test_task(task_id: &str) -> AmbientAgentTask {
     let now = Utc::now();
@@ -45,6 +57,291 @@ fn create_test_task(task_id: &str) -> AmbientAgentTask {
     }
 }
 
+fn create_server_metadata_with_creator(
+    server_token: &str,
+    creator_uid: &str,
+) -> ServerAIConversationMetadata {
+    ServerAIConversationMetadata {
+        title: "test conversation".to_string(),
+        working_directory: None,
+        harness: AIAgentHarness::Oz,
+        usage: ConversationUsageMetadata {
+            was_summarized: false,
+            context_window_usage: 0.0,
+            credits_spent: 0.0,
+            credits_spent_for_last_block: None,
+            token_usage: vec![],
+            tool_usage_metadata: Default::default(),
+        },
+        metadata: ServerMetadata {
+            uid: ServerId::default(),
+            revision: Revision::now(),
+            metadata_last_updated_ts: Utc::now().into(),
+            trashed_ts: None,
+            folder_id: None,
+            is_welcome_object: false,
+            creator_uid: Some(creator_uid.to_string()),
+            last_editor_uid: None,
+            current_editor_uid: None,
+        },
+        permissions: ServerPermissions::mock_personal(),
+        ambient_agent_task_id: None,
+        server_conversation_token: ServerConversationToken::new(server_token.to_string()),
+        artifacts: vec![],
+    }
+}
+
+fn user_profile(
+    uid: &str,
+    display_name: Option<&str>,
+    email: &str,
+    photo_url: &str,
+) -> UserProfileWithUID {
+    UserProfileWithUID {
+        firebase_uid: UserUid::new(uid),
+        display_name: display_name.map(str::to_string),
+        email: email.to_string(),
+        photo_url: photo_url.to_string(),
+    }
+}
+
+fn create_entry_with_creator_uid(creator_uid: &str) -> AgentConversationEntry {
+    let conversation_id = AIConversationId::new();
+    AgentConversationEntry {
+        id: AgentConversationEntryId::Conversation(conversation_id),
+        identity: AgentConversationIdentity {
+            local_conversation_id: Some(conversation_id),
+            ambient_agent_task_id: None,
+            server_conversation_token: None,
+            session_id: None,
+        },
+        provenance: AgentConversationProvenance::CloudSyncedConversation,
+        display: AgentConversationDisplayData {
+            title: "Entry conversation".to_string(),
+            initial_query: Some("test".to_string()),
+            created_at: Utc::now(),
+            last_updated: Utc::now(),
+            status: AgentRunDisplayStatus::ConversationSucceeded,
+            creator: AgentConversationPrincipal {
+                name: None,
+                uid: Some(creator_uid.to_string()),
+                principal_type: Some(PrincipalType::User),
+            },
+            executor: None,
+            request_usage: None,
+            run_time: None,
+            session_status: None,
+            source: None,
+            working_directory: None,
+            environment_id: None,
+            harness: None,
+            artifacts: vec![],
+        },
+        backing: AgentConversationBackingData {
+            has_loaded_conversation: false,
+            has_local_persisted_data: false,
+            has_cloud_data: true,
+            has_ambient_run: false,
+        },
+        capabilities: AgentConversationCapabilities {
+            can_open: false,
+            can_copy_link: false,
+            can_share: false,
+            can_delete: false,
+            can_fork_locally: false,
+            can_cancel: false,
+        },
+    }
+}
+
+#[test]
+fn test_from_conversation_uses_unknown_creator_when_profile_is_missing() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| UserProfiles::new(vec![]));
+
+        let conversation_id = AIConversationId::new();
+        let creator_uid = "B123456789";
+        let mut conversation = create_restored_conversation(
+            conversation_id,
+            "root-task",
+            "/tmp/unknown-creator-conversation",
+            AgentConversationData {
+                server_conversation_token: Some("server-token-unknown-creator".to_string()),
+                conversation_usage_metadata: None,
+                reverted_action_ids: None,
+                forked_from_server_conversation_token: None,
+                artifacts_json: None,
+                parent_agent_id: None,
+                agent_name: None,
+                orchestration_harness_type: None,
+                parent_conversation_id: None,
+                is_remote_child: false,
+                root_task_is_optimistic: None,
+                run_id: None,
+                autoexecute_override: None,
+                last_event_sequence: None,
+                pinned: false,
+            },
+        );
+        conversation.set_server_metadata(create_server_metadata_with_creator(
+            "server-token-unknown-creator",
+            creator_uid,
+        ));
+
+        app.update(|ctx| {
+            let data = ConversationDetailsData::from_conversation(&conversation, ctx);
+            let creator = data.creator.as_ref().expect("creator should be populated");
+
+            assert_eq!(creator.display_name, UNKNOWN_CREATOR_DISPLAY_NAME);
+            assert_eq!(creator.uid.as_deref(), Some(creator_uid));
+        });
+    });
+}
+
+#[test]
+fn test_from_conversation_uses_profile_info_when_available() {
+    App::test((), |mut app| async move {
+        let creator_uid = "profile-user-conversation";
+        app.add_singleton_model(|_| {
+            UserProfiles::new(vec![user_profile(
+                creator_uid,
+                Some("ZL"),
+                "zl@example.com",
+                "https://example.com/zl.png",
+            )])
+        });
+
+        let conversation_id = AIConversationId::new();
+        let mut conversation = create_restored_conversation(
+            conversation_id,
+            "root-task",
+            "/tmp/profile-creator-conversation",
+            AgentConversationData {
+                server_conversation_token: Some("server-token-profile-creator".to_string()),
+                conversation_usage_metadata: None,
+                reverted_action_ids: None,
+                forked_from_server_conversation_token: None,
+                artifacts_json: None,
+                parent_agent_id: None,
+                agent_name: None,
+                orchestration_harness_type: None,
+                parent_conversation_id: None,
+                is_remote_child: false,
+                root_task_is_optimistic: None,
+                run_id: None,
+                autoexecute_override: None,
+                last_event_sequence: None,
+                pinned: false,
+            },
+        );
+        conversation.set_server_metadata(create_server_metadata_with_creator(
+            "server-token-profile-creator",
+            creator_uid,
+        ));
+
+        app.update(|ctx| {
+            let data = ConversationDetailsData::from_conversation(&conversation, ctx);
+            let creator = data.creator.as_ref().expect("creator should be populated");
+
+            assert_eq!(creator.display_name, "ZL");
+            assert_eq!(
+                creator.photo_url.as_deref(),
+                Some("https://example.com/zl.png")
+            );
+            assert_eq!(creator.uid.as_deref(), Some(creator_uid));
+        });
+    });
+}
+
+#[test]
+fn test_from_task_uses_unknown_creator_when_only_uid_is_available() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        app.add_singleton_model(|_| UserProfiles::new(vec![]));
+
+        let mut task = create_test_task("550e8400-e29b-41d4-a716-000000004040");
+        let creator_uid = "B987654321";
+        task.creator = Some(TaskPrincipalInfo {
+            creator_type: "USER".to_string(),
+            uid: creator_uid.to_string(),
+            display_name: None,
+        });
+
+        app.update(|ctx| {
+            let data = ConversationDetailsData::from_task(&task, None, None, ctx);
+            let creator = data.creator.as_ref().expect("creator should be populated");
+
+            assert_eq!(creator.display_name, UNKNOWN_CREATOR_DISPLAY_NAME);
+            assert_eq!(creator.uid.as_deref(), Some(creator_uid));
+        });
+    });
+}
+
+#[test]
+fn test_from_task_uses_profile_info_when_display_name_is_missing() {
+    App::test((), |mut app| async move {
+        let creator_uid = "profile-user-task";
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        app.add_singleton_model(|_| {
+            UserProfiles::new(vec![user_profile(
+                creator_uid,
+                Some("Profile User"),
+                "profile@example.com",
+                "https://example.com/profile.png",
+            )])
+        });
+
+        let mut task = create_test_task("550e8400-e29b-41d4-a716-000000004041");
+        task.creator = Some(TaskPrincipalInfo {
+            creator_type: "USER".to_string(),
+            uid: creator_uid.to_string(),
+            display_name: None,
+        });
+
+        app.update(|ctx| {
+            let data = ConversationDetailsData::from_task(&task, None, None, ctx);
+            let creator = data.creator.as_ref().expect("creator should be populated");
+
+            assert_eq!(creator.display_name, "Profile User");
+            assert_eq!(
+                creator.photo_url.as_deref(),
+                Some("https://example.com/profile.png")
+            );
+            assert_eq!(creator.uid.as_deref(), Some(creator_uid));
+        });
+    });
+}
+
+#[test]
+fn test_from_entry_uses_profile_info_when_name_is_missing() {
+    App::test((), |mut app| async move {
+        let creator_uid = "profile-user-entry";
+        app.add_singleton_model(|_| {
+            UserProfiles::new(vec![user_profile(
+                creator_uid,
+                Some("Entry Profile"),
+                "entry@example.com",
+                "https://example.com/entry.png",
+            )])
+        });
+
+        let entry = create_entry_with_creator_uid(creator_uid);
+
+        app.update(|ctx| {
+            let data = ConversationDetailsData::from_agent_conversation_entry(
+                &entry, None, None, None, ctx,
+            );
+            let creator = data.creator.as_ref().expect("creator should be populated");
+
+            assert_eq!(creator.display_name, "Entry Profile");
+            assert_eq!(
+                creator.photo_url.as_deref(),
+                Some("https://example.com/entry.png")
+            );
+            assert_eq!(creator.uid.as_deref(), Some(creator_uid));
+        });
+    });
+}
 fn create_message_with_directory(id: &str, task_id: &str, directory: &str) -> api::Message {
     api::Message {
         id: id.to_string(),
