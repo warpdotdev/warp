@@ -148,9 +148,10 @@ fn skill_path(repo_path: &Path, provider_dir: &str, skill_name: &str) -> PathBuf
 }
 
 fn parsed_skill(path: PathBuf, name: &str) -> ParsedSkill {
+    let path = LocalOrRemotePath::Local(path);
     let provider = get_provider_for_path(&path).unwrap_or(SkillProvider::Agents);
     ParsedSkill {
-        path: LocalOrRemotePath::Local(path),
+        path,
         name: name.to_string(),
         description: String::new(),
         content: String::new(),

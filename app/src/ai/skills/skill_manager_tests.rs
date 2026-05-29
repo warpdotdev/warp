@@ -591,13 +591,14 @@ fn active_skill_by_reference_distinguishes_remote_hosts_with_the_same_display_pa
 /// Helper: creates a ParsedSkill under a given provider directory.
 fn make_skill(name: &str, provider_dir: &str) -> ParsedSkill {
     let local_path = PathBuf::from(format!("/repo/{provider_dir}/skills/{name}/SKILL.md"));
+    let path = LocalOrRemotePath::Local(local_path);
     ParsedSkill {
         name: name.to_string(),
         description: format!("{name} skill"),
-        path: LocalOrRemotePath::Local(local_path.clone()),
+        path: path.clone(),
         content: format!("# {name}"),
         line_range: None,
-        provider: get_provider_for_path(&local_path).unwrap_or(SkillProvider::Warp),
+        provider: get_provider_for_path(&path).unwrap_or(SkillProvider::Warp),
         scope: SkillScope::Project,
     }
 }

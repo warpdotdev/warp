@@ -13,6 +13,7 @@ use warp_core::ui::color::CLAUDE_ORANGE;
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::Fill;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::standardized_path::StandardizedPath;
 
 /// Represents a skill provider/origin (Agents, Claude, Codex, or Warp).
 #[derive(
@@ -167,11 +168,23 @@ pub fn home_skills_path(provider: SkillProvider) -> Option<PathBuf> {
     home_dir().map(|home_dir| home_dir.join(&definition.skills_path))
 }
 
-/// Returns the skill provider for a given path, if it matches a known skill provider directory.
+/// Returns the skill provider for a location, if it matches a known skill provider directory.
+///
+/// Local locations retain home-directory-aware matching. Remote project locations are
+/// classified only by their provider-directory structure, because their paths do not
+/// belong to the local filesystem.
+pub fn get_provider_for_path(path: &LocalOrRemotePath) -> Option<SkillProvider> {
+    match path {
+        LocalOrRemotePath::Local(path) => get_provider_for_local_path(path),
+        LocalOrRemotePath::Remote(remote) => get_provider_for_remote_path(&remote.path),
+    }
+}
+
+/// Returns the skill provider for a local path, if it matches a known skill provider directory.
 /// For example:
-///   get_provider_for_path(Path::new("/repo/.claude/skills/my-skill/SKILL.md")) returns Some(SkillProvider::Claude).
+///   get_provider_for_local_path(Path::new("/repo/.claude/skills/my-skill/SKILL.md")) returns Some(SkillProvider::Claude).
 /// Handles both SKILL.md files and files nested within a skill directory.
-pub fn get_provider_for_path(path: &Path) -> Option<SkillProvider> {
+fn get_provider_for_local_path(path: &Path) -> Option<SkillProvider> {
     let path_components: Vec<_> = path.components().collect();
 
     for def in SKILL_PROVIDER_DEFINITIONS.iter() {
@@ -195,25 +208,15 @@ pub fn get_provider_for_path(path: &Path) -> Option<SkillProvider> {
     None
 }
 
-/// Returns the skill provider for a location without discarding remote host identity.
-///
-/// Local locations retain home-directory-aware matching. Remote project locations are
-/// classified only by their provider-directory structure, because their paths do not
-/// belong to the local filesystem.
-pub fn get_provider_for_location(path: &LocalOrRemotePath) -> Option<SkillProvider> {
-    match path {
-        LocalOrRemotePath::Local(path) => get_provider_for_path(path),
-        LocalOrRemotePath::Remote(remote) => SKILL_PROVIDER_DEFINITIONS
-            .iter()
-            .find(|definition| {
-                let provider_path = definition.skills_path.to_string_lossy();
-                remote
-                    .path
-                    .ancestors()
-                    .any(|ancestor| ancestor.ends_with(provider_path.as_ref()))
-            })
-            .map(|definition| definition.provider),
-    }
+fn get_provider_for_remote_path(path: &StandardizedPath) -> Option<SkillProvider> {
+    SKILL_PROVIDER_DEFINITIONS
+        .iter()
+        .find(|definition| {
+            let provider_path = definition.skills_path.to_string_lossy();
+            path.ancestors()
+                .any(|ancestor| ancestor.ends_with(provider_path.as_ref()))
+        })
+        .map(|definition| definition.provider)
 }
 
 /// Returns the skill scope (Home or Project) for a given path.
@@ -234,8 +237,7 @@ pub fn get_scope_for_path(path: &Path) -> SkillScope {
 #[cfg(test)]
 mod tests {
     use super::{
-        get_provider_for_location, get_provider_for_path, get_scope_for_path, home_skills_path,
-        SkillProvider, SkillScope,
+        get_provider_for_path, get_scope_for_path, home_skills_path, SkillProvider, SkillScope,
     };
     use warp_util::host_id::HostId;
     use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -258,7 +260,10 @@ mod tests {
         };
         let path = warp_home_skills_dir.join("my-skill").join("SKILL.md");
 
-        assert_eq!(get_provider_for_path(&path), Some(SkillProvider::Warp));
+        assert_eq!(
+            get_provider_for_path(&LocalOrRemotePath::Local(path.clone())),
+            Some(SkillProvider::Warp)
+        );
         assert_eq!(get_scope_for_path(&path), SkillScope::Home);
     }
 
@@ -270,7 +275,7 @@ mod tests {
         ));
 
         assert_eq!(
-            get_provider_for_location(&path),
+            get_provider_for_path(&path),
             Some(SkillProvider::Claude)
         );
     }
@@ -282,6 +287,6 @@ mod tests {
             StandardizedPath::try_new(r"C:\repo\.codex\skills\my-skill\SKILL.md").unwrap(),
         ));
 
-        assert_eq!(get_provider_for_location(&path), Some(SkillProvider::Codex));
+        assert_eq!(get_provider_for_path(&path), Some(SkillProvider::Codex));
     }
 }

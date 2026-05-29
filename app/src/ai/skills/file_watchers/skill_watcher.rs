@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use ai::skills::{
-    get_provider_for_location, home_skills_path, parse_skill, parse_skill_content_at_location,
+    get_provider_for_path, home_skills_path, parse_skill, parse_skill_content_at_location,
     ParsedSkill, SkillProvider, SkillScope, SKILL_PROVIDER_DEFINITIONS,
 };
 use async_channel::Sender;
@@ -1132,7 +1132,7 @@ fn parse_remote_skill_file_contexts(
                 return None;
             };
             let content = text_content_by_path.get(remote.path.as_str())?;
-            let provider = get_provider_for_location(&path).unwrap_or(SkillProvider::Agents);
+            let provider = get_provider_for_path(&path).unwrap_or(SkillProvider::Agents);
             parse_skill_content_at_location(path, content, provider, SkillScope::Project).ok()
         })
         .collect()
