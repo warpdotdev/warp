@@ -47,7 +47,7 @@
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/pr-walkthrough/SKILL.md",
-      "computedHash": "990e8549611cff4b82036d4c7cc50d23eb2cbb27272926142d3fd8ad17a5e18f"
+      "computedHash": "fd5ff2a22f4cc80ef8d0ab3a7bdef427d6463719f9e5fdf47f6fa1371fc4d3f9"
     },
     "reproduce-bug-report": {
       "source": "warpdotdev/common-skills",
