@@ -1579,17 +1579,14 @@ impl CodeDiffView {
                 self.location_for_standardized_path(diff.diff_view.as_ref(app).file_path()?)
             })
             .collect();
-        let file_paths: Vec<PathBuf> = file_locations
-            .iter()
-            .filter_map(|path| path.to_local_path().map(Path::to_path_buf))
-            .collect();
 
-        // Renders the 'open skill' button if all edited files live in the same skill directory
+        // Renders the 'open skill' button only if every edited file lives in the same skill directory.
         let skill_paths = file_locations
             .iter()
-            .filter_map(skill_path_from_location)
-            .collect::<Vec<_>>();
-        let skill = skill_paths.first().and_then(|first_path| {
+            .map(skill_path_from_location)
+            .collect::<Option<Vec<_>>>();
+        let skill = skill_paths.and_then(|skill_paths| {
+            let first_path = skill_paths.first()?;
             skill_paths
                 .iter()
                 .all(|path| path == first_path)
@@ -1628,7 +1625,12 @@ impl CodeDiffView {
         // Renders the 'open config' button only when every MCP config file in this diff
         // belongs to the same provider. Mixed-provider diffs (e.g. editing both a Claude
         // config and a Warp config at once) show no badge to avoid misleading attribution.
-        let mcp_configs: Vec<_> = file_paths
+        // MCP config actions currently operate on local paths only.
+        let local_file_paths: Vec<PathBuf> = file_locations
+            .iter()
+            .filter_map(|path| path.to_local_path().map(Path::to_path_buf))
+            .collect();
+        let mcp_configs: Vec<_> = local_file_paths
             .iter()
             .filter_map(|path| {
                 mcp_provider_from_file_path(path).map(|provider| (provider, path.to_path_buf()))
