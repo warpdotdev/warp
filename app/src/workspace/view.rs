@@ -5857,28 +5857,42 @@ impl Workspace {
                 self.show_settings_with_section(Some(SettingsSection::WarpAgent), ctx);
             }
             #[allow(unused_variables)]
-            AIFactViewEvent::OpenFile(path) => {
+            AIFactViewEvent::OpenFile(location) => {
                 #[cfg(feature = "local_fs")]
                 {
-                    let settings = EditorSettings::as_ref(ctx);
-                    let target = resolve_file_target_with_editor_choice(
-                        path,
-                        *settings.open_file_editor,
-                        *settings.prefer_markdown_viewer,
-                        *settings.open_file_layout,
-                        None,
-                    );
-                    self.open_file_with_target(
-                        path.clone(),
-                        target,
-                        None,
-                        CodeSource::Link {
-                            path: path.clone(),
-                            range_start: None,
-                            range_end: None,
-                        },
-                        ctx,
-                    );
+                    match location {
+                        LocalOrRemotePath::Local(path) => {
+                            let settings = EditorSettings::as_ref(ctx);
+                            let target = resolve_file_target_with_editor_choice(
+                                path,
+                                *settings.open_file_editor,
+                                *settings.prefer_markdown_viewer,
+                                *settings.open_file_layout,
+                                None,
+                            );
+                            self.open_file_with_target(
+                                path.clone(),
+                                target,
+                                None,
+                                CodeSource::ProjectRules {
+                                    location: location.clone(),
+                                },
+                                ctx,
+                            );
+                        }
+                        LocalOrRemotePath::Remote(_) => {
+                            self.open_code(
+                                CodeSource::ProjectRules {
+                                    location: location.clone(),
+                                },
+                                EditorLayout::SplitPane,
+                                None,
+                                false,
+                                &[],
+                                ctx,
+                            );
+                        }
+                    }
                 }
             }
             AIFactViewEvent::InitializeProject(path) => {

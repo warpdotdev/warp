@@ -7,6 +7,7 @@ use repo_metadata::{DirectoryWatcher, Repository, RepositoryUpdate};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use warp_core::safe_warn;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::standardized_path::StandardizedPath;
 use warpui_core::{ModelContext, ModelHandle, SingletonEntity};
 use watcher::{HomeDirectoryWatcher, HomeDirectoryWatcherEvent};
@@ -85,7 +86,8 @@ impl GlobalRules {
         self.rules
             .values()
             .next()
-            .and_then(|rule| rule.path.parent().map(|p| p.to_path_buf()))
+            .and_then(|rule| rule.path.parent())
+            .and_then(|parent| parent.to_local_path().map(Path::to_path_buf))
     }
 
     /// Index all configured global rule sources (see [`GlobalRuleSource`]).
@@ -159,7 +161,7 @@ impl GlobalRules {
                     me.global_rules.rules.insert(
                         file_path.clone(),
                         ProjectRule {
-                            path: file_path.clone(),
+                            path: LocalOrRemotePath::Local(file_path.clone()),
                             content,
                         },
                     );

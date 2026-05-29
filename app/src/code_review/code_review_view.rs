@@ -4099,7 +4099,7 @@ impl CodeReviewView {
                 ProjectContextModel::as_ref(app).find_applicable_project_rules(repo_path)
             {
                 if let Some(first_rule) = rules.active_rules.first() {
-                    if let Some(file_name) = first_rule.path.file_name().and_then(|n| n.to_str()) {
+                    if let Some(file_name) = first_rule.path.file_name() {
                         zero_state_column.add_child(
                             Container::new(
                                 Text::new(
