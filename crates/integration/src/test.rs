@@ -5878,7 +5878,7 @@ pub fn test_warp_prompt_unsets_zsh_rprompt() -> Builder {
             let dir = utils.test_dir();
             write_rc_files_for_test(
                 &dir,
-                r#"export RPROMPT="right prompt""#.to_string(),
+                r#"export RPROMPT="right prompt""#,
                 [ShellRcType::Zsh],
             );
         })
