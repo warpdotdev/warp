@@ -563,266 +563,287 @@ them).
 
 Pass-through is the v1 mechanism for Category C widgets — atuin,
 fzf, zsh-vi-mode, `edit-command-line`, and any other user-defined
-shell-function widget. It composes existing Warp primitives rather
-than introducing new ones for keystroke routing or alt-screen
-handling; what is genuinely new is a **buffer-bearing app→shell
-trigger** and the **shell-side helper** that consumes it.
+shell-function widget — and is also the foundation for inline-plugin
+support (§7).
 
-**Composed primitives** (already exist; established by the explore
-of the codebase):
+#### Architectural premise
 
-- `Message::Input(bytes)` (`app/src/terminal/writeable_pty/message.rs`
-  ~line 4-22) writes raw bytes to the PTY. Today only used to send
-  fully-formed commands at Enter. Pass-through reuses it to deliver a
-  short shell command that triggers the helper.
-- `InputBuffer` DCS hook (`app/src/terminal/model/ansi/dcs_hooks.rs`)
-  + `send_input_buffer_to_terminal_editor()`
-  (`app/src/terminal/input.rs` ~line 2014-2022) already plumbs
-  shell→Warp buffer sync, currently used for vim-mode and `fc`-driven
-  external edits. Pass-through reuses both ends to receive the
-  widget's resulting buffer.
-- `enter_alt_screen()` / `exit_alt_screen()`
-  (`app/src/terminal/model/terminal_model.rs` ~line 2021-2090) auto
-  yields rendering when the widget's TUI sets DEC mode 1049. No
-  changes needed.
+A submitted shell command runs *outside* an active ZLE / readline
+context, so `BUFFER`, `CURSOR`, and `zle <widget>` are invalid in
+that context. Earlier drafts proposed a `warp_invoke_widget` helper
+invoked as a shell command; that approach does not work on zsh and
+is partially broken on bash for the same reason. v1 abandons that
+shape entirely.
 
-**What's new:** one DCS variant in the app-to-shell direction (the
-first such — today everything is shell→app), one shell-side helper
-function per supported shell, and a small per-tab state machine that
-correlates "we triggered widget X" with "the new buffer arrived".
+**v1 model: native-keystroke dispatch.** The shell's line editor is
+the source of truth for `$BUFFER` (zsh), `$READLINE_LINE` (bash),
+and `commandline` (fish). Warp drives it by injecting bytes into
+the PTY at the prompt and consumes its state via a bootstrap-
+installed hook that emits the buffer + plugin overlays back over
+DCS after every keystroke. Widgets dispatch natively from inside
+ZLE / readline / fish-line-editor — exactly the context they were
+written for.
 
-#### Dispatch flow
+Concretely:
 
-1. The matcher resolves a keystroke to a `ShellWidget::External(name)`
-   binding (§3 above).
-2. The terminal layer fires
-   `ModelEvent::ShellWidgetInvocationRequested { tab_id, widget_name,
-   buffer, cursor }`. Warp's input editor enters `PassthroughPending`
-   state for that tab — keystrokes are not intercepted; they pass
-   straight through to the PTY exactly as in alt-screen mode (the
-   existing `TerminalInputState::AltScreen` path is reused).
-3. Warp writes a single short command to the PTY (via
-   `Message::Input`) that invokes the shell-side helper:
+- All printable keystrokes are written to the PTY via
+  `Message::Input`. ZLE / readline / fish-line-editor receive them
+  the same way they would in any other terminal and run their
+  `self-insert` widget (including plugin-installed wrappers like
+  `_zsh_autosuggest_self-insert`, `fast-syntax-highlight`, fish
+  abbr-expansion).
+- A bootstrap-installed `zle-line-pre-redraw` hook (zsh), per-key
+  wrapper widget (bash, see #6.3), or `fish_postexec`-style hook
+  (fish, see #6.3) emits a `WarpBufferState` DCS payload after
+  each keystroke carrying the new buffer, cursor, vi-mode (if
+  any), autosuggest text (if any), and syntax-highlight regions.
+- Warp maintains a *mirror* of `$BUFFER` for its own features
+  (autocomplete, AI correction, etc.). The mirror is updated from
+  the DCS payload, never written-to outside of being a passive
+  reflection of shell state. This keeps Warp's editor features
+  working without making Warp the source of truth — important
+  because shell plugins are allowed to mutate `$BUFFER`
+  asynchronously (e.g. fish abbreviation expansion fires on
+  space).
+- When the matcher resolves a keystroke to
+  `ShellWidget::External(name)` (Category C), Warp does nothing
+  special at dispatch time — the keystroke is just injected like
+  any other byte. ZLE / readline / fish-line-editor dispatches the
+  bound widget from its own keymap, in its own valid context.
+  Atuin opens its TUI, fzf opens its picker, etc. The existing
+  alt-screen plumbing handles the TUI's render.
+- When the widget completes (sets `$BUFFER` and returns), the
+  `zle-line-pre-redraw` hook fires again and emits the new buffer
+  via DCS. Warp updates its mirror and re-renders the input editor.
 
-   ```
-   warp_invoke_widget <widget_name> <hex(buffer)> <cursor>\n
-   ```
+The widget name **never crosses the app→shell boundary as a
+command argument**. The keystroke does. ZLE's keymap turns that
+keystroke into a widget dispatch, in-shell. This resolves both the
+critical ZLE-context concern and the security concern about
+widget-name encoding (there's no widget name to encode).
 
-   The resulting block is created in a hidden interaction mode,
-   modeled on the existing AI-requested-command pattern in
-   `app/src/terminal/model/block/interaction_mode.rs (113-228,
-   325-345)`: the block carries metadata flagging it as
-   Warp-internal so the block-list renderer hides it (the same code
-   path used today to hide AI-requested command blocks). A new
-   `InteractionMode::WidgetInvocation { widget_name, originating_tab }`
-   variant is the v1-shape proposal — reusing the hide-by-default
-   plumbing rather than inventing a new env-var convention. The
-   block remains in the model for telemetry and replay, just not
-   rendered.
-4. The shell-side helper (defined in each bootstrap script):
+#### 6.1 Per-keystroke flow (printable + Category A + Category C)
 
-   **zsh** (`bundled/bootstrap/zsh.sh`):
+1. User presses key K with current Warp buffer `B`.
+2. Matcher resolves K against the active keymap (§4). Match
+   `ShellWidget::External(_)`, `Action(_)`, or `Insert(_)` —
+   dispatch is the same shape for all three: inject the byte
+   sequence for K into the PTY.
+3. Shell's line editor processes K natively. `self-insert` wrappers
+   fire; bound widget dispatches; plugins render their overlays.
+4. Bootstrap hook fires after the keystroke and emits
+   `WarpBufferState { buffer, cursor, vi_mode?, autosuggest?,
+   highlights? }` over DCS.
+5. Warp consumes the DCS, updates its mirror buffer, renders the
+   input editor with Warp's block-UI chrome plus the plugin
+   overlays from the report.
 
-   ```sh
-   warp_invoke_widget() {
-       local widget="$1" buf cursor="$3"
-       buf=$(printf '%b' "\\x$(echo "$2" | sed 's/../&\\x/g')")
-       BUFFER="$buf"
-       CURSOR="$cursor"
-       zle "$widget"           # runs natively; alt-screen if needed
-       local rc=$?
-       warp_report_input       # emits InputBuffer DCS w/ new BUFFER
-       warp_emit_widget_done "$widget" "$rc"
-       return $rc
-   }
-   ```
+Latency per keystroke is one PTY round-trip plus one DCS parse —
+the same shape as Warp's existing shell→app pings (prompt
+detection, exit-code report). The §7 latency budget is the gate.
 
-   **bash** (`bundled/bootstrap/bash_body.sh`): bash is materially
-   harder than zsh because there is no programmatic equivalent of
-   `zle <widget>` for invoking a built-in readline function from
-   outside the line editor. Two cases:
+#### 6.2 Buffer-sync at session boundaries
 
-   - **`bind -x`-bound keys** (atuin, fzf, custom user widgets):
-     these execute a shell command body, which we *can* invoke
-     directly. The helper looks up the body via `bind -X` (its
-     output enumerates all `bind -x` bindings with their command
-     strings), sets `READLINE_LINE` / `READLINE_POINT` from the
-     passed buffer, then runs the body via `eval`. atuin and fzf
-     both ship as `bind -x`, so this covers the v1 motivating cases.
-   - **Built-in-readline-function-bound keys** (e.g. user has
-     `bind '"\C-r": reverse-search-history'` directly): there is no
-     clean way to invoke a readline function from outside the line
-     editor. The honest path is to skip the helper for these and
-     instead inject the bound key into the readline input queue
-     once the buffer has been pre-populated, then let readline run
-     normally. The mechanism for keystroke injection on bash is the
-     subject of an open question (Risks below); the v1 commit is to
-     ship `bind -x` coverage and document the gap for built-in
-     functions.
+When the user opens a new tab, the shell starts with `$BUFFER=""`
+and Warp's editor is empty. They are in sync trivially.
 
-   **fish** (`bundled/bootstrap/fish.sh`): `commandline "$buffer"`
-   sets the input, then the helper invokes the bound function via
-   `eval $function_name`, then `commandline` reads back the result
-   and `warp_report_input` reports it.
+When the user pastes a multi-character string into Warp's editor,
+Warp writes the bytes into the PTY. Shell's bracketed-paste
+handling collapses the `self-insert` wrapper bursts (autosuggest
+intentionally does not re-fire mid-paste), so the DCS report fires
+once at paste completion. Warp's mirror catches up.
 
-5. While the helper runs, the widget has full terminal control. If
-   it draws a TUI it switches to alt screen; Warp's existing
-   alt-screen handling renders it. If it just edits the line, the
-   shell's line editor handles redraw.
-6. On widget completion the shell sends a new `InputBuffer` DCS hook
-   carrying the resulting buffer + cursor. A new
-   `WidgetInvocationDone { tab_id, widget_name, exit_code }` DCS
-   hook is also sent so Warp knows pass-through is over.
-7. Warp consumes both: `send_input_buffer_to_terminal_editor`
-   populates the input editor with the new buffer; the tab leaves
-   `PassthroughPending` and re-enters block mode. If `exit_code !=
-   0`, Warp restores the pre-invocation buffer (cached at step 2)
-   and emits the failure diagnostic.
+When the user switches between tabs or focuses Warp from another
+app, no resync is needed — `$BUFFER` is held in the shell's
+memory across focus changes.
 
-#### Cancellation, timeout, and accept-line
+#### 6.3 Shell-specific bootstrap
 
-- **Cancel.** If the widget exits without writing a different buffer
-  (atuin Esc, fzf Ctrl-C), the helper still calls
-  `warp_report_input` with whatever the buffer is now; if it is
-  unchanged Warp's editor is restored to that exact state. The pre-
-  invocation buffer cached at step 2 is the safety net for crashes.
-- **Widget calls `accept-line`.** Some atuin configs submit
-  immediately. ZLE / readline / fish-line-editor all process
-  `accept-line` synchronously, so the helper returns *after* the
-  command has run; by the time `warp_report_input` fires, the new
-  buffer is empty and the user's selected command has already
-  produced output. Warp treats the resulting block (the command
-  output) as a normal block. The empty-buffer report leaves Warp's
-  editor empty — the right state for "command was run."
-- **Timeout.** If `WidgetInvocationDone` does not arrive within 60 s
-  Warp restores the pre-invocation buffer and exits
-  `PassthroughPending`. The keystrokes the user typed in the
-  meantime have gone to the shell (it's still in alt-screen or at
-  the prompt), so this is a recoverable state — the user can press
-  Esc to bail out of any TUI that's still up.
-- **Tab close mid-passthrough.** Standard tab-teardown: the PTY is
-  killed, `PassthroughPending` is dropped with the rest of the tab
-  state, no special handling.
+**zsh** (`bundled/bootstrap/zsh.sh`):
 
-#### Trust boundary
+```sh
+_warp_emit_buffer_state() {
+    local payload
+    payload=$(_warp_encode_buffer_state)  # see #6.4
+    printf '\eP+%s|buffer-state|%s\e\\' "$WARP_BOOTSTRAP_NONCE" "$payload"
+}
+# Install once at bootstrap, after user's zshrc has loaded so
+# plugin-installed widgets are present.
+zle -N zle-line-pre-redraw _warp_emit_buffer_state
+```
 
-The new app→shell DCS direction (`WARP_SUPPRESS_BLOCK` + helper
-invocation) does not need a nonce going outbound — Warp owns the
-PTY write side; nothing else can. The shell-side helpers carry the
-existing `WARP_BOOTSTRAP_NONCE` (or fish tempfile equivalent) on the
-returned `InputBuffer` and `WidgetInvocationDone` payloads, same as
-every other shell→app DCS.
+The hook runs in proper ZLE context after each redraw (which
+follows each keystroke and widget dispatch). It reads `$BUFFER`,
+`$CURSOR`, `$KEYMAP` (for vi-mode), and any plugin-published
+state (e.g. `$POSTDISPLAY` for zsh-autosuggestions, the
+`region_highlight` array for zsh-syntax-highlighting).
 
-#### What this does NOT require
+**bash** (`bundled/bootstrap/bash_body.sh`): bash readline does not
+expose a per-keystroke hook equivalent to `zle-line-pre-redraw`.
+Two options, picked per binding category:
 
-- No keystroke-by-keystroke forwarding. Once Warp has yielded for
-  the widget, the existing alt-screen path already routes
-  keystrokes to the PTY.
-- No new rendering mode. `TerminalInputState::AltScreen` already
-  handles "TUI takes over"; pass-through reuses it.
-- No new shell-detection plumbing. The helper is shell-typed via
-  the existing `Shell::shell_type`.
+- For `bind -x` widgets (atuin, fzf): wrap the user's `bind -x`
+  body in a function that emits `WarpBufferState` after the body
+  returns. Implemented by post-processing `bind -X` output at
+  bootstrap and re-binding each `bind -x` key to a Warp wrapper
+  that calls the original body then emits.
+- For everything else (native readline functions + `self-insert`):
+  the only programmatic surface is `PROMPT_COMMAND` (fires after
+  the line is accepted, not per-keystroke) and `bind -x` (fires
+  for explicitly-bound keys, not all keystrokes). Vanilla bash
+  has no per-keystroke hook. v1 ships with `bind -x` coverage —
+  which is what atuin/fzf actually use — and accepts that
+  inline-plugin support for vanilla bash is limited to what
+  `bind -x` wrappers can publish. Users running `blesh` get full
+  inline-plugin support because blesh provides per-keystroke
+  hooks.
+
+The bash gap is honest and documented; it does not block v1
+because the motivating cases (atuin, fzf) all use `bind -x`.
+
+**fish** (`bundled/bootstrap/fish.sh`): fish provides
+`fish_postexec` (after command runs) and lets bindings publish
+arbitrary events. The bootstrap wraps each user-bound function in
+a small emitter and installs a `bind --erase` + `bind` rebind to
+reach every key. Per-keystroke buffer state is read via
+`commandline` and emitted with the same DCS shape.
+
+#### 6.4 Security and encoding
+
+The shell→app DCS direction is the only place plugin-influenced
+data crosses a trust boundary. Rules:
+
+- **Payload framing.** `WarpBufferState` payloads use the
+  existing DCS envelope with `WARP_BOOTSTRAP_NONCE` (zsh/bash) or
+  the fish tempfile-nonce equivalent. Missing/wrong nonce → drop
+  silently (same path as every other shell→app DCS).
+- **Payload encoding.** Buffer content and autosuggest text are
+  hex-encoded by the shell-side emitter (`_warp_encode_buffer_state`
+  in zsh, equivalents in bash/fish). The app-side parser decodes
+  hex back into bytes and treats the result as opaque UTF-8 (with
+  invalid-sequence replacement). No structured parsing of buffer
+  bytes; they are display data only.
+- **Numeric fields.** `cursor`, `vi_mode_id`, `highlight_start`,
+  `highlight_end` are parsed as ASCII decimal with strict bounds
+  validation (cursor ∈ [0, buffer.len()], etc.). Out-of-bounds →
+  drop the report and emit a one-time diagnostic.
+- **Widget-name fields.** A `last_dispatched_widget` label may
+  appear in reports for telemetry. App-side validates against the
+  set of widget names discovered by §1 (`bindkey -L` / `bind -p` /
+  `bind` output). Unknown name → drop the label, keep the rest of
+  the report. Widget-name labels are never used in command
+  construction — telemetry only.
+- **App→shell direction carries only bytes.** Warp writes
+  keystroke bytes into the PTY via `Message::Input`. There is no
+  shell-command construction with shell-reported data, so no
+  encoding/escaping question exists at the app→shell boundary.
+  This is the structural fix for the security concern raised
+  against earlier drafts.
+
+#### 6.5 Cancellation, timeout, accept-line, tab close
+
+- **Widget cancel** (atuin Esc, fzf Ctrl-C): the widget returns,
+  `$BUFFER` is whatever it was set to (typically unchanged), the
+  hook emits the report, Warp's mirror reflects the unchanged
+  buffer. No special handling.
+- **Widget calls `accept-line`**: ZLE processes accept-line, the
+  command runs as a block, the next prompt's `$BUFFER` is empty
+  and the hook reports it. Warp's editor clears for the next
+  prompt. Same flow as a normal Enter.
+- **Widget hangs**: the user can press Ctrl-C to interrupt
+  (Ctrl-C reaches the PTY normally because Warp injected the
+  original bound keystroke, putting the shell in widget-active
+  state where Ctrl-C is the natural interrupt). If Ctrl-C is
+  itself remapped, the shell-level escape is `Ctrl-\` (SIGQUIT)
+  which is unmappable. No 60-second timeout machinery is needed —
+  the same recovery path as any hung TUI applies.
+- **Tab close mid-widget**: standard tab teardown kills the PTY;
+  no special handling needed.
+
+#### 6.6 What this does NOT require
+
+- No new shell-command helper crossing app→shell. Removed.
+- No out-of-context mutation of `$BUFFER` / `$CURSOR`. The hook
+  reads them inside a ZLE-active path.
+- No tempfile or named-pipe side channel for buffer sync.
+- No widget-name escaping at the app→shell boundary — there is no
+  app→shell command construction at all.
 
 ### 7. Continuous inline-plugin rendering
 
-PRODUCT #11.6 commits to honoring plugins that hook every keystroke —
-zsh-autosuggestions, syntax highlighting, fish abbreviations,
-zsh-vi-mode's per-mode cursor shapes. Pass-through (§6) is the wrong
-shape for these because they fire on every keystroke, not on a single
-bound key. The right mechanism is genuinely an open implementation
-question, with three candidate shapes that need real measurement
-before one is picked.
+PRODUCT #11.6 commits to honoring plugins that hook every keystroke
+— zsh-autosuggestions, syntax highlighting, fish abbreviations,
+zsh-vi-mode's per-mode cursor shapes. The v1 architecture is the
+same per-keystroke injection + DCS-report model defined in §6.
 
-The behavioral bar from PRODUCT #11.6 is the contract; the picked
-mechanism is the implementer's call after benchmarking.
+#### 7.1 v1 architecture (committed)
 
-#### Candidate A: per-keystroke ZLE round-trip
+- Every printable keystroke is injected into the PTY (§6.1).
+- ZLE / readline / fish-line-editor runs `self-insert` plus all
+  plugin-installed wrappers. Plugins update their visible state
+  exactly as they do in a native terminal.
+- The bootstrap `zle-line-pre-redraw` hook (zsh), `bind -x`
+  wrappers (bash with blesh: full per-keystroke; vanilla bash:
+  only at bound keys), or fish equivalent emits
+  `WarpBufferState` carrying buffer, cursor, vi-mode, autosuggest
+  text, and syntax-highlight regions over DCS.
+- Warp renders its input editor from the DCS-reported state plus
+  Warp's block-UI chrome. The mirror buffer drives Warp's own
+  features (autocomplete suggestions, AI correction) but the
+  shell's reported buffer is authoritative for display.
 
-- Every printable keystroke and every Category A widget invocation
-  goes through the same `warp_invoke_widget` plumbing as §6, just
-  with `widget = self-insert` (or the matched widget) and the buffer
-  state.
-- Bootstrap helper sets `BUFFER`, runs the widget, calls the
-  plugin-installed wrappers (because they're hooked into ZLE's
-  widget table), then reports back the new `BUFFER` plus any
-  plugin-emitted hints (suggestion text, syntax-highlight regions).
-- Warp paints the result in its native input editor.
+This is one mechanism for both Category C dispatch (§6) and
+inline plugins. Earlier drafts described three candidates and
+deferred the choice; v1 picks this and commits.
 
-**Cost:** one shell roundtrip per keystroke. Local roundtrips through
-a PTY are typically ~0.5–2 ms; Warp's existing block-mode rendering
-adds another frame. Whether this clears the latency bar for human
-typing (~50 ms ceiling for "feels native") is the central question
-the implementation must answer.
+#### 7.2 Why this and not the alternatives
 
-**Pros:** uniform mechanism with §6, no plugin-specific glue.
-**Cons:** if latency exceeds the bar, every key feels sluggish.
+- **Not "Warp owns the buffer, queries plugins async"** (the
+  previous Candidate C): plugin-aware glue is brittle (adapters
+  per plugin) and doesn't generalize to plugins we don't know
+  about. Per-keystroke injection has uniform coverage.
+- **Not "shell renders the prompt area, Warp lifts the ANSI"**
+  (the previous Candidate B): requires parsing arbitrary ANSI
+  emitted by plugins into Warp's rendering primitives, which is
+  open-ended. DCS-reported structured state (buffer + overlays
+  as discrete fields) is bounded and parseable.
+- **Not "Warp owns keystrokes locally and only sync at Category
+  C"**: plugins don't fire because chars never reach ZLE between
+  keystrokes. Loses inline-plugin support — violates PRODUCT
+  #11.6.
 
-#### Candidate B: live shell-line zone
+#### 7.3 Latency budget and fallback
 
-- Block list above the active prompt stays Warp-native. The active
-  prompt's input area becomes a region where the shell's line editor
-  draws directly (ZLE / readline / fish-line-editor renders into the
-  PTY, Warp lifts that output into the input area's bounding box).
-- Plugins paint inline because ZLE owns the surface they expect.
-- On Enter, the shell's line editor commits, the line graduates into
-  a Warp block, the next prompt's input area becomes a fresh shell
-  zone.
+Per-keystroke round-trip cost: one `Message::Input` write, one
+shell read + widget execution + hook emit, one DCS parse, one
+render. On developer hardware Warp's existing shell→app DCS
+round-trips (prompt detection, exit-code) measure in the 1–5 ms
+range. Plugin work adds shell-side compute (autosuggest history
+lookup, syntax-highlight tokenize) typically 1–10 ms depending on
+plugin.
 
-**Cost:** Warp parses ANSI emitted by the shell into its own
-rendering primitives for that region. No per-key roundtrip; ZLE
-handles keystrokes natively (they reach the PTY).
+**Budget: p95 keystroke-to-render < 30 ms** on the slowest
+realistic stack (zsh + oh-my-zsh + atuin init + fzf init +
+zsh-autosuggestions + zsh-syntax-highlighting + powerlevel10k).
+Measured by the integration test in the validation section.
 
-**Pros:** plugins work because they're driving the surface they
-were designed for. Lowest latency, plugins behave identically to a
-native terminal.
-**Cons:** Warp's block-mode features that depend on parsing the
-input editor's state (autocomplete suggestions, AI command
-correction) need a fresh hook for "current shell-zone buffer state",
-which has to be queried not assumed.
+**Fallback if budget is exceeded:** Warp-local keystroke handling
+for printable characters, with batched sync into the shell only
+at Category C dispatch boundaries and at Enter. This preserves
+Category C (atuin/fzf still work) but loses inline plugins for
+the stacks where latency is bad. The fallback is gated by a
+config setting `shell_keybindings.injection_mode` ∈ `{full,
+batched}`, defaulting to `full`. Users on slow setups can flip
+to `batched` to recover typing latency at the cost of plugin
+fidelity; PRODUCT #11.6 invariants degrade explicitly via a
+diagnostic.
 
-#### Candidate C: plugin-aware query API
+#### 7.4 What this is NOT
 
-- Warp's editor stays the source of truth for keystrokes and
-  rendering. After each buffer change Warp asynchronously asks the
-  shell for plugin-derived state: "what does
-  `_zsh_autosuggest_strategy` return for $BUFFER?", "what tokens
-  does `(z)highlighter` color?".
-- Bootstrap installs adapter functions that call into the loaded
-  plugins' public APIs and report back via DCS.
-- Warp paints suggestion / highlight regions from the returned data.
-
-**Cost:** one async query per buffer change; debounced. Plugin-
-specific adapter logic per supported plugin in the bootstrap.
-
-**Pros:** lowest UI latency (plugins are queried, not driven, so
-typing is never blocked).
-**Cons:** plugin-aware (we maintain adapters for autosuggest,
-syntax-highlight, fish abbr, vi-mode, etc.). Brittle when plugins
-change their internal API. Doesn't help bindings whose behavior
-isn't expressible as "compute X from buffer".
-
-#### How the implementation picks
-
-The implementation should prototype Candidate A first because it has
-the broadest coverage and reuses §6's infrastructure. If real
-latency on representative hardware (developer laptops, the slowest
-shell × plugin combination — typically zsh + oh-my-zsh + atuin +
-fzf-tab + zsh-autosuggestions + zsh-syntax-highlighting + powerlevel10k)
-sits within ~30 ms total per keystroke, ship A. If it doesn't, the
-fallback is B for the prompt's input area and A for everything else;
-C is the escape hatch for specific plugins where A and B both fail.
-
-The picked mechanism is documented in this spec as the
-implementation lands; PRODUCT #11.6 invariants are the user-facing
-contract regardless.
-
-#### What this is NOT
-
-- Not a wholesale "use PS1 mode for everything" — that gives up
-  Warp's block UI for the tab. Inline-plugin support has to coexist
-  with block mode.
-- Not "reimplement the plugins natively in Warp" — that's a
-  separate, much larger product question outside this spec's scope.
+- Not "use PS1 mode for everything" — Warp's block UI is
+  preserved; only the input area's buffer is shell-driven.
+- Not "reimplement the plugins natively in Warp" — plugins run
+  in-shell as their authors wrote them.
 
 ### Open questions carried from PRODUCT.md
 
@@ -936,29 +957,17 @@ contract regardless.
   `bind` outputs are stable but quoting differs. Each parser has a
   property-test fixture set covering edge cases (escapes, multi-byte,
   bound to nothing, named widgets).
-- **Bash invocation of built-in readline functions** (§6, dispatch
-  step 4). bash has no `zle`-equivalent for calling a readline
-  function programmatically from outside the line editor. v1 ships
-  pass-through for `bind -x`-bound keys (atuin and fzf are both
-  `bind -x`, so the motivating cases work) and explicitly does not
-  support pass-through for keys bound directly to readline
-  built-ins. A built-in-readline binding falls back to Category A
-  translation (the mapped `InputAction`); if Warp does not have a
-  matching action, it goes through the standard
-  `Unsupported`-fallthrough path with a diagnostic. **Open question:**
-  whether to invest in a keystroke-injection mechanism (writing
-  raw bytes to the readline input queue with the buffer
-  pre-populated) for v2. Out of scope for v1.
-- **Hidden-block plumbing reuse.** §6 dispatch step 3 proposes
-  modeling `warp_invoke_widget` blocks via the existing
-  `InteractionMode` hide-by-default pattern from
-  `interaction_mode.rs`. The interaction-mode tagging happens
-  on the app side at command-emit time; the bootstrap helper does
-  not need to know about it. **Open question:** whether reusing
-  `InteractionMode` requires extending the existing variants vs.
-  adding a new top-level "internal command" tag — depends on how
-  AI-requested-command code paths assume the metadata is shaped.
-  Tech-spec follow-up.
+- **Bash per-keystroke hook coverage.** Vanilla readline has no
+  per-keystroke hook equivalent to `zle-line-pre-redraw`. v1
+  emits `WarpBufferState` from `bind -x` wrapper bodies — which
+  covers atuin, fzf, and every other user-bound `bind -x` widget
+  — and at `PROMPT_COMMAND` time. Vanilla-bash users without
+  blesh therefore get Category C dispatch (works correctly via
+  native key injection) but no inline-plugin overlays between
+  bound keystrokes. blesh users get full coverage because blesh
+  installs its own per-keystroke hook surface. This is an honest
+  v1 gap: documented in PRODUCT #11.6 failure-mode wording and
+  the per-shell rollout notes.
 
 ## Testing and validation
 
@@ -1035,11 +1044,24 @@ Tests are organized to map to numbered PRODUCT invariants. Use
   (an atuin config with `enter_accept = true`). Asserts the command
   ran (block in scrollback), Warp's editor is empty, and the user
   is at a fresh prompt. Covers PRODUCT #11.5 accept-line path.
-- **Pass-through timeout** — integration test that triggers a
-  pass-through then kills the shell-side helper before completion
-  (`pkill -STOP` to simulate a hang). Assert: after 60 s Warp
-  restores the pre-invocation buffer, exits `PassthroughPending`,
-  emits a diagnostic. Covers PRODUCT #11.5 failure mode.
+- **Pass-through Ctrl-C interrupt** — integration test that
+  triggers a Category C widget (atuin), then sends Ctrl-C before
+  the widget completes. Assert: the widget exits, the next DCS
+  `WarpBufferState` carries the pre-invocation buffer (since the
+  widget didn't mutate `$BUFFER`), Warp's editor reflects it.
+  Covers PRODUCT #11.5 failure mode under the §6.5 model.
+- **DCS payload encoding** — unit test feeding crafted
+  `WarpBufferState` payloads through the parser: valid hex
+  buffer + numeric cursor decode correctly; invalid hex →
+  drop + diagnostic; cursor > buffer.len() → drop + diagnostic;
+  missing/wrong nonce → drop silently; unknown
+  `last_dispatched_widget` → strip label, keep rest. Covers §6.4.
+- **Widget-name validation** — unit test asserting that
+  `last_dispatched_widget` labels are matched against the
+  discovered widget set before use in telemetry, and that no
+  app→shell code path passes shell-reported widget names into
+  any string interpolation, command argv, or eval context.
+  Covers the security concern raised against earlier drafts.
 - **External widget detection** — unit test that
   `crates/warp_terminal/src/shell/bindings.rs` correctly classifies
   zsh `bindkey '^R' atuin-search` as `External("atuin-search")`,
@@ -1076,8 +1098,9 @@ Tests are organized to map to numbered PRODUCT invariants. Use
   to-render time for the slowest realistic stack (zsh + oh-my-zsh
   + atuin init + fzf init + zsh-autosuggestions +
   zsh-syntax-highlighting + powerlevel10k). Asserts p95 keystroke
-  latency stays under 30 ms. Drives the §7 Candidate A vs B vs C
-  decision; failing test forces the fallback path.
+  latency under §7.1's per-keystroke injection model stays under
+  30 ms. Failing test forces the `injection_mode = batched`
+  fallback (§7.3) for the affected configuration.
 - **Inline plugin failure mode** — integration test that injects a
   malformed ANSI sequence into the plugin output stream (simulate
   a plugin emitting an unsupported escape). Assert: render
