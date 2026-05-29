@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use ai::skills::{
@@ -6,6 +7,7 @@ use ai::skills::{
     ParsedSkill, SkillProvider, SkillScope, SKILL_PROVIDER_DEFINITIONS,
 };
 use async_channel::Sender;
+use futures::future::BoxFuture;
 use remote_server::proto::{
     file_context_proto, FileContextProto, ReadFileContextFile, ReadFileContextRequest,
 };
@@ -38,6 +40,8 @@ pub enum SkillWatcherEvent {
 
 const REMOTE_SKILL_MAX_FILE_BYTES: u32 = 1024 * 1024;
 const REMOTE_SKILL_MAX_BATCH_BYTES: u32 = 5 * 1024 * 1024;
+type ProjectSkillContentsFuture =
+    BoxFuture<'static, anyhow::Result<Vec<(LocalOrRemotePath, String)>>>;
 pub struct SkillWatcher {
     // Channel for sending repository messages from subscribers.
     repository_message_tx: Sender<SkillRepositoryMessage>,
@@ -260,16 +264,6 @@ impl SkillWatcher {
                 });
         }
 
-        let local_skill_files = current_skill_files
-            .iter()
-            .filter_map(|path| path.to_local_path().map(Path::to_path_buf))
-            .collect::<Vec<_>>();
-        let remote_skill_files = current_skill_files
-            .iter()
-            .filter(|path| matches!(path, LocalOrRemotePath::Remote(_)))
-            .cloned()
-            .collect::<Vec<_>>();
-
         // Project skill counts are expected to be small, so repo metadata updates
         // intentionally trigger a full refresh instead of attempting to diff the
         // changed subtree. This keeps local and remote project-skill behavior on
@@ -278,18 +272,9 @@ impl SkillWatcher {
         self.spawn_read_project_skills_from_files(
             repo_id.clone(),
             refresh_generation,
-            local_skill_files,
+            current_skill_files.iter().cloned().collect(),
             ctx,
         );
-        if let RepositoryIdentifier::Remote(remote_repo) = &repo_id {
-            self.spawn_read_remote_project_skills(
-                repo_id.clone(),
-                refresh_generation,
-                remote_repo.host_id.clone(),
-                remote_skill_files,
-                ctx,
-            );
-        }
 
         self.project_skill_files_by_repo
             .insert(repo_id.clone(), current_skill_files);
@@ -381,56 +366,31 @@ impl SkillWatcher {
             },
         );
     }
-    fn spawn_read_remote_project_skills(
+
+    fn spawn_read_project_skills_from_files(
         &mut self,
         repo_id: RepositoryIdentifier,
         refresh_generation: u64,
-        host_id: warp_util::host_id::HostId,
         skill_paths: Vec<LocalOrRemotePath>,
         ctx: &mut ModelContext<Self>,
     ) {
         if skill_paths.is_empty() {
             return;
         }
-        let Some(client) = RemoteServerManager::as_ref(ctx)
-            .client_for_host(&host_id)
-            .cloned()
-        else {
+        let Some(read_skill_contents) = read_project_skill_contents(skill_paths, ctx) else {
             return;
         };
 
         ctx.spawn(
             async move {
-                let request = remote_skill_read_request(&skill_paths);
-                let response = client.read_file_context(request).await?;
-                let skills = parse_remote_skill_file_contexts(skill_paths, response.file_contexts);
-                Ok::<Vec<ParsedSkill>, anyhow::Error>(skills)
+                let skill_contents = read_skill_contents.await?;
+                Ok::<Vec<ParsedSkill>, anyhow::Error>(parse_project_skill_contents(skill_contents))
             },
             move |me, skills, ctx| match skills {
                 Ok(skills) => {
                     me.emit_project_skills_if_current(&repo_id, refresh_generation, skills, ctx);
                 }
-                Err(err) => log::warn!("Failed to read remote project skills: {err}"),
-            },
-        );
-    }
-
-    fn spawn_read_project_skills_from_files(
-        &mut self,
-        repo_id: RepositoryIdentifier,
-        refresh_generation: u64,
-        skill_files: impl IntoIterator<Item = PathBuf>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let skill_files: Vec<_> = skill_files.into_iter().collect();
-        if skill_files.is_empty() {
-            return;
-        }
-
-        ctx.spawn(
-            async move { read_skills_from_files(skill_files) },
-            move |me, skills, ctx| {
-                me.emit_project_skills_if_current(&repo_id, refresh_generation, skills, ctx);
+                Err(err) => log::warn!("Failed to read project skills: {err}"),
             },
         );
     }
@@ -1094,6 +1054,29 @@ impl SkillWatcher {
     }
 }
 
+fn read_project_skill_contents(
+    skill_paths: Vec<LocalOrRemotePath>,
+    ctx: &AppContext,
+) -> Option<ProjectSkillContentsFuture> {
+    match skill_paths.first()? {
+        LocalOrRemotePath::Local(_) => Some(Box::pin(async move {
+            Ok(read_local_project_skill_contents(skill_paths))
+        })),
+        LocalOrRemotePath::Remote(remote) => {
+            let client = RemoteServerManager::as_ref(ctx)
+                .client_for_host(&remote.host_id)?
+                .clone();
+            Some(Box::pin(async move {
+                let request = remote_skill_read_request(&skill_paths);
+                let response = client.read_file_context(request).await?;
+                Ok(read_remote_project_skill_contents(
+                    skill_paths,
+                    response.file_contexts,
+                ))
+            }))
+        }
+    }
+}
 fn remote_skill_read_request(skill_paths: &[LocalOrRemotePath]) -> ReadFileContextRequest {
     ReadFileContextRequest {
         files: skill_paths
@@ -1111,10 +1094,22 @@ fn remote_skill_read_request(skill_paths: &[LocalOrRemotePath]) -> ReadFileConte
     }
 }
 
-fn parse_remote_skill_file_contexts(
+fn read_local_project_skill_contents(
+    skill_paths: Vec<LocalOrRemotePath>,
+) -> Vec<(LocalOrRemotePath, String)> {
+    skill_paths
+        .into_iter()
+        .filter_map(|path| {
+            let content = fs::read_to_string(path.to_local_path()?).ok()?;
+            Some((path, content))
+        })
+        .collect()
+}
+
+fn read_remote_project_skill_contents(
     skill_paths: Vec<LocalOrRemotePath>,
     file_contexts: Vec<FileContextProto>,
-) -> Vec<ParsedSkill> {
+) -> Vec<(LocalOrRemotePath, String)> {
     let text_content_by_path = file_contexts
         .into_iter()
         .filter_map(|file_context| {
@@ -1131,9 +1126,20 @@ fn parse_remote_skill_file_contexts(
             let LocalOrRemotePath::Remote(remote) = &path else {
                 return None;
             };
-            let content = text_content_by_path.get(remote.path.as_str())?;
+            let content = text_content_by_path.get(remote.path.as_str())?.clone();
+            Some((path, content))
+        })
+        .collect()
+}
+
+fn parse_project_skill_contents(
+    skill_contents: Vec<(LocalOrRemotePath, String)>,
+) -> Vec<ParsedSkill> {
+    skill_contents
+        .into_iter()
+        .filter_map(|(path, content)| {
             let provider = get_provider_for_path(&path).unwrap_or(SkillProvider::Agents);
-            parse_skill_content_at_location(path, content, provider, SkillScope::Project).ok()
+            parse_skill_content_at_location(path, &content, provider, SkillScope::Project).ok()
         })
         .collect()
 }

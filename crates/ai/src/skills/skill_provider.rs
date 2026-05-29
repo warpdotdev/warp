@@ -170,45 +170,26 @@ pub fn home_skills_path(provider: SkillProvider) -> Option<PathBuf> {
 
 /// Returns the skill provider for a location, if it matches a known skill provider directory.
 ///
-/// Local locations retain home-directory-aware matching. Remote project locations are
-/// classified only by their provider-directory structure, because their paths do not
-/// belong to the local filesystem.
+/// Local locations retain home-directory-aware matching. All other locations are
+/// classified by provider-directory structure using their standardized path representation.
 pub fn get_provider_for_path(path: &LocalOrRemotePath) -> Option<SkillProvider> {
-    match path {
-        LocalOrRemotePath::Local(path) => get_provider_for_local_path(path),
-        LocalOrRemotePath::Remote(remote) => get_provider_for_remote_path(&remote.path),
-    }
+    path.to_local_path()
+        .and_then(get_home_provider_for_local_path)
+        .or_else(|| get_provider_for_standardized_path(&path.path_component()))
 }
 
-/// Returns the skill provider for a local path, if it matches a known skill provider directory.
-/// For example:
-///   get_provider_for_local_path(Path::new("/repo/.claude/skills/my-skill/SKILL.md")) returns Some(SkillProvider::Claude).
-/// Handles both SKILL.md files and files nested within a skill directory.
-fn get_provider_for_local_path(path: &Path) -> Option<SkillProvider> {
-    let path_components: Vec<_> = path.components().collect();
-
-    for def in SKILL_PROVIDER_DEFINITIONS.iter() {
-        if home_skills_path(def.provider)
-            .into_iter()
-            .any(|home_skills_path| path.starts_with(home_skills_path))
-        {
-            return Some(def.provider);
-        }
-
-        // Retrieves path components for the skill provider directory (i.e., [".claude", "skills"])
-        let skill_components: Vec<_> = def.skills_path.components().collect();
-
-        // Checks if some consecutive components of the path match the skill provider directory
-        for window in path_components.windows(skill_components.len()) {
-            if window == skill_components.as_slice() {
-                return Some(def.provider);
-            }
-        }
-    }
-    None
+fn get_home_provider_for_local_path(path: &Path) -> Option<SkillProvider> {
+    SKILL_PROVIDER_DEFINITIONS
+        .iter()
+        .find(|definition| {
+            home_skills_path(definition.provider)
+                .into_iter()
+                .any(|home_skills_path| path.starts_with(home_skills_path))
+        })
+        .map(|definition| definition.provider)
 }
 
-fn get_provider_for_remote_path(path: &StandardizedPath) -> Option<SkillProvider> {
+fn get_provider_for_standardized_path(path: &StandardizedPath) -> Option<SkillProvider> {
     SKILL_PROVIDER_DEFINITIONS
         .iter()
         .find(|definition| {
@@ -273,6 +254,20 @@ mod tests {
             HostId::new("remote-host".to_string()),
             StandardizedPath::try_new("/repo/.claude/skills/my-skill/SKILL.md").unwrap(),
         ));
+
+        assert_eq!(get_provider_for_path(&path), Some(SkillProvider::Claude));
+    }
+
+    #[test]
+    fn local_project_provider_path_is_classified_by_structure() {
+        let path = LocalOrRemotePath::Local(
+            std::env::temp_dir()
+                .join("repo")
+                .join(".claude")
+                .join("skills")
+                .join("my-skill")
+                .join("SKILL.md"),
+        );
 
         assert_eq!(get_provider_for_path(&path), Some(SkillProvider::Claude));
     }

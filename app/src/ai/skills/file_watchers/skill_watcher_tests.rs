@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use super::super::subscribers::SkillRepositoryMessage;
 use super::{
-    parse_remote_skill_file_contexts, remote_skill_read_request, SkillWatcher,
-    REMOTE_SKILL_MAX_BATCH_BYTES, REMOTE_SKILL_MAX_FILE_BYTES,
+    parse_project_skill_contents, read_remote_project_skill_contents, remote_skill_read_request,
+    SkillWatcher, REMOTE_SKILL_MAX_BATCH_BYTES, REMOTE_SKILL_MAX_FILE_BYTES,
 };
 use crate::ai::skills::skill_manager::SkillWatcherEvent;
 use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
@@ -102,20 +102,21 @@ fn remote_skill_file_context(path: &LocalOrRemotePath, content: &str) -> FileCon
 }
 
 #[test]
-fn parse_remote_skill_file_contexts_matches_reordered_responses_by_path() {
+fn parse_project_skill_contents_matches_reordered_remote_responses_by_path() {
     let host = HostId::new("test-host".to_string());
     let first_path = remote_skill_path(&host, "first");
     let second_path = remote_skill_path(&host, "second");
     let first_content = remote_skill_content("first", "First skill", "First body");
     let second_content = remote_skill_content("second", "Second skill", "Second body");
 
-    let skills = parse_remote_skill_file_contexts(
+    let skill_contents = read_remote_project_skill_contents(
         vec![first_path.clone(), second_path.clone()],
         vec![
             remote_skill_file_context(&second_path, &second_content),
             remote_skill_file_context(&first_path, &first_content),
         ],
     );
+    let skills = parse_project_skill_contents(skill_contents);
 
     assert_eq!(skills.len(), 2);
     assert_eq!(skills[0].path, first_path);
@@ -128,17 +129,14 @@ fn parse_remote_skill_file_contexts_matches_reordered_responses_by_path() {
 }
 
 #[test]
-fn parse_remote_skill_file_contexts_classifies_foreign_encoded_provider_path() {
+fn parse_project_skill_contents_classifies_foreign_encoded_provider_path() {
     let path = LocalOrRemotePath::Remote(RemotePath::new(
         HostId::new("test-host".to_string()),
         StandardizedPath::try_new(r"C:\repo\.codex\skills\windows-skill\SKILL.md").unwrap(),
     ));
     let content = remote_skill_content("windows-skill", "Windows skill", "Windows body");
 
-    let skills = parse_remote_skill_file_contexts(
-        vec![path.clone()],
-        vec![remote_skill_file_context(&path, &content)],
-    );
+    let skills = parse_project_skill_contents(vec![(path.clone(), content)]);
 
     assert_eq!(skills.len(), 1);
     assert_eq!(skills[0].path, path);
@@ -146,16 +144,17 @@ fn parse_remote_skill_file_contexts_classifies_foreign_encoded_provider_path() {
 }
 
 #[test]
-fn parse_remote_skill_file_contexts_keeps_paths_aligned_after_missing_reads() {
+fn read_remote_project_skill_contents_keeps_paths_aligned_after_missing_reads() {
     let host = HostId::new("test-host".to_string());
     let missing_path = remote_skill_path(&host, "missing");
     let present_path = remote_skill_path(&host, "present");
     let present_content = remote_skill_content("present", "Present skill", "Present body");
 
-    let skills = parse_remote_skill_file_contexts(
+    let skill_contents = read_remote_project_skill_contents(
         vec![missing_path, present_path.clone()],
         vec![remote_skill_file_context(&present_path, &present_content)],
     );
+    let skills = parse_project_skill_contents(skill_contents);
 
     assert_eq!(skills.len(), 1);
     assert_eq!(skills[0].path, present_path);
