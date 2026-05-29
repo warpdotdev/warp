@@ -860,39 +860,85 @@ the keymap. It uses bracketed paste:
   post-paste `WarpBufferState` fires once (not once per byte).
   The handler distinguishes Warp-driven pastes from user-driven
   ones via an in-payload marker, *not* a separate signaling
-  channel:
-  - Warp emits `\e[200~__WARP_PASTE__<bytes>\e[201~` for
-    Warp-driven syncs. The literal token `__WARP_PASTE__` is
-    a 13-byte sentinel reserved in the same `__warp_`
-    namespace as the bootstrap's private variables and
-    functions (§1 preservation rules).
-  - The bootstrap installs a paste handler at the
-    paste-handler hook of each shell (zsh: wrap
-    `bracketed-paste-magic` via `add-zsh-hook`-style
-    composition over `paste-finish`; bash: install a
-    paste-stage filter via the readline paste path; fish:
-    wrap `fish_paste`). The handler reads the full pasted
-    content (which all three shells deliver to their paste
-    handler as a single string), checks whether the first
-    13 bytes are `__WARP_PASTE__`; if yes, strips the
-    sentinel, writes the remainder to `$BUFFER` /
-    `$READLINE_LINE` / `commandline` directly, and emits one
-    final `WarpBufferState`. If no (user paste from OS
-    clipboard), the handler runs the shell's standard
-    paste path unchanged.
-  - This approach avoids an app→shell signaling primitive
-    that the shells don't natively support (binding OSC
-    prefixes via `bindkey` / `bind -x` is fragile under
-    PTY-read boundaries and prefix-timeout rules; encoding
-    the marker inside the paste content sidesteps that
-    entirely).
-  - The sentinel is rejected if a user-driven paste happens
-    to start with the same 13 bytes (vanishingly unlikely
-    but documentable). To make the check unambiguous the
-    sentinel includes a per-session nonce: the bootstrap
-    captures `WARP_BOOTSTRAP_NONCE`'s first 8 chars and uses
-    `__WARP_PASTE_<nonce>__` as the actual sentinel, so a
-    real user paste of the literal token doesn't collide.
+  channel.
+
+  **Sentinel format.** Warp emits
+  `\e[200~<sentinel><bytes>\e[201~` for Warp-driven syncs. The
+  sentinel is `__WARP_PASTE_<nonce>__` where `<nonce>` is the
+  first 8 hex characters of `WARP_BOOTSTRAP_NONCE` (captured at
+  bootstrap). The full sentinel is 21 bytes; the bootstrap
+  stores it in a shell-local `__warp_paste_sentinel` constant
+  for the handler to compare against. The per-session nonce
+  closes the collision window — a non-bootstrap process cannot
+  guess the nonce, the same trust boundary as §1's other DCS
+  payloads.
+
+  **Handler behavior.** Each shell's paste handler reads the
+  full pasted content (all three shells deliver it as a single
+  string), checks whether the leading 21 bytes match
+  `__warp_paste_sentinel`. If yes: strip the sentinel, write
+  the remainder to `$BUFFER` / `$READLINE_LINE` /
+  `commandline` directly, emit one final `WarpBufferState`.
+  If no (user paste from the OS clipboard, or any other source
+  that doesn't carry the nonced sentinel): run the shell's
+  standard paste path unchanged.
+
+  **Per-shell installation.**
+  - **zsh.** Save the existing `bracketed-paste` widget under
+    a new name and install a Warp wrapper:
+    ```sh
+    zle -A bracketed-paste _warp_orig_bracketed_paste
+    zle -N bracketed-paste _warp_bracketed_paste
+    # _warp_bracketed_paste reads $BUFFER after the parent
+    # widget has consumed the paste, strips the sentinel if
+    # present, otherwise calls the original behavior via
+    #   zle _warp_orig_bracketed_paste
+    ```
+    Plugins like `bracketed-paste-magic` compose by being
+    saved-and-re-installed in the same chain at their own
+    bootstrap time, the standard ZLE composition pattern.
+  - **bash.** readline has no separate paste-stage filter, so
+    the bootstrap binds the bracketed-paste start sentinel to
+    a `bind -x` handler that reads until the end sentinel:
+    ```sh
+    _warp_bracketed_paste() {
+        # Read stdin via `read -d $'\e' -r` in a loop until
+        # the matching `[201~` arrives; assemble the content;
+        # strip the Warp sentinel if present; assign to
+        # READLINE_LINE.
+        ...
+    }
+    bind -x '"\e[200~": _warp_bracketed_paste'
+    ```
+    The boundary-handling concerns from the OSC discussion
+    above don't apply here because the handler runs inside a
+    paste-mode sequence (PTY input is a contiguous burst
+    framed by `\e[200~` / `\e[201~`), not during free typing
+    where ambiguous-prefix timeouts would matter.
+  - **fish.** Bind the bracketed-paste start sentinel
+    explicitly and have the handler consume up to the end
+    sentinel via `commandline`:
+    ```fish
+    function _warp_bracketed_paste
+        # Read pasted bytes via the buffer fish has just
+        # accumulated; strip the Warp sentinel if present;
+        # set the buffer via `commandline --replace`.
+        ...
+    end
+    bind \e\[200\~ _warp_bracketed_paste
+    ```
+    Note this replaces fish's default bracketed-paste binding;
+    the bootstrap calls fish's internal paste path
+    (`commandline -i` for the content after sentinel
+    stripping) so the user-paste behavior matches default
+    fish when no Warp sentinel is present.
+
+  This approach avoids an app→shell signaling primitive that
+  the shells don't natively support (binding OSC prefixes via
+  `bindkey` / `bind -x` for free-typing-time use is fragile
+  under PTY-read boundaries and prefix-timeout rules);
+  encoding the marker inside the paste content sidesteps that
+  entirely.
 - **Bracketed-paste capability is a v1 requirement on bash.**
   The bash bootstrap detects the setting at startup by parsing
   `bind -v` output for `set enable-bracketed-paste on` and
