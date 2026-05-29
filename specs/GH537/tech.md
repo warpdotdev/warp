@@ -1675,6 +1675,40 @@ Tests are organized to map to numbered PRODUCT invariants. Use
   `WarpBufferState` carries the pre-invocation buffer (since the
   widget didn't mutate `$BUFFER`), Warp's editor reflects it.
   Covers PRODUCT #11.5 failure mode under the §6.5 model.
+- **Literal mirror sync — round-trip** — integration test in
+  vanilla bash (`batched` mode). Place mirror = `"ls -la\nrm -f"`
+  (contains a newline that would fire `accept-line` if synced
+  byte-by-byte). Trigger Cat C dispatch. Assert `$READLINE_LINE`
+  in the shell after sync equals the mirror exactly, no
+  `accept-line` fired, and the post-sync `WarpBufferState`
+  reports the same content. Covers §6.2.5 happy path on bash.
+  Repeat for fish (`commandline --replace` path).
+- **Literal mirror sync — sentinel collision** — unit test:
+  craft a user paste that begins with literal `__WARP_PASTE_`
+  but has a different (or absent) nonce. Feed through each
+  shell's paste handler. Assert the sentinel check fails (the
+  nonce doesn't match `__warp_paste_sentinel`) and the handler
+  falls through to the user-paste branch — content lands at
+  `$READLINE_POINT` / `commandline` cursor with no
+  `WarpBufferState` emitted. Covers §6.2.5 nonce-vs-collision
+  invariant.
+- **bash bracketed-paste-disabled fallback** — integration test
+  that starts a bash tab with `set enable-bracketed-paste off`
+  in `~/.inputrc`. Assert: bootstrap emits the user-visible
+  toast, debug view shows each Cat C binding as `unsupported
+  (bracketed-paste disabled)`, pressing the bound key falls
+  through to Warp's default. Then run `bind 'set enable-
+  bracketed-paste on'` at the prompt; on the next `precmd`,
+  assert the symmetric toast fires and Cat C dispatch resumes
+  from the next keystroke. Covers §6.2.5 bash detection +
+  toggle.
+- **fish `__fish_paste` composition** — integration test in fish
+  that installs a user wrapper around `__fish_paste` *after*
+  Warp's bootstrap (simulating a plugin loaded at runtime).
+  Assert: a Warp-driven sync still reaches Warp's wrapper (via
+  the user's wrapper calling Warp's, which calls the saved
+  original), and the buffer ends up correct. Covers §6.2.5
+  fish composability.
 - **DCS payload encoding** — unit test feeding crafted
   `WarpBufferState` payloads through the parser: valid hex
   buffer + numeric cursor decode correctly; invalid hex →
@@ -1723,7 +1757,7 @@ Tests are organized to map to numbered PRODUCT invariants. Use
   to-render time for the slowest realistic stack (zsh + oh-my-zsh
   + atuin init + fzf init + zsh-autosuggestions +
   zsh-syntax-highlighting + powerlevel10k). Asserts p95 keystroke
-  latency under §7.1's per-keystroke injection model stays under
+  latency under §7.3's per-keystroke injection model stays under
   30 ms. Failing test forces the `injection_mode = batched`
   fallback (§7.3) for the affected configuration.
 - **Inline plugin failure mode** — integration test that injects a
