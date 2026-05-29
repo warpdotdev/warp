@@ -15,10 +15,10 @@ use warp_core::ui::color::coloru_with_opacity;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{NewScrollable, SingleAxisConfig};
 use warpui::elements::{
-    resizable_state_handle, Border, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, DragBarSide, Empty, Expanded, Flex, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, ParentElement, Radius, Resizable, ResizableStateHandle,
-    SelectableArea, SelectionHandle, Shrinkable, Text, Wrap,
+    Border, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, DragBarSide, Empty, Expanded, Flex, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, ParentElement, Radius, Resizable, ResizableStateHandle, SelectableArea,
+    SelectionHandle, Shrinkable, Text, Wrap, resizable_state_handle,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::FixedBinding;
@@ -39,7 +39,7 @@ use crate::ai::agent_management::details_action_buttons::{
 };
 use crate::ai::agent_management::telemetry::{AgentManagementTelemetryEvent, OpenedFrom};
 use crate::ai::ambient_agents::task::TaskPrincipalInfo;
-use crate::ai::ambient_agents::{cancel_task_with_toast, AmbientAgentTaskId};
+use crate::ai::ambient_agents::{AmbientAgentTaskId, cancel_task_with_toast};
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironment};
@@ -47,7 +47,7 @@ use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
 use crate::appearance::Appearance;
 use crate::auth::UserUid;
-use crate::cloud_object::CloudObjectLookup as _;
+use crate::cloud_object::{CloudObjectLookup as _, Owner, ServerPermissions};
 use crate::notebooks::NotebookId;
 use crate::send_telemetry_from_ctx;
 use crate::server::ids::{ServerId, SyncId};
@@ -60,13 +60,13 @@ use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
 use crate::util::bindings::CustomAction;
 use crate::util::time_format::{format_approx_duration_from_now, human_readable_precise_duration};
+use crate::view_components::DismissibleToast;
 #[cfg(not(target_family = "wasm"))]
 use crate::view_components::action_button::PrimaryTheme;
 use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
 use crate::view_components::copyable_text_field::{
-    render_copyable_text_field, CopyableTextFieldConfig, COPY_FEEDBACK_DURATION,
+    COPY_FEEDBACK_DURATION, CopyableTextFieldConfig, render_copyable_text_field,
 };
-use crate::view_components::DismissibleToast;
 use crate::workspace::{ForkedConversationDestination, ToastStack, WorkspaceAction};
 use crate::workspaces::user_profiles::UserProfiles;
 
@@ -219,11 +219,24 @@ pub struct ConversationDetailsData {
     skill_spec: Option<SkillSpec>,
     /// Execution harness for this conversation/task.
     harness: Option<Harness>,
+    /// Link/object visibility for cloud-backed conversations.
+    visibility: Option<String>,
     /// Error message displayed when the API call to fetch run data failed.
     fetch_error: Option<String>,
 }
 
 impl ConversationDetailsData {
+    fn visibility_from_permissions(permissions: &ServerPermissions) -> String {
+        if permissions.anyone_link_sharing.is_some() {
+            return "Public".to_string();
+        }
+
+        match permissions.space {
+            Owner::Team { .. } => "Team".to_string(),
+            Owner::User { .. } => "Private".to_string(),
+        }
+    }
+
     fn directory_for_task(task: &AmbientAgentTask, app: &AppContext) -> Option<String> {
         let history_model = BlocklistAIHistoryModel::as_ref(app);
         let conversation_id = history_model
@@ -252,10 +265,17 @@ impl ConversationDetailsData {
     pub fn from_conversation(conversation: &AIConversation, app: &AppContext) -> Self {
         let mut directory = None;
         let mut conversation_id = None;
+        let mut task_id = None;
+        let mut visibility = None;
 
         // Server metadata (creator, timestamps)
         let mut creator = None;
         if let Some(server_metadata) = conversation.server_metadata() {
+            task_id = server_metadata.ambient_agent_task_id;
+            visibility = Some(Self::visibility_from_permissions(
+                &server_metadata.permissions,
+            ));
+
             if let Some(creator_uid_str) = &server_metadata.metadata.creator_uid {
                 let creator_uid = UserUid::new(creator_uid_str);
                 let user_profiles = UserProfiles::handle(app).as_ref(app);
@@ -309,13 +329,28 @@ impl ConversationDetailsData {
             .map(|m| Harness::from(m.harness))
             .or(Some(Harness::Oz));
 
-        ConversationDetailsData {
-            mode: PanelMode::Conversation {
+        let mode = if let Some(task_id) = task_id {
+            PanelMode::Task {
+                task_id: Some(task_id),
+                directory,
+                display_status: Some(AgentRunDisplayStatus::from_conversation_status(
+                    conversation.status(),
+                )),
+                error_message: None,
+                environment_id: None,
+                conversation_id,
+            }
+        } else {
+            PanelMode::Conversation {
                 directory,
                 server_conversation_id: conversation_id,
                 ai_conversation_id: None,
                 status: Some(conversation.status().clone()),
-            },
+            }
+        };
+
+        ConversationDetailsData {
+            mode,
             title: conversation
                 .title()
                 .unwrap_or_else(|| "Conversation".to_string()),
@@ -330,6 +365,7 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec: None,
             harness,
+            visibility,
             fetch_error: None,
         }
     }
@@ -394,6 +430,7 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec,
             harness,
+            visibility: None,
             fetch_error: None,
         }
     }
@@ -466,6 +503,7 @@ impl ConversationDetailsData {
                 copy_link_url,
                 skill_spec,
                 harness,
+                visibility: None,
                 fetch_error: None,
             };
         }
@@ -493,6 +531,7 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec: None,
             harness,
+            visibility: None,
             fetch_error: None,
         }
     }
@@ -521,6 +560,7 @@ impl ConversationDetailsData {
             copy_link_url: None,
             skill_spec: None,
             harness: None,
+            visibility: None,
             fetch_error,
         }
     }
@@ -563,6 +603,7 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec: None,
             harness,
+            visibility: None,
             fetch_error: None,
         }
     }
@@ -1829,6 +1870,14 @@ impl View for ConversationDetailsPanel {
         if let Some(harness_section) = self.render_harness_section(appearance, app) {
             content.add_child(
                 Container::new(harness_section)
+                    .with_margin_bottom(FIELD_SPACING)
+                    .finish(),
+            );
+        }
+
+        if let Some(visibility) = &self.data.visibility {
+            content.add_child(
+                Container::new(self.render_simple_field("Visibility", visibility, appearance))
                     .with_margin_bottom(FIELD_SPACING)
                     .finish(),
             );
