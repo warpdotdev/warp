@@ -814,17 +814,16 @@ impl AgentDriver {
                             );
                         })
                         .await;
-                }
 
-                // Keep the session alive after environment setup failures so
-                // the viewer can connect, receive scrollback, and see the error.
-                if let (Some(idle_timeout), true) = (
-                    idle_on_complete,
-                    matches!(err, AgentDriverError::EnvironmentSetupFailed(_)),
-                ) {
-                    let timeout = idle_timeout.min(SETUP_FAILED_IDLE_TIMEOUT);
-                    log::info!("Environment setup failed; keeping session alive for {timeout:?}");
-                    warpui::r#async::Timer::after(timeout).await;
+                    // Keep the session alive after environment setup failures so
+                    // the viewer can connect, receive scrollback, and see the error.
+                    if let Some(idle_timeout) = idle_on_complete {
+                        let timeout = idle_timeout.min(SETUP_FAILED_IDLE_TIMEOUT);
+                        log::info!(
+                            "Environment setup failed; keeping session alive for {timeout:?}"
+                        );
+                        warpui::r#async::Timer::after(timeout).await;
+                    }
                 }
             }
 
