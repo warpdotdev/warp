@@ -14,7 +14,7 @@ The Antigravity CLI agent (`agy`) is an autonomous developer tool that performs 
 1. Running `agy` does not trigger the terminal's Agent Mode layout or toolbar.
 2. Warp does not listen to or parse structured notifications from `agy` sessions.
 3. No install/update chip or setup instructions are available to help the user configure the `agy-warp` integration plugin.
-4. No feature flag exists to gate or control `agy` integrations.
+4. No feature flag exists to gate or control `agy` plugin integrations.
 
 ## Goals
 
@@ -23,7 +23,7 @@ The Antigravity CLI agent (`agy`) is an autonomous developer tool that performs 
 - Auto-install and auto-update: provide inline terminal chips that automatically configure or update the `agy-warp` plugin.
 - Fallback instructions: offer a split pane with manual setup commands if auto-installation fails.
 - Notification streams: process and display structured notifications (e.g. blocked, success, permission requests) in the agent inbox.
-- Feature gating: The entire `agy` integration—including command detection, Agent Mode transitions, plugin chips, and notifications—must be strictly gated by the `AntigravityNotifications` feature flag.
+- Feature gating: The `agy` plugin chip and notification flows are gated by the `AntigravityNotifications` feature flag (consistent with existing agents like `GeminiNotifications`, `CodexNotifications`). Command detection and Agent Mode entry are unconditional, matching the established pattern for all CLI agents.
 
 ## Non-Goals
 
@@ -88,7 +88,11 @@ Consistent with other agents (Claude Code, Gemini CLI):
 
 ## Security
 
-Warp assumes the `warpdotdev/agy-warp` repository is trusted and maintained by the core Warp team. To guarantee integrity and provenance, Warp will enforce a concrete version-pinning strategy. The auto-install and auto-update flows will specify exact release tags (e.g., `@v1.0.0`) rather than floating branches, and will verify the release's cryptographic checksums (or sigstore signatures) before executing any downloaded extension code. This ensures the extension cannot be tampered with between the repository and execution.
+The install and update flows follow the same trust model as the existing Gemini CLI and Claude Code plugin managers:
+
+1. **Trusted source**: Only the official `warpdotdev` GitHub organization URL is hardcoded in `EXTENSION_REPO`. Users cannot redirect the install to an arbitrary repository.
+2. **HTTPS transport**: All downloads use HTTPS, relying on GitHub's TLS integrity.
+3. **Post-update version verification**: After an update, the plugin manager reads the on-disk manifest to verify the version actually changed. If it did not, the update is treated as a failure (matching the `GeminiPluginManager` pattern).
 
 ## Success Criteria
 
@@ -98,10 +102,12 @@ Warp assumes the `warpdotdev/agy-warp` repository is trusted and maintained by t
 4. Outdated plugin manifests prompt an update chip.
 5. Setup instructions display correctly in a split pane.
 6. Structured events from the `agy` session are handled and displayed in the terminal UI.
+7. When `AntigravityNotifications` is disabled, no plugin chips are active, but `agy` is still detected and Agent Mode still activates.
 
 ## Validation
 
 - **Unit tests**: Validate filesystem verification (`is_installed`, `needs_update`) using temporary directory structures.
 - **Unit tests**: Test CLI detection, brand styling, and plugin instructions.
 - **Unit tests**: Validate the core OSC 777 parser, listener, and session-model data flow for `agent: "agy"` to ensure the notification stream works correctly.
+- **Unit tests**: Verify that disabling the `AntigravityNotifications` flag prevents plugin manager instantiation while leaving command detection and listener wiring functional.
 - **Manual verification**: Verify the end-to-end setup and notifications flow inside a live terminal window.
