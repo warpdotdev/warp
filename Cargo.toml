@@ -131,7 +131,7 @@ cynic = { version = "3" }
 cynic-codegen = { version = "3", features = ["rkyv"] }
 dashmap = "6.1.0"
 derive_more = "0.99.17"
-diesel = { version = "2.3.4", default-features = false }
+diesel = { version = "2.3.8", default-features = false }
 directories = "6.0"
 dunce = "1.0.1"
 enum-iterator = "1.1.3"
