@@ -29,7 +29,6 @@ use vim::{
 };
 use warp_core::platform::SessionPlatform;
 use warp_core::semantic_selection::SemanticSelection;
-use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::theme::Fill;
 use warp_editor::content::anchor::Anchor;
 use warp_editor::content::buffer::{
@@ -72,7 +71,6 @@ use super::line::EditorLineLocation;
 use crate::appearance::Appearance;
 use crate::code::editor::line_iterator::LineIterator;
 use crate::code_review::comments::{CommentId, CommentOrigin, LineDiffContent};
-use crate::code_review::CodeReviewTelemetryEvent;
 use crate::editor::InteractionState;
 use crate::notebooks::editor::model::word_unit;
 use crate::themes::theme::AnsiColorIdentifier;
@@ -3826,9 +3824,6 @@ impl CoreEditorModel for CodeEditorModel {
 
 impl CodeEditorModel {
     pub fn open_comment_line(&mut self, line: &EditorLineLocation, ctx: &mut ModelContext<Self>) {
-        // Telemetry: comment editor opened for a new inline review comment.
-        send_telemetry_from_ctx!(CodeReviewTelemetryEvent::CommentEditorOpened, ctx);
-
         self.comments.update(ctx, |comments, ctx| {
             comments.pending_comment = PendingComment::Open { line: line.clone() };
             ctx.emit(PendingCommentEvent::NewPendingComment(line.clone()));
@@ -3843,9 +3838,6 @@ impl CodeEditorModel {
         origin: &CommentOrigin,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Telemetry: comment editor opened for editing an existing inline review comment.
-        send_telemetry_from_ctx!(CodeReviewTelemetryEvent::CommentEditorOpened, ctx);
-
         self.comments.update(ctx, |comments, ctx| {
             comments.pending_comment = PendingComment::Open { line: line.clone() };
             ctx.emit(PendingCommentEvent::ReopenPendingComment {

@@ -261,6 +261,19 @@ fn test_warp_web_link_failure() {
         None
     );
 }
+#[test]
+fn test_app_web_link_rewrites_to_new_cloud_agent_conversation() {
+    let url = Url::parse(&format!("{}/app", ChannelState::server_root_url())).unwrap();
+    let intent = web_intent_parser::maybe_rewrite_web_url_to_intent(&url).unwrap();
+
+    assert_eq!(
+        intent.as_str(),
+        format!(
+            "{}://action/new_cloud_agent_conversation?source=web_home",
+            ChannelState::url_scheme()
+        )
+    );
+}
 
 #[test]
 fn test_action_create_environment_parse() {

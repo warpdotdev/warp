@@ -27,7 +27,6 @@ mod context_chips;
 mod crash_recovery;
 #[cfg(feature = "crash_reporting")]
 mod crash_reporting;
-mod debounce;
 mod debug_dump;
 mod default_terminal;
 mod download_method;
@@ -211,6 +210,8 @@ use terminal::session_settings::SessionSettings;
 use url::Url;
 pub use warp_core::errors::{report_error, report_if_error};
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
+// Re-export the debounce function to simplify imports.
+pub use warp_core::r#async::debounce;
 // Re-export the send_telemetry_from_ctx macro at the crate root level
 pub use warp_core::send_telemetry_from_app_ctx;
 pub use warp_core::send_telemetry_from_ctx;
@@ -651,6 +652,7 @@ pub fn run() -> Result<()> {
                 warp_logging::init(warp_logging::LogConfig {
                     is_cli: true,
                     log_destination: launch_mode.log_destination(),
+                    ..Default::default()
                 })?;
                 return crate::remote_server::run_proxy(args.identity_key.clone());
             }
@@ -791,10 +793,18 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             if crash_recovery::is_crash_recovery_process(launch_mode.args().as_ref()) {
                 warp_logging::init_for_crash_recovery_process()?;
             } else {
-                warp_logging::init(warp_logging::LogConfig { is_cli, log_destination })?;
+                warp_logging::init(warp_logging::LogConfig {
+                    is_cli,
+                    log_destination,
+                    ..Default::default()
+                })?;
             }
         } else {
-            warp_logging::init(warp_logging::LogConfig { is_cli, log_destination })?;
+            warp_logging::init(warp_logging::LogConfig {
+                is_cli,
+                log_destination,
+                ..Default::default()
+            })?;
         }
     }
 
@@ -1509,6 +1519,12 @@ pub(crate) fn initialize_app(
             } else {
                 RepoMetadataModel::new(ctx)
             };
+            model.register_ignored_path_interests(
+                ::ai::skills::SKILL_PROVIDER_DEFINITIONS
+                    .iter()
+                    .map(|provider| provider.skills_path.clone()),
+                ctx,
+            );
 
             // Subscribe to RemoteServerManager push events so that remote repo
             // metadata snapshots and incremental updates populate the remote
@@ -1711,6 +1727,9 @@ pub(crate) fn initialize_app(
         let conversations = &multi_agent_conversations;
         ctx.add_singleton_model(move |_| BlocklistAIHistoryModel::new(ai_queries, conversations));
     }
+    // Per-conversation queued prompts. Registered after the history model
+    // since it subscribes to history events for cleanup.
+    ctx.add_singleton_model(ai::blocklist::QueuedQueryModel::new);
     // Cross-pane UI state for the orchestration pill bar. Registered
     // after the history model since it subscribes to history events.
     ctx.add_singleton_model(move |ctx| {
@@ -1726,7 +1745,9 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(AgentNotificationsModel::new);
     ctx.add_singleton_model(BlocklistAIPermissions::new);
     ctx.add_singleton_model(ai::blocklist::orchestration_events::OrchestrationEventService::new);
-    ctx.add_singleton_model(ai::blocklist::task_status_sync_model::TaskStatusSyncModel::new);
+    ctx.add_singleton_model(
+        ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel::new,
+    );
     if warp_core::features::FeatureFlag::OrchestrationV2.is_enabled() {
         ctx.add_singleton_model(
             ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer::new,
@@ -2429,6 +2450,14 @@ fn on_close_window_cancelled(
     }
 }
 
+fn is_cloud_agent_web_home_launch_url(url: &Url) -> bool {
+    url.scheme() == ChannelState::url_scheme()
+        && url.host_str() == Some("action")
+        && url.path() == "/new_cloud_agent_conversation"
+        && url
+            .query_pairs()
+            .any(|(key, value)| key == "source" && value == "web_home")
+}
 fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode: LaunchMode) {
     IntervalTimer::handle(ctx).update(ctx, |timer, _ctx| {
         timer.mark_interval_end("APP_LAUNCHED");
@@ -2446,6 +2475,12 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
 
     match launch_mode {
         LaunchMode::App { .. } | LaunchMode::Test { .. } => {
+            let should_skip_restore = launch_mode
+                .args()
+                .urls
+                .iter()
+                .any(is_cloud_agent_web_home_launch_url);
+            let app_state = if should_skip_restore { None } else { app_state };
             // Attempt to restore windows from the persisted application state.
             let arg = OpenFromRestoredArg { app_state };
             ctx.dispatch_global_action("root_view:open_from_restored", &arg);

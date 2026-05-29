@@ -320,7 +320,13 @@ impl Input {
                 app,
             ));
         }
-        column.add_children([ChildView::new(&self.agent_status_view).finish(), input]);
+        column.add_child(ChildView::new(&self.agent_status_view).finish());
+        if let Some(panel) = self.queued_prompts_panel.as_ref() {
+            if panel.as_ref(app).should_render(app) {
+                column.add_child(ChildView::new(panel).finish());
+            }
+        }
+        column.add_child(input);
 
         let mut outer_stack = Stack::new().with_constrain_absolute_children();
         outer_stack.add_child(column.finish());

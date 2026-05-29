@@ -1,14 +1,19 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::str::FromStr;
-use std::sync::Arc;
-
-use ::ai::index::full_source_code_embedding::store_client::StoreClient;
-use ::ai::index::full_source_code_embedding::{ContentHash, Fragment, RepoMetadata};
+use ::ai::index::full_source_code_embedding::{
+    search_shaping::{build_fragments_from_file_contents, fragments_to_context_locations},
+    store_client::StoreClient,
+    ContentHash, FragmentMetadata as AiFragmentMetadata, FragmentMetadataLocation, RepoMetadata,
+};
+use ::ai::index::locations::CodeContextLocation;
 use itertools::Itertools;
 use remote_server::proto::{
-    file_context_proto, FragmentMetadata, LineRange, ReadFileContextFile, ReadFileContextRequest,
-    ReadFileContextResponse,
+    file_context_proto, FragmentMetadata as ProtoFragmentMetadata, LineRange, ReadFileContextFile,
+    ReadFileContextRequest, ReadFileContextResponse,
+};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    str::FromStr,
+    sync::Arc,
 };
 use string_offset::ByteOffset;
 use warpui::{AppContext, ModelContext, SingletonEntity};
@@ -17,8 +22,10 @@ use crate::ai::agent::{
     AnyFileContent, FileContext, SearchCodebaseFailureReason, SearchCodebaseResult,
 };
 use crate::ai::blocklist::SessionContext;
+use crate::ai::codebase_auto_indexing::{
+    should_use_codebase_indexing, CodebaseAutoIndexingSurface,
+};
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
-use crate::features::FeatureFlag;
 use crate::remote_server::codebase_index_model::{
     RemoteCodebaseIndexModel, RemoteCodebaseSearchAvailability, RemoteCodebaseSearchContext,
 };
@@ -53,7 +60,7 @@ pub(super) fn send_request(
     action_id: crate::ai::agent::AIAgentActionId,
     ctx: &mut ModelContext<GetRelevantFilesController>,
 ) -> RemoteSearchRequest {
-    if !FeatureFlag::RemoteCodebaseIndexing.is_enabled() {
+    if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
         return RemoteSearchRequest::Ready(SearchCodebaseResult::Failed {
             reason: SearchCodebaseFailureReason::CodebaseNotIndexed,
             message: "Remote codebase search is not enabled.".to_string(),
@@ -106,13 +113,6 @@ pub(super) fn send_request(
             RemoteSearchRequest::Pending(abort_handle)
         }
         availability @ RemoteCodebaseSearchAvailability::NotIndexed { .. } => {
-            RemoteCodebaseIndexModel::handle(ctx).update(ctx, |model, ctx| {
-                model.request_active_repo_index(
-                    &session_context,
-                    requested_codebase_path.as_deref(),
-                    ctx,
-                );
-            });
             RemoteSearchRequest::Ready(remote_availability_failure(availability))
         }
         RemoteCodebaseSearchAvailability::NoConnectedHost
@@ -176,20 +176,37 @@ async fn execute_remote_codebase_search(
             repo_path
         );
     }
-    let mut metadata = metadata_response.fragments;
+    let mut remote_fragments = metadata_response.fragments;
     if let Some(partial_paths) = partial_paths {
-        metadata.retain(|fragment| {
+        remote_fragments.retain(|fragment| {
             partial_paths
                 .iter()
                 .any(|partial_path| fragment.path.contains(partial_path))
         });
     }
-    if metadata.is_empty() {
+    if remote_fragments.is_empty() {
+        return Ok(SearchCodebaseResult::Success { files: vec![] });
+    }
+
+    // Convert daemon protobuf metadata into the shared search-shaping metadata format so
+    // remote search reuses the same fragment reconstruction and context expansion path as
+    // local search.
+    let parsed_fragment_metadata = remote_fragments
+        .into_iter()
+        .filter_map(|fragment| match remote_fragment_metadata(fragment) {
+            Ok(metadata) => Some(metadata),
+            Err(err) => {
+                log::warn!("Failed to parse remote codebase fragment metadata: {err:?}");
+                None
+            }
+        })
+        .collect_vec();
+    if parsed_fragment_metadata.is_empty() {
         return Ok(SearchCodebaseResult::Success { files: vec![] });
     }
 
     let response = client
-        .read_file_context(read_fragment_metadata_request(&metadata))
+        .read_file_context(read_full_fragment_files_request(&parsed_fragment_metadata))
         .await?;
     if !response.failed_files.is_empty() && response.file_contexts.is_empty() {
         let failed = response
@@ -209,42 +226,98 @@ async fn execute_remote_codebase_search(
             message: format!("Failed to read remote search result files: {failed}"),
         });
     }
-
-    let (fragments, mut file_contexts_by_identity) =
-        remote_fragments_and_file_contexts(response, &metadata)?;
+    let file_contents = file_contents_from_response(response);
+    let read_fragment_result = build_fragments_from_file_contents(
+        parsed_fragment_metadata.iter().cloned(),
+        &file_contents,
+    );
+    if !read_fragment_result.fail_to_read_path.is_empty() {
+        log::warn!(
+            "Remote codebase search failed to read {} fragment file(s)",
+            read_fragment_result.fail_to_read_path.len()
+        );
+    }
+    let fragments = read_fragment_result.successfully_read;
     if fragments.is_empty() {
         return Ok(SearchCodebaseResult::Success { files: vec![] });
     }
 
     let reranked_fragments = store_client.rerank_fragments(query, fragments).await?;
-    let files = reranked_fragments
+    let metadata_by_hash = fragment_metadata_by_hash(&parsed_fragment_metadata);
+    let locations = fragments_to_context_locations(
+        reranked_fragments,
+        |hash| metadata_by_hash.get(hash).map(Vec::as_slice),
+        RETRIEVE_FRAGMENT_CONTEXT_LENGTH,
+    );
+    if locations.is_empty() {
+        return Ok(SearchCodebaseResult::Success { files: vec![] });
+    }
+
+    let response = client
+        .read_file_context(read_context_locations_request(&locations))
+        .await?;
+    if !response.failed_files.is_empty() && response.file_contexts.is_empty() {
+        let failed = response
+            .failed_files
+            .iter()
+            .map(|file| {
+                let reason = file
+                    .error
+                    .as_ref()
+                    .map(|error| error.message.as_str())
+                    .unwrap_or("unknown error");
+                format!("{}: {reason}", file.path)
+            })
+            .join(", ");
+        return Ok(SearchCodebaseResult::Failed {
+            reason: SearchCodebaseFailureReason::InvalidFilePaths,
+            message: format!("Failed to read remote search result files: {failed}"),
+        });
+    }
+    let files = response
+        .file_contexts
         .into_iter()
-        .filter_map(|fragment| {
-            file_contexts_by_identity.remove(&RemoteFragmentIdentity::from_fragment(&fragment))
-        })
+        .filter_map(proto_file_context_to_file_context)
         .collect_vec();
 
     Ok(SearchCodebaseResult::Success { files })
 }
 
-fn read_fragment_metadata_request(metadata: &[FragmentMetadata]) -> ReadFileContextRequest {
+const RETRIEVE_FRAGMENT_CONTEXT_LENGTH: usize = 0;
+
+fn remote_fragment_metadata(
+    fragment: ProtoFragmentMetadata,
+) -> anyhow::Result<(ContentHash, AiFragmentMetadata)> {
+    let content_hash = ContentHash::from_str(&fragment.content_hash)?;
+    Ok((
+        content_hash,
+        AiFragmentMetadata {
+            absolute_path: PathBuf::from(fragment.path),
+            location: FragmentMetadataLocation {
+                start_line: fragment.start_line as usize,
+                end_line: fragment.end_line as usize,
+                byte_range: ByteOffset::from(fragment.byte_start as usize)
+                    ..ByteOffset::from(fragment.byte_end as usize),
+            },
+        },
+    ))
+}
+
+fn read_full_fragment_files_request(
+    metadata: &[(ContentHash, AiFragmentMetadata)],
+) -> ReadFileContextRequest {
+    let mut seen_paths = HashSet::new();
     ReadFileContextRequest {
         files: metadata
             .iter()
-            .map(|fragment| {
-                let line_ranges =
-                    if fragment.start_line > 0 && fragment.end_line >= fragment.start_line {
-                        vec![LineRange {
-                            start: fragment.start_line,
-                            end: fragment.end_line.saturating_add(1),
-                        }]
-                    } else {
-                        vec![]
-                    };
-                ReadFileContextFile {
-                    path: fragment.path.clone(),
-                    line_ranges,
-                }
+            .filter_map(|(_, fragment)| {
+                let path = fragment.absolute_path.to_string_lossy().to_string();
+                seen_paths
+                    .insert(path.clone())
+                    .then_some(ReadFileContextFile {
+                        path,
+                        line_ranges: vec![],
+                    })
             })
             .collect(),
         max_file_bytes: None,
@@ -252,109 +325,59 @@ fn read_fragment_metadata_request(metadata: &[FragmentMetadata]) -> ReadFileCont
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-struct RemoteFragmentIdentity {
-    content_hash: String,
-    path: String,
-    byte_start: u64,
-    byte_end: u64,
-}
-
-impl RemoteFragmentIdentity {
-    fn from_metadata(metadata: &FragmentMetadata) -> Self {
-        Self {
-            content_hash: metadata.content_hash.clone(),
-            path: metadata.path.clone(),
-            byte_start: metadata.byte_start,
-            byte_end: metadata.byte_end,
-        }
-    }
-
-    fn from_fragment(fragment: &Fragment) -> Self {
-        let byte_range = fragment.byte_range();
-        Self {
-            content_hash: fragment.content_hash().to_string(),
-            path: fragment.absolute_path().to_string_lossy().to_string(),
-            byte_start: byte_range.start.as_usize() as u64,
-            byte_end: byte_range.end.as_usize() as u64,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-struct RemoteReadContextKey {
-    path: String,
-    line_range_start: Option<u32>,
-    line_range_end: Option<u32>,
-}
-
-impl RemoteReadContextKey {
-    fn from_metadata(metadata: &FragmentMetadata) -> Self {
-        let line_range = (metadata.start_line > 0 && metadata.end_line >= metadata.start_line)
-            .then_some((metadata.start_line, metadata.end_line.saturating_add(1)));
-        Self {
-            path: metadata.path.clone(),
-            line_range_start: line_range.map(|(start, _)| start),
-            line_range_end: line_range.map(|(_, end)| end),
-        }
-    }
-
-    fn from_file_context(file_context: &remote_server::proto::FileContextProto) -> Self {
-        Self {
-            path: file_context.file_name.clone(),
-            line_range_start: file_context.line_range_start,
-            line_range_end: file_context.line_range_end,
-        }
-    }
-}
-
-fn remote_fragments_and_file_contexts(
-    response: ReadFileContextResponse,
-    metadata: &[FragmentMetadata],
-) -> anyhow::Result<(Vec<Fragment>, HashMap<RemoteFragmentIdentity, FileContext>)> {
-    let mut fragments = Vec::new();
-    let mut file_contexts_by_read_key: HashMap<RemoteReadContextKey, Vec<FileContext>> =
-        HashMap::new();
+fn file_contents_from_response(response: ReadFileContextResponse) -> HashMap<PathBuf, String> {
+    let mut file_contents = HashMap::new();
     for file_context in response.file_contexts {
-        let read_key = RemoteReadContextKey::from_file_context(&file_context);
-        let Some(file_context) = proto_file_context_to_file_context(file_context) else {
+        if file_context.line_range_start.is_some() || file_context.line_range_end.is_some() {
             continue;
-        };
-        file_contexts_by_read_key
-            .entry(read_key)
+        }
+        if let Some(file_context_proto::Content::TextContent(content)) = file_context.content {
+            file_contents.insert(PathBuf::from(file_context.file_name), content);
+        }
+    }
+    file_contents
+}
+
+fn fragment_metadata_by_hash(
+    metadata: &[(ContentHash, AiFragmentMetadata)],
+) -> HashMap<ContentHash, Vec<AiFragmentMetadata>> {
+    let mut metadata_by_hash: HashMap<ContentHash, Vec<AiFragmentMetadata>> = HashMap::new();
+    for (content_hash, metadata) in metadata {
+        metadata_by_hash
+            .entry(content_hash.clone())
             .or_default()
-            .push(file_context);
+            .push(metadata.clone());
     }
+    metadata_by_hash
+}
 
-    let mut file_contexts_by_identity = HashMap::new();
-
-    for fragment_metadata in metadata {
-        let read_key = RemoteReadContextKey::from_metadata(fragment_metadata);
-        let Some(file_context) = file_contexts_by_read_key
-            .get(&read_key)
-            .and_then(|file_contexts| file_contexts.last())
-            .cloned()
-        else {
-            continue;
-        };
-        let AnyFileContent::StringContent(content) = &file_context.content else {
-            continue;
-        };
-        let content_hash = ContentHash::from_str(&fragment_metadata.content_hash)?;
-        fragments.push(Fragment::from_byte_range(
-            content.clone(),
-            content_hash,
-            PathBuf::from(fragment_metadata.path.clone()),
-            ByteOffset::from(fragment_metadata.byte_start as usize)
-                ..ByteOffset::from(fragment_metadata.byte_end as usize),
-        ));
-        file_contexts_by_identity.insert(
-            RemoteFragmentIdentity::from_metadata(fragment_metadata),
-            file_context,
-        );
+fn read_context_locations_request(
+    locations: &HashSet<CodeContextLocation>,
+) -> ReadFileContextRequest {
+    ReadFileContextRequest {
+        files: locations
+            .iter()
+            .map(|location| match location {
+                CodeContextLocation::WholeFile(path) => ReadFileContextFile {
+                    path: path.to_string_lossy().to_string(),
+                    line_ranges: vec![],
+                },
+                CodeContextLocation::Fragment(fragment) => ReadFileContextFile {
+                    path: fragment.path.to_string_lossy().to_string(),
+                    line_ranges: fragment
+                        .line_ranges
+                        .iter()
+                        .map(|range| LineRange {
+                            start: range.start as u32,
+                            end: range.end as u32,
+                        })
+                        .collect(),
+                },
+            })
+            .collect(),
+        max_file_bytes: None,
+        max_batch_bytes: None,
     }
-
-    Ok((fragments, file_contexts_by_identity))
 }
 
 // Keep this conversion at the AI boundary: `FileContext` lives in the `ai` crate, so the
@@ -401,7 +424,7 @@ fn remote_availability_failure(
             SearchCodebaseResult::Failed {
                 reason: SearchCodebaseFailureReason::CodebaseNotIndexed,
                 message: format!(
-                    "The remote codebase at {} is not indexed yet. Indexing has been requested; try again after it finishes.",
+                    "The remote codebase at {} is not indexed yet.",
                     remote_path.path.as_str()
                 ),
             }
@@ -431,3 +454,7 @@ fn remote_availability_failure(
         },
     }
 }
+
+#[cfg(test)]
+#[path = "native_tests.rs"]
+mod tests;

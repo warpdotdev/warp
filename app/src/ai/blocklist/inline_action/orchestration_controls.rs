@@ -7,7 +7,6 @@
 //! from field-change events to their own action enum.
 
 use std::collections::HashMap;
-use std::fmt::Debug;
 
 use ai::agent::action::RunAgentsExecutionMode;
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationExecutionMode};
@@ -44,10 +43,13 @@ use crate::ai::local_child_harnesses::{
     local_child_harness_disabled_message, local_child_harness_is_enabled,
 };
 use crate::appearance::Appearance;
+use crate::cloud_object::CloudObjectLookup as _;
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
-use crate::view_components::dropdown::{Dropdown, DropdownAction, DropdownStyle};
+use crate::view_components::dropdown::{
+    Dropdown, DropdownAction, DropdownItemAction, DropdownStyle,
+};
 use crate::view_components::FilterableDropdown;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{report_if_error, LLMPreferences};
@@ -68,6 +70,8 @@ pub const ORCHESTRATION_PICKER_RADIUS: f32 = 4.;
 pub const ORCHESTRATION_PICKER_MAX_WIDTH: f32 = 205.;
 
 const DEFAULT_MODEL_LABEL: &str = "Default model";
+const ORCHESTRATION_SEGMENTED_CONTROL_PADDING: f32 = 4.;
+const ORCHESTRATION_SEGMENT_VERTICAL_PADDING: f32 = 4.;
 
 /// Label shown in the auth secret picker when no secret is selected
 /// (the child agent will inherit credentials from its environment).
@@ -81,7 +85,7 @@ const AUTH_SECRET_CREATE_NEW_LABEL: &str = "New API key…";
 /// Trait that both `RunAgentsCardViewAction` and
 /// `OrchestrationConfigBlockAction` implement so the shared picker
 /// creation and render helpers can produce the correct action variant.
-pub trait OrchestrationControlAction: Clone + Debug + Send + Sync + 'static {
+pub trait OrchestrationControlAction: DropdownItemAction + Clone {
     fn execution_mode_toggled(is_remote: bool) -> Self;
     fn model_changed(model_id: String) -> Self;
     fn harness_changed(harness_type: String) -> Self;
@@ -335,7 +339,7 @@ impl OrchestrationEditState {
 /// block. Generic over the action type `A`.
 #[derive(Clone)]
 pub struct OrchestrationPickerHandles<A: OrchestrationControlAction> {
-    pub model_picker: Option<ViewHandle<Dropdown<A>>>,
+    pub model_picker: Option<ViewHandle<FilterableDropdown<A>>>,
     pub harness_picker: Option<ViewHandle<Dropdown<A>>>,
     pub environment_picker: Option<ViewHandle<FilterableDropdown<A>>>,
     pub host_picker: Option<ViewHandle<HostPicker>>,
@@ -437,6 +441,26 @@ pub fn new_standard_picker_dropdown<A: OrchestrationControlAction, V: View>(
     })
 }
 
+/// Creates a searchable dropdown with the shared orchestration picker
+/// chrome (border, radius, background, font).
+pub fn new_standard_filterable_picker_dropdown<A: OrchestrationControlAction, V: View>(
+    styles: &UiComponentStyles,
+    ctx: &mut ViewContext<V>,
+) -> ViewHandle<FilterableDropdown<A>> {
+    let styles = *styles;
+    ctx.add_typed_action_view(move |ctx_dropdown| {
+        let mut dropdown = FilterableDropdown::<A>::new(ctx_dropdown);
+        dropdown.set_use_overlay_layer(false, ctx_dropdown);
+        dropdown.set_match_menu_width_to_top_bar(true, ctx_dropdown);
+        dropdown.set_main_axis_size(MainAxisSize::Max, ctx_dropdown);
+        dropdown.set_button_variant(ButtonVariant::Secondary);
+        dropdown.set_style(styles);
+        dropdown.set_top_bar_height(ORCHESTRATION_PICKER_HEIGHT, ctx_dropdown);
+        dropdown.set_top_bar_max_width(f32::INFINITY);
+        dropdown
+    })
+}
+
 /// Returns Warp base-model choices for orchestration.
 fn get_base_model_choices<'a>(
     llm_prefs: &'a LLMPreferences,
@@ -456,7 +480,7 @@ fn get_base_model_choices<'a>(
 ///   by the server-provided harness model catalog from
 ///   `HarnessAvailabilityModel::models_for()`.
 pub fn populate_model_picker_for_harness<A: OrchestrationControlAction, V: View>(
-    dropdown: &ViewHandle<Dropdown<A>>,
+    dropdown: &ViewHandle<FilterableDropdown<A>>,
     initial_model_id: &str,
     harness_type: &str,
     is_local: bool,
@@ -490,7 +514,9 @@ pub fn populate_model_picker_for_harness<A: OrchestrationControlAction, V: View>
                 let items = available_model_menu_items(
                     ordered_choices,
                     move |llm| {
-                        DropdownAction::SelectActionAndClose(A::model_changed(llm.id.to_string()))
+                        DropdownAction::select_action_and_close(A::model_changed(
+                            llm.id.to_string(),
+                        ))
                     },
                     None,
                     None,
@@ -512,14 +538,13 @@ pub fn populate_model_picker_for_harness<A: OrchestrationControlAction, V: View>
             Some(harness) => {
                 // Non-Oz harness: "Default model" at top, then server-provided
                 // harness models.
-                let mut items: Vec<MenuItem<DropdownAction<A>>> =
-                    vec![default_model_menu_item::<A>()];
+                let mut items: Vec<MenuItem<DropdownAction>> = vec![default_model_menu_item::<A>()];
                 let availability = HarnessAvailabilityModel::as_ref(ctx_dropdown);
                 if let Some(models) = availability.models_for(harness) {
                     for model in models {
                         let model_id = model.id.clone();
                         let fields = MenuItemFields::new(&model.display_name)
-                            .with_on_select_action(DropdownAction::SelectActionAndClose(
+                            .with_on_select_action(DropdownAction::select_action_and_close(
                                 A::model_changed(model_id),
                             ));
                         items.push(MenuItem::Item(fields));
@@ -549,10 +574,10 @@ pub fn populate_model_picker_for_harness<A: OrchestrationControlAction, V: View>
 }
 
 /// Creates a "Default model" menu item that emits an empty model_id.
-fn default_model_menu_item<A: OrchestrationControlAction>() -> MenuItem<DropdownAction<A>> {
+fn default_model_menu_item<A: OrchestrationControlAction>() -> MenuItem<DropdownAction> {
     MenuItem::Item(
         MenuItemFields::new(DEFAULT_MODEL_LABEL).with_on_select_action(
-            DropdownAction::SelectActionAndClose(A::model_changed(String::new())),
+            DropdownAction::select_action_and_close(A::model_changed(String::new())),
         ),
     )
 }
@@ -656,7 +681,7 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
         // cached entry.harness deserialized as Unknown.
         let target_harness = Harness::parse_orchestration_harness(&initial_harness);
 
-        let mut items: Vec<MenuItem<DropdownAction<A>>> = Vec::new();
+        let mut items: Vec<MenuItem<DropdownAction>> = Vec::new();
         let mut selected_name: Option<String> = None;
         let target_display = target_harness.map(|harness| availability.display_name_for(harness));
 
@@ -672,7 +697,7 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
             }
             let harness_str = harness.to_string();
             if entry.enabled {
-                fields = fields.with_on_select_action(DropdownAction::SelectActionAndClose(
+                fields = fields.with_on_select_action(DropdownAction::select_action_and_close(
                     A::harness_changed(harness_str.clone()),
                 ));
             } else {
@@ -732,11 +757,11 @@ pub fn create_environment_picker<A: OrchestrationControlAction, V: View>(
             .collect();
         sorted_envs.sort_by(|a, b| a.1.cmp(&b.1));
 
-        let mut items: Vec<MenuItem<DropdownAction<A>>> = Vec::new();
+        let mut items: Vec<MenuItem<DropdownAction>> = Vec::new();
         let mut selected_name: Option<String> = None;
         items.push(MenuItem::Item(
             MenuItemFields::new(ORCHESTRATION_ENV_NONE_LABEL).with_on_select_action(
-                DropdownAction::SelectActionAndClose(A::environment_changed(String::new())),
+                DropdownAction::select_action_and_close(A::environment_changed(String::new())),
             ),
         ));
         if initial_env.is_empty() {
@@ -749,7 +774,9 @@ pub fn create_environment_picker<A: OrchestrationControlAction, V: View>(
             let env_id_for_item = env_id.clone();
             items.push(MenuItem::Item(
                 MenuItemFields::new(env_name).with_on_select_action(
-                    DropdownAction::SelectActionAndClose(A::environment_changed(env_id_for_item)),
+                    DropdownAction::select_action_and_close(A::environment_changed(
+                        env_id_for_item,
+                    )),
                 ),
             ));
         }
@@ -775,11 +802,11 @@ pub fn populate_environment_picker<A: OrchestrationControlAction, V: View>(
             .collect();
         sorted_envs.sort_by(|a, b| a.1.cmp(&b.1));
 
-        let mut items: Vec<MenuItem<DropdownAction<A>>> = Vec::new();
+        let mut items: Vec<MenuItem<DropdownAction>> = Vec::new();
         let mut selected_name: Option<String> = None;
         items.push(MenuItem::Item(
             MenuItemFields::new(ORCHESTRATION_ENV_NONE_LABEL).with_on_select_action(
-                DropdownAction::SelectActionAndClose(A::environment_changed(String::new())),
+                DropdownAction::select_action_and_close(A::environment_changed(String::new())),
             ),
         ));
         if initial_env.is_empty() {
@@ -792,7 +819,9 @@ pub fn populate_environment_picker<A: OrchestrationControlAction, V: View>(
             let env_id_for_item = env_id.clone();
             items.push(MenuItem::Item(
                 MenuItemFields::new(env_name).with_on_select_action(
-                    DropdownAction::SelectActionAndClose(A::environment_changed(env_id_for_item)),
+                    DropdownAction::select_action_and_close(A::environment_changed(
+                        env_id_for_item,
+                    )),
                 ),
             ));
         }
@@ -1135,11 +1164,11 @@ pub fn populate_auth_secret_picker_for_harness<A: OrchestrationControlAction, V:
     let selection = selection.clone();
     dropdown.update(ctx, |dropdown, ctx_dropdown| {
         let availability = HarnessAvailabilityModel::as_ref(ctx_dropdown);
-        let mut items: Vec<MenuItem<DropdownAction<A>>> = Vec::new();
+        let mut items: Vec<MenuItem<DropdownAction>> = Vec::new();
 
         items.push(MenuItem::Item(
             MenuItemFields::new(AUTH_SECRET_INHERIT_LABEL).with_on_select_action(
-                DropdownAction::SelectActionAndClose(A::auth_secret_changed(None)),
+                DropdownAction::select_action_and_close(A::auth_secret_changed(None)),
             ),
         ));
 
@@ -1153,7 +1182,7 @@ pub fn populate_auth_secret_picker_for_harness<A: OrchestrationControlAction, V:
                     }
                     items.push(MenuItem::Item(
                         MenuItemFields::new(&name).with_on_select_action(
-                            DropdownAction::SelectActionAndClose(A::auth_secret_changed(Some(
+                            DropdownAction::select_action_and_close(A::auth_secret_changed(Some(
                                 name.clone(),
                             ))),
                         ),
@@ -1176,7 +1205,7 @@ pub fn populate_auth_secret_picker_for_harness<A: OrchestrationControlAction, V:
             items.push(MenuItem::Separator);
             items.push(MenuItem::Item(
                 MenuItemFields::new(AUTH_SECRET_CREATE_NEW_LABEL).with_on_select_action(
-                    DropdownAction::SelectActionAndClose(A::create_new_auth_secret_requested()),
+                    DropdownAction::select_action_and_close(A::create_new_auth_secret_requested()),
                 ),
             ));
         }
@@ -1778,17 +1807,19 @@ pub fn render_mode_toggle<A: OrchestrationControlAction>(
         .with_child(Expanded::new(1.0, local_segment).finish())
         .finish();
     let segmented_control = Container::new(segments_row)
-        .with_padding_top(4.)
-        .with_padding_bottom(4.)
-        .with_padding_left(4.)
-        .with_padding_right(4.)
+        .with_padding_top(ORCHESTRATION_SEGMENTED_CONTROL_PADDING)
+        .with_padding_bottom(ORCHESTRATION_SEGMENTED_CONTROL_PADDING)
+        .with_padding_left(ORCHESTRATION_SEGMENTED_CONTROL_PADDING)
+        .with_padding_right(ORCHESTRATION_SEGMENTED_CONTROL_PADDING)
         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
         .with_background(segment_outer_bg)
         .finish();
+    let segmented_control =
+        ConstrainedBox::new(segmented_control).with_height(ORCHESTRATION_PICKER_HEIGHT);
     let segmented_control = if full_width {
-        segmented_control
+        segmented_control.finish()
     } else {
-        ConstrainedBox::new(segmented_control)
+        segmented_control
             .with_width(ORCHESTRATION_PICKER_MAX_WIDTH)
             .finish()
     };
@@ -1816,7 +1847,7 @@ fn render_segment_button<A: OrchestrationControlAction>(
     let theme = appearance.theme();
     let label_owned = label.to_string();
     let font_family = appearance.ui_font_family();
-    let font_size = appearance.monospace_font_size() + 1.;
+    let font_size = ORCHESTRATION_PICKER_FONT_SIZE;
     let active_text_color = blended_colors::text_main(theme, theme.surface_1());
     let inactive_text_color = blended_colors::text_disabled(theme, theme.surface_1());
     let segment_active_bg = active_bg_override
@@ -1831,7 +1862,7 @@ fn render_segment_button<A: OrchestrationControlAction>(
             .finish();
         let centered = warpui::elements::Align::new(text).finish();
         let mut container = Container::new(centered)
-            .with_vertical_padding(6.)
+            .with_vertical_padding(ORCHESTRATION_SEGMENT_VERTICAL_PADDING)
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
         if is_active {
             container = container.with_background(segment_active_bg);

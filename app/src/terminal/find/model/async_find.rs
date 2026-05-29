@@ -202,6 +202,42 @@ pub struct AsyncBlockGridMatch {
     pub block_index: BlockIndex,
 }
 
+/// A focused match in a rich content (AI) block.
+///
+/// Mirrors the data carried by `BlockListMatch::RichContent` in the sync path,
+/// so callers can synthesize a `BlockListMatch` from either path.
+///
+/// This is a snapshot of the controller's state at the time it was produced.
+/// `match_id` is the most volatile field: `AIBlock::run_find` regenerates all
+/// match ids from a process-global atomic counter on every rescan (see
+/// `app/src/ai/blocklist/block/find.rs`), so any cached id is invalidated the
+/// next time that AI block is scanned. `total_index` is more stable — it only
+/// shifts when the blocklist sumtree itself is mutated at a non-end position
+/// (banner/gap insertion, scrollback truncation), not when new output streams
+/// into an existing AI block. Callers should still consume the value inline
+/// and not hold it across `process_message` deliveries.
+///
+/// TODO(vkodithala): This mirrors `BlockListMatch::RichContent` in the sync path. Both
+/// derive `Clone` even though their contents are short-lived; explore removing
+/// `Clone` from both in a future PR to enforce the snapshot contract in the
+/// type system.
+#[derive(Debug, Clone)]
+pub struct AsyncFocusedAiMatch {
+    /// The view id of the rich content block.
+    pub view_id: EntityId,
+    /// The id of the focused match within the rich content block.
+    pub match_id: RichContentMatchId,
+    /// The total index of the rich content block in the blocklist sumtree.
+    pub total_index: TotalIndex,
+}
+
+/// Resolution of the global focused match index to either a terminal or an AI match.
+#[derive(Debug, Clone)]
+enum FocusedMatchResolution {
+    Terminal(AsyncBlockGridMatch),
+    Ai(AsyncFocusedAiMatch),
+}
+
 /// Per-block find results, keyed by block index.
 #[derive(Debug, Default)]
 pub(crate) struct BlockFindResults {
@@ -371,9 +407,10 @@ pub struct AsyncFindController {
     /// The FindOptions for the current find run, stored for `active_find_options()` access.
     current_find_options: Option<FindOptions>,
 
-    /// Cached result of `focused_terminal_match()`, updated when focus or matches change.
-    /// Avoids re-sorting HashMap keys and iterating on every call.
-    cached_focused_match: Option<AsyncBlockGridMatch>,
+    /// Cached resolution of `focused_match_index` to either a terminal match,
+    /// an AI match, or `None` (out of range). Updated when focus or matches
+    /// change
+    cached_focused_match: Option<FocusedMatchResolution>,
 
     /// Monotonically increasing generation counter, bumped each time new streams
     /// are spawned. The result stream callback captures the generation at spawn
@@ -482,27 +519,42 @@ impl AsyncFindController {
         self.update_cached_focused_match();
     }
 
-    /// Returns the focused match as an AsyncBlockGridMatch if it's a terminal match.
+    /// Returns the focused match as an [`AsyncBlockGridMatch`] if it's a terminal match.
     ///
     /// Returns a cached value that is updated when focus or matches change,
-    /// avoiding the cost of sorting and iterating on every call.
+    /// avoiding the cost of sorting and iterating on every call. Returns
+    /// `None` if focus is on an AI match or out of range.
     pub fn focused_terminal_match(&self) -> Option<AsyncBlockGridMatch> {
-        self.cached_focused_match.clone()
+        match &self.cached_focused_match {
+            Some(FocusedMatchResolution::Terminal(m)) => Some(m.clone()),
+            _ => None,
+        }
     }
 
-    /// Recomputes the cached focused match from the current matches and focus index.
-    fn update_cached_focused_match(&mut self) {
-        self.cached_focused_match = self.compute_focused_terminal_match();
+    /// Returns the focused match as an `AsyncFocusedAiMatch` if it's an AI match.
+    ///
+    /// Returns a cached value that is updated when focus or matches change,
+    /// avoiding the cost of sorting and iterating on every call. Returns
+    /// `None` if focus is on a terminal match or out of range.
+    pub fn focused_ai_match(&self) -> Option<AsyncFocusedAiMatch> {
+        match &self.cached_focused_match {
+            Some(FocusedMatchResolution::Ai(m)) => Some(m.clone()),
+            _ => None,
+        }
     }
 
-    /// Computes the focused terminal match by iterating through all matches
+    /// Recomputes the cached focused match by iterating through all matches
     /// (terminal and AI) in visual display order, derived from the TotalIndex
     /// maps stored in the block results.
     ///
-    /// Returns `Some` if the focused index lands on a terminal match, `None`
-    /// if it lands on an AI match or is out of range.
-    fn compute_focused_terminal_match(&self) -> Option<AsyncBlockGridMatch> {
-        let focused_idx = self.focused_match_index?;
+    /// Resolves the global `focused_match_index` to either a terminal match or
+    /// an AI match (or `None`, if out of range) and stores it in the unified
+    /// cache.
+    fn update_cached_focused_match(&mut self) {
+        let Some(focused_idx) = self.focused_match_index else {
+            self.cached_focused_match = None;
+            return;
+        };
         let mut current_idx = 0;
 
         // Determine grid iteration order within each terminal block.
@@ -536,13 +588,14 @@ impl AsyncFindController {
         // of the blocklist (newest blocks, near the prompt) come first.
         ordered_blocks.sort_by(|a, b| b.0.cmp(&a.0));
 
+        let reverse_within_block = matches!(
+            self.block_sort_direction,
+            BlockSortDirection::MostRecentLast
+        );
+
         for (_, block_info) in &ordered_blocks {
             match block_info {
                 BlockInfo::Terminal { block_index, .. } => {
-                    let reverse_within_grid = matches!(
-                        self.block_sort_direction,
-                        BlockSortDirection::MostRecentLast
-                    );
                     for &grid_type in &grid_types {
                         if let Some(matches) = self
                             .block_results
@@ -552,35 +605,62 @@ impl AsyncFindController {
                             // For MostRecentLast, sync focus traversal
                             // iterates from the bottom of each grid first.
                             let iter: Box<dyn Iterator<Item = &AbsoluteMatch>> =
-                                if reverse_within_grid {
+                                if reverse_within_block {
                                     Box::new(matches.iter().rev())
                                 } else {
                                     Box::new(matches.iter())
                                 };
                             for match_range in iter {
                                 if current_idx == focused_idx {
-                                    return Some(AsyncBlockGridMatch {
-                                        block_index: *block_index,
-                                        grid_type,
-                                        range: match_range.clone(),
-                                    });
+                                    self.cached_focused_match = Some(
+                                        FocusedMatchResolution::Terminal(AsyncBlockGridMatch {
+                                            block_index: *block_index,
+                                            grid_type,
+                                            range: match_range.clone(),
+                                        }),
+                                    );
+                                    return;
                                 }
                                 current_idx += 1;
                             }
                         }
                     }
                 }
-                BlockInfo::RichContent { view_id, .. } => {
-                    // Count AI matches so the index arithmetic stays correct,
-                    // but don't return them as terminal matches.
+                BlockInfo::RichContent {
+                    view_id,
+                    total_index,
+                } => {
                     if let Some(ai_matches) = self.block_results.ai_matches.get(view_id) {
-                        current_idx += ai_matches.len();
+                        // Mirror sync find's per-AI-block traversal order. Sync
+                        // reverses rich-content match ids for MostRecentLast so
+                        // that matches inside one AI block are walked from
+                        // bottom to top; we apply the same reversal at iteration
+                        // time to keep stored order canonical.
+                        let iter: Box<dyn Iterator<Item = &RichContentMatchId>> =
+                            if reverse_within_block {
+                                Box::new(ai_matches.iter().rev())
+                            } else {
+                                Box::new(ai_matches.iter())
+                            };
+                        for &match_id in iter {
+                            if current_idx == focused_idx {
+                                self.cached_focused_match =
+                                    Some(FocusedMatchResolution::Ai(AsyncFocusedAiMatch {
+                                        view_id: *view_id,
+                                        match_id,
+                                        total_index: *total_index,
+                                    }));
+                                return;
+                            }
+                            current_idx += 1;
+                        }
                     }
                 }
             }
         }
 
-        None
+        // No match at the focused index (index out of range).
+        self.cached_focused_match = None;
     }
 
     /// Registers a rich content view for AI block searching.

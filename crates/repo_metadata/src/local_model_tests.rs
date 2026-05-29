@@ -38,6 +38,7 @@ mod tests {
                 #[cfg(feature = "local_fs")]
                 watcher: Default::default(),
                 emit_incremental_updates: false,
+                ignored_path_interests: Vec::new(),
             }
         }
     }
@@ -747,6 +748,7 @@ mod tests {
                     &update,
                     &gitignores,
                     &std::collections::HashSet::new(),
+                    &[],
                 ));
             LocalRepoMetadataModel::apply_file_tree_mutations(&mut root, mutations, false, false);
 
@@ -1219,6 +1221,7 @@ Thumbs.db
                     &update,
                     &[],
                     &failed_walk_paths,
+                    &[],
                 ));
 
             // The cache hit should prevent any build_tree call, so no
@@ -1266,6 +1269,7 @@ Thumbs.db
                     &update,
                     &[],
                     &failed_walk_paths,
+                    &[],
                 ));
 
             // other_dir is not under failed_dir; the walk should have run and
@@ -1315,6 +1319,7 @@ Thumbs.db
                     &update,
                     &[],
                     &failed_walk_paths,
+                    &[],
                 ));
 
             // `Tempest` is a sibling of `Temp`, not a descendant. The cache

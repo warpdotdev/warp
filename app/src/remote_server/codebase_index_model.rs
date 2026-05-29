@@ -1,26 +1,26 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use ai::index::full_source_code_embedding::NodeHash;
-use remote_server::codebase_index_proto::{RemoteCodebaseIndexState, RemoteCodebaseIndexStatus};
-use warp_core::{HostId, SessionId};
-use warp_util::remote_path::RemotePath;
-use warp_util::standardized_path::StandardizedPath;
-use warpui::{Entity, ModelContext, SingletonEntity};
-
 use super::manager::{
     RemoteCodebaseIndexStatusWithPath, RemoteCodebaseIndexUpdateOperation, RemoteServerManager,
     RemoteServerManagerEvent,
 };
 use crate::ai::blocklist::SessionContext;
 use crate::ai::codebase_auto_indexing::{
-    auto_index_candidate_roots, should_auto_index_codebase, CodebaseAutoIndexingSurface,
+    auto_index_candidate_roots, should_auto_index_codebase, should_use_codebase_indexing,
+    CodebaseAutoIndexingSurface,
 };
 use crate::server::telemetry::{
     RemoteCodebaseAutoIndexTrigger, RemoteCodebaseIndexStatusTelemetrySource,
 };
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use ai::index::full_source_code_embedding::NodeHash;
+use remote_server::codebase_index_proto::{RemoteCodebaseIndexState, RemoteCodebaseIndexStatus};
+use warp_core::{HostId, SessionId};
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
+use warpui::{Entity, ModelContext, SingletonEntity};
 
 #[derive(Clone, Debug)]
 pub struct RemoteCodebaseSearchContext {
@@ -187,6 +187,9 @@ impl RemoteCodebaseIndexModel {
         explicit_repo_path: Option<&str>,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
+        if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
+            return false;
+        }
         let Some(host_id) = session_context.host_id() else {
             return false;
         };
@@ -210,12 +213,13 @@ impl RemoteCodebaseIndexModel {
         true
     }
 
-    pub fn codebases_for_agent_context(&self) -> Vec<RemoteCodebaseContextEntry> {
+    pub fn codebases_for_agent_context(&self, host_id: &HostId) -> Vec<RemoteCodebaseContextEntry> {
         let mut entries = self
             .statuses
             .iter()
             .filter(|&(remote_path, status)| {
-                search_availability_for_status(status, remote_path.clone()).is_ready()
+                remote_path.host_id == *host_id
+                    && search_availability_for_status(status, remote_path.clone()).is_ready()
             })
             .map(|(remote_path, _)| {
                 let path = remote_path.path.as_str().to_string();
@@ -230,6 +234,9 @@ impl RemoteCodebaseIndexModel {
     }
 
     pub fn request_index(&self, remote_path: RemotePath, ctx: &mut ModelContext<Self>) {
+        if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
+            return;
+        }
         RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
             manager.ensure_codebase_indexed(
                 remote_path,
@@ -242,6 +249,9 @@ impl RemoteCodebaseIndexModel {
     }
 
     pub fn resync_index(&self, remote_path: RemotePath, ctx: &mut ModelContext<Self>) {
+        if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
+            return;
+        }
         RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
             manager.resync_codebase(remote_path, ctx);
         });
@@ -281,6 +291,9 @@ impl RemoteCodebaseIndexModel {
     ) {
         match event {
             RemoteServerManagerEvent::CodebaseIndexStatusesSnapshot { host_id, statuses } => {
+                if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
+                    return;
+                }
                 let (changed, telemetry_updates) =
                     self.apply_statuses_snapshot_with_telemetry(host_id, statuses);
                 for update in telemetry_updates {
@@ -301,6 +314,9 @@ impl RemoteCodebaseIndexModel {
                 mutation_kind,
                 session_id: _,
             } => {
+                if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
+                    return;
+                }
                 if let Some(update) =
                     self.apply_status_update_with_telemetry(remote_path.clone(), status.clone())
                 {
@@ -385,27 +401,28 @@ impl RemoteCodebaseIndexModel {
             | RemoteServerManagerEvent::ServerMessageDecodingError { .. } => {}
         }
     }
-    fn should_request_auto_index_for_navigated_git_repo(&self, remote_path: &RemotePath) -> bool {
-        let Some(status) = self.status_for_repo(remote_path) else {
-            return true;
-        };
-
-        match search_availability_for_status(status, remote_path.clone()) {
-            RemoteCodebaseSearchAvailability::Ready(_)
-            | RemoteCodebaseSearchAvailability::Indexing { .. } => false,
-            RemoteCodebaseSearchAvailability::NoConnectedHost
-            | RemoteCodebaseSearchAvailability::NoActiveRepo
-            | RemoteCodebaseSearchAvailability::NotIndexed { .. }
-            | RemoteCodebaseSearchAvailability::Unavailable { .. } => true,
-        }
-    }
 
     fn handle_codebase_context_enablement_changed(&mut self, ctx: &mut ModelContext<Self>) {
-        if !should_auto_index_codebase(CodebaseAutoIndexingSurface::Remote, ctx) {
+        if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
+            let remote_paths = self.clear_remote_codebase_indexing_state();
+            if !remote_paths.is_empty() {
+                ctx.emit(RemoteCodebaseIndexModelEvent::SettingsEntriesChanged);
+            }
+            for remote_path in remote_paths {
+                RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
+                    manager.drop_codebase_index(remote_path, ctx);
+                });
+            }
             return;
         }
 
         let remote_paths = self.active_git_repo_paths_needing_auto_index();
+        if remote_paths.is_empty()
+            || !should_auto_index_codebase(CodebaseAutoIndexingSurface::Remote, ctx)
+        {
+            return;
+        }
+
         emit_auto_index_requested_telemetry(
             RemoteCodebaseAutoIndexTrigger::CodebaseContextEnablementChanged,
             remote_paths.len(),
@@ -422,6 +439,25 @@ impl RemoteCodebaseIndexModel {
                     ctx,
                 );
             });
+        }
+    }
+
+    fn clear_remote_codebase_indexing_state(&mut self) -> Vec<RemotePath> {
+        let statuses = std::mem::take(&mut self.statuses);
+        statuses.into_keys().collect()
+    }
+    fn should_request_auto_index_for_navigated_git_repo(&self, remote_path: &RemotePath) -> bool {
+        let Some(status) = self.status_for_repo(remote_path) else {
+            return true;
+        };
+
+        match search_availability_for_status(status, remote_path.clone()) {
+            RemoteCodebaseSearchAvailability::Ready(_)
+            | RemoteCodebaseSearchAvailability::Indexing { .. } => false,
+            RemoteCodebaseSearchAvailability::NoConnectedHost
+            | RemoteCodebaseSearchAvailability::NoActiveRepo
+            | RemoteCodebaseSearchAvailability::NotIndexed { .. }
+            | RemoteCodebaseSearchAvailability::Unavailable { .. } => true,
         }
     }
 
@@ -811,7 +847,6 @@ fn search_availability_for_status(
         },
     }
 }
-
 fn emit_status_changed_telemetry(
     update: RemoteCodebaseIndexStatusTelemetryUpdate,
     mutation_kind: Option<RemoteCodebaseIndexUpdateOperation>,

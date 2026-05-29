@@ -18,9 +18,9 @@ use crate::features::FeatureFlag;
 use crate::remote_server::manager::RemoteServerManager;
 use crate::server::telemetry::ImageProtocol;
 use crate::terminal::event::{
-    AfterBlockCompletedEvent, BlockCompletedEvent, BlockMetadataReceivedEvent, Event,
-    ExecutedExecutorCommandEvent, InitSshEvent, InitSubshellEvent, SourcedRcFileInSubshellEvent,
-    TerminalMode,
+    AfterBlockCompletedEvent, BlockCompletedEvent, BlockMetadataReceivedEvent,
+    BlockWorkingDirectoryUpdatedEvent, Event, ExecutedExecutorCommandEvent, InitSshEvent,
+    InitSubshellEvent, SourcedRcFileInSubshellEvent, TerminalMode,
 };
 use crate::terminal::model::session::Sessions;
 use crate::terminal::shell::ShellType;
@@ -225,6 +225,9 @@ impl ModelEventDispatcher {
             Event::BlockMetadataReceived(block_metadata_received_event) => {
                 ModelEvent::BlockMetadataReceived(block_metadata_received_event)
             }
+            Event::BlockWorkingDirectoryUpdated(block_working_directory_updated_event) => {
+                ModelEvent::BlockWorkingDirectoryUpdated(block_working_directory_updated_event)
+            }
             Event::BackgroundBlockStarted => ModelEvent::BackgroundBlockStarted,
             Event::ClipboardStore(clipboard_type, text) => {
                 ModelEvent::ClipboardStore(clipboard_type, text)
@@ -395,6 +398,9 @@ pub enum ModelEvent {
     },
     /// Sent when a new block is created.
     BlockMetadataReceived(BlockMetadataReceivedEvent),
+    /// Sent when an existing block's working directory has been updated
+    /// outside of the precmd path (e.g. via an OSC 7 escape sequence).
+    BlockWorkingDirectoryUpdated(BlockWorkingDirectoryUpdatedEvent),
     /// Sent after a background block is started and added to the block list.
     BackgroundBlockStarted,
     ClipboardStore(ClipboardType, String),

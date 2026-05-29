@@ -290,7 +290,7 @@ fn codebases_for_agent_context_includes_searchable_remote_paths() {
         status_with_state("/workspaces/stale", RemoteCodebaseIndexState::Stale),
     );
 
-    let entries = model.codebases_for_agent_context();
+    let entries = model.codebases_for_agent_context(&host());
 
     assert_eq!(
         entries,
@@ -325,7 +325,75 @@ fn codebases_for_agent_context_skips_unsearchable_remote_paths() {
         status_with_state("/workspaces/failed", RemoteCodebaseIndexState::Failed),
     );
 
-    assert!(model.codebases_for_agent_context().is_empty());
+    assert!(model.codebases_for_agent_context(&host()).is_empty());
+}
+
+#[test]
+fn codebases_for_agent_context_only_includes_active_host_paths() {
+    let mut model = RemoteCodebaseIndexModel::default();
+    let active_host = host_with_name("active-host");
+    let other_host = host_with_name("other-host");
+    model.apply_status_update(
+        remote_path_for_host(&active_host, "/workspaces/active"),
+        ready_status("/workspaces/active"),
+    );
+    model.apply_status_update(
+        remote_path_for_host(&other_host, "/workspaces/other"),
+        ready_status("/workspaces/other"),
+    );
+
+    let entries = model.codebases_for_agent_context(&active_host);
+
+    assert_eq!(
+        entries,
+        vec![RemoteCodebaseContextEntry {
+            name: "active".to_string(),
+            path: "/workspaces/active".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn clear_remote_codebase_indexing_state_returns_paths_and_removes_client_state() {
+    let mut model = RemoteCodebaseIndexModel::default();
+    let host = host();
+    model.apply_status_update(
+        remote_path("/workspaces/warp"),
+        ready_status("/workspaces/warp"),
+    );
+    model.record_navigated_directory(session(1), &remote_path("/workspaces/warp"), true);
+
+    let remote_paths = model.clear_remote_codebase_indexing_state();
+
+    assert_eq!(remote_paths, vec![remote_path("/workspaces/warp")]);
+    assert!(model.entries_for_settings().is_empty());
+    assert!(matches!(
+        model.availability_for_remote(&host, Some("/workspaces/warp"), None),
+        RemoteCodebaseSearchAvailability::NotIndexed { .. }
+    ));
+}
+
+#[test]
+fn active_git_repo_paths_needing_auto_index_skips_searchable_and_indexing_repos_across_hosts() {
+    let mut model = RemoteCodebaseIndexModel::default();
+    let host_ready = host_with_name("ready-host");
+    let host_new = host_with_name("new-host");
+    let host_indexing = host_with_name("indexing-host");
+    let ready_path = remote_path_for_host(&host_ready, "/ready");
+    let new_path = remote_path_for_host(&host_new, "/new");
+    let indexing_path = remote_path_for_host(&host_indexing, "/indexing");
+    model.record_navigated_directory(session(1), &ready_path, true);
+    model.record_navigated_directory(session(2), &new_path, true);
+    model.record_navigated_directory(session(3), &indexing_path, true);
+    model.apply_status_update(ready_path, ready_status("/ready"));
+    model.apply_status_update(
+        indexing_path,
+        status_with_state("/indexing", RemoteCodebaseIndexState::Indexing),
+    );
+
+    let remote_paths = model.active_git_repo_paths_needing_auto_index();
+
+    assert_eq!(remote_paths, vec![new_path]);
 }
 
 #[test]

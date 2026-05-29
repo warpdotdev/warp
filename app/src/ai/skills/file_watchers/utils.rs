@@ -3,57 +3,179 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use ai::skills::{
-    home_skills_path, read_skills, ParsedSkill, SkillProvider, SKILL_PROVIDER_DEFINITIONS,
+    home_skills_path, parse_skill, read_skills, ParsedSkill, SkillProvider,
+    SKILL_PROVIDER_DEFINITIONS,
 };
 use anyhow::Error;
 use regex::Regex;
 use repo_metadata::local_model::GetContentsArgs;
-use repo_metadata::{RepoContent, RepoMetadataModel};
+use repo_metadata::{RepoContent, RepoMetadataModel, RepositoryIdentifier};
+use walkdir::{DirEntry, WalkDir};
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
 use warpui::AppContext;
 
 use crate::warp_managed_paths_watcher::warp_managed_skill_dirs;
 
-/// Finds all skill directories in a repository by querying the RepoMetadataModel tree.
+fn local_or_remote_path_for_repo_path(
+    repo_id: &RepositoryIdentifier,
+    path: &StandardizedPath,
+) -> LocalOrRemotePath {
+    match repo_id {
+        RepositoryIdentifier::Local(_) => LocalOrRemotePath::Local(path.to_local_path_lossy()),
+        RepositoryIdentifier::Remote(remote) => {
+            LocalOrRemotePath::Remote(RemotePath::new(remote.host_id.clone(), path.clone()))
+        }
+    }
+}
+
+/// Finds all skill files in a repository by querying the RepoMetadataModel tree.
 ///
-/// Returns a list of paths to skill directories (e.g., `/repo/.agents/skills/`, `/repo/sub/.claude/skills/`).
-pub fn find_skill_directories_in_tree(
-    repo_path: &Path,
+/// Returns a list of paths to concrete `SKILL.md` files (e.g.,
+/// `/repo/.agents/skills/deploy/SKILL.md`, `/repo/sub/.claude/skills/build/SKILL.md`).
+pub fn find_skill_files_in_tree(
+    repo_id: &RepositoryIdentifier,
     repo_metadata: &RepoMetadataModel,
     ctx: &AppContext,
-) -> Vec<PathBuf> {
-    // Collect provider skills paths (e.g., ".agents/skills", ".claude/skills")
-    let skill_path_suffixes: Vec<&Path> = SKILL_PROVIDER_DEFINITIONS
-        .iter()
-        .map(|p| p.skills_path.as_path())
-        .collect();
-
-    // Filter during traversal: only collect directories that end with a skill provider path.
-    // The filter rejects files and non-matching directories, avoiding intermediate allocations.
-    let args = GetContentsArgs::default().with_filter(move |content| {
-        let RepoContent::Directory(dir) = content else {
+) -> Vec<LocalOrRemotePath> {
+    // Filter during traversal: only collect concrete SKILL.md files that match a known provider
+    // path. This keeps project acquisition on repo metadata until local or remote file hydration.
+    let args = GetContentsArgs {
+        include_folders: false,
+        ..GetContentsArgs::default()
+    }
+    .include_ignored()
+    .with_filter(|content| {
+        let RepoContent::File(file) = content else {
             return false;
         };
-        skill_path_suffixes
-            .iter()
-            .any(|suffix| dir.path.ends_with(&suffix.to_string_lossy()))
+        is_skill_file(&file.path.to_local_path_lossy())
     });
-
-    let Some(id) = repo_metadata::RepositoryIdentifier::try_local(repo_path) else {
-        return Vec::new();
-    };
     repo_metadata
-        .get_repo_contents(&id, args, ctx)
+        .get_repo_contents(repo_id, args, ctx)
         .unwrap_or_default()
         .into_iter()
-        // Only directories should reach this iterator due to the GetContentsArgs::filter.
-        // Keep the File arm for exhaustive matching in case RepoContent grows new variants.
-        .map(|content| match content {
-            RepoContent::Directory(dir) => dir.path.to_local_path_lossy(),
-            RepoContent::File(f) => f.path.to_local_path_lossy(),
+        // Only files should reach this iterator due to the GetContentsArgs::filter.
+        // Keep the Directory arm for exhaustive matching in case RepoContent grows new variants.
+        .filter_map(|content| match content {
+            RepoContent::File(file) => {
+                Some(local_or_remote_path_for_repo_path(repo_id, &file.path))
+            }
+            RepoContent::Directory(_) => None,
         })
         .collect()
 }
 
+/// Reads local project skills by discovering provider directories on the filesystem.
+///
+/// This is a local-only fallback for repositories whose repo metadata indexing fails. Successful
+/// local and remote repos should use [`find_skill_files_in_tree`] so the normal metadata-backed
+/// path remains shared.
+pub(super) fn read_local_project_skills_from_filesystem(scan_root: &Path) -> Vec<ParsedSkill> {
+    let direct_skill_file = scan_root.join("SKILL.md");
+    if is_skill_file(&direct_skill_file) {
+        return read_skills_from_files([direct_skill_file]);
+    }
+
+    read_skills_from_directories(find_local_provider_directories_on_filesystem(scan_root))
+}
+
+fn find_local_provider_directories_on_filesystem(scan_root: &Path) -> Vec<PathBuf> {
+    let mut provider_dirs = Vec::new();
+    let mut entries = WalkDir::new(scan_root).follow_links(false).into_iter();
+    while let Some(entry) = entries.next() {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        if is_ignored_fallback_scan_entry(&entry) {
+            if entry.file_type().is_dir() {
+                entries.skip_current_dir();
+            }
+            continue;
+        }
+        if entry.file_type().is_dir() && is_project_provider_path(entry.path()) {
+            provider_dirs.push(entry.into_path());
+            entries.skip_current_dir();
+        }
+    }
+    provider_dirs.sort();
+    provider_dirs
+}
+
+fn is_ignored_fallback_scan_entry(entry: &DirEntry) -> bool {
+    entry.file_name().to_str() == Some(".git")
+}
+
+/// Finds symlinked skill directories under loaded local provider directories in a repository.
+///
+/// Repo metadata intentionally skips directory symlinks to avoid duplicate trees/cycles. Project
+/// skill refreshes are still triggered by repo metadata, but local hydration supplements the tree
+/// with `SKILL.md` files from symlinked skill directories so existing symlink handling is preserved.
+pub(super) fn find_symlinked_skill_files_in_tree(
+    repo_id: &RepositoryIdentifier,
+    repo_metadata: &RepoMetadataModel,
+    ctx: &AppContext,
+) -> Vec<PathBuf> {
+    if !matches!(repo_id, RepositoryIdentifier::Local(_)) {
+        return Vec::new();
+    }
+
+    let provider_dirs = find_local_provider_directories_in_tree(repo_id, repo_metadata, ctx);
+    provider_dirs
+        .into_iter()
+        .flat_map(|provider_dir| {
+            std::fs::read_dir(provider_dir)
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| entry.ok())
+                .filter_map(|entry| {
+                    let skill_dir = entry.path();
+                    if skill_dir.is_symlink() && skill_dir.is_dir() {
+                        let skill_file = skill_dir.join("SKILL.md");
+                        if skill_file.exists() {
+                            return Some(skill_file);
+                        }
+                    }
+                    None
+                })
+        })
+        .collect()
+}
+
+fn find_local_provider_directories_in_tree(
+    repo_id: &RepositoryIdentifier,
+    repo_metadata: &RepoMetadataModel,
+    ctx: &AppContext,
+) -> Vec<PathBuf> {
+    let args = GetContentsArgs {
+        include_folders: true,
+        ..GetContentsArgs::default()
+    }
+    .include_ignored()
+    .with_filter(|content| {
+        let RepoContent::Directory(directory) = content else {
+            return false;
+        };
+        is_project_provider_path(&directory.path.to_local_path_lossy())
+    });
+
+    repo_metadata
+        .get_repo_contents(repo_id, args, ctx)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|content| match content {
+            RepoContent::Directory(directory) => directory.path.to_local_path(),
+            RepoContent::File(_) => None,
+        })
+        .collect()
+}
+
+fn is_project_provider_path(path: &Path) -> bool {
+    SKILL_PROVIDER_DEFINITIONS
+        .iter()
+        .any(|provider| path.ends_with(&provider.skills_path))
+}
 /// Reads all skills from the given skill directories.
 pub fn read_skills_from_directories(
     skill_dirs: impl IntoIterator<Item = PathBuf>,
@@ -61,6 +183,13 @@ pub fn read_skills_from_directories(
     skill_dirs
         .into_iter()
         .flat_map(|dir| read_skills(&dir))
+        .collect()
+}
+/// Reads all skills from the given concrete skill files.
+pub fn read_skills_from_files(skill_files: impl IntoIterator<Item = PathBuf>) -> Vec<ParsedSkill> {
+    skill_files
+        .into_iter()
+        .filter_map(|path| parse_skill(&path).ok())
         .collect()
 }
 

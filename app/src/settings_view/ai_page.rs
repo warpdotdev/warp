@@ -77,10 +77,9 @@ use crate::settings::{
     AgentModeCodingPermissionsType, AgentModeCommandExecutionDenylist,
     AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled, AwsBedrockAutoLogin,
     AwsBedrockCredentialsEnabled, CanUseWarpCreditsForFallback, CodeSettings,
-    CodebaseContextEnabled, FeedbackBundledSkillEnabled, FileBasedMcpEnabled,
-    GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory, InputSettings,
-    IntelligentAutosuggestionsEnabled, MemoryEnabled, NLDInTerminalEnabled,
-    NaturalLanguageAutosuggestionsEnabled, RuleSuggestionsEnabled,
+    CodebaseContextEnabled, FileBasedMcpEnabled, GitOperationsAutogenEnabled,
+    IncludeAgentCommandsInHistory, InputSettings, IntelligentAutosuggestionsEnabled, MemoryEnabled,
+    NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled, RuleSuggestionsEnabled,
     SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
     ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
     ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
@@ -358,6 +357,24 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     );
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
         vec![ToggleSettingActionPair::new(
+            "commit and pull request generation",
+            builder(SettingsAction::AI(
+                AISettingsPageAction::ToggleGitOperationsAutogen,
+            )),
+            &(context.clone() & id!(flags::IS_ACTIVE_AI_ENABLED)),
+            flags::GIT_OPERATIONS_AUTOGEN_FLAG,
+        )
+        .with_enabled(|| FeatureFlag::GitOperationsInCodeReview.is_enabled())
+        .is_supported_on_current_platform(
+            AISettings::as_ref(app)
+                .git_operations_autogen_enabled_internal
+                .is_supported_on_current_platform()
+                && UserWorkspaces::as_ref(app).is_git_operations_ai_enabled(),
+        )],
+        app,
+    );
+    ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
+        vec![ToggleSettingActionPair::new(
             "voice input",
             builder(SettingsAction::AI(AISettingsPageAction::ToggleVoiceInput)),
             &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
@@ -385,6 +402,143 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             None,
         )
         .with_group(bindings::BindingGroup::WarpAi)],
+        app,
+    );
+    ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
+        vec![
+            ToggleSettingActionPair::new(
+                "include agent-executed commands in history",
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleIncludeAgentCommandsInHistory,
+                )),
+                &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
+                flags::INCLUDE_AGENT_COMMANDS_IN_HISTORY_FLAG,
+            )
+            .with_group(bindings::BindingGroup::WarpAi),
+            ToggleSettingActionPair::new(
+                "conversation history in tools panel",
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleShowConversationHistory,
+                )),
+                &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
+                flags::SHOW_CONVERSATION_HISTORY,
+            )
+            .with_group(bindings::BindingGroup::WarpAi),
+            ToggleSettingActionPair::new(
+                "model picker in prompt",
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleShowBaseModelPickerInPrompt,
+                )),
+                &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
+                flags::SHOW_BASE_MODEL_PICKER_IN_PROMPT_FLAG,
+            )
+            .with_group(bindings::BindingGroup::WarpAi),
+            ToggleSettingActionPair::new(
+                "coding agent toolbar",
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleCLIAgentToolbar,
+                )),
+                context,
+                flags::CLI_AGENT_FOOTER_ENABLED,
+            )
+            .with_group(bindings::BindingGroup::WarpAi),
+        ],
+        app,
+    );
+    ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
+        vec![
+            ToggleSettingActionPair::new(
+                "Rules",
+                builder(SettingsAction::AI(AISettingsPageAction::ToggleRules)),
+                &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
+                flags::AI_RULES_FLAG,
+            )
+            .with_group(bindings::BindingGroup::WarpAi)
+            .with_enabled(|| FeatureFlag::AIRules.is_enabled()),
+            ToggleSettingActionPair::new(
+                "Suggested Rules",
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleRuleSuggestions,
+                )),
+                &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
+                flags::SUGGESTED_RULES_FLAG,
+            )
+            .with_group(bindings::BindingGroup::WarpAi)
+            .with_enabled(|| {
+                FeatureFlag::AIRules.is_enabled() && FeatureFlag::SuggestedRules.is_enabled()
+            }),
+            ToggleSettingActionPair::new(
+                "Warp Drive as agent context",
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleWarpDriveContext,
+                )),
+                &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
+                flags::WARP_DRIVE_CONTEXT_FLAG,
+            )
+            .with_group(bindings::BindingGroup::WarpAi)
+            .with_enabled(|| FeatureFlag::AIRules.is_enabled()),
+            ToggleSettingActionPair::new(
+                "Auto-spawn servers from third-party agents",
+                builder(SettingsAction::AI(AISettingsPageAction::ToggleFileBasedMcp)),
+                &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
+                flags::FILE_BASED_MCP_FLAG,
+            )
+            .with_group(bindings::BindingGroup::WarpAi)
+            .with_enabled(|| {
+                FeatureFlag::McpServer.is_enabled()
+                    && FeatureFlag::FileBasedMcp.is_enabled()
+                    && ContextFlag::ShowMCPServers.is_enabled()
+            }),
+        ],
+        app,
+    );
+    ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
+        vec![
+            ToggleSettingActionPair::new(
+                "Warp credit fallback",
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleCanUseWarpCreditsForFallback,
+                )),
+                &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
+                flags::WARP_CREDIT_FALLBACK_FLAG,
+            )
+            .with_group(bindings::BindingGroup::WarpAi)
+            .is_supported_on_current_platform(
+                UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app)
+                    || (FeatureFlag::CustomInferenceEndpoints.is_enabled()
+                        && UserWorkspaces::as_ref(app).is_custom_inference_enabled(app)),
+            ),
+            ToggleSettingActionPair::new(
+                "auto show or hide Rich Input based on agent status",
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleAutoToggleRichInput,
+                )),
+                &(context.clone() & id!(flags::CLI_AGENT_FOOTER_ENABLED)),
+                flags::AUTO_TOGGLE_RICH_INPUT_FLAG,
+            )
+            .with_group(bindings::BindingGroup::WarpAi)
+            .with_enabled(|| FeatureFlag::CLIAgentRichInput.is_enabled()),
+            ToggleSettingActionPair::new(
+                "auto open Rich Input when a coding agent session starts",
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleAutoOpenRichInputOnCLIAgentStart,
+                )),
+                &(context.clone() & id!(flags::CLI_AGENT_FOOTER_ENABLED)),
+                flags::AUTO_OPEN_RICH_INPUT_ON_CLI_AGENT_START_FLAG,
+            )
+            .with_group(bindings::BindingGroup::WarpAi)
+            .with_enabled(|| FeatureFlag::CLIAgentRichInput.is_enabled()),
+            ToggleSettingActionPair::new(
+                "auto dismiss Rich Input after prompt submission",
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleAutoDismissRichInputAfterSubmit,
+                )),
+                &(context.clone() & id!(flags::CLI_AGENT_FOOTER_ENABLED)),
+                flags::AUTO_DISMISS_RICH_INPUT_AFTER_SUBMIT_FLAG,
+            )
+            .with_group(bindings::BindingGroup::WarpAi)
+            .with_enabled(|| FeatureFlag::CLIAgentRichInput.is_enabled()),
+        ],
         app,
     );
     if !FeatureFlag::FullSourceCodeEmbedding.is_enabled() {
@@ -2134,7 +2288,11 @@ impl AISettingsPageView {
 
             let items = available_model_menu_items(
                 choices,
-                |llm| AISettingsPageAction::SetBaseModel(llm.id.clone()).into(),
+                |llm| {
+                    DropdownAction::select_action_and_close(AISettingsPageAction::SetBaseModel(
+                        llm.id.clone(),
+                    ))
+                },
                 None,
                 None,
                 false,
@@ -2169,7 +2327,11 @@ impl AISettingsPageView {
 
             let items = available_model_menu_items(
                 choices,
-                |llm| AISettingsPageAction::SetCodingModel(llm.id.clone()).into(),
+                |llm| {
+                    DropdownAction::select_action_and_close(AISettingsPageAction::SetCodingModel(
+                        llm.id.clone(),
+                    ))
+                },
                 None,
                 None,
                 false,
@@ -2516,7 +2678,7 @@ impl AISettingsPageView {
                     dropdown.set_menu_width(180., ctx);
                     dropdown.set_main_axis_size(MainAxisSize::Min, ctx);
 
-                    let mut items: Vec<MenuItem<DropdownAction<AISettingsPageAction>>> = Vec::new();
+                    let mut items: Vec<MenuItem<DropdownAction>> = Vec::new();
 
                     for agent in all::<CLIAgent>() {
                         if matches!(agent, CLIAgent::Unknown) {
@@ -2524,7 +2686,7 @@ impl AISettingsPageView {
                         }
                         let icon = agent.icon();
                         let mut fields = MenuItemFields::new(agent.display_name())
-                            .with_on_select_action(DropdownAction::SelectActionAndClose(
+                            .with_on_select_action(DropdownAction::select_action_and_close(
                                 AISettingsPageAction::SetCLIAgentForCommand {
                                     pattern: pattern_clone.clone(),
                                     agent: Some(agent),
@@ -2538,7 +2700,7 @@ impl AISettingsPageView {
 
                     items.push(
                         MenuItemFields::new("Other")
-                            .with_on_select_action(DropdownAction::SelectActionAndClose(
+                            .with_on_select_action(DropdownAction::select_action_and_close(
                                 AISettingsPageAction::SetCLIAgentForCommand {
                                     pattern: pattern_clone.clone(),
                                     agent: None,
@@ -2662,7 +2824,6 @@ pub enum AISettingsPageAction {
     ToggleFileBasedMcp,
     ToggleIncludeAgentCommandsInHistory,
     ToggleAgentAttribution,
-    ToggleFeedbackBundledSkill,
 
     // Custom inference
     OpenAddCustomEndpointModal,
@@ -3409,14 +3570,6 @@ impl TypedActionView for AISettingsPageView {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings
                         .show_conversation_history
-                        .toggle_and_save_value(ctx));
-                });
-                ctx.notify();
-            }
-            AISettingsPageAction::ToggleFeedbackBundledSkill => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .feedback_bundled_skill_enabled
                         .toggle_and_save_value(ctx));
                 });
                 ctx.notify();
@@ -6068,7 +6221,6 @@ struct OtherAIWidget {
     show_oz_updates_in_zero_state_toggle: SwitchStateHandle,
     use_agent_footer_toggle: SwitchStateHandle,
     show_conversation_history_toggle: SwitchStateHandle,
-    feedback_bundled_skill_toggle: SwitchStateHandle,
 }
 
 impl OtherAIWidget {
@@ -6099,7 +6251,7 @@ impl SettingsWidget for OtherAIWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "other oz updates zero state empty changelog new conversation agent what's new use agent footer toolbar layout chip chips rearrange re-arrange thinking expanded reasoning collapse never show hide conversation history feedback skill bundled github issue"
+        "other oz updates zero state empty changelog new conversation agent what's new use agent footer toolbar layout chip chips rearrange re-arrange thinking expanded reasoning collapse never show hide conversation history"
     }
 
     fn render(
@@ -6167,20 +6319,6 @@ impl SettingsWidget for OtherAIWidget {
             is_toggleable,
             self.show_conversation_history_toggle.clone(),
             &view.local_only_icon_tooltip_states,
-            app,
-        ));
-        column.add_child(render_ai_setting_toggle::<FeedbackBundledSkillEnabled>(
-            "Enable built-in feedback skill",
-            AISettingsPageAction::ToggleFeedbackBundledSkill,
-            *ai_settings.feedback_bundled_skill_enabled,
-            is_toggleable,
-            self.feedback_bundled_skill_toggle.clone(),
-            &view.local_only_icon_tooltip_states,
-            app,
-        ));
-        column.add_child(render_ai_setting_description(
-            "Let Oz use Warp's built-in skill for turning Warp product feedback into GitHub issues.",
-            is_toggleable,
             app,
         ));
 
@@ -7100,12 +7238,9 @@ impl ApiKeysWidget {
         let appearance = Appearance::as_ref(app);
         let text_fragments = vec![
             FormattedTextFragment::plain_text(
-                "Use your own API keys from model providers for Warp Agent. You can also add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API. API keys are stored locally and are never synced to the cloud. Using auto models or models from providers you have not provided API keys for will consume Warp credits. ",
+                "Use your own API keys from model providers for Warp Agent. You can also add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API. API keys are stored only on your device, never on Warp's servers. They're used to make requests to your chosen model provider. Using auto models or models from providers you have not provided API keys for will consume Warp credits. ",
             ),
-            FormattedTextFragment::hyperlink(
-                "Learn more",
-                CUSTOM_INFERENCE_LEARN_MORE_URL,
-            ),
+            FormattedTextFragment::hyperlink("Learn more", CUSTOM_INFERENCE_LEARN_MORE_URL),
         ];
         let description = FormattedTextElement::new(
             FormattedText::new([FormattedTextLine::Line(text_fragments)]),
@@ -7143,10 +7278,7 @@ impl ApiKeysWidget {
             FormattedTextFragment::plain_text(
                 "By using BYOK or custom endpoints, you agree to use them only as permitted by ",
             ),
-            FormattedTextFragment::hyperlink(
-                "Warp's Terms of Service",
-                CUSTOM_INFERENCE_TERMS_URL,
-            ),
+            FormattedTextFragment::hyperlink("Warp's Terms of Service", CUSTOM_INFERENCE_TERMS_URL),
             FormattedTextFragment::plain_text(
                 ". BYOK and custom endpoints are intended for individual use and small teams. Companies or organizations with more than 10 employees should use Warp Business or Enterprise.",
             ),

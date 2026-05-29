@@ -1,3 +1,8 @@
+use std::fs;
+
+use ignore::gitignore::Gitignore;
+
+use super::{Entry, IgnoredPathStrategy};
 #[test]
 fn test_git_path_filtering_allowlist() {
     use std::path::Path;
@@ -166,6 +171,225 @@ fn test_git_path_filtering_allowlist() {
             r"C:\Users\user\project\.git\index"
         )));
     }
+}
+
+fn find_entry<'a>(entry: &'a super::Entry, path: &std::path::Path) -> Option<&'a super::Entry> {
+    let std_path = warp_util::standardized_path::StandardizedPath::try_from_local(path).ok()?;
+    if entry.path() == &std_path {
+        return Some(entry);
+    }
+    let super::Entry::Directory(directory) = entry else {
+        return None;
+    };
+    directory
+        .children
+        .iter()
+        .find_map(|child| find_entry(child, path))
+}
+
+fn build_skill_tree_with_gitignore(root: &std::path::Path, gitignore: &str) -> super::Entry {
+    std::fs::write(root.join(".gitignore"), gitignore).unwrap();
+    let mut files = Vec::new();
+    let mut gitignores = Vec::new();
+    let mut file_limit = 1000;
+    super::Entry::build_tree_with_ignored_path_interests(
+        root,
+        &mut files,
+        &mut gitignores,
+        Some(&mut file_limit),
+        super::BuildTreeOptions {
+            max_depth: 200,
+            current_depth: 0,
+            ignored_path_strategy: &super::IgnoredPathStrategy::IncludeLazy,
+            ignored_path_interests: &[std::path::PathBuf::from(".agents/skills")],
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn ignored_skill_file_is_loaded_for_registered_provider_path() {
+    virtual_fs::VirtualFS::test("ignored_skill_file_loaded", |dirs, mut vfs| {
+        vfs.mkdir("repo/.agents/skills/test")
+            .with_files(vec![virtual_fs::Stub::FileWithContent(
+                "repo/.agents/skills/test/SKILL.md",
+                "name: test",
+            )]);
+        let repo = dirs.tests().join("repo");
+
+        let tree = build_skill_tree_with_gitignore(&repo, ".agents/skills/test/SKILL.md\n");
+        let skill_file = find_entry(&tree, &repo.join(".agents/skills/test/SKILL.md"))
+            .expect("ignored skill file should be present");
+        assert!(skill_file.ignored());
+    });
+}
+
+#[test]
+fn ignored_skill_directory_is_loaded_for_registered_provider_path() {
+    virtual_fs::VirtualFS::test("ignored_skill_dir_loaded", |dirs, mut vfs| {
+        vfs.mkdir("repo/.agents/skills/test")
+            .with_files(vec![virtual_fs::Stub::FileWithContent(
+                "repo/.agents/skills/test/SKILL.md",
+                "name: test",
+            )]);
+        let repo = dirs.tests().join("repo");
+
+        let tree = build_skill_tree_with_gitignore(&repo, ".agents/skills/test/\n");
+        let skill_dir = find_entry(&tree, &repo.join(".agents/skills/test"))
+            .expect("ignored skill directory should be present");
+        assert!(skill_dir.ignored());
+        assert!(skill_dir.loaded());
+        assert!(find_entry(&tree, &repo.join(".agents/skills/test/SKILL.md")).is_some());
+    });
+}
+
+#[test]
+fn ignored_agents_directory_is_loaded_for_registered_provider_path() {
+    virtual_fs::VirtualFS::test("ignored_agents_dir_loaded", |dirs, mut vfs| {
+        vfs.mkdir("repo/.agents/skills/test")
+            .with_files(vec![virtual_fs::Stub::FileWithContent(
+                "repo/.agents/skills/test/SKILL.md",
+                "name: test",
+            )]);
+        let repo = dirs.tests().join("repo");
+
+        let tree = build_skill_tree_with_gitignore(&repo, ".agents/\n");
+        let agents_dir = find_entry(&tree, &repo.join(".agents"))
+            .expect("ignored .agents directory should be present");
+        assert!(agents_dir.ignored());
+        assert!(agents_dir.loaded());
+        assert!(find_entry(&tree, &repo.join(".agents/skills/test/SKILL.md")).is_some());
+    });
+}
+
+#[test]
+fn ignored_agents_skills_directory_is_loaded_for_registered_provider_path() {
+    virtual_fs::VirtualFS::test("ignored_agents_skills_dir_loaded", |dirs, mut vfs| {
+        vfs.mkdir("repo/.agents/skills/test")
+            .with_files(vec![virtual_fs::Stub::FileWithContent(
+                "repo/.agents/skills/test/SKILL.md",
+                "name: test",
+            )]);
+        let repo = dirs.tests().join("repo");
+
+        let tree = build_skill_tree_with_gitignore(&repo, ".agents/skills/\n");
+        let skills_dir = find_entry(&tree, &repo.join(".agents/skills"))
+            .expect("ignored .agents/skills directory should be present");
+        assert!(skills_dir.ignored());
+        assert!(skills_dir.loaded());
+        assert!(find_entry(&tree, &repo.join(".agents/skills/test/SKILL.md")).is_some());
+    });
+}
+
+#[test]
+fn unrelated_ignored_directory_stays_lazy_without_registered_interest() {
+    virtual_fs::VirtualFS::test("unrelated_ignored_dir_lazy", |dirs, mut vfs| {
+        vfs.mkdir("repo/.agents/skills/test")
+            .mkdir("repo/target/debug")
+            .with_files(vec![
+                virtual_fs::Stub::FileWithContent(
+                    "repo/.agents/skills/test/SKILL.md",
+                    "name: test",
+                ),
+                virtual_fs::Stub::FileWithContent("repo/target/debug/app", "binary"),
+            ]);
+        let repo = dirs.tests().join("repo");
+
+        let tree = build_skill_tree_with_gitignore(&repo, "target/\n");
+        let target_dir = find_entry(&tree, &repo.join("target"))
+            .expect("ignored unrelated directory should be present as lazy");
+        assert!(target_dir.ignored());
+        assert!(!target_dir.loaded());
+        assert!(find_entry(&tree, &repo.join("target/debug/app")).is_none());
+    });
+}
+
+#[test]
+fn build_tree_marks_descendants_of_ignored_directory_as_ignored() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root_path = dunce::canonicalize(temp_dir.path()).unwrap();
+    fs::write(root_path.join(".gitignore"), "ignored-dir/\n").unwrap();
+    fs::create_dir(root_path.join("ignored-dir")).unwrap();
+    fs::write(root_path.join("ignored-dir").join("ignored-file.txt"), "").unwrap();
+
+    let mut files = Vec::new();
+    let mut gitignores = Vec::<Gitignore>::new();
+    let tree = Entry::build_tree(
+        &root_path,
+        &mut files,
+        &mut gitignores,
+        None,
+        10,
+        0,
+        &IgnoredPathStrategy::Include,
+    )
+    .unwrap();
+
+    let Entry::Directory(root) = tree else {
+        panic!("root should be a directory");
+    };
+    let ignored_dir = root
+        .children
+        .iter()
+        .find(|entry| entry.path().file_name() == Some("ignored-dir"))
+        .unwrap();
+    let Entry::Directory(ignored_dir) = ignored_dir else {
+        panic!("ignored child should be a directory");
+    };
+    assert!(ignored_dir.ignored);
+
+    let ignored_file = ignored_dir
+        .children
+        .iter()
+        .find(|entry| entry.path().file_name() == Some("ignored-file.txt"))
+        .unwrap();
+    assert!(ignored_file.ignored());
+}
+
+#[test]
+fn lazy_loaded_ignored_directory_marks_loaded_children_as_ignored() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root_path = dunce::canonicalize(temp_dir.path()).unwrap();
+    fs::write(root_path.join(".gitignore"), "ignored-dir/\n").unwrap();
+    fs::create_dir(root_path.join("ignored-dir")).unwrap();
+    fs::write(root_path.join("ignored-dir").join("ignored-file.txt"), "").unwrap();
+
+    let mut files = Vec::new();
+    let mut gitignores = Vec::<Gitignore>::new();
+    let mut tree = Entry::build_tree(
+        &root_path,
+        &mut files,
+        &mut gitignores,
+        None,
+        10,
+        0,
+        &IgnoredPathStrategy::IncludeLazy,
+    )
+    .unwrap();
+
+    let ignored_path = root_path.join("ignored-dir");
+    let ignored_dir = tree.find_mut(&ignored_path).unwrap();
+    let Entry::Directory(directory) = ignored_dir else {
+        panic!("ignored child should be a directory");
+    };
+    assert!(directory.ignored);
+    assert!(!directory.loaded);
+    assert!(directory.children.is_empty());
+
+    ignored_dir.load(&mut gitignores).unwrap();
+
+    let Entry::Directory(directory) = ignored_dir else {
+        panic!("ignored child should still be a directory");
+    };
+    assert!(directory.ignored);
+    assert!(directory.loaded);
+
+    let ignored_file = directory
+        .children
+        .iter()
+        .find(|entry| entry.path().file_name() == Some("ignored-file.txt"))
+        .unwrap();
+    assert!(ignored_file.ignored());
 }
 
 #[test]

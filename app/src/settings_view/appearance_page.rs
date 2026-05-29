@@ -249,6 +249,50 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         context.to_owned(),
     )
     .with_group(bindings::BindingGroup::Settings.as_str())]);
+    toggle_binding_pairs.push(ToggleSettingActionPair::new(
+        "open new windows with custom size",
+        builder(SettingsAction::AppearancePageToggle(
+            AppearancePageAction::ToggleOpenWindowsAtCustomSize,
+        )),
+        context,
+        flags::OPEN_WINDOWS_AT_CUSTOM_SIZE_FLAG,
+    ));
+
+    toggle_binding_pairs.push(ToggleSettingActionPair::new(
+        "window blur acrylic texture",
+        builder(SettingsAction::AppearancePageToggle(
+            AppearancePageAction::ToggleBlurTexture,
+        )),
+        context,
+        flags::WINDOW_BLUR_TEXTURE_FLAG,
+    ));
+
+    toggle_binding_pairs.push(ToggleSettingActionPair::new(
+        "tools panel visibility across tabs",
+        builder(SettingsAction::AppearancePageToggle(
+            AppearancePageAction::ToggleLeftPanelVisibility,
+        )),
+        context,
+        flags::LEFT_PANEL_VISIBILITY_ACROSS_TABS_FLAG,
+    ));
+
+    toggle_binding_pairs.push(ToggleSettingActionPair::new(
+        "agent font matching terminal font",
+        builder(SettingsAction::AppearancePageToggle(
+            AppearancePageAction::ToggleMatchAIToTerminalFontFamily,
+        )),
+        context,
+        flags::MATCH_AI_FONT_TO_TERMINAL_FONT_FLAG,
+    ));
+
+    toggle_binding_pairs.push(ToggleSettingActionPair::new(
+        "notebook font size matching terminal font size",
+        builder(SettingsAction::AppearancePageToggle(
+            AppearancePageAction::ToggleMatchNotebookToMonospaceFontSize,
+        )),
+        context,
+        flags::MATCH_NOTEBOOK_FONT_SIZE_TO_TERMINAL_FONT_SIZE_FLAG,
+    ));
 
     toggle_binding_pairs.push(
         ToggleSettingActionPair::new(
@@ -374,7 +418,15 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 AppearancePageAction::ToggleShowVerticalTabPanelInRestoredWindows,
             )),
             context,
-            flags::USE_VERTICAL_TABS_FLAG,
+            flags::SHOW_VERTICAL_TAB_PANEL_IN_RESTORED_WINDOWS_FLAG,
+        ));
+        toggle_binding_pairs.push(ToggleSettingActionPair::new(
+            "latest user prompt as conversation title in tab names",
+            builder(SettingsAction::AppearancePageToggle(
+                AppearancePageAction::ToggleUseLatestUserPromptAsConversationTitleInTabNames,
+            )),
+            context,
+            flags::USE_LATEST_USER_PROMPT_AS_CONVERSATION_TITLE_IN_TAB_NAMES_FLAG,
         ));
     }
 
@@ -388,6 +440,24 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             flags::LIGATURE_RENDERING_CONTEXT_FLAG,
         ));
     }
+
+    toggle_binding_pairs.push(ToggleSettingActionPair::new(
+        "preserve active tab color for new tabs",
+        builder(SettingsAction::AppearancePageToggle(
+            AppearancePageAction::TogglePreserveActiveTabColor,
+        )),
+        context,
+        flags::PRESERVE_ACTIVE_TAB_COLOR_FLAG,
+    ));
+
+    toggle_binding_pairs.push(ToggleSettingActionPair::new(
+        "custom padding in alt-screen",
+        builder(SettingsAction::AppearancePageToggle(
+            AppearancePageAction::ToggleAltScreenPadding,
+        )),
+        context,
+        flags::ALT_SCREEN_PADDING_FLAG,
+    ));
 
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(toggle_binding_pairs, app);
 }
@@ -456,6 +526,7 @@ pub enum AppearancePageAction {
     OpenUrl(String),
     ToggleFocusPaneOnHover,
     ToggleInputMode,
+    ToggleAltScreenPadding,
     UpdateAltScreenPaddingMode(AltScreenPaddingMode),
     SetTabCloseButtonPosition(TabCloseButtonPosition),
     SetZoomLevel(u16),
@@ -614,6 +685,19 @@ impl TypedActionView for AppearanceSettingsPageView {
             }
             ToggleInputMode => {
                 self.toggle_input_mode(ctx);
+            }
+            ToggleAltScreenPadding => {
+                let new_mode = TerminalSettings::as_ref(ctx).alt_screen_padding.toggled();
+                TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
+                    report_if_error!(terminal_settings
+                        .alt_screen_padding
+                        .set_value(new_mode, ctx));
+                });
+                self.set_alt_screen_padding_editor_text(ctx);
+                send_telemetry_from_ctx!(
+                    TelemetryEvent::UpdateAltScreenPaddingMode { new_mode },
+                    ctx
+                );
             }
             UpdateAltScreenPaddingMode(new_mode) => {
                 TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
@@ -2811,16 +2895,11 @@ impl SettingsWidget for CustomAppIconWidget {
         #[allow(unused_mut)]
         let show_bundle_warning = {
             #[cfg(target_os = "macos")]
-            #[allow(deprecated)]
             {
-                use cocoa::base::id;
-                use objc::{class, msg_send, sel, sel_impl};
-                unsafe {
-                    let running_app: id =
-                        msg_send![class!(NSRunningApplication), currentApplication];
-                    let bundle_id: id = msg_send![running_app, bundleIdentifier];
-                    bundle_id.is_null()
-                }
+                use objc2_app_kit::NSRunningApplication;
+                NSRunningApplication::currentApplication()
+                    .bundleIdentifier()
+                    .is_none()
             }
             #[cfg(not(target_os = "macos"))]
             {

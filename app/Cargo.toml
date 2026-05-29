@@ -81,6 +81,7 @@ cfg-if.workspace = true
 channel_versions.workspace = true
 chrono.workspace = true
 clap.workspace = true
+cloud_objects.workspace = true
 command = { workspace = true }
 command-corrections.workspace = true
 command-signatures-v2 = { workspace = true, optional = true }
@@ -129,6 +130,7 @@ indexmap = { version = "2.0.2", features = ["serde"] }
 input_classifier.workspace = true
 instant.workspace = true
 ipc.workspace = true
+iso8601-duration.workspace = true
 itertools.workspace = true
 kmeans_colors = { version = "0.5", default-features = false, features = [
     "palette_color",
@@ -154,7 +156,6 @@ ordered-float.workspace = true
 os_info = { version = "3.7.0", default-features = false }
 palette = { version = "0.6.0", default-features = false, features = ["std"] }
 parking_lot = { version = "0.12.1", features = ["serde"] }
-paste = "1.0"
 pathfinder_color = "0.5.0"
 pathfinder_geometry.workspace = true
 persistence.workspace = true
@@ -229,6 +230,7 @@ warp_core.workspace = true
 warp_editor.workspace = true
 warp_graphql.workspace = true
 warp_js = { workspace = true, optional = true }
+warp_search_core.workspace = true
 warp_server_client.workspace = true
 warp_util.workspace = true
 warpui = { workspace = true, features = ["schema_gen", "settings_value"] }
@@ -265,7 +267,22 @@ cocoa.workspace = true
 core-foundation.workspace = true
 mach2 = "0.5"
 objc.workspace = true
-objc2-foundation = { workspace = true, features = ["NSBundle"] }
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = [
+    "NSApplication",
+    "NSImage",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSWorkspace",
+] }
+objc2-core-foundation.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "NSBundle",
+    "NSLocale",
+    "NSPathUtilities",
+    "NSString",
+    "NSURL",
+] }
 permissions = "0.4.1"
 pprof = { workspace = true, optional = true, features = ["frame-pointer"] }
 security-framework-sys = "2.0.0"
@@ -315,7 +332,6 @@ is_executable = "1.0.1"
 gethostname = "1.1.0"
 watcher.workspace = true
 warp_files.workspace = true
-tantivy = "0.26.0"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 console_error_panic_hook = { version = "0.1.6" }
@@ -609,6 +625,7 @@ default = [
     "github_pr_prompt_chip",
     "conversations_as_context",
     "markdown_tables",
+    "blocklist_markdown_table_rendering",
     "markdown_mermaid",
     "blocklist_markdown_images",
     "pr_comments_slash_command",
@@ -652,6 +669,8 @@ default = [
     "solo_user_byok",
     "custom_inference_endpoints",
     "billing_and_usage_page_v2",
+    "remote_code_review",
+    "git_operations_in_code_review",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -946,6 +965,7 @@ hoa_code_review = []
 vertical_tabs = []
 vertical_tabs_summary_mode = []
 tab_configs = []
+grouped_tabs = []
 agent_harness = []
 oz_handoff = []
 handoff_local_cloud = []

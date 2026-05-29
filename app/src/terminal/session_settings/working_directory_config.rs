@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use settings::Setting;
 
 /// The source for a newly-created session.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum NewSessionSource {
     /// The user split a pane to create a new session.
     SplitPane,

@@ -44,6 +44,7 @@ use crate::util::color::{coloru_with_opacity, Opacity};
 use crate::util::truncation::truncate_from_end;
 use crate::window_settings::WindowSettings;
 use crate::workspace::sync_inputs::SyncedInputState;
+use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::tab_settings::{
     TabCloseButtonPosition, TabSettings, VerticalTabsDisplayGranularity,
 };
@@ -116,6 +117,8 @@ pub enum NewSessionMenuItem {
     OpenLaunchConfig(LaunchConfig),
     OpenLaunchConfigDocs,
     CreateNewTabConfig,
+    /// Creates a new tab group. Gated by `FeatureFlag::GroupedTabs`.
+    CreateNewTabGroup,
 }
 
 #[derive(Clone, Copy)]
@@ -145,6 +148,8 @@ pub struct TabData {
     pub indicator_hover_state: MouseStateHandle,
     // Used by a later drag-tab branch to distinguish tabs that have moved into detached windows.
     pub detached: bool,
+    /// Tab group this tab belongs to, if any
+    pub group_id: Option<TabGroupId>,
 }
 
 const TAB_COLOR_ICON_PATH: &str = "bundled/svg/ellipse.svg";
@@ -162,6 +167,7 @@ impl TabData {
             selected_color: SelectedTabColor::Unset,
             indicator_hover_state: Default::default(),
             detached: false,
+            group_id: None,
         }
     }
 
@@ -192,6 +198,7 @@ impl TabData {
         let mut menu_items = vec![];
 
         for section_items in [
+            Self::tab_group_menu_items(),
             self.session_sharing_menu_items(index, ctx),
             self.copy_metadata_menu_items(pane_name_target, ctx),
             self.modify_tab_menu_items(index, tabs_len, pane_name_target, ctx),
@@ -525,6 +532,17 @@ impl TabData {
         vec![MenuItemFields::new("Save as new config")
             .with_on_select_action(WorkspaceAction::SaveCurrentTabAsNewConfig(index))
             .into_item()]
+    }
+
+    /// Returns the tab-group related entries, TODO(johnturcoo) add group actions.
+    fn tab_group_menu_items() -> Vec<MenuItem<WorkspaceAction>> {
+        if !FeatureFlag::GroupedTabs.is_enabled() {
+            return vec![];
+        }
+        vec![
+            MenuItemFields::new("New group with tab").into_item(),
+            MenuItemFields::new_submenu("Move to group").into_item(),
+        ]
     }
 
     fn color_option_menu_items(

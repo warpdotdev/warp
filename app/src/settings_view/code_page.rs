@@ -967,6 +967,54 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             app,
         );
     }
+
+    if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
+        ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
+            vec![
+                ToggleSettingActionPair::new(
+                    "auto open code review panel",
+                    builder(SettingsAction::Code(
+                        CodeSettingsPageAction::ToggleAutoOpenCodeReviewPane,
+                    )),
+                    context,
+                    flags::AUTO_OPEN_CODE_REVIEW_PANE_FLAG,
+                ),
+                ToggleSettingActionPair::new(
+                    "code review button",
+                    builder(SettingsAction::Code(
+                        CodeSettingsPageAction::ToggleCodeReviewPanel,
+                    )),
+                    context,
+                    flags::SHOW_CODE_REVIEW_BUTTON_FLAG,
+                ),
+                ToggleSettingActionPair::new(
+                    "diff stats on code review button",
+                    builder(SettingsAction::Code(
+                        CodeSettingsPageAction::ToggleShowCodeReviewDiffStats,
+                    )),
+                    context,
+                    flags::SHOW_CODE_REVIEW_DIFF_STATS_FLAG,
+                ),
+                ToggleSettingActionPair::new(
+                    "project explorer",
+                    builder(SettingsAction::Code(
+                        CodeSettingsPageAction::ToggleProjectExplorer,
+                    )),
+                    context,
+                    flags::SHOW_PROJECT_EXPLORER,
+                ),
+                ToggleSettingActionPair::new(
+                    "global file search",
+                    builder(SettingsAction::Code(
+                        CodeSettingsPageAction::ToggleGlobalSearch,
+                    )),
+                    context,
+                    flags::SHOW_GLOBAL_SEARCH,
+                ),
+            ],
+            app,
+        );
+    }
 }
 
 struct CodePageWidget {

@@ -30,6 +30,7 @@ use crate::code_review::comments::{
 use crate::code_review::diff_size_limits::DiffSize;
 use crate::code_review::diff_state::{DiffStateModel, FileDiff, GitFileStatus};
 use crate::code_review::editor_state::CodeReviewEditorState;
+use crate::code_review::git_status_update::GitStatusUpdateModel;
 use crate::code_review::GlobalCodeReviewModel;
 use crate::pane_group::WorkingDirectoriesModel;
 use crate::server::server_api::team::MockTeamClient;
@@ -76,6 +77,7 @@ fn initialize_test_app(app: &mut App) {
     app.add_singleton_model(|_| VimRegisters::new());
     app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
     app.add_singleton_model(|_| DetectedRepositories::default());
+    app.add_singleton_model(|_| GitStatusUpdateModel::new());
     app.add_singleton_model(|_| LspManagerModel::new());
     app.add_singleton_model(|_| LocalShellState::NotLoaded);
     app.add_singleton_model(PersistedWorkspace::new_for_test);

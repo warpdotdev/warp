@@ -6,7 +6,6 @@ use ai::skills::{parse_skill, ParsedSkill, SkillProvider, SkillReference, SkillS
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
 use repo_metadata::RepoMetadataModel;
-use settings::Setting as _;
 use tempfile::TempDir;
 use warp_core::features::FeatureFlag;
 use warpui::App;
@@ -125,9 +124,9 @@ fn test_read_skill_executor_reads_enabled_bundled_skill() {
         let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
         SkillManager::handle(&app).update(&mut app, |manager, _ctx| {
             manager.add_bundled_skill_for_testing(
-                "feedback",
-                bundled_skill("feedback"),
-                BundledSkillActivation::FeedbackSkillSetting,
+                "pr-comments",
+                bundled_skill("pr-comments"),
+                BundledSkillActivation::Always,
             );
         });
         let executor_handle = app.add_model(|_| ReadSkillExecutor::new());
@@ -135,7 +134,7 @@ fn test_read_skill_executor_reads_enabled_bundled_skill() {
         let action = AIAgentAction {
             id: AIAgentActionId::from("test-action-id".to_string()),
             action: AIAgentActionType::ReadSkill(ReadSkillRequest {
-                skill: SkillReference::BundledSkillId("feedback".to_string()),
+                skill: SkillReference::BundledSkillId("pr-comments".to_string()),
             }),
             task_id: TaskId::new("test-task-id".to_string()),
             requires_result: false,
@@ -153,58 +152,9 @@ fn test_read_skill_executor_reads_enabled_bundled_skill() {
                 AnyActionExecution::Sync(AIAgentActionResultType::ReadSkill(
                     ReadSkillResult::Success { content },
                 )) => {
-                    assert_eq!(content.file_name, "/bundled/skills/feedback/SKILL.md");
+                    assert_eq!(content.file_name, "/bundled/skills/pr-comments/SKILL.md");
                 }
                 _ => panic!("Enabled bundled skill should return ReadSkillResult::Success"),
-            }
-        });
-    });
-}
-
-#[test]
-fn test_read_skill_executor_errors_for_disabled_feedback_bundled_skill() {
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-        let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
-        SkillManager::handle(&app).update(&mut app, |manager, _ctx| {
-            manager.add_bundled_skill_for_testing(
-                "feedback",
-                bundled_skill("feedback"),
-                BundledSkillActivation::FeedbackSkillSetting,
-            );
-        });
-        AISettings::handle(&app).update(&mut app, |settings, ctx| {
-            settings
-                .feedback_bundled_skill_enabled
-                .load_value(false, true, ctx)
-                .expect("test setting update should succeed");
-        });
-        let executor_handle = app.add_model(|_| ReadSkillExecutor::new());
-
-        let action = AIAgentAction {
-            id: AIAgentActionId::from("test-action-id".to_string()),
-            action: AIAgentActionType::ReadSkill(ReadSkillRequest {
-                skill: SkillReference::BundledSkillId("feedback".to_string()),
-            }),
-            task_id: TaskId::new("test-task-id".to_string()),
-            requires_result: false,
-        };
-
-        let input = ExecuteActionInput {
-            action: &action,
-            conversation_id: AIConversationId::new(),
-        };
-
-        executor_handle.update(&mut app, |executor, ctx| {
-            let result: AnyActionExecution = executor.execute(input, ctx).into();
-
-            match result {
-                AnyActionExecution::Sync(AIAgentActionResultType::ReadSkill(
-                    ReadSkillResult::Error(error_msg),
-                )) => {
-                    assert!(error_msg.contains("feedback"));
-                }
-                _ => panic!("Disabled feedback bundled skill should return ReadSkillResult::Error"),
             }
         });
     });

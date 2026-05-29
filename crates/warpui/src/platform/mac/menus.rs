@@ -4,20 +4,22 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::rc::Rc;
 
-use cocoa::appkit::{
-    NSApp, NSDownArrowFunctionKey, NSEndFunctionKey, NSEventModifierFlags, NSF10FunctionKey,
-    NSF11FunctionKey, NSF12FunctionKey, NSF13FunctionKey, NSF14FunctionKey, NSF15FunctionKey,
-    NSF16FunctionKey, NSF17FunctionKey, NSF18FunctionKey, NSF19FunctionKey, NSF1FunctionKey,
-    NSF20FunctionKey, NSF2FunctionKey, NSF3FunctionKey, NSF4FunctionKey, NSF5FunctionKey,
-    NSF6FunctionKey, NSF7FunctionKey, NSF8FunctionKey, NSF9FunctionKey, NSHomeFunctionKey,
-    NSInsertFunctionKey, NSLeftArrowFunctionKey, NSMenu, NSMenuItem, NSPageDownFunctionKey,
-    NSPageUpFunctionKey, NSRightArrowFunctionKey, NSUpArrowFunctionKey,
-};
-use cocoa::base::{id, nil, selector};
-use cocoa::foundation::{NSArray, NSAutoreleasePool, NSInteger};
+use cocoa::base::{id, nil};
 use lazy_static::lazy_static;
-use objc::runtime::{NO, YES};
-use objc::{msg_send, sel, sel_impl};
+use objc2::rc::{autoreleasepool, Retained};
+use objc2::runtime::Sel;
+use objc2::{sel, MainThreadMarker};
+use objc2_app_kit::{
+    NSApplication, NSControlStateValue, NSDownArrowFunctionKey, NSEndFunctionKey,
+    NSEventModifierFlags, NSF10FunctionKey, NSF11FunctionKey, NSF12FunctionKey, NSF13FunctionKey,
+    NSF14FunctionKey, NSF15FunctionKey, NSF16FunctionKey, NSF17FunctionKey, NSF18FunctionKey,
+    NSF19FunctionKey, NSF1FunctionKey, NSF20FunctionKey, NSF2FunctionKey, NSF3FunctionKey,
+    NSF4FunctionKey, NSF5FunctionKey, NSF6FunctionKey, NSF7FunctionKey, NSF8FunctionKey,
+    NSF9FunctionKey, NSHomeFunctionKey, NSInsertFunctionKey, NSLeftArrowFunctionKey, NSMenu,
+    NSMenuItem, NSPageDownFunctionKey, NSPageUpFunctionKey, NSRightArrowFunctionKey,
+    NSUpArrowFunctionKey,
+};
+use objc2_foundation::{ns_string, NSInteger, NSString};
 use warpui_core::actions::StandardAction;
 use warpui_core::keymap::Keystroke;
 use warpui_core::platform::menu::{
@@ -26,14 +28,13 @@ use warpui_core::platform::menu::{
 };
 
 use super::app::callback_dispatcher;
-use super::make_nsstring;
 
 lazy_static! {
     /// A mac-menu-specific map of key names to special characters used for the keyboard shortcuts
     /// in the mac menus
     static ref MENU_KEY_EQUIVALENTS: HashMap<&'static str, char> = {
-        fn to_char(key: u16) -> char {
-            char::from_u32(key.into()).unwrap()
+        fn to_char(key: u32) -> char {
+            char::from_u32(key).unwrap()
         }
 
         HashMap::from([
@@ -162,24 +163,41 @@ extern "C" {
 }
 
 struct StandardMenuItemProperties {
-    title: &'static str,    // menu item title
-    action: &'static str,   // the selector name
-    shortcut: &'static str, // the key equivalent string, or empty for none
+    /// The menu item title.
+    title: &'static NSString,
+    /// The selector to invoke.
+    action: Sel,
+    /// The key equivalent string, or empty for none.
+    shortcut: &'static NSString,
     modifiers: NSEventModifierFlags,
+}
+
+enum KeyEquivalent {
+    Static(&'static NSString),
+    Dynamic(Retained<NSString>),
+}
+
+impl KeyEquivalent {
+    fn as_nsstring(&self) -> &NSString {
+        match self {
+            Self::Static(value) => value,
+            Self::Dynamic(value) => value,
+        }
+    }
 }
 
 // Get properties from a standard action.
 fn resolve_standard_action(action: StandardAction) -> StandardMenuItemProperties {
-    let cmd = NSEventModifierFlags::NSCommandKeyMask;
-    let option = NSEventModifierFlags::NSAlternateKeyMask;
-    let ctrl = NSEventModifierFlags::NSControlKeyMask;
+    let cmd = NSEventModifierFlags::Command;
+    let option = NSEventModifierFlags::Option;
+    let ctrl = NSEventModifierFlags::Control;
     let none = NSEventModifierFlags::empty();
 
     fn make(
-        title: &'static str,
-        action: &'static str,
+        title: &'static NSString,
+        action: Sel,
         modifiers: NSEventModifierFlags,
-        shortcut: &'static str,
+        shortcut: &'static NSString,
     ) -> StandardMenuItemProperties {
         StandardMenuItemProperties {
             title,
@@ -190,42 +208,73 @@ fn resolve_standard_action(action: StandardAction) -> StandardMenuItemProperties
     }
 
     match action {
-        StandardAction::Close => make("Close Window", "performClose:", none, ""),
-        StandardAction::Quit => make("Quit Warp", "terminate:", cmd, "q"),
-        StandardAction::Hide => make("Hide Warp", "hide:", cmd, "h"),
-        StandardAction::HideOtherApps => {
-            make("Hide Others", "hideOtherApplications:", cmd | option, "h")
-        }
-        StandardAction::ShowAllApps => make("Show All", "unhideAllApplications:", none, ""),
-        StandardAction::Minimize => make("Minimize", "performMiniaturize:", cmd, "m"),
-        StandardAction::Zoom => make("Zoom", "performZoom:", none, ""),
-        StandardAction::BringAllToFront => make("Bring All to Front", "arrangeInFront:", none, ""),
-        StandardAction::ToggleFullScreen => {
-            make("ToggleFullScreen", "toggleFullScreen:", cmd | ctrl, "f")
-        }
-        StandardAction::Paste => make("Paste", "paste:", none, ""),
+        StandardAction::Close => make(
+            ns_string!("Close Window"),
+            sel!(performClose:),
+            none,
+            ns_string!(""),
+        ),
+        StandardAction::Quit => make(
+            ns_string!("Quit Warp"),
+            sel!(terminate:),
+            cmd,
+            ns_string!("q"),
+        ),
+        StandardAction::Hide => make(ns_string!("Hide Warp"), sel!(hide:), cmd, ns_string!("h")),
+        StandardAction::HideOtherApps => make(
+            ns_string!("Hide Others"),
+            sel!(hideOtherApplications:),
+            cmd | option,
+            ns_string!("h"),
+        ),
+        StandardAction::ShowAllApps => make(
+            ns_string!("Show All"),
+            sel!(unhideAllApplications:),
+            none,
+            ns_string!(""),
+        ),
+        StandardAction::Minimize => make(
+            ns_string!("Minimize"),
+            sel!(performMiniaturize:),
+            cmd,
+            ns_string!("m"),
+        ),
+        StandardAction::Zoom => make(ns_string!("Zoom"), sel!(performZoom:), none, ns_string!("")),
+        StandardAction::BringAllToFront => make(
+            ns_string!("Bring All to Front"),
+            sel!(arrangeInFront:),
+            none,
+            ns_string!(""),
+        ),
+        StandardAction::ToggleFullScreen => make(
+            ns_string!("ToggleFullScreen"),
+            sel!(toggleFullScreen:),
+            cmd | ctrl,
+            ns_string!("f"),
+        ),
+        StandardAction::Paste => make(ns_string!("Paste"), sel!(paste:), none, ns_string!("")),
     }
 }
 
 /// Determine the key equivalent for the given keystroke
-fn resolve_key_equivalent(keystroke: Option<&Keystroke>) -> (id, NSEventModifierFlags) {
+fn resolve_key_equivalent(keystroke: Option<&Keystroke>) -> (KeyEquivalent, NSEventModifierFlags) {
     let mut flags = NSEventModifierFlags::empty();
 
     let keystroke = match keystroke {
         Some(value) => value,
-        None => return (make_nsstring(""), flags),
+        None => return (KeyEquivalent::Static(ns_string!("")), flags),
     };
 
     let key_equivalent = match MENU_KEY_EQUIVALENTS.get(keystroke.key.as_str()) {
-        Some(c) => make_nsstring(String::from(*c)),
-        None => make_nsstring(&keystroke.key),
+        Some(c) => KeyEquivalent::Dynamic(NSString::from_str(&String::from(*c))),
+        None => KeyEquivalent::Dynamic(NSString::from_str(&keystroke.key)),
     };
 
     for (is_set, flag) in [
-        (keystroke.cmd, NSEventModifierFlags::NSCommandKeyMask),
-        (keystroke.alt, NSEventModifierFlags::NSAlternateKeyMask),
-        (keystroke.shift, NSEventModifierFlags::NSShiftKeyMask),
-        (keystroke.ctrl, NSEventModifierFlags::NSControlKeyMask),
+        (keystroke.cmd, NSEventModifierFlags::Command),
+        (keystroke.alt, NSEventModifierFlags::Option),
+        (keystroke.shift, NSEventModifierFlags::Shift),
+        (keystroke.ctrl, NSEventModifierFlags::Control),
     ] {
         if is_set {
             flags |= flag
@@ -239,39 +288,42 @@ fn resolve_key_equivalent(keystroke: Option<&Keystroke>) -> (id, NSEventModifier
 unsafe fn apply_changes(changes: MenuItemPropertyChanges, item: id) {
     // Wrap in a local autorelease pool: AppKit invokes `warp_menu_item_needs_update`
     // on every menu validation (per menu open and per keystroke for shortcut matching),
-    // so this is a hot path. A local pool bounds peak memory for the NSString temporaries
-    // created here (item title, key equivalent) without relying on the outer AppKit pool.
-    let pool = NSAutoreleasePool::new(nil);
-    if let Some(name) = changes.name {
-        let _: () = msg_send![item, setTitle: make_nsstring(name)];
-    }
-    if let Some(keystroke) = changes.keystroke {
-        let (key_equivalent, modifiers) = resolve_key_equivalent(keystroke.as_ref());
-        let _: () = msg_send![item, setKeyEquivalent: key_equivalent];
-        let _: () = msg_send![item, setKeyEquivalentModifierMask: modifiers];
-    }
-    if let Some(disabled) = changes.disabled {
-        let enabled = if disabled { NO } else { YES };
-        let _: () = msg_send![item, setEnabled: enabled];
-    }
-    if let Some(checked) = changes.checked {
-        // NSControlStateValue has Off as 0, On as 1, Mixed as -1.
-        let control_state: NSInteger = i64::from(checked);
-        let _: () = msg_send![item, setState: control_state];
-    }
-    if let Some(submenu) = changes.submenu {
-        let nsmenu = submenu
-            .map(|menu_items| make_submenu(menu_items))
-            .unwrap_or(nil);
-        set_menu_item_submenu(item, nsmenu);
-    }
-    pool.drain();
+    // so this is a hot path. A local pool bounds peak memory for the temporaries AppKit
+    // produces here (e.g. inside `setTitle:`/`setKeyEquivalent:`) without relying on the
+    // outer AppKit pool.
+    autoreleasepool(|_| unsafe {
+        let menu_item = &*item.cast::<NSMenuItem>();
+        if let Some(name) = changes.name {
+            menu_item.setTitle(&NSString::from_str(&name));
+        }
+        if let Some(keystroke) = changes.keystroke {
+            let (key_equivalent, modifiers) = resolve_key_equivalent(keystroke.as_ref());
+            menu_item.setKeyEquivalent(key_equivalent.as_nsstring());
+            menu_item.setKeyEquivalentModifierMask(modifiers);
+        }
+        if let Some(disabled) = changes.disabled {
+            menu_item.setEnabled(!disabled);
+        }
+        if let Some(checked) = changes.checked {
+            // NSControlStateValue has Off as 0, On as 1, Mixed as -1.
+            let control_state = i64::from(checked) as NSControlStateValue;
+            menu_item.setState(control_state);
+        }
+        if let Some(submenu) = changes.submenu {
+            let nsmenu = match submenu {
+                Some(menu_items) => make_submenu(menu_items),
+                None => nil,
+            };
+            set_menu_item_submenu(item, nsmenu);
+        }
+    });
 }
 
 unsafe fn make_submenu(menu_items: Vec<MenuItem>) -> id {
-    let nsmenu = make_delegated_menu(make_nsstring(""));
+    let nsmenu = make_delegated_menu(ns_string!("") as *const NSString as id);
+    let nsmenu_ref = &*nsmenu.cast::<NSMenu>();
     for menu_item in menu_items {
-        nsmenu.addItem_(make_menu_item(menu_item));
+        nsmenu_ref.addItem(&*make_menu_item(menu_item).cast::<NSMenuItem>());
     }
     nsmenu
 }
@@ -297,19 +349,22 @@ unsafe fn make_menu_item(menu_item: MenuItem) -> id {
             nsmenu_item
         }
         MenuItem::Standard(standard_action) => {
+            let mtm = MainThreadMarker::new_unchecked();
             let properties = resolve_standard_action(standard_action);
-            let nsmenu_item = NSMenuItem::alloc(nil)
-                .initWithTitle_action_keyEquivalent_(
-                    make_nsstring(properties.title),
-                    selector(properties.action),
-                    make_nsstring(properties.shortcut),
-                )
-                .autorelease();
-            nsmenu_item.setKeyEquivalentModifierMask_(properties.modifiers);
-            let _: id = msg_send![nsmenu_item, setTag: standard_action as libc::c_long];
-            nsmenu_item
+            let nsmenu_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+                mtm.alloc(),
+                properties.title,
+                Some(properties.action),
+                properties.shortcut,
+            );
+            nsmenu_item.setKeyEquivalentModifierMask(properties.modifiers);
+            nsmenu_item.setTag(standard_action as NSInteger);
+            Retained::autorelease_ptr(nsmenu_item) as id
         }
-        MenuItem::Separator => NSMenuItem::separatorItem(nil),
+        MenuItem::Separator => {
+            Retained::autorelease_ptr(NSMenuItem::separatorItem(MainThreadMarker::new_unchecked()))
+                as id
+        }
         MenuItem::Services => make_services_menu_item(),
     }
 }
@@ -317,39 +372,43 @@ unsafe fn make_menu_item(menu_item: MenuItem) -> id {
 /// \return an autoreleased NSMenuItem with a submenu represented by \p menu.
 // This supports creating the top-level menu bar.
 unsafe fn make_top_level_menu_item(menu: Menu) -> id {
-    let nsmenu = make_delegated_menu(make_nsstring(&menu.title));
+    let mtm = MainThreadMarker::new_unchecked();
+    let nsmenu = make_delegated_menu(Retained::as_ptr(&NSString::from_str(&menu.title)) as id);
+    let nsmenu = &*nsmenu.cast::<NSMenu>();
 
     if menu.is_window_menu() {
         // `setWindowsMenu` gives us all the default window menu items like
         // 'Enter Full Screen' and 'Tile Window to Left of Screen'.
-        let () = msg_send![NSApp(), setWindowsMenu: nsmenu];
+        NSApplication::sharedApplication(mtm).setWindowsMenu(Some(nsmenu));
     }
 
     for menu_item in menu.menu_items {
-        nsmenu.addItem_(make_menu_item(menu_item));
+        nsmenu.addItem(&*make_menu_item(menu_item).cast::<NSMenuItem>());
     }
 
-    let menuitem = NSMenuItem::alloc(nil).init().autorelease();
-    menuitem.setSubmenu_(nsmenu);
-    menuitem
+    let menuitem = NSMenuItem::new(mtm);
+    menuitem.setSubmenu(Some(nsmenu));
+    Retained::autorelease_ptr(menuitem) as id
 }
 
 /// \return an autoreleased NSMenu representing the given menu bar.
 pub unsafe fn make_main_menu(menubar: MenuBar) -> id {
-    let main_menu = NSMenu::alloc(nil).init().autorelease();
+    let mtm = MainThreadMarker::new_unchecked();
+    let main_menu = NSMenu::new(mtm);
     for menu in menubar.menus {
-        main_menu.addItem_(make_top_level_menu_item(menu));
+        main_menu.addItem(&*make_top_level_menu_item(menu).cast::<NSMenuItem>());
     }
-    main_menu
+    Retained::autorelease_ptr(main_menu) as id
 }
 
 /// \return an autoreleased NSMenu representing the given dock menu.
 pub unsafe fn make_dock_menu(menu: Menu) -> id {
-    let dock_menu = NSMenu::alloc(nil).init().autorelease();
+    let mtm = MainThreadMarker::new_unchecked();
+    let dock_menu = NSMenu::new(mtm);
     for item in menu.menu_items {
-        dock_menu.addItem_(make_menu_item(item));
+        dock_menu.addItem(&*make_menu_item(item).cast::<NSMenuItem>());
     }
-    dock_menu
+    Retained::autorelease_ptr(dock_menu) as id
 }
 
 #[cfg(test)]

@@ -207,6 +207,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_warp_auto_title_disabled);
     register_test!(test_warp_honors_user_title_bash);
     register_test!(test_warp_honors_user_title_zsh);
+    register_test!(test_osc7_updates_current_working_directory);
     register_test!(test_input_focused_after_executing_command);
     register_test!(test_new_session_focuses_input);
     register_test!(test_executable_completions);
@@ -447,6 +448,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_goto_line_jumps_to_line);
     register_test!(test_goto_line_with_column);
     register_test!(test_goto_line_clamps_out_of_range);
+    register_test!(test_code_editor_line_numbers_default_to_absolute);
+    register_test!(test_code_editor_relative_line_numbers_follow_cursor);
 
     // Keyboard protocol tests
     register_test!(test_keyboard_protocol_disabled_shift_enter);

@@ -38,7 +38,7 @@ fn test_simple_edit() {
             &app,
             r#"
 -------- 0.00px / 0 characters --------
-Paragraph (2 characters, 1 lines, 32.00px tall)
+Paragraph (2 characters, 1 lines, 24.00px tall)
 "#,
         );
     });
@@ -88,57 +88,57 @@ zzzzzzzzzzzzzzzzzzzzzzzzzz"#,
             &app,
             r#"
 -------- 0.00px / 0 characters --------
-Paragraph (2 characters, 1 lines, 32.00px tall)
--------- 32.00px / 2 characters --------
-Paragraph (3 characters, 1 lines, 32.00px tall)
--------- 64.00px / 5 characters --------
-Paragraph (4 characters, 1 lines, 32.00px tall)
--------- 96.00px / 9 characters --------
-Paragraph (5 characters, 1 lines, 32.00px tall)
--------- 128.00px / 14 characters --------
-Paragraph (6 characters, 1 lines, 32.00px tall)
--------- 160.00px / 20 characters --------
-Paragraph (7 characters, 1 lines, 32.00px tall)
--------- 192.00px / 27 characters --------
-Paragraph (8 characters, 1 lines, 32.00px tall)
--------- 224.00px / 35 characters --------
-Paragraph (9 characters, 1 lines, 32.00px tall)
--------- 256.00px / 44 characters --------
-Paragraph (10 characters, 1 lines, 32.00px tall)
--------- 288.00px / 54 characters --------
-Paragraph (11 characters, 1 lines, 32.00px tall)
--------- 320.00px / 65 characters --------
-Paragraph (12 characters, 1 lines, 32.00px tall)
--------- 352.00px / 77 characters --------
-Paragraph (13 characters, 1 lines, 32.00px tall)
--------- 384.00px / 90 characters --------
-Paragraph (14 characters, 1 lines, 32.00px tall)
--------- 416.00px / 104 characters --------
-Paragraph (15 characters, 1 lines, 32.00px tall)
--------- 448.00px / 119 characters --------
-Paragraph (16 characters, 1 lines, 32.00px tall)
--------- 480.00px / 135 characters --------
-Paragraph (17 characters, 1 lines, 32.00px tall)
--------- 512.00px / 152 characters --------
-Paragraph (18 characters, 1 lines, 32.00px tall)
--------- 544.00px / 170 characters --------
-Paragraph (19 characters, 1 lines, 32.00px tall)
--------- 576.00px / 189 characters --------
-Paragraph (20 characters, 1 lines, 32.00px tall)
--------- 608.00px / 209 characters --------
-Paragraph (21 characters, 1 lines, 32.00px tall)
--------- 640.00px / 230 characters --------
-Paragraph (22 characters, 1 lines, 32.00px tall)
--------- 672.00px / 252 characters --------
-Paragraph (23 characters, 1 lines, 32.00px tall)
--------- 704.00px / 275 characters --------
-Paragraph (24 characters, 1 lines, 32.00px tall)
--------- 736.00px / 299 characters --------
-Paragraph (25 characters, 1 lines, 32.00px tall)
--------- 768.00px / 324 characters --------
-Paragraph (26 characters, 1 lines, 32.00px tall)
--------- 800.00px / 350 characters --------
-Paragraph (27 characters, 1 lines, 32.00px tall)
+Paragraph (2 characters, 1 lines, 24.00px tall)
+-------- 24.00px / 2 characters --------
+Paragraph (3 characters, 1 lines, 24.00px tall)
+-------- 48.00px / 5 characters --------
+Paragraph (4 characters, 1 lines, 24.00px tall)
+-------- 72.00px / 9 characters --------
+Paragraph (5 characters, 1 lines, 24.00px tall)
+-------- 96.00px / 14 characters --------
+Paragraph (6 characters, 1 lines, 24.00px tall)
+-------- 120.00px / 20 characters --------
+Paragraph (7 characters, 1 lines, 24.00px tall)
+-------- 144.00px / 27 characters --------
+Paragraph (8 characters, 1 lines, 24.00px tall)
+-------- 168.00px / 35 characters --------
+Paragraph (9 characters, 1 lines, 24.00px tall)
+-------- 192.00px / 44 characters --------
+Paragraph (10 characters, 1 lines, 24.00px tall)
+-------- 216.00px / 54 characters --------
+Paragraph (11 characters, 1 lines, 24.00px tall)
+-------- 240.00px / 65 characters --------
+Paragraph (12 characters, 1 lines, 24.00px tall)
+-------- 264.00px / 77 characters --------
+Paragraph (13 characters, 1 lines, 24.00px tall)
+-------- 288.00px / 90 characters --------
+Paragraph (14 characters, 1 lines, 24.00px tall)
+-------- 312.00px / 104 characters --------
+Paragraph (15 characters, 1 lines, 24.00px tall)
+-------- 336.00px / 119 characters --------
+Paragraph (16 characters, 1 lines, 24.00px tall)
+-------- 360.00px / 135 characters --------
+Paragraph (17 characters, 1 lines, 24.00px tall)
+-------- 384.00px / 152 characters --------
+Paragraph (18 characters, 1 lines, 24.00px tall)
+-------- 408.00px / 170 characters --------
+Paragraph (19 characters, 1 lines, 24.00px tall)
+-------- 432.00px / 189 characters --------
+Paragraph (20 characters, 1 lines, 24.00px tall)
+-------- 456.00px / 209 characters --------
+Paragraph (21 characters, 1 lines, 24.00px tall)
+-------- 480.00px / 230 characters --------
+Paragraph (22 characters, 1 lines, 24.00px tall)
+-------- 504.00px / 252 characters --------
+Paragraph (23 characters, 1 lines, 24.00px tall)
+-------- 528.00px / 275 characters --------
+Paragraph (24 characters, 1 lines, 24.00px tall)
+-------- 552.00px / 299 characters --------
+Paragraph (25 characters, 1 lines, 24.00px tall)
+-------- 576.00px / 324 characters --------
+Paragraph (26 characters, 1 lines, 24.00px tall)
+-------- 600.00px / 350 characters --------
+Paragraph (27 characters, 1 lines, 24.00px tall)
 "#,
         );
     });
@@ -167,13 +167,13 @@ fn test_enter_before_horizontal_rule() {
             app,
             r#"
 -------- 0.00px / 0 characters --------
-Paragraph (11 characters, 1 lines, 32.00px tall)
--------- 32.00px / 11 characters --------
-Paragraph (1 characters, 1 lines, 32.00px tall)
--------- 64.00px / 12 characters --------
-Horizontal Rule (1 characters, 1 lines, 18.00px tall)
--------- 82.00px / 13 characters --------
-Paragraph (12 characters, 1 lines, 32.00px tall)
+Paragraph (11 characters, 1 lines, 24.00px tall)
+-------- 24.00px / 11 characters --------
+Paragraph (1 characters, 1 lines, 24.00px tall)
+-------- 48.00px / 12 characters --------
+Horizontal Rule (1 characters, 1 lines, 10.00px tall)
+-------- 58.00px / 13 characters --------
+Paragraph (12 characters, 1 lines, 24.00px tall)
 "#,
         );
     })
@@ -202,13 +202,13 @@ fn test_enter_after_horizontal_rule() {
             app,
             r#"
 -------- 0.00px / 0 characters --------
-Paragraph (11 characters, 1 lines, 32.00px tall)
--------- 32.00px / 11 characters --------
-Horizontal Rule (1 characters, 1 lines, 18.00px tall)
--------- 50.00px / 12 characters --------
-Paragraph (1 characters, 1 lines, 32.00px tall)
--------- 82.00px / 13 characters --------
-Paragraph (12 characters, 1 lines, 32.00px tall)
+Paragraph (11 characters, 1 lines, 24.00px tall)
+-------- 24.00px / 11 characters --------
+Horizontal Rule (1 characters, 1 lines, 10.00px tall)
+-------- 34.00px / 12 characters --------
+Paragraph (1 characters, 1 lines, 24.00px tall)
+-------- 58.00px / 13 characters --------
+Paragraph (12 characters, 1 lines, 24.00px tall)
 "#,
         );
     })
@@ -238,13 +238,13 @@ fn test_edit_at_horizontal_rule_end() {
             app,
             r#"
 -------- 0.00px / 0 characters --------
-Paragraph (11 characters, 1 lines, 32.00px tall)
--------- 32.00px / 11 characters --------
-Horizontal Rule (1 characters, 1 lines, 18.00px tall)
--------- 50.00px / 12 characters --------
-Paragraph (2 characters, 1 lines, 32.00px tall)
--------- 82.00px / 14 characters --------
-Paragraph (12 characters, 1 lines, 32.00px tall)
+Paragraph (11 characters, 1 lines, 24.00px tall)
+-------- 24.00px / 11 characters --------
+Horizontal Rule (1 characters, 1 lines, 10.00px tall)
+-------- 34.00px / 12 characters --------
+Paragraph (2 characters, 1 lines, 24.00px tall)
+-------- 58.00px / 14 characters --------
+Paragraph (12 characters, 1 lines, 24.00px tall)
 "#,
         );
     })
@@ -280,9 +280,9 @@ fn test_edit_after_style() {
             app,
             r#"
 -------- 0.00px / 0 characters --------
-Paragraph (18 characters, 1 lines, 32.00px tall)
--------- 32.00px / 18 characters --------
-Paragraph (9 characters, 1 lines, 32.00px tall)
+Paragraph (18 characters, 1 lines, 24.00px tall)
+-------- 24.00px / 18 characters --------
+Paragraph (9 characters, 1 lines, 24.00px tall)
         "#,
         );
     })
@@ -317,7 +317,7 @@ Task List @ 1 [X] (2 characters, 1 lines, 18.00px tall)
 -------- 18.00px / 2 characters --------
 Task List @ 1 [ ] (2 characters, 1 lines, 18.00px tall)
 -------- 36.00px / 4 characters --------
-Trailing Newline (1 characters, 1 lines, 32.00px tall)
+Trailing Newline (1 characters, 1 lines, 24.00px tall)
         "#,
         );
 
@@ -338,7 +338,7 @@ Task List @ 1 [ ] (2 characters, 1 lines, 18.00px tall)
 -------- 54.00px / 6 characters --------
 Task List @ 1 [ ] (2 characters, 1 lines, 18.00px tall)
 -------- 72.00px / 8 characters --------
-Trailing Newline (1 characters, 1 lines, 32.00px tall)
+Trailing Newline (1 characters, 1 lines, 24.00px tall)
         "#,
         )
     });
@@ -371,11 +371,11 @@ fn test_convert_first_line() {
             app,
             r#"
 -------- 0.00px / 0 characters --------
-Horizontal Rule (1 characters, 1 lines, 18.00px tall)
--------- 18.00px / 1 characters --------
+Horizontal Rule (1 characters, 1 lines, 10.00px tall)
+-------- 10.00px / 1 characters --------
 Code Block - Shell (5 characters, 1 lines, 84.00px tall)
--------- 102.00px / 6 characters --------
-Trailing Newline (1 characters, 1 lines, 32.00px tall)
+-------- 94.00px / 6 characters --------
+Trailing Newline (1 characters, 1 lines, 24.00px tall)
 "#,
         );
 
@@ -388,11 +388,11 @@ Trailing Newline (1 characters, 1 lines, 32.00px tall)
             app,
             r#"
 -------- 0.00px / 0 characters --------
-Paragraph (3 characters, 1 lines, 32.00px tall)
--------- 32.00px / 3 characters --------
+Paragraph (3 characters, 1 lines, 24.00px tall)
+-------- 24.00px / 3 characters --------
 Code Block - Shell (5 characters, 1 lines, 84.00px tall)
--------- 116.00px / 8 characters --------
-Trailing Newline (1 characters, 1 lines, 32.00px tall)
+-------- 108.00px / 8 characters --------
+Trailing Newline (1 characters, 1 lines, 24.00px tall)
 "#,
         )
     });

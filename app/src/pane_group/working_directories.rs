@@ -78,6 +78,145 @@ impl DiffStateModelMap {
     }
 }
 
+/// Bidirectional map of pane groups to the repository roots they reference.
+///
+/// Maintains both a forward map (`pane_group_id -> ordered set of repo paths`)
+/// and a reverse map (`repo path -> set of pane group ids that reference it`)
+/// in lockstep, so callers can answer "is this repo still referenced by any
+/// pane group?" in O(1) without scanning every pane group's set.
+///
+/// All mutations go through methods on this wrapper to guarantee the two
+/// maps stay in sync.
+#[cfg(feature = "local_fs")]
+#[derive(Default)]
+struct PaneGroupRepositoryRoots {
+    /// Forward: per-pane-group ordered set of repository roots.
+    /// IndexSet maintains insertion order so most recently added repos appear later.
+    pane_group_to_paths: HashMap<EntityId, IndexSet<LocalOrRemotePath>>,
+    /// Reverse: which pane groups reference each repo path.
+    /// Maintained in lockstep with `pane_group_to_paths`.
+    path_to_pane_groups: HashMap<LocalOrRemotePath, HashSet<EntityId>>,
+}
+
+#[cfg(feature = "local_fs")]
+impl PaneGroupRepositoryRoots {
+    /// Read-only view of a pane group's repository roots, preserving the
+    /// existing `HashMap::get(&pane_group_id)` semantics.
+    fn get(&self, pane_group_id: EntityId) -> Option<&IndexSet<LocalOrRemotePath>> {
+        self.pane_group_to_paths.get(&pane_group_id)
+    }
+
+    /// Insert a single repo for a pane group. Returns `true` if it was newly
+    /// added to the pane group (matching `IndexSet::insert` semantics).
+    ///
+    /// Always keeps the reverse map in sync: if the path was newly added to
+    /// the pane group, the pane group is added to the path's reverse entry.
+    fn insert(&mut self, pane_group_id: EntityId, path: LocalOrRemotePath) -> bool {
+        let added = self
+            .pane_group_to_paths
+            .entry(pane_group_id)
+            .or_default()
+            .insert(path.clone());
+
+        if added {
+            self.path_to_pane_groups
+                .entry(path)
+                .or_default()
+                .insert(pane_group_id);
+        }
+
+        added
+    }
+
+    /// Set the full list of repository roots for a pane group,
+    /// preserving the insertion-order of the previous set.
+    ///
+    /// Returns the paths that left this pane group's set AND no longer have
+    /// any other pane group referencing them — i.e. the paths whose shared
+    /// `DiffStateModel` is now safe to drop. Any paths that were already referenced
+    /// by other pane groups are kept in their original order.
+    fn set_paths(
+        &mut self,
+        pane_group_id: EntityId,
+        new_paths: impl IntoIterator<Item = LocalOrRemotePath>,
+    ) -> Vec<LocalOrRemotePath> {
+        let new_paths: Vec<LocalOrRemotePath> = new_paths.into_iter().collect();
+        let new_set: HashSet<&LocalOrRemotePath> = new_paths.iter().collect();
+
+        // Update the forward map and capture which paths left this pane group
+        // (`removed`) and which were newly inserted into it (`newly_added`).
+        // Tracking `newly_added` separately lets us skip redundant reverse-map
+        // updates for paths the pane group already referenced.
+        let (removed, newly_added): (Vec<LocalOrRemotePath>, Vec<LocalOrRemotePath>) = {
+            let forward = self.pane_group_to_paths.entry(pane_group_id).or_default();
+            let removed: Vec<LocalOrRemotePath> = forward
+                .iter()
+                .filter(|item| !new_set.contains(*item))
+                .cloned()
+                .collect();
+            forward.retain(|item| new_set.contains(item));
+            let mut newly_added: Vec<LocalOrRemotePath> = Vec::new();
+            for item in &new_paths {
+                if forward.insert(item.clone()) {
+                    newly_added.push(item.clone());
+                }
+            }
+            (removed, newly_added)
+        };
+
+        // Add pane_group_id only for paths that are newly referenced by this
+        // pane group; paths it already referenced are already in the reverse
+        // entry by the invariant maintained on every mutation.
+        for path in newly_added {
+            self.path_to_pane_groups
+                .entry(path)
+                .or_default()
+                .insert(pane_group_id);
+        }
+
+        // Drop pane_group_id from the reverse map for paths it no longer
+        // references; collect the paths whose reverse entry became empty.
+        removed
+            .into_iter()
+            .filter(|path| self.remove_path(pane_group_id, path))
+            .collect()
+    }
+
+    /// Drop all entries for a pane group (used when a tab is closed or the
+    /// pane group becomes empty). Returns `Some(orphans)` when the pane group
+    /// had a `repository_roots` entry, where `orphans` are the paths that no
+    /// longer have any pane group referencing them. Returns `None` when the
+    /// pane group was not tracked, so callers can distinguish "present with
+    /// no orphans" from "not present" in a single call.
+    fn remove_pane_group(&mut self, pane_group_id: EntityId) -> Option<Vec<LocalOrRemotePath>> {
+        let paths = self.pane_group_to_paths.remove(&pane_group_id)?;
+        Some(
+            paths
+                .into_iter()
+                .filter(|path| self.remove_path(pane_group_id, path))
+                .collect(),
+        )
+    }
+
+    /// Remove `pane_group_id` from the reverse-map entry for `path`.
+    /// Returns `true` if removing this reference left `path` with no pane groups
+    /// referencing it — i.e. the path is now globally orphaned.
+    ///
+    /// This only mutates the reverse map; callers are responsible for
+    /// removing `path` from `pane_group_id`'s forward entry before (or
+    /// after) calling this.
+    fn remove_path(&mut self, pane_group_id: EntityId, path: &LocalOrRemotePath) -> bool {
+        let became_empty = self.path_to_pane_groups.get_mut(path).is_some_and(|set| {
+            set.remove(&pane_group_id);
+            set.is_empty()
+        });
+        if became_empty {
+            self.path_to_pane_groups.remove(path);
+        }
+        became_empty
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkingDirectory {
     pub path: LocalOrRemotePath,
@@ -132,8 +271,7 @@ pub struct WorkingDirectoriesModel {
     pane_groups: HashMap<EntityId, IndexSet<LocalOrRemotePath>>,
     /// Per-pane-group tracking of active repository roots as a deduplicated, ordered set.
     /// Covers both local and remote repositories in a single map.
-    /// IndexSet maintains insertion order - most recently added repositories appear later.
-    repository_roots: HashMap<EntityId, IndexSet<LocalOrRemotePath>>,
+    repository_roots: PaneGroupRepositoryRoots,
     /// Per-pane-group mapping from root paths to a matching terminal view ID.
     /// This allows looking up which terminal is associated with each root path.
     /// Note, a single root path can be associated with multiple terminals.
@@ -212,7 +350,7 @@ impl WorkingDirectoriesModel {
         &self,
         pane_group_id: EntityId,
     ) -> Option<&IndexSet<LocalOrRemotePath>> {
-        self.repository_roots.get(&pane_group_id)
+        self.repository_roots.get(pane_group_id)
     }
 
     /// Get the unique repository roots for a specific pane group in most to least recently added order.
@@ -237,9 +375,10 @@ impl WorkingDirectoriesModel {
 
     /// Get or create a DiffStateModel for a specific repository.
     ///
-    /// If the model doesn't exist, it will be created.
-    /// For remote file locations we require a connected session for the host.
-    /// If none exists, returns `None` and callers should retry once a session is established.
+    /// If the model doesn't exist, it will be created. For remote
+    /// repositories we require a connected session for the host; returns
+    /// `None` when none exists so callers treat the panel as unavailable
+    /// for that repo rather than producing a model that cannot subscribe.
     pub fn get_or_create_diff_state_model(
         &mut self,
         key: LocalOrRemotePath,
@@ -256,11 +395,11 @@ impl WorkingDirectoriesModel {
             }
             LocalOrRemotePath::Remote(remote_path) => {
                 let mgr_handle = RemoteServerManager::handle(ctx);
-                let session_id = mgr_handle
+                mgr_handle
                     .as_ref(ctx)
-                    .find_connected_session(&remote_path.host_id)?;
+                    .client_for_host(&remote_path.host_id)?;
                 let remote_path = remote_path.clone();
-                ctx.add_model(|ctx| DiffStateModel::new_remote(remote_path, session_id, ctx))
+                ctx.add_model(|ctx| DiffStateModel::new_remote(remote_path, ctx))
             }
         };
 
@@ -278,23 +417,15 @@ impl WorkingDirectoriesModel {
         Some(diff_state_model)
     }
 
-    /// DiffStateModels are shared across tabs. When you delete repos from one tab,
-    /// we should check if its still in use in any tab. If not, stop its watcher and delete it.
-    /// Drops diff state models and cached views for repos that are no longer
-    /// active in any pane group. Called from `refresh_working_directories`
-    /// when a repo leaves the computed set.
-    ///
-    /// The model is dropped unconditionally for the repos passed in — the
-    /// caller has already verified they are not in the new repo set. We do
-    /// NOT re-check `repository_roots` here because a racing side-channel
-    /// (e.g. `register_remote_repo`) may have re-added the repo, which
-    /// would prevent the stale model from being cleaned up.
+    /// Drops diff state models for repos that are no longer referenced by any
+    /// pane group. The input must already be pre-filtered to orphans, so this
+    /// method stops the watcher and removes stale model and view cache entries.
     fn drop_unused_diff_state_models(
         &mut self,
-        removed_repos: impl Iterator<Item = LocalOrRemotePath>,
+        orphaned_repos: impl IntoIterator<Item = LocalOrRemotePath>,
         ctx: &mut ModelContext<Self>,
     ) {
-        for repo_key in removed_repos {
+        for repo_key in orphaned_repos {
             if let Some(model) = self.diff_state_models.remove(&repo_key) {
                 model.update(ctx, |model, ctx| {
                     model.stop_active_watcher(ctx);
@@ -431,11 +562,11 @@ impl WorkingDirectoriesModel {
     fn handle_empty_pane_group(&mut self, pane_group_id: EntityId, ctx: &mut ModelContext<Self>) {
         let did_remove_dirs = self.pane_groups.remove(&pane_group_id).is_some();
         let did_remove_terminals = self.directory_to_terminal.remove(&pane_group_id).is_some();
-        let removed_repos = self.repository_roots.remove(&pane_group_id);
-        let did_remove_repos = removed_repos.is_some();
+        let orphaned_repos = self.repository_roots.remove_pane_group(pane_group_id);
+        let did_remove_repos = orphaned_repos.is_some();
 
-        if let Some(removed_repos) = removed_repos {
-            self.drop_unused_diff_state_models(removed_repos.into_iter(), ctx);
+        if let Some(orphaned_repos) = orphaned_repos {
+            self.drop_unused_diff_state_models(orphaned_repos, ctx);
         }
 
         if did_remove_dirs {
@@ -685,8 +816,9 @@ impl WorkingDirectoriesModel {
         });
         let _ = seen; // consumed by retain closure above
 
-        let pane_group_repos = self.repository_roots.entry(pane_group_id).or_default();
-        update_index_set(pane_group_repos, new_repo_roots_wrapped);
+        let orphaned_repos = self
+            .repository_roots
+            .set_paths(pane_group_id, new_repo_roots_wrapped);
 
         self.directory_to_terminal
             .insert(pane_group_id, new_root_to_terminal);
@@ -705,7 +837,7 @@ impl WorkingDirectoriesModel {
             .unwrap_or_default();
         let new_deduplicated_repos: Vec<LocalOrRemotePath> = self
             .repository_roots
-            .get(&pane_group_id)
+            .get(pane_group_id)
             .map(|repos| repos.iter().cloned().collect())
             .unwrap_or_default();
         if old_directories != new_directories {
@@ -713,12 +845,7 @@ impl WorkingDirectoriesModel {
         }
 
         if old_repos != new_deduplicated_repos {
-            self.drop_unused_diff_state_models(
-                old_repos
-                    .into_iter()
-                    .filter(|repo| !new_deduplicated_repos.contains(repo)),
-                ctx,
-            );
+            self.drop_unused_diff_state_models(orphaned_repos, ctx);
             self.emit_repositories_changed(pane_group_id, ctx);
         }
 
@@ -753,8 +880,7 @@ impl WorkingDirectoriesModel {
         repo_key: LocalOrRemotePath,
         ctx: &mut ModelContext<Self>,
     ) {
-        let repos = self.repository_roots.entry(pane_group_id).or_default();
-        if repos.insert(repo_key) {
+        if self.repository_roots.insert(pane_group_id, repo_key) {
             self.emit_repositories_changed(pane_group_id, ctx);
         }
     }

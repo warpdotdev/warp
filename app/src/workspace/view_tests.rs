@@ -10,7 +10,6 @@ use repo_metadata::CanonicalizedPath;
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
 use session_sharing_protocol::common::SessionId;
-use session_sharing_protocol::sharer::SessionSourceType;
 #[cfg(feature = "local_fs")]
 use tempfile::TempDir;
 use terminal::shared_session::permissions_manager::SessionPermissionsManager;
@@ -70,7 +69,9 @@ use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::history::History;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_tty::spawner::PtySpawner;
-use crate::terminal::shared_session::{SharedSessionScrollbackType, SharedSessionStatus};
+use crate::terminal::shared_session::{
+    SharedSessionScrollbackType, SharedSessionSource, SharedSessionStatus,
+};
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::undo_close::UndoCloseSettings;
 #[cfg(feature = "local_fs")]
@@ -137,6 +138,9 @@ fn initialize_app(app: &mut App) {
         )
     });
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+    // QueuedQueryModel subscribes to history events; register after the
+    // history model is in place.
+    app.add_singleton_model(crate::ai::blocklist::QueuedQueryModel::new);
     app.add_singleton_model(|ctx| OrchestrationPillBarModel::new(Default::default(), ctx));
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
@@ -212,10 +216,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(AIDocumentModel::new);
     app.add_singleton_model(|_| History::new(vec![]));
 
-    // SkillManager must be registered because the command palette materializes
-    // binding descriptions eagerly, and `workspace:send_feedback`'s dynamic
-    // label calls `is_feedback_skill_available`, which reads `SkillManager`.
-    // Registered after `HomeDirectoryWatcher`, `DirectoryWatcher`,
+    // SkillManager is registered after `HomeDirectoryWatcher`, `DirectoryWatcher`,
     // `WarpManagedPathsWatcher`, `DetectedRepositories`, and `RepoMetadataModel`
     // because `SkillWatcher::new` subscribes to all of them.
     app.add_singleton_model(SkillManager::new);
@@ -305,7 +306,10 @@ fn test_tab_bar_traffic_light_space_regression_for_resource_center_overlap() {
 #[cfg(feature = "local_fs")]
 fn open_worktree_sidecar(workspace: &ViewHandle<Workspace>, app: &mut App) {
     workspace.update(app, |workspace, ctx| {
-        workspace.open_new_session_dropdown_menu(Vector2F::zero(), ctx);
+        workspace.open_new_session_dropdown_menu(
+            crate::workspace::action::NewSessionMenuAnchor::AddTabButton(Vector2F::zero()),
+            ctx,
+        );
 
         let worktree_index = workspace
             .new_session_dropdown_menu
@@ -403,7 +407,10 @@ fn test_worktree_sidecar_pointer_entry_does_not_select_top_repo() {
         });
 
         workspace.update(&mut app, |workspace, ctx| {
-            workspace.open_new_session_dropdown_menu(Vector2F::zero(), ctx);
+            workspace.open_new_session_dropdown_menu(
+                crate::workspace::action::NewSessionMenuAnchor::AddTabButton(Vector2F::zero()),
+                ctx,
+            );
 
             let worktree_index = workspace
                 .new_session_dropdown_menu
@@ -599,7 +606,7 @@ fn mock_workspace_with_shared_session(app: &mut App) -> ViewHandle<Workspace> {
         view.attempt_to_share_session(
             SharedSessionScrollbackType::All,
             None,
-            SessionSourceType::default(),
+            SharedSessionSource::user(None),
             false,
             ctx,
         );
@@ -698,6 +705,44 @@ fn active_session_state(
     }
 }
 
+#[test]
+fn restore_conversation_in_active_pane_enters_existing_live_conversation_without_loading() {
+    let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let terminal_view = workspace.read(&app, |workspace, ctx| {
+            workspace
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .focused_session_view(ctx)
+                .expect("workspace should start with a terminal view")
+        });
+        let terminal_view_id = terminal_view.read(&app, |view, _| view.view_id());
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                history.start_new_conversation(terminal_view_id, false, false, false, ctx)
+            });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            assert_eq!(workspace.tab_count(), 1);
+
+            workspace.restore_conversation_in_active_pane(conversation_id, ctx);
+
+            assert_eq!(workspace.tab_count(), 1);
+        });
+
+        terminal_view.read(&app, |view, ctx| {
+            assert_eq!(view.active_conversation_id(ctx), Some(conversation_id));
+            assert_eq!(
+                view.model.lock().conversation_transcript_viewer_status(),
+                None
+            );
+        });
+    });
+}
 fn new_session_menu_label(item: &MenuItem<WorkspaceAction>) -> String {
     match item {
         MenuItem::Item(fields) => fields.label().to_string(),
@@ -1068,7 +1113,7 @@ fn setup_session_sharing_test(workspace: &ViewHandle<Workspace>, app: &mut App) 
                     terminal.attempt_to_share_session(
                         SharedSessionScrollbackType::None,
                         None,
-                        SessionSourceType::default(),
+                        SharedSessionSource::user(None),
                         false,
                         ctx,
                     );
@@ -1756,7 +1801,7 @@ fn test_stop_sharing_all_sessions_in_tab() {
                             terminal_view.attempt_to_share_session(
                                 SharedSessionScrollbackType::None,
                                 None,
-                                SessionSourceType::default(),
+                                SharedSessionSource::user(None),
                                 false,
                                 ctx,
                             );
@@ -1774,7 +1819,7 @@ fn test_stop_sharing_all_sessions_in_tab() {
                             terminal_view.attempt_to_share_session(
                                 SharedSessionScrollbackType::None,
                                 None,
-                                SessionSourceType::default(),
+                                SharedSessionSource::user(None),
                                 false,
                                 ctx,
                             );
@@ -2649,7 +2694,10 @@ fn test_pointer_opened_tab_configs_menu_does_not_select_top_item() {
         let workspace = mock_workspace(&mut app);
 
         workspace.update(&mut app, |workspace, ctx| {
-            workspace.toggle_new_session_dropdown_menu(Vector2F::zero(), ctx);
+            workspace.toggle_new_session_dropdown_menu(
+                crate::workspace::action::NewSessionMenuAnchor::Pointer(Vector2F::zero()),
+                ctx,
+            );
 
             assert!(workspace.show_new_session_dropdown_menu.is_some());
             assert_eq!(
@@ -3151,6 +3199,272 @@ fn test_tab_mru_order() {
             workspace.handle_action(&WorkspaceAction::ActivateTab(0), ctx);
 
             assert_eq!(workspace.tab_mru_order(), &[id_a, id_c, id_b]);
+        });
+    });
+}
+
+#[test]
+fn test_create_new_tab_group_groups_active_tab() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Workspace starts with one tab from `Empty` source. Create a tab
+            // group and verify the active tab is assigned to it.
+            assert_eq!(workspace.tab_count(), 1);
+            assert!(workspace.tabs[0].group_id.is_none());
+            assert!(workspace.tab_groups.is_empty());
+
+            workspace.handle_action(
+                &WorkspaceAction::SelectNewSessionMenuItem(NewSessionMenuItem::CreateNewTabGroup),
+                ctx,
+            );
+
+            assert_eq!(workspace.tab_groups.len(), 1);
+            let group_id = workspace.tabs[0]
+                .group_id
+                .expect("active tab should be assigned to the new group");
+            assert!(workspace.tab_groups.contains_key(&group_id));
+            // New groups start expanded so members are visible.
+            assert!(!workspace.tab_groups[&group_id].collapsed);
+        });
+    });
+}
+
+#[test]
+fn test_toggle_tab_group_collapsed_flips_state() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(
+                &WorkspaceAction::SelectNewSessionMenuItem(NewSessionMenuItem::CreateNewTabGroup),
+                ctx,
+            );
+            let group_id = workspace.tabs[0]
+                .group_id
+                .expect("active tab should be in a group");
+            assert!(!workspace.tab_groups[&group_id].collapsed);
+
+            workspace.handle_action(&WorkspaceAction::ToggleTabGroupCollapsed(group_id), ctx);
+            assert!(workspace.tab_groups[&group_id].collapsed);
+
+            workspace.handle_action(&WorkspaceAction::ToggleTabGroupCollapsed(group_id), ctx);
+            assert!(!workspace.tab_groups[&group_id].collapsed);
+        });
+    });
+}
+
+#[test]
+fn test_close_tab_group_removes_group_and_members() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Create a group, then add another tab which inherits the
+            // active tab's group_id via `add_tab_with_pane_layout`.
+            workspace.handle_action(
+                &WorkspaceAction::SelectNewSessionMenuItem(NewSessionMenuItem::CreateNewTabGroup),
+                ctx,
+            );
+            let group_id = workspace.tabs[workspace.active_tab_index()]
+                .group_id
+                .expect("active tab should be in a group");
+
+            workspace.add_terminal_tab(false, ctx);
+
+            let group_members: Vec<usize> = workspace
+                .tabs
+                .iter()
+                .enumerate()
+                .filter(|(_, tab)| tab.group_id == Some(group_id))
+                .map(|(idx, _)| idx)
+                .collect();
+            assert_eq!(
+                group_members.len(),
+                2,
+                "new tab should inherit the active tab's group_id"
+            );
+
+            workspace.handle_action(&WorkspaceAction::CloseTabGroup(group_id), ctx);
+
+            // All group members are closed and the group entry is removed.
+            assert!(!workspace.tab_groups.contains_key(&group_id));
+            assert!(workspace
+                .tabs
+                .iter()
+                .all(|tab| tab.group_id != Some(group_id)));
+        });
+    });
+}
+
+#[test]
+fn test_new_tab_with_after_all_tabs_setting_lands_at_group_end() {
+    // With `new_tab_placement = AfterAllTabs` and the active tab in a
+    // group, a new tab should land at the end of the group's contiguous
+    // run instead of at the workspace's global end so group contiguity
+    // is preserved while honoring the user's "end" placement preference.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.update(|ctx| {
+            TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                report_if_error!(settings
+                    .new_tab_placement
+                    .set_value(NewTabPlacement::AfterAllTabs, ctx));
+            });
+        });
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Create a group and add a second tab so the group has two
+            // contiguous members.
+            workspace.handle_action(
+                &WorkspaceAction::SelectNewSessionMenuItem(NewSessionMenuItem::CreateNewTabGroup),
+                ctx,
+            );
+            let group_id = workspace.tabs[workspace.active_tab_index()]
+                .group_id
+                .expect("active tab should be in a group");
+            workspace.add_terminal_tab(false, ctx);
+
+            // Add an ungrouped tab past the end of the group by first
+            // activating the trailing ungrouped tab.
+            let ungrouped_idx = workspace
+                .tabs
+                .iter()
+                .position(|t| t.group_id.is_none())
+                .expect("expected at least one ungrouped tab");
+            workspace.activate_tab(ungrouped_idx, ctx);
+            workspace.add_terminal_tab(false, ctx);
+
+            // Now activate the first grouped tab and add a new tab. With
+            // `AfterAllTabs`, the new tab must land at the end of the
+            // group's contiguous run rather than past the trailing
+            // ungrouped tabs.
+            let first_grouped_idx = workspace
+                .tabs
+                .iter()
+                .position(|t| t.group_id == Some(group_id))
+                .expect("expected at least one grouped tab");
+            workspace.activate_tab(first_grouped_idx, ctx);
+
+            let group_run_end_before = workspace
+                .tabs
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.group_id == Some(group_id))
+                .map(|(idx, _)| idx)
+                .max()
+                .expect("group should be non-empty")
+                + 1;
+
+            workspace.add_terminal_tab(false, ctx);
+
+            // The new tab lands at the prior group-run end, inherits the
+            // group_id, and keeps the group's run contiguous.
+            assert_eq!(workspace.active_tab_index(), group_run_end_before);
+            assert_eq!(
+                workspace.tabs[group_run_end_before].group_id,
+                Some(group_id)
+            );
+
+            let group_indices: Vec<usize> = workspace
+                .tabs
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.group_id == Some(group_id))
+                .map(|(idx, _)| idx)
+                .collect();
+            assert!(
+                group_indices.windows(2).all(|w| w[1] == w[0] + 1),
+                "group's tab indices should be contiguous, got {group_indices:?}"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_new_tab_with_after_current_tab_setting_lands_after_active_tab_in_group() {
+    // With `new_tab_placement = AfterCurrentTab` and the active tab in the
+    // middle of a group, a new tab should land immediately after the active
+    // tab and inherit the group_id, preserving group contiguity rather than
+    // jumping to the end of the group or past it.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.update(|ctx| {
+            TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                report_if_error!(settings
+                    .new_tab_placement
+                    .set_value(NewTabPlacement::AfterCurrentTab, ctx));
+            });
+        });
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Create a group and grow it to two contiguous members so we can
+            // activate the first one (i.e. a member that isn't at the end of
+            // the group's run).
+            workspace.handle_action(
+                &WorkspaceAction::SelectNewSessionMenuItem(NewSessionMenuItem::CreateNewTabGroup),
+                ctx,
+            );
+            let group_id = workspace.tabs[workspace.active_tab_index()]
+                .group_id
+                .expect("active tab should be in a group");
+            workspace.add_terminal_tab(false, ctx);
+
+            // Activate the first grouped tab so the next insertion happens in
+            // the middle of the group's contiguous run.
+            let first_grouped_idx = workspace
+                .tabs
+                .iter()
+                .position(|t| t.group_id == Some(group_id))
+                .expect("expected at least one grouped tab");
+            workspace.activate_tab(first_grouped_idx, ctx);
+
+            let expected_new_idx = first_grouped_idx + 1;
+
+            workspace.add_terminal_tab(false, ctx);
+
+            // The new tab lands immediately after the previously-active
+            // grouped tab, inherits its group_id, and keeps the group's run
+            // contiguous.
+            assert_eq!(workspace.active_tab_index(), expected_new_idx);
+            assert_eq!(
+                workspace.tabs[expected_new_idx].group_id,
+                Some(group_id),
+                "new tab should inherit the active tab's group_id"
+            );
+
+            let group_indices: Vec<usize> = workspace
+                .tabs
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.group_id == Some(group_id))
+                .map(|(idx, _)| idx)
+                .collect();
+            assert_eq!(
+                group_indices.len(),
+                3,
+                "group should have grown to three members"
+            );
+            assert!(
+                group_indices.windows(2).all(|w| w[1] == w[0] + 1),
+                "group's tab indices should be contiguous, got {group_indices:?}"
+            );
         });
     });
 }

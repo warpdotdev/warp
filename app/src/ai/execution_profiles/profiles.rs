@@ -12,7 +12,7 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 use super::{
     AIExecutionProfile, ActionPermission, CloudAIExecutionProfileModel, WriteToPtyPermission,
 };
-use crate::ai::llms::LLMId;
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
@@ -621,9 +621,25 @@ impl AIExecutionProfilesModel {
             ctx,
         );
 
-        if changed {
+        // Gate on the limit being non-empty. The limit is cleared during
+        // reconciliation, which runs inside an `LLMPreferences` update where the
+        // `LLMPreferences::as_ref` read below would panic.
+        if changed && limit.is_some() {
+            let Some(profile) = self.get_profile_by_id(profile_id, ctx) else {
+                return;
+            };
+            let llm_preferences = LLMPreferences::as_ref(ctx);
+            let model_info = profile
+                .data()
+                .base_model
+                .as_ref()
+                .and_then(|id| llm_preferences.get_llm_info(id))
+                .unwrap_or_else(|| llm_preferences.get_default_base_model());
             send_telemetry_from_ctx!(
-                TelemetryEvent::AIExecutionProfileContextWindowSelected { tokens: limit },
+                TelemetryEvent::AIExecutionProfileContextWindowSelected {
+                    tokens: limit,
+                    model_id: model_info.id.to_string(),
+                },
                 ctx
             );
         }

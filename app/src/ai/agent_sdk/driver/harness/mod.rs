@@ -25,6 +25,7 @@ use super::{
     OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
 };
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::mcp::JSONMCPServer;
@@ -479,6 +480,7 @@ pub(crate) trait HarnessRunner: Send + Sync {
     async fn start(
         &self,
         foreground: &ModelSpawner<AgentDriver>,
+        setup_events: &SetupClientEventReporter,
     ) -> Result<CommandHandle, AgentDriverError>;
 
     /// Save the current conversation state (transcript upload, etc.).

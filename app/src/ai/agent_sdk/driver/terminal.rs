@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use futures::channel::oneshot;
 use session_sharing_protocol::common::{Role, SessionId};
-use session_sharing_protocol::sharer::SessionSourceType;
 use warp_cli::share::{ShareAccessLevel, ShareRequest, ShareSubject};
 use warp_completer::completer::CommandOutput;
 use warp_core::command::ExitCode;
@@ -31,7 +30,7 @@ use crate::terminal::model::grid::RespectDisplayedOutput;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::session::ExecuteCommandOptions;
 use crate::terminal::model::RespectObfuscatedSecrets;
-use crate::terminal::shared_session::{self, IsSharedSessionCreator};
+use crate::terminal::shared_session::{self, IsSharedSessionCreator, SharedSessionSource};
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::terminal::TerminalView;
@@ -120,9 +119,7 @@ fn create_terminal_view(
 ) -> Result<ViewHandle<TerminalView>, AgentDriverError> {
     let is_shared_session_creator = if options.should_share {
         IsSharedSessionCreator::Yes {
-            source_type: SessionSourceType::AmbientAgent {
-                task_id: options.task_id.map(|t| t.to_string()),
-            },
+            source: SharedSessionSource::ambient_agent(options.task_id.map(|t| t.to_string())),
         }
     } else {
         IsSharedSessionCreator::No

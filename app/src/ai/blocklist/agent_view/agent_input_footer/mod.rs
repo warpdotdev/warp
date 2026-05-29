@@ -50,6 +50,7 @@ pub(crate) use self::environment_selector::sort_environments_by_recency;
 pub(crate) use self::environment_selector::{
     EnvironmentSelector, EnvironmentSelectorEvent, EnvironmentSelectorTarget,
 };
+use crate::ai::blocklist::agent_view::is_in_cloud_context;
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::usage::icon_for_context_window_usage;
@@ -121,6 +122,8 @@ const DISABLE_NLD_TOOLTIP: &str = "Disable terminal command autodetection";
 
 const FAST_FORWARD_ON_TOOLTIP: &str = "Turn off auto-approve all agent actions";
 const FAST_FORWARD_OFF_TOOLTIP: &str = "Auto-approve all agent actions for this task";
+const FAST_FORWARD_LOCKED_TOOLTIP: &str =
+    "Fast forward is always enabled for cloud agent conversations";
 
 const START_REMOTE_CONTROL_TOOLTIP: &str = "Start remote control";
 const START_REMOTE_CONTROL_LOGIN_REQUIRED_TOOLTIP: &str = "Log in to use /remote-control";
@@ -167,6 +170,19 @@ fn plugin_chip_key(agent_prefix: &str, remote_host: &Option<String>) -> String {
         Some(host) => format!("{agent_prefix}@{host}"),
         None => agent_prefix.to_owned(),
     }
+}
+
+fn is_conversation_transcript_context(
+    terminal_view_id: EntityId,
+    terminal_model: &TerminalModel,
+    app: &AppContext,
+) -> bool {
+    terminal_model.is_conversation_transcript_viewer()
+        || BlocklistAIHistoryModel::as_ref(app)
+            .active_conversation(terminal_view_id)
+            .is_some_and(|conversation| {
+                conversation.is_viewing_shared_session() || conversation.is_cli_agent_transcript()
+            })
 }
 
 /// Footer control bar at the bottom of the agent input.
@@ -345,6 +361,7 @@ impl AgentInputFooter {
                 .with_tooltip(FAST_FORWARD_OFF_TOOLTIP)
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
+                .with_disabled_theme(FastForwardLockedTheme)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(TerminalAction::ToggleAutoexecuteMode);
                 })
@@ -718,6 +735,12 @@ impl AgentInputFooter {
                 me.update_ftu_callout_render_state(ctx);
             }
         });
+        ctx.subscribe_to_model(
+            &display_chip_config.agent_view_controller,
+            |me, _, _, ctx| {
+                me.sync_fast_forward_button(ctx);
+            },
+        );
 
         // Keep the remote-control chip in sync with login state so we can
         // disable it and swap the tooltip when the user is anonymous or
@@ -734,7 +757,8 @@ impl AgentInputFooter {
                     ctx.notify();
                 }
                 SessionSettingsChangedEvent::AgentToolbarChipSelectionSetting { .. }
-                | SessionSettingsChangedEvent::CLIAgentToolbarChipSelectionSetting { .. } => {
+                | SessionSettingsChangedEvent::CLIAgentToolbarChipSelectionSetting { .. }
+                | SessionSettingsChangedEvent::GithubPrChipDefaultValidation { .. } => {
                     me.update_display_chips(&prompt_for_session_settings, ctx);
                     ctx.notify();
                 }
@@ -1398,6 +1422,7 @@ impl AgentInputFooter {
         &self,
         item: &AgentToolbarItemKind,
         shared_status: &SharedSessionStatus,
+        is_conversation_transcript_context: bool,
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         if !item.available_in().is_available_for_cli()
@@ -1410,7 +1435,8 @@ impl AgentInputFooter {
         // it doesn't make sense to offer remote-control when already
         // viewing a cloud agent's shared session.
         if matches!(item, AgentToolbarItemKind::ShareSession)
-            && self.terminal_model.lock().is_shared_ambient_agent_session()
+            && (is_conversation_transcript_context
+                || self.terminal_model.lock().is_shared_ambient_agent_session())
         {
             return None;
         }
@@ -1436,6 +1462,9 @@ impl AgentInputFooter {
                 None
             }
             AgentToolbarItemKind::ShareSession => {
+                if is_conversation_transcript_context {
+                    return None;
+                }
                 let enabled = FeatureFlag::CreatingSharedSessions.is_enabled()
                     && FeatureFlag::HOARemoteControl.is_enabled()
                     && ContextFlag::CreateSharedSession.is_enabled();
@@ -1468,7 +1497,7 @@ impl AgentInputFooter {
         // the lock before calling into helpers like `should_use_manual_mode`
         // and `render_cli_toolbar_item`, which may re-lock the same model and
         // would deadlock since the lock is non-reentrant.
-        let (background_color, shared_status) = {
+        let (background_color, shared_status, is_conversation_transcript_context) = {
             let terminal_model = self.terminal_model.lock();
             let background_color = if terminal_model.is_alt_screen_active() {
                 terminal_model
@@ -1479,7 +1508,13 @@ impl AgentInputFooter {
                 appearance.theme().surface_1().into_solid()
             };
             let shared_status = terminal_model.shared_session_status().clone();
-            (background_color, shared_status)
+            let is_conversation_transcript_context =
+                is_conversation_transcript_context(self.terminal_view_id, &terminal_model, app);
+            (
+                background_color,
+                shared_status,
+                is_conversation_transcript_context,
+            )
         };
 
         let session_settings = SessionSettings::as_ref(app);
@@ -1542,7 +1577,12 @@ impl AgentInputFooter {
         }
 
         for item in &left_items {
-            if let Some(element) = self.render_cli_toolbar_item(item, &shared_status, app) {
+            if let Some(element) = self.render_cli_toolbar_item(
+                item,
+                &shared_status,
+                is_conversation_transcript_context,
+                app,
+            ) {
                 left_buttons.add_child(element);
             }
         }
@@ -1553,7 +1593,12 @@ impl AgentInputFooter {
             .with_spacing(4.);
 
         for item in &right_items {
-            if let Some(element) = self.render_cli_toolbar_item(item, &shared_status, app) {
+            if let Some(element) = self.render_cli_toolbar_item(
+                item,
+                &shared_status,
+                is_conversation_transcript_context,
+                app,
+            ) {
                 right_buttons.add_child(element);
             }
         }
@@ -1911,26 +1956,40 @@ impl AgentInputFooter {
     }
 
     fn sync_fast_forward_button(&self, ctx: &mut ViewContext<Self>) {
+        // In cloud agent conversations fast forward is force-enabled.
+        let terminal_model = self.terminal_model.lock();
+        let is_force_enabled = is_in_cloud_context(
+            terminal_model.block_list().agent_view_state(),
+            &terminal_model,
+        );
+        drop(terminal_model);
+
         // Read directly from the conversation, same data source as the warping
         // indicator footer's auto-approve chip.
         let is_active = BlocklistAIHistoryModel::as_ref(ctx)
             .active_conversation(self.terminal_view_id)
             .map(|c| c.autoexecute_any_action())
-            .unwrap_or(false);
+            .unwrap_or(false)
+            || is_force_enabled;
+
         let icon = if is_active {
             Icon::FastForwardFilled
         } else {
             Icon::FastForward
         };
-        let tooltip = if is_active {
+        let tooltip = if is_force_enabled {
+            FAST_FORWARD_LOCKED_TOOLTIP
+        } else if is_active {
             FAST_FORWARD_ON_TOOLTIP
         } else {
             FAST_FORWARD_OFF_TOOLTIP
         };
+
         self.fast_forward_button.update(ctx, |button, ctx| {
             button.set_icon(Some(icon), ctx);
             button.set_tooltip(Some(tooltip), ctx);
             button.set_active(is_active, ctx);
+            button.set_disabled(is_force_enabled, ctx);
         });
     }
 
@@ -1973,6 +2032,7 @@ impl AgentInputFooter {
         item: &AgentToolbarItemKind,
         shared_status: &SharedSessionStatus,
         is_cloud_context: bool,
+        is_conversation_transcript_context: bool,
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let is_cloud_mode = FeatureFlag::CloudModeImageContext.is_enabled()
@@ -2035,6 +2095,9 @@ impl AgentInputFooter {
                 has_conversation.then(|| ChildView::new(&self.context_window_button).finish())
             }
             AgentToolbarItemKind::ShareSession => {
+                if is_conversation_transcript_context {
+                    return None;
+                }
                 let enabled = FeatureFlag::CreatingSharedSessions.is_enabled()
                     && FeatureFlag::HOARemoteControl.is_enabled()
                     && ContextFlag::CreateSharedSession.is_enabled();
@@ -2149,11 +2212,17 @@ impl View for AgentInputFooter {
             terminal_model.block_list().agent_view_state(),
             &terminal_model,
         );
+        let is_conversation_transcript_context =
+            is_conversation_transcript_context(self.terminal_view_id, &terminal_model, app);
 
         for item in &left_items {
-            if let Some(element) =
-                self.render_toolbar_item(item, shared_status, is_cloud_context, app)
-            {
+            if let Some(element) = self.render_toolbar_item(
+                item,
+                shared_status,
+                is_cloud_context,
+                is_conversation_transcript_context,
+                app,
+            ) {
                 left_buttons.add_child(element);
             }
         }
@@ -2174,9 +2243,13 @@ impl View for AgentInputFooter {
             );
         } else {
             for item in &right_items {
-                if let Some(element) =
-                    self.render_toolbar_item(item, shared_status, is_cloud_context, app)
-                {
+                if let Some(element) = self.render_toolbar_item(
+                    item,
+                    shared_status,
+                    is_cloud_context,
+                    is_conversation_transcript_context,
+                    app,
+                ) {
                     right_buttons.add_child(element);
                 }
             }
@@ -2787,6 +2860,38 @@ impl ActionButtonTheme for FastForwardButtonTheme {
 
     fn should_opt_out_of_contrast_adjustment(&self) -> bool {
         true
+    }
+}
+
+/// Disabled-state theme used by the fast-forward chip when fast-forward is
+/// locked on (cloud agent conversations). Delegates entirely to
+/// `FastForwardButtonTheme`, but forces `hovered=true` on the background so
+/// the chip still reads as "on" while the underlying button is disabled
+/// (which gives us the arrow cursor and no-op click handler for free).
+struct FastForwardLockedTheme;
+
+impl ActionButtonTheme for FastForwardLockedTheme {
+    fn background(&self, _hovered: bool, appearance: &Appearance) -> Option<Fill> {
+        // Force the active (hovered) background so the disabled chip still
+        // visually looks like fast-forward is on.
+        FastForwardButtonTheme.background(true, appearance)
+    }
+
+    fn text_color(
+        &self,
+        hovered: bool,
+        background: Option<Fill>,
+        appearance: &Appearance,
+    ) -> ColorU {
+        FastForwardButtonTheme.text_color(hovered, background, appearance)
+    }
+
+    fn border(&self, appearance: &Appearance) -> Option<ColorU> {
+        FastForwardButtonTheme.border(appearance)
+    }
+
+    fn should_opt_out_of_contrast_adjustment(&self) -> bool {
+        FastForwardButtonTheme.should_opt_out_of_contrast_adjustment()
     }
 }
 

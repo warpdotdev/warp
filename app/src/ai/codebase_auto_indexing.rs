@@ -22,6 +22,16 @@ impl CodebaseAutoIndexingSurface {
     }
 }
 
+pub(crate) fn should_use_codebase_indexing(
+    surface: CodebaseAutoIndexingSurface,
+    ctx: &AppContext,
+) -> bool {
+    codebase_indexing_enabled(
+        surface,
+        UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx),
+    )
+}
+
 pub(crate) fn should_auto_index_codebase(
     surface: CodebaseAutoIndexingSurface,
     ctx: &AppContext,
@@ -33,15 +43,21 @@ pub(crate) fn should_auto_index_codebase(
     )
 }
 
+fn codebase_indexing_enabled(
+    surface: CodebaseAutoIndexingSurface,
+    codebase_context_enabled: bool,
+) -> bool {
+    FeatureFlag::FullSourceCodeEmbedding.is_enabled()
+        && surface.required_feature_enabled()
+        && codebase_context_enabled
+}
+
 pub(crate) fn codebase_auto_indexing_enabled(
     surface: CodebaseAutoIndexingSurface,
     codebase_context_enabled: bool,
     auto_indexing_enabled: bool,
 ) -> bool {
-    FeatureFlag::FullSourceCodeEmbedding.is_enabled()
-        && surface.required_feature_enabled()
-        && codebase_context_enabled
-        && auto_indexing_enabled
+    codebase_indexing_enabled(surface, codebase_context_enabled) && auto_indexing_enabled
 }
 
 pub(crate) fn auto_index_candidate_roots<Root>(

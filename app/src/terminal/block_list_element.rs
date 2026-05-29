@@ -1648,9 +1648,13 @@ impl BlockListElement {
                                 return true;
                             }
 
-                            if let Some(RichContentMetadata::AIBlock { .. }) =
-                                self.rich_content_metadata.get(view_id)
-                            {
+                            if matches!(
+                                self.rich_content_metadata.get(view_id),
+                                Some(
+                                    RichContentMetadata::AIBlock(_)
+                                        | RichContentMetadata::PendingUserQuery { .. }
+                                )
+                            ) {
                                 should_redetermine_focus = false;
                             }
 

@@ -62,7 +62,6 @@ use crate::features::FeatureFlag;
 use crate::network::{NetworkStatusEvent, NetworkStatusKind};
 use crate::pane_group::TerminalViewResources;
 use crate::persistence::ModelEvent;
-use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::{TelemetryAgentViewEntryOrigin, TelemetryEvent};
 use crate::settings::{DebugSettings, PrivacySettings, SshSettings};
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
@@ -92,7 +91,7 @@ use crate::terminal::shared_session::sharer::network::{
 };
 use crate::terminal::shared_session::{
     IsSharedSessionCreator, SharedSessionActionSource, SharedSessionScrollbackType,
-    SharedSessionStatus,
+    SharedSessionSource, SharedSessionStatus,
 };
 use crate::terminal::shell::ShellName;
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event as TerminalViewEvent};
@@ -322,11 +321,11 @@ impl TerminalManager {
         // shared-session state before we construct the view, so that bootstrap
         // events can observe the correct pending status and source type.
         match is_shared_session_creator {
-            IsSharedSessionCreator::Yes { source_type }
+            IsSharedSessionCreator::Yes { source }
                 if FeatureFlag::CreatingSharedSessions.is_enabled() =>
             {
                 model.lock().set_shared_session_status(
-                    SharedSessionStatus::SharePendingPreBootstrap { source_type },
+                    SharedSessionStatus::SharePendingPreBootstrap { source },
                 );
                 log::info!("Configured terminal to start sharing after bootstrap");
             }
@@ -445,7 +444,7 @@ impl TerminalManager {
                 view.attempt_to_share_session(
                     SharedSessionScrollbackType::All,
                     None,
-                    SessionSourceType::default(),
+                    SharedSessionSource::user(None),
                     false,
                     ctx,
                 )
@@ -736,6 +735,48 @@ impl TerminalManager {
                                 );
                             });
                         }
+                    }
+                    // Upgrade a manual `User` share's sidecar `source_task_id`
+                    // from `None` to `Some(_)` once the active conversation
+                    // gets its `task_id`, so inherited child shares can
+                    // discover the orchestrator task. Existing viewers stay
+                    // on the old value (the protocol has no
+                    // `UpdateSourceType` upstream message) until they
+                    // reconnect.
+                    BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
+                        terminal_view_id,
+                        conversation_id,
+                    } => {
+                        if *terminal_view_id != view_id_for_stream_init {
+                            return;
+                        }
+
+                        let Some(view) = weak_view_for_stream_init.upgrade(ctx) else {
+                            return;
+                        };
+
+                        let model = view.as_ref(ctx).model.clone();
+                        let needs_upgrade = {
+                            let model_lock = model.lock();
+                            model_lock.shared_session_source().is_some_and(|s| {
+                                matches!(s.source_type, SessionSourceType::User)
+                                    && s.source_task_id.is_none()
+                            })
+                        };
+                        if !needs_upgrade {
+                            return;
+                        }
+
+                        let task_id = BlocklistAIHistoryModel::as_ref(ctx)
+                            .conversation(conversation_id)
+                            .and_then(|c| c.task_id());
+                        let Some(task_id) = task_id else {
+                            return;
+                        };
+
+                        model
+                            .lock()
+                            .set_shared_session_source_task_id(Some(task_id.to_string()));
                     }
                     _ => {}
                 }
@@ -1296,7 +1337,7 @@ impl TerminalManager {
         shared_session_model: Rc<RefCell<Option<ModelHandle<Network>>>>,
         scrollback_type: SharedSessionScrollbackType,
         lifetime: Lifetime,
-        source_type: SessionSourceType,
+        source: SharedSessionSource,
         model: Arc<FairMutex<TerminalModel>>,
         window_id: WindowId,
         sharer_remote_update_guard: RemoteUpdateGuard,
@@ -1312,12 +1353,19 @@ impl TerminalManager {
         }
         log::info!("Starting shared session");
 
-        // Record the source type on the model so we can distinguish ambient agent
-        // sessions from user-initiated shared sessions in the UI logic.
-        model
-            .lock()
-            .set_shared_session_source_type(source_type.clone());
-        if matches!(source_type, SessionSourceType::AmbientAgent { .. }) {
+        // Record the source on the model so we can distinguish ambient agent
+        // sessions from user-initiated shared sessions in the UI logic, and so
+        // the orchestrator task id is discoverable regardless of which variant
+        // the share is.
+        model.lock().set_shared_session_source(source.clone());
+        Self::log_shared_session_lifecycle(
+            &terminal_view,
+            &model,
+            "start_requested",
+            "trigger=terminal_view_start_sharing",
+            ctx,
+        );
+        if matches!(source.source_type, SessionSourceType::AmbientAgent { .. }) {
             let terminal_view_id = terminal_view.id();
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _ctx| {
                 history.mark_terminal_view_as_ambient_agent_session_view(terminal_view_id);
@@ -1366,7 +1414,6 @@ impl TerminalManager {
         cfg_if::cfg_if! {
             if #[cfg(any(test, feature = "integration_tests"))] {
                 let _ = lifetime;
-                let _ = source_type;
                 let network = ctx.add_model(|ctx| Network::new_for_test(
                     model.clone(),
                     events_rx,
@@ -1449,7 +1496,7 @@ impl TerminalManager {
                         terminal_view.id(),
                         universal_developer_input_context,
                         lifetime,
-                        source_type.clone(),
+                        source.clone(),
                         ctx,
                     )
                 });
@@ -1486,7 +1533,7 @@ impl TerminalManager {
                         *sharer_firebase_uid,
                         scrollback_type,
                         *session_id,
-                        source_type.clone(),
+                        source.source_type.clone(),
                         ctx,
                     );
 
@@ -1495,11 +1542,28 @@ impl TerminalManager {
                         controller.set_sharer_participant_id(sharer_id.clone());
                     });
                 });
+                Self::log_shared_session_lifecycle(
+                    &terminal_view,
+                    &model,
+                    "session_established",
+                    "outcome=active_sharer",
+                    ctx,
+                );
 
                 // Let the manager know the share is active with the relevant metadata.
                 Manager::handle(ctx).update(ctx, |manager, ctx| {
                     manager.started_share(terminal_view.downgrade(), *session_id, window_id, ctx);
                 });
+
+                // Lifecycle event for downstream subscribers.
+                if let Some(conversation_id) = selected_conversation_id {
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |_, ctx| {
+                        ctx.emit(BlocklistAIHistoryEvent::LocalSharedSessionEstablished {
+                            conversation_id,
+                            session_id: *session_id,
+                        });
+                    });
+                }
 
                 // Flush the initial input operations that the sharer performed
                 // in the latest buffer before the share was started.
@@ -1526,39 +1590,8 @@ impl TerminalManager {
                     Self::stream_historical_agent_conversations(&terminal_view, &model, ctx);
                 }
 
-                let session_id_for_link = *session_id;
-
-                // Read task_id lazily so we still pick up a server-assigned
-                // task_id that arrived after the user clicked share.
-                let task_id = selected_conversation_id.and_then(|conversation_id| {
-                    BlocklistAIHistoryModel::as_ref(ctx)
-                        .conversation(&conversation_id)
-                        .and_then(|c| c.task_id())
-                });
-
-                if let Some(task_id) = task_id {
-                    let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-                    terminal_view.update(ctx, |_view, ctx| {
-                        ctx.spawn(
-                            async move {
-                                ai_client
-                                    .update_agent_task(
-                                        task_id,
-                                        None,
-                                        Some(session_id_for_link),
-                                        None,
-                                        None,
-                                    )
-                                    .await
-                            },
-                            move |_view, result, _ctx| {
-                                if let Err(e) = result {
-                                    log::warn!("Failed to link shared session to Oz task: {e}");
-                                }
-                            },
-                        );
-                    });
-                }
+                // `LocalAgentTaskSyncModel` fires the (task_id,
+                // session_id) link in response to the event emitted above.
             }
             NetworkEvent::FailedToCreateSharedSession {
                 reason,
@@ -2163,6 +2196,35 @@ impl TerminalManager {
         *session_sharer = Some(network);
     }
 
+    fn log_shared_session_lifecycle(
+        terminal_view: &ViewHandle<TerminalView>,
+        model: &Arc<FairMutex<TerminalModel>>,
+        event: &'static str,
+        details: impl std::fmt::Display,
+        ctx: &AppContext,
+    ) {
+        let session_id = terminal_view.as_ref(ctx).shared_session_id().cloned();
+        let (source_type, source_task_id) = {
+            let model = model.lock();
+            match model.shared_session_source() {
+                Some(source) => {
+                    let source_type = match &source.source_type {
+                        SessionSourceType::User => "user",
+                        SessionSourceType::AmbientAgent { .. } => "ambient_agent",
+                    };
+                    (
+                        source_type,
+                        source.orchestrator_task_id().map(str::to_owned),
+                    )
+                }
+                None => ("unknown", None),
+            }
+        };
+        log::info!(
+            "Shared session local lifecycle: event={event} session_id={session_id:?} source_type={source_type} source_task_id={source_task_id:?} {details}"
+        );
+    }
+
     /// Contains necessary logic for stopping the current shared session.
     fn cleanup_shared_session(
         terminal_view: &ViewHandle<TerminalView>,
@@ -2215,6 +2277,13 @@ impl TerminalManager {
         model: Arc<FairMutex<TerminalModel>>,
         ctx: &mut AppContext,
     ) {
+        Self::log_shared_session_lifecycle(
+            terminal_view,
+            &model,
+            "end_requested",
+            format_args!("reason={reason:?}"),
+            ctx,
+        );
         Self::cleanup_shared_session(terminal_view, model, ctx);
 
         // Drop the ModelHandle<Network> and set session_sharer to None.
@@ -2251,7 +2320,7 @@ impl TerminalManager {
         ctx.subscribe_to_view(terminal_view, move |view, event, ctx| match event {
             TerminalViewEvent::StartSharingCurrentSession {
                 scrollback_type,
-                source_type,
+                source,
             } if FeatureFlag::CreatingSharedSessions.is_enabled() => {
                 Self::start_sharing_session(
                     view.clone(),
@@ -2259,7 +2328,7 @@ impl TerminalManager {
                     session_sharer.clone(),
                     *scrollback_type,
                     session_lifetime,
-                    source_type.clone(),
+                    source.clone(),
                     model.clone(),
                     window_id,
                     sharer_remote_update_guard.clone(),
@@ -2603,11 +2672,18 @@ impl crate::terminal::TerminalManager for TerminalManager {
         // The detach type is intentionally ignored: a sharer always stops sharing immediately,
         // even on a reversible `HiddenForClose` detach. This is desirable for security — a sharer
         // should not continue accepting commands from viewers while the session is not visible.
-        _detach_type: crate::pane_group::pane::DetachType,
+        detach_type: crate::pane_group::pane::DetachType,
         app: &mut AppContext,
     ) {
         let shared_session_status = self.model.lock().shared_session_status().clone();
         if shared_session_status.is_sharer() {
+            Self::log_shared_session_lifecycle(
+                &self.view,
+                &self.model,
+                "view_detached",
+                format_args!("detach_type={detach_type:?}"),
+                app,
+            );
             let is_confirm_close_session =
                 *SessionSettings::as_ref(app).should_confirm_close_session;
             self.view.update(app, |terminal_view, ctx| {

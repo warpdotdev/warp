@@ -7,21 +7,24 @@ use warp_graphql::mutations::update_generic_string_object::{
 };
 use warp_graphql::object::ObjectUpdateSuccess;
 
-use crate::ai::ambient_agents::scheduled::CloudScheduledAmbientAgentModel;
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironmentModel;
-use crate::ai::execution_profiles::CloudAIExecutionProfileModel;
-use crate::ai::facts::CloudAIFactModel;
-use crate::ai::mcp::templatable::CloudTemplatableMCPServerModel;
-use crate::ai::mcp::CloudMCPServerModel;
-use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::{
-    GenericServerObject, RevisionAndLastEditor, ServerFolder, ServerObject, UpdateCloudObjectResult,
+    RevisionAndLastEditor, ServerAIExecutionProfile, ServerAIFact, ServerAmbientAgentEnvironment,
+    ServerEnvVarCollection, ServerFolder, ServerMCPServer, ServerObject, ServerPreference,
+    ServerScheduledAmbientAgent, ServerTemplatableMCPServer, ServerWorkflowEnum, TryFromGql,
+    UpdateCloudObjectResult,
 };
-use crate::env_vars::CloudEnvVarCollectionModel;
 use crate::server::graphql::get_user_facing_error_message;
-use crate::server::ids::ServerId;
-use crate::settings::cloud_preferences::CloudPreferenceModel;
-use crate::workflows::workflow_enum::CloudWorkflowEnumModel;
+
+fn boxed_rejected_generic_string_object<T>(
+    object: warp_graphql::generic_string_object::GenericStringObject,
+) -> Result<Box<dyn ServerObject>>
+where
+    T: TryFromGql<GqlType = warp_graphql::generic_string_object::GenericStringObject>
+        + ServerObject
+        + 'static,
+{
+    Ok(Box::new(T::try_from_gql(object)?))
+}
 
 pub fn update_generic_string_object_result_to_update_result(
     value: UpdateGenericStringObjectResult,
@@ -38,236 +41,52 @@ pub fn update_generic_string_object_result_to_update_result(
                     })
                 }
                 GenericStringObjectUpdate::GenericStringObjectUpdateRejected(rejected) => {
-                    let boxed: Box<dyn ServerObject> = match rejected
-                        .conflicting_generic_string_object
-                        .format
-                    {
+                    let format = rejected.conflicting_generic_string_object.format;
+                    let boxed: Box<dyn ServerObject> = match format {
                         GenericStringObjectFormat::JsonEnvVarCollection => {
-                            let gso = GenericServerObject::<
-                                GenericStringObjectId,
-                                CloudEnvVarCollectionModel,
-                            >::try_from_graphql_fields(
-                                ServerId::from_string_lossy(
-                                    rejected
-                                        .conflicting_generic_string_object
-                                        .metadata
-                                        .uid
-                                        .inner(),
-                                ),
-                                Some(rejected.conflicting_generic_string_object.serialized_model),
-                                rejected
-                                    .conflicting_generic_string_object
-                                    .metadata
-                                    .try_into()?,
-                                rejected
-                                    .conflicting_generic_string_object
-                                    .permissions
-                                    .try_into()?,
-                            )?;
-                            let boxed: Box<dyn ServerObject> = Box::new(gso);
-                            boxed
+                            boxed_rejected_generic_string_object::<ServerEnvVarCollection>(
+                                rejected.conflicting_generic_string_object,
+                            )?
                         }
                         GenericStringObjectFormat::JsonPreference => {
-                            let gso = GenericServerObject::<
-                                GenericStringObjectId,
-                                CloudPreferenceModel,
-                            >::try_from_graphql_fields(
-                                ServerId::from_string_lossy(
-                                    rejected
-                                        .conflicting_generic_string_object
-                                        .metadata
-                                        .uid
-                                        .inner(),
-                                ),
-                                Some(rejected.conflicting_generic_string_object.serialized_model),
-                                rejected
-                                    .conflicting_generic_string_object
-                                    .metadata
-                                    .try_into()?,
-                                rejected
-                                    .conflicting_generic_string_object
-                                    .permissions
-                                    .try_into()?,
-                            )?;
-                            let boxed: Box<dyn ServerObject> = Box::new(gso);
-                            boxed
+                            boxed_rejected_generic_string_object::<ServerPreference>(
+                                rejected.conflicting_generic_string_object,
+                            )?
                         }
                         GenericStringObjectFormat::JsonWorkflowEnum => {
-                            let gso = GenericServerObject::<
-                                GenericStringObjectId,
-                                CloudWorkflowEnumModel,
-                            >::try_from_graphql_fields(
-                                ServerId::from_string_lossy(
-                                    rejected
-                                        .conflicting_generic_string_object
-                                        .metadata
-                                        .uid
-                                        .inner(),
-                                ),
-                                Some(rejected.conflicting_generic_string_object.serialized_model),
-                                rejected
-                                    .conflicting_generic_string_object
-                                    .metadata
-                                    .try_into()?,
-                                rejected
-                                    .conflicting_generic_string_object
-                                    .permissions
-                                    .try_into()?,
-                            )?;
-                            let boxed: Box<dyn ServerObject> = Box::new(gso);
-                            boxed
+                            boxed_rejected_generic_string_object::<ServerWorkflowEnum>(
+                                rejected.conflicting_generic_string_object,
+                            )?
                         }
                         GenericStringObjectFormat::JsonAIFact => {
-                            let gso = GenericServerObject::<
-                                    GenericStringObjectId,
-                                    CloudAIFactModel,
-                                >::try_from_graphql_fields(
-                                    ServerId::from_string_lossy(
-                                        rejected
-                                            .conflicting_generic_string_object
-                                            .metadata
-                                            .uid
-                                            .inner(),
-                                    ),
-                                    Some(
-                                        rejected.conflicting_generic_string_object.serialized_model,
-                                    ),
-                                    rejected
-                                        .conflicting_generic_string_object
-                                        .metadata
-                                        .try_into()?,
-                                    rejected
-                                        .conflicting_generic_string_object
-                                        .permissions
-                                        .try_into()?,
-                                )?;
-                            let boxed: Box<dyn ServerObject> = Box::new(gso);
-                            boxed
+                            boxed_rejected_generic_string_object::<ServerAIFact>(
+                                rejected.conflicting_generic_string_object,
+                            )?
                         }
                         GenericStringObjectFormat::JsonAIExecutionProfile => {
-                            let gso = GenericServerObject::<
-                                GenericStringObjectId,
-                                CloudAIExecutionProfileModel,
-                            >::try_from_graphql_fields(
-                                ServerId::from_string_lossy(
-                                    rejected
-                                        .conflicting_generic_string_object
-                                        .metadata
-                                        .uid
-                                        .inner(),
-                                ),
-                                Some(rejected.conflicting_generic_string_object.serialized_model),
-                                rejected
-                                    .conflicting_generic_string_object
-                                    .metadata
-                                    .try_into()?,
-                                rejected
-                                    .conflicting_generic_string_object
-                                    .permissions
-                                    .try_into()?,
-                            )?;
-                            let boxed: Box<dyn ServerObject> = Box::new(gso);
-                            boxed
+                            boxed_rejected_generic_string_object::<ServerAIExecutionProfile>(
+                                rejected.conflicting_generic_string_object,
+                            )?
                         }
                         GenericStringObjectFormat::JsonMCPServer => {
-                            let gso = GenericServerObject::<
-                                GenericStringObjectId,
-                                CloudMCPServerModel,
-                            >::try_from_graphql_fields(
-                                ServerId::from_string_lossy(
-                                    rejected
-                                        .conflicting_generic_string_object
-                                        .metadata
-                                        .uid
-                                        .inner(),
-                                ),
-                                Some(rejected.conflicting_generic_string_object.serialized_model),
-                                rejected
-                                    .conflicting_generic_string_object
-                                    .metadata
-                                    .try_into()?,
-                                rejected
-                                    .conflicting_generic_string_object
-                                    .permissions
-                                    .try_into()?,
-                            )?;
-                            let boxed: Box<dyn ServerObject> = Box::new(gso);
-                            boxed
+                            boxed_rejected_generic_string_object::<ServerMCPServer>(
+                                rejected.conflicting_generic_string_object,
+                            )?
                         }
                         GenericStringObjectFormat::JsonTemplatableMCPServer => {
-                            let gso = GenericServerObject::<
-                                GenericStringObjectId,
-                                CloudTemplatableMCPServerModel,
-                            >::try_from_graphql_fields(
-                                ServerId::from_string_lossy(
-                                    rejected
-                                        .conflicting_generic_string_object
-                                        .metadata
-                                        .uid
-                                        .inner(),
-                                ),
-                                Some(rejected.conflicting_generic_string_object.serialized_model),
-                                rejected
-                                    .conflicting_generic_string_object
-                                    .metadata
-                                    .try_into()?,
-                                rejected
-                                    .conflicting_generic_string_object
-                                    .permissions
-                                    .try_into()?,
-                            )?;
-                            let boxed: Box<dyn ServerObject> = Box::new(gso);
-                            boxed
+                            boxed_rejected_generic_string_object::<ServerTemplatableMCPServer>(
+                                rejected.conflicting_generic_string_object,
+                            )?
                         }
                         GenericStringObjectFormat::JsonCloudEnvironment => {
-                            let gso = GenericServerObject::<
-                                GenericStringObjectId,
-                                CloudAmbientAgentEnvironmentModel,
-                            >::try_from_graphql_fields(
-                                ServerId::from_string_lossy(
-                                    rejected
-                                        .conflicting_generic_string_object
-                                        .metadata
-                                        .uid
-                                        .inner(),
-                                ),
-                                Some(rejected.conflicting_generic_string_object.serialized_model),
-                                rejected
-                                    .conflicting_generic_string_object
-                                    .metadata
-                                    .try_into()?,
-                                rejected
-                                    .conflicting_generic_string_object
-                                    .permissions
-                                    .try_into()?,
-                            )?;
-                            let boxed: Box<dyn ServerObject> = Box::new(gso);
-                            boxed
+                            boxed_rejected_generic_string_object::<ServerAmbientAgentEnvironment>(
+                                rejected.conflicting_generic_string_object,
+                            )?
                         }
                         GenericStringObjectFormat::JsonScheduledAmbientAgent => {
-                            let gso = GenericServerObject::<
-                                GenericStringObjectId,
-                                CloudScheduledAmbientAgentModel,
-                            >::try_from_graphql_fields(
-                                ServerId::from_string_lossy(
-                                    rejected
-                                        .conflicting_generic_string_object
-                                        .metadata
-                                        .uid
-                                        .inner(),
-                                ),
-                                Some(rejected.conflicting_generic_string_object.serialized_model),
-                                rejected
-                                    .conflicting_generic_string_object
-                                    .metadata
-                                    .try_into()?,
-                                rejected
-                                    .conflicting_generic_string_object
-                                    .permissions
-                                    .try_into()?,
-                            )?;
-                            let boxed: Box<dyn ServerObject> = Box::new(gso);
-                            boxed
+                            boxed_rejected_generic_string_object::<ServerScheduledAmbientAgent>(
+                                rejected.conflicting_generic_string_object,
+                            )?
                         }
                     };
                     Ok(UpdateCloudObjectResult::Rejected { object: boxed })

@@ -1,6 +1,6 @@
 //! Commands to interact with available agents via the public API.
 
-use warp_cli::agent::ListAgentConfigsArgs;
+use warp_cli::agent::ListAgentSkillsArgs;
 use warp_graphql::queries::get_oauth_connect_tx_status::OauthConnectTxStatus;
 use warp_graphql::queries::user_repo_auth_status::UserRepoAuthStatusEnum;
 use warpui::platform::TerminationMode;
@@ -8,7 +8,7 @@ use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use crate::ai::agent_sdk::oauth_flow::poll_oauth_until_terminal;
 use crate::ai::cloud_environments::GithubRepo;
-use crate::server::server_api::ai::AgentListItem;
+use crate::server::server_api::ai::AgentSkillItem;
 use crate::server::server_api::ServerApiProvider;
 
 const MAX_LINE_WIDTH: usize = 90;
@@ -17,8 +17,8 @@ const MAX_AUTH_ATTEMPTS: u32 = 8;
 /// Singleton model that runs async work for agent CLI commands.
 struct AgentConfigRunner;
 
-/// List all available agents.
-pub fn list_agents(ctx: &mut AppContext, args: ListAgentConfigsArgs) -> anyhow::Result<()> {
+/// List all available agent skills.
+pub fn list_skills(ctx: &mut AppContext, args: ListAgentSkillsArgs) -> anyhow::Result<()> {
     let runner = ctx.add_singleton_model(|_ctx| AgentConfigRunner);
     runner.update(ctx, |runner, ctx| runner.list(args.repo.clone(), ctx))
 }
@@ -222,7 +222,7 @@ impl AgentConfigRunner {
             println!("Fetching agent skills from your Warp environments...");
         }
 
-        let list_future = async move { ai_client.list_agents(repo).await };
+        let list_future = async move { ai_client.list_skills(repo).await };
 
         ctx.spawn(list_future, |_, result, ctx| match result {
             Ok(agents) => {
@@ -236,9 +236,9 @@ impl AgentConfigRunner {
     }
 
     /// Print a list of agents in a card-style format.
-    fn print_agents_table(agents: &[AgentListItem]) {
+    fn print_agents_table(agents: &[AgentSkillItem]) {
         if agents.is_empty() {
-            println!("No agents found.");
+            println!("No skills found.");
             return;
         }
 

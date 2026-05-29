@@ -90,7 +90,7 @@ const TABLE_SCROLL_REVEAL_MARGIN: Pixels = Pixels::new(8.);
 pub const EMBEDDED_ITEM_FIRST_LINE_HEIGHT: f32 = 24.;
 
 pub const TEXT_SPACING: BlockSpacing = BlockSpacing {
-    margin: Margin::uniform(4.).with_right(16.),
+    margin: Margin::uniform(0.).with_right(16.),
     padding: Padding::uniform(0.),
 };
 
@@ -122,8 +122,8 @@ pub const BROKEN_LINK_SPACING: BlockSpacing = BlockSpacing {
 
 pub const HEADER_SPACING: BlockSpacing = BlockSpacing {
     margin: Margin::uniform(4.)
-        .with_top(12.)
-        .with_bottom(12.)
+        .with_top(4.)
+        .with_bottom(4.)
         .with_right(16.),
     padding: Padding::uniform(0.),
 };

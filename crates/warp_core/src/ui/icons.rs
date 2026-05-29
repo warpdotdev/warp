@@ -318,6 +318,8 @@ pub enum Icon {
     Atom,
     Cognition,
     Dataflow04,
+    LayersThree01,
+    Aws,
     // Language-specific icons for the code block dropdown
     MermaidLang,
     GoLang,
@@ -643,6 +645,8 @@ impl From<Icon> for &'static str {
             Icon::Atom => "bundled/svg/atom-02.svg",
             Icon::Cognition => "bundled/svg/cognition.svg",
             Icon::Dataflow04 => "bundled/svg/dataflow-04.svg",
+            Icon::LayersThree01 => "bundled/svg/layers-three-01.svg",
+            Icon::Aws => "bundled/svg/aws.svg",
             Icon::MermaidLang => "bundled/svg/file_type/mermaid.svg",
             Icon::GoLang => "bundled/svg/file_type/go.svg",
             Icon::CppLang => "bundled/svg/file_type/cpp.svg",

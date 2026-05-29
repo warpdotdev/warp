@@ -27,6 +27,7 @@ use super::{
     JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness,
 };
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::mcp::JSONTransportType;
@@ -452,6 +453,7 @@ impl HarnessRunner for ClaudeHarnessRunner {
     async fn start(
         &self,
         foreground: &ModelSpawner<AgentDriver>,
+        setup_events: &SetupClientEventReporter,
     ) -> Result<CommandHandle, AgentDriverError> {
         // When resuming, we already have a server conversation id from the prior run.
         // Otherwise create a fresh external conversation record for this run.
@@ -463,14 +465,17 @@ impl HarnessRunner for ClaudeHarnessRunner {
                 id
             }
             None => {
-                let id = self
-                    .client
-                    .create_external_conversation(CLAUDE_CODE_FORMAT)
-                    .await
-                    .map_err(|e| {
-                        log::error!("Failed to create external conversation: {e}");
-                        AgentDriverError::ConfigBuildFailed(e)
-                    })?;
+                let id = setup_events
+                    .record_result(SetupStep::ThirdPartyHarnessExternalConversation, async {
+                        self.client
+                            .create_external_conversation(CLAUDE_CODE_FORMAT)
+                            .await
+                            .map_err(|e| {
+                                log::error!("Failed to create external conversation: {e}");
+                                AgentDriverError::ConfigBuildFailed(e)
+                            })
+                    })
+                    .await?;
                 log::info!("Created external conversation {id}");
                 id
             }
