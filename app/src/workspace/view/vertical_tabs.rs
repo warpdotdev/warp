@@ -128,6 +128,11 @@ fn vtab_pane_row_position_id(pane_group_id: EntityId, pane_id: PaneId) -> String
     format!("vertical_tabs:pane_row:{pane_group_id:?}:{pane_id}")
 }
 
+/// Save-position id for a tab group header's kebab button; anchors the group menu.
+pub(crate) fn vtab_group_kebab_position_id(group_id: TabGroupId) -> String {
+    format!("vertical_tabs:group_kebab:{group_id:?}")
+}
+
 fn terminal_title_fallback_font(agent_text: &TerminalAgentText) -> TerminalPrimaryLineFont {
     if agent_text.cli_agent.is_some() {
         TerminalPrimaryLineFont::Ui
@@ -2508,15 +2513,21 @@ fn render_grouped_tabs_header(
         .finish();
 
     let action_buttons = if show_action_buttons {
-        let kebab_button = render_tab_group_header_icon_button(
-            WarpIcon::DotsVertical,
-            TAB_GROUP_HEADER_ACTION_ICON_SIZE,
-            sub_text_color,
-            internal_colors::fg_overlay_2(theme),
-            mouse_states.kebab.clone(),
-            // No-op for now; TODO(johnturcoo) add tab group more-options menu.
-            None,
-        );
+        let kebab_button = SavePosition::new(
+            render_tab_group_header_icon_button(
+                WarpIcon::DotsVertical,
+                TAB_GROUP_HEADER_ACTION_ICON_SIZE,
+                sub_text_color,
+                internal_colors::fg_overlay_2(theme),
+                mouse_states.kebab.clone(),
+                Some(WorkspaceAction::ToggleTabGroupRightClickMenu {
+                    group_id,
+                    anchor: TabContextMenuAnchor::VerticalTabsKebab,
+                }),
+            ),
+            &vtab_group_kebab_position_id(group_id),
+        )
+        .finish();
         let close_button = render_tab_group_header_icon_button(
             WarpIcon::X,
             TAB_GROUP_HEADER_ACTION_ICON_SIZE,
@@ -2574,16 +2585,19 @@ fn render_grouped_tabs_header(
     .with_cursor(Cursor::PointingHand)
     .with_defer_events_to_children();
 
-    // Single-click toggles collapse; double-click opens the inline rename editor.
-    // No-op `on_right_click` keeps right-clicks from bubbling up to the panel's
-    // new-session menu handler.
+    // Click toggles collapse; double-click renames; right-click opens the group menu.
     hoverable = hoverable.on_click(move |ctx, _, _| {
         ctx.dispatch_typed_action(WorkspaceAction::ToggleTabGroupCollapsed(group_id));
     });
     hoverable = hoverable.on_double_click(move |ctx, _, _| {
         ctx.dispatch_typed_action(WorkspaceAction::RenameTabGroup(group_id));
     });
-    hoverable = hoverable.on_right_click(|_, _, _| {});
+    hoverable = hoverable.on_right_click(move |ctx, _, position| {
+        ctx.dispatch_typed_action(WorkspaceAction::ToggleTabGroupRightClickMenu {
+            group_id,
+            anchor: TabContextMenuAnchor::Pointer(position),
+        });
+    });
     hoverable.finish()
 }
 
@@ -2609,6 +2623,7 @@ fn render_grouped_tab_container(
         .clone();
 
     let member_count = members.len();
+    let group_id = group.id;
     let group = group.clone();
     let any_member_active = members
         .iter()
@@ -2703,8 +2718,13 @@ fn render_grouped_tab_container(
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)))
             .finish()
     })
-    // Consume right-clicks so they don't bubble to the panel's new-session menu handler.
-    .on_right_click(|_, _, _| {})
+    // Right-click on group chrome (not member rows) opens the group menu.
+    .on_right_click(move |ctx, _, position| {
+        ctx.dispatch_typed_action(WorkspaceAction::ToggleTabGroupRightClickMenu {
+            group_id,
+            anchor: TabContextMenuAnchor::Pointer(position),
+        });
+    })
     .with_defer_events_to_children()
     .finish()
 }
