@@ -1104,12 +1104,14 @@ impl SettingsWidget for IapCredentialsWidget {
         let (status_text, status_color): (String, ColorU) = match &state {
             IapCredentialsState::Missing => ("Not yet loaded".to_string(), disabled),
             IapCredentialsState::Refreshing { .. } => ("Refreshing…".to_string(), active),
-            IapCredentialsState::Loaded { expires_at, .. } => {
-                let remaining = expires_at.saturating_duration_since(instant::Instant::now());
+            IapCredentialsState::Loaded(cached) => {
+                let remaining = cached
+                    .expires_at
+                    .saturating_duration_since(instant::Instant::now());
                 let mins = remaining.as_secs() / 60;
                 (format!("Loaded (refreshes in ~{mins}m)"), active)
             }
-            IapCredentialsState::Failed { message } => (format!("Failed: {message}"), ansi_red),
+            IapCredentialsState::Failed { message, .. } => (format!("Failed: {message}"), ansi_red),
             IapCredentialsState::EnvInjected { .. } => {
                 ("Using injected token (WARP_IAP_TOKEN)".to_string(), active)
             }

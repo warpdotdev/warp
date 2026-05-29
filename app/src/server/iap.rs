@@ -9,8 +9,10 @@ use warp_core::channel::IapConfig;
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
+use crate::view_components::DismissibleToast;
+use crate::workspace::{ToastStack, WorkspaceAction};
+
 const PROACTIVE_REFRESH_BUFFER: Duration = Duration::from_secs(5 * 60);
-const FALLBACK_TOKEN_VALIDITY: Duration = Duration::from_secs(55 * 60);
 const INJECTED_TOKEN_ENV_VAR: &str = "WARP_IAP_TOKEN";
 
 const BASE_FAILURE_RETRY_DELAY: Duration = Duration::from_secs(30);
@@ -22,6 +24,18 @@ const MAX_FAILURE_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
 const MAX_FAILURE_RETRIES: u32 = 5;
 
 #[derive(Debug, Clone)]
+pub struct CachedToken {
+    pub token: String,
+    pub expires_at: Instant,
+}
+
+impl CachedToken {
+    fn valid_token(&self) -> Option<String> {
+        (self.expires_at > Instant::now()).then(|| self.token.clone())
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum IapCredentialsState {
     Missing,
     /// A credential fetch is in progress. `previous` carries the last
@@ -29,14 +43,13 @@ pub enum IapCredentialsState {
     /// outbound requests while we're refreshing so that proactive refreshes
     /// (i.e. refresh the token 5min before exp) don't prevent active requests.
     Refreshing {
-        previous: Option<(String, Instant)>,
+        previous: Option<CachedToken>,
     },
-    Loaded {
-        token: String,
-        expires_at: Instant,
-    },
+    Loaded(CachedToken),
     Failed {
         message: String,
+        // in case the last token still works... we can try to use that for a couple more mins
+        previous: Option<CachedToken>,
     },
     /// Represents a terminal state in the iap creds state machine.
     /// The gcloud refresh loop will never run, and an IAP challenge is logged
@@ -47,6 +60,17 @@ pub enum IapCredentialsState {
     EnvInjected {
         token: String,
     },
+}
+
+impl IapCredentialsState {
+    fn previous_token(&self) -> Option<CachedToken> {
+        match self {
+            IapCredentialsState::Loaded(cached) => Some(cached.clone()),
+            IapCredentialsState::Refreshing { previous }
+            | IapCredentialsState::Failed { previous, .. } => previous.clone(),
+            IapCredentialsState::EnvInjected { .. } | IapCredentialsState::Missing => None,
+        }
+    }
 }
 
 pub struct IapState {
@@ -71,13 +95,13 @@ impl IapState {
 
     pub fn get_cached(&self) -> Option<String> {
         match &*self.inner.read().expect("IAP state lock poisoned") {
-            IapCredentialsState::Loaded { token, .. }
-            | IapCredentialsState::EnvInjected { token } => Some(token.clone()),
-            IapCredentialsState::Refreshing { previous } => {
-                let (token, expires_at) = previous.as_ref()?;
-                (*expires_at > Instant::now()).then(|| token.clone())
+            IapCredentialsState::Loaded(cached) => Some(cached.token.clone()),
+            IapCredentialsState::EnvInjected { token } => Some(token.clone()),
+            IapCredentialsState::Refreshing { previous }
+            | IapCredentialsState::Failed { previous, .. } => {
+                previous.as_ref().and_then(CachedToken::valid_token)
             }
-            IapCredentialsState::Missing | IapCredentialsState::Failed { .. } => None,
+            IapCredentialsState::Missing => None,
         }
     }
 
@@ -95,24 +119,21 @@ impl IapState {
 
     fn set_refreshing(&self) {
         let mut state = self.inner.write().expect("IAP state lock poisoned");
-        let previous = match &*state {
-            IapCredentialsState::Loaded { token, expires_at } => Some((token.clone(), *expires_at)),
-            IapCredentialsState::Refreshing { previous } => previous.clone(),
-            IapCredentialsState::EnvInjected { .. }
-            | IapCredentialsState::Missing
-            | IapCredentialsState::Failed { .. } => None,
+        *state = IapCredentialsState::Refreshing {
+            previous: state.previous_token(),
         };
-        *state = IapCredentialsState::Refreshing { previous };
     }
 
-    fn set_loaded(&self, token: String, expires_at: Instant) {
-        *self.inner.write().expect("IAP state lock poisoned") =
-            IapCredentialsState::Loaded { token, expires_at };
+    fn set_loaded(&self, cached: CachedToken) {
+        *self.inner.write().expect("IAP state lock poisoned") = IapCredentialsState::Loaded(cached);
     }
 
     fn set_failed(&self, message: String) {
-        *self.inner.write().expect("IAP state lock poisoned") =
-            IapCredentialsState::Failed { message };
+        let mut state = self.inner.write().expect("IAP state lock poisoned");
+        *state = IapCredentialsState::Failed {
+            message,
+            previous: state.previous_token(),
+        };
     }
 }
 
@@ -197,8 +218,9 @@ impl IapManager {
                     return;
                 };
                 match result {
-                    Ok((token, expires_at)) => {
-                        state.set_loaded(token, expires_at);
+                    Ok(cached) => {
+                        let expires_at = cached.expires_at;
+                        state.set_loaded(cached);
                         manager.consecutive_failures = 0;
                         log::info!("IAP token refreshed");
                         ctx.emit(IapManagerEvent::StateChanged);
@@ -208,7 +230,11 @@ impl IapManager {
                     Err(err) => {
                         let message = format!("{err:#}");
                         log::warn!("IAP token fetch failed: {message}");
-                        state.set_failed(message);
+                        let is_first_failure_of_streak = manager.consecutive_failures == 0;
+                        state.set_failed(message.clone());
+                        if is_first_failure_of_streak {
+                            manager.show_failure_toast(&message, ctx);
+                        }
                         ctx.emit(IapManagerEvent::StateChanged);
                         ctx.notify();
                         manager.schedule_failure_retry(ctx);
@@ -257,6 +283,21 @@ impl IapManager {
             },
         );
     }
+
+    fn show_failure_toast(&self, message: &str, ctx: &mut ModelContext<Self>) {
+        let window_id = ctx
+            .windows()
+            .active_window()
+            .or_else(|| ctx.windows().ordered_window_ids().first().copied());
+        let Some(window_id) = window_id else {
+            return;
+        };
+        let toast: DismissibleToast<WorkspaceAction> =
+            DismissibleToast::error(format!("IAP credential refresh failed: {message}"));
+        ToastStack::handle(ctx).update(ctx, |stack, ctx| {
+            stack.add_ephemeral_toast(toast, window_id, ctx);
+        });
+    }
 }
 
 impl Entity for IapManager {
@@ -268,7 +309,7 @@ impl SingletonEntity for IapManager {}
 /// How long to wait for `auth print-identity-token` command to respond before killing it.
 const GCLOUD_TIMEOUT: Duration = Duration::from_secs(30);
 
-fn fetch_iap_token(audiences: &str, service_account_email: &str) -> Result<(String, Instant)> {
+fn fetch_iap_token(audiences: &str, service_account_email: &str) -> Result<CachedToken> {
     let args = [
         "auth",
         "print-identity-token",
@@ -324,28 +365,25 @@ fn fetch_iap_token(audiences: &str, service_account_email: &str) -> Result<(Stri
 
     anyhow::ensure!(!token.is_empty(), "gcloud returned an empty token");
 
-    let expires_at = get_expires_at(&token);
-    Ok((token, expires_at))
+    let expires_at = get_expires_at(&token)?;
+    Ok(CachedToken { token, expires_at })
 }
 
-/// Returns the [`Instant`] at which the given IAP identity token expires.
-fn get_expires_at(token: &str) -> Instant {
-    parse_exp_from_jwt(token)
-        .and_then(|exp| {
-            // `exp` is Unix wall-clock seconds; `Instant` is monotonic and
-            // has no Unix-time API, so bridge via `SystemTime::now()` to
-            // compute a delta, then add that to `Instant::now()`.
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
-            let secs_remaining = exp.checked_sub(now)?;
-            Some(Instant::now() + Duration::from_secs(secs_remaining))
-        })
-        .unwrap_or_else(|| {
-            log::warn!(
-                "Could not parse `exp` claim from IAP token; falling back to {}s validity",
-                FALLBACK_TOKEN_VALIDITY.as_secs()
-            );
-            Instant::now() + FALLBACK_TOKEN_VALIDITY
-        })
+fn get_expires_at(token: &str) -> Result<Instant> {
+    let exp = parse_exp_from_jwt(token).ok_or_else(|| {
+        anyhow::anyhow!("IAP token missing or unparseable `exp` claim; refusing to cache")
+    })?;
+    // `exp` is Unix wall-clock seconds; `Instant` is monotonic and
+    // has no Unix-time API, so bridge via `SystemTime::now()` to
+    // compute a delta, then add that to `Instant::now()`.
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| anyhow::anyhow!("system clock is before unix epoch: {err}"))?
+        .as_secs();
+    let secs_remaining = exp
+        .checked_sub(now)
+        .ok_or_else(|| anyhow::anyhow!("IAP token is already expired (exp={exp}, now={now})"))?;
+    Ok(Instant::now() + Duration::from_secs(secs_remaining))
 }
 
 fn parse_exp_from_jwt(token: &str) -> Option<u64> {
