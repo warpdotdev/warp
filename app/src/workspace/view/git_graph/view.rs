@@ -8,16 +8,18 @@
 
 use std::sync::Arc;
 
+use pathfinder_color::ColorU;
 use warpui::elements::{
-    Container, CrossAxisAlignment, Element, Empty, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, ParentElement, Shrinkable, Text, UniformList, UniformListState,
+    resizable_state_handle, Container, CornerRadius, CrossAxisAlignment, DragBarSide, Element, Empty,
+    Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
+    Resizable, ResizableStateHandle, Shrinkable, Text, UniformList, UniformListState,
 };
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use warp_core::ui::Icon;
 use warpui::ui_components::components::UiComponent;
 
-use super::data::{ChangedFile, CommitDetail, CommitNode};
+use super::data::{ChangedFile, CommitDetail, CommitNode, RefKind, RefLabel};
 use super::layout::{assign_lanes, GraphLayout, GraphRow};
 use super::row_canvas::GitGraphRowCanvas;
 use crate::appearance::Appearance;
@@ -33,6 +35,10 @@ pub(crate) enum GitGraphAction {
     SelectCommit(usize),
     /// 手动重新加载当前仓库的图谱。
     Refresh,
+    /// 加载下一页提交（追加到列表末尾）。
+    LoadMore,
+    /// 关闭详情区（取消选中）。
+    CloseDetail,
 }
 
 /// 视图向外发出的事件。暂无。
@@ -79,6 +85,16 @@ pub(crate) struct GitGraphView {
     detail_list_state: UniformListState,
     /// 刷新按钮的鼠标状态。
     refresh_mouse_state: MouseStateHandle,
+    /// 是否可能还有更多提交可加载（上一页取满即认为有）。
+    has_more: bool,
+    /// 是否正在加载下一页（防重入）。
+    loading_more: bool,
+    /// "加载更多"行的鼠标状态。
+    load_more_mouse_state: MouseStateHandle,
+    /// 详情区高度的可拖动状态。
+    detail_resizable_state: ResizableStateHandle,
+    /// 详情区关闭按钮的鼠标状态。
+    detail_close_mouse_state: MouseStateHandle,
 }
 
 /// 空布局，用于未加载/出错时。
@@ -102,6 +118,11 @@ impl GitGraphView {
             list_state: UniformListState::new(),
             detail_list_state: UniformListState::new(),
             refresh_mouse_state: MouseStateHandle::default(),
+            has_more: false,
+            loading_more: false,
+            load_more_mouse_state: MouseStateHandle::default(),
+            detail_resizable_state: resizable_state_handle(220.0),
+            detail_close_mouse_state: MouseStateHandle::default(),
         }
     }
 
@@ -127,6 +148,8 @@ impl GitGraphView {
     /// 重新加载当前工作目录的提交图谱。
     fn reload(&mut self, ctx: &mut ViewContext<Self>) {
         self.clear_selection();
+        self.has_more = false;
+        self.loading_more = false;
 
         let Some(dir) = self.working_dir.clone() else {
             self.commits = Arc::new(Vec::new());
@@ -153,6 +176,7 @@ impl GitGraphView {
                     }
                     match result {
                         Ok(commits) => {
+                            view.has_more = commits.len() == COMMIT_PAGE_SIZE;
                             view.layout = Arc::new(assign_lanes(&commits));
                             view.row_mouse_states =
                                 Arc::new((0..commits.len()).map(|_| MouseStateHandle::default()).collect());
@@ -163,6 +187,7 @@ impl GitGraphView {
                             view.commits = Arc::new(Vec::new());
                             view.layout = Arc::new(empty_layout());
                             view.row_mouse_states = Arc::new(Vec::new());
+                            view.has_more = false;
                             view.state = LoadState::Error(err.to_string());
                         }
                     }
@@ -175,6 +200,58 @@ impl GitGraphView {
             let _ = dir;
             self.state = LoadState::NoRepo;
             ctx.notify();
+        }
+    }
+
+    /// 加载下一页提交并追加到列表末尾。
+    fn load_more(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.loading_more || !self.has_more {
+            return;
+        }
+        let Some(dir) = self.working_dir.clone() else {
+            return;
+        };
+        let skip = self.commits.len();
+        self.loading_more = true;
+        ctx.notify();
+
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let expected = dir.clone();
+            ctx.spawn(
+                async move { super::data::load_commit_graph(&dir, COMMIT_PAGE_SIZE, skip).await },
+                move |view, result, ctx| {
+                    view.loading_more = false;
+                    // 仓库已切换、或起始位置已变（被 reload 打断），丢弃过期结果。
+                    if view.working_dir.as_deref() != Some(expected.as_path())
+                        || view.commits.len() != skip
+                    {
+                        ctx.notify();
+                        return;
+                    }
+                    match result {
+                        Ok(batch) => {
+                            view.has_more = batch.len() == COMMIT_PAGE_SIZE;
+                            let mut combined = (*view.commits).clone();
+                            combined.extend(batch);
+                            view.layout = Arc::new(assign_lanes(&combined));
+                            view.row_mouse_states = Arc::new(
+                                (0..combined.len()).map(|_| MouseStateHandle::default()).collect(),
+                            );
+                            view.commits = Arc::new(combined);
+                        }
+                        Err(_) => {
+                            view.has_more = false;
+                        }
+                    }
+                    ctx.notify();
+                },
+            );
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = (dir, skip);
+            self.loading_more = false;
         }
     }
 
@@ -217,26 +294,49 @@ impl GitGraphView {
     }
 
     /// 渲染可点击的提交列表（每行 = 泳道 + 文字，包一层 [`Hoverable`] 派发选中）。
+    /// 若可能还有更多提交，末尾追加一行"加载更多"。
     fn render_commit_list(&self) -> Box<dyn Element> {
         let commits = self.commits.clone();
         let layout = self.layout.clone();
         let mouse_states = self.row_mouse_states.clone();
-        let list = UniformList::new(self.list_state.clone(), commits.len(), move |range, app| {
+        let has_more = self.has_more;
+        let loading_more = self.loading_more;
+        let load_more_state = self.load_more_mouse_state.clone();
+        let commit_count = commits.len();
+        let total = commit_count + usize::from(has_more);
+
+        let list = UniformList::new(self.list_state.clone(), total, move |range, app| {
             let appearance = Appearance::as_ref(app);
             let lane_count = layout.max_lanes;
             let rows: Vec<Box<dyn Element>> = range
                 .filter_map(|i| {
-                    let commit = commits.get(i)?;
-                    let row = layout.rows.get(i)?;
-                    let element = render_graph_row(row, lane_count, commit, appearance);
-                    let state = mouse_states.get(i).cloned().unwrap_or_default();
-                    Some(
-                        Hoverable::new(state, move |_| element)
-                            .on_click(move |ctx, _, _| {
-                                ctx.dispatch_typed_action(GitGraphAction::SelectCommit(i));
-                            })
-                            .finish(),
-                    )
+                    if i < commit_count {
+                        let commit = commits.get(i)?;
+                        let row = layout.rows.get(i)?;
+                        let element = render_graph_row(row, lane_count, commit, appearance);
+                        let state = mouse_states.get(i).cloned().unwrap_or_default();
+                        Some(
+                            Hoverable::new(state, move |_| element)
+                                .on_click(move |ctx, _, _| {
+                                    ctx.dispatch_typed_action(GitGraphAction::SelectCommit(i));
+                                })
+                                .finish(),
+                        )
+                    } else {
+                        // 末行：加载更多。
+                        let label = if loading_more { "Loading more…" } else { "Load more" };
+                        let element = Container::new(text_line(label.to_string(), appearance, true))
+                            .with_horizontal_padding(12.)
+                            .with_vertical_padding(4.)
+                            .finish();
+                        Some(
+                            Hoverable::new(load_more_state.clone(), move |_| element)
+                                .on_click(move |ctx, _, _| {
+                                    ctx.dispatch_typed_action(GitGraphAction::LoadMore);
+                                })
+                                .finish(),
+                        )
+                    }
                 })
                 .collect();
             rows.into_iter()
@@ -244,9 +344,27 @@ impl GitGraphView {
         list.finish()
     }
 
-    /// 渲染选中提交的详情区。
+    /// 把详情区包进可拖动高度的 [`Resizable`]（顶部拖条上下拉），列表占其余空间。
+    fn render_resizable_detail(&self, appearance: &Appearance) -> Box<dyn Element> {
+        Resizable::new(
+            self.detail_resizable_state.clone(),
+            self.render_detail(appearance),
+        )
+        .with_dragbar_side(DragBarSide::Top)
+        .on_resize(move |ctx, _| {
+            ctx.notify();
+        })
+        .with_bounds_callback(Box::new(|window_size| {
+            let min = 100.0;
+            let max = (window_size.y() * 0.7).max(min);
+            (min, max)
+        }))
+        .finish()
+    }
+
+    /// 渲染选中提交的详情区（顶部带关闭按钮）。
     fn render_detail(&self, appearance: &Appearance) -> Box<dyn Element> {
-        match &self.detail {
+        let body: Box<dyn Element> = match &self.detail {
             DetailState::None => Empty::new().finish(),
             DetailState::Loading => render_message("Loading commit details…".to_string(), appearance),
             DetailState::Error(err) => {
@@ -256,7 +374,39 @@ impl GitGraphView {
                 let commit = self.selected.and_then(|i| self.commits.get(i));
                 render_detail_body(commit, detail, &self.detail_list_state, appearance)
             }
-        }
+        };
+
+        let close = icon_button(
+            appearance,
+            Icon::X,
+            false,
+            self.detail_close_mouse_state.clone(),
+        )
+        .build()
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(GitGraphAction::CloseDetail);
+        })
+        .finish();
+
+        let header = Container::new(
+            Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(text_line("Commit details".to_string(), appearance, true))
+                .with_child(close)
+                .finish(),
+        )
+        .with_horizontal_padding(12.)
+        .with_vertical_padding(4.)
+        .finish();
+
+        Flex::column()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(header)
+            .with_child(Shrinkable::new(1.0, body).finish())
+            .finish()
     }
 
     /// 顶部条：左侧提交计数 / 状态，右侧刷新按钮。
@@ -348,22 +498,8 @@ fn render_commit_text(commit: &CommitNode, appearance: &Appearance) -> Box<dyn E
             .finish(),
         );
 
-    if !commit.refs.is_empty() {
-        let label = commit
-            .refs
-            .iter()
-            .map(|r| r.name.clone())
-            .collect::<Vec<_>>()
-            .join(", ");
-        row = row.with_child(
-            Container::new(
-                Text::new_inline(format!("({label})"), font, size)
-                    .with_color(fg.into())
-                    .finish(),
-            )
-            .with_padding_right(8.)
-            .finish(),
-        );
+    for ref_label in &commit.refs {
+        row = row.with_child(render_ref_badge(ref_label, appearance));
     }
 
     row = row.with_child(
@@ -376,6 +512,38 @@ fn render_commit_text(commit: &CommitNode, appearance: &Appearance) -> Box<dyn E
         .with_padding_left(6.)
         .with_padding_right(12.)
         .finish()
+}
+
+/// 引用标签的徽标配色（按种类）。
+fn ref_badge_color(kind: RefKind) -> ColorU {
+    match kind {
+        RefKind::Head => ColorU { r: 0x4e, g: 0xc9, b: 0x7a, a: 0xff }, // 绿
+        RefKind::LocalBranch => ColorU { r: 0x4f, g: 0xc1, b: 0xff, a: 0xff }, // 蓝
+        RefKind::RemoteBranch => ColorU { r: 0xd6, g: 0x7c, b: 0xff, a: 0xff }, // 紫
+        RefKind::Tag => ColorU { r: 0xe6, g: 0xd2, b: 0x4f, a: 0xff }, // 黄
+    }
+}
+
+/// 渲染一个引用标签徽标：圆角半透明底 + 同色文字，右侧留间距。
+fn render_ref_badge(label: &RefLabel, appearance: &Appearance) -> Box<dyn Element> {
+    let color = ref_badge_color(label.kind);
+    let bg = ColorU { a: 0x33, ..color };
+    let badge = Container::new(
+        Text::new_inline(
+            label.name.clone(),
+            appearance.ui_font_family(),
+            appearance.ui_font_size(),
+        )
+        .with_color(color.into())
+        .finish(),
+    )
+    .with_background_color(bg)
+    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.)))
+    .with_horizontal_padding(5.)
+    .with_vertical_padding(1.)
+    .finish();
+
+    Container::new(badge).with_padding_right(4.).finish()
 }
 
 /// 渲染详情区主体：元信息 + 完整信息 + 变更文件列表。
@@ -486,6 +654,11 @@ impl TypedActionView for GitGraphView {
         match action {
             GitGraphAction::SelectCommit(index) => self.select_commit(*index, ctx),
             GitGraphAction::Refresh => self.reload(ctx),
+            GitGraphAction::LoadMore => self.load_more(ctx),
+            GitGraphAction::CloseDetail => {
+                self.clear_selection();
+                ctx.notify();
+            }
         }
     }
 }
@@ -526,9 +699,9 @@ impl View for GitGraphView {
                 column.with_child(render_message("No commits yet".to_string(), appearance))
             }
             LoadState::Loaded if self.selected.is_some() => column
-                // 列表与详情按 2:1 分配高度。
-                .with_child(Shrinkable::new(2.0, self.render_commit_list()).finish())
-                .with_child(Shrinkable::new(1.0, self.render_detail(appearance)).finish()),
+                // 列表填充上方空间；详情区高度可拖动（顶部拖条）。
+                .with_child(Shrinkable::new(1.0, self.render_commit_list()).finish())
+                .with_child(self.render_resizable_detail(appearance)),
             LoadState::Loaded => {
                 column.with_child(Shrinkable::new(1.0, self.render_commit_list()).finish())
             }
