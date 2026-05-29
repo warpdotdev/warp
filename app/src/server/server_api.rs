@@ -545,6 +545,10 @@ impl ServerApi {
     /// Inspects a response for the IAP challenge header and emits an
     /// `IapChallengeReceived` event if detected. Returns `true` if the
     /// response was an IAP challenge.
+    ///
+    /// TODO(isaiah): implement retries on IAP challenge failures so the
+    /// triggering request transparently succeeds after the refresh
+    /// completes instead of bubbling up a one-off error to the caller.
     fn check_for_iap_challenge(&self, response: &http_client::Response) -> bool {
         if self.iap_state.is_none() {
             return false;
@@ -554,9 +558,12 @@ impl ServerApi {
                 "Received IAP challenge (status {}); notifying IapManager",
                 response.status()
             );
-            let _ = self
+            if let Err(err) = self
                 .event_sender
-                .try_send(ServerApiEvent::IapChallengeReceived);
+                .try_send(ServerApiEvent::IapChallengeReceived)
+            {
+                log::warn!("Failed to enqueue IapChallengeReceived event: {err}");
+            }
             true
         } else {
             false
@@ -565,7 +572,11 @@ impl ServerApi {
 
     /// Wraps an eventsource stream so that any `InvalidStatusCode` error
     /// carrying an IAP challenge header triggers an `IapChallengeReceived`
-    /// event. The original error is passed through unchanged.
+    /// event. The original error is passed through unchanged — the
+    /// stream is not transparently reconnected after the refresh.
+    ///
+    /// TODO(isaiah): implement retries on IAP challenge failures so
+    /// streams transparently reconnect after the refresh completes.
     fn wrap_eventsource_with_iap_detection(
         &self,
         stream: http_client::EventSourceStream,
@@ -581,7 +592,11 @@ impl ServerApi {
                     log::warn!(
                         "Received IAP challenge on eventsource (status {status}); notifying IapManager"
                     );
-                    let _ = event_sender.try_send(ServerApiEvent::IapChallengeReceived);
+                    if let Err(err) = event_sender.try_send(ServerApiEvent::IapChallengeReceived) {
+                        log::warn!(
+                            "Failed to enqueue IapChallengeReceived event from eventsource: {err}"
+                        );
+                    }
                 }
             }
             event
