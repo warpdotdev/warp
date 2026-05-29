@@ -47,6 +47,28 @@ fn parses_first_slice_app_smoke_metadata_commands() {
     assert!(ControlArgs::try_parse_from(["warpctrl", "app", "ping"]).is_ok());
     assert!(ControlArgs::try_parse_from(["warpctrl", "app", "version"]).is_ok());
 }
+#[test]
+fn parses_control_mode_args_after_hidden_flag() {
+    let args = ControlArgs::try_parse_control_mode_from([
+        "warp",
+        "--warpctrl",
+        "tab",
+        "create",
+        "--instance",
+        "inst_123",
+    ])
+    .expect("control mode flag is present")
+    .expect("control mode args parse");
+    let ControlCommand::Tab(TabCommand::Create(target)) = args.command else {
+        panic!("expected tab create command");
+    };
+    assert_eq!(target.instance.as_deref(), Some("inst_123"));
+}
+
+#[test]
+fn ignores_args_without_control_mode_flag() {
+    assert!(ControlArgs::try_parse_control_mode_from(["warp", "tab", "create"]).is_none());
+}
 
 #[test]
 fn parses_execution_underlying_commands() {

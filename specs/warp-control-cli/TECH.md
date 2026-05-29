@@ -1,5 +1,5 @@
 # Context
-`PRODUCT.md` defines a standalone local Warp control CLI binary, provisionally named `warpctrl`, with an allowlisted action catalog, deterministic addressing across multiple running Warp app processes, and an incremental implementation plan.
+`PRODUCT.md` defines a local Warp control CLI command, provisionally named `warpctrl`, with an allowlisted action catalog, deterministic addressing across multiple running Warp app processes, and an incremental implementation plan. The public command should be exposed through an Oz-style wrapper script that invokes the existing channel-specific Warp binary in control mode, not through a separate standalone control binary.
 `SECURITY.md` is the normative security architecture for this feature. Implementation work must follow it for the top-level Settings > Scripting surface, protected mode storage, discovery metadata, credential storage, scoped safety grants, verified execution context, authenticated-user requirements, localhost/browser protections, permission-category enforcement, deterministic target resolution, and local app-side validation. The long-term architecture includes separate verified inside-Warp and outside-Warp invocation contexts, but the current foundation implementation supports outside-Warp requests only in the broadest mode and must reject `InvocationContext::InsideWarp` until the verified Warp-terminal proof broker lands. If this technical plan and `SECURITY.md` disagree, update the plan before implementing rather than treating the security architecture as optional follow-up work.
 The existing app already has three relevant building blocks:
 - `crates/http_server/src/lib.rs (7-61)` runs a native-only loopback Axum server on fixed port `9277`.
@@ -15,11 +15,11 @@ Warp also already has the app-side behaviors the control API should reuse rather
 - `app/src/workspace/action.rs (95-776)` is the largest existing inventory of user-visible workspace actions and informs the allowlist catalog.
 - `app/src/workspace/util.rs (12-18)` defines `PaneViewLocator`, and `app/src/pane_group/pane/mod.rs (84-177)` defines serializable pane identifiers, both useful reference points for selector resolution.
 - `app/src/uri/mod.rs (822-1093, 1166-1364)` demonstrates external intents being resolved into active windows/workspaces and dispatched into running app state.
-The current Oz CLI build/distribution model is also directly relevant because the control CLI should follow the same standalone-artifact approach rather than relying on the Warp GUI executable to service ordinary shell invocations:
+The current Oz CLI build/distribution model is also directly relevant because the control CLI should follow the same wrapper-script approach rather than introducing a separate bundled binary:
 - `crates/warp_cli/src/lib.rs (88-188, 316-418)` defines the existing CLI/parser conventions and channel-specific command naming support.
-- `app/src/lib.rs (631-746)` routes CLI invocations into CLI execution rather than GUI launch.
-- `script/macos/bundle (353-735)` and `script/linux/bundle (157-294)` build standalone CLI artifacts with the `standalone` feature.
-- `.github/workflows/create_release.yml (423-554, 660-858, 992-1276)` publishes macOS/Linux CLI artifacts.
+- `app/src/lib.rs (631-746)` routes CLI invocations into CLI execution rather than GUI launch, and already avoids GUI startup for commands such as `dump-debug-info`.
+- `script/macos/bundle (542-567)` writes the bundled Oz wrapper script into `Resources/bin` and uses `exec -a "$0"` to call the channel binary in `Contents/MacOS`.
+- `script/linux/bundle (157-198)` shows the existing channelized binary naming and the current standalone artifact code that should be removed from the `warpctrl` path rather than extended.
 - `script/windows/windows-installer.iss (235-263)` shows the current Windows helper-wrapper pattern for CLI access.
 The most important constraint surfaced by this code is that the current fixed-port local HTTP server cannot be the entire solution for a multi-process control API. If multiple local Warp processes attempt to expose mutating routes through the same fixed port, only one can own it. The control design therefore needs explicit per-process discovery and addressing.
 ## Proposed changes
@@ -46,7 +46,7 @@ Required security gates:
 - Remote control remains out of scope for the local same-machine credential model.
 The first implementation slice should include the protected enablement gate, credential issuance checks, and app-side permission-category enforcement even if the only mutating action initially implemented is `tab.create`. Shipping `tab.create` without the enablement and validation architecture would create the wrong foundation for the full catalog.
 ### 1. Protocol crate and stable envelope
-Create a small shared protocol crate or equivalent shared module used by both the app server and standalone CLI client. It should define:
+Create a small shared protocol crate or equivalent shared module used by both the app server and the `warpctrl` command-mode client. It should define:
 - Protocol version metadata.
 - Discovery/health response types.
 - Execution-context proof/request types for verified Warp-terminal invocations versus external invocations.
@@ -330,7 +330,7 @@ The first `warpctrl` implementation slice should land the minimum cross-cutting 
 - Protected local-only mode storage where outside-Warp control defaults off unless the broadest mode is selected.
 - As an interim foundation step, the local-control mode lives in the typed `LocalControlSettings` group as a private setting with `SyncToCloud::Never`, an explicit private storage key, and no `toml_path`. This keeps it out of the user-visible settings file and generated settings schema while leaving the protected-storage migration as a required pre-ship hardening step.
 - Discovery registry and CLI instance selection.
-- A standalone `warpctrl` binary or artifact path that runs control commands without starting the GUI app runtime.
+- A `warpctrl` wrapper entrypoint that invokes the existing channel-specific Warp binary with a hidden `--warpctrl` control-mode flag and runs control commands without starting the GUI app runtime.
 - Per-process authenticated local-control server that refuses sensitive work when outside-Warp control is disabled and rejects inside-Warp credential requests until verified terminal proof support is implemented.
 - Scoped credential issuance/storage with no raw credentials in plaintext discovery records, including execution-context fields and authenticated-user grant fields.
 - App-side request bridge and selector resolver.
@@ -343,7 +343,7 @@ Why `tab.create` first:
 - It exercises process discovery, local authentication, request bridging, selector defaults, app-context dispatch, and structured success/error output without introducing higher-risk terminal input execution.
 - It exercises the protected enablement and scoped-grant model before higher-risk action families depend on it.
 - It gives operators a concise end-to-end smoke test: discover a running instance, create a tab, and confirm the live app changed.
-The PR should also introduce the shell-facing CLI command grammar that the remainder of the protocol will reuse and establish a lightweight CLI startup path distinct from GUI startup.
+The PR should also introduce the shell-facing CLI command grammar that the remainder of the protocol will reuse and establish a lightweight control-mode startup path inside the existing Warp binary that dispatches before GUI startup.
 ### 10. Follow-up slices: fill out the remaining protocol in parallel
 After the first slice validates discovery, auth, selector resolution, CLI syntax, and server-to-app execution, follow-up slices can add the remaining allowlisted catalog in parallelized action-family groups. The baseline code should make new action additions mostly additive:
 - Extend the macro-backed action catalog.
@@ -353,37 +353,40 @@ After the first slice validates discovery, auth, selector resolution, CLI syntax
 - Add validation/tests.
 - Add CLI surface/tests.
 ### 11. CLI parsing and output libraries
-The `warpctrl` CLI must use the same argument parsing and output libraries as the existing Oz CLI so that conventions, derive patterns, and shell-completion generation remain consistent across both binaries.
-- **clap** (with the `derive` feature) for argument parsing, subcommand trees, and help generation. Both binaries share the `warp_cli` crate, so parser types defined there are reused directly.
+The `warpctrl` CLI must use the same argument parsing and output libraries as the existing Oz CLI so that conventions, derive patterns, and shell-completion generation remain consistent across both command surfaces.
+- **clap** (with the `derive` feature) for argument parsing, subcommand trees, and help generation. Oz and `warpctrl` share the `warp_cli` crate, so parser types defined there are reused directly.
 - **serde** / **serde_json** for JSON request/response serialization and for `--output-format json` output.
 - **clap_complete** for shell completion generation, reusing the same infrastructure the Oz CLI uses.
 - The `OutputFormat` enum (`Pretty`, `Json`, `Ndjson`, `Text`) is shared from `warp_cli::agent::OutputFormat` so human-readable vs. machine-readable output follows the same conventions.
 - New subcommand types for `warpctrl` live in `warp_cli::local_control` and follow the same `#[derive(Parser)]` / `#[derive(Subcommand)]` / `#[derive(Args)]` patterns used by the Oz CLI's top-level `Args` and `CliCommand` types.
-Do not introduce alternative parsing libraries (e.g., `structopt`, `argh`) or alternative serialization approaches. Keeping one set of libraries across both CLIs reduces dependency weight, ensures consistent `--help` formatting, and lets contributors move between the two surfaces without learning a different stack.
+Do not introduce alternative parsing libraries (e.g., `structopt`, `argh`) or alternative serialization approaches. Keeping one set of libraries across both command surfaces reduces dependency weight, ensures consistent `--help` formatting, and lets contributors move between the two surfaces without learning a different stack.
 ### 12. CLI packaging and release shape
-The shipped product shape should be a separate bundled `warpctrl` CLI binary that reuses shared CLI/protocol crates but does not depend on launching the GUI binary in command mode. Follow the Oz CLI release model as closely as practical:
+The shipped product shape should be a bundled `warpctrl` wrapper script or helper that calls the existing channel-specific Warp binary with a hidden `--warpctrl` flag. It should match the Oz app-bundle model: users invoke `warpctrl ...`, while the wrapper delegates to the real Warp executable that already carries channel identity, embedded resources, signing, and release metadata.
 - macOS:
-  - Add a standalone control CLI artifact path next to the existing Oz standalone CLI artifact flow.
-  - If the app bundle also exposes a wrapper/install flow, keep channelized naming consistent with the final product name decision.
+  - Add a `Resources/bin/warpctrl` wrapper next to the existing Oz wrapper script in the app bundle.
+  - The wrapper should use the same pattern as Oz: compute its script directory, `exec -a "$0"` the channel binary in `Contents/MacOS`, and append the hidden `--warpctrl` flag before forwarding user arguments.
+  - Keep channelized naming consistent with the final product name decision; if non-stable channels need aliases, the aliases should still point at the same channel app binary.
 - Linux:
-  - Extend bundle/release scripts to emit control CLI standalone artifacts and packages in the same broad pattern as the current Oz CLI tarball/deb/rpm/Arch package flow.
+  - Prefer installing a small `warpctrl` wrapper or symlink/helper in the same package as the Warp app, routed to the packaged channel binary with `--warpctrl`.
+  - Do not add a separate `--artifact warpctrl` standalone release path unless a later product decision explicitly chooses independent CLI packages.
 - Windows:
-  - Mirror the existing installer-generated helper-wrapper pattern first if that remains the canonical Oz behavior on Windows.
-  - If the product decision is to ship a true standalone Windows control CLI binary, add a dedicated release path in follow-up work rather than silently diverging from existing Oz precedent.
+  - Mirror the existing installer-generated helper-wrapper pattern first.
+  - If Windows cannot cheaply use a shell-script-style wrapper, generate the smallest possible helper that forwards to the installed channel binary with `--warpctrl` and preserves stdout/stderr behavior for scripts.
 Startup and dependency expectations:
-- The CLI process should initialize only command parsing, discovery, authentication material loading, protocol serialization, HTTP transport, and output formatting needed for the requested command.
-- The CLI should not initialize GUI state, rendering, terminal session models, app workspaces, or other main-app-only subsystems.
-- Startup cost should be treated as part of the product contract because control commands are expected to compose naturally in scripts and repeated interactive shell usage.
+- `app/src/lib.rs` should recognize `--warpctrl` before app launch and route into `warp_cli::local_control` just as current CLI commands route before GUI launch.
+- The control-mode path should initialize only command parsing, discovery, authentication material loading, protocol serialization, HTTP transport, output formatting, and any minimal shared state needed for channel/version/feature evaluation.
+- The control-mode path should not initialize GUI state, rendering, terminal session models, app workspaces, or other main-app-only subsystems.
+- Startup cost should be treated as part of the product contract because control commands are expected to compose naturally in scripts and repeated interactive shell usage. Add a focused startup-path regression test or smoke check so the wrapper path stays close to Oz command latency.
 Naming decision:
-- Product examples use provisional `warpctrl ...` command lines for the standalone local-control binary.
-- Final artifact filenames, channelized aliases, and installer exposure should be chosen before broad rollout to avoid churn in bundle scripts, docs, shell completions, and release workflow files.
+- Product examples use provisional `warpctrl ...` command lines for the local-control wrapper.
+- Final wrapper names, channelized aliases, and installer exposure should be chosen before broad rollout to avoid churn in bundle scripts, docs, shell completions, and release workflow files.
 ## Implementation Plan
 ### Branch stack
 Use raw git for the stack; do not use Graphite for these branches.
 The active durable review stack is the recovered `zach/warp-cli-v2/*` stack. This stack is the review architecture for the current implementation because it preserves the fan-in work while slicing it into branch-sized review boundaries. The older branch names in the pre-recovery plan are historical source material only and should not be used as the active PR stack.
 Spec ownership is part of the branch architecture. The only v2 branch that may intentionally change `specs/warp-control-cli/PRODUCT.md`, `TECH.md`, `SECURITY.md`, or `README.md` is `zach/warp-cli-v2/contract-spec-sync`. After a spec change lands there, propagate it upward through every higher v2 branch with raw git rebases so those files remain byte-identical across the stack. Higher implementation branches must not make independent spec edits except when resolving a propagation conflict in a way that preserves the bottom-branch content.
 The intended v2 stack is:
-1. `zach/warp-cli-v2/contract-spec-sync` — create from `origin/master`. It owns the product, technical, security, and README specs plus the shared contract/foundation: protocol crate shape, discovery/auth scaffolding, selector and error types, action metadata/catalog structure, Scripting settings surface, protected local-control settings, local-control server/bridge skeleton, standalone `warpctrl` binary skeleton, packaging hooks, module split, `WarpCtrlBehavior` scaffolding, and the minimum first-slice smoke path needed to prove the end-to-end architecture.
+1. `zach/warp-cli-v2/contract-spec-sync` — create from `origin/master`. It owns the product, technical, security, and README specs plus the shared contract/foundation: protocol crate shape, discovery/auth scaffolding, selector and error types, action metadata/catalog structure, Scripting settings surface, protected local-control settings, local-control server/bridge skeleton, `warpctrl` wrapper/control-mode entrypoint, packaging hooks, module split, `WarpCtrlBehavior` scaffolding, and the minimum first-slice smoke path needed to prove the end-to-end architecture.
 2. `zach/warp-cli-v2/auth-security` — create from `zach/warp-cli-v2/contract-spec-sync`. It owns authentication and security enforcement that applies across command families: scoped grants, execution-context policy, authenticated-user/API-key plumbing, denial paths, Settings > Scripting security controls, and tests proving high-risk actions cannot run without the required identity and permission category.
 3. `zach/warp-cli-v2/readonly-capability-targets` — create from `zach/warp-cli-v2/auth-security`. It owns structural metadata reads, capability/action metadata, target selector parsing and resolution, opaque IDs, active window/tab/pane/session targeting, metadata-read permission checks, and read-only CLI output for these surfaces. It must not expose terminal output, input buffers, history, Drive object contents, or other underlying user data.
 4. `zach/warp-cli-v2/appstate-file-drive-views` — create from `zach/warp-cli-v2/readonly-capability-targets`. It owns read-only app-state, file view, Drive view, block/input/history-style underlying-data read surfaces that are approved for the public catalog, along with the required underlying-data-read permission checks. It must keep local filesystem content reads/writes outside the v0 public catalog unless the specs are updated first.
@@ -423,7 +426,7 @@ When `FeatureFlag::WarpControlCli` is disabled in the Warp app:
 - no `/v1/control` or `/v1/control/credentials` local server endpoints should be exposed;
 - command-palette/keybinding entries related specifically to installing, configuring, or using `warpctrl` should be hidden;
 - tests should cover both enabled and disabled flag states with the repo's normal feature-flag override helpers.
-The standalone `warpctrl` binary can still exist in a build where the app feature is disabled, but it should find no compatible enabled app instance and should return a structured no-instance or feature-disabled error rather than relying on hidden server state.
+The `warpctrl` wrapper may still be installed in a build where the app feature is disabled, but the hidden control-mode entrypoint should find no compatible enabled app instance and should return a structured no-instance or feature-disabled error rather than relying on hidden server state.
 ### Merge and review strategy
 Keep PR boundaries aligned with the v2 stack:
 - PR1: `zach/warp-cli-v2/contract-spec-sync` into `master` for specs, shared contracts, protocol, CLI skeleton, settings, bridge, module scaffolding, and first-slice smoke behavior.
@@ -472,9 +475,9 @@ sequenceDiagram
 ## Testing and validation
 Map tests directly to `PRODUCT.md` behavior.
 - Catalog/parser implementation-status invariant:
-  - `ActionImplementationStatus::Implemented` means the action is complete enough for standalone CLI users in the selected build: it has a parseable `warpctrl ...` command route, generated help/completion/docs coverage, a protocol parameter mapping, and an app-side bridge handler.
-  - Catalog entries that have only an internal app handler, only protocol metadata, or only a planned product command must remain `Stub` until the standalone CLI route and generated surfaces ship.
-  - Tests must enumerate the implemented catalog and prove each implemented action has at least one parseable standalone CLI example that maps to the same `ActionKind`.
+  - `ActionImplementationStatus::Implemented` means the action is complete enough for wrapper-script CLI users in the selected build: it has a parseable `warpctrl ...` command route, generated help/completion/docs coverage, a protocol parameter mapping, and an app-side bridge handler.
+  - Catalog entries that have only an internal app handler, only protocol metadata, or only a planned product command must remain `Stub` until the wrapper-backed CLI route and generated surfaces ship.
+  - Tests must enumerate the implemented catalog and prove each implemented action has at least one parseable `warpctrl ...` CLI example that maps to the same `ActionKind`.
   - Tests must also prove each shipped parser route maps to an allowlisted catalog action and that help/completion generation includes the implemented route. `action list --implemented-only`, `capability list --implemented-only`, discovery metadata, shell completions, generated docs, and app-side bridge support must not drift silently from one another.
 - Security architecture:
   - Protected mode tests proving outside-Warp control defaults off, disabled and inside-only modes reject outside-Warp credential issuance, sensitive discovery, and mutating requests with `local_control_disabled`, the broadest mode allows outside-Warp credential issuance, and current inside-Warp credential requests are rejected with `execution_context_not_allowed`.
@@ -505,17 +508,17 @@ Map tests directly to `PRODUCT.md` behavior.
 - Behavior 30:
   - Multi-process integration-style coverage using two synthetic discovery records and mock health responders, plus manual testing with multiple channel builds where practical.
 - Packaging:
-  - `--artifact cli`-style bundle smoke tests or script-level checks for each supported platform path touched by the first slice.
-  - Startup-path tests or focused checks confirming `warpctrl` dispatches commands without entering GUI-app launch code.
+  - Bundle smoke tests or script-level checks for each supported platform path touched by the first slice, proving the `warpctrl` wrapper is installed and forwards to the channel binary with `--warpctrl`.
+  - Startup-path tests or focused checks confirming `warpctrl` dispatches commands through early control-mode routing without entering GUI-app launch code.
   - Shell completions/help output checks once final command naming is selected.
 ### Computer-use CLI verification
-Before any stacked PR is considered ready for review, run an end-to-end computer-use verification pass against a cloud built validation artifact from that branch. The validation artifact is a Warp app build and standalone `warpctrl` binary built by the validation agent from the exact commit under review, with `warp_control_cli` compiled in and `FeatureFlag::WarpControlCli` enabled at runtime.
+Before any stacked PR is considered ready for review, run an end-to-end computer-use verification pass against a cloud built validation artifact from that branch. The validation artifact is a Warp app build plus its packaged `warpctrl` wrapper from the exact commit under review, with `warp_control_cli` compiled in and `FeatureFlag::WarpControlCli` enabled at runtime.
 The verifier must launch the built Warp app, enable the Scripting settings needed for the command category under test, and capture screenshots or screen recordings that prove both the terminal invocation and the user-visible result of each basic command family. Every `warpctrl` invocation executed during verification must have a durable screenshot captured immediately after the command runs, showing the exact command line and full terminal output in either pretty or JSON mode. Screenshots should be saved as durable artifacts and named by branch, invocation context, command family, command name, and whether the image shows terminal output or app UI state.
 Verification screenshots should make the cause and effect visible in a single image whenever possible. The preferred composition is a staggered two-window layout where the terminal running the `warpctrl` command remains visible and unobscured, while the target Warp window or terminal is also visible enough to prove the UI state before or after the command. For outside-Warp invocations, use one external terminal window for the CLI command and one built Warp app window, staggered so the screenshot shows both the command/output and the Warp UI result. For inside-Warp invocations, use two Warp terminal windows or panes when possible: one Warp terminal running `warpctrl` and a second Warp terminal or Warp window showing the target/result state, staggered so both are visible in the same screenshot. Avoid screenshots that show only the CLI terminal or only the Warp UI when a combined view can be captured.
 Before/after screenshots for visible mutations should preserve the same staggered layout so reviewers can compare the command context and UI state directly. If a single combined screenshot is not possible because of window-manager, display-size, or focus limitations, the verifier must capture paired screenshots with the same ordinal: one terminal-output screenshot that fully shows the command and output, and one UI screenshot that shows the resulting Warp state. The manifest entry should explain why the combined composition was not possible. Screenshots should not crop out the command, exit status, selected Warp target, or relevant visible UI effect.
 Before every computer-use scenario, the verifier must explicitly ask and answer, "What is the best way to show the impact of this CLI command?" The verifier should then put Warp into a state where the expected effect is clearly visible before running the command. For example, syntax-highlighting changes should start with recognizable text in the input editor that will visibly change; font-size and zoom changes should start with enough terminal text or UI chrome to compare scale; tab or pane rename/color commands should keep the affected tab or pane label visible; app-state mutation commands should make the target workspace, tab, pane, input box, or surface visible; and denial paths should show the relevant Settings > Scripting state or target state that makes the denial meaningful. Each manifest entry for a visible or user-facing command should describe the chosen proof setup, the expected visual effect, and any setup screenshot used to establish the before state.
 After each command that has a visible or user-facing result, the verifier must use computer vision on the captured screenshot or screen recording to inspect whether the visible Warp state matches the expected effect. The verifier should record the visual inspection result in the manifest, including unexpected UI changes, missing visual evidence, ambiguous screenshots, focus/onboarding artifacts, or differences between JSON success and the visible app state. JSON success alone is not sufficient for visible-effect validation; if the screenshot does not clearly prove the expected effect, the case should be marked failed or blocked with an explanation, even when the CLI response is successful.
-The verifier must exercise every invocation context implemented by the branch under review. For the current foundation branch, inside-Warp verification means proving `InsideWarp` requests are rejected even though the default mode is enabled within Warp until proof verification exists. Once verified Warp-terminal support is implemented, the verifier must also run `warpctrl` from a terminal session inside the feature-flag-enabled Warp app and prove the app-issued execution-context proof is accepted and Settings > Scripting mode gates the invocation context. The outside-Warp path must run the same `warpctrl` binary from an external terminal or automation shell outside the built Warp app and prove outside-Warp control is default-off, then works only after selecting the broadest mode in Settings > Scripting.
+The verifier must exercise every invocation context implemented by the branch under review. For the current foundation branch, inside-Warp verification means proving `InsideWarp` requests are rejected even though the default mode is enabled within Warp until proof verification exists. Once verified Warp-terminal support is implemented, the verifier must also run `warpctrl` from a terminal session inside the feature-flag-enabled Warp app and prove the app-issued execution-context proof is accepted and Settings > Scripting mode gates the invocation context. The outside-Warp path must run the packaged `warpctrl` wrapper from an external terminal or automation shell outside the built Warp app and prove outside-Warp control is default-off, then works only after selecting the broadest mode in Settings > Scripting.
 The verification matrix should cover every implemented command in `PRODUCT.md` at least once in JSON output mode. The verifier must capture a terminal-output screenshot for every command invocation, including successful calls, expected denials, unsupported stubs, and fail-closed policy gates. Where there is a visible UI effect, the verifier must also capture app UI screenshots after the command runs, and before the command when that is needed to prove a before/after state transition. At minimum:
 - read-only metadata commands show successful CLI output in a terminal screenshot and, for active/focus/list commands, a visible target that matches the output;
 - underlying data read commands show successful CLI output only when the underlying-data-read permission is enabled, plus terminal screenshots for disabled-permission denials;
@@ -588,11 +591,11 @@ flowchart LR
   - Mitigation: allowlisted setting keys only, with private/debug/derived settings rejected.
 - Command execution risk:
   - Mitigation: keep `input.run`/typed workflow execution in the catalog but implement it only in `zach/warp-cli-v2/execution-underlying` after authenticated scripting identity, underlying-data-mutation permission, deterministic target resolution, and audit coverage are in place.
-- Packaging churn due to provisional executable naming:
+- Packaging churn due to provisional wrapper naming:
   - Mitigation: document `warpctrl` as provisional and settle final aliases before broad release workflow rollout.
-- Heavyweight CLI startup caused by sharing the GUI binary's launch path:
-  - Mitigation: ship a separate control CLI artifact with a narrow initialization path and keep GUI-only subsystems out of ordinary CLI command execution.
+- Heavyweight CLI startup caused by sharing the app binary:
+  - Mitigation: route `--warpctrl` before GUI launch, keep the control-mode initialization path as narrow as current Oz command dispatch, and add startup-path checks that fail if the wrapper initializes GUI-only subsystems.
 ## Follow-ups
-- Decide the final artifact filename/channel alias scheme around the provisional `warpctrl ...` public command surface.
-- Decide whether Windows should follow the current Oz wrapper pattern indefinitely or gain standalone control CLI artifacts.
+- Decide the final wrapper filename/channel alias scheme around the provisional `warpctrl ...` public command surface.
+- Decide whether Windows should follow the current Oz helper-wrapper pattern indefinitely or gain a different forwarding helper.
 - Decide whether a future subscription/watch protocol is useful for scripts that want live state changes, rather than single request/response calls only.

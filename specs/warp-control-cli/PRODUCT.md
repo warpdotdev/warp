@@ -1,10 +1,10 @@
 # Summary
-Warp should ship an allowlisted standalone local control CLI binary, provisionally named `warpctrl`, that acts as an agent control plane for operating Warp itself. `warpctrl` lets agents and developers script the same classes of user-visible actions they can already perform inside the running app: manipulating windows, tabs, panes, sessions, terminal blocks, appearance, settings, Warp Drive views, and selected UI surfaces. The CLI should operate against one or more already-running local Warp app processes through a stable machine protocol, with deterministic target selection and clear errors when a process or target is ambiguous.
+Warp should ship an allowlisted local control CLI command, provisionally named `warpctrl`, that acts as an agent control plane for operating Warp itself. `warpctrl` is exposed as an Oz-style wrapper script that invokes the existing channel-specific Warp binary in control mode rather than as a separate standalone binary. `warpctrl` lets agents and developers script the same classes of user-visible actions they can already perform inside the running app: manipulating windows, tabs, panes, sessions, terminal blocks, appearance, settings, Warp Drive views, and selected UI surfaces. The CLI should operate against one or more already-running local Warp app processes through a stable machine protocol, with deterministic target selection and clear errors when a process or target is ambiguous.
 ## Problem
 Warp already has rich interactive actions, but they are primarily reachable through UI, keybindings, menus, or deeplinks. Agents can use native tools for files, code, shell commands, MCP calls, and many context reads, but they cannot reliably operate Warp's own product surfaces: arranging the user's workspace, focusing the correct pane, opening Warp Drive objects, presenting settings, or recovering from ambiguous UI state. Developers also cannot reliably compose those same actions into shell scripts, demos, automation, or agent workflows, and there is no general local protocol for addressing a specific running Warp instance, window, pane, session, terminal block, Warp Drive object, or other uniquely named Warp entity.
 ## Goals / Non-goals
 Goals:
-- Provide a first-class, scriptable standalone `warpctrl` binary for controlling running Warp app processes.
+- Provide a first-class, scriptable `warpctrl` command for controlling running Warp app processes.
 - Make Warp's own UI and app state available to agents through a typed, permissioned control plane instead of brittle screen automation or arbitrary internal dispatch.
 - Keep CLI startup lightweight by avoiding GUI-app startup or full terminal initialization for routine control commands.
 - Keep the surface allowlisted and finite instead of exposing arbitrary internal actions.
@@ -16,7 +16,7 @@ Non-goals:
 - Exposing every internal app action, debug action, developer-only helper, or privileged state mutation.
 - Treating the CLI as a general RPC escape hatch into Warp internals.
 - Replacing native agent tools for code editing, file operations, shell execution, web/MCP calls, or attached conversation/block context when those tools already solve the task better.
-- Requiring developers or automation to spawn the Warp GUI executable in CLI mode for ordinary control commands.
+- Requiring developers or automation to directly invoke the Warp app executable path for ordinary control commands; the packaged `warpctrl` wrapper should hide that implementation detail.
 - Requiring the first implementation slice to ship every action in the catalog.
 ## Primary user stories
 These stories define the most compelling product uses for `warpctrl`. The command catalog below is intentionally broader, but the product should prioritize surfaces that agents cannot already operate well through native tools.
@@ -157,7 +157,7 @@ Persistent settings changes, Warp Drive creation or sharing, cross-app preferenc
    - Arbitrary setting names outside the allowlist.
    - Accepted-command submission and agent-prompt submission until they receive a separate product/security review.
    Terminal command execution and typed Warp Drive object mutations are no longer excluded from the full product scope, but they belong to later authenticated underlying-data mutation branches and require stronger authenticated-user and permission gates than app-state or settings mutations. Local file content reads, writes, appends, deletes, and other filesystem-content mutations are excluded from the public `warpctrl` catalog; file/path support is limited to app-state intents such as opening a path in Warp and metadata reads of files already open in Warp.
-27. CLI command names should be noun-oriented and discoverable. During the provisional standalone-binary phase, the control CLI should expose a `warpctrl ...` command surface:
+27. CLI command names should be noun-oriented and discoverable. During the provisional wrapper-script phase, the control CLI should expose a `warpctrl ...` command surface:
    - `warpctrl instance list`
    - `warpctrl app active`
    - `warpctrl tab create`
@@ -191,15 +191,15 @@ Persistent settings changes, Warp Drive creation or sharing, cross-app preferenc
 33. The first `warpctrl` implementation slice should ship the smallest end-to-end vertical slice that proves:
    - The current implementation supports outside-Warp local-control requests only; verified inside-Warp requests are specified for future work and rejected until the app-issued terminal proof broker exists.
    - Process discovery and target resolution work.
-   - A standalone CLI binary can reach a running local Warp process without launching or initializing the GUI app.
+   - The wrapper-script command can reach a running local Warp process through the existing Warp binary's early control-mode dispatch without launching or initializing the GUI app.
    - `warpctrl tab create` creates a new terminal tab in the selected running instance.
    - The command returns a structured success or failure payload suitable for human-readable and JSON output.
    The first slice should include the minimum health/introspection commands needed to discover a running instance and exercise `tab.create`.
-34. Follow-up PRs should fill out the remaining catalog in parallelizable groups once the protocol, discovery model, target resolution, error model, `tab.create` action path, and standalone `warpctrl` packaging shape have been validated by the first slice.
+34. Follow-up PRs should fill out the remaining catalog in parallelizable groups once the protocol, discovery model, target resolution, error model, `tab.create` action path, and wrapper-script `warpctrl` packaging shape have been validated by the first slice.
 35. The protocol transport should be designed so that the default target is localhost but the CLI can be extended in the future to target remote URLs (e.g., a Warp instance on another machine or a hosted control endpoint). This is not in scope for the first implementation but should not be precluded by the architecture.
 ## API command surface
 The public `warpctrl` API is organized around nouns that map to stable user-facing entities. Command names are intentionally not a dump of every internal `WorkspaceAction`, `TerminalAction`, keybinding, or command-palette binding. Internal actions inform the catalog, but a command is added only when it has a stable user-facing behavior, typed parameters, deterministic target resolution, and an explicit risk classification.
-Catalog support status is part of the public API contract. An action reported as `implemented` by `warpctrl action list --implemented-only`, `warpctrl capability list --implemented-only`, or app discovery metadata must be reachable through a standalone `warpctrl ...` parser route, represented in generated help/completions/docs, and backed by an app-side bridge handler in the selected app build. Planned actions without that complete path must be reported as stubs or planned entries, even if an internal app handler already exists.
+Catalog support status is part of the public API contract. An action reported as `implemented` by `warpctrl action list --implemented-only`, `warpctrl capability list --implemented-only`, or app discovery metadata must be reachable through the wrapper-backed `warpctrl ...` parser route, represented in generated help/completions/docs, and backed by an app-side bridge handler in the selected app build. Planned actions without that complete path must be reported as stubs or planned entries, even if an internal app handler already exists.
 ### State and data taxonomy
 The product surface must distinguish what kind of state a command touches. This distinction is part of the public API and the permission model, not just an implementation detail.
 - **Metadata reads** inspect app structure or configuration metadata without exposing user content: instances, windows, tabs, panes, sessions, capability metadata, action metadata, keybinding metadata, theme names, setting keys, and other structural state.
@@ -365,7 +365,7 @@ These are underlying-data mutations because they can modify user data, execute c
 The command surface must continue to exclude debug-only, crash-only, auth-token, heap-dump, and arbitrary internal dispatch actions even when those actions are available in command palette or keybinding registries. Examples that remain excluded are app crash/panic helpers, access-token copy helpers, heap profile dumps, debug reset actions, raw view-tree debugging, and broad internal action-by-string execution.
 ## Branch stacking and delivery model
 The Warp Control CLI work should ship as a raw-git branch stack so the combined specs/foundation slice, read-only expansion, and mutating expansion remain reviewable independently:
-- `zach/warp-cli-core-foundation` is the bottom review branch and targets `master`. It owns `specs/warp-control-cli/PRODUCT.md`, `TECH.md`, `SECURITY.md`, and supporting docs alongside the first implementation slice: shared protocol, discovery/auth scaffolding, outside-Warp Settings > Scripting gates, local-control bridge/server, standalone `warpctrl` binary, packaging hooks, and the smallest safe end-to-end action. Verified inside-Warp invocation is documented for future implementation but is not supported by this branch.
+- `zach/warp-cli-core-foundation` is the bottom review branch and targets `master`. It owns `specs/warp-control-cli/PRODUCT.md`, `TECH.md`, `SECURITY.md`, and supporting docs alongside the first implementation slice: shared protocol, discovery/auth scaffolding, outside-Warp Settings > Scripting gates, local-control bridge/server, `warpctrl` wrapper entrypoint, packaging hooks, and the smallest safe end-to-end action. Verified inside-Warp invocation is documented for future implementation but is not supported by this branch.
 - `zach/warp-cli-readonly-metadata` stacks on `zach/warp-cli-core-foundation` and implements structural metadata reads, including instance/app health, active-chain, windows, tabs, panes, sessions, and action metadata.
 - `zach/warp-cli-readonly-data-settings` stacks on `zach/warp-cli-readonly-metadata` and fills in underlying-data reads plus read-only settings/appearance/docs, including terminal block output, input-buffer reads, history reads, and allowlisted settings metadata.
 - `zach/warp-cli-authenticated-scripting` stacks on `zach/warp-cli-readonly-data-settings` and implements authenticated-user grant plumbing for both verified Warp-terminal invocations and external API-key scripting identities. It does not broaden action support by itself; it makes later high-risk branches enforceable.

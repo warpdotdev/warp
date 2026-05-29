@@ -26,10 +26,6 @@ test = false
 name = "warp"
 path = "src/bin/local.rs"
 test = false
-[[bin]]
-name = "warpctrl"
-path = "src/bin/warpctrl.rs"
-test = false
 
 [[bin]]
 name = "integration"
