@@ -859,33 +859,40 @@ the keymap. It uses bracketed paste:
   that suppresses its own emit during a Warp-driven paste so the
   post-paste `WarpBufferState` fires once (not once per byte).
   The handler distinguishes Warp-driven pastes from user-driven
-  ones via an app→shell marker primitive:
-  - Warp emits a private-use OSC immediately before the
-    bracketed-paste start marker: `\e]7771;1\e\\` (set marker)
-    before `\e[200~`, and `\e]7771;0\e\\` (clear) after
-    `\e[201~`. The OSC code `7771` is reserved for this
-    purpose in the same private-use space Warp already uses
-    for its other shell-integration OSCs.
-  - The shell-side handler is installed at bootstrap and reads
-    the OSC from stdin via the keymap: zsh binds the OSC
-    prefix sequence to a `_warp_paste_marker` ZLE widget that
-    sets `__warp_paste_in_flight` to 1 or 0 based on the
-    payload; bash binds it via `bind -x '"\e]7771;...": …'`
-    using readline's OSC-prefix support (readline 7+); fish
-    binds it via `bind \e]7771\; ...`. The shell variable is
-    `typeset -g` (zsh) / regular global (bash) / `set -g`
-    (fish) so it survives between the marker set and the
-    paste handler's read.
-  - The paste handler checks `__warp_paste_in_flight` at
-    `\e[200~` time; if set, it consumes the paste without
-    emitting a `WarpBufferState` per byte and emits one final
-    `WarpBufferState` after `\e[201~`. If unset (user paste
-    from the OS clipboard), the handler runs its normal path.
-  - User-side toggling. The marker is shell-local; user code
-    that sets `__warp_paste_in_flight` would confuse the
-    handler. Documented as a reserved variable in the
-    `__warp_` namespace alongside `__warp_bindings_hash`
-    (§1's preservation rules).
+  ones via an in-payload marker, *not* a separate signaling
+  channel:
+  - Warp emits `\e[200~__WARP_PASTE__<bytes>\e[201~` for
+    Warp-driven syncs. The literal token `__WARP_PASTE__` is
+    a 13-byte sentinel reserved in the same `__warp_`
+    namespace as the bootstrap's private variables and
+    functions (§1 preservation rules).
+  - The bootstrap installs a paste handler at the
+    paste-handler hook of each shell (zsh: wrap
+    `bracketed-paste-magic` via `add-zsh-hook`-style
+    composition over `paste-finish`; bash: install a
+    paste-stage filter via the readline paste path; fish:
+    wrap `fish_paste`). The handler reads the full pasted
+    content (which all three shells deliver to their paste
+    handler as a single string), checks whether the first
+    13 bytes are `__WARP_PASTE__`; if yes, strips the
+    sentinel, writes the remainder to `$BUFFER` /
+    `$READLINE_LINE` / `commandline` directly, and emits one
+    final `WarpBufferState`. If no (user paste from OS
+    clipboard), the handler runs the shell's standard
+    paste path unchanged.
+  - This approach avoids an app→shell signaling primitive
+    that the shells don't natively support (binding OSC
+    prefixes via `bindkey` / `bind -x` is fragile under
+    PTY-read boundaries and prefix-timeout rules; encoding
+    the marker inside the paste content sidesteps that
+    entirely).
+  - The sentinel is rejected if a user-driven paste happens
+    to start with the same 13 bytes (vanishingly unlikely
+    but documentable). To make the check unambiguous the
+    sentinel includes a per-session nonce: the bootstrap
+    captures `WARP_BOOTSTRAP_NONCE`'s first 8 chars and uses
+    `__WARP_PASTE_<nonce>__` as the actual sentinel, so a
+    real user paste of the literal token doesn't collide.
 - **Bracketed-paste capability is a v1 requirement on bash.**
   The bash bootstrap detects the setting at startup by parsing
   `bind -v` output for `set enable-bracketed-paste on` and
@@ -895,17 +902,22 @@ the keymap. It uses bracketed paste:
   Category C also re-reads `bind -v` for this flag). When the
   setting is off (user has it disabled in `~/.inputrc` or in an
   older readline, or flips it mid-session), the bootstrap emits
-  a one-time-per-state-change diagnostic and Warp suppresses
+  a one-time-per-state-change diagnostic *and a user-visible
+  toast on the affected tab* — "Category C bindings disabled
+  on this tab — bracketed-paste was turned off; re-enable with
+  `bind 'set enable-bracketed-paste on'`". Warp suppresses
   Category C dispatch from the block-mode editor on that tab —
   the binding still parses and appears in the debug view as
   `unsupported (bracketed-paste disabled)`, but pressing the
   bound key falls through to Warp's default for that key
   (PRODUCT #11/#16 fallthrough applies). When the setting
-  flips back on, Category C dispatch resumes from the next
-  keystroke. zsh and fish always have bracketed-paste available
-  in supported versions and need no detection. Lifting the
-  bash requirement is a follow-up gated on an explicit per-byte
-  literal-insert primitive landing in readline.
+  flips back on, a symmetric toast ("Category C bindings
+  re-enabled — bracketed-paste is on again") fires and Cat C
+  dispatch resumes from the next keystroke. zsh and fish
+  always have bracketed-paste available in supported versions
+  and need no detection. Lifting the bash requirement is a
+  follow-up gated on an explicit per-byte literal-insert
+  primitive landing in readline.
 
 **Cursor position is end-of-buffer (v1).** After the paste the
 cursor sits at end-of-buffer. Warp does not reposition it in v1
@@ -1281,10 +1293,20 @@ current capability alongside the `ShellBindings` payload:
 - On zsh and fish the result is constant and is informational
   only; the app does not flip the mode.
 - On bash, when blesh is detected for the first time (the user
-  ran `source ble.sh` since the last snapshot), the capability
-  flips from `batched`-only to both-available. Symmetrically,
-  if blesh is unloaded mid-session, capability falls back to
-  `batched`-only.
+  ran `source ble.sh` since the last snapshot — detected via
+  `[[ -n "${_ble_version:-}" ]]`, since blesh exports
+  `_ble_version` on init and unsets it on unload), the
+  capability flips from `batched`-only to both-available.
+  Symmetrically, if blesh is unloaded mid-session
+  (`_ble_version` is absent on a snapshot where it was present
+  previously), capability falls back to `batched`-only. On the
+  unload transition the bootstrap traverses the installed
+  `__warp_wrap_NNN` wrappers and either re-installs them
+  through the plain-readline `bind -x` path (Cat C keys, which
+  have a plain-readline equivalent) or `unset -f`s them (the
+  per-keystroke hooks installed only because blesh provided
+  the surface — these have no plain-readline equivalent and
+  must not stick around).
 
 When the bash capability flip happens:
 
