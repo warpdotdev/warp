@@ -93,6 +93,7 @@ This guarantees that launching the `agy` command is handled as a standard shell 
 
 1. Add `AntigravityNotifications` to the `FeatureFlag` enum.
 2. Wire it into the default dogfood or beta flag sets.
+3. Ensure this flag strictly gates **all** `agy` integrations codebase-wide, including command classification (`input_classifier`), notification listener wiring, and plugin manager instantiations, to guarantee the feature can be completely disabled.
 
 ### 3f. Add Plugin Manager (`app/src/terminal/cli_agent_sessions/plugin_manager/`)
 
@@ -129,7 +130,7 @@ This guarantees that launching the `agy` command is handled as a standard shell 
        skills_path: PathBuf::from(".antigravitycli").join("skills"),
    }
    ```
-3. Map it in `crates/ai/src/skills/conversion.rs` (`From<SkillProvider>` and `convert_provider` conversions). Since `warp_multi_agent_api` is imported from `warp-proto-apis`, if the proto does not yet contain `Antigravity` as a provider type, the implementation-safe behavior is to fall back by mapping it to the generic `Agent` provider type (or simply returning `None` and skipping remote sync) to prevent build failures.
+3. Map it in `crates/ai/src/skills/conversion.rs` (`From<SkillProvider>` and `convert_provider` conversions). Since `warp_multi_agent_api` is imported from `warp-proto-apis`, if the proto does not yet contain `Antigravity` as a provider type, the implementation-safe behavior is to fall back by mapping it to the generic `Agents` proto enum variant to ensure the `From<SkillProvider>` conversion remains infallible.
 
 ## 4. End-to-End Flow
 
