@@ -5,7 +5,7 @@
 //! `load_*` 只做"组装命令 + 调用解析"的薄封装。
 
 #[cfg(not(target_family = "wasm"))]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(not(target_family = "wasm"))]
 use anyhow::Result;
@@ -192,6 +192,79 @@ pub(crate) async fn load_commit_graph(
     ];
     let stdout = warp_util::git::run_git_command(repo_root, &args).await?;
     Ok(parse_commit_log(&stdout))
+}
+
+/// 发现 `anchor` 相关的所有 git 仓库根，按展示顺序返回（去重）：
+/// 1. 锚点自身所属仓库：用 `git rev-parse --show-toplevel` 向上探——锚点可能是某仓库的
+///    子目录（如终端 `cd` 进了 `repo/crates`），这一步保留"在子目录里也能看父仓库历史"的行为，
+///    且作为列表第一项（最贴近用户当前所在位置）。
+/// 2. 第 1..=`depth` 层子目录里的仓库：见 [`scan_subdir_repos`]。
+///
+/// 用于"一个目录下挂着多个独立 git 项目"的场景（如把 `~/Projects` 作为工作目录）。
+#[cfg(not(target_family = "wasm"))]
+pub(crate) async fn discover_repositories(anchor: &Path, depth: usize) -> Vec<PathBuf> {
+    let mut repos: Vec<PathBuf> = Vec::new();
+
+    // 锚点自身所属仓库（向上探）。失败（不在任何仓库内）则跳过，不报错。
+    if let Ok(stdout) =
+        warp_util::git::run_git_command(anchor, &["rev-parse", "--show-toplevel"]).await
+    {
+        let toplevel = stdout.trim();
+        if !toplevel.is_empty() {
+            repos.push(PathBuf::from(toplevel));
+        }
+    }
+
+    // 子目录里的独立仓库（与锚点所属仓库去重）。
+    for repo in scan_subdir_repos(anchor, depth) {
+        if !repos.contains(&repo) {
+            repos.push(repo);
+        }
+    }
+
+    repos
+}
+
+/// 扫描 `anchor` 的第 1..=`depth` 层子目录，返回其中带 `.git` 标记（仓库根）的目录，按路径排序。
+///
+/// 语义：`anchor` 自身是第 0 层，其直接子目录是第 1 层。`depth==0` 时不扫描任何子目录。
+/// 命中一个仓库根后**不再深入其内部**——避免把它的 submodule / 嵌套仓库当作并列的独立项目。
+#[cfg(not(target_family = "wasm"))]
+fn scan_subdir_repos(anchor: &Path, depth: usize) -> Vec<PathBuf> {
+    use std::collections::VecDeque;
+
+    let mut found: Vec<PathBuf> = Vec::new();
+    // BFS 队列：(目录, 该目录所处层级)。
+    let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::new();
+    queue.push_back((anchor.to_path_buf(), 0));
+
+    while let Some((dir, level)) = queue.pop_front() {
+        // 已到达深度上限：该层目录不再展开其子目录。
+        if level >= depth {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            // 只看目录（忽略普通文件；`.git` 既可能是目录也可能是文件，用 exists 判定）。
+            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let path = entry.path();
+            if path.join(".git").exists() {
+                // 命中仓库根：收录，且不入队其子目录（不深入仓库内部）。
+                found.push(path);
+            } else {
+                // 普通目录：继续向下一层扫描。
+                queue.push_back((path, level + 1));
+            }
+        }
+    }
+
+    // read_dir 顺序依赖文件系统，排序保证列表稳定（UI 下拉顺序、测试可复现）。
+    found.sort();
+    found
 }
 
 /// 一个提交涉及的单个变更文件及其增删行数。

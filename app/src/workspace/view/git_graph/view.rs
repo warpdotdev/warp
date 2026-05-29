@@ -7,6 +7,7 @@
 //! 出现跨视图共享需求时再抽。
 
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use async_channel::Sender;
@@ -16,16 +17,18 @@ use warpui::elements::shimmering_text::{
     ShimmerConfig, ShimmeringTextElement, ShimmeringTextStateHandle,
 };
 use warpui::elements::{
-    resizable_state_handle, Align, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
-    Container, CornerRadius, CrossAxisAlignment, DragBarSide, Element, Empty, Fill, Flex, Hoverable,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Resizable,
-    ResizableStateHandle, ScrollbarWidth, SelectableArea, SelectionHandle, Shrinkable, Text,
-    UniformList, UniformListState,
+    resizable_state_handle, Align, ChildView, ClippedScrollStateHandle, ClippedScrollable,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DragBarSide, Element, Empty, Fill,
+    Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
+    Resizable, ResizableStateHandle, ScrollbarWidth, SelectableArea, SelectionHandle, Shrinkable,
+    Text, UniformList, UniformListState,
 };
 use warpui::keymap::macros::id;
 use warpui::keymap::FixedBinding;
 use warpui::units::Pixels;
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+use warpui::{
+    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+};
 
 use warp_core::ui::Icon;
 use warpui::ui_components::components::UiComponent;
@@ -34,8 +37,10 @@ use super::data::{ChangedFile, CommitDetail, CommitNode, RefKind, RefLabel};
 use super::layout::{assign_lanes, GraphLayout, GraphRow};
 use super::row_canvas::GitGraphRowCanvas;
 use crate::appearance::Appearance;
+use crate::settings::{GitSettings, GitSettingsChangedEvent};
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::item_highlight::ItemHighlightState;
+use crate::view_components::dropdown::{Dropdown, DropdownItem};
 
 /// 每页加载的提交数。
 const COMMIT_PAGE_SIZE: usize = 200;
@@ -54,11 +59,14 @@ pub(crate) fn init(app: &mut AppContext) {
 }
 
 /// 视图自身的 action。
-#[derive(Debug, Clone)]
+/// 实现 `PartialEq` 以满足仓库下拉的 [`DropdownItemAction`] 约束。
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum GitGraphAction {
     /// 选中列表中第 N 行提交并加载其详情。
     SelectCommit(usize),
-    /// 手动重新加载当前仓库的图谱。
+    /// 切换到发现列表中第 N 个仓库（多仓库时由顶部下拉派发）。
+    SelectRepository(usize),
+    /// 手动重新扫描工作目录并重新加载图谱。
     Refresh,
     /// 关闭详情区（取消选中）。
     CloseDetail,
@@ -91,8 +99,15 @@ enum DetailState {
 }
 
 pub(crate) struct GitGraphView {
-    /// 当前跟随的工作目录（由左侧 panel 在活跃目录变化时推入）。
-    working_dir: Option<std::path::PathBuf>,
+    /// 仓库发现的锚点目录（由左侧 panel 在活跃目录变化时推入）：在它自身所属仓库
+    /// 之外，还会按 [`GitSettings::git_graph_scan_depth`] 向下扫描子目录里的独立仓库。
+    scan_anchor: Option<PathBuf>,
+    /// 发现到的仓库根列表（锚点所属仓库在最前）。多于 1 个时顶部展示仓库下拉。
+    repositories: Arc<Vec<PathBuf>>,
+    /// 当前选中（正在展示历史）的仓库在 `repositories` 中的下标。
+    selected_repo: Option<usize>,
+    /// 多仓库时顶部的仓库选择下拉（子视图，派发 [`GitGraphAction::SelectRepository`]）。
+    repo_dropdown: ViewHandle<Dropdown<GitGraphAction>>,
     /// 已加载的提交（用 `Arc` 便于零拷贝移动进 [`UniformList`] 的构建闭包）。
     commits: Arc<Vec<CommitNode>>,
     /// 由 [`assign_lanes`] 算出的逐行泳道布局，与 `commits` 一一对应。
@@ -147,8 +162,24 @@ impl GitGraphView {
             |_, _| {},
         );
 
+        let repo_dropdown = ctx.add_typed_action_view(Dropdown::new);
+        // 收缩到仓库名宽度，放进顶部条左侧时才不会撑满、把右侧刷新按钮挤出去。
+        repo_dropdown.update(ctx, |dropdown, ctx| {
+            dropdown.set_main_axis_size(MainAxisSize::Min, ctx);
+        });
+
+        // 扫描深度变化时，对当前锚点重新发现仓库（用户在设置里调深度后面板即时生效）。
+        ctx.subscribe_to_model(&GitSettings::handle(ctx), |me, _, event, ctx| {
+            if matches!(event, GitSettingsChangedEvent::GitGraphScanDepth { .. }) {
+                me.discover(ctx);
+            }
+        });
+
         Self {
-            working_dir: None,
+            scan_anchor: None,
+            repositories: Arc::new(Vec::new()),
+            selected_repo: None,
+            repo_dropdown,
             commits: Arc::new(Vec::new()),
             layout: Arc::new(empty_layout()),
             state: LoadState::NoRepo,
@@ -169,16 +200,128 @@ impl GitGraphView {
         }
     }
 
-    /// 设置要展示的工作目录；变化时触发重新加载。
+    /// 设置仓库发现的锚点目录；变化时触发重新发现仓库。
     pub(crate) fn set_working_directory(
         &mut self,
-        dir: Option<std::path::PathBuf>,
+        dir: Option<PathBuf>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if self.working_dir == dir {
+        if self.scan_anchor == dir {
             return;
         }
-        self.working_dir = dir;
+        self.scan_anchor = dir;
+        self.discover(ctx);
+    }
+
+    /// 当前选中仓库的路径。
+    fn current_repo_path(&self) -> Option<PathBuf> {
+        self.selected_repo
+            .and_then(|i| self.repositories.get(i).cloned())
+    }
+
+    /// 扫描锚点目录、发现其中的所有 git 仓库（异步），完成后填充仓库列表并加载选中仓库。
+    /// 尽量保持原先选中的仓库（路径仍在新列表中则继续选它），否则默认选第一个。
+    fn discover(&mut self, ctx: &mut ViewContext<Self>) {
+        // 记住当前选中仓库，发现完成后尽量保持选中同一个。
+        let previous = self.current_repo_path();
+        self.clear_selection();
+
+        let Some(anchor) = self.scan_anchor.clone() else {
+            self.set_repositories(Vec::new(), None, ctx);
+            return;
+        };
+
+        self.state = LoadState::Loading;
+        ctx.notify();
+
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let depth = *GitSettings::as_ref(ctx).git_graph_scan_depth as usize;
+            let expected = anchor.clone();
+            ctx.spawn(
+                async move { super::data::discover_repositories(&anchor, depth).await },
+                move |view, repos, ctx| {
+                    if view.scan_anchor.as_deref() != Some(expected.as_path()) {
+                        // 锚点已切换，丢弃过期结果。
+                        return;
+                    }
+                    // 保持原选中仓库；找不到则默认第一个。
+                    let selected = previous
+                        .and_then(|p| repos.iter().position(|r| *r == p))
+                        .or_else(|| (!repos.is_empty()).then_some(0));
+                    view.set_repositories(repos, selected, ctx);
+                },
+            );
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = (anchor, previous);
+            self.set_repositories(Vec::new(), None, ctx);
+        }
+    }
+
+    /// 应用一次仓库发现的结果：更新列表与下拉，再加载选中仓库（无选中则进入 NoRepo 占位）。
+    fn set_repositories(
+        &mut self,
+        repos: Vec<PathBuf>,
+        selected: Option<usize>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.repositories = Arc::new(repos);
+        self.selected_repo = selected;
+        self.update_repo_dropdown(ctx);
+
+        if self.selected_repo.is_some() {
+            self.reload(ctx);
+        } else {
+            self.commits = Arc::new(Vec::new());
+            self.layout = Arc::new(empty_layout());
+            self.row_mouse_states = Arc::new(Vec::new());
+            self.state = LoadState::NoRepo;
+            ctx.notify();
+        }
+    }
+
+    /// 用当前仓库列表与选中项刷新顶部仓库下拉的菜单项与选中态。
+    fn update_repo_dropdown(&self, ctx: &mut ViewContext<Self>) {
+        let repos = self.repositories.clone();
+        let selected = self.selected_repo;
+        self.repo_dropdown.update(ctx, |dropdown, ctx| {
+            dropdown.set_items(
+                repos
+                    .iter()
+                    .enumerate()
+                    .map(|(i, path)| {
+                        // 展示目录名，悬停 tooltip 给出完整路径（同名仓库可借此区分）。
+                        DropdownItem::new(repo_display_name(path), GitGraphAction::SelectRepository(i))
+                            .with_tooltip(path.to_string_lossy().to_string())
+                    })
+                    .collect(),
+                ctx,
+            );
+            if let Some(sel) = selected {
+                dropdown.set_selected_by_index(sel, ctx);
+            }
+            // 只有一个仓库时无可切换项，置灰不可点（仅用于一致地展示当前仓库名）。
+            if repos.len() <= 1 {
+                dropdown.set_disabled(ctx);
+            } else {
+                dropdown.set_enabled(ctx);
+            }
+        });
+    }
+
+    /// 切换当前展示的仓库。
+    ///
+    /// 不在此同步调用 [`Self::update_repo_dropdown`]：本方法由下拉项点击经 `dispatch_typed_action`
+    /// **同步**冒泡而来，此刻 [`Dropdown`] 视图正被其自身 `handle_action` 可变借用，再 `.update()`
+    /// 它会重入借用而崩溃。表头选中态由 [`Dropdown`] 收到 `ItemSelected` 时自更新，无需我们干预；
+    /// 列表/选中的权威重建只在异步的 [`Self::set_repositories`] 里做（不存在重入）。
+    fn select_repository(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
+        if self.selected_repo == Some(index) || index >= self.repositories.len() {
+            return;
+        }
+        self.selected_repo = Some(index);
         self.reload(ctx);
     }
 
@@ -197,7 +340,7 @@ impl GitGraphView {
         }
     }
 
-    /// 重新加载当前工作目录的提交图谱。
+    /// 重新加载当前选中仓库的提交图谱。
     fn reload(&mut self, ctx: &mut ViewContext<Self>) {
         self.clear_selection();
         self.has_more = false;
@@ -206,7 +349,7 @@ impl GitGraphView {
         // 否则用户滚到下面刷新后会停在中下部，被迫手动滚回。
         self.list_state.scroll_to(0);
 
-        let Some(dir) = self.working_dir.clone() else {
+        let Some(dir) = self.current_repo_path() else {
             self.commits = Arc::new(Vec::new());
             self.layout = Arc::new(empty_layout());
             self.row_mouse_states = Arc::new(Vec::new());
@@ -225,7 +368,7 @@ impl GitGraphView {
             ctx.spawn(
                 async move { super::data::load_commit_graph(&dir, COMMIT_PAGE_SIZE, 0).await },
                 move |view, result, ctx| {
-                    if view.working_dir.as_deref() != Some(expected.as_path()) {
+                    if view.current_repo_path().as_deref() != Some(expected.as_path()) {
                         // 仓库已切换，丢弃过期结果。
                         return;
                     }
@@ -270,7 +413,7 @@ impl GitGraphView {
         if self.loading_more || !self.has_more {
             return;
         }
-        let Some(dir) = self.working_dir.clone() else {
+        let Some(dir) = self.current_repo_path() else {
             return;
         };
         let skip = self.commits.len();
@@ -285,7 +428,7 @@ impl GitGraphView {
                 move |view, result, ctx| {
                     view.loading_more = false;
                     // 仓库已切换、或起始位置已变（被 reload 打断），丢弃过期结果。
-                    if view.working_dir.as_deref() != Some(expected.as_path())
+                    if view.current_repo_path().as_deref() != Some(expected.as_path())
                         || view.commits.len() != skip
                     {
                         ctx.notify();
@@ -340,7 +483,7 @@ impl GitGraphView {
 
         #[cfg(not(target_family = "wasm"))]
         {
-            let Some(dir) = self.working_dir.clone() else {
+            let Some(dir) = self.current_repo_path() else {
                 return;
             };
             ctx.spawn(
@@ -494,12 +637,14 @@ impl GitGraphView {
             .finish()
     }
 
-    /// 顶部条：左侧提交计数 / 状态，右侧刷新按钮。
+    /// 顶部条：左侧为仓库选择下拉，右侧为刷新按钮。
     fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let label = match &self.state {
-            LoadState::Loaded => format!("{} commits", self.commits.len()),
-            LoadState::Loading => "Loading…".to_string(),
-            _ => String::new(),
+        // 有仓库就显示下拉（单仓库时下拉被置灰、仅展示当前仓库名，保持布局一致）；
+        // 无仓库（NoRepo）时左侧留空，不显示没有内容的空下拉。
+        let left: Box<dyn Element> = if self.repositories.is_empty() {
+            Empty::new().finish()
+        } else {
+            ChildView::new(&self.repo_dropdown).finish()
         };
         let refresh = icon_button(
             appearance,
@@ -518,7 +663,7 @@ impl GitGraphView {
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(text_line(label, appearance, true))
+                .with_child(left)
                 .with_child(refresh)
                 .finish(),
         )
@@ -526,6 +671,13 @@ impl GitGraphView {
         .with_vertical_padding(6.)
         .finish()
     }
+}
+
+/// 仓库下拉里展示的名字：取目录名（完整路径由 tooltip 给出）。
+fn repo_display_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string_lossy().to_string())
 }
 
 /// 一行普通文字（单行、不换行）。
@@ -842,7 +994,9 @@ impl TypedActionView for GitGraphView {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             GitGraphAction::SelectCommit(index) => self.select_commit(*index, ctx),
-            GitGraphAction::Refresh => self.reload(ctx),
+            GitGraphAction::SelectRepository(index) => self.select_repository(*index, ctx),
+            // 手动刷新时重新扫描仓库（用户可能新增/删除了子仓库），再加载选中仓库。
+            GitGraphAction::Refresh => self.discover(ctx),
             GitGraphAction::CloseDetail => {
                 self.clear_selection();
                 ctx.notify();
@@ -877,8 +1031,8 @@ impl View for GitGraphView {
             .with_main_axis_alignment(MainAxisAlignment::Start)
             .with_cross_axis_alignment(CrossAxisAlignment::Start);
 
-        // 有工作目录时显示顶部条（含刷新按钮）。
-        if self.working_dir.is_some() {
+        // 有锚点目录时显示顶部条（仓库下拉 + 刷新按钮）。
+        if self.scan_anchor.is_some() {
             column = column.with_child(self.render_header(appearance));
         }
 

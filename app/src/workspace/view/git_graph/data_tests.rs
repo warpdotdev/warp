@@ -197,3 +197,69 @@ fn parse_commit_detail_handles_empty_numstat() {
     assert_eq!(detail.message, "msg");
     assert!(detail.files.is_empty());
 }
+
+// ===== scan_subdir_repos：子目录仓库发现（纯文件系统逻辑，用临时目录构造，无需真实 git）=====
+
+/// 在 `root` 下创建目录 `rel`，并给它放一个 `.git` 标记目录（模拟仓库根）。
+#[cfg(not(target_family = "wasm"))]
+fn make_repo(root: &std::path::Path, rel: &str) {
+    let dir = root.join(rel);
+    std::fs::create_dir_all(dir.join(".git")).unwrap();
+}
+
+/// 在 `root` 下创建普通目录 `rel`（无 `.git`）。
+#[cfg(not(target_family = "wasm"))]
+fn make_plain_dir(root: &std::path::Path, rel: &str) {
+    std::fs::create_dir_all(root.join(rel)).unwrap();
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn scan_subdir_repos_depth_one_finds_direct_children_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    make_repo(root, "alpha"); // 第 1 层仓库
+    make_repo(root, "beta"); // 第 1 层仓库
+    make_plain_dir(root, "plain"); // 第 1 层普通目录
+    make_repo(root, "plain/nested"); // 第 2 层仓库（depth=1 不应发现）
+
+    let found = scan_subdir_repos(root, 1);
+
+    assert_eq!(found, vec![root.join("alpha"), root.join("beta")]);
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn scan_subdir_repos_depth_zero_scans_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    make_repo(root, "alpha");
+
+    assert!(scan_subdir_repos(root, 0).is_empty());
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn scan_subdir_repos_depth_two_finds_nested_under_plain_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    make_plain_dir(root, "group");
+    make_repo(root, "group/inner"); // 第 2 层仓库
+
+    let found = scan_subdir_repos(root, 2);
+
+    assert_eq!(found, vec![root.join("group/inner")]);
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn scan_subdir_repos_does_not_descend_into_found_repo() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    make_repo(root, "outer"); // 第 1 层仓库
+    make_repo(root, "outer/sub"); // 仓库内的嵌套仓库（submodule 样），不应被并列收录
+
+    let found = scan_subdir_repos(root, 3);
+
+    assert_eq!(found, vec![root.join("outer")]);
+}

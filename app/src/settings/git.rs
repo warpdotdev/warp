@@ -15,4 +15,16 @@ define_settings_group!(GitSettings, settings: [
         toml_path: "git.show_graph_panel",
         description: "Whether the Git Graph panel is shown in the tools panel.",
     },
+    // Git Graph 在工作目录下探测仓库的层数：0=只看工作目录自身所属仓库；1（默认）=再看每个
+    // 第一层子目录是否为仓库；2/3 依次向下。用于"一个目录下挂着多个独立 git 项目"的场景，
+    // 发现多个仓库时面板顶部出现仓库下拉以供切换。
+    git_graph_scan_depth: GitGraphScanDepth {
+        type: u32,
+        default: 1,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "git.graph_scan_depth",
+        description: "How many directory levels below the working directory the Git Graph scans for repositories (0 = working directory only).",
+    },
 ]);
