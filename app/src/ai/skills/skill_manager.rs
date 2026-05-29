@@ -14,7 +14,7 @@ use warp_core::{report_error, safe_warn};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
-use super::SkillDescriptor;
+use super::{SkillDescriptor, SkillPathQuery};
 use crate::ai::mcp::{McpIntegration, TemplatableMCPServerManager};
 use crate::ai::skills::skill_utils::unique_skills;
 use crate::keyboard::keybinding_file_path;
@@ -79,27 +79,6 @@ pub struct SkillManager {
     skill_watcher: ModelHandle<SkillWatcher>, // Can't remove this or it'll get cleaned up after new()
 }
 
-pub trait SkillPathQuery {
-    fn to_skill_location(&self) -> LocalOrRemotePath;
-}
-
-impl SkillPathQuery for LocalOrRemotePath {
-    fn to_skill_location(&self) -> LocalOrRemotePath {
-        self.clone()
-    }
-}
-
-impl SkillPathQuery for Path {
-    fn to_skill_location(&self) -> LocalOrRemotePath {
-        LocalOrRemotePath::Local(self.to_path_buf())
-    }
-}
-
-impl SkillPathQuery for PathBuf {
-    fn to_skill_location(&self) -> LocalOrRemotePath {
-        LocalOrRemotePath::Local(self.clone())
-    }
-}
 impl SkillManager {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let (skill_watcher_tx, skill_watcher_rx) = async_channel::unbounded();
