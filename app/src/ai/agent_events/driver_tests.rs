@@ -142,6 +142,7 @@ async fn driver_skips_duplicate_sequences_and_persists_new_cursor() {
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        max_consecutive_http_failures: Some(DEFAULT_AGENT_EVENT_MAX_CONSECUTIVE_HTTP_FAILURES),
     };
 
     run_agent_event_driver(source, config, &mut consumer)
@@ -188,6 +189,7 @@ async fn driver_resets_failures_after_successful_event_delivery() {
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        max_consecutive_http_failures: Some(DEFAULT_AGENT_EVENT_MAX_CONSECUTIVE_HTTP_FAILURES),
     };
 
     run_agent_event_driver(source, config, &mut consumer)
@@ -233,6 +235,7 @@ async fn driver_ignores_persist_cursor_errors() {
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        max_consecutive_http_failures: Some(DEFAULT_AGENT_EVENT_MAX_CONSECUTIVE_HTTP_FAILURES),
     };
 
     run_agent_event_driver(source, config, &mut consumer)
@@ -267,6 +270,7 @@ async fn driver_ignores_driver_state_errors() {
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        max_consecutive_http_failures: Some(DEFAULT_AGENT_EVENT_MAX_CONSECUTIVE_HTTP_FAILURES),
     };
 
     run_agent_event_driver(source, config, &mut consumer)
@@ -303,6 +307,7 @@ async fn driver_retries_initial_connection_until_stream_opens() {
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        max_consecutive_http_failures: Some(DEFAULT_AGENT_EVENT_MAX_CONSECUTIVE_HTTP_FAILURES),
     };
 
     run_agent_event_driver(source, config, &mut consumer)
@@ -366,56 +371,36 @@ fn make_http_status_error(status: u16) -> anyhow::Error {
 }
 
 #[tokio::test]
-async fn driver_uses_slow_backoff_on_permanent_http_error() {
-    let source = FakeAgentEventSource::new(vec![
-        // First attempt: stream opens then returns a 404-enriched error.
-        ok_stream(vec![
-            Ok(AgentEventSourceItem::Open),
-            Err(make_http_status_error(404)),
-        ]),
-        // Second attempt: succeeds with a stoppable event.
-        ok_stream(vec![
-            Ok(AgentEventSourceItem::Open),
-            Ok(AgentEventSourceItem::Event(make_run_event(
-                1,
-                "new_message",
-                "child-run",
-                Some("msg-1"),
-            ))),
-        ]),
-    ]);
+async fn driver_stops_on_permanent_http_error() {
+    let source = FakeAgentEventSource::new(vec![ok_stream(vec![
+        Ok(AgentEventSourceItem::Open),
+        Err(make_http_status_error(403)),
+    ])]);
     let mut consumer = RecordingConsumer {
         stop_after: 1,
         ..Default::default()
     };
 
-    // Use asymmetric values: transient=9999s (would block if chosen),
-    // permanent=0s (instant). Proving backoff is 0s confirms the
-    // permanent schedule was selected.
     let config = AgentEventDriverConfig {
         run_ids: vec!["child-run".to_string()],
         since_sequence: 0,
-        reconnect_backoff_steps: &[9999],
+        reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
         permanent_error_backoff_steps: ZERO_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        max_consecutive_http_failures: Some(DEFAULT_AGENT_EVENT_MAX_CONSECUTIVE_HTTP_FAILURES),
     };
 
-    run_agent_event_driver(source, config, &mut consumer)
+    let err = run_agent_event_driver(source, config, &mut consumer)
         .await
-        .unwrap();
+        .expect_err("403 should stop the stream");
 
-    assert_eq!(consumer.handled_sequences, vec![1]);
-    // The backoff must be from the permanent schedule (0s), not transient (9999s).
-    let retry_backoff = consumer
+    assert!(is_terminal_agent_event_stream_error(&err));
+    assert_eq!(consumer.handled_sequences, Vec::<i64>::new());
+    assert!(!consumer
         .driver_states
         .iter()
-        .find_map(|s| match s {
-            AgentEventDriverState::RetryScheduled { backoff, .. } => Some(*backoff),
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!(retry_backoff, Duration::from_secs(0));
+        .any(|state| matches!(state, AgentEventDriverState::RetryScheduled { .. })));
 }
 
 #[tokio::test]
@@ -450,6 +435,7 @@ async fn driver_uses_fast_backoff_on_transient_http_error() {
         permanent_error_backoff_steps: &[9999],
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        max_consecutive_http_failures: Some(DEFAULT_AGENT_EVENT_MAX_CONSECUTIVE_HTTP_FAILURES),
     };
 
     run_agent_event_driver(source, config, &mut consumer)
@@ -468,4 +454,50 @@ async fn driver_uses_fast_backoff_on_transient_http_error() {
         })
         .unwrap();
     assert_eq!(retry_backoff, Duration::from_secs(0));
+}
+
+#[tokio::test]
+async fn driver_stops_after_repeated_transient_http_errors() {
+    let source = FakeAgentEventSource::new(vec![
+        ok_stream(vec![
+            Ok(AgentEventSourceItem::Open),
+            Err(make_http_status_error(429)),
+        ]),
+        ok_stream(vec![
+            Ok(AgentEventSourceItem::Open),
+            Err(make_http_status_error(429)),
+        ]),
+    ]);
+    let mut consumer = RecordingConsumer {
+        stop_after: 1,
+        ..Default::default()
+    };
+
+    let config = AgentEventDriverConfig {
+        run_ids: vec!["child-run".to_string()],
+        since_sequence: 0,
+        reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
+        permanent_error_backoff_steps: ZERO_BACKOFF_STEPS,
+        proactive_reconnect_after: None,
+        failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        max_consecutive_http_failures: Some(2),
+    };
+
+    let err = run_agent_event_driver(source, config, &mut consumer)
+        .await
+        .expect_err("repeated 429s should stop the stream");
+
+    assert!(is_terminal_agent_event_stream_error(&err));
+    let retry_failures = consumer
+        .driver_states
+        .iter()
+        .filter_map(|state| match state {
+            AgentEventDriverState::RetryScheduled {
+                consecutive_failures,
+                ..
+            } => Some(*consecutive_failures),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(retry_failures, vec![1]);
 }

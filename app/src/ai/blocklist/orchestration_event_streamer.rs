@@ -22,8 +22,9 @@ use super::orchestration_events::{
 use crate::ai::agent::conversation::{AIAgentHarness, AIConversationId, ConversationStatus};
 use crate::ai::agent::{AIAgentExchangeId, AIAgentOutputMessageType, ReceivedMessageInput};
 use crate::ai::agent_events::{
-    run_agent_event_driver, AgentEventConsumer, AgentEventConsumerControlFlow,
-    AgentEventDriverConfig, AgentMessageEventMetadata, MessageHydrator, ServerApiAgentEventSource,
+    is_terminal_agent_event_stream_error, run_agent_event_driver, AgentEventConsumer,
+    AgentEventConsumerControlFlow, AgentEventDriverConfig, AgentMessageEventMetadata,
+    MessageHydrator, ServerApiAgentEventSource,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::retry_strategies::is_transient_http_error;
@@ -1255,6 +1256,10 @@ impl OrchestrationEventStreamer {
                     log::warn!(
                         "SSE driver exited for {conversation_id:?} (gen={generation}): {err:#}"
                     );
+                    if is_terminal_agent_event_stream_error(&err) {
+                        me.teardown_sse(conversation_id, ctx);
+                        return;
+                    }
                     me.reconnect_sse(conversation_id, ctx);
                 }
             },

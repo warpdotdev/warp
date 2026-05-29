@@ -8,11 +8,13 @@ mod message_hydrator;
 pub(crate) use driver::{
     agent_event_backoff, agent_event_failures_exceeded_threshold, AgentEventDriverState,
     AgentEventSource, AgentEventSourceItem, DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
-    DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS, DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
+    DEFAULT_AGENT_EVENT_MAX_CONSECUTIVE_HTTP_FAILURES, DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS,
+    DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
 };
 pub(crate) use driver::{
-    run_agent_event_driver, AgentEventConsumer, AgentEventConsumerControlFlow,
-    AgentEventDriverConfig, AgentMessageEventMetadata, ServerApiAgentEventSource,
+    is_terminal_agent_event_stream_error, run_agent_event_driver, AgentEventConsumer,
+    AgentEventConsumerControlFlow, AgentEventDriverConfig, AgentMessageEventMetadata,
+    ServerApiAgentEventSource,
 };
 pub(crate) use message_hydrator::MessageHydrator;
 

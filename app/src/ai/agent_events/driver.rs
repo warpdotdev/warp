@@ -17,6 +17,7 @@ pub(crate) const DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS: &[u64] = &[1, 2, 5
 pub(crate) const DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS: &[u64] = &[30];
 pub(crate) const DEFAULT_AGENT_EVENT_PROACTIVE_RECONNECT: Duration = Duration::from_secs(14 * 60);
 pub(crate) const DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG: usize = 5;
+pub(crate) const DEFAULT_AGENT_EVENT_MAX_CONSECUTIVE_HTTP_FAILURES: usize = 5;
 
 /// Configuration for the shared agent-event stream driver.
 #[derive(Clone, Debug)]
@@ -40,6 +41,11 @@ pub(crate) struct AgentEventDriverConfig {
     /// Failure count at which reconnect logging is escalated from debug to warn.
     /// This only affects log severity; retry behavior stays the same.
     pub failures_before_error_log: usize,
+    /// Maximum number of consecutive HTTP-status stream failures before the
+    /// driver gives up. Network errors without an HTTP status still retry
+    /// forever, but repeated backend/rate-limit responses should not keep a
+    /// long-lived Agent Mode session alive indefinitely.
+    pub max_consecutive_http_failures: Option<usize>,
 }
 
 impl AgentEventDriverConfig {
@@ -53,8 +59,22 @@ impl AgentEventDriverConfig {
             permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
             proactive_reconnect_after: Some(DEFAULT_AGENT_EVENT_PROACTIVE_RECONNECT),
             failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+            max_consecutive_http_failures: Some(DEFAULT_AGENT_EVENT_MAX_CONSECUTIVE_HTTP_FAILURES),
         }
     }
+}
+
+#[derive(thiserror::Error, Debug)]
+#[error("agent event stream stopped after HTTP status {status} ({consecutive_failures} consecutive failure(s)): {message}")]
+pub(crate) struct AgentEventStreamTerminalError {
+    pub status: u16,
+    pub consecutive_failures: usize,
+    message: String,
+}
+
+pub(crate) fn is_terminal_agent_event_stream_error(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<AgentEventStreamTerminalError>()
+        .is_some()
 }
 
 /// Tells the shared driver whether to continue or stop after a handled event.
@@ -227,6 +247,7 @@ where
 {
     let mut since_sequence = config.since_sequence;
     let mut failures = 0usize;
+    let mut consecutive_http_failures = 0usize;
     let mut has_connected_once = false;
 
     loop {
@@ -239,6 +260,15 @@ where
             Ok(stream) => stream,
             Err(err) => {
                 failures += 1;
+                let http_failures =
+                    increment_http_failure_count(&err, &mut consecutive_http_failures);
+                if let Some(terminal_error) =
+                    terminal_http_stream_error(&err, http_failures, &config)
+                {
+                    log_terminal_stream_failure(&config.run_ids, &terminal_error);
+                    return Err(terminal_error.into());
+                }
+
                 let backoff_steps = if is_transient_http_error(&err) {
                     config.reconnect_backoff_steps
                 } else {
@@ -302,6 +332,7 @@ where
                 }
                 NextDriverItem::StreamItem(Some(Ok(AgentEventSourceItem::Event(event)))) => {
                     failures = 0;
+                    consecutive_http_failures = 0;
                     if event.sequence <= since_sequence {
                         continue;
                     }
@@ -322,6 +353,15 @@ where
                 }
                 NextDriverItem::StreamItem(Some(Err(err))) => {
                     failures += 1;
+                    let http_failures =
+                        increment_http_failure_count(&err, &mut consecutive_http_failures);
+                    if let Some(terminal_error) =
+                        terminal_http_stream_error(&err, http_failures, &config)
+                    {
+                        log_terminal_stream_failure(&config.run_ids, &terminal_error);
+                        return Err(terminal_error.into());
+                    }
+
                     let backoff_steps = if is_transient_http_error(&err) {
                         config.reconnect_backoff_steps
                     } else {
@@ -406,6 +446,56 @@ fn log_stream_failure(
             run_ids
         );
     }
+}
+
+fn increment_http_failure_count(err: &anyhow::Error, failures: &mut usize) -> usize {
+    if http_status_from_error(err).is_some() {
+        *failures += 1;
+        *failures
+    } else {
+        0
+    }
+}
+
+fn terminal_http_stream_error(
+    err: &anyhow::Error,
+    http_failures: usize,
+    config: &AgentEventDriverConfig,
+) -> Option<AgentEventStreamTerminalError> {
+    let status = http_status_from_error(err)?;
+    let is_transient = is_transient_http_error(err);
+    let reached_http_failure_limit = config
+        .max_consecutive_http_failures
+        .is_some_and(|max_failures| http_failures >= max_failures);
+
+    if is_transient && !reached_http_failure_limit {
+        return None;
+    }
+
+    Some(AgentEventStreamTerminalError {
+        status,
+        consecutive_failures: http_failures,
+        message: format!("{err:#}"),
+    })
+}
+
+fn http_status_from_error(err: &anyhow::Error) -> Option<u16> {
+    for cause in err.chain() {
+        if let Some(http_err) = cause.downcast_ref::<HttpStatusError>() {
+            return Some(http_err.status);
+        }
+    }
+    None
+}
+
+fn log_terminal_stream_failure(run_ids: &[String], err: &AgentEventStreamTerminalError) {
+    log::error!(
+        "Agent event stream stopped for {:?} after HTTP status {} ({} consecutive failure(s)): {}",
+        run_ids,
+        err.status,
+        err.consecutive_failures,
+        err.message
+    );
 }
 
 pub(crate) fn agent_event_backoff(failures: usize, backoff_steps: &[u64]) -> Duration {
