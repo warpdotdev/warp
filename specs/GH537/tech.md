@@ -656,13 +656,16 @@ per-keystroke flow and §7.3 for the per-shell defaults.
 - **`batched` mode** (vanilla bash; fish in v1): Warp owns the
   mirror locally during typing. Category A and B widgets
   dispatch natively in `InputBufferModel`; Category C widgets
-  inject the mirror byte-for-byte into the PTY ahead of the bound
-  keystroke so the shell's line editor sees `$BUFFER` correctly
-  pre-populated and the widget can run in valid context. At
-  widget exit and at Enter, a bootstrap-installed hook (bash's
-  `bind -x` wrappers, fish's per-bound-key wrappers, fish's
-  `fish_postexec` / `fish_prompt`) emits a `WarpBufferState`
-  payload and Warp resyncs.
+  inject the bound keystroke after first syncing the mirror to
+  the shell via the literal-paste path (§6.2.5: bracketed-paste
+  markers around a nonced `__warp_paste_sentinel` prefix, so
+  newlines and control bytes in the mirror don't dispatch
+  widgets mid-sync). At widget exit and at Enter, a bootstrap-
+  installed hook (bash's `bind -x` wrappers plus
+  `_warp_bracketed_paste`; fish's wrapped `__fish_paste` and
+  per-bound-key wrappers, plus `fish_postexec` / `fish_prompt`
+  as coarser fallbacks) emits a `WarpBufferState` payload and
+  Warp resyncs.
 - For `External(name)` (Category C) the dispatch shape is the
   same in both modes: the keystroke is injected, ZLE / readline /
   fish-line-editor dispatches the bound widget from its own
@@ -866,12 +869,14 @@ the keymap. It uses bracketed paste:
   `\e[200~<sentinel><bytes>\e[201~` for Warp-driven syncs. The
   sentinel is `__WARP_PASTE_<nonce>__` where `<nonce>` is the
   first 8 hex characters of `WARP_BOOTSTRAP_NONCE` (captured at
-  bootstrap). The full sentinel is 21 bytes; the bootstrap
-  stores it in a shell-local `__warp_paste_sentinel` constant
-  for the handler to compare against. The per-session nonce
-  closes the collision window — a non-bootstrap process cannot
-  guess the nonce, the same trust boundary as §1's other DCS
-  payloads.
+  bootstrap). The bootstrap stores the sentinel in a shell-local
+  `__warp_paste_sentinel` constant and its length in
+  `__warp_paste_sentinel_len`; handlers compare against these
+  rather than hardcoding either, so a future nonce-length
+  change doesn't require touching handler bodies. The per-
+  session nonce closes the collision window — a non-bootstrap
+  process cannot guess the nonce, the same trust boundary as
+  §1's other DCS payloads.
 
   **Handler behavior.** Each shell's paste handler reads the
   full pasted content (all three shells deliver it as a single
