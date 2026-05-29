@@ -24,7 +24,10 @@ pub enum RepoContent<'a> {
 
 use warp_util::standardized_path::StandardizedPath;
 
-use crate::entry::{BuildTreeError, BuildTreeOptions, Entry, FileId, IgnoredPathStrategy};
+use crate::entry::{
+    matches_ignored_path_interest, BuildTreeError, BuildTreeOptions, Entry, FileId,
+    IgnoredPathStrategy,
+};
 use crate::repository::Repository;
 use crate::telemetry::RepoMetadataTelemetryEvent;
 use crate::{gitignores_for_directory, matches_gitignores, RepoMetadataError};
@@ -693,10 +696,21 @@ impl LocalRepoMetadataModel {
             // `/home/user/AppData/Local/Temp` will suppress events for
             // `/home/user/AppData/Local/Temp/foo.tmp` without false-positives
             // against unrelated siblings like `/home/user/AppData/Local/Tempest/`.
+            //
+            // EXCEPTION: if the path matches a registered `ignored_path_interest`
+            // (e.g. a skill provider path from SKILL_PROVIDER_DEFINITIONS), the
+            // caller explicitly wants it eager-loaded — do NOT skip it even if its
+            // ancestor exceeded the file limit.  The interest overrides the cache.
+            //
+            // Known edge: if an interest path *itself* exceeds MAX_FILES_PER_REPO
+            // it will be re-walked on each event.  This is acceptable because
+            // interest subtrees (skill directories) are small; no extra machinery
+            // is needed here to handle that case.
             if let Ok(std_path) = StandardizedPath::try_from_local(path_to_add) {
                 if failed_walk_paths
                     .iter()
                     .any(|failed| std_path.starts_with(failed))
+                    && !matches_ignored_path_interest(path_to_add, ignored_path_interests)
                 {
                     continue;
                 }

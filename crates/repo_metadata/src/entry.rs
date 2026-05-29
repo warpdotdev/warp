@@ -422,7 +422,7 @@ pub fn is_git_internal_path(path: &Path) -> bool {
     })
 }
 
-fn matches_ignored_path_interest(path: &Path, ignored_path_interests: &[PathBuf]) -> bool {
+pub(crate) fn matches_ignored_path_interest(path: &Path, ignored_path_interests: &[PathBuf]) -> bool {
     let path_components: Vec<_> = path
         .components()
         .filter_map(|component| match component {

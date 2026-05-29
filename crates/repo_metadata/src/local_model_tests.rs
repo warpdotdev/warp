@@ -1341,6 +1341,70 @@ Thumbs.db
         });
     }
 
+    /// Regression guard for the bug where `failed_walk_paths` short-circuited
+    /// BEFORE the interest-aware `build_tree` call, silently dropping any
+    /// `ignored_path_interests` that lived under a cached failed-walk directory.
+    ///
+    /// A `path_to_add` that descends from a `failed_walk_paths` entry must
+    /// still be processed when it (or one of its ancestors up to itself) matches
+    /// a registered `ignored_path_interest`.  The short-circuit must only fire
+    /// when the path is NOT on/under an interest path.
+    #[test]
+    fn test_failed_walk_cache_does_not_skip_ignored_path_interest() {
+        VirtualFS::test("failed_walk_interest_override", |dirs, mut vfs| {
+            // Layout: huge_dir/skills/my_skill/tool.sh
+            // huge_dir is a known-failed walk path (previously exceeded MAX_FILES_PER_REPO).
+            // skills is a registered ignored_path_interest (e.g. from SKILL_PROVIDER_DEFINITIONS).
+            vfs.mkdir("huge_dir/skills/my_skill").with_files(vec![
+                Stub::FileWithContent("huge_dir/skills/my_skill/tool.sh", "#!/bin/sh\necho hi"),
+            ]);
+
+            let huge_dir = dirs.tests().join("huge_dir");
+            let skills_dir = huge_dir.join("skills");
+
+            let failed_path = StandardizedPath::try_from_local(&huge_dir).unwrap();
+
+            // Seed the cache: huge_dir previously hit ExceededMaxFileLimit.
+            let mut failed_walk_paths = std::collections::HashSet::new();
+            failed_walk_paths.insert(failed_path.clone());
+
+            // Register "skills" as an ignored_path_interest (eager-load override).
+            let ignored_path_interests = vec![PathBuf::from("skills")];
+
+            // Request a mutation for skills_dir, which is a descendant of huge_dir.
+            let update = RepoUpdate {
+                added: vec![skills_dir.clone()],
+                deleted: vec![],
+                moved: HashMap::new(),
+            };
+
+            let (mutations, _newly_failed) =
+                block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                    &update,
+                    &[],
+                    &failed_walk_paths,
+                    &ignored_path_interests,
+                ));
+
+            // The interest path (skills_dir) is under a failed-walk directory, but
+            // it matches a registered ignored_path_interest.  The short-circuit must
+            // NOT fire: a mutation must be produced for it.
+            let has_dir_mutation = mutations.iter().any(|m| {
+                matches!(
+                    m,
+                    FileTreeMutation::AddDirectorySubtree { .. }
+                        | FileTreeMutation::AddEmptyDirectory { .. }
+                )
+            });
+            assert!(
+                has_dir_mutation,
+                "Expected a directory mutation for an interest path even though its \
+                 ancestor is in failed_walk_paths, but got: {:?}",
+                mutations
+            );
+        });
+    }
+
     // ── WatchFilter system-dir exclusion tests (Windows only) ─────────────────
 
     /// Build a path under the real `%USERPROFILE%\AppData` for use in positive
