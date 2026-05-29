@@ -10,6 +10,7 @@ use super::{
     compare_versions, run_cli_command_logged, CliAgentPluginManager, PluginInstallError,
     PluginInstructionStep, PluginInstructions,
 };
+use crate::features::FeatureFlag;
 use crate::terminal::model::session::LocalCommandExecutor;
 use crate::terminal::shell::ShellType;
 
@@ -55,14 +56,21 @@ impl CodexPluginManager {
 #[async_trait]
 impl CliAgentPluginManager for CodexPluginManager {
     fn minimum_plugin_version(&self) -> &'static str {
-        MINIMUM_PLUGIN_VERSION
+        if FeatureFlag::CodexPlugin.is_enabled() {
+            MINIMUM_PLUGIN_VERSION
+        } else {
+            "0.0.0"
+        }
     }
 
     fn can_auto_install(&self) -> bool {
-        true
+        FeatureFlag::CodexPlugin.is_enabled()
     }
 
     fn is_installed(&self) -> bool {
+        if !FeatureFlag::CodexPlugin.is_enabled() {
+            return false;
+        }
         let Ok(codex_dir) = codex_home_dir() else {
             return false;
         };
@@ -70,6 +78,9 @@ impl CliAgentPluginManager for CodexPluginManager {
     }
 
     fn needs_update(&self) -> bool {
+        if !FeatureFlag::CodexPlugin.is_enabled() {
+            return false;
+        }
         let Ok(codex_dir) = codex_home_dir() else {
             return false;
         };
@@ -80,6 +91,9 @@ impl CliAgentPluginManager for CodexPluginManager {
     }
 
     async fn install(&self) -> Result<(), PluginInstallError> {
+        if !FeatureFlag::CodexPlugin.is_enabled() {
+            return Ok(());
+        }
         let mut log = String::new();
         self.run_logged(
             &["plugin", "marketplace", "add", MARKETPLACE_REPO],
@@ -92,6 +106,9 @@ impl CliAgentPluginManager for CodexPluginManager {
     }
 
     async fn update(&self) -> Result<(), PluginInstallError> {
+        if !FeatureFlag::CodexPlugin.is_enabled() {
+            return Ok(());
+        }
         let mut log = String::new();
         self.run_logged(
             &["plugin", "marketplace", "upgrade", MARKETPLACE_NAME],
@@ -117,7 +134,11 @@ impl CliAgentPluginManager for CodexPluginManager {
     }
 
     fn install_success_message(&self) -> &'static str {
-        "Warp plugin installed. Please restart Codex to activate."
+        if FeatureFlag::CodexPlugin.is_enabled() {
+            "Warp plugin installed. Please restart Codex to activate."
+        } else {
+            "Warp notifications enabled. Please restart Codex to activate."
+        }
     }
 
     fn update_success_message(&self) -> &'static str {
@@ -125,14 +146,29 @@ impl CliAgentPluginManager for CodexPluginManager {
     }
 
     fn install_instructions(&self) -> &'static PluginInstructions {
-        &INSTALL_INSTRUCTIONS
+        if FeatureFlag::CodexPlugin.is_enabled() {
+            &PLUGIN_INSTALL_INSTRUCTIONS
+        } else {
+            &NATIVE_INSTALL_INSTRUCTIONS
+        }
     }
 
     fn update_instructions(&self) -> &'static PluginInstructions {
-        &UPDATE_INSTRUCTIONS
+        if FeatureFlag::CodexPlugin.is_enabled() {
+            &PLUGIN_UPDATE_INSTRUCTIONS
+        } else {
+            &EMPTY_INSTRUCTIONS
+        }
+    }
+
+    fn supports_update(&self) -> bool {
+        FeatureFlag::CodexPlugin.is_enabled()
     }
 
     async fn install_platform_plugin(&self) -> Result<(), PluginInstallError> {
+        if !FeatureFlag::CodexPlugin.is_enabled() {
+            return Ok(());
+        }
         let mut log = String::new();
         self.run_logged(
             &["plugin", "marketplace", "add", MARKETPLACE_REPO],
@@ -145,45 +181,76 @@ impl CliAgentPluginManager for CodexPluginManager {
     }
 }
 
-static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
-    title: "Install Warp Plugin for Codex",
-    subtitle: "Run the following commands, then restart Codex.",
-    steps: &[
-        PluginInstructionStep {
-            description: "Add the Warp plugin marketplace repository",
-            command: "codex plugin marketplace add warpdotdev/codex-warp",
-            executable: true,
-            link: None,
-        },
-        PluginInstructionStep {
-            description: "Install the Warp plugin",
-            command: "codex plugin add warp@codex-warp",
-            executable: true,
-            link: None,
-        },
-    ],
-    post_install_notes: &["Restart Codex to activate the plugin."],
+static PLUGIN_INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> =
+    LazyLock::new(|| PluginInstructions {
+        title: "Install Warp Plugin for Codex",
+        subtitle: "Run the following commands, then restart Codex.",
+        steps: &[
+            PluginInstructionStep {
+                description: "Add the Warp plugin marketplace repository",
+                command: "codex plugin marketplace add warpdotdev/codex-warp",
+                executable: true,
+                link: None,
+            },
+            PluginInstructionStep {
+                description: "Install the Warp plugin",
+                command: "codex plugin add warp@codex-warp",
+                executable: true,
+                link: None,
+            },
+        ],
+        post_install_notes: &["Restart Codex to activate the plugin."],
+    });
+
+static NATIVE_INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| {
+    PluginInstructions {
+        title: "Enable Warp Notifications for Codex",
+        subtitle: "Update Codex to the latest version, then enable in-focus notifications so Warp can display them while you work.",
+        steps: &[
+            PluginInstructionStep {
+                description: "Update Codex to the latest version.",
+                command: "",
+                executable: false,
+                link: Some("https://developers.openai.com/codex/cli#upgrade"),
+            },
+            PluginInstructionStep {
+                description: "Set the notification condition to \"always\" in your Codex config. Open or create ~/.codex/config.toml and add:",
+                command: "[tui]\nnotification_condition = \"always\"",
+                executable: false,
+                link: None,
+            },
+        ],
+        post_install_notes: &["Restart Codex to apply the changes."],
+    }
 });
 
-static UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
-    title: "Update Warp Plugin for Codex",
-    subtitle: "Run the following commands, then restart Codex.",
-    steps: &[
-        PluginInstructionStep {
-            description: "Upgrade the Warp plugin marketplace",
-            command: "codex plugin marketplace upgrade codex-warp",
-            executable: true,
-            link: None,
-        },
-        PluginInstructionStep {
-            description: "Reinstall the Warp plugin",
-            command: "codex plugin add warp@codex-warp",
-            executable: true,
-            link: None,
-        },
-    ],
-    post_install_notes: &["Restart Codex to activate the update."],
+static EMPTY_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
+    title: "",
+    subtitle: "",
+    steps: &[],
+    post_install_notes: &[],
 });
+
+static PLUGIN_UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> =
+    LazyLock::new(|| PluginInstructions {
+        title: "Update Warp Plugin for Codex",
+        subtitle: "Run the following commands, then restart Codex.",
+        steps: &[
+            PluginInstructionStep {
+                description: "Upgrade the Warp plugin marketplace",
+                command: "codex plugin marketplace upgrade codex-warp",
+                executable: true,
+                link: None,
+            },
+            PluginInstructionStep {
+                description: "Reinstall the Warp plugin",
+                command: "codex plugin add warp@codex-warp",
+                executable: true,
+                link: None,
+            },
+        ],
+        post_install_notes: &["Restart Codex to activate the update."],
+    });
 
 fn check_installed(codex_dir: &Path) -> bool {
     let config_path = codex_dir.join("config.toml");

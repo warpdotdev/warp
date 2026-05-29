@@ -12893,6 +12893,11 @@ impl TerminalView {
         if !is_agent_supported(&notification.agent) {
             return;
         }
+        
+        if notification.agent == CLIAgent::Codex && !FeatureFlag::CodexPlugin.is_enabled() {
+            return;
+        }
+
         if !self.register_cli_agent_listener_from_event(&notification, ctx) {
             return;
         }
