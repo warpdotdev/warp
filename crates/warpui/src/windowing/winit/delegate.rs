@@ -57,8 +57,15 @@ static MAIN_THREAD_ID: OnceLock<thread::ThreadId> = OnceLock::new();
 pub fn open_url_in_system(url: &str) {
     #[cfg(target_family = "wasm")]
     if let Some(window) = web_sys::window() {
-        // Try to open the URL in a new tab.
-        let _ = window.open_with_url_and_target(url, "_blank");
+        if let Some(safe_url) = crate::browser::safe_browser_open_url(url) {
+            let _ = window.open_with_url_and_target_and_features(
+                &safe_url,
+                "_blank",
+                "noopener,noreferrer",
+            );
+        } else {
+            log::warn!("Skipping browser URL open for invalid or unsafe URL");
+        }
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -306,7 +313,11 @@ impl platform::Delegate for AppDelegate {
                     if let Some(path) = path.to_str() {
                         // Try to open the path via a file:// URL.
                         let url = format!("file://{path}");
-                        let _ = window.open_with_url(&url);
+                        let _ = window.open_with_url_and_target_and_features(
+                            &url,
+                            "_blank",
+                            "noopener,noreferrer",
+                        );
                     }
                 }
             } else if #[cfg(windows)] {

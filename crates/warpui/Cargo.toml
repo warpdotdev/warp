@@ -48,6 +48,7 @@ pathfinder_geometry.workspace = true
 sum_tree.workspace = true
 takecell = "0.1.1"
 thiserror.workspace = true
+url.workspace = true
 vec1.workspace = true
 version-compare = { workspace = true, optional = true }
 warpui_core.workspace = true
@@ -178,7 +179,6 @@ open = "5.0.0"
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 blocking.workspace = true
 dirs.workspace = true
-url.workspace = true
 fontconfig = { version = "0.8.0", features = ["dlopen"] }
 # On Linux, use dlopen to locate fontconfig at runtime. Other platforms should not depend on fontconfig at all.
 font-kit = { workspace = true, default-features = false, features = [

@@ -1,3 +1,4 @@
+pub mod browser;
 pub mod fonts;
 pub mod platform;
 pub mod rendering;
