@@ -1,152 +1,197 @@
-# Git Graph Panel — Technical Spec
+# Git Graph Panel — Technical Spec (as built)
 
 ## Scope
-Add a read-only commit DAG visualization tab (`ToolPanelView::GitGraph`) to the left tools panel. It follows the git repository of the currently active pane, renders the commit graph, and shows commit details on click. v1 contains no write operations. The whole panel is gated by `FeatureFlag::GitGraph`.
+A read-only commit DAG visualization tab (`ToolPanelView::GitGraph`) in the left
+tools panel. It follows the git repository of the currently active pane, renders
+the commit graph, shows a commit's detail on click, supports a manual refresh and
+"load more" pagination. No write operations. Gated by `FeatureFlag::GitGraph`.
 
-## Key technical constraints (read first)
-1. **The render layer only has rectangle-family primitives.** `Scene` in `crates/warpui_core/src/scene.rs` provides only `Rect` (with `Border` / `CornerRadius` / `DropShadow` / `Dash`), `Image`, `Glyph`, and `Icon` — **no line / path / bezier, and no rotation.**
-   - Consequence: DAG connectors are drawn as **orthogonal elbow polylines** — vertical line = thin rect; horizontal hop = thin rect; corner = a rect with `CornerRadius` to round the bend. **It cannot reproduce git-graph's bezier curves**; visually it is the straight rounded-elbow style of lazygit/tig. This is an explicit trade-off against the reference.
-2. **Custom drawing goes through `Element::paint`.** `Rect::paint` at `crates/warpui_core/src/elements/rect.rs:117` demonstrates how a custom element draws in `paint(&mut self, origin, ctx, app)` by calling `ctx.scene.draw_rect_with_hit_recording(RectF)` and chaining `with_background / with_border / with_corner_radius`. The Git Graph lane cell is exactly such a custom `Element`. A node dot = a small square with `corner_radius` set to half its side length.
-3. **No git library.** The repo does not depend on `git2`/`gix`. All data is fetched via `run_git_command(repo_path, args) -> Result<String>` at `crates/warp_util/src/git.rs:8` (async, shells out to `git`).
+## Key technical constraints
+1. **The render layer only has rectangle-family primitives.** `Scene` in
+   `crates/warpui_core/src/scene.rs` provides only `Rect` (with `Border` /
+   `CornerRadius` / `DropShadow` / `Dash`), `Image`, `Glyph`, `Icon` — **no
+   line / path / bezier, no rotation.** DAG connectors are therefore drawn as
+   **orthogonal polylines** (thin vertical/horizontal rects). They are currently
+   **square (sharp) corners**; rounded bends are a deferred polish item. This is
+   an explicit trade-off against git-graph's bezier curves.
+2. **Custom drawing goes through `Element::paint`.** `row_canvas.rs` implements a
+   custom `Element` whose `paint` calls `ctx.scene.draw_rect_with_hit_recording`
+   and chains `with_background` / `with_corner_radius` (pattern mirrors
+   `crates/warpui_core/src/elements/rect.rs:117`). A node dot is a small square
+   with `corner_radius = half side` (→ circle).
+3. **No git library.** Data is fetched via `run_git_command(repo, args)` at
+   `crates/warp_util/src/git.rs:8` (async, shells out to `git`).
+4. **`metal` toolchain required to build on macOS.** `warpui/build.rs`
+   unconditionally compiles Metal shaders, so a full Xcode + the Metal Toolchain
+   component (`xcodebuild -downloadComponent MetalToolchain`) is needed; the app
+   crate can't build with Command Line Tools alone.
 
-## Relevant code (integration points)
+## Integration points (as wired)
 - `app/src/workspace/view/left_panel.rs`
-  - `enum ToolPanelView` (100-106) — add `GitGraph` variant
-  - `enum LeftPanelAction` (74-79) — add `GitGraph`
-  - `struct LeftPanelView` (167-180) — add field `git_graph_view: ViewHandle<GitGraphView>`
-  - `LeftPanelView::new` (196+) — construct `git_graph_view`
-  - `create_toolbelt_button_config` (391) — add `GitGraph` arm (`Icon::GitBranch`, tooltip "Git Graph")
-  - the render-body `match self.active_view.get()` (1147-1184) — add an arm rendering `git_graph_view`
-  - `focus_active_view_on_entry` (684-721) — add an arm
-  - tab active-state logic (around 863-870, the `is_*_active` / `update_button_active_states`) — add `is_git_graph_active`
+  - `ToolPanelView::GitGraph` + `LeftPanelAction::GitGraph` variants.
+  - `git_graph_view: ViewHandle<GitGraphView>` field, built with
+    `ctx.add_typed_action_view(GitGraphView::new)`.
+  - arms in `create_toolbelt_button_config` (`Icon::GitBranch`, tooltip
+    "Git Graph"), the render-body match, `focus_active_view_on_entry`, the second
+    focus match, `handle_action_with_force_open`, and `update_button_active_states`.
+  - the `WorkingDirectoriesEvent::DirectoriesChanged` subscription pushes the
+    most-recent local directory into `git_graph_view.set_working_directory`.
 - `app/src/workspace/view.rs`
-  - `compute_left_panel_views` (21218) — push when `cfg!(feature="local_fs") && FeatureFlag::GitGraph.is_enabled()`
-  - left-panel keybinding constants (around 609-613) — add `LEFT_PANEL_GIT_GRAPH_BINDING_NAME = "workspace:left_panel_git_graph"`
-  - `left_panel_view` construction (2774-2779) — no change; reuses `compute_left_panel_views`
-- `crates/warp_features/src/lib.rs`
-  - `enum FeatureFlag` (cf. `GlobalSearch` @526 and its description @1039) — add `GitGraph` + description + default Dev stage
-- Reusable assets
-  - `Icon::GitBranch` (`crates/warp_core/src/ui/icons.rs:177`), `Icon::GitCommit` (310) — already exist, no new svg needed
-  - `run_git_command` (`crates/warp_util/src/git.rs:8`)
-  - `Repository` / repo resolution (`crates/repo_metadata/src/repository.rs:59`) — used to resolve "active pane's working directory" into "repository root"
+  - `compute_left_panel_views` pushes `GitGraph` when
+    `cfg!(feature="local_fs") && FeatureFlag::GitGraph.is_enabled()`.
+  - `LEFT_PANEL_GIT_GRAPH_BINDING_NAME = "workspace:left_panel_git_graph"` (used
+    only for the button tooltip; no key bound yet).
+  - tooltip-string and snapshot-restore matches updated for the new variant.
+- `app/src/app_state.rs`: `LeftPanelDisplayedTab::GitGraph` + the
+  `ToolPanelView` ↔ `LeftPanelDisplayedTab` mappings (snapshot persistence).
+- Feature flag: cargo feature `git_graph` in `app/Cargo.toml` (not in `default`);
+  `FeatureFlag::GitGraph` in `crates/warp_features/src/lib.rs` (+ `DOGFOOD_FLAGS`);
+  compile→runtime bridge `#[cfg(feature="git_graph")] FeatureFlag::GitGraph` in
+  `app/src/features.rs`.
 
-## New module structure
-Following the `global_search` subtree, the feature lives under the view tree for cohesion and low coupling:
-
+## Module structure
 ```
 app/src/workspace/view/git_graph/
-  mod.rs          re-export GitGraphView / GitGraphEvent
-  data.rs         data types + async fetch (calls warp_util::git)
-  layout.rs       pure lane-layout algorithm + lane palette
-  layout_tests.rs unit tests for layout (the core test surface)
-  data_tests.rs   table-driven tests for parsing git log output
-  model.rs        GitGraphModel (state machine + async loading + refresh subscription)
-  view.rs         GitGraphView (renders header / list / detail; subscribes to model and repo changes)
-  row_canvas.rs   GitGraphRowCanvas: custom Element that paints lanes/dots/connectors per row
+  mod.rs          declares submodules; re-exports GitGraphView
+  data.rs         data types + git-log/show parsing (pure) + async fetch
+  layout.rs       pure lane-layout algorithm (assign_lanes)
+  row_canvas.rs   GitGraphRowCanvas: custom Element painting one row's lanes
+  view.rs         GitGraphView + GitGraphAction + GitGraphEvent
+  data_tests.rs   parsing unit tests
+  layout_tests.rs lane-layout unit tests
 ```
+No separate model module: state is held directly in `GitGraphView` (single,
+unshared view). A `GitGraphModel` would be premature; introduce one only if the
+state ever needs to be shared across views.
 
 ## Data layer (data.rs)
-
-### Types
 ```
 struct CommitNode { hash, short_hash, parents: Vec<String>,
                     author_name, author_email, author_time: i64,
                     subject, refs: Vec<RefLabel> }
-enum RefKind { Head, LocalBranch, RemoteBranch, Tag }
+enum   RefKind { Head, LocalBranch, RemoteBranch, Tag }
 struct RefLabel { kind: RefKind, name: String }
 
-struct ChangedFile { status: char /*A/M/D/R*/, path: String, additions: u32, deletions: u32 }
-struct CommitDetail { committer_name, committer_time: i64, body: String, files: Vec<ChangedFile> }
+struct ChangedFile { path: String, additions: u32, deletions: u32 }
+struct CommitDetail { committer_name: String, committer_time: i64,
+                      message: String, files: Vec<ChangedFile> }
 ```
+(There is **no** A/M/D/R status field on `ChangedFile`: numstat alone gives
+adds/dels, and a second `--name-status` pass was judged not worth the extra
+command for v1.)
 
-### Fetch functions (responsibilities, not implementations)
-- `async fn load_commit_graph(repo_root, limit, skip) -> Result<Vec<CommitNode>>`
-  - Command: `git log --all --date-order --no-color -n {limit} --skip {skip} --pretty=format:%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s%x1e`
-  - Uses the unit separator `%x1f` between fields and the record separator `%x1e` between commits, so subjects/refs containing arbitrary characters still parse reliably.
-  - `%P` gives parents (space-separated; 0 = root, 2+ = merge); `%D` gives the decorate string (e.g. `HEAD -> main, origin/main, tag: v1`), which the parser splits into `RefLabel`s.
-- `async fn load_commit_detail(repo_root, hash) -> Result<CommitDetail>`
-  - One call for committer + body: `git show --no-patch --no-color --pretty=format:...{hash}`
-  - One call for file changes: `git show --numstat --no-color --format= {hash}` (each line `add\tdel\tpath`), plus a `--name-status` pass for the status letter, or derive rename from `--numstat`'s first column.
-- The parsers `parse_commit_log(stdout) -> Vec<CommitNode>`, `parse_decorate(d) -> Vec<RefLabel>`, `parse_numstat(...)` are pure functions, tested separately.
+Fetch + parse:
+- `load_commit_graph(repo, limit, skip)`:
+  `git log --all --date-order --decorate=full --no-color -n {limit} --skip {skip}
+   --pretty=format:%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s%x1e`.
+  Fields separated by `%x1f` (Unit Sep), commits by `%x1e` (Record Sep) so
+  arbitrary subjects/refs parse reliably. `--decorate=full` makes `%D` emit
+  `refs/heads/…` `refs/remotes/…` `refs/tags/…`, which `parse_decorate`
+  classifies (and drops remote symbolic `…/HEAD`).
+- `load_commit_detail(repo, hash)`: a single
+  `git show --numstat --no-color --format=%cn%x1f%ct%x1f%B%x1e {hash}`.
+  `parse_commit_detail` splits header (committer name/time + full message `%B`)
+  from the numstat block; `parse_numstat` parses `adds\tdels\tpath` (binary `-`
+  → 0).
+- Pure parsers (`parse_commit_log`, `parse_decorate`, `parse_commit_detail`,
+  `parse_numstat`) are unit-tested; the async `load_*` wrappers are thin.
 
 ## Lane layout (layout.rs) — core algorithm
-
-Input: `&[CommitNode]` (git log order, newest → oldest, children before their parents). Output:
+Input `&[CommitNode]` (newest → oldest, children before parents). Output:
 ```
-struct GraphRow { node_col: usize, segments: Vec<LaneSegment> }
-struct LaneSegment { from_col: usize, to_col: usize, color_idx: usize, kind: SegmentKind }
-enum SegmentKind { ThroughVertical, /* row has a commit node */ NodeIn, BranchOut, MergeIn }
+struct PassingLane { col: usize, color_idx: usize }
+struct Connection  { col: usize, color_idx: usize }
+struct GraphRow {
+    node_col: usize,
+    node_color: usize,
+    node_continues_up: bool,          // node reached via an existing lane (not a tip)
+    passing: Vec<PassingLane>,        // lanes passing straight through this row
+    to_parents: Vec<Connection>,      // node → each parent column (lower half)
+    from_children: Vec<Connection>,   // each merging child → node (upper half)
+}
 struct GraphLayout { rows: Vec<GraphRow>, max_lanes: usize }
 fn assign_lanes(commits: &[CommitNode]) -> GraphLayout
 ```
+Top-down scan maintaining `lanes: Vec<Option<Lane>>` (each lane = expected next
+hash + color). Per commit: find incoming lanes (expected == hash); `node_col` =
+leftmost incoming, or a fresh leftmost-empty lane for a branch tip
+(`node_continues_up = !incoming.is_empty()`). Other incoming lanes collapse into
+`from_children`. The first parent continues `node_col` (so a merged branch
+visually rejoins the mainline); extra parents open new lanes → `to_parents`.
+**No lane compaction**: a lane keeps its column for life, so adjacent rows align
+and each row can be painted independently. `color_idx` is the lane's creation
+ordinal (monotonic); the renderer takes `% palette_len`.
 
-Algorithm (top-down scan, maintaining `active_lanes: Vec<Option<expected_hash>>`, where each lane records the commit hash it expects to reach on the next row):
-1. Find all lanes with `expected_hash == current commit.hash`; the commit's `node_col` = the leftmost such lane (if none, it's a branch tip — open a new leftmost empty lane).
-2. The commit "consumes" those lanes: set lane `node_col`'s expected hash to the **first parent**; any other lanes pointing at this commit (multiple children merging in) collapse on this row, draw a `MergeIn` segment, and are freed.
-3. Multiple parents (merge commit): parents 2..n each open a new lane (leftmost free slot), drawing a `BranchOut` segment.
-4. Any lane not touched by this commit continues as-is, drawing a `ThroughVertical` segment.
-5. `color_idx = lane_index % PALETTE_LEN`; palette comes from theme tokens (see below).
-
-Shapes to cover (test cases): purely linear, single fork, single merge, consecutive merges, octopus merge (3+ parents), multi-root repository (several parentless commits), isolated branch tip.
+Test coverage: linear, fork, merge, consecutive/​octopus merges, multi-root,
+single/empty, freed-lane reuse.
 
 ## Per-row painting (row_canvas.rs)
-
-`GitGraphRowCanvas` implements `Element`:
-- Inputs: this row's `GraphRow` + lane width `LANE_W` (~14px) + row height + palette.
-- `paint()`: for each `LaneSegment`,
-  - `ThroughVertical`: draw a 2px-wide vertical rect spanning the row height, centered in column `from_col`.
-  - `NodeIn` / `BranchOut` / `MergeIn` crossing columns: draw an orthogonal elbow polyline of "vertical segment + horizontal segment + rounded-corner rect" (use `CornerRadius` to round the bend).
-  - Commit dot: at `node_col`, row midpoint, draw a small square with `corner_radius = half side` (= circle), colored by the lane; a HEAD commit may add a `Border` outline.
-- For click selection, the node dot uses `draw_rect_with_hit_recording` to record a hit region; click events bubble to `GitGraphView` → `model.select(index)`.
-- **Each row paints itself** (not one full-height canvas), which aligns naturally with the existing scrollable list / scrollbar elements and avoids global scroll-offset math.
-
-## Model (model.rs)
-
-`GitGraphModel` (warpui Model) fields: `repo_root: Option<PathBuf>`, `commits: Vec<CommitNode>`, `layout: GraphLayout`, `selected: Option<usize>`, `detail: Option<CommitDetail>`, `state: { NoRepo | Loading | Loaded | Error(String) }`, pagination cursor `loaded_count`.
-
-Methods (responsibilities):
-- `set_repo(root, ctx)`: called when the active repository changes; reset and `reload`.
-- `reload(ctx)`: spawn an async task calling `load_commit_graph` → back on the main thread run `assign_lanes` → update state + `ctx.notify()`.
-- `load_more(ctx)`: paginated append.
-- `select(index, ctx)`: spawn `load_commit_detail` → fill `detail`.
-- Subscribe to repo changes for auto-refresh: reuse `repo_metadata`'s repository watcher events (`crates/repo_metadata`), debounce refreshes (~300ms) so that bursts of file events don't repeatedly re-run `git log`.
+`GitGraphRowCanvas { row: GraphRow, lane_count }` implements `Element`: fixed
+width `lane_count * LANE_WIDTH` (14px), fixed height `ROW_HEIGHT` (22px, matched
+by the text column so the `UniformList` rows are uniform). `paint` draws, with
+2px-thick rects: `passing` lanes as full-height verticals; `node_continues_up` as
+a top→mid vertical at `node_col`; `from_children` as vertical(top→mid at child)
++ horizontal(child→node at mid); `to_parents` as horizontal(node→parent at mid)
++ vertical(mid→bottom at parent); and the commit dot (8px circle) at the node.
+Colors come from a fixed 7-entry `PALETTE` (const `ColorU` literals) — theming
+via design tokens is deferred.
 
 ## View (view.rs) + active-repo resolution
+`GitGraphView` holds all state: `working_dir`, `commits: Arc<Vec<CommitNode>>`,
+`layout: Arc<GraphLayout>`, `state` (NoRepo/Loading/Loaded/Error), per-row
+`MouseStateHandle`s, `selected`, `detail` (None/Loading/Loaded/Error),
+two `UniformListState`s (graph + detail file list), refresh/​load-more mouse
+states, and `has_more` / `loading_more` for pagination.
 
-`GitGraphView` (warpui View):
-- Header: repo name + current branch + refresh button (`icon_button`, reusing `app/src/ui_components/buttons`).
-- Body: scrollable list, each row = `[GitGraphRowCanvas | ref labels + subject + author + relative time + short hash]`.
-- Detail area (bottom/side): renders `model.detail`.
-- Subscribes to `GitGraphModel` changes → `ctx.notify()` to repaint.
+`GitGraphAction` = `SelectCommit(usize)` | `Refresh` | `LoadMore`, handled by the
+`TypedActionView` impl. Rows are wrapped in `Hoverable` and dispatch
+`SelectCommit`. Layout per state:
+- header (when a dir is set): "{N} commits" / status + a refresh `icon_button`.
+- body: a single `MainAxisSize::Max` column with `Shrinkable` factors — list
+  alone (factor 1), or list (2) + detail (1) when a commit is selected. (Nesting
+  two `Max` columns feeds the inner one an infinite constraint and panics — the
+  view deliberately uses one column.)
+- the graph list is a `UniformList`; when `has_more`, a trailing "Load more" row
+  dispatches `LoadMore` (button-style pagination, not infinite-scroll).
+- the detail area shows full message, author (name+email), committer (if
+  different), full hash, and a virtualized changed-file list with `+adds/-dels`.
+  Timestamps are not yet formatted/shown.
 
-**Active-repo resolution** (follow the focused pane's repository): reuse the same path the file tree uses to locate "the current repo." `LeftPanelView` already holds `working_directories_model: ModelHandle<WorkingDirectoriesModel>` and `active_pane_group` (see `left_panel.rs:174-178`), and the file tree resolves the active working directory per pane group via `active_file_tree_view`. Git Graph follows suit: subscribe to `WorkingDirectoriesEvent::DirectoriesChanged` (already subscribed around `left_panel.rs:256`) + active-pane-group changes, resolve the active working directory to a repository root via `repo_metadata` repository lookup, and call `model.set_repo`.
-> Note: the exact "working directory → repository root" API is confirmed with a small spike in Phase 0 (the file tree already has a working path to copy).
+Each commit row = `[GitGraphRowCanvas | short hash + ref badges + subject]`.
+Ref labels render as small rounded color-coded badges (HEAD/local/remote/tag).
 
-## Integration change checklist
-
-1. **`left_panel.rs`**: the 7 arm/field changes listed under "Relevant code"; subscribe to `git_graph_view` events if needed (e.g. if `GitGraphEvent` must bubble, such as "open file" — v1 may have no events).
-2. **`view.rs`**: push in `compute_left_panel_views`; add the keybinding constant and register the action where actions are registered (cf. how `LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME` is registered); a default keybinding can be left unbound.
-3. **`crates/warp_features/src/lib.rs`**: add `FeatureFlag::GitGraph`. **Use the `add-feature-flag` skill**, default Dev stage.
-4. **Settings**: v1 gates only on flag + cfg; do **not** add a `show_git_graph` user setting (keep the surface small). If a show/hide toggle consistent with other tabs is wanted, defer to a Phase 5 stretch (cf. `CodeSettings::show_project_explorer`).
-5. **Telemetry**: optional, via the `add-telemetry` skill, to record "open Git Graph / select commit" — Phase 5.
+**Active-repo resolution**: `LeftPanelView`'s existing
+`WorkingDirectoriesEvent::DirectoriesChanged` handler already computes the active
+pane group's local directories; it pushes the most-recent one into
+`git_graph_view.set_working_directory`. `git log` resolves the repository from
+any subdirectory, so no explicit "directory → repo root" lookup is needed; a
+non-repo directory simply yields the NoRepo state.
 
 ## Testing
+- `layout_tests.rs`: assert `assign_lanes` `node_col` / `node_continues_up` /
+  passing / to_parents / from_children / `max_lanes` across DAG shapes.
+- `data_tests.rs`: `parse_commit_log` / `parse_decorate` / `parse_commit_detail`
+  edge cases (separators in subject, empty `%D`, detached HEAD, multiple parents,
+  binary numstat, etc.).
+- 22 unit tests total. Build/run verified manually under
+  `--features local_fs,git_graph` (no integration test added; core logic is in
+  the pure-function unit tests).
 
-- `layout_tests.rs` (highest value, TDD-first): for hand-built commit sequences, assert `assign_lanes` output `node_col` / segments / `max_lanes`, covering linear / fork / merge / consecutive merge / octopus merge / multi-root.
-- `data_tests.rs`: table-driven tests for `parse_commit_log` / `parse_decorate` / `parse_numstat`, including edge cases — subjects containing separators, empty `%D`, multiple parents, renames.
-- Integration test (stretch): use `warp-integration-test` to verify panel load and rendering in a temp repo; the core logic is already covered by the two unit-test groups, so the integration test is not required.
+## Deferred / not yet implemented
+- **Auto-refresh on repo change.** Needs a `RepoMetadataModel` handle threaded
+  into the view, subscription to `RepoMetadataEvent::RepositoryUpdated` filtered
+  by repo id, debounce, and large-repo perf care. Manual refresh covers v1.
+- **Rounded elbow connectors** (cosmetic), **theme-token palette** (current fixed
+  palette suits dark themes), **keybinding** for the tab, **telemetry**, and a
+  `show_git_graph` user setting — all deliberately out of scope for now.
+- **Changed-file A/M/D/R status** and **formatted commit timestamps** in detail.
 
-## Risks and open items
-1. **Connector look**: orthogonal rounded elbows ≠ git-graph beziers; confirm this is acceptable (already declared in PRODUCT non-goals).
-2. **Active-repo API**: confirm the existing "working directory → repository root" call in a Phase 0 spike before implementing (low risk; file-tree precedent exists).
-3. **Large-repo performance**: bounded by pagination (first ~200, lazy more) + layout is O(commits × lanes); debounced refresh avoids thrash.
-4. **Edge shapes**: detached HEAD, worktrees, multi-root, empty repo — layout and parsing must handle these explicitly (covered in test cases).
-5. **Refresh granularity**: repo watcher events are fine-grained; debounce, and if needed only re-run on changes under `.git/HEAD`, `.git/refs`, `.git/logs`.
-
-## Implementation phases (suggested order)
-- **Phase 0 — spike (~0.5d)**: confirm active-repo resolution; with hardcoded 3-row data, make `GitGraphRowCanvas` draw lanes + dots + one elbow connector, validating that the custom `Element` drawing works.
-- **Phase 1 — data + layout (TDD)**: `data.rs` + `layout.rs` + both unit-test groups green, no UI.
-- **Phase 2 — panel shell**: wire up `FeatureFlag::GitGraph` + the full set of `ToolPanelView` arms; `GitGraphView` first shows a **plain-text** commit list (no lanes), proving the "flag → button → view → fetch → render" path.
-- **Phase 3 — graph rendering**: plug in `GitGraphRowCanvas`, lanes/dots/connectors + palette.
-- **Phase 4 — detail and interaction**: click to select → detail (message + changed files + ins/del); refresh button; scroll lazy-load; auto-refresh subscription.
-- **Phase 5 — polish**: ref-label styling and theme tokens, empty/error/no-commits states, keybinding, telemetry.
+## Implementation phases (delivered)
+- **Phase 1** — data + layout + unit tests (no UI).
+- **Phase 2** — feature flag + `ToolPanelView` wiring + plain-text commit list.
+- **Phase 3** — lane graph rendering (`row_canvas`).
+- **Phase 4a** — click → commit detail (+ startup flex-nesting crash fix).
+- **Phase 4b** — manual refresh button.
+- **Phase 4c** — "load more" pagination.
+- **Phase 5 (partial)** — ref-label color badges. Remaining polish deferred (see
+  above).
