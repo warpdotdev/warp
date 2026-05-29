@@ -6,7 +6,7 @@
 //! footer's credit rollup) can walk the same tree without duplicating the
 //! traversal.
 
-use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 
 /// Returns all locally-known descendants (children, grandchildren, …) of
@@ -103,6 +103,27 @@ pub fn aggregated_orchestrator_status(
         return ConversationStatus::Cancelled;
     }
     ConversationStatus::Success
+}
+
+/// Returns a conversation's direct status unless it is a known orchestration
+/// parent, in which case it returns [`aggregated_orchestrator_status`].
+///
+/// This is intended for top-level conversation chrome (tab icons, pane header
+/// icons, status rows) where the user expects the visible status badge to keep
+/// representing active child agents after the orchestrator's own turn has
+/// finished.
+pub fn orchestration_aware_conversation_status(
+    history: &BlocklistAIHistoryModel,
+    conversation: &AIConversation,
+) -> ConversationStatus {
+    if history
+        .child_conversation_ids_of(&conversation.id())
+        .is_empty()
+    {
+        conversation.status().clone()
+    } else {
+        aggregated_orchestrator_status(history, conversation.id())
+    }
 }
 
 #[cfg(test)]
