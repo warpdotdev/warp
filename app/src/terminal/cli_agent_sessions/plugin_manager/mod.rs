@@ -177,7 +177,6 @@ pub(crate) trait CliAgentPluginManager: Send + Sync {
     fn has_local_marketplace_override(&self) -> bool {
         false
     }
-
     /// Install the Warp notification plugin.
     /// Default returns an error — only agents with `can_auto_install() == true` should override.
     async fn install(&self) -> Result<(), PluginInstallError> {

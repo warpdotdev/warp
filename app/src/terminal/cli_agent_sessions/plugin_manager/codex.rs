@@ -15,16 +15,20 @@ use crate::terminal::model::session::LocalCommandExecutor;
 use crate::terminal::shell::ShellType;
 
 const PLUGIN_KEY: &str = "warp@codex-warp";
+const PLUGIN_NAME: &str = "warp";
 const MARKETPLACE_REPO: &str = "warpdotdev/codex-warp";
 const MARKETPLACE_NAME: &str = "codex-warp";
 
 const PLATFORM_PLUGIN_KEY: &str = "orchestration@codex-warp";
+const PLATFORM_PLUGIN_NAME: &str = "orchestration";
 
 const CODEX_CONFIG_DIR: &str = ".codex";
 const CODEX_HOME_ENV: &str = "CODEX_HOME";
 
 // Keep in sync with the plugin version in warpdotdev/codex-warp.
 const MINIMUM_PLUGIN_VERSION: &str = "0.4.0";
+// Keep in sync with the orchestration plugin version in warpdotdev/codex-warp.
+const MINIMUM_PLATFORM_PLUGIN_VERSION: &str = "0.4.0";
 
 pub(super) struct CodexPluginManager {
     executor: LocalCommandExecutor,
@@ -84,10 +88,32 @@ impl CliAgentPluginManager for CodexPluginManager {
         let Ok(codex_dir) = codex_home_dir() else {
             return false;
         };
-        match installed_version(&codex_dir) {
-            Some(v) => compare_versions(&v, MINIMUM_PLUGIN_VERSION).is_lt(),
-            None => check_installed(&codex_dir),
+        plugin_needs_update(&codex_dir, PLUGIN_KEY, PLUGIN_NAME, MINIMUM_PLUGIN_VERSION)
+    }
+
+    fn is_platform_plugin_installed(&self) -> bool {
+        if !FeatureFlag::CodexPlugin.is_enabled() {
+            return false;
         }
+        let Ok(codex_dir) = codex_home_dir() else {
+            return false;
+        };
+        check_platform_plugin_installed(&codex_dir)
+    }
+
+    fn platform_plugin_needs_update(&self) -> bool {
+        if !FeatureFlag::CodexPlugin.is_enabled() {
+            return false;
+        }
+        let Ok(codex_dir) = codex_home_dir() else {
+            return false;
+        };
+        plugin_needs_update(
+            &codex_dir,
+            PLATFORM_PLUGIN_KEY,
+            PLATFORM_PLUGIN_NAME,
+            MINIMUM_PLATFORM_PLUGIN_VERSION,
+        )
     }
 
     async fn install(&self) -> Result<(), PluginInstallError> {
@@ -173,6 +199,43 @@ impl CliAgentPluginManager for CodexPluginManager {
         .await?;
         self.run_logged(&["plugin", "add", PLATFORM_PLUGIN_KEY], &mut log)
             .await?;
+        let updated = codex_home_dir()
+            .ok()
+            .map(|dir| platform_plugin_version_is_current(&dir))
+            .unwrap_or(false);
+        if !updated {
+            log.push_str("Post-install version check: platform plugin is still outdated\n");
+            return Err(PluginInstallError {
+                message: "Platform plugin installation did not take effect".to_owned(),
+                log,
+            });
+        }
+        Ok(())
+    }
+
+    async fn update_platform_plugin(&self) -> Result<(), PluginInstallError> {
+        if !FeatureFlag::CodexPlugin.is_enabled() {
+            return Ok(());
+        }
+        let mut log = String::new();
+        self.run_logged(
+            &["plugin", "marketplace", "upgrade", MARKETPLACE_NAME],
+            &mut log,
+        )
+        .await?;
+        self.run_logged(&["plugin", "add", PLATFORM_PLUGIN_KEY], &mut log)
+            .await?;
+        let updated = codex_home_dir()
+            .ok()
+            .map(|dir| platform_plugin_version_is_current(&dir))
+            .unwrap_or(false);
+        if !updated {
+            log.push_str("Post-update version check: platform plugin is still outdated\n");
+            return Err(PluginInstallError {
+                message: "Platform plugin update did not take effect".to_owned(),
+                log,
+            });
+        }
         Ok(())
     }
 }
@@ -249,6 +312,14 @@ static PLUGIN_UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> =
     });
 
 fn check_installed(codex_dir: &Path) -> bool {
+    check_plugin_installed(codex_dir, PLUGIN_KEY)
+}
+
+fn check_platform_plugin_installed(codex_dir: &Path) -> bool {
+    check_plugin_installed(codex_dir, PLATFORM_PLUGIN_KEY)
+}
+
+fn check_plugin_installed(codex_dir: &Path, plugin_key: &str) -> bool {
     let config_path = codex_dir.join("config.toml");
     let Ok(contents) = fs::read_to_string(config_path) else {
         return false;
@@ -258,7 +329,7 @@ fn check_installed(codex_dir: &Path) -> bool {
     };
     parsed
         .get("plugins")
-        .and_then(|plugins| plugins.get(PLUGIN_KEY))
+        .and_then(|plugins| plugins.get(plugin_key))
         .and_then(|plugin| plugin.get("enabled"))
         .and_then(|enabled| enabled.as_bool())
         .unwrap_or(false)
@@ -266,11 +337,26 @@ fn check_installed(codex_dir: &Path) -> bool {
 
 /// Reads the latest cached Warp plugin version, if present.
 fn installed_version(codex_dir: &Path) -> Option<String> {
+    installed_plugin_version(codex_dir, PLUGIN_NAME)
+}
+
+/// Reads the latest cached orchestration plugin version, if present.
+fn installed_platform_plugin_version(codex_dir: &Path) -> Option<String> {
+    installed_plugin_version(codex_dir, PLATFORM_PLUGIN_NAME)
+}
+
+fn platform_plugin_version_is_current(codex_dir: &Path) -> bool {
+    installed_platform_plugin_version(codex_dir)
+        .map(|v| !compare_versions(&v, MINIMUM_PLATFORM_PLUGIN_VERSION).is_lt())
+        .unwrap_or(false)
+}
+
+fn installed_plugin_version(codex_dir: &Path, plugin_name: &str) -> Option<String> {
     let cache_dir = codex_dir
         .join("plugins")
         .join("cache")
         .join(MARKETPLACE_NAME)
-        .join("warp");
+        .join(plugin_name);
     let entries = fs::read_dir(cache_dir).ok()?;
     let mut latest: Option<String> = None;
     for entry in entries.flatten() {
@@ -293,6 +379,22 @@ fn installed_version(codex_dir: &Path) -> Option<String> {
         }
     }
     latest
+}
+
+fn plugin_needs_update(
+    codex_dir: &Path,
+    plugin_key: &str,
+    plugin_name: &str,
+    minimum_version: &str,
+) -> bool {
+    if !check_plugin_installed(codex_dir, plugin_key) {
+        return false;
+    }
+    match installed_plugin_version(codex_dir, plugin_name) {
+        Some(v) => compare_versions(&v, minimum_version).is_lt(),
+        // No version field means very old plugin.
+        None => true,
+    }
 }
 
 /// Checks `CODEX_HOME` first, falls back to `~/.codex`.
