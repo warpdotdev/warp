@@ -1093,8 +1093,10 @@ enum RemoteChildHydrationAction {
         task_is_terminal: bool,
     },
     /// Neither live nor cloud transcript available; fall through to
-    /// `apply_existing_ambient_task_to_pane` + (conditional) tombstone.
-    Fallback,
+    /// `attach_ambient_session_and_maybe_tombstone`. `task_is_terminal`
+    /// gates the tombstone so an `ActiveUnattachable` run with no server
+    /// token isn't visually marked as ended.
+    Fallback { task_is_terminal: bool },
 }
 
 /// Pure decision function backing [`PaneGroup::attempt_remote_child_hydration`].
@@ -1108,6 +1110,8 @@ fn decide_remote_child_hydration_action(task: &AmbientAgentTask) -> RemoteChildH
         return RemoteChildHydrationAction::LiveAttach;
     }
 
+    let task_is_terminal = matches!(live_session_state, AmbientAgentLiveSessionState::Inactive);
+
     // Empty/whitespace tokens would drive a no-op cloud fetch followed by
     // a misleading tombstone; route them to `Fallback` instead.
     let server_token = task
@@ -1119,9 +1123,9 @@ fn decide_remote_child_hydration_action(task: &AmbientAgentTask) -> RemoteChildH
     match server_token {
         Some(server_token) => RemoteChildHydrationAction::LoadTranscript {
             server_token,
-            task_is_terminal: matches!(live_session_state, AmbientAgentLiveSessionState::Inactive),
+            task_is_terminal,
         },
-        None => RemoteChildHydrationAction::Fallback,
+        None => RemoteChildHydrationAction::Fallback { task_is_terminal },
     }
 }
 
@@ -3850,9 +3854,10 @@ impl PaneGroup {
     /// `attempt_remote_child_hydration` (or queues a pending entry while
     /// task data is fetched).
     ///
-    /// Idempotent: skipped when the placeholder already has a tracked pane
-    /// AND at least one exchange, so repeat calls from
-    /// `restore_missing_child_agent_panes_for_parent` don't double-hydrate.
+    /// Idempotent: skipped when the placeholder already has a live tracked
+    /// pane, so repeat calls from `restore_missing_child_agent_panes_for_parent`
+    /// — including while the initial async hydration is still in flight —
+    /// don't create a duplicate hidden pane and orphan the first one.
     fn hydrate_task_backed_hidden_child_pane(
         &mut self,
         child_conversation: AIConversation,
@@ -3864,7 +3869,7 @@ impl PaneGroup {
 
         // Idempotency guard — see fn doc.
         if let Some(existing_pane_id) = self.child_agent_panes.get(&child_id).copied() {
-            if self.has_pane_id(existing_pane_id) && child_conversation.exchange_count() > 0 {
+            if self.has_pane_id(existing_pane_id) {
                 return;
             }
         }
@@ -3979,17 +3984,18 @@ impl PaneGroup {
                     ctx,
                 );
             }
-            RemoteChildHydrationAction::Fallback => {
+            RemoteChildHydrationAction::Fallback { task_is_terminal } => {
                 // No live session, no server token: attach to the
-                // (possibly empty) ambient session and insert the
-                // conversation-ended tombstone so we're never worse than
-                // the pre-fix behaviour.
-                self.apply_existing_ambient_task_to_pane(pane_id, child_id, task_id, ctx);
-                if let Some(terminal_view) = self.terminal_view_from_pane_id(pane_id, ctx) {
-                    terminal_view.update(ctx, |view, ctx| {
-                        view.insert_conversation_ended_tombstone_with_resolved_cta(ctx);
-                    });
-                }
+                // (possibly empty) ambient session, then insert the
+                // conversation-ended tombstone iff the run is terminal so
+                // an `ActiveUnattachable` child isn't visually ended.
+                self.attach_ambient_session_and_maybe_tombstone(
+                    pane_id,
+                    child_id,
+                    task_id,
+                    task_is_terminal,
+                    ctx,
+                );
             }
         }
     }

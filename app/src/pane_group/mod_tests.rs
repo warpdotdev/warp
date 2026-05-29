@@ -3199,7 +3199,7 @@ fn decide_remote_child_hydration_active_unattachable_with_token_loads_transcript
 #[test]
 fn decide_remote_child_hydration_inactive_without_token_falls_back() {
     // Terminal state, no server token -> nothing to attach to and nothing to
-    // load, so we expose the pre-Fix-B tombstone path.
+    // load. Terminal => tombstone is appropriate.
     let task = hydration_decision_task(AmbientAgentTaskState::Succeeded, false, None, None);
     assert_eq!(
         task.active_live_session_state(),
@@ -3208,7 +3208,34 @@ fn decide_remote_child_hydration_inactive_without_token_falls_back() {
 
     assert_eq!(
         decide_remote_child_hydration_action(&task),
-        RemoteChildHydrationAction::Fallback,
+        RemoteChildHydrationAction::Fallback {
+            task_is_terminal: true,
+        },
+    );
+}
+
+/// `ActiveUnattachable` + no server token: the run is still in progress but
+/// the client can't attach and has nothing to load. Fallback must carry
+/// `task_is_terminal: false` so the dispatch arm skips the
+/// conversation-ended tombstone.
+#[test]
+fn decide_remote_child_hydration_active_unattachable_without_token_falls_back_non_terminal() {
+    let task = hydration_decision_task(
+        AmbientAgentTaskState::InProgress,
+        true,
+        Some("not-a-valid-uuid"),
+        None,
+    );
+    assert_eq!(
+        task.active_live_session_state(),
+        AmbientAgentLiveSessionState::ActiveUnattachable,
+    );
+
+    assert_eq!(
+        decide_remote_child_hydration_action(&task),
+        RemoteChildHydrationAction::Fallback {
+            task_is_terminal: false,
+        },
     );
 }
 
@@ -3216,7 +3243,7 @@ fn decide_remote_child_hydration_inactive_without_token_falls_back() {
 /// whitespace-only) is treated the same as `None`: the dispatch must not
 /// route to a no-op cloud fetch wrapped in a misleading tombstone. The
 /// `Fallback` arm handles "nothing to attach to, nothing to load"
-/// correctly.
+/// correctly. Terminal here => tombstone is appropriate.
 #[test]
 fn decide_remote_child_hydration_empty_token_falls_back() {
     for empty_token in [Some(""), Some("   "), Some("\t\n")] {
@@ -3229,7 +3256,9 @@ fn decide_remote_child_hydration_empty_token_falls_back() {
         );
         assert_eq!(
             decide_remote_child_hydration_action(&task),
-            RemoteChildHydrationAction::Fallback,
+            RemoteChildHydrationAction::Fallback {
+                task_is_terminal: true,
+            },
             "empty/whitespace token={empty_token:?} must fall through to Fallback",
         );
     }
