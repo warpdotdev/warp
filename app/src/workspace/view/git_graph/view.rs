@@ -14,10 +14,14 @@ use warpui::elements::{
 };
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
+use warp_core::ui::Icon;
+use warpui::ui_components::components::UiComponent;
+
 use super::data::{ChangedFile, CommitDetail, CommitNode};
 use super::layout::{assign_lanes, GraphLayout, GraphRow};
 use super::row_canvas::GitGraphRowCanvas;
 use crate::appearance::Appearance;
+use crate::ui_components::buttons::icon_button;
 
 /// 首屏加载的提交数上限（分页懒加载留待后续）。
 const COMMIT_PAGE_SIZE: usize = 200;
@@ -27,6 +31,8 @@ const COMMIT_PAGE_SIZE: usize = 200;
 pub(crate) enum GitGraphAction {
     /// 选中列表中第 N 行提交并加载其详情。
     SelectCommit(usize),
+    /// 手动重新加载当前仓库的图谱。
+    Refresh,
 }
 
 /// 视图向外发出的事件。暂无。
@@ -71,6 +77,8 @@ pub(crate) struct GitGraphView {
     list_state: UniformListState,
     /// 详情区文件列表的滚动状态。
     detail_list_state: UniformListState,
+    /// 刷新按钮的鼠标状态。
+    refresh_mouse_state: MouseStateHandle,
 }
 
 /// 空布局，用于未加载/出错时。
@@ -93,6 +101,7 @@ impl GitGraphView {
             detail: DetailState::None,
             list_state: UniformListState::new(),
             detail_list_state: UniformListState::new(),
+            refresh_mouse_state: MouseStateHandle::default(),
         }
     }
 
@@ -248,6 +257,39 @@ impl GitGraphView {
                 render_detail_body(commit, detail, &self.detail_list_state, appearance)
             }
         }
+    }
+
+    /// 顶部条：左侧提交计数 / 状态，右侧刷新按钮。
+    fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let label = match &self.state {
+            LoadState::Loaded => format!("{} commits", self.commits.len()),
+            LoadState::Loading => "Loading…".to_string(),
+            _ => String::new(),
+        };
+        let refresh = icon_button(
+            appearance,
+            Icon::Refresh,
+            false,
+            self.refresh_mouse_state.clone(),
+        )
+        .build()
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(GitGraphAction::Refresh);
+        })
+        .finish();
+
+        Container::new(
+            Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(text_line(label, appearance, true))
+                .with_child(refresh)
+                .finish(),
+        )
+        .with_horizontal_padding(12.)
+        .with_vertical_padding(6.)
+        .finish()
     }
 }
 
@@ -443,6 +485,7 @@ impl TypedActionView for GitGraphView {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             GitGraphAction::SelectCommit(index) => self.select_commit(*index, ctx),
+            GitGraphAction::Refresh => self.reload(ctx),
         }
     }
 }
@@ -461,6 +504,11 @@ impl View for GitGraphView {
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::Start)
             .with_cross_axis_alignment(CrossAxisAlignment::Start);
+
+        // 有工作目录时显示顶部条（含刷新按钮）。
+        if self.working_dir.is_some() {
+            column = column.with_child(self.render_header(appearance));
+        }
 
         column = match &self.state {
             LoadState::NoRepo => column.with_child(render_message(
