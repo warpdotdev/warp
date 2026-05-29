@@ -17,7 +17,7 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::{AppContext, ModelContext, ModelHandle};
 
 use crate::code_review::diff_size_limits::DiffSize;
-use crate::util::git::{BranchEntry, Commit};
+use crate::util::git::{BranchEntry, Commit, PrInfo};
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 mod local;
 #[cfg(feature = "local_fs")]
@@ -276,6 +276,7 @@ pub struct DiffMetadata {
     pub has_head_commit: bool,
     pub unpushed_commits: Vec<Commit>,
     pub upstream_ref: Option<String>,
+    pub pr_info: Option<PrInfo>,
 }
 
 #[derive(Clone, Default, Debug)]

@@ -7,7 +7,7 @@ use tempfile::TempDir;
 use super::{
     detect_current_branch, detect_current_branch_display, get_pr_for_branch, get_repository_info,
     is_gh_auth_error, is_gh_missing_error, is_no_pr_for_branch_error,
-    repository_info_from_remote_url, RepositoryInfo,
+    repository_info_from_gh_output, RepositoryInfo,
 };
 
 /// Helper: run a git command inside the given repo directory.
@@ -24,92 +24,42 @@ async fn git(repo: &Path, args: &[&str]) -> String {
 }
 
 #[test]
-fn repository_info_from_remote_url_handles_https_remote() {
+fn repository_info_from_gh_output_parses_name_and_owner() {
     assert_eq!(
-        repository_info_from_remote_url("https://github.com/warpdotdev/warp-internal.git"),
-        Some(RepositoryInfo {
+        repository_info_from_gh_output(
+            r#"{"name":"warp-internal","owner":{"login":"warpdotdev"}}"#
+        )
+        .unwrap(),
+        RepositoryInfo {
             name: "warp-internal".to_owned(),
             owner: Some("warpdotdev".to_owned()),
-        })
+        }
     );
 }
 
 #[test]
-fn repository_info_from_remote_url_handles_ssh_remote() {
-    assert_eq!(
-        repository_info_from_remote_url("git@github.com:warpdotdev/warp-internal.git"),
-        Some(RepositoryInfo {
-            name: "warp-internal".to_owned(),
-            owner: Some("warpdotdev".to_owned()),
-        })
+fn repository_info_from_gh_output_rejects_missing_name() {
+    assert!(repository_info_from_gh_output(r#"{"owner":{"login":"warpdotdev"}}"#).is_err());
+}
+
+#[test]
+fn repository_info_from_gh_output_rejects_missing_owner_login() {
+    assert!(repository_info_from_gh_output(r#"{"name":"warp-internal","owner":{}}"#).is_err());
+}
+
+#[test]
+fn repository_info_from_gh_output_rejects_empty_fields() {
+    assert!(
+        repository_info_from_gh_output(r#"{"name":"","owner":{"login":"warpdotdev"}}"#).is_err()
+    );
+    assert!(
+        repository_info_from_gh_output(r#"{"name":"warp-internal","owner":{"login":""}}"#).is_err()
     );
 }
 
 #[test]
-fn repository_info_from_remote_url_handles_url_style_ssh_remote() {
-    assert_eq!(
-        repository_info_from_remote_url("ssh://git@github.com/warpdotdev/warp-internal.git"),
-        Some(RepositoryInfo {
-            name: "warp-internal".to_owned(),
-            owner: Some("warpdotdev".to_owned()),
-        })
-    );
-}
-
-#[test]
-fn repository_info_from_remote_url_rejects_supported_ownerless_url() {
-    assert_eq!(
-        repository_info_from_remote_url("https://example.com/warp-internal.git"),
-        None
-    );
-}
-
-#[test]
-fn repository_info_from_remote_url_rejects_extra_path_segments() {
-    assert_eq!(
-        repository_info_from_remote_url("https://github.com/warpdotdev/warp-internal/extra"),
-        None
-    );
-}
-
-#[test]
-fn repository_info_from_remote_url_strips_query_from_repo_name() {
-    assert_eq!(
-        repository_info_from_remote_url("https://github.com/warpdotdev/warp-internal?ref=main"),
-        Some(RepositoryInfo {
-            name: "warp-internal".to_owned(),
-            owner: Some("warpdotdev".to_owned()),
-        })
-    );
-}
-
-#[test]
-fn repository_info_from_remote_url_rejects_unrecognized_ownerless_remote() {
-    assert_eq!(repository_info_from_remote_url("warp-internal.git"), None);
-}
-
-#[test]
-fn repository_info_from_remote_url_rejects_unrecognized_url_scheme() {
-    assert_eq!(
-        repository_info_from_remote_url("custom://github.com/warpdotdev/warp-internal.git"),
-        None
-    );
-}
-
-#[test]
-fn repository_info_from_remote_url_rejects_invalid_ssh_remote() {
-    assert_eq!(
-        repository_info_from_remote_url("git@:warpdotdev/warp-internal.git"),
-        None
-    );
-    assert_eq!(
-        repository_info_from_remote_url("git@github.com/warpdotdev/warp-internal.git"),
-        None
-    );
-    assert_eq!(
-        repository_info_from_remote_url("git@github.com:/warpdotdev/warp-internal.git"),
-        None
-    );
+fn repository_info_from_gh_output_rejects_malformed_json() {
+    assert!(repository_info_from_gh_output("not json").is_err());
 }
 
 /// Creates a temp git repo with one commit and returns `(dir_handle, repo_path)`.
@@ -125,22 +75,32 @@ async fn init_repo() -> (TempDir, std::path::PathBuf) {
     (dir, path)
 }
 
+#[cfg(unix)]
 #[tokio::test]
-async fn get_repository_info_reads_origin_remote() {
+async fn get_repository_info_reads_gh_repo_view() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     let (_dir, repo) = init_repo().await;
-    git(
-        &repo,
-        &[
-            "remote",
-            "add",
-            "origin",
-            "https://github.com/warpdotdev/warp-internal.git",
-        ],
+
+    let fake_bin = tempfile::tempdir().expect("failed to create fake bin dir");
+    let gh_path = fake_bin.path().join("gh");
+    fs::write(
+        &gh_path,
+        "#!/bin/sh\nprintf '{\"name\":\"warp-internal\",\"owner\":{\"login\":\"warpdotdev\"}}\\n'\n",
     )
-    .await;
+    .expect("failed to write fake gh");
+    let mut permissions = fs::metadata(&gh_path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&gh_path, permissions).unwrap();
+
+    let path_env = format!(
+        "{}:{}",
+        fake_bin.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
 
     assert_eq!(
-        get_repository_info(&repo).await.unwrap(),
+        get_repository_info(&repo, Some(&path_env)).await.unwrap(),
         Some(RepositoryInfo {
             name: "warp-internal".to_owned(),
             owner: Some("warpdotdev".to_owned()),

@@ -12,7 +12,7 @@ use crate::code_review::diff_state::{
     GitDiffWithBaseContent, GitFileStatus, RemoteDiffStateModel,
 };
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::util::git::Commit;
+use crate::util::git::{Commit, PrInfo};
 
 impl RemoteDiffStateModel {
     fn new_for_test(
@@ -46,6 +46,7 @@ fn empty_metadata(branch: &str) -> DiffMetadata {
         has_head_commit: true,
         unpushed_commits: vec![],
         upstream_ref: None,
+        pr_info: None,
     }
 }
 
@@ -126,6 +127,13 @@ fn test_metadata(branch: &str) -> DiffMetadata {
             deletions: 2,
         }],
         upstream_ref: Some("origin/feature".to_string()),
+        pr_info: Some(PrInfo {
+            number: 42,
+            url: "https://github.com/test/repo/pull/42".to_string(),
+            state: String::new(),
+            draft: false,
+            base_branch: String::new(),
+        }),
     }
 }
 

@@ -693,80 +693,44 @@ pub struct RepositoryInfo {
     pub owner: Option<String>,
 }
 
-pub fn repository_info_from_remote_url(url: &str) -> Option<RepositoryInfo> {
-    let url = url.trim().trim_end_matches(".git");
-    parse_scp_like_ssh_remote_path(url)
-        .or_else(|| parse_supported_url_remote_path(url))
-        .and_then(repository_info_from_remote_path)
-}
-
-fn parse_scp_like_ssh_remote_path(url: &str) -> Option<&str> {
-    let rest = url.strip_prefix("git@")?;
-    let (host, path) = rest.split_once(':')?;
-    if host.is_empty() || host.contains('/') || path.is_empty() || path.starts_with('/') {
-        return None;
-    }
-    Some(path)
-}
-
-fn parse_supported_url_remote_path(url: &str) -> Option<&str> {
-    if !(url.starts_with("https://") || url.starts_with("http://") || url.starts_with("ssh://")) {
-        return None;
-    }
-
-    let (_, rest) = url.split_once("://")?;
-    let (host, path) = rest.split_once('/')?;
-    if host.is_empty() || path.is_empty() {
-        return None;
-    }
-    Some(path)
-}
-
-fn repository_info_from_remote_path(path: &str) -> Option<RepositoryInfo> {
-    let path = path.trim_matches('/');
-    if path.is_empty() {
-        return None;
-    }
-
-    let mut segments = path.splitn(3, '/');
-    let owner = segments.next()?;
-    let repo = segments.next();
-    let extra = segments.next();
-
-    if extra.is_some() {
-        return None;
-    }
-
-    match repo {
-        Some(repo) if !owner.is_empty() && !repo.is_empty() => {
-            let repo = repo
-                .split(['?', '#'])
-                .next()
-                .unwrap_or(repo)
-                .trim_end_matches(".git");
-            if repo.is_empty() {
-                return None;
-            }
-            Some(RepositoryInfo {
-                name: repo.to_string(),
-                owner: Some(owner.to_string()),
-            })
-        }
-        Some(_) => None,
-        None => None,
-    }
+fn repository_info_from_gh_output(output: &str) -> Result<RepositoryInfo> {
+    let parsed: serde_json::Value = serde_json::from_str(output.trim())
+        .map_err(|e| anyhow!("Failed to parse gh output: {e}"))?;
+    let name = parsed["name"]
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| anyhow!("Missing 'name' in gh output"))?
+        .to_string();
+    let owner = parsed["owner"]["login"]
+        .as_str()
+        .filter(|owner| !owner.is_empty())
+        .ok_or_else(|| anyhow!("Missing 'owner.login' in gh output"))?
+        .to_string();
+    Ok(RepositoryInfo {
+        name,
+        owner: Some(owner),
+    })
 }
 
 #[cfg(feature = "local_fs")]
-pub async fn get_repository_info(repo_path: &Path) -> Result<Option<RepositoryInfo>> {
-    log::debug!("[GIT OPERATION] git.rs get_repository_info git remote get-url origin");
-    run_git_command(repo_path, &["remote", "get-url", "origin"])
-        .await
-        .map(|remote_url| repository_info_from_remote_url(remote_url.trim()))
+pub async fn get_repository_info(
+    repo_path: &Path,
+    path_env: Option<&str>,
+) -> Result<Option<RepositoryInfo>> {
+    let stdout = run_gh_command(
+        repo_path,
+        &["repo", "view", "--json", "name,owner"],
+        path_env,
+    )
+    .await?;
+    repository_info_from_gh_output(&stdout).map(Some)
 }
 
 #[cfg(not(feature = "local_fs"))]
-pub async fn get_repository_info(_repo_path: &Path) -> Result<Option<RepositoryInfo>> {
+pub async fn get_repository_info(
+    _repo_path: &Path,
+    _path_env: Option<&str>,
+) -> Result<Option<RepositoryInfo>> {
     Err(anyhow!("Not supported without local_fs"))
 }
 

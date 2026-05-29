@@ -17,7 +17,7 @@ use crate::code_review::diff_state::{
     DiffStats, FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffData, GitDiffWithBaseContent,
     GitFileStatus,
 };
-use crate::util::git::Commit;
+use crate::util::git::{Commit, PrInfo};
 
 // ── Proto → Rust (for incoming client messages) ────────────────────
 
@@ -29,6 +29,18 @@ impl From<&proto::DiffMode> for DiffMode {
             Some(proto::diff_mode::Mode::OtherBranch(ob)) => {
                 DiffMode::OtherBranch(ob.branch_name.clone())
             }
+        }
+    }
+}
+
+impl From<&proto::PrInfo> for PrInfo {
+    fn from(pr_info: &proto::PrInfo) -> Self {
+        PrInfo {
+            number: pr_info.number,
+            url: pr_info.url.clone(),
+            state: String::new(),
+            draft: false,
+            base_branch: String::new(),
         }
     }
 }
@@ -119,8 +131,6 @@ impl TryFrom<&proto::DiffMetadata> for DiffMetadata {
     type Error = String;
 
     fn try_from(metadata: &proto::DiffMetadata) -> Result<Self, Self::Error> {
-        // Legacy proto `pr_info` is intentionally ignored. PR info is fetched
-        // independently per repo by GitRepoStatusModel and is not diff state.
         Ok(DiffMetadata {
             main_branch_name: metadata.main_branch_name.clone(),
             current_branch_name: metadata.current_branch_name.clone(),
@@ -137,6 +147,7 @@ impl TryFrom<&proto::DiffMetadata> for DiffMetadata {
             has_head_commit: metadata.has_head_commit,
             unpushed_commits: metadata.unpushed_commits.iter().map(Commit::from).collect(),
             upstream_ref: metadata.upstream_ref.clone(),
+            pr_info: metadata.pr_info.as_ref().map(PrInfo::from),
         })
     }
 }
@@ -398,6 +409,15 @@ impl From<&Commit> for proto::Commit {
     }
 }
 
+impl From<&PrInfo> for proto::PrInfo {
+    fn from(pr_info: &PrInfo) -> Self {
+        proto::PrInfo {
+            number: pr_info.number,
+            url: pr_info.url.clone(),
+        }
+    }
+}
+
 impl From<&DiffMetadata> for proto::DiffMetadata {
     fn from(m: &DiffMetadata) -> Self {
         proto::DiffMetadata {
@@ -408,9 +428,7 @@ impl From<&DiffMetadata> for proto::DiffMetadata {
             has_head_commit: m.has_head_commit,
             unpushed_commits: m.unpushed_commits.iter().map(proto::Commit::from).collect(),
             upstream_ref: m.upstream_ref.clone(),
-            // PR info is fetched independently per repo by GitRepoStatusModel
-            // and is not part of the diff state. Always None on the wire.
-            pr_info: None,
+            pr_info: m.pr_info.as_ref().map(proto::PrInfo::from),
         }
     }
 }

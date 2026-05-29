@@ -33,6 +33,8 @@ use {
 use super::diff_state::{diff_metadata_against_head, DiffStats};
 #[cfg(feature = "local_fs")]
 const PR_INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(feature = "local_fs")]
+const REPOSITORY_INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Public metadata exposed to consumers — the subset of diff metadata
 /// that the git chip (prompt display, agent view footer) needs.
@@ -307,7 +309,7 @@ impl GitRepoStatusModel {
         self.metadata.as_ref()
     }
 
-    /// Repository info parsed from the origin remote URL.
+    /// Repository info returned by `gh repo view`.
     pub fn repository_info(&self) -> Option<&RepositoryInfo> {
         self.repository_info.as_ref()
     }
@@ -377,8 +379,30 @@ impl GitRepoStatusModel {
             handle.abort();
         }
         let repo_path = self.repo_path.clone();
+        #[cfg(feature = "local_tty")]
+        let path_future = {
+            // Use the shell's interactive PATH so `gh` can be found when Warp
+            // was launched outside of a login shell, e.g. from the macOS GUI.
+            use crate::terminal::local_shell::LocalShellState;
+            LocalShellState::handle(ctx).update(ctx, |shell_state, ctx| {
+                shell_state.get_interactive_path_env_var(ctx)
+            })
+        };
+        #[cfg(not(feature = "local_tty"))]
+        let path_future = futures::future::ready(None);
         self.computing_repository_info_abort_handle = Some(ctx.spawn(
-            async move { get_repository_info(&repo_path).await },
+            async move {
+                let path_env = path_future.await;
+                let fetch = get_repository_info(&repo_path, path_env.as_deref());
+                let timeout = async_io::Timer::after(REPOSITORY_INFO_FETCH_TIMEOUT);
+                futures::pin_mut!(fetch);
+                match futures::future::select(fetch, timeout).await {
+                    futures::future::Either::Left((result, _)) => result,
+                    futures::future::Either::Right((_, _)) => {
+                        Err(anyhow::anyhow!("Repository info fetch timed out"))
+                    }
+                }
+            },
             |me, result, ctx| {
                 let repository_info = match result {
                     Ok(repository_info) => repository_info,
