@@ -539,9 +539,13 @@ readline / ZLE.
 
 **Focus-loss abandonment (PRODUCT #8).** Window blur, modal-overlay
 open, and tab switch each call `Matcher::abandon_pending()`, which
-returns the buffered keys for the dispatcher to drop on the floor
-(no replay, since the input editor no longer has focus to receive
-them).
+returns the buffered keys for the dispatcher to replay through
+normal handling *while the editor still has focus*, then releases
+focus. Any single-key bindings from the replayed keys fire; none
+re-enter prefix accumulation until the replay finishes. This
+matches PRODUCT #8's "no keystroke is ever silently dropped" rule
+and the replay path called out for focus loss. On refocus,
+accumulation starts fresh.
 
 ### 5. Settings, feature flag, debug surface
 
@@ -663,21 +667,46 @@ before any inject path.
 **`full` mode** — inline plugins active. Defaults: zsh, bash with
 blesh detected. The shell owns `$BUFFER`; Warp mirrors it.
 
-1. Matcher runs the `Reserved` and `Editable` tiers (§4) only.
-   On match in either tier, Warp dispatches locally and returns —
-   no inject. The `Contextual` tier (shell bindings) is not
-   consulted at dispatch time in this mode, because ZLE / readline
-   already owns shell-binding resolution from the injected byte.
-2. For `SelfInsert` of a printable K, Warp speculatively appends K
-   to its mirror and renders one frame immediately, hiding the
-   PTY round-trip. For `Action(_)` or `External(_)`, no
-   speculation: the pre-K buffer remains rendered until the DCS
-   report arrives. Category A keystrokes go through the shell in
-   this mode so plugin wrappers around `self-insert` and the
-   kill-ring continue to see them; `$BUFFER` stays authoritative.
-3. Warp writes the byte sequence for K into the PTY. The shell's
-   line editor runs `self-insert` plus plugin wrappers, or
-   dispatches the externally-bound widget in its own keymap.
+1. Matcher walks the full PRODUCT #14 precedence ladder, but each
+   tier dispatches differently in this mode:
+   - **Reserved** match → Warp handles locally, no inject. Step 0
+     already covered this; included here for completeness.
+   - **Editable** match (user-customized Warp binding) → Warp
+     dispatches locally, no inject.
+   - **Contextual** match (shell binding *other than `SelfInsert`*
+     — see below) → Warp injects the byte; ZLE / readline
+     dispatches the bound widget. Plugin wrappers and the bound
+     widget fire in shell context.
+   - **Fixed** match (Warp default; the shell-reported binding for
+     this key is `SelfInsert` so the shell asserts no intent) →
+     Warp dispatches locally, no inject. PRODUCT #29 holds: Warp
+     defaults that the user has not shadowed via shell binding or
+     editable override continue to fire.
+   - **Else** (printable, no Fixed match) → inject, ZLE
+     self-inserts and plugin wrappers fire.
+
+   The Contextual tier only contains shell bindings whose widget
+   is non-`SelfInsert` (Category A / B / C). Keys for which
+   `bindkey -L` / `bind -p` / fish `bind` reports `self-insert`
+   are *not* recorded as Contextual matches — they fall through
+   to Fixed (Warp default if any) and then to the inject-and-
+   self-insert path. This is how a key the shell leaves at
+   default `self-insert` can still trigger a Warp Fixed action
+   (PRODUCT #14 tier 4) before defaulting to character insertion
+   (tier 5).
+2. For `SelfInsert` of a printable K (the Else case above), Warp
+   speculatively appends K to its mirror and renders one frame
+   immediately, hiding the PTY round-trip. For `Action(_)` or
+   `External(_)` injected to ZLE, no speculation: the pre-K
+   buffer remains rendered until the DCS report arrives.
+   Category A keystrokes go through the shell in this mode so
+   plugin wrappers around `self-insert` and the kill-ring
+   continue to see them; `$BUFFER` stays authoritative.
+3. For tiers that inject (Contextual non-`SelfInsert` and the
+   printable Else case), Warp writes the byte sequence for K
+   into the PTY. The shell's line editor runs `self-insert` plus
+   plugin wrappers, or dispatches the externally-bound widget in
+   its own keymap.
 4. The bootstrap hook fires after the keystroke and emits
    `WarpBufferState { buffer, cursor, vi_mode?, autosuggest?,
    highlights? }` over DCS.
@@ -702,34 +731,46 @@ the mirror; the shell receives the buffer at sync boundaries.
    #10's "no shell roundtrip" guarantee. Warp's mirror is
    authoritative for the duration of the typed line.
 3. On `External(_)` match, Warp first syncs `$BUFFER` to the
-   shell by injecting the current mirror byte-for-byte (each
-   byte runs through `self-insert` in-shell), then injects the
-   bound keystroke. ZLE / readline / fish-line-editor dispatches
-   the widget with `$BUFFER` correctly pre-populated. On widget
-   exit the post-dispatch hook emits a `WarpBufferState` payload
-   and Warp resyncs the mirror to whatever the widget left
-   behind.
-4. On Enter, Warp injects the mirror followed by `\n`; the shell
+   shell via the literal-paste path described in §6.2.5, then
+   injects the bound keystroke. ZLE / readline / fish-line-editor
+   dispatches the widget with `$BUFFER` correctly pre-populated.
+   On widget exit the post-dispatch hook emits a
+   `WarpBufferState` payload and Warp resyncs the mirror to
+   whatever the widget left behind.
+4. On Enter, Warp uses the same literal-paste path (§6.2.5) to
+   set `$BUFFER` to the mirror, then injects `\n`; the shell
    runs `accept-line` natively and the block model fires from
    the existing `Preexec` / `Precmd` hooks.
 
-**Prefix accumulation ownership (PRODUCT #8).** Whichever matcher
-dispatches a tier also owns its prefix accumulation; the two
-matchers never compete for the same prefix.
+**Prefix accumulation ownership (PRODUCT #8).** Each prefix is
+owned by exactly one matcher; the two matchers never compete for
+the same prefix.
 
-- In both modes, multi-key bindings on the `Reserved` or
-  `Editable` tier accumulate in Warp's matcher with
-  `MatchOutcome::{Match, Pending, AbandonedPrefix}` (§4).
+- In both modes, multi-key bindings on the `Reserved`,
+  `Editable`, or `Fixed` tier accumulate in Warp's matcher with
+  `MatchOutcome::{Match, Pending, AbandonedPrefix}` (§4). While
+  Warp accumulates, the buffered bytes are *not* injected — the
+  shell does not see them until the sequence resolves.
 - In `full` mode, multi-key bindings on the `Contextual` tier
-  accumulate inside ZLE / readline / fish-line-editor, because
-  every byte reaches the shell immediately. The shell's own
-  pure-prefix wait, 500 ms ambiguity timeout, and replay-on-
-  abandon behavior is what the user sees, and that is what
-  PRODUCT #8 specifies.
+  (shell bindings) accumulate inside ZLE / readline. The shell's
+  own pure-prefix wait, 500 ms ambiguity timeout, and replay-on-
+  abandon behavior is what the user sees once the bytes reach
+  it. Warp's matcher in `full` mode does not buffer for
+  Contextual-only prefixes — single-key Contextual matches
+  inject immediately; for ambiguous cases where a key prefixes
+  both a Warp local-tier sequence and a Contextual sequence,
+  Warp's matcher accumulates locally and the AbandonedPrefix
+  path forwards the buffered keys through the inject path so
+  the shell's own matcher can take over.
 - In `batched` mode, multi-key bindings on the `Contextual`
   tier accumulate in Warp's matcher (because shell bindings are
   dispatched natively); Warp's matcher implements PRODUCT #8
   rules for those sequences directly.
+
+The single invariant: a key the user types either (a) commits a
+Warp-side dispatch (Reserved/Editable/Fixed/Contextual-in-batched)
+without injecting, or (b) reaches the shell as a literal byte,
+where ZLE's keymap is the authority. Never both.
 
 Latency per keystroke: one PTY round-trip plus one DCS parse in
 `full` mode, masked by speculation for the common `SelfInsert`
@@ -756,6 +797,48 @@ When the user switches between tabs or focuses Warp from another
 app, no resync is needed — `$BUFFER` is held in the shell's
 memory across focus changes (`full` mode), and Warp's mirror is
 held in the app's memory (`batched` mode).
+
+#### 6.2.5 Literal mirror-to-shell sync (`batched` mode)
+
+In `batched` mode, both Category C dispatch (§6.1 step 3) and
+Enter (§6.1 step 4) require Warp to install its locally-held
+mirror into the shell's `$BUFFER` before any bound keystroke
+fires. Injecting the mirror byte-for-byte through `self-insert`
+is unsafe: the mirror can contain newlines (would fire
+`accept-line` mid-sync), control characters bound to widgets
+(would dispatch them instead of inserting), and the cursor
+position needs to be set independently of buffer content.
+
+The sync path therefore does **not** route mirror bytes through
+the keymap. It uses two channels:
+
+- **Bracketed paste for buffer content.** Warp wraps the mirror
+  bytes in DEC-mode bracketed-paste markers
+  (`\e[200~` … `\e[201~`). zsh, bash (with `enable-bracketed-paste`,
+  on by default in modern readline), and fish all treat the
+  contents as literal text — no widget dispatch fires, newlines
+  do not trigger `accept-line`, control characters insert as
+  literal bytes. Plugins that hook `bracketed-paste-magic` (zsh)
+  remain composable because the paste delimiters fire the
+  paste-handler widget, not `self-insert`. The bootstrap installs
+  a sentinel paste handler that suppresses its own emit during
+  a Warp-driven paste so the post-paste `WarpBufferState` fires
+  once (not once per byte).
+- **Cursor positioning via shell-native commands.** After the
+  paste, the cursor sits at end-of-buffer. Warp positions it by
+  emitting the shell's own cursor-movement byte sequence —
+  `\e[D` per character of leftward travel — which the shell's
+  keymap interprets through its default `backward-char`
+  binding. v1 documents a small carve-out: if the user has
+  rebound `backward-char` (rare but possible), the cursor lands
+  at end-of-buffer and Warp emits a one-time diagnostic; the
+  Cat C widget still runs correctly with the full buffer
+  pre-populated, only the cursor position is wrong. Tracked as
+  follow-up for a literal cursor-set primitive once one exists.
+
+The literal-paste path is used in `batched` mode only —
+in `full` mode the shell already owns `$BUFFER` continuously
+from per-keystroke injection, no resync needed.
 
 #### 6.3 Shell-specific bootstrap
 
@@ -792,7 +875,45 @@ Two options, picked per binding category:
   body in a function that emits `WarpBufferState` after the body
   returns. Implemented by post-processing `bind -X` output at
   bootstrap and re-binding each `bind -x` key to a Warp wrapper
-  that calls the original body then emits.
+  that calls the original body then emits. **Wrapper
+  construction safety** (the body is user-controlled shell code):
+  - The original body string and the key string are *parsed*
+    from `bind -X` output, not concatenated into shell source.
+    The parser handles `bind -X`'s documented quoting (outer
+    double quotes around the key, `\C-`/`\M-`/`\e` escapes,
+    backslash-escaped quotes) and emits a structured
+    `{key_bytes: Vec<u8>, body: String}` pair.
+  - The wrapper is installed by a small bootstrap helper that
+    takes the structured pair and writes a function declaration
+    with the body literal in source position, not via
+    string-concatenation `eval`. Conceptually:
+    ```bash
+    # Inputs come from the structured pair; key_bytes is
+    # re-quoted via bash printf %q, body is the literal
+    # parsed source.
+    __warp_wrap_001() {
+        _warp_emit_pre
+        __ORIGINAL_BODY_HERE__   # literal source from bind -X
+        _warp_emit_post
+    }
+    bind -x "$(printf '%q' "$key_bytes")": __warp_wrap_001
+    ```
+    Bash parses the body when the function declaration runs, in
+    exactly the same lexical context the original `bind -x`
+    declaration parsed it. The wrapper does *not* re-eval the
+    body at invoke time, does not interpolate it into another
+    string, and does not invoke `eval` on attacker-controlled
+    data. Wrapper names (`__warp_wrap_NNN`) are bootstrap-
+    generated and contain no user data.
+  - Keys from `bind -X` are passed through `printf %q` before
+    being handed to the `bind -x` call so any control bytes in
+    the key string round-trip safely.
+  - On re-snapshot at `precmd` (when the user has run another
+    `bind -x` since the last snapshot), wrappers for keys that
+    have disappeared are removed via `bind -r`; wrappers for
+    keys whose body has changed are re-installed with a fresh
+    wrapper name (the old wrapper is unset). No body string is
+    ever mutated in-place.
 - For everything else (native readline functions + `self-insert`):
   the only programmatic surface is `PROMPT_COMMAND` (fires after
   the line is accepted, not per-keystroke) and `bind -x` (fires
@@ -817,9 +938,42 @@ fires per keystroke. Fish therefore defaults to `batched` mode
 - Category C dispatch is supported via per-bound-key wrapping
   exactly analogous to bash `bind -x`. The bootstrap post-
   processes the discovered fish bindings and rewrites each
-  Category C bind to chain a Warp emitter before and after the
-  user's function, e.g.
-  `bind \cR '_warp_emit_pre; atuin-search; _warp_emit_post'`.
+  Category C bind so that a Warp emitter fires before and after
+  the user's function. Wrapper construction follows the same
+  safety model as bash:
+  - The original binding's right-hand side is parsed from
+    `bind` output into a structured `{key: String, body:
+    String}` pair (fish bindings have a documented format —
+    `bind \cR foo; bar` where everything after the key token
+    is the command list).
+  - Wrapper installation creates a generated fish function
+    that contains the original body as literal source (fish
+    parses the body when the `function … end` block is read,
+    in the same lexical context the original `bind` parsed
+    it), then rebinds the key to call the wrapper:
+    ```fish
+    function __warp_wrap_001
+        _warp_emit_pre
+        # body literal from `bind` output, not via eval / string
+        # concatenation
+        atuin-search
+        _warp_emit_post
+    end
+    bind \cR __warp_wrap_001
+    ```
+  - Keys from `bind` output are validated against fish's key
+    syntax before being passed back to `bind`; any byte that
+    doesn't round-trip through fish's parser is dropped with
+    a diagnostic (the binding remains unwrapped, so the user's
+    original behavior is preserved — Cat C dispatch from Warp
+    just doesn't emit overlays for that key).
+  - Wrapper function names (`__warp_wrap_NNN`) are bootstrap-
+    generated and contain no user data.
+  - On re-snapshot at the next `precmd`/event, removed
+    bindings have their wrappers `functions --erase`d; changed
+    bodies get a fresh wrapper name. No body string is ever
+    mutated in-place.
+
   This composes with binds the user adds after bootstrap: each
   `precmd` re-snapshots `bind` output and re-wraps any new
   Category C entries before emitting the next `ShellBindings`
