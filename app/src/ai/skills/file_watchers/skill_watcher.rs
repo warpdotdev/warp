@@ -281,7 +281,7 @@ impl SkillWatcher {
             local_skill_files,
             ctx,
         );
-        if let RepositoryIdentifier::Remote(remote_repo) = repo_id {
+        if let RepositoryIdentifier::Remote(remote_repo) = &repo_id {
             self.spawn_read_remote_project_skills(
                 repo_id.clone(),
                 refresh_generation,
