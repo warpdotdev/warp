@@ -629,8 +629,12 @@ inline. See #11.6.
 
 ## Open questions
 
-Collected from inline references above plus a few cross-cutting ones the
-tech spec must resolve:
+Collected from inline references above plus a few cross-cutting
+ones the tech spec resolved during the spec iteration. All
+items below are marked Resolved with a pointer to the TECH
+section that closed each one; this section exists as the
+single index of v1 design decisions for reviewers and future
+maintainers.
 
 - (Resolved) v1 handling of user-defined named widgets whose
   body is shell code (#11): honored via Category C pass-through
