@@ -875,25 +875,47 @@ the keymap. It uses bracketed paste:
 
   **Handler behavior.** Each shell's paste handler reads the
   full pasted content (all three shells deliver it as a single
-  string), checks whether the leading 21 bytes match
-  `__warp_paste_sentinel`. If yes: strip the sentinel, write
-  the remainder to `$BUFFER` / `$READLINE_LINE` /
-  `commandline` directly, emit one final `WarpBufferState`.
-  If no (user paste from the OS clipboard, or any other source
-  that doesn't carry the nonced sentinel): run the shell's
-  standard paste path unchanged.
+  string), checks whether the leading bytes match
+  `__warp_paste_sentinel` (the sentinel length is computed once
+  at bootstrap and stored as `__warp_paste_sentinel_len`; all
+  three handlers use that, so a future nonce-length change
+  doesn't require touching the handler bodies). If yes: strip
+  the sentinel, write the remainder to `$BUFFER` /
+  `$READLINE_LINE` / `commandline` directly, emit one final
+  `WarpBufferState`. If no (user paste from the OS clipboard,
+  or any other source that doesn't carry the nonced sentinel):
+  run the shell's standard paste path unchanged.
 
   **Per-shell installation.**
   - **zsh.** Save the existing `bracketed-paste` widget under
-    a new name and install a Warp wrapper:
+    a new name and install a Warp wrapper that diffs `$BUFFER`
+    around the delegation so it can locate the inserted slice
+    regardless of where the cursor was pre-paste:
     ```sh
     zle -A bracketed-paste _warp_orig_bracketed_paste
+    _warp_bracketed_paste() {
+        local pre_cursor=$CURSOR
+        zle _warp_orig_bracketed_paste
+        # The original widget inserted the pasted content at
+        # pre_cursor and advanced CURSOR past it. The inserted
+        # slice is $BUFFER[pre_cursor .. CURSOR).
+        local inserted=${BUFFER:$pre_cursor:$((CURSOR - pre_cursor))}
+        if [[ ${inserted:0:$__warp_paste_sentinel_len} == "$__warp_paste_sentinel" ]]; then
+            # Strip the sentinel from the inserted slice and
+            # rewrite $BUFFER. Move CURSOR back by sentinel_len
+            # so it lands at end of the (stripped) insert.
+            BUFFER=${BUFFER:0:$pre_cursor}${inserted:$__warp_paste_sentinel_len}${BUFFER:$CURSOR}
+            CURSOR=$((CURSOR - __warp_paste_sentinel_len))
+            _warp_emit_buffer_state
+        fi
+    }
     zle -N bracketed-paste _warp_bracketed_paste
-    # _warp_bracketed_paste reads $BUFFER after the parent
-    # widget has consumed the paste, strips the sentinel if
-    # present, otherwise calls the original behavior via
-    #   zle _warp_orig_bracketed_paste
     ```
+    The pre/post-cursor diff is the standard zsh idiom for
+    "what did the inner widget insert"; without it the
+    sentinel-strip would only be correct when `$BUFFER` was
+    empty pre-paste.
+
     The bootstrap loads after user zshrc by design (§1), so
     Warp's wrapper sits outermost in any pre-existing widget
     chain. Plugin-installed wrappers (`bracketed-paste-magic`,
@@ -919,11 +941,13 @@ the keymap. It uses bracketed paste:
             [[ ${content: -5} == $'\e[201~' ]] && break
         done
         content=${content%$'\e[201~'}
-        if [[ ${content:0:21} == "$__warp_paste_sentinel" ]]; then
-            READLINE_LINE+=${content:21}
+        if [[ ${content:0:$__warp_paste_sentinel_len} == "$__warp_paste_sentinel" ]]; then
+            READLINE_LINE+=${content:$__warp_paste_sentinel_len}
+            READLINE_POINT=${#READLINE_LINE}
             _warp_emit_buffer_state
         else
             READLINE_LINE+=$content
+            READLINE_POINT=${#READLINE_LINE}
         fi
     }
     bind -x '"\e[200~": _warp_bracketed_paste'
@@ -944,12 +968,14 @@ the keymap. It uses bracketed paste:
     function __fish_paste
         # The pasted content arrives as $argv[1] (fish's
         # standard paste calling convention). Strip the Warp
-        # sentinel if present; otherwise delegate to the
-        # saved original so user pastes from the OS clipboard
-        # behave as default fish.
+        # sentinel if present and `--replace` $commandline
+        # wholesale (Warp's mirror is the complete buffer
+        # state in `batched`-mode sync); otherwise delegate
+        # to the saved original so user pastes from the OS
+        # clipboard behave as default fish (insert at cursor).
         set -l content $argv[1]
         if string match -q "$__warp_paste_sentinel*" -- $content
-            commandline --insert -- (string sub --start 22 -- $content)
+            commandline --replace -- (string sub --start (math $__warp_paste_sentinel_len + 1) -- $content)
             _warp_emit_buffer_state
         else
             _warp_orig_fish_paste $content
