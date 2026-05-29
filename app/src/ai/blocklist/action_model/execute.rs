@@ -71,6 +71,7 @@ use warp_files::{FileModel, TextFileReadResult};
 use warp_util::file::FileLoadError;
 #[cfg(feature = "local_fs")]
 use warp_util::file_type::is_buffer_binary;
+use warp_util::path::ShellFamily;
 use warpui::{
     r#async::{Spawnable, SpawnableOutput},
     AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity,
@@ -1295,7 +1296,7 @@ async fn read_binary_file_context(
 /// `$VAR`, `;`, etc.) in a legitimate or attacker-influenced filename do not
 /// get re-interpreted by the shell.
 fn build_is_file_path_command(path: &str, shell_type: ShellType) -> String {
-    let escaped = warp_util::path::ShellFamily::from(shell_type).shell_escape(path);
+    let escaped = ShellFamily::from(shell_type).shell_escape(path);
     if shell_type == ShellType::PowerShell {
         format!("if (Test-Path -PathType Leaf {escaped}) {{ exit 0 }} else {{ exit 1 }}")
     } else {
@@ -1306,7 +1307,7 @@ fn build_is_file_path_command(path: &str, shell_type: ShellType) -> String {
 /// Builds the shell command used by [`is_git_repository`]. See
 /// [`build_is_file_path_command`] for why escaping is required.
 fn build_is_git_repository_command(absolute_path: &str, shell_type: ShellType) -> String {
-    let escaped = warp_util::path::ShellFamily::from(shell_type).shell_escape(absolute_path);
+    let escaped = ShellFamily::from(shell_type).shell_escape(absolute_path);
     format!("git -C {escaped} rev-parse")
 }
 

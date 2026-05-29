@@ -5,6 +5,7 @@ use std::time::Duration;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use itertools::Itertools;
+use warp_util::path::ShellFamily;
 use warpui::r#async::FutureExt as AsyncFutureExt;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
@@ -46,7 +47,7 @@ pub(crate) fn build_git_ls_files_command(
     shell_launch_data: Option<&ShellLaunchData>,
     shell_type: ShellType,
 ) -> String {
-    let shell_family = warp_util::path::ShellFamily::from(shell_type);
+    let shell_family = ShellFamily::from(shell_type);
     let pattern_args = patterns
         .iter()
         .flat_map(|pattern| {
@@ -65,7 +66,7 @@ pub(crate) fn build_git_ls_files_command(
 /// Builds the `find` command emitted by [`run_find_command`]. See
 /// [`build_git_ls_files_command`] for the threat model.
 pub(crate) fn build_find_command(patterns: &[String], target_path: &str) -> String {
-    let shell_family = warp_util::path::ShellFamily::Posix;
+    let shell_family = ShellFamily::Posix;
     // Build a find command with -name for each pattern. Each pattern is
     // shell-escaped to neutralise embedded `'`, `$(...)`, backticks, etc.
     let pattern_args = patterns
@@ -83,7 +84,7 @@ pub(crate) fn build_powershell_get_childitem_command(
     patterns: &[String],
     target_path: &str,
 ) -> String {
-    let shell_family = warp_util::path::ShellFamily::PowerShell;
+    let shell_family = ShellFamily::PowerShell;
     let pattern_args = patterns
         .iter()
         .map(|pattern| shell_family.escape(pattern))

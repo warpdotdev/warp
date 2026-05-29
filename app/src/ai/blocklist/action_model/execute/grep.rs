@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use warp_util::path::ShellFamily;
 use warp_util::standardized_path::StandardizedPath;
 
 use futures::future::BoxFuture;
@@ -51,7 +52,7 @@ pub(crate) fn build_git_grep_command(
     target_path: &str,
     shell_type: ShellType,
 ) -> String {
-    let shell_family = warp_util::path::ShellFamily::from(shell_type);
+    let shell_family = ShellFamily::from(shell_type);
     // This command works on all the shells we support (even PowerShell).
     let mut grep_command = "git --no-pager grep --color=never --untracked -nIE".to_string();
     for query in queries {
@@ -66,7 +67,7 @@ pub(crate) fn build_git_grep_command(
 /// Builds the POSIX `grep` command emitted by [`run_grep_command`]. See
 /// [`build_git_grep_command`] for the threat model.
 pub(crate) fn build_grep_command(queries: &[String], target_path: &str) -> String {
-    let shell_family = warp_util::path::ShellFamily::Posix;
+    let shell_family = ShellFamily::Posix;
     // Summary of the options we use:
     // * "--color=never" ensures we don't get colorized output which is harder to parse due to escape sequences
     // * "-n" includes line numbers
@@ -88,7 +89,7 @@ pub(crate) fn build_grep_command(queries: &[String], target_path: &str) -> Strin
 /// [`run_select_string_command`]. See [`build_git_grep_command`] for the
 /// threat model.
 pub(crate) fn build_select_string_command(queries: &[String], target_path: &str) -> String {
-    let shell_family = warp_util::path::ShellFamily::PowerShell;
+    let shell_family = ShellFamily::PowerShell;
     let escaped_target = shell_family.shell_escape(target_path);
     let escaped_patterns = queries
         .iter()
