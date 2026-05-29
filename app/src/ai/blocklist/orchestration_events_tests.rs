@@ -1,7 +1,6 @@
 #![allow(deprecated)]
 use std::collections::HashSet;
 
-use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, EntityId};
 
@@ -400,7 +399,6 @@ fn test_has_pending_events_tracks_any_event_kind() {
 #[test]
 fn test_emit_child_killed_enqueues_cancelled_event_for_parent() {
     App::test((), |mut app| async move {
-        let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
         initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let parent_run_id = uuid::Uuid::new_v4().to_string();
@@ -472,7 +470,6 @@ fn test_emit_child_killed_enqueues_cancelled_event_for_parent() {
 #[test]
 fn test_emit_child_killed_drops_when_no_parent() {
     App::test((), |mut app| async move {
-        let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
         initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let child_run_id = uuid::Uuid::new_v4().to_string();
@@ -511,7 +508,6 @@ fn test_emit_child_killed_drops_when_no_parent() {
 #[test]
 fn test_emit_child_killed_drops_when_child_already_terminal() {
     App::test((), |mut app| async move {
-        let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
         initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let parent_run_id = uuid::Uuid::new_v4().to_string();
@@ -569,9 +565,8 @@ fn test_emit_child_killed_drops_when_child_already_terminal() {
 }
 
 #[test]
-fn test_restored_v1_child_reregisters_lifecycle_subscription() {
+fn test_restored_child_does_not_reregister_legacy_lifecycle_subscription() {
     App::test((), |mut app| async move {
-        let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(false);
         initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
@@ -613,13 +608,12 @@ fn test_restored_v1_child_reregisters_lifecycle_subscription() {
                 ctx,
             );
 
-            let routes = service
-                .lifecycle_subscription_routes
-                .get(&child_conversation_id)
-                .expect("restored V1 child should have a lifecycle subscription");
-            assert_eq!(routes.len(), 1);
-            assert_eq!(routes[0].target_agent_id, "parent-token");
-            assert_eq!(routes[0].subscribed_event_types, None);
+            assert!(
+                !service
+                    .lifecycle_subscription_routes
+                    .contains_key(&child_conversation_id),
+                "current builds should not restore legacy lifecycle subscriptions"
+            );
         });
     });
 }

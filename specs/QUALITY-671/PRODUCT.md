@@ -60,7 +60,7 @@ The expanded credit usage footer in agent mode is per-conversation. When the con
 
 12. The "View details" / "Hide details" link and the per-agent list visually match the existing footer's typography, spacing, and color treatment. Avatar discs use the same component used in the orchestration pill bar's pill avatars (per-name deterministic color + uppercase initial; orchestrator uses `Icon::Oz` on `ansi_fg_cyan`).
 
-13. The feature is self-gating: there is no dedicated feature flag. The rollup activates whenever the orchestrator has at least one locally-loaded descendant with non-zero credits; otherwise the row renders exactly as today. The underlying ability to create child agents is gated by `FeatureFlag::OrchestrationV2`, and the expanded footer surface itself is gated by `FeatureFlag::AgentView`, so the rollup is effectively reachable only when both are on — no additional flag is needed.
+13. The feature is self-gating: there is no dedicated feature flag. The rollup activates whenever the orchestrator has at least one locally-loaded descendant with non-zero credits; otherwise the row renders exactly as today. The underlying ability to create child agents is gated by `the removed orchestration-v2 rollout flag`, and the expanded footer surface itself is gated by `FeatureFlag::AgentView`, so the rollup is effectively reachable only when both are on — no additional flag is needed.
 
 14. The footer remains keyboard accessible. The "View details" link is reachable via the normal focus order and activatable with Enter/Space. The "Show N more" link is reachable and activatable the same way. Screen reader semantics for the per-agent list mirror existing list semantics in the footer (no new ARIA invention).
 

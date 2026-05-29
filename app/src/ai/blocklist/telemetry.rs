@@ -18,6 +18,7 @@ pub(crate) enum BlocklistOrchestrationTelemetryEvent {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
 pub(crate) enum TeamAgentCommunicationKind {
     Message,
     LifecycleEvent,
@@ -25,12 +26,14 @@ pub(crate) enum TeamAgentCommunicationKind {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
 pub(crate) enum TeamAgentCommunicationTransport {
     Local,
     ServerApi,
 }
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
 pub(crate) enum TeamAgentOrchestrationVersion {
     V1,
     V2,
@@ -38,6 +41,7 @@ pub(crate) enum TeamAgentOrchestrationVersion {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
 pub(crate) enum TeamAgentCommunicationFailureReason {
     InvalidLifecycleEventType,
     MissingSourceConversation,

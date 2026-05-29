@@ -113,7 +113,7 @@ There is no dedicated `OrchestrationCreditRollup` feature flag. The rollup activ
 - Conversations where every loaded descendant has zero credits → `None` (zero-credit filter empties `per_agent`).
 - Settings-mode views → `rollup()` short-circuits on `display_mode != Footer`.
 
-The upstream ability to spawn child agents is still gated by `FeatureFlag::OrchestrationV2`, and the expanded footer surface itself is gated by `FeatureFlag::AgentView`, so the rollup is reachable only when both already permit the user to create and view an orchestration. Adding a third flag on top of those would only have offered a kill-switch; the self-gating data check provides the same safety net (today's UI is preserved whenever the rollup has nothing to add) without the cleanup burden.
+The upstream ability to spawn child agents is still gated by `the removed orchestration-v2 rollout flag`, and the expanded footer surface itself is gated by `FeatureFlag::AgentView`, so the rollup is reachable only when both already permit the user to create and view an orchestration. Adding a third flag on top of those would only have offered a kill-switch; the self-gating data check provides the same safety net (today's UI is preserved whenever the rollup has nothing to add) without the cleanup burden.
 
 ### 6. Live updates from child usage changes
 

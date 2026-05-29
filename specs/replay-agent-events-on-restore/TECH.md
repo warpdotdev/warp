@@ -52,7 +52,7 @@ The async server fetch happens alongside the child-run discovery query. When bot
 Add a helper to scan task messages for child run_ids (driver/remote-worker case). Gate on `OrchestrationV2` because in V2 the `agent_id` in `StartAgentV2` results is the child's `run_id`; in V1 it is a different identifier and the scan would produce wrong values:
 ```rust
 fn child_run_ids_from_task_messages(conversation: &AIConversation) -> Vec<String> {
-    if !FeatureFlag::OrchestrationV2.is_enabled() {
+    if !the removed orchestration-v2 rollout flag.is_enabled() {
         return vec![];
     }
     let mut out = Vec::new();
@@ -92,7 +92,7 @@ The `child_run_ids_from_task_messages` helper is still needed as the failure fal
 
 Extend the existing `RestoredConversations` handler (currently lines 355-361) to also re-register subscriptions. For each restored conversation that `is_child_agent_conversation()`:
 ```rust
-if !FeatureFlag::OrchestrationV2.is_enabled() {
+if !the removed orchestration-v2 rollout flag.is_enabled() {
     if let Some(parent_agent_id) = history_model
         .conversation(&child_conv.parent_conversation_id()?)
         .and_then(|p| p.server_conversation_token())

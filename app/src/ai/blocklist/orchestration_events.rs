@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
-use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_multi_agent_api as api;
 use warpui::{Entity, ModelContext, SingletonEntity};
@@ -27,12 +26,14 @@ const MAX_PENDING_LIFECYCLE_EVENTS_PER_TARGET: usize = 200;
 /// Stage associated with a lifecycle error detail.
 /// This keeps persisted/runtime metadata consistent across API payloads and DB rows.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[allow(dead_code)]
 pub enum LifecycleEventDetailStage {
     Startup,
     Runtime,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
 struct LifecycleSubscriptionRoute {
     target_agent_id: String,
     subscribed_event_types: Option<Vec<LifecycleEventType>>,
@@ -90,6 +91,7 @@ pub enum SendEventResult {
     Error(String),
 }
 
+#[allow(dead_code)]
 pub enum SendMessageResult {
     MessageSent { message_id: String },
     Error(String),
@@ -130,6 +132,7 @@ impl OrchestrationEventService {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn register_lifecycle_subscription(
         &mut self,
         source_conversation_id: AIConversationId,
@@ -154,6 +157,7 @@ impl OrchestrationEventService {
     }
 
     #[allow(deprecated)]
+    #[allow(dead_code)]
     pub fn emit_child_startup_started(
         &mut self,
         child_conversation_id: AIConversationId,
@@ -172,6 +176,7 @@ impl OrchestrationEventService {
         );
     }
 
+    #[allow(dead_code)]
     pub fn emit_child_startup_errored(
         &mut self,
         child_conversation_id: AIConversationId,
@@ -197,6 +202,7 @@ impl OrchestrationEventService {
         );
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn emit_child_killed(
         &mut self,
         child_conversation_id: AIConversationId,
@@ -256,6 +262,7 @@ impl OrchestrationEventService {
         SendEventResult::LifecycleSent
     }
 
+    #[allow(dead_code)]
     fn dispatch_lifecycle_event(
         &mut self,
         source_conversation_id: AIConversationId,
@@ -447,6 +454,7 @@ impl OrchestrationEventService {
         }
     }
 
+    #[allow(dead_code)]
     fn log_lifecycle_dispatch_result(
         &self,
         child_conversation_id: AIConversationId,
@@ -490,34 +498,10 @@ impl OrchestrationEventService {
 
     fn restore_v1_lifecycle_subscription(
         &mut self,
-        source_conversation_id: AIConversationId,
-        ctx: &ModelContext<Self>,
+        _source_conversation_id: AIConversationId,
+        _ctx: &ModelContext<Self>,
     ) {
-        // TODO(QUALITY-733): Remove restored v1 lifecycle subscriptions once legacy
-        // orchestration lifecycle dispatch is deleted.
-        if FeatureFlag::OrchestrationV2.is_enabled() {
-            return;
-        }
-
-        let target_agent_id = {
-            let history_model = BlocklistAIHistoryModel::as_ref(ctx);
-            let Some(conversation) = history_model.conversation(&source_conversation_id) else {
-                return;
-            };
-            if !conversation.is_child_agent_conversation() {
-                return;
-            }
-
-            conversation
-                .parent_conversation_id()
-                .and_then(|parent_id| history_model.conversation(&parent_id))
-                .and_then(|parent| parent.orchestration_agent_id())
-                .or_else(|| conversation.parent_agent_id().map(str::to_string))
-        };
-
-        if let Some(target_agent_id) = target_agent_id {
-            self.register_lifecycle_subscription(source_conversation_id, target_agent_id, None);
-        }
+        // Legacy v1 lifecycle subscriptions are no longer restored for current builds.
     }
 
     fn on_conversation_status_updated(
@@ -526,7 +510,7 @@ impl OrchestrationEventService {
         is_restored: bool,
         ctx: &mut ModelContext<Self>,
     ) {
-        let (is_child_agent_conversation, current_status, status_error_message) = {
+        let (is_child_agent_conversation, current_status) = {
             let Some(conversation) =
                 BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
             else {
@@ -536,7 +520,6 @@ impl OrchestrationEventService {
             (
                 conversation.is_child_agent_conversation(),
                 conversation.status().clone(),
-                conversation.status_error_message().map(str::to_string),
             )
         };
 
@@ -555,116 +538,13 @@ impl OrchestrationEventService {
             return;
         }
 
-        // When v2 is enabled, lifecycle events are delivered via the server
-        // event log (poller reports → polls back → enqueues). Skip the v1
-        // local dispatch to avoid duplicate delivery.
-        if FeatureFlag::OrchestrationV2.is_enabled() {
-            return;
-        }
-        // TODO(QUALITY-733): Remove legacy v1 lifecycle dispatch once all child-agent lifecycle
-        // events are delivered through the v2 event log.
-
-        #[allow(deprecated)]
-        match (previous_status.as_ref(), &current_status) {
-            (Some(ConversationStatus::Success), ConversationStatus::InProgress) => {
-                let result = self.dispatch_lifecycle_event(
-                    conversation_id,
-                    LifecycleEventType::Restarted,
-                    LifecycleEventDetailPayload::default(),
-                    ctx,
-                );
-                self.log_lifecycle_dispatch_result(
-                    conversation_id,
-                    LifecycleEventType::Restarted,
-                    result,
-                );
-            }
-            (Some(ConversationStatus::Blocked { .. }), ConversationStatus::InProgress) => {
-                let result = self.dispatch_lifecycle_event(
-                    conversation_id,
-                    LifecycleEventType::Restarted,
-                    LifecycleEventDetailPayload::default(),
-                    ctx,
-                );
-                self.log_lifecycle_dispatch_result(
-                    conversation_id,
-                    LifecycleEventType::Restarted,
-                    result,
-                );
-            }
-            (Some(ConversationStatus::InProgress), ConversationStatus::Success) => {
-                let result = self.dispatch_lifecycle_event(
-                    conversation_id,
-                    LifecycleEventType::Idle,
-                    LifecycleEventDetailPayload::default(),
-                    ctx,
-                );
-                self.log_lifecycle_dispatch_result(
-                    conversation_id,
-                    LifecycleEventType::Idle,
-                    result,
-                );
-            }
-            (Some(ConversationStatus::InProgress), ConversationStatus::Error) => {
-                let result = self.dispatch_lifecycle_event(
-                    conversation_id,
-                    LifecycleEventType::Errored,
-                    LifecycleEventDetailPayload {
-                        stage: Some(LifecycleEventDetailStage::Runtime),
-                        reason: Some("conversation_error".to_string()),
-                        error_message: status_error_message,
-                        blocked_action: None,
-                    },
-                    ctx,
-                );
-                self.log_lifecycle_dispatch_result(
-                    conversation_id,
-                    LifecycleEventType::Errored,
-                    result,
-                );
-            }
-            (
-                Some(ConversationStatus::InProgress),
-                ConversationStatus::Blocked { blocked_action },
-            ) => {
-                let result = self.dispatch_lifecycle_event(
-                    conversation_id,
-                    LifecycleEventType::Blocked,
-                    LifecycleEventDetailPayload {
-                        stage: None,
-                        reason: None,
-                        error_message: None,
-                        blocked_action: Some(blocked_action.clone()),
-                    },
-                    ctx,
-                );
-                self.log_lifecycle_dispatch_result(
-                    conversation_id,
-                    LifecycleEventType::Blocked,
-                    result,
-                );
-            }
-            (Some(ConversationStatus::InProgress), ConversationStatus::Cancelled)
-            | (Some(ConversationStatus::Blocked { .. }), ConversationStatus::Cancelled) => {
-                let result = self.dispatch_lifecycle_event(
-                    conversation_id,
-                    LifecycleEventType::Cancelled,
-                    LifecycleEventDetailPayload::default(),
-                    ctx,
-                );
-                self.log_lifecycle_dispatch_result(
-                    conversation_id,
-                    LifecycleEventType::Cancelled,
-                    result,
-                );
-            }
-            _ => {}
-        }
+        let _ = previous_status;
     }
 
     /// Send an orchestration event from `source_conversation_id` to each agent
     /// in `target_agent_ids`. Resolves addresses, queues, and emits
     /// `EventsReady` for each target conversation.
+    #[allow(dead_code)]
     pub fn send_message(
         &mut self,
         source_conversation_id: AIConversationId,
@@ -805,6 +685,7 @@ impl OrchestrationEventService {
         )
     }
 
+    #[allow(dead_code)]
     fn send_message_event(
         &mut self,
         sender_agent_id: &str,
@@ -851,6 +732,7 @@ impl OrchestrationEventService {
         SendMessageResult::MessageSent { message_id }
     }
 
+    #[allow(dead_code)]
     fn log_send_message_error(
         &self,
         source_conversation_id: AIConversationId,
@@ -865,6 +747,7 @@ impl OrchestrationEventService {
 
     /// Broadcast a lifecycle signal to subscribed targets.
     /// Enqueues an in-memory `AgentEvent` for controller delivery.
+    #[allow(dead_code)]
     fn send_lifecycle_event(
         &mut self,
         sender_agent_id: &str,
@@ -1196,6 +1079,7 @@ impl OrchestrationEventService {
 
 /// `None` means \"subscribe to all lifecycle types\" (input omitted).
 /// `Some([])` means subscribe to no lifecycle events.
+#[cfg_attr(not(test), allow(dead_code))]
 fn is_subscribed(
     subscription: Option<&[LifecycleEventType]>,
     event_type: LifecycleEventType,
@@ -1222,6 +1106,7 @@ fn did_event_round_trip_through_server(
 }
 
 #[allow(deprecated)]
+#[allow(dead_code)]
 pub(super) fn lifecycle_event_type_name(event_type: LifecycleEventType) -> &'static str {
     match event_type {
         LifecycleEventType::Started => "started",

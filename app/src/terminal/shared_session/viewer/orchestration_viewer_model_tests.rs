@@ -1107,7 +1107,6 @@ fn b1_populates_agent_id_to_conversation_id_for_new_child() {
         // which only returns the `run_id` when OrchestrationV2 is enabled.
         // Without this override, the v1 fallback is `server_conversation_token`,
         // which the test doesn't populate.
-        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         let parent = task_id(PARENT_TASK_ID);
         let (_, _, model) = setup_model(&mut app, parent);
         let model_handle = app.add_model(|_| model);
@@ -1158,7 +1157,6 @@ fn b2_backfills_parent_agent_id_on_orchestrator_token_assigned() {
     // `orchestration_conversation_links::parent_conversation_id` resolves
     // back to the orchestrator.
     App::test((), |mut app| async move {
-        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         let parent = task_id(PARENT_TASK_ID);
         let (terminal_view_id, parent_conv_id, model) = setup_model(&mut app, parent);
         let model_handle = app.add_model(|_| model);
@@ -1234,7 +1232,6 @@ fn b2_does_not_overwrite_existing_parent_agent_id() {
     // is already set (e.g. created after the orchestrator already had a
     // run id) must not be clobbered.
     App::test((), |mut app| async move {
-        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         let parent = task_id(PARENT_TASK_ID);
         let (terminal_view_id, parent_conv_id, model) = setup_model(&mut app, parent);
         let model_handle = app.add_model(|_| model);
@@ -1293,7 +1290,6 @@ fn b2_ignores_token_assigned_for_unrelated_conversation() {
     // Events for other conversations (e.g. the user's local conversation
     // in another tab) must not trigger backfill on this model's children.
     App::test((), |mut app| async move {
-        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         let parent = task_id(PARENT_TASK_ID);
         let (terminal_view_id, parent_conv_id, model) = setup_model(&mut app, parent);
         let model_handle = app.add_model(|_| model);
@@ -1667,7 +1663,6 @@ fn streamer_consumer_is_registered_when_constructed_under_flag() {
     use warp_core::features::FeatureFlag;
 
     App::test((), |mut app| async move {
-        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
         let _pill_bar_guard = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
 
@@ -1721,7 +1716,6 @@ fn viewer_model_retries_consumer_registration_on_set_active_conversation() {
     use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 
     App::test((), |mut app| async move {
-        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
         let _pill_bar_guard = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
 
@@ -1788,7 +1782,6 @@ fn viewer_model_does_not_register_when_active_conversation_is_a_child_placeholde
     use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 
     App::test((), |mut app| async move {
-        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
         let _pill_bar_guard = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
 

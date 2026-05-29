@@ -6,7 +6,6 @@ use chrono::{DateTime, Local, Utc};
 use itertools::Itertools;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId};
 
 use super::{
@@ -256,7 +255,6 @@ fn start_new_child_conversation_persists_harness_metadata() {
 
 #[test]
 fn test_initialize_historical_conversations_resolves_parent_agent_id_children_via_seeded_run_ids() {
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
     App::test((), |app| async move {
         let parent_id = AIConversationId::new();
         let child_id = AIConversationId::new();
@@ -1311,8 +1309,6 @@ fn test_restore_conversations_maintains_children_by_parent() {
 fn test_restore_conversations_indexes_child_by_parent_agent_id() {
     use crate::ai::agent::conversation::AIConversation;
 
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-
     App::test((), |mut app| async move {
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
@@ -1791,7 +1787,6 @@ fn test_optimistic_root_restore_round_trip_yields_in_progress_optimistic_root() 
 
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
-        let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
 
         let (sender, receiver) = std::sync::mpsc::sync_channel(2);
         let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);

@@ -896,27 +896,25 @@ fn kill_agent_conversation(
     ctx: &mut ViewContext<PaneGroup>,
 ) {
     let state = agent_conversation_action_state(conversation_id, ctx);
-    if FeatureFlag::OrchestrationV2.is_enabled() {
-        OrchestrationEventService::handle(ctx).update(ctx, |service, ctx| {
-            match service.emit_child_killed(conversation_id, ctx) {
-                SendEventResult::LifecycleSent => {}
-                SendEventResult::LifecycleDropped => {
-                    log::info!(
-                        "KillAgentConversation: killed lifecycle event not emitted for {conversation_id:?}"
-                    );
-                }
-                SendEventResult::Error(error) => {
-                    log::warn!(
-                        "KillAgentConversation: failed to emit killed lifecycle event for {conversation_id:?}: {error}"
-                    );
-                }
+    OrchestrationEventService::handle(ctx).update(ctx, |service, ctx| {
+        match service.emit_child_killed(conversation_id, ctx) {
+            SendEventResult::LifecycleSent => {}
+            SendEventResult::LifecycleDropped => {
+                log::info!(
+                    "KillAgentConversation: killed lifecycle event not emitted for {conversation_id:?}"
+                );
             }
-        });
-        // Tombstone every Kill so late events cannot restore a removed child.
-        OrchestrationEventStreamer::handle(ctx).update(ctx, |streamer, ctx| {
-            streamer.mark_conversation_killed(conversation_id, ctx);
-        });
-    }
+            SendEventResult::Error(error) => {
+                log::warn!(
+                    "KillAgentConversation: failed to emit killed lifecycle event for {conversation_id:?}: {error}"
+                );
+            }
+        }
+    });
+    // Tombstone every Kill so late events cannot restore a removed child.
+    OrchestrationEventStreamer::handle(ctx).update(ctx, |streamer, ctx| {
+        streamer.mark_conversation_killed(conversation_id, ctx);
+    });
 
     if let Some(state) = state {
         if state.is_in_progress {
