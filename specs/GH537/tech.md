@@ -886,6 +886,16 @@ the keymap. It uses bracketed paste:
   or any other source that doesn't carry the nonced sentinel):
   run the shell's standard paste path unchanged.
 
+  The bootstrap asserts `__warp_paste_sentinel_len > 0` after
+  computing the sentinel and refuses to install the paste
+  handlers if the assertion fails — a zero-length sentinel
+  would make every paste silently match the empty prefix and
+  fall through to the user-paste branch, leaving Warp-driven
+  pastes with their sentinel bytes still in the buffer. On
+  assertion failure the bootstrap emits a diagnostic and the
+  tab falls back to no-`batched`-mode-Cat-C dispatch (same
+  path as the bash `enable-bracketed-paste off` case below).
+
   **Per-shell installation.**
   - **zsh.** Save the existing `bracketed-paste` widget under
     a new name and install a Warp wrapper that diffs `$BUFFER`
@@ -942,12 +952,19 @@ the keymap. It uses bracketed paste:
         done
         content=${content%$'\e[201~'}
         if [[ ${content:0:$__warp_paste_sentinel_len} == "$__warp_paste_sentinel" ]]; then
+            # Warp-sync: the mirror is the complete buffer
+            # state, so land the cursor at end. READLINE_LINE
+            # is empty in batched-mode sync (Warp owns typing),
+            # so += is effectively assign.
             READLINE_LINE+=${content:$__warp_paste_sentinel_len}
             READLINE_POINT=${#READLINE_LINE}
             _warp_emit_buffer_state
         else
-            READLINE_LINE+=$content
-            READLINE_POINT=${#READLINE_LINE}
+            # User paste from OS clipboard: insert at cursor
+            # and advance past the inserted content, matching
+            # default bash bracketed-paste behavior.
+            READLINE_LINE="${READLINE_LINE:0:$READLINE_POINT}$content${READLINE_LINE:$READLINE_POINT}"
+            READLINE_POINT=$((READLINE_POINT + ${#content}))
         fi
     }
     bind -x '"\e[200~": _warp_bracketed_paste'
