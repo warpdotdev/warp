@@ -16,6 +16,8 @@ use warpui::elements::{
 use warpui::{AppContext, Entity, SingletonEntity, View, ViewContext};
 
 use super::data::CommitNode;
+use super::layout::{assign_lanes, GraphLayout, GraphRow};
+use super::row_canvas::GitGraphRowCanvas;
 use crate::appearance::Appearance;
 
 /// 首屏加载的提交数上限（分页懒加载留待 Phase 4）。
@@ -41,9 +43,19 @@ pub(crate) struct GitGraphView {
     working_dir: Option<std::path::PathBuf>,
     /// 已加载的提交（用 `Arc` 便于零拷贝移动进 [`UniformList`] 的构建闭包）。
     commits: Arc<Vec<CommitNode>>,
+    /// 由 [`assign_lanes`] 算出的逐行泳道布局，与 `commits` 一一对应。
+    layout: Arc<GraphLayout>,
     state: LoadState,
     /// 列表滚动状态（保留滚动位置）。
     list_state: UniformListState,
+}
+
+/// 空布局，用于未加载/出错时。
+fn empty_layout() -> GraphLayout {
+    GraphLayout {
+        rows: Vec::new(),
+        max_lanes: 0,
+    }
 }
 
 impl GitGraphView {
@@ -51,6 +63,7 @@ impl GitGraphView {
         Self {
             working_dir: None,
             commits: Arc::new(Vec::new()),
+            layout: Arc::new(empty_layout()),
             state: LoadState::NoRepo,
             list_state: UniformListState::new(),
         }
@@ -73,6 +86,7 @@ impl GitGraphView {
     fn reload(&mut self, ctx: &mut ViewContext<Self>) {
         let Some(dir) = self.working_dir.clone() else {
             self.commits = Arc::new(Vec::new());
+            self.layout = Arc::new(empty_layout());
             self.state = LoadState::NoRepo;
             ctx.notify();
             return;
@@ -94,11 +108,13 @@ impl GitGraphView {
                     }
                     match result {
                         Ok(commits) => {
+                            view.layout = Arc::new(assign_lanes(&commits));
                             view.commits = Arc::new(commits);
                             view.state = LoadState::Loaded;
                         }
                         Err(err) => {
                             view.commits = Arc::new(Vec::new());
+                            view.layout = Arc::new(empty_layout());
                             view.state = LoadState::Error(err.to_string());
                         }
                     }
@@ -128,8 +144,22 @@ fn render_message(text: String, appearance: &Appearance) -> Box<dyn Element> {
     .finish()
 }
 
-/// 渲染一行提交（Phase 2 纯文本）：短 hash + 引用标签 + subject。
-fn render_commit_row(commit: &CommitNode, appearance: &Appearance) -> Box<dyn Element> {
+/// 渲染一行图谱：左侧泳道绘制 + 右侧提交文字。
+fn render_graph_row(
+    row: &GraphRow,
+    lane_count: usize,
+    commit: &CommitNode,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_child(GitGraphRowCanvas::new(row.clone(), lane_count).finish())
+        .with_child(render_commit_text(commit, appearance))
+        .finish()
+}
+
+/// 渲染提交文字列：短 hash + 引用标签 + subject。
+fn render_commit_text(commit: &CommitNode, appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     let font = appearance.ui_font_family();
     let size = appearance.ui_font_size();
@@ -173,8 +203,8 @@ fn render_commit_row(commit: &CommitNode, appearance: &Appearance) -> Box<dyn El
     );
 
     Container::new(row.finish())
-        .with_horizontal_padding(12.)
-        .with_vertical_padding(4.)
+        .with_padding_left(6.)
+        .with_padding_right(12.)
         .finish()
 }
 
@@ -203,13 +233,16 @@ impl View for GitGraphView {
             }
             LoadState::Loaded => {
                 let commits = self.commits.clone();
+                let layout = self.layout.clone();
                 let list = UniformList::new(self.list_state.clone(), commits.len(), {
-                    let commits = commits.clone();
                     move |range, app| {
                         let appearance = Appearance::as_ref(app);
+                        let lane_count = layout.max_lanes;
                         let rows: Vec<Box<dyn Element>> = range
                             .filter_map(|i| {
-                                commits.get(i).map(|c| render_commit_row(c, appearance))
+                                let commit = commits.get(i)?;
+                                let row = layout.rows.get(i)?;
+                                Some(render_graph_row(row, lane_count, commit, appearance))
                             })
                             .collect();
                         rows.into_iter()

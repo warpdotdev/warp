@@ -37,6 +37,9 @@ pub(crate) struct GraphRow {
     pub node_col: usize,
     /// 节点所在 lane 的颜色序号。
     pub node_color: usize,
+    /// 节点是否由上一行延续而来（即由已存在的 lane 抵达，而非分支 tip）。
+    /// 决定渲染时是否在 `node_col` 画一段从行顶到节点的竖线。
+    pub node_continues_up: bool,
     /// 竖直穿过本行的其它延续泳道。
     pub passing: Vec<PassingLane>,
     /// 本节点向下连到各父所在列（下半段）。第一父通常等于 `node_col`。
@@ -77,6 +80,9 @@ pub(crate) fn assign_lanes(commits: &[CommitNode]) -> GraphLayout {
                 _ => None,
             })
             .collect();
+
+        // 节点是否由已存在的 lane 抵达（非分支 tip）。
+        let node_continues_up = !incoming.is_empty();
 
         // 2. 确定节点列与节点颜色。
         let (node_col, node_color) = match incoming.first() {
@@ -166,6 +172,7 @@ pub(crate) fn assign_lanes(commits: &[CommitNode]) -> GraphLayout {
         rows.push(GraphRow {
             node_col,
             node_color,
+            node_continues_up,
             passing,
             to_parents,
             from_children,

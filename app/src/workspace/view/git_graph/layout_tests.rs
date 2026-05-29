@@ -39,6 +39,11 @@ fn linear_history_stays_in_single_lane() {
     assert_eq!(layout.max_lanes, 1);
     assert_eq!(node_cols(&layout), vec![0, 0, 0]);
 
+    // 首个提交是分支 tip（无上游延续），其余由已存在 lane 抵达。
+    assert!(!layout.rows[0].node_continues_up);
+    assert!(layout.rows[1].node_continues_up);
+    assert!(layout.rows[2].node_continues_up);
+
     // 中间提交：上接下连都在同一列。
     assert_eq!(layout.rows[1].to_parents, vec![conn(0, 0)]);
     assert!(layout.rows[1].passing.is_empty());
