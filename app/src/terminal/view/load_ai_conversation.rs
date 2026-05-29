@@ -44,8 +44,10 @@ use crate::terminal::model::block::SerializedBlock;
 use crate::terminal::model::blocks::RichContentItem;
 use crate::terminal::model::rich_content::RichContentType;
 use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::model_events::ModelEventDispatcher;
+use crate::terminal::shell::ShellType;
 use crate::terminal::view::{
     AIBlockMetadata, Event, RichContent, RichContentInsertionPosition, RichContentMetadata,
     TerminalView,
@@ -62,6 +64,14 @@ pub(crate) enum RestorationDirState {
     MissingOriginalDir,
     /// The terminal needs to cd into the conversation's directory.
     NeedsCd { path: String },
+}
+
+fn cd_command_for_restore_path(path: &str, shell_type: ShellType) -> String {
+    let escaped_path = shell_escape_single_quotes(path, shell_type);
+    match shell_type {
+        ShellType::PowerShell => format!("Set-Location -LiteralPath '{escaped_path}'"),
+        ShellType::Bash | ShellType::Zsh | ShellType::Fish => format!("cd -- '{escaped_path}'"),
+    }
 }
 
 /// Specifies how AI conversations should be restored when creating a TerminalView.
@@ -293,8 +303,12 @@ impl TerminalView {
         match restore_context_state {
             RestorationDirState::NeedsCd { path } => {
                 let path_for_hint = path.clone();
+                let shell_type = self
+                    .active_session_shell_type(ctx)
+                    .unwrap_or(ShellType::Bash);
+                let cd_command = cd_command_for_restore_path(&path, shell_type);
                 let did_execute_cd = self.input.update(ctx, |input, ctx| {
-                    input.try_execute_command(&format!("cd \"{path}\""), ctx)
+                    input.try_execute_command(&cd_command, ctx)
                 });
                 if did_execute_cd {
                     self.on_next_block_completed(move |me, ctx| {

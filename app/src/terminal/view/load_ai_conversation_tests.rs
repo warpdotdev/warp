@@ -1,7 +1,7 @@
+use super::{cd_command_for_restore_path, find_block_indices_for_exchange_timestamps};
+use crate::terminal::shell::ShellType;
 use chrono::{Local, TimeZone};
 use warp_terminal::model::BlockIndex;
-
-use super::find_block_indices_for_exchange_timestamps;
 
 /// Helper: create a `DateTime<Local>` from a unix timestamp in seconds.
 fn ts(secs: i64) -> chrono::DateTime<Local> {
@@ -10,6 +10,33 @@ fn ts(secs: i64) -> chrono::DateTime<Local> {
 
 fn bi(idx: usize) -> BlockIndex {
     BlockIndex::from(idx)
+}
+
+#[test]
+fn restore_cd_command_uses_literal_powershell_path() {
+    let command = cd_command_for_restore_path(
+        r"C:\Users\me\$(exit)\project's folder",
+        ShellType::PowerShell,
+    );
+
+    assert_eq!(
+        command,
+        r"Set-Location -LiteralPath 'C:\Users\me\$(exit)\project''s folder'"
+    );
+}
+
+#[test]
+fn restore_cd_command_escapes_posix_single_quotes() {
+    let command = cd_command_for_restore_path("/Users/me/project's folder", ShellType::Bash);
+
+    assert_eq!(command, r#"cd -- '/Users/me/project'"'"'s folder'"#);
+}
+
+#[test]
+fn restore_cd_command_escapes_fish_single_quotes() {
+    let command = cd_command_for_restore_path("/Users/me/project's folder", ShellType::Fish);
+
+    assert_eq!(command, r"cd -- '/Users/me/project\'s folder'");
 }
 
 // ── All blocks in increasing timestamp order ──────────────────────────
