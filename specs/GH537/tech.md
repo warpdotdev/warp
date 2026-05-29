@@ -112,6 +112,23 @@ The payload is emitted as a new `DProtoHook::ShellBindings` variant in
 `dcs_hooks.rs` carrying `{ shell, keymaps: Vec<KeymapTable>,
 active_keymap, schema_version, nonce }`. Reuse `HEX_ENCODED_JSON_MARKER`.
 
+**`schema_version` policy.** The bootstrap script is shipped from
+the app to the PTY at runtime (`bundled/bootstrap/*.sh` are
+embedded in the binary and written into the shell's init path on
+session start), so the bootstrap version and the app's expected
+schema are always pinned together — version skew should be
+impossible in steady state. `schema_version` validation is
+defense-in-depth, covering: stale bootstrap scripts persisted on
+disk from a partial install, rc-file injection of a hand-crafted
+`ShellBindings` DCS frame (caught upstream by the nonce check
+but the version check is a second layer), and dev-branch
+mismatches where a developer is running an old app against a new
+bootstrap. Schema-version bumps follow the existing
+`DProtoHook` convention: a new version is only introduced when
+field semantics change incompatibly; additive fields use
+`#[serde(default)]` and do not bump. Any future bump ships
+alongside an app release; the new bootstrap is always co-shipped.
+
 The `ShellBindings` payload is a privileged terminal-control message
 (it can rewrite local key handling) and is only accepted from the
 bootstrap context:
@@ -341,12 +358,19 @@ distinguishes:
   per-macro-character limit prevents bind-cycle infinite loops; the
   input pipeline rejects further macro expansion once the limit is
   reached and emits a diagnostic).
-- `Action(InputAction)` — every other Category A built-in widget. The
-  dispatcher fires the mapped `InputAction` directly.
+- `Action(InputAction)` — every other Category A built-in widget. In
+  `batched` mode the dispatcher fires the mapped `InputAction`
+  directly against `InputBufferModel` (the PRODUCT #10 "no shell
+  roundtrip" fast path). In `full` mode the dispatcher injects the
+  bound keystroke into the PTY so plugin wrappers around the
+  underlying widget continue to see it; the corresponding mutation
+  to Warp's mirror lands when the next `WarpBufferState` arrives.
+  See §6.1 for the per-mode dispatch flow.
 - `External(widget_name: String)` — Category C external shell-function
   widgets (atuin, fzf, custom user widgets, plugin widgets,
-  `edit-command-line`, etc.). The dispatcher routes to the
-  pass-through path described in §6 below.
+  `edit-command-line`, etc.). The dispatcher routes to the inject
+  path described in §6 (with the buffer prefix-sync detour in
+  `batched` mode, §6.1).
 - `Unsupported(name)` — Category A widgets without a Warp equivalent
   only. Returns a sentinel that tells the matcher to fall through
   (PRODUCT #11, #16). Category C widgets never land here.
@@ -575,46 +599,46 @@ invoked as a shell command; that approach does not work on zsh and
 is partially broken on bash for the same reason. v1 abandons that
 shape entirely.
 
-**v1 model: native-keystroke dispatch.** The shell's line editor is
-the source of truth for `$BUFFER` (zsh), `$READLINE_LINE` (bash),
-and `commandline` (fish). Warp drives it by injecting bytes into
-the PTY at the prompt and consumes its state via a bootstrap-
-installed hook that emits the buffer + plugin overlays back over
-DCS after every keystroke. Widgets dispatch natively from inside
-ZLE / readline / fish-line-editor — exactly the context they were
-written for.
+**v1 model: dispatch widgets where their context is valid.** The
+unifying rule is that no widget — Category A, B, or C — is ever
+invoked outside an active ZLE / readline / fish-line-editor
+context. Bytes are the only thing that crosses the app→shell
+boundary; the shell's own keymap and dispatch machinery turns
+them into widget invocations from inside the context those
+widgets were written for. Two operating modes implement this rule
+differently based on shell capability — see §6.1 for the
+per-keystroke flow and §7.3 for the per-shell defaults.
 
-Concretely:
-
-- All printable keystrokes are written to the PTY via
-  `Message::Input`. ZLE / readline / fish-line-editor receive them
-  the same way they would in any other terminal and run their
-  `self-insert` widget (including plugin-installed wrappers like
-  `_zsh_autosuggest_self-insert`, `fast-syntax-highlight`, fish
-  abbr-expansion).
-- A bootstrap-installed `zle-line-pre-redraw` hook (zsh), per-key
-  wrapper widget (bash, see #6.3), or `fish_postexec`-style hook
-  (fish, see #6.3) emits a `WarpBufferState` DCS payload after
-  each keystroke carrying the new buffer, cursor, vi-mode (if
-  any), autosuggest text (if any), and syntax-highlight regions.
-- Warp maintains a *mirror* of `$BUFFER` for its own features
-  (autocomplete, AI correction, etc.). The mirror is updated from
-  the DCS payload, never written-to outside of being a passive
-  reflection of shell state. This keeps Warp's editor features
-  working without making Warp the source of truth — important
-  because shell plugins are allowed to mutate `$BUFFER`
-  asynchronously (e.g. fish abbreviation expansion fires on
-  space).
-- When the matcher resolves a keystroke to
-  `ShellWidget::External(name)` (Category C), Warp does nothing
-  special at dispatch time — the keystroke is just injected like
-  any other byte. ZLE / readline / fish-line-editor dispatches the
-  bound widget from its own keymap, in its own valid context.
-  Atuin opens its TUI, fzf opens its picker, etc. The existing
-  alt-screen plumbing handles the TUI's render.
-- When the widget completes (sets `$BUFFER` and returns), the
-  `zle-line-pre-redraw` hook fires again and emits the new buffer
-  via DCS. Warp updates its mirror and re-renders the input editor.
+- **`full` mode** (zsh; bash with blesh): every keystroke is
+  written to the PTY via `Message::Input`. ZLE / readline runs
+  `self-insert` plus plugin wrappers (`_zsh_autosuggest_self-
+  insert`, `fast-syntax-highlight`, fish abbr-expansion under
+  any future fish per-keystroke hook). A bootstrap-installed
+  per-keystroke hook — `add-zle-hook-widget zle-line-pre-redraw`
+  on zsh, blesh's per-key surface on bash — emits a
+  `WarpBufferState` DCS payload carrying the new buffer, cursor,
+  vi-mode, autosuggest text, and syntax-highlight regions. Warp
+  reconciles its mirror against the report (§6.1's reconciliation
+  paragraph); for printable `SelfInsert` Warp speculatively
+  renders the mirror locally to hide the round-trip.
+- **`batched` mode** (vanilla bash; fish in v1): Warp owns the
+  mirror locally during typing. Category A and B widgets
+  dispatch natively in `InputBufferModel`; Category C widgets
+  inject the mirror byte-for-byte into the PTY ahead of the bound
+  keystroke so the shell's line editor sees `$BUFFER` correctly
+  pre-populated and the widget can run in valid context. At
+  widget exit and at Enter, a bootstrap-installed hook (bash's
+  `bind -x` wrappers, fish's per-bound-key wrappers, fish's
+  `fish_postexec` / `fish_prompt`) emits a `WarpBufferState`
+  payload and Warp resyncs.
+- For `External(name)` (Category C) the dispatch shape is the
+  same in both modes: the keystroke is injected, ZLE / readline /
+  fish-line-editor dispatches the bound widget from its own
+  keymap in its own valid context, atuin opens its TUI, fzf
+  opens its picker, the existing alt-screen plumbing handles the
+  render. The only difference is whether the buffer pre-fill
+  came implicitly from prior keystrokes (`full` mode) or from an
+  explicit mirror-to-shell sync (`batched` mode).
 
 The widget name **never crosses the app→shell boundary as a
 command argument**. The keystroke does. ZLE's keymap turns that
@@ -622,40 +646,116 @@ keystroke into a widget dispatch, in-shell. This resolves both the
 critical ZLE-context concern and the security concern about
 widget-name encoding (there's no widget name to encode).
 
-#### 6.1 Per-keystroke flow (printable + Category A + Category C)
+#### 6.1 Per-keystroke flow
 
-1. User presses key K with current Warp buffer `B`.
-2. Matcher resolves K against the active keymap (§4). Match
-   `ShellWidget::External(_)`, `Action(_)`, or `Insert(_)` —
-   dispatch is the same shape for all three: inject the byte
-   sequence for K into the PTY.
-3. Shell's line editor processes K natively. `self-insert` wrappers
-   fire; bound widget dispatches; plugins render their overlays.
-4. Bootstrap hook fires after the keystroke and emits
+Dispatch depends on the tab's `injection_mode` (§7.3), set at
+bootstrap based on shell capability and inline-plugin detection.
+Two modes — `full` and `batched` — differ in who owns the buffer
+during typing.
+
+**Step 0 — reserved-key bypass (both modes).** If K matches one of
+the shell's reserved infrastructure keys (PRODUCT #14: zsh `^P` /
+`\ei`; bash `\C-p` / `\ei` / `\ep` / `\ew`; fish `\cP` / `\ep` /
+`\ew` / `\ei`), Warp handles it locally and returns; the byte is
+never written to the PTY. This step runs before the matcher and
+before any inject path.
+
+**`full` mode** — inline plugins active. Defaults: zsh, bash with
+blesh detected. The shell owns `$BUFFER`; Warp mirrors it.
+
+1. Matcher runs the `Reserved` and `Editable` tiers (§4) only.
+   On match in either tier, Warp dispatches locally and returns —
+   no inject. The `Contextual` tier (shell bindings) is not
+   consulted at dispatch time in this mode, because ZLE / readline
+   already owns shell-binding resolution from the injected byte.
+2. For `SelfInsert` of a printable K, Warp speculatively appends K
+   to its mirror and renders one frame immediately, hiding the
+   PTY round-trip. For `Action(_)` or `External(_)`, no
+   speculation: the pre-K buffer remains rendered until the DCS
+   report arrives. Category A keystrokes go through the shell in
+   this mode so plugin wrappers around `self-insert` and the
+   kill-ring continue to see them; `$BUFFER` stays authoritative.
+3. Warp writes the byte sequence for K into the PTY. The shell's
+   line editor runs `self-insert` plus plugin wrappers, or
+   dispatches the externally-bound widget in its own keymap.
+4. The bootstrap hook fires after the keystroke and emits
    `WarpBufferState { buffer, cursor, vi_mode?, autosuggest?,
    highlights? }` over DCS.
-5. Warp consumes the DCS, updates its mirror buffer, renders the
-   input editor with Warp's block-UI chrome plus the plugin
-   overlays from the report.
+5. Warp reconciles the mirror with the reported buffer in one
+   frame (no fade). If the speculative render disagrees with the
+   shell-reported state — a plugin wrapper rewrote `$BUFFER`,
+   autosuggest accepted on a key that also self-inserts, fish
+   abbr expanded the typed token — the corrected state is what
+   the user sees; the speculative frame is overwritten before
+   most users perceive it. Plugin overlays from the report
+   (autosuggest dimmed text, syntax-highlight regions) render
+   alongside the buffer.
 
-Latency per keystroke is one PTY round-trip plus one DCS parse —
-the same shape as Warp's existing shell→app pings (prompt
-detection, exit-code report). The §7 latency budget is the gate.
+**`batched` mode** — inline plugins inactive. Defaults: vanilla
+bash, fish (see §6.3 fish for the structural reason). Warp owns
+the mirror; the shell receives the buffer at sync boundaries.
+
+1. Matcher runs the full precedence chain (§4): Reserved →
+   Editable → Contextual → Fixed.
+2. On `SelfInsert` or `Action(_)` match, Warp dispatches natively
+   in `InputBufferModel` — no PTY round-trip, satisfying PRODUCT
+   #10's "no shell roundtrip" guarantee. Warp's mirror is
+   authoritative for the duration of the typed line.
+3. On `External(_)` match, Warp first syncs `$BUFFER` to the
+   shell by injecting the current mirror byte-for-byte (each
+   byte runs through `self-insert` in-shell), then injects the
+   bound keystroke. ZLE / readline / fish-line-editor dispatches
+   the widget with `$BUFFER` correctly pre-populated. On widget
+   exit the post-dispatch hook emits a `WarpBufferState` payload
+   and Warp resyncs the mirror to whatever the widget left
+   behind.
+4. On Enter, Warp injects the mirror followed by `\n`; the shell
+   runs `accept-line` natively and the block model fires from
+   the existing `Preexec` / `Precmd` hooks.
+
+**Prefix accumulation ownership (PRODUCT #8).** Whichever matcher
+dispatches a tier also owns its prefix accumulation; the two
+matchers never compete for the same prefix.
+
+- In both modes, multi-key bindings on the `Reserved` or
+  `Editable` tier accumulate in Warp's matcher with
+  `MatchOutcome::{Match, Pending, AbandonedPrefix}` (§4).
+- In `full` mode, multi-key bindings on the `Contextual` tier
+  accumulate inside ZLE / readline / fish-line-editor, because
+  every byte reaches the shell immediately. The shell's own
+  pure-prefix wait, 500 ms ambiguity timeout, and replay-on-
+  abandon behavior is what the user sees, and that is what
+  PRODUCT #8 specifies.
+- In `batched` mode, multi-key bindings on the `Contextual`
+  tier accumulate in Warp's matcher (because shell bindings are
+  dispatched natively); Warp's matcher implements PRODUCT #8
+  rules for those sequences directly.
+
+Latency per keystroke: one PTY round-trip plus one DCS parse in
+`full` mode, masked by speculation for the common `SelfInsert`
+case; zero round-trips in `batched` mode. The §7.3 latency
+budget applies to `full` mode only.
 
 #### 6.2 Buffer-sync at session boundaries
 
 When the user opens a new tab, the shell starts with `$BUFFER=""`
 and Warp's editor is empty. They are in sync trivially.
 
-When the user pastes a multi-character string into Warp's editor,
-Warp writes the bytes into the PTY. Shell's bracketed-paste
-handling collapses the `self-insert` wrapper bursts (autosuggest
-intentionally does not re-fire mid-paste), so the DCS report fires
-once at paste completion. Warp's mirror catches up.
+When the user pastes a multi-character string into Warp's editor
+in `full` mode, Warp writes the bytes into the PTY wrapped in
+the bracketed-paste markers the terminal already supports. The
+shell's bracketed-paste handling collapses the `self-insert`
+wrapper bursts (autosuggest intentionally does not re-fire mid-
+paste), so the DCS report fires once at paste completion. Warp's
+mirror catches up. In `batched` mode, paste lands directly in
+Warp's mirror; the mirror syncs to the shell at the next sync
+boundary (Category C dispatch or Enter), so paste is zero-
+round-trip.
 
 When the user switches between tabs or focuses Warp from another
 app, no resync is needed — `$BUFFER` is held in the shell's
-memory across focus changes.
+memory across focus changes (`full` mode), and Warp's mirror is
+held in the app's memory (`batched` mode).
 
 #### 6.3 Shell-specific bootstrap
 
@@ -667,9 +767,15 @@ _warp_emit_buffer_state() {
     payload=$(_warp_encode_buffer_state)  # see #6.4
     printf '\eP+%s|buffer-state|%s\e\\' "$WARP_BOOTSTRAP_NONCE" "$payload"
 }
-# Install once at bootstrap, after user's zshrc has loaded so
-# plugin-installed widgets are present.
-zle -N zle-line-pre-redraw _warp_emit_buffer_state
+# Install once at bootstrap, after the user's zshrc has loaded so
+# plugin-installed widgets are present. `add-zle-hook-widget`
+# composes — it appends to the existing widget chain instead of
+# replacing whatever zsh-autosuggestions / zsh-syntax-highlighting
+# / prezto already installed at `zle-line-pre-redraw`. Using
+# `zle -N` here would silently uninstall those plugins' hooks and
+# break the inline-rendering support §7 is supposed to deliver.
+autoload -Uz add-zle-hook-widget
+add-zle-hook-widget zle-line-pre-redraw _warp_emit_buffer_state
 ```
 
 The hook runs in proper ZLE context after each redraw (which
@@ -701,12 +807,41 @@ Two options, picked per binding category:
 The bash gap is honest and documented; it does not block v1
 because the motivating cases (atuin, fzf) all use `bind -x`.
 
-**fish** (`bundled/bootstrap/fish.sh`): fish provides
-`fish_postexec` (after command runs) and lets bindings publish
-arbitrary events. The bootstrap wraps each user-bound function in
-a small emitter and installs a `bind --erase` + `bind` rebind to
-reach every key. Per-keystroke buffer state is read via
-`commandline` and emitted with the same DCS shape.
+**fish** (`bundled/bootstrap/fish.sh`): fish has no per-keystroke
+hook equivalent to `zle-line-pre-redraw`. The available hooks
+fire at coarser boundaries: `fish_postexec` after a command is
+accepted and run, `fish_prompt` before each new prompt. Neither
+fires per keystroke. Fish therefore defaults to `batched` mode
+(§7.3) in v1:
+
+- Category C dispatch is supported via per-bound-key wrapping
+  exactly analogous to bash `bind -x`. The bootstrap post-
+  processes the discovered fish bindings and rewrites each
+  Category C bind to chain a Warp emitter before and after the
+  user's function, e.g.
+  `bind \cR '_warp_emit_pre; atuin-search; _warp_emit_post'`.
+  This composes with binds the user adds after bootstrap: each
+  `precmd` re-snapshots `bind` output and re-wraps any new
+  Category C entries before emitting the next `ShellBindings`
+  payload. No `bind --erase`-everywhere is required.
+- `WarpBufferState` payloads emit at the wrap boundaries above,
+  at `fish_postexec`, and at `fish_prompt` — never per
+  keystroke. Buffer content is read via `commandline`.
+- fish abbreviations (`abbr`) are detected at the
+  `WarpBufferState` sync that fires when the user presses space
+  or enter — the expansion is visible after the sync, not per
+  keystroke. PRODUCT #11.6's "fish abbreviations expand"
+  invariant is met (the expanded text lands before the command
+  is submitted); the visible-during-typing animation the
+  invariant does not require is not delivered.
+- Fish's built-in syntax highlighting and autosuggestions are
+  rendered by fish itself when Warp is in PS1 mode; the
+  block-UI input editor in v1 mirrors Warp's local buffer and
+  does not show fish-native inline highlighting. Inline-plugin
+  parity for fish is a follow-up tracked below, contingent on a
+  per-keystroke fish hook landing upstream or on a curated
+  bind-every-printable-key shim that the implementation can
+  measure against the §7.3 latency budget.
 
 #### 6.4 Security and encoding
 
@@ -773,24 +908,36 @@ data crosses a trust boundary. Rules:
 
 PRODUCT #11.6 commits to honoring plugins that hook every keystroke
 — zsh-autosuggestions, syntax highlighting, fish abbreviations,
-zsh-vi-mode's per-mode cursor shapes. The v1 architecture is the
-same per-keystroke injection + DCS-report model defined in §6.
+zsh-vi-mode's per-mode cursor shapes — on shells whose line editor
+exposes a per-keystroke hook. The v1 architecture is the
+per-keystroke injection + DCS-report model defined in §6.1 `full`
+mode; capability for that mode is determined per shell at
+bootstrap (§7.3).
 
 #### 7.1 v1 architecture (committed)
 
-- Every printable keystroke is injected into the PTY (§6.1).
-- ZLE / readline / fish-line-editor runs `self-insert` plus all
-  plugin-installed wrappers. Plugins update their visible state
-  exactly as they do in a native terminal.
-- The bootstrap `zle-line-pre-redraw` hook (zsh), `bind -x`
-  wrappers (bash with blesh: full per-keystroke; vanilla bash:
-  only at bound keys), or fish equivalent emits
-  `WarpBufferState` carrying buffer, cursor, vi-mode, autosuggest
-  text, and syntax-highlight regions over DCS.
-- Warp renders its input editor from the DCS-reported state plus
-  Warp's block-UI chrome. The mirror buffer drives Warp's own
-  features (autocomplete suggestions, AI correction) but the
+The architecture below is what runs when `injection_mode = full`
+on a tab. §7.3 lists which shells default to `full` in v1.
+
+- Every printable keystroke is injected into the PTY (§6.1
+  `full` mode).
+- ZLE / readline runs `self-insert` plus all plugin-installed
+  wrappers. Plugins update their visible state exactly as they
+  do in a native terminal.
+- The bootstrap `zle-line-pre-redraw` hook (zsh, installed via
+  `add-zle-hook-widget` so plugin-installed hooks compose) or
+  blesh's per-keystroke hook surface (bash) emits a
+  `WarpBufferState` payload carrying buffer, cursor, vi-mode,
+  autosuggest text, and syntax-highlight regions over DCS.
+- Warp renders its input editor from the DCS-reported state
+  plus Warp's block-UI chrome and the speculative-render frame
+  for the in-flight keystroke (§6.1 reconciliation). The
   shell's reported buffer is authoritative for display.
+
+Shells whose default is `batched` (vanilla bash, fish in v1)
+do not run this path — they deliver Category C bindings
+natively but cannot supply per-keystroke overlays. See §6.3
+fish and §7.3 for the structural reasons.
 
 This is one mechanism for both Category C dispatch (§6) and
 inline plugins. Earlier drafts described three candidates and
@@ -825,18 +972,37 @@ plugin.
 **Budget: p95 keystroke-to-render < 30 ms** on the slowest
 realistic stack (zsh + oh-my-zsh + atuin init + fzf init +
 zsh-autosuggestions + zsh-syntax-highlighting + powerlevel10k).
-Measured by the integration test in the validation section.
+Measured by the integration test in the validation section. The
+budget applies to `full` mode only.
 
-**Fallback if budget is exceeded:** Warp-local keystroke handling
-for printable characters, with batched sync into the shell only
-at Category C dispatch boundaries and at Enter. This preserves
-Category C (atuin/fzf still work) but loses inline plugins for
-the stacks where latency is bad. The fallback is gated by a
-config setting `shell_keybindings.injection_mode` ∈ `{full,
-batched}`, defaulting to `full`. Users on slow setups can flip
-to `batched` to recover typing latency at the cost of plugin
-fidelity; PRODUCT #11.6 invariants degrade explicitly via a
-diagnostic.
+**Mode is per-shell, defaulted by structural capability — not a
+universal `full` default.** `injection_mode ∈ {full, batched}` is
+computed at bootstrap time and stored on the tab:
+
+- **zsh** → `full`. `add-zle-hook-widget zle-line-pre-redraw`
+  delivers per-keystroke `WarpBufferState`.
+- **bash with blesh detected** → `full`. blesh installs the
+  per-keystroke hook surface readline lacks.
+- **vanilla bash (no blesh)** → `batched`. Readline has no
+  per-keystroke hook (§6.3 bash). `full` cannot deliver PRODUCT
+  #11.6 invariants on this shell at any latency; the user-facing
+  setting is read-only in this case.
+- **fish** → `batched` in v1 (§6.3 fish). Inline-plugin parity
+  follow-up gates the eventual `full` default.
+
+**User opt-down on capable shells.** On zsh or bash-with-blesh,
+users on slow setups can flip the setting to `batched` to recover
+typing latency at the cost of inline plugin fidelity. PRODUCT
+#11.6 invariants degrade explicitly via a one-time-per-session
+diagnostic at tab start that names the plugins affected.
+
+**Structural-incapability diagnostic.** On vanilla bash and fish
+(both default to `batched` for structural reasons), a one-time-
+per-session diagnostic at tab start names the limitation:
+"inline-plugin overlays are not available on this shell in v1;
+Category C bindings (atuin, fzf, custom widgets) work normally."
+The diagnostic is suppressed when the user has explicitly
+chosen `batched` on a capable shell — the opt-down case above.
 
 #### 7.4 What this is NOT
 
@@ -1148,4 +1314,15 @@ Tests are organized to map to numbered PRODUCT invariants. Use
   (PRODUCT #22). When this lands, the `ClassifierGate` (PRODUCT
   #22.5, tech §"#22.5") ships at the same time — the two are
   inseparable; #22 without the gate ships the flicker bug.
+- Promote fish to `full` mode (§6.3 fish, §7.3). Two viable
+  paths: (a) upstream a per-keystroke fish hook akin to
+  `zle-line-pre-redraw` once one exists, (b) ship a curated
+  bind-every-printable-key shim that wraps `self-insert` for
+  the ASCII printable range plus common navigation keys, gated
+  on the §7.3 latency budget. Path (b) is a v1.x candidate;
+  path (a) is open-ended.
+- Vanilla bash `full`-mode path conditional on blesh becoming
+  installable on demand (the v1 dependency is "blesh detected
+  at bootstrap"; an opt-in installer flow would let more users
+  reach `full` without distro changes).
 - Extend to PowerShell, nushell, xonsh once the core lands.

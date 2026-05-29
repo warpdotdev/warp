@@ -354,14 +354,17 @@ inline. See #11.6.
       and behaves exactly as it does today. The change is scoped to
       how the active prompt's input area is composed.
 
-    The mechanism by which these plugins drive the input editor's
-    rendering is left to the tech spec — multiple shapes are
-    plausible (per-keystroke ZLE round-trip, embedding the shell's
-    line editor as the rendering authority for the active prompt,
-    plugin-specific query API, etc.) and the right choice is
-    informed by latency measurements that the implementation must
-    do. The behavioral invariants above are the bar regardless of
-    how the implementation gets there.
+    The implementation uses per-keystroke PTY injection plus
+    shell-emitted DCS overlays (see TECH §6, §7). Behavioral
+    invariants above are the bar; TECH owns the latency budget
+    and the per-shell capability matrix that determines whether
+    each shell hits all of them in v1. The short version of that
+    matrix: zsh and bash-with-blesh get the full inline-rendering
+    experience; vanilla bash and fish v1 honor Category C
+    bindings (atuin, fzf, custom widgets) natively but cannot
+    deliver per-keystroke inline overlays in v1 because their
+    line editors lack a per-keystroke hook. TECH §7.3 surfaces
+    that limitation with a one-time diagnostic.
 
     **Failure mode.** If the plugin emits something Warp's renderer
     can't faithfully display (an obscure ANSI sequence, a 24-bit
