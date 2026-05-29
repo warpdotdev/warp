@@ -29,6 +29,6 @@ pub mod user_preferences;
 pub use app_id::AppId;
 pub use session_id::SessionId;
 pub use warp_util::host_id::HostId;
-// Re-export warpui so that it can be referenced safely from the
+// Re-export warpui_core so that it can be referenced safely from the
 // telemetry macros.
-pub use warpui;
+pub use warpui_core;
