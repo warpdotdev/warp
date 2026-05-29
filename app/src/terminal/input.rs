@@ -3676,14 +3676,16 @@ impl Input {
         &self.agent_status_view
     }
 
-    /// Handles events from the queued-prompts panel: places deleted-row text into an empty editor,
-    /// and refocuses the input editor when an inline edit finishes.
     fn handle_queued_prompts_panel_event(
         &mut self,
         event: &QueuedPromptsPanelEvent,
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
+            QueuedPromptsPanelEvent::SendNow { text } => {
+                self.submit_queued_prompt_for_active_pane(text.clone(), ctx);
+                self.focus_input_box(ctx);
+            }
             QueuedPromptsPanelEvent::RowDeleted { text } => {
                 if self.buffer_text(ctx).is_empty() {
                     self.replace_buffer_content(text, ctx);

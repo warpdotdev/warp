@@ -4,8 +4,8 @@
 //! Reads from the `QueuedQueryModel` singleton (keyed by `AIConversationId`) for the queue of the
 //! currently-active conversation in its parent terminal view, looked up via
 //! [`BlocklistAIHistoryModel::active_conversation_id`]. Tracks panel-only UI state (collapse,
-//! hover, drag) locally. Emits two high-level events: [`QueuedPromptsPanelEvent::RowDeleted`] and
-//! [`QueuedPromptsPanelEvent::EditEnded`], which the host uses to update the input editor.
+//! hover, drag) locally. Emits high-level events for immediate submission, deletion, and edit
+//! completion, which the host uses to submit or update the input editor.
 use std::collections::HashMap;
 
 use pathfinder_color::ColorU;
@@ -61,15 +61,26 @@ fn build_row_state(
     ctx: &mut ViewContext<QueuedPromptsPanelView>,
 ) -> QueuedPromptRowState {
     let is_initial_cloud_mode_prompt = origin == QueuedQueryOrigin::InitialCloudMode;
-    let (edit_tooltip, delete_tooltip) = if is_initial_cloud_mode_prompt {
+    let (send_now_tooltip, edit_tooltip, delete_tooltip) = if is_initial_cloud_mode_prompt {
         (
+            INITIAL_CLOUD_MODE_PROMPT_TOOLTIP,
             INITIAL_CLOUD_MODE_PROMPT_TOOLTIP,
             INITIAL_CLOUD_MODE_PROMPT_TOOLTIP,
         )
     } else {
-        ("Edit queued prompt", "Delete queued prompt")
+        ("Send now", "Edit", "Delete")
     };
 
+    let send_now_button = ctx.add_typed_action_view(move |_| {
+        ActionButton::new("", NakedTheme)
+            .with_icon(TerminalIcon::ArrowUp)
+            .with_tooltip(send_now_tooltip)
+            .with_size(ButtonSize::XSmall)
+            .with_disabled_theme(NakedTheme)
+            .on_click(move |ctx| {
+                ctx.dispatch_typed_action(QueuedPromptsPanelAction::SendNow(query_id));
+            })
+    });
     let edit_button = ctx.add_typed_action_view(move |_| {
         ActionButton::new("", NakedTheme)
             .with_icon(TerminalIcon::Pencil)
@@ -92,6 +103,7 @@ fn build_row_state(
     });
 
     if is_initial_cloud_mode_prompt {
+        send_now_button.update(ctx, |button, ctx| button.set_disabled(true, ctx));
         edit_button.update(ctx, |button, ctx| button.set_disabled(true, ctx));
         delete_button.update(ctx, |button, ctx| button.set_disabled(true, ctx));
     }
@@ -99,6 +111,7 @@ fn build_row_state(
     QueuedPromptRowState {
         mouse_state: MouseStateHandle::default(),
         drag_handle_tooltip_state: MouseStateHandle::default(),
+        send_now_button,
         edit_button,
         delete_button,
         draggable_state: DraggableState::default(),
@@ -109,6 +122,7 @@ fn build_row_state(
 struct QueuedPromptRowState {
     mouse_state: MouseStateHandle,
     drag_handle_tooltip_state: MouseStateHandle,
+    send_now_button: ViewHandle<ActionButton>,
     edit_button: ViewHandle<ActionButton>,
     delete_button: ViewHandle<ActionButton>,
     draggable_state: DraggableState,
@@ -143,6 +157,7 @@ pub struct QueuedPromptsPanelView {
 #[derive(Clone, Debug)]
 pub enum QueuedPromptsPanelAction {
     ToggleCollapsed,
+    SendNow(QueuedQueryId),
     StartEditingRow(QueuedQueryId),
     DeleteRow(QueuedQueryId),
     StartDrag(QueuedQueryId),
@@ -150,10 +165,11 @@ pub enum QueuedPromptsPanelAction {
     DropEnd,
 }
 
-/// Events emitted to the parent view ([`TerminalView`]). Two variants cover everything the host
-/// needs: place text on delete, and refocus the input box after an edit-mode transition.
+/// Events emitted to the host input view.
 #[derive(Clone, Debug)]
 pub enum QueuedPromptsPanelEvent {
+    /// A row was removed via its send-now button. The host should immediately submit `text`.
+    SendNow { text: String },
     /// A row was deleted via the trash button. The host should place `text` into the input editor
     /// when the editor is empty, and focus the input.
     RowDeleted { text: String },
@@ -453,6 +469,20 @@ impl TypedActionView for QueuedPromptsPanelView {
                     ctx
                 );
                 ctx.notify();
+            }
+            QueuedPromptsPanelAction::SendNow(query_id) => {
+                let query_id = *query_id;
+                if self.editing_row_id(ctx) == Some(query_id) {
+                    self.commit_edit(ctx);
+                }
+
+                let removed = QueuedQueryModel::handle(ctx)
+                    .update(ctx, |model, ctx| model.remove_by_id(conv_id, query_id, ctx));
+                if let Some(removed) = removed {
+                    ctx.emit(QueuedPromptsPanelEvent::SendNow {
+                        text: removed.text().to_owned(),
+                    });
+                }
             }
             QueuedPromptsPanelAction::StartEditingRow(query_id) => {
                 let query_id = *query_id;
@@ -781,6 +811,7 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
     let QueuedPromptRowState {
         mouse_state,
         drag_handle_tooltip_state,
+        send_now_button,
         edit_button,
         delete_button,
         draggable_state,
@@ -878,6 +909,7 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
             let mut buttons = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(4.);
+            buttons.add_child(ChildView::new(&send_now_button).finish());
             if !is_in_edit_mode {
                 buttons.add_child(ChildView::new(&edit_button).finish());
             }

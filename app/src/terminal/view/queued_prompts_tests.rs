@@ -9,8 +9,11 @@ use std::rc::Rc;
 use std::str::FromStr;
 
 use warpui::platform::WindowStyle;
-use warpui::{App, SingletonEntity, ViewContext, ViewHandle};
+use warpui::{App, SingletonEntity, TypedActionView, ViewContext, ViewHandle};
 
+use super::queued_prompts_panel::{
+    QueuedPromptsPanelAction, QueuedPromptsPanelEvent, QueuedPromptsPanelView,
+};
 use super::TerminalView;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::UserQueryMode;
@@ -25,7 +28,7 @@ use crate::terminal::input::Event as InputEvent;
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
 use crate::test_util::settings::initialize_settings_for_tests;
-use crate::test_util::terminal::initialize_app_for_terminal_view;
+use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 fn user_query(text: &str) -> QueuedQuery {
     QueuedQuery::new(text.to_owned(), QueuedQueryOrigin::QueueSlashCommand)
@@ -742,6 +745,56 @@ fn drain_is_isolated_per_conversation() {
             assert_eq!(m.queue(conv_a).len(), 0);
             assert_eq!(m.queue(conv_b).len(), 1);
             assert_eq!(m.queue(conv_b)[0].text(), "b-first");
+        });
+    });
+}
+
+#[test]
+fn send_now_action_removes_row_and_emits_send_now_event() {
+    // Clicking "send now" on a queued row removes exactly that row and asks the host to submit its
+    // text immediately. The locked initial cloud-mode row is rejected by the model (covered by
+    // `initial_cloud_mode_head_rejects_user_mutations_and_autofire`) and has its button disabled
+    // in the panel, so it needs no separate panel test.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        // The panel keys its queue lookups on the history model's active conversation for its
+        // terminal view, so seed one and build the panel as a child of that terminal view.
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_view_id = terminal.read(&app, |view, _| view.view_id);
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        let panel = terminal.update(&mut app, |_, ctx| {
+            ctx.add_view(|ctx| QueuedPromptsPanelView::new(terminal_view_id, ctx))
+        });
+
+        let query_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(conversation_id, user_query("send me now"), ctx)
+        });
+
+        let send_now_events = Rc::new(RefCell::new(Vec::<String>::new()));
+        let send_now_events_for_subscription = send_now_events.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&panel, move |_, event: &QueuedPromptsPanelEvent, _| {
+                if let QueuedPromptsPanelEvent::SendNow { text } = event {
+                    send_now_events_for_subscription
+                        .borrow_mut()
+                        .push(text.clone());
+                }
+            });
+        });
+
+        panel.update(&mut app, |panel, ctx| {
+            panel.handle_action(&QueuedPromptsPanelAction::SendNow(query_id), ctx);
+        });
+
+        assert_eq!(send_now_events.borrow().as_slice(), ["send me now"]);
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(model.queue(conversation_id).is_empty());
         });
     });
 }
