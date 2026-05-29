@@ -227,20 +227,26 @@ pub fn extract_skill_parent_directory(
     };
 
     for definition in SKILL_PROVIDER_DEFINITIONS.iter() {
-        if !skills_root
-            .path_component()
-            .ends_with(&definition.skills_path.to_string_lossy())
-        {
-            continue;
-        }
-
         let mut parent_directory = skills_root.clone();
-        for _ in definition.skills_path.components() {
-            parent_directory = parent_directory
-                .parent()
-                .ok_or_else(|| anyhow::anyhow!("Not a skill path: {}", path.display_path()))?;
+        let mut matches_provider = true;
+        for component in definition.skills_path.components().rev() {
+            let Some(expected_component) = component.as_os_str().to_str() else {
+                matches_provider = false;
+                break;
+            };
+            if parent_directory.file_name() != Some(expected_component) {
+                matches_provider = false;
+                break;
+            }
+            let Some(parent) = parent_directory.parent() else {
+                matches_provider = false;
+                break;
+            };
+            parent_directory = parent;
         }
-        return Ok(parent_directory);
+        if matches_provider {
+            return Ok(parent_directory);
+        }
     }
 
     Err(anyhow::anyhow!("Not a skill path: {}", path.display_path()))
