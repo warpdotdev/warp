@@ -85,6 +85,10 @@ Consistent with other agents (Claude Code, Gemini CLI):
 5. Not connected + not installed on disk → **install chip**
 6. Notifications disabled in settings → **no chip**
 
+## Security
+
+Warp assumes the `warpdotdev/agy-warp` repository is trusted and maintained by the core Warp team. By executing `agy extensions install https://github.com/warpdotdev/agy-warp`, Warp relies on GitHub's HTTPS/TLS integrity and Antigravity's own extension installation mechanisms. Users can trust that this extension is downloaded directly from the official `warpdotdev` GitHub organization.
+
 ## Success Criteria
 
 1. Running `agy` in Warp launches Agent Mode and styles the pane with Antigravity branding.
@@ -98,4 +102,5 @@ Consistent with other agents (Claude Code, Gemini CLI):
 
 - **Unit tests**: Validate filesystem verification (`is_installed`, `needs_update`) using temporary directory structures.
 - **Unit tests**: Test CLI detection, brand styling, and plugin instructions.
+- **Unit tests**: Validate the core OSC 777 parser, listener, and session-model data flow for `agent: "agy"` to ensure the notification stream works correctly.
 - **Manual verification**: Verify the end-to-end setup and notifications flow inside a live terminal window.
