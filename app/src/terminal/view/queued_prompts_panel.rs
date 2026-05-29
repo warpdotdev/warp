@@ -48,6 +48,8 @@ use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme
 
 const MAX_PROMPT_LINES: f32 = 5.;
 const INITIAL_CLOUD_MODE_PROMPT_TOOLTIP: &str = "The first cloud-mode prompt cannot be changed.";
+const SEND_NOW_DURING_CLOUD_SETUP_TOOLTIP: &str =
+    "Prompts cannot be sent until environment setup is complete.";
 
 /// Returns the position-cache id used to look up a row's bounding rect during a drag.
 /// Indexed by the row's current visual index so swaps maintain stable lookups.
@@ -61,20 +63,21 @@ fn build_row_state(
     ctx: &mut ViewContext<QueuedPromptsPanelView>,
 ) -> QueuedPromptRowState {
     let is_initial_cloud_mode_prompt = origin == QueuedQueryOrigin::InitialCloudMode;
-    let (send_now_tooltip, edit_tooltip, delete_tooltip) = if is_initial_cloud_mode_prompt {
+    // The send-now tooltip is owned by `update_send_now_availability`, which swaps in a
+    // "wait for the cloud agent" message while send-now is disabled; "Send now" is the default.
+    let (edit_tooltip, delete_tooltip) = if is_initial_cloud_mode_prompt {
         (
-            INITIAL_CLOUD_MODE_PROMPT_TOOLTIP,
             INITIAL_CLOUD_MODE_PROMPT_TOOLTIP,
             INITIAL_CLOUD_MODE_PROMPT_TOOLTIP,
         )
     } else {
-        ("Send now", "Edit", "Delete")
+        ("Edit", "Delete")
     };
 
     let send_now_button = ctx.add_typed_action_view(move |_| {
         ActionButton::new("", NakedTheme)
             .with_icon(TerminalIcon::ArrowUp)
-            .with_tooltip(send_now_tooltip)
+            .with_tooltip("Send now")
             .with_size(ButtonSize::XSmall)
             .with_disabled_theme(NakedTheme)
             .on_click(move |ctx| {
@@ -103,7 +106,6 @@ fn build_row_state(
     });
 
     if is_initial_cloud_mode_prompt {
-        send_now_button.update(ctx, |button, ctx| button.set_disabled(true, ctx));
         edit_button.update(ctx, |button, ctx| button.set_disabled(true, ctx));
         delete_button.update(ctx, |button, ctx| button.set_disabled(true, ctx));
     }
@@ -245,6 +247,46 @@ impl QueuedPromptsPanelView {
                 .entry(id)
                 .or_insert_with(|| build_row_state(id, origin, ctx));
         }
+        self.update_send_now_availability(ctx);
+    }
+
+    /// Updates each row's "send now" button: disabled, with a tooltip explaining the wait, for the
+    /// locked initial cloud-mode prompt and for every row while that locked row sits at the head of
+    /// the queue — i.e. while the cloud environment is still setting up, with no live agent yet to
+    /// receive an immediate submission. Otherwise it is enabled with the default "Send now" tooltip.
+    fn update_send_now_availability(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(conv_id) = self.active_conversation_id else {
+            return;
+        };
+
+        let rows: Vec<(QueuedQueryId, QueuedQueryOrigin)> = QueuedQueryModel::as_ref(ctx)
+            .queue(conv_id)
+            .iter()
+            .map(|query| (query.id(), query.origin()))
+            .collect();
+        let cloud_setup_in_progress = rows
+            .first()
+            .is_some_and(|(_, origin)| *origin == QueuedQueryOrigin::InitialCloudMode);
+        for (query_id, origin) in &rows {
+            let Some(send_now_button) = self
+                .row_states
+                .get(query_id)
+                .map(|state| state.send_now_button.clone())
+            else {
+                continue;
+            };
+            let disabled =
+                *origin == QueuedQueryOrigin::InitialCloudMode || cloud_setup_in_progress;
+            let tooltip = if disabled {
+                SEND_NOW_DURING_CLOUD_SETUP_TOOLTIP
+            } else {
+                "Send now"
+            };
+            send_now_button.update(ctx, |button, ctx| {
+                button.set_disabled(disabled, ctx);
+                button.set_tooltip(Some(tooltip), ctx);
+            });
+        }
     }
 
     fn handle_history_event(
@@ -313,6 +355,8 @@ impl QueuedPromptsPanelView {
                 if !QueuedQueryModel::as_ref(ctx).has_queue(active_conv_id) {
                     self.collapsed = false;
                 }
+                // Removing the locked initial cloud-mode row re-enables the remaining rows.
+                self.update_send_now_availability(ctx);
             }
             QueuedQueryEvent::EditEntered { query_id, .. } => {
                 let initial_text = QueuedQueryModel::as_ref(ctx)
@@ -352,6 +396,8 @@ impl QueuedPromptsPanelView {
                         .entry(*query_id)
                         .or_insert_with(|| build_row_state(*query_id, origin, ctx));
                 }
+                // A new row queued while the locked initial row is present must start disabled.
+                self.update_send_now_availability(ctx);
             }
             QueuedQueryEvent::Reordered { .. }
             | QueuedQueryEvent::QueueNextPromptToggled { .. }
@@ -449,6 +495,20 @@ impl QueuedPromptsPanelView {
             return false;
         };
         QueuedQueryModel::as_ref(ctx).has_queue(conv_id)
+    }
+}
+
+#[cfg(test)]
+impl QueuedPromptsPanelView {
+    /// Test accessor: whether the "send now" button for `query_id` is currently disabled.
+    pub(super) fn send_now_button_disabled_for_test(
+        &self,
+        query_id: QueuedQueryId,
+        ctx: &AppContext,
+    ) -> Option<bool> {
+        self.row_states
+            .get(&query_id)
+            .map(|state| state.send_now_button.as_ref(ctx).is_disabled())
     }
 }
 

@@ -768,8 +768,14 @@ fn send_now_action_removes_row_and_emits_send_now_event() {
                 history.set_active_conversation_id(id, terminal_view_id, ctx);
                 id
             });
+        let suggestions_mode_model = {
+            let input = terminal.read(&app, |view, _| view.input.clone());
+            input.read(&app, |input, _| input.suggestions_mode_model().clone())
+        };
         let panel = terminal.update(&mut app, |_, ctx| {
-            ctx.add_view(|ctx| QueuedPromptsPanelView::new(terminal_view_id, ctx))
+            ctx.add_view(move |ctx| {
+                QueuedPromptsPanelView::new(terminal_view_id, suggestions_mode_model, ctx)
+            })
         });
 
         let query_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
@@ -795,6 +801,72 @@ fn send_now_action_removes_row_and_emits_send_now_event() {
         assert_eq!(send_now_events.borrow().as_slice(), ["send me now"]);
         QueuedQueryModel::handle(&app).read(&app, |model, _| {
             assert!(model.queue(conversation_id).is_empty());
+        });
+    });
+}
+
+#[test]
+fn send_now_disabled_for_all_rows_while_initial_cloud_mode_row_is_present() {
+    // While the locked initial cloud-mode prompt sits at the head (cloud environment setup),
+    // every queued row's "send now" is disabled — there is no live agent to receive it yet. Once
+    // that row is removed (the agent picked up the prompt), the remaining follow-up rows are
+    // re-enabled.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_view_id = terminal.read(&app, |view, _| view.view_id);
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        let suggestions_mode_model = {
+            let input = terminal.read(&app, |view, _| view.input.clone());
+            input.read(&app, |input, _| input.suggestions_mode_model().clone())
+        };
+        let panel = terminal.update(&mut app, |_, ctx| {
+            ctx.add_view(move |ctx| {
+                QueuedPromptsPanelView::new(terminal_view_id, suggestions_mode_model, ctx)
+            })
+        });
+
+        // The locked initial cloud-mode prompt, plus a follow-up queued during setup.
+        let (initial_id, followup_id) =
+            QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+                let initial_id = model.append(
+                    conversation_id,
+                    QueuedQuery::new("initial".to_owned(), QueuedQueryOrigin::InitialCloudMode),
+                    ctx,
+                );
+                let followup_id = model.append(conversation_id, user_query("follow up"), ctx);
+                (initial_id, followup_id)
+            });
+
+        // During setup, both rows' "send now" is disabled.
+        panel.read(&app, |panel, ctx| {
+            assert_eq!(
+                panel.send_now_button_disabled_for_test(initial_id, ctx),
+                Some(true)
+            );
+            assert_eq!(
+                panel.send_now_button_disabled_for_test(followup_id, ctx),
+                Some(true)
+            );
+        });
+
+        // The agent picks up the prompt — the locked initial row is removed.
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.remove_initial_cloud_mode_row(conversation_id, ctx);
+        });
+
+        // The remaining follow-up row's "send now" is re-enabled.
+        panel.read(&app, |panel, ctx| {
+            assert_eq!(
+                panel.send_now_button_disabled_for_test(followup_id, ctx),
+                Some(false)
+            );
         });
     });
 }
