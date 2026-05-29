@@ -6,9 +6,14 @@
 //! 状态直接持有在视图内（单实例、无共享），不引入单独的 Model 间接层——待后续
 //! 出现跨视图共享需求时再抽。
 
+use std::ops::Range;
 use std::sync::Arc;
 
+use async_channel::Sender;
 use pathfinder_color::ColorU;
+use warpui::elements::shimmering_text::{
+    ShimmerConfig, ShimmeringTextElement, ShimmeringTextStateHandle,
+};
 use warpui::elements::{
     resizable_state_handle, Container, CornerRadius, CrossAxisAlignment, DragBarSide, Element, Empty,
     Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
@@ -25,8 +30,11 @@ use super::row_canvas::GitGraphRowCanvas;
 use crate::appearance::Appearance;
 use crate::ui_components::buttons::icon_button;
 
-/// 首屏加载的提交数上限（分页懒加载留待后续）。
+/// 每页加载的提交数。
 const COMMIT_PAGE_SIZE: usize = 200;
+
+/// 距离列表末尾还剩这么多行时就预取下一页（无限滚动的提前量，避免滚到底才触发）。
+const LOAD_MORE_PREFETCH: usize = 10;
 
 /// 视图自身的 action。
 #[derive(Debug, Clone)]
@@ -35,8 +43,6 @@ pub(crate) enum GitGraphAction {
     SelectCommit(usize),
     /// 手动重新加载当前仓库的图谱。
     Refresh,
-    /// 加载下一页提交（追加到列表末尾）。
-    LoadMore,
     /// 关闭详情区（取消选中）。
     CloseDetail,
 }
@@ -89,8 +95,10 @@ pub(crate) struct GitGraphView {
     has_more: bool,
     /// 是否正在加载下一页（防重入）。
     loading_more: bool,
-    /// "加载更多"行的鼠标状态。
-    load_more_mouse_state: MouseStateHandle,
+    /// 列表可见行区间的发送端：[`UniformList`] 上报可见区间，驱动滚动到底自动加载。
+    visible_range_sender: Sender<Range<usize>>,
+    /// 底部"加载更多"指示行的闪烁动画状态。
+    loading_shimmer: ShimmeringTextStateHandle,
     /// 详情区高度的可拖动状态。
     detail_resizable_state: ResizableStateHandle,
     /// 详情区关闭按钮的鼠标状态。
@@ -106,7 +114,15 @@ fn empty_layout() -> GraphLayout {
 }
 
 impl GitGraphView {
-    pub(crate) fn new(_ctx: &mut ViewContext<Self>) -> Self {
+    pub(crate) fn new(ctx: &mut ViewContext<Self>) -> Self {
+        // UniformList 通过此 channel 上报当前可见行区间，触发滚动到底的自动加载。
+        let (visible_range_sender, visible_range_receiver) = async_channel::unbounded();
+        let _ = ctx.spawn_stream_local(
+            visible_range_receiver,
+            Self::on_visible_range,
+            |_, _| {},
+        );
+
         Self {
             working_dir: None,
             commits: Arc::new(Vec::new()),
@@ -120,7 +136,8 @@ impl GitGraphView {
             refresh_mouse_state: MouseStateHandle::default(),
             has_more: false,
             loading_more: false,
-            load_more_mouse_state: MouseStateHandle::default(),
+            visible_range_sender,
+            loading_shimmer: ShimmeringTextStateHandle::new(),
             detail_resizable_state: resizable_state_handle(220.0),
             detail_close_mouse_state: MouseStateHandle::default(),
         }
@@ -255,6 +272,14 @@ impl GitGraphView {
         }
     }
 
+    /// [`UniformList`] 上报的当前可见行区间回调。可见区间逼近列表末尾且还有更多页时，
+    /// 自动加载下一页（无限滚动）。`load_more` 自身做了防重入与"无更多页"的保护。
+    fn on_visible_range(&mut self, range: Range<usize>, ctx: &mut ViewContext<Self>) {
+        if range.end + LOAD_MORE_PREFETCH >= self.commits.len() {
+            self.load_more(ctx);
+        }
+    }
+
     /// 选中某行并异步加载其详情。
     fn select_commit(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
         let Some(commit) = self.commits.get(index) else {
@@ -294,14 +319,14 @@ impl GitGraphView {
     }
 
     /// 渲染可点击的提交列表（每行 = 泳道 + 文字，包一层 [`Hoverable`] 派发选中）。
-    /// 若可能还有更多提交，末尾追加一行"加载更多"。
+    /// 渲染提交列表。还有更多页时末尾追加一行带闪烁动画的"加载更多"指示，滚动到它即
+    /// 自动加载下一页（无限滚动）。
     fn render_commit_list(&self) -> Box<dyn Element> {
         let commits = self.commits.clone();
         let layout = self.layout.clone();
         let mouse_states = self.row_mouse_states.clone();
         let has_more = self.has_more;
-        let loading_more = self.loading_more;
-        let load_more_state = self.load_more_mouse_state.clone();
+        let shimmer = self.loading_shimmer.clone();
         let commit_count = commits.len();
         let total = commit_count + usize::from(has_more);
 
@@ -323,24 +348,15 @@ impl GitGraphView {
                                 .finish(),
                         )
                     } else {
-                        // 末行：加载更多。
-                        let label = if loading_more { "Loading more…" } else { "Load more" };
-                        let element = Container::new(text_line(label.to_string(), appearance, true))
-                            .with_horizontal_padding(12.)
-                            .with_vertical_padding(4.)
-                            .finish();
-                        Some(
-                            Hoverable::new(load_more_state.clone(), move |_| element)
-                                .on_click(move |ctx, _, _| {
-                                    ctx.dispatch_typed_action(GitGraphAction::LoadMore);
-                                })
-                                .finish(),
-                        )
+                        // 末行：加载更多指示（闪烁动画，滚动到此自动触发加载）。
+                        Some(render_loading_more_row(appearance, shimmer.clone()))
                     }
                 })
                 .collect();
             rows.into_iter()
-        });
+        })
+        // 上报可见行区间，逼近末尾时由 on_visible_range 触发自动加载。
+        .notify_visible_items(self.visible_range_sender.clone());
         list.finish()
     }
 
@@ -453,6 +469,32 @@ fn text_line(text: String, appearance: &Appearance, dim: bool) -> Box<dyn Elemen
     };
     Text::new_inline(text, appearance.ui_font_family(), appearance.ui_font_size())
         .with_color(color.into())
+        .finish()
+}
+
+/// 渲染列表底部的"加载更多"指示行：闪烁文字动画（[`ShimmeringTextElement`] 在 paint
+/// 内自驱重绘，约 30fps），仅在还有更多页时出现，滚动到它即触发自动加载。
+fn render_loading_more_row(
+    appearance: &Appearance,
+    shimmer: ShimmeringTextStateHandle,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let bg = theme.background();
+    let base_color = theme.sub_text_color(bg).into_solid();
+    let shimmer_color = theme.foreground().into_solid();
+    let text = ShimmeringTextElement::new(
+        "Loading more commits…",
+        appearance.ui_font_family(),
+        appearance.ui_font_size(),
+        base_color,
+        shimmer_color,
+        ShimmerConfig::default(),
+        shimmer,
+    )
+    .finish();
+    Container::new(text)
+        .with_horizontal_padding(12.)
+        .with_vertical_padding(4.)
         .finish()
 }
 
@@ -654,7 +696,6 @@ impl TypedActionView for GitGraphView {
         match action {
             GitGraphAction::SelectCommit(index) => self.select_commit(*index, ctx),
             GitGraphAction::Refresh => self.reload(ctx),
-            GitGraphAction::LoadMore => self.load_more(ctx),
             GitGraphAction::CloseDetail => {
                 self.clear_selection();
                 ctx.notify();
