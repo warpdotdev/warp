@@ -397,10 +397,13 @@ inline. See #11.6.
     against the new map. Visible mode indicators (cursor shape, vim-mode
     plugin status text in the prompt) remain whatever the shell already
     drew; Warp does not add its own.
-    - **Open question:** what's the canonical signal for mode change across
-      the three shells? Tech spec must answer this concretely. If no
-      reliable signal exists for one shell, document the fallback (poll on
-      every prompt redraw, etc.).
+    - **Resolved (TECH §"#13"):** an in-app state machine drives
+      mode tracking. Initial mode comes from the bootstrap payload
+      (zsh `$KEYMAP`, bash `bind -v`, fish `$fish_bind_mode`);
+      each `Precmd` payload is authoritative for resync; between
+      prompts the widget dispatcher updates `active_keymap`
+      synchronously based on the dispatched widget (vi-cmd-mode →
+      ViCommand, vi-insert → ViInsert, etc.).
 
 ### Precedence and conflicts
 
@@ -492,8 +495,13 @@ inline. See #11.6.
 22. The AI prompt input editor does not honor shell bindkeys by default —
     it is not a shell, and shell vi/emacs muscle memory there would
     conflict with the AI input's own conventions.
-    - **Open question:** add an opt-in setting "Use my shell bindings in AI
-      prompts too"? Default off either way. Resolve before implementation.
+    - **Resolved (TECH §"#22"):** v1 ships with no AI-prompt
+      opt-in. The matcher's `BindingOrigin::Contextual` tier only
+      activates on tabs whose focus is the shell command input
+      editor. The opt-in setting and its dependent
+      `ClassifierGate` (#22.5) are tracked as a follow-up — they
+      must ship together since #22 without the gate ships the
+      flicker bug.
 
 22.5. **Interaction with the shell-vs-natural-language classifier.**
     Warp's agent conversation input runs a per-keystroke classifier that
@@ -565,9 +573,10 @@ inline. See #11.6.
 ### Settings, opt-out, and discoverability
 
 23. The feature is on by default for supported shells once it ships.
-    - **Open question:** ship behind a feature flag for staged rollout
-      (default off → dogfood → preview → stable), or default on from
-      release? Tech spec / release plan to decide.
+    - **Resolved (TECH §5):** gated by
+      `FeatureFlag::HonorShellBindkeys` for staged rollout
+      (default off → dogfood → preview → stable). Once stable
+      the flag is on by default for supported shells.
 
 24. A single setting "Honor shell keybindings in input editor" lives under
     the Keybindings section of settings. Toggling it off immediately
@@ -623,11 +632,25 @@ inline. See #11.6.
 Collected from inline references above plus a few cross-cutting ones the
 tech spec must resolve:
 
-- v1 handling of user-defined named widgets whose body is shell code (#11).
-- Canonical signal for vi-mode transitions across zsh, bash, and fish (#13).
-- AI prompt input opt-in for shell bindings (#22).
-- Default-on vs feature-flagged staged rollout (#23).
-- (Resolved) Telemetry redaction policy for widget names — see #11; the
-  rule is allowlist-or-bucket, never raw user-defined names.
-- (Resolved) Default keystroke for `agent-input.lock-mode` (#22.5d):
-  `Ctrl-Alt-L`, user-rebindable via the editable Warp keymap.
+- (Resolved) v1 handling of user-defined named widgets whose
+  body is shell code (#11): honored via Category C pass-through
+  (TECH §3, §6); only built-in widgets without a Warp equivalent
+  land in the `Unsupported` fallthrough path.
+- (Resolved) Canonical signal for vi-mode transitions across
+  zsh, bash, and fish (#13): in-app state machine driven by
+  dispatched widget transitions, with bootstrap and `Precmd`
+  payloads providing initial state and resync. See TECH §"#13".
+- (Resolved) AI prompt input opt-in for shell bindings (#22):
+  v1 ships with no opt-in; the `Contextual` tier doesn't
+  activate on the AI prompt. The opt-in plus its dependent
+  `ClassifierGate` (#22.5) are tracked as a follow-up that
+  must ship together.
+- (Resolved) Default-on vs feature-flagged staged rollout
+  (#23): gated by `FeatureFlag::HonorShellBindkeys`
+  (default off → dogfood → preview → stable). See TECH §5.
+- (Resolved) Telemetry redaction policy for widget names — see
+  #11; the rule is allowlist-or-bucket, never raw user-defined
+  names.
+- (Resolved) Default keystroke for `agent-input.lock-mode`
+  (#22.5d): `Ctrl-Alt-L`, user-rebindable via the editable
+  Warp keymap.
