@@ -7165,10 +7165,18 @@ impl Workspace {
         ctx.notify();
     }
 
-    /// Reorders the tab at `from_index` to `to_index` (`Vec::remove` +
-    /// `Vec::insert` semantics), keeping the active-tab tracker pointed at the
-    /// same tab across the shift. Used to hop a tab over an entire group in a
-    /// single move.
+    /// Moves the tab at `from_index` so it ends up at `to_index`, sliding the
+    /// tabs in between over to fill the gap. This is a `Vec::remove` +
+    /// `Vec::insert` (not a `swap`), so it works for arbitrary distances, such
+    /// as hopping a tab over a whole group, not just adjacent slots. `to_index`
+    /// is an index into the current list and is exactly where the moved tab
+    /// ends up.
+    ///
+    /// `active_tab_index` stores a position, not a reference to a tab, so after
+    /// reordering we recompute it to keep the same tab visually active.
+    /// Removing `from` then inserting at `to` slides every tab strictly between
+    /// the two endpoints by one slot toward `from`; tabs outside that span keep
+    /// their index.
     fn hop_tab_to_index(
         &mut self,
         from_index: usize,
@@ -7183,16 +7191,20 @@ impl Workspace {
 
         let old_active = self.active_tab_index;
         self.active_tab_index = if old_active == from_index {
+            // The active tab is the one we just moved; it follows to `to_index`.
             to_index
         } else if from_index < to_index {
+            // Forward move: tabs in `(from_index, to_index]` slid left by one.
             if old_active > from_index && old_active <= to_index {
                 old_active - 1
             } else {
                 old_active
             }
         } else if old_active >= to_index && old_active < from_index {
+            // Backward move: tabs in `[to_index, from_index)` slid right by one.
             old_active + 1
         } else {
+            // Active tab is outside the affected span; its index is unchanged.
             old_active
         };
 
@@ -13056,39 +13068,52 @@ impl Workspace {
         });
     }
 
-    // Move tab, given tab index, left or right. When the adjacent neighbor
-    // belongs to a *different* group, hop over that group's entire run so the
-    // tab never lands inside it (which would break the group's contiguous
-    // range). Moving within the tab's own group still shifts by one slot.
+    /// Moves the tab at `index` one slot left/right, where a "slot" is either a
+    /// single tab or an entire adjacent group. If the neighbor in the move
+    /// direction belongs to a *different* group, the tab hops over that whole
+    /// group so it never lands inside the group's contiguous run. Moving past an
+    /// ungrouped tab, or reordering within the tab's own group, is an ordinary
+    /// one-slot move.
     fn move_tab(&mut self, index: usize, direction: TabMovement, ctx: &mut ViewContext<Self>) {
         let tabs_len = self.tabs.len();
+        // The group the moved tab belongs to (if any), so we can distinguish
+        // "reorder within my own group" from "hop over a different group".
         let moved_group_id = self.tabs.get(index).and_then(|tab| tab.group_id);
         let target = match direction {
             TabMovement::Left if index > 0 => {
                 let neighbor = index - 1;
                 match self.tabs[neighbor].group_id {
+                    // A different group sits to the left: target its first
+                    // member so the tab lands just before the whole group.
                     Some(group_id) if Some(group_id) != moved_group_id => {
                         group_member_index_range(&self.tabs, group_id)
                             .map(|(first, _)| first)
                             .unwrap_or(neighbor)
                     }
+                    // Ungrouped neighbor, or a member of our own group: step one.
                     Some(_) | None => neighbor,
                 }
             }
             TabMovement::Right if index < tabs_len - 1 => {
                 let neighbor = index + 1;
                 match self.tabs[neighbor].group_id {
+                    // A different group sits to the right: target its last
+                    // member; the remove+insert leaves the tab just past it.
                     Some(group_id) if Some(group_id) != moved_group_id => {
                         group_member_index_range(&self.tabs, group_id)
                             .map(|(_, last)| last)
                             .unwrap_or(neighbor)
                     }
+                    // Ungrouped neighbor, or a member of our own group: step one.
                     Some(_) | None => neighbor,
                 }
             }
+            // Already at the start/end of the list: nothing to move past.
             TabMovement::Left | TabMovement::Right => return,
         };
 
+        // `hop_tab_to_index` keeps the same tab active across the move, so we
+        // only capture whether the moved tab was the active one for telemetry.
         let moving_active_tab = index == self.active_tab_index;
         self.hop_tab_to_index(index, target, ctx);
 
