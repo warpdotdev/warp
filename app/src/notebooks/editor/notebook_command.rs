@@ -450,7 +450,7 @@ impl NotebookCommand {
         let appearance = Appearance::as_ref(ctx);
         let font_settings = FontSettings::as_ref(ctx);
         let terminal_colors_normal = appearance.theme().terminal_colors().normal.to_owned();
-        let background_color = rich_text_styles(appearance, font_settings)
+        let background_color = rich_text_styles(appearance, font_settings, ctx)
             .code_background
             .start_color();
 

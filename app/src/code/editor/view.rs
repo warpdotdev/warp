@@ -79,6 +79,7 @@ use crate::editor::InteractionState;
 use crate::features::FeatureFlag;
 use crate::notebooks::editor::rich_text_styles;
 use crate::settings::{AppEditorSettings, CodeEditorLineNumberMode, FontSettings};
+use crate::terminal::ligature_settings::should_use_ligature_rendering;
 use crate::view_components::find::FindDirection;
 
 mod actions;
@@ -301,6 +302,7 @@ impl CodeEditorView {
             appearance_handle.as_ref(ctx),
             font_settings_handle.as_ref(ctx),
             render_options.line_height_override,
+            ctx,
         );
         ctx.subscribe_to_model(&appearance_handle, |me, _, _, ctx| {
             me.handle_appearance_or_font_change(ctx);
@@ -1347,6 +1349,7 @@ impl CodeEditorView {
             Appearance::as_ref(ctx),
             FontSettings::as_ref(ctx),
             self.display_options.line_height_override,
+            ctx,
         );
         self.model.update(ctx, move |model, ctx| {
             model.handle_appearance_or_font_change(new_styles, ctx);
@@ -2414,8 +2417,9 @@ pub fn code_text_styles(
     appearance: &Appearance,
     font_settings: &FontSettings,
     line_height_override: Option<f32>,
+    app: &AppContext,
 ) -> RichTextStyles {
-    let mut styling = rich_text_styles(appearance, font_settings);
+    let mut styling = rich_text_styles(appearance, font_settings, app);
     let theme = appearance.theme();
     styling.base_text = ParagraphStyles {
         font_size: appearance.monospace_font_size(),
@@ -2425,6 +2429,7 @@ pub fn code_text_styles(
         text_color: theme.main_text_color(theme.background()).into_solid(),
         baseline_ratio: 0.8,
         fixed_width_tab_size: Some(4),
+        disable_ligatures: !should_use_ligature_rendering(app),
     };
     styling.block_spacings.text = BlockSpacing {
         margin: Margin::uniform(0.).with_left(1.),

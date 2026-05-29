@@ -106,6 +106,7 @@ fn test_end_to_end() {
             text_color: ColorU::white(),
             baseline_ratio: TEST_BASELINE_OFFSET,
             fixed_width_tab_size: None,
+            disable_ligatures: false,
         };
         let inline_code = InlineCodeStyle {
             font_family: font_cache

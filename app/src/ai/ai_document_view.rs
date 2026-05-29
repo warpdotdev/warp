@@ -329,7 +329,7 @@ impl AIDocumentView {
                 ctx.add_model(|ctx| {
                     let appearance = Appearance::as_ref(ctx);
                     let font_settings = FontSettings::as_ref(ctx);
-                    let styles = rich_text_styles(appearance, font_settings);
+                    let styles = rich_text_styles(appearance, font_settings, ctx);
                     let mut model = NotebooksEditorModel::new_unbound(styles, ctx);
                     model.set_default_mermaid_display_mode(MarkdownDisplayMode::Rendered, ctx);
                     model

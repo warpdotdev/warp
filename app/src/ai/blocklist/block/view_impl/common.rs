@@ -2359,7 +2359,7 @@ fn is_supported_blocklist_image_source(source: &str) -> bool {
 }
 
 fn visual_section_height(app: &AppContext) -> f32 {
-    rich_text_styles(Appearance::as_ref(app), FontSettings::as_ref(app))
+    rich_text_styles(Appearance::as_ref(app), FontSettings::as_ref(app), app)
         .base_line_height()
         .as_f32()
         * BLOCKLIST_VISUAL_SECTION_HEIGHT_LINE_MULTIPLIER
@@ -2386,7 +2386,7 @@ fn render_table_section(
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     let table_appearance = markdown_table_appearance(appearance);
-    let notebook_styles = rich_text_styles(appearance, FontSettings::as_ref(app));
+    let notebook_styles = rich_text_styles(appearance, FontSettings::as_ref(app), app);
     let table_font_family = appearance.ai_font_family();
     let table_font_size = appearance.monospace_font_size();
     let body_font_weight = appearance.monospace_font_weight();

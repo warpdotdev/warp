@@ -108,7 +108,7 @@ fn initialize_editor(
         let window_id = ctx.window_id();
         let links = ctx.add_model(|ctx| NotebookLinks::new(SessionSource::Active(window_id), ctx));
         let editor_model = ctx.add_model(|ctx| {
-            let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
+            let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx), ctx);
             NotebooksEditorModel::new(styles, window_id, ctx)
         });
         let editor = ctx.add_typed_action_view(|ctx| {

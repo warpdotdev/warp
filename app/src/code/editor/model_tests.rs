@@ -20,7 +20,7 @@ fn initialize_deps(app: &mut App) {
 
 fn mock_model(app: &mut App, text: &str, version: ContentVersion) -> ModelHandle<CodeEditorModel> {
     app.add_model(|ctx| {
-        let styles = code_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx), None);
+        let styles = code_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx), None, ctx);
         let mut model = CodeEditorModel::new(styles, None, false, None, ctx);
         let state = InitialBufferState::plain_text(text).with_version(version);
         model.reset_content(state, ctx);
@@ -36,7 +36,7 @@ fn mock_model_with_diff(
     version: ContentVersion,
 ) -> ModelHandle<CodeEditorModel> {
     app.add_model(|ctx| {
-        let styles = code_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx), None);
+        let styles = code_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx), None, ctx);
         let mut model = CodeEditorModel::new(styles, None, false, None, ctx);
         let state = InitialBufferState::plain_text(current_text).with_version(version);
         model.reset_content(state, ctx);

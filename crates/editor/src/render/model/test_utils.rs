@@ -150,6 +150,7 @@ pub const TEST_STYLES: RichTextStyles = RichTextStyles {
         text_color: WHITE,
         baseline_ratio: TEST_BASELINE_OFFSET,
         fixed_width_tab_size: None,
+        disable_ligatures: false,
     },
     code_text: ParagraphStyles {
         font_family: FamilyId(0),
@@ -159,6 +160,7 @@ pub const TEST_STYLES: RichTextStyles = RichTextStyles {
         text_color: WHITE,
         baseline_ratio: TEST_BASELINE_OFFSET,
         fixed_width_tab_size: Some(4),
+        disable_ligatures: false,
     },
     code_background: Fill::None,
     embedding_background: Fill::None,
@@ -170,6 +172,7 @@ pub const TEST_STYLES: RichTextStyles = RichTextStyles {
         text_color: WHITE,
         baseline_ratio: TEST_BASELINE_OFFSET,
         fixed_width_tab_size: Some(4),
+        disable_ligatures: false,
     },
     code_border: Border::new(0.),
     placeholder_color: WHITE,

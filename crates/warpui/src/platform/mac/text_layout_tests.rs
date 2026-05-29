@@ -29,6 +29,7 @@ fn test_char_indices_ligatures() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            disable_ligatures: false,
         },
         &[
             (
@@ -67,6 +68,57 @@ fn test_char_indices_ligatures() -> Result<()> {
 }
 
 #[test]
+fn test_disable_ligatures_keeps_glyphs_separate() -> Result<()> {
+    let mut font_db = FontDB::new();
+    let zapfino = font_db.load_from_system("Zapfino")?;
+    let menlo = font_db.load_from_system("Menlo")?;
+
+    let text = "This is, m𐍈re 𐍈r less, Zapfino!𐍈";
+    let line = layout_line(
+        text,
+        LineStyle {
+            font_size: 16.0,
+            line_height_ratio: 1.2,
+            baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+            fixed_width_tab_size: None,
+            disable_ligatures: true,
+        },
+        &[
+            (
+                0..9,
+                StyleAndFont::new(zapfino, Properties::default(), TextStyle::new()),
+            ),
+            (
+                9..22,
+                StyleAndFont::new(menlo, Properties::default(), TextStyle::new()),
+            ),
+            (
+                22..text.encode_utf16().count(),
+                StyleAndFont::new(zapfino, Properties::default(), TextStyle::new()),
+            ),
+        ],
+        &font_db,
+        ClipConfig::default(),
+    );
+
+    // With ligatures disabled, "Zapfino" should NOT collapse into a single glyph: every
+    // character keeps its own index, so the sequence runs contiguously from 22 through 31
+    // instead of jumping from 23 directly to 30 (see `test_char_indices_ligatures`).
+    let indices: Vec<usize> = line
+        .runs
+        .iter()
+        .flat_map(|r| r.glyphs.iter())
+        .map(|g| g.index)
+        .collect();
+    assert!(
+        indices.contains(&24) && indices.contains(&29),
+        "expected ligature-free Zapfino glyphs (indices 24..=29 present); got {:?}",
+        indices,
+    );
+    Ok(())
+}
+
+#[test]
 fn test_caret_positions_ligatures() -> Result<()> {
     // There's some overlap between caret positions and the character indices we
     // store in glyphs. However, a single glyph may have multiple caret positions
@@ -87,6 +139,7 @@ fn test_caret_positions_ligatures() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            disable_ligatures: false,
         },
         &[
             (
@@ -211,6 +264,7 @@ fn test_emoji_caret_positions() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            disable_ligatures: false,
         },
         &[(
             0..12,
@@ -265,6 +319,7 @@ fn test_bidi_caret_positions() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            disable_ligatures: false,
         },
         &[(
             0..text.encode_utf16().count(),
@@ -318,6 +373,7 @@ fn test_layout_text_ligatures() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            disable_ligatures: false,
         },
         &[
             (
@@ -377,6 +433,7 @@ fn test_layout_text_first_line_head_indent_ligatures() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            disable_ligatures: false,
         },
         &[
             (
@@ -443,6 +500,7 @@ fn test_tab_stops_affect_line_width() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            disable_ligatures: false,
         },
         &[(0..strings.chars().count(), style)],
         &font_db,
@@ -456,6 +514,7 @@ fn test_tab_stops_affect_line_width() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: Some(tab_size),
+            disable_ligatures: false,
         },
         &[(0..tabbed.chars().count(), style)],
         &font_db,
@@ -500,6 +559,7 @@ fn test_tab_stops_do_not_drift_over_long_runs() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            disable_ligatures: false,
         },
         &[(0..strings.chars().count(), style)],
         &font_db,
@@ -516,6 +576,7 @@ fn test_tab_stops_do_not_drift_over_long_runs() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: Some(tab_size),
+            disable_ligatures: false,
         },
         &[(0..tabbed.chars().count(), style)],
         &font_db,
@@ -551,6 +612,7 @@ fn test_layout_text_large_first_line_head_indent_ligatures() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            disable_ligatures: false,
         },
         &[
             (
@@ -609,6 +671,7 @@ fn test_layout_text_last_line_clipped_ligatures() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            disable_ligatures: false,
         },
         &[
             (

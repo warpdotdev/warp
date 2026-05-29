@@ -13,6 +13,7 @@ fn test_empty_line() {
                 line_height_ratio: 1.,
                 baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
                 fixed_width_tab_size: None,
+                disable_ligatures: false,
             };
             let styles = [];
 
@@ -52,6 +53,7 @@ fn test_empty_text_frame() {
                 line_height_ratio: 1.,
                 baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
                 fixed_width_tab_size: None,
+                disable_ligatures: false,
             };
             let styles = [];
 
@@ -96,6 +98,7 @@ fn test_cache_key_includes_fixed_width_tab_size() {
         font_size: OrderedFloat(12.),
         line_height_ratio: OrderedFloat(1.),
         fixed_width_tab_size: Some(4),
+        disable_ligatures: false,
         style_runs,
         max_width: OrderedFloat(100.),
         max_height: None,

@@ -85,6 +85,10 @@ pub struct LineStyle {
     ///
     /// `None` leaves tab stop behavior up to the backend defaults.
     pub fixed_width_tab_size: Option<u8>,
+    /// When `true`, the shaper must omit ligature substitutions. Matches the
+    /// `appearance.text.ligature_rendering_enabled` setting; consumed by the
+    /// per-platform `TextLayoutSystem` implementations.
+    pub disable_ligatures: bool,
 }
 
 pub struct WindowOptions {

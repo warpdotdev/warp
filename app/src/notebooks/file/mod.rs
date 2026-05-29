@@ -244,7 +244,7 @@ impl FileNotebookView {
         let view_position_id = format!("file_notebook_view_{}", ctx.view_id());
 
         let editor_model = ctx.add_model(|ctx| {
-            let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
+            let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx), ctx);
             let mut model = NotebooksEditorModel::new(styles, window_id, ctx);
             model.set_default_mermaid_display_mode(MarkdownDisplayMode::Rendered, ctx);
             model

@@ -810,7 +810,7 @@ impl AIDocumentModel {
             let appearance = Appearance::as_ref(ctx);
             let font_settings = FontSettings::as_ref(ctx);
             // Use the same rich text styles as notebooks for consistency
-            let styles = rich_text_styles(appearance, font_settings);
+            let styles = rich_text_styles(appearance, font_settings, ctx);
 
             let mut model = NotebooksEditorModel::new_unbound(styles, ctx);
             model.set_default_mermaid_display_mode(MarkdownDisplayMode::Rendered, ctx);

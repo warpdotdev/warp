@@ -1296,7 +1296,7 @@ impl RichTextEditorView {
     fn handle_appearance_or_font_change(&mut self, ctx: &mut ViewContext<Self>) {
         let font_settings = FontSettings::as_ref(ctx);
         let appearance = Appearance::as_ref(ctx);
-        let new_styles = rich_text_styles(appearance, font_settings);
+        let new_styles = rich_text_styles(appearance, font_settings, ctx);
         self.model.update(ctx, move |model, ctx| {
             model.update_rich_text_styles(new_styles, ctx);
         });

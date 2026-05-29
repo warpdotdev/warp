@@ -518,7 +518,7 @@ fn create_comment_markdown_editor_inner<V>(
 where
     V: View,
 {
-    let rich_text_styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
+    let rich_text_styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx), ctx);
     let window_id = ctx.window_id();
     let parent_view_id = ctx.view_id();
 

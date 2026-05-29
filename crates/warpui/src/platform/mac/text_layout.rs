@@ -25,7 +25,8 @@ use core_text::framesetter::CTFramesetter;
 use core_text::line::{CTLine, CTLineRef};
 use core_text::run::{CTRun, CTRunRef};
 use core_text::string_attributes::{
-    kCTFontAttributeName, kCTKernAttributeName, kCTParagraphStyleAttributeName,
+    kCTFontAttributeName, kCTKernAttributeName, kCTLigatureAttributeName,
+    kCTParagraphStyleAttributeName,
 };
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
@@ -517,6 +518,14 @@ fn create_attributed_string(
         let attributes_pairs = text_style_as_cf_type_pairs(&style_and_font.style);
         unsafe {
             attributed_string.set_attribute(cf_range, kCTFontAttributeName, &native_font);
+
+            if line_style.disable_ligatures {
+                attributed_string.set_attribute(
+                    cf_range,
+                    kCTLigatureAttributeName,
+                    &CFNumber::from(0_i32),
+                );
+            }
 
             // The way the system computes line height can be slightly different from the way we compute line height.
             // See https://www.zsiegel.com/2012/10/23/Core-Text-Calculating-line-heights for how the system computes line height.

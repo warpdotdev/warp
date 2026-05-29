@@ -934,6 +934,16 @@ impl platform::FontDB for FontDB {
     }
 }
 
+fn shaping_for(line_style: &LineStyle) -> Shaping {
+    // `Shaping::Basic` skips OpenType GSUB/GPOS, which includes the `liga`/`calt` substitutions
+    // that turn `==`, `===`, `!=`, etc. into glyphs. `Shaping::Advanced` is the default.
+    if line_style.disable_ligatures {
+        Shaping::Basic
+    } else {
+        Shaping::Advanced
+    }
+}
+
 impl platform::TextLayoutSystem for TextLayoutSystem {
     fn layout_line(
         &self,
@@ -960,11 +970,12 @@ impl platform::TextLayoutSystem for TextLayoutSystem {
         );
 
         let tab_width = line_style.fixed_width_tab_size.unwrap_or(4).into();
+        let shaping = shaping_for(&line_style);
         let shape_line = ShapeLine::new(
             self.font_store.write().deref_mut(),
             text.as_str(),
             &attrs_list,
-            Shaping::Advanced,
+            shaping,
             tab_width,
         );
 
@@ -1019,6 +1030,7 @@ impl platform::TextLayoutSystem for TextLayoutSystem {
         let mut font_store = self.font_store.write();
 
         let tab_width = line_style.fixed_width_tab_size.unwrap_or(4).into();
+        let shaping = shaping_for(&line_style);
         let mut num_bytes_seen = 0;
         let layouts = BidiParagraphs::new(text).flat_map(|paragraph| {
             let following_paragraph_text = &text[num_bytes_seen + paragraph.len()..];
@@ -1054,7 +1066,7 @@ impl platform::TextLayoutSystem for TextLayoutSystem {
                 font_store.deref_mut(),
                 paragraph,
                 &current_attrs_list,
-                Shaping::Advanced,
+                shaping,
                 tab_width,
             );
 

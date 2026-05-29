@@ -17,8 +17,10 @@ use warp_util::user_input::UserInput;
 use warpui::elements::{Border, ListIndentLevel};
 use warpui::fonts::FamilyId;
 use warpui::ui_components::checkbox::HOVER_BACKGROUND_COLOR;
+use warpui::AppContext;
 
 use crate::appearance::Appearance;
+use crate::terminal::ligature_settings::should_use_ligature_rendering;
 use crate::notebooks::editor::embedded_item::EmbeddedWorkflow;
 use crate::settings::{derived_notebook_font_size, FontSettings};
 use crate::themes::theme::Fill;
@@ -198,12 +200,17 @@ pub(crate) fn markdown_table_style(
 }
 
 /// Build [`RichTextStyles`] based on the current [`Appearance`].
-pub fn rich_text_styles(appearance: &Appearance, font_settings: &FontSettings) -> RichTextStyles {
+pub fn rich_text_styles(
+    appearance: &Appearance,
+    font_settings: &FontSettings,
+    app: &AppContext,
+) -> RichTextStyles {
     let line_height_ratio = NOTEBOOK_LINE_HEIGHT_RATIO;
     let baseline_ratio = NOTEBOOK_BASELINE_RATIO;
     let theme = appearance.theme();
     let inline_font_color: ColorU = theme.terminal_colors().normal.red.into();
     let font_size = derived_notebook_font_size(font_settings);
+    let disable_ligatures = !should_use_ligature_rendering(app);
 
     let base_text = ParagraphStyles {
         font_size,
@@ -213,6 +220,7 @@ pub fn rich_text_styles(appearance: &Appearance, font_settings: &FontSettings) -
         text_color: theme.main_text_color(theme.background()).into_solid(),
         baseline_ratio,
         fixed_width_tab_size: None,
+        disable_ligatures,
     };
 
     RichTextStyles {
@@ -225,6 +233,7 @@ pub fn rich_text_styles(appearance: &Appearance, font_settings: &FontSettings) -
             text_color: theme.main_text_color(theme.background()).into_solid(),
             baseline_ratio,
             fixed_width_tab_size: Some(4),
+            disable_ligatures,
         },
         code_background: theme.background().into(),
         embedding_background: theme.surface_2().into(),
@@ -236,6 +245,7 @@ pub fn rich_text_styles(appearance: &Appearance, font_settings: &FontSettings) -
             text_color: theme.main_text_color(theme.surface_2()).into_solid(),
             baseline_ratio,
             fixed_width_tab_size: Some(4),
+            disable_ligatures,
         },
         code_border: Border::all(1.).with_border_fill(theme.surface_3()),
         placeholder_color: appearance
