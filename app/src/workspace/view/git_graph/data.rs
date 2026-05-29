@@ -194,6 +194,81 @@ pub(crate) async fn load_commit_graph(
     Ok(parse_commit_log(&stdout))
 }
 
+/// 一个提交涉及的单个变更文件及其增删行数。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChangedFile {
+    pub path: String,
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+/// 选中提交的详情：committer 信息、完整提交信息、变更文件列表。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CommitDetail {
+    pub committer_name: String,
+    pub committer_time: i64,
+    /// 完整提交信息（`%B`，含标题与正文）。
+    pub message: String,
+    pub files: Vec<ChangedFile>,
+}
+
+/// 加载单个提交的详情。
+#[cfg(not(target_family = "wasm"))]
+pub(crate) async fn load_commit_detail(repo_root: &Path, hash: &str) -> Result<CommitDetail> {
+    // 用 `%x1e` 把 format 头部与随后的 `--numstat` 行分隔开。
+    let args = [
+        "show",
+        "--numstat",
+        "--no-color",
+        "--format=%cn%x1f%ct%x1f%B%x1e",
+        hash,
+    ];
+    let stdout = warp_util::git::run_git_command(repo_root, &args).await?;
+    Ok(parse_commit_detail(&stdout))
+}
+
+/// 解析 `git show --numstat --format=%cn%x1f%ct%x1f%B%x1e` 的输出。
+pub(crate) fn parse_commit_detail(stdout: &str) -> CommitDetail {
+    let (header, numstat) = stdout.split_once(RECORD_SEP).unwrap_or((stdout, ""));
+    let mut fields = header.splitn(3, UNIT_SEP);
+    let committer_name = fields.next().unwrap_or("").to_string();
+    let committer_time = fields
+        .next()
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .unwrap_or(0);
+    let message = fields.next().unwrap_or("").trim().to_string();
+
+    CommitDetail {
+        committer_name,
+        committer_time,
+        message,
+        files: parse_numstat(numstat),
+    }
+}
+
+/// 解析 `--numstat` 输出（每行 `additions\tdeletions\tpath`；二进制文件为 `-`）。
+fn parse_numstat(stdout: &str) -> Vec<ChangedFile> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() {
+                return None;
+            }
+            let mut parts = line.splitn(3, '\t');
+            let additions = parts.next()?;
+            let deletions = parts.next()?;
+            let path = parts.next()?.to_string();
+            Some(ChangedFile {
+                path,
+                // 二进制文件的列为 "-"，按 0 处理。
+                additions: additions.parse::<u32>().unwrap_or(0),
+                deletions: deletions.parse::<u32>().unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 #[path = "data_tests.rs"]
 mod tests;

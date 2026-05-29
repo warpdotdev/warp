@@ -219,7 +219,7 @@ impl LeftPanelView {
         };
         let warp_drive_view = ctx.add_typed_action_view(DrivePanel::new);
         let conversation_list_view = ctx.add_typed_action_view(ConversationListView::new);
-        let git_graph_view = ctx.add_view(GitGraphView::new);
+        let git_graph_view = ctx.add_typed_action_view(GitGraphView::new);
 
         ctx.subscribe_to_view(&warp_drive_view, |_me, _, event, ctx| {
             ctx.emit(LeftPanelEvent::WarpDrive(event.clone()));

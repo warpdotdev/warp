@@ -154,3 +154,46 @@ fn parse_decorate_ignores_unknown_tokens() {
     assert_eq!(refs.len(), 1);
     assert_eq!(refs[0].name, "main");
 }
+
+#[test]
+fn parse_commit_detail_extracts_header_and_files() {
+    let input = format!(
+        "Bob Committer{US}1700000050{US}Subject line\n\nBody paragraph.{RS}\n\
+         3\t1\tsrc/main.rs\n0\t0\tREADME.md\n-\t-\tlogo.png\n",
+        US = UNIT_SEP,
+        RS = RECORD_SEP,
+    );
+    let detail = parse_commit_detail(&input);
+
+    assert_eq!(detail.committer_name, "Bob Committer");
+    assert_eq!(detail.committer_time, 1_700_000_050);
+    // 完整信息保留标题 + 正文。
+    assert_eq!(detail.message, "Subject line\n\nBody paragraph.");
+    assert_eq!(detail.files.len(), 3);
+    assert_eq!(
+        detail.files[0],
+        ChangedFile {
+            path: "src/main.rs".to_string(),
+            additions: 3,
+            deletions: 1,
+        }
+    );
+    // 二进制文件（"-"）按 0 增删处理。
+    assert_eq!(
+        detail.files[2],
+        ChangedFile {
+            path: "logo.png".to_string(),
+            additions: 0,
+            deletions: 0,
+        }
+    );
+}
+
+#[test]
+fn parse_commit_detail_handles_empty_numstat() {
+    let input = format!("Ann{US}100{US}msg{RS}", US = UNIT_SEP, RS = RECORD_SEP);
+    let detail = parse_commit_detail(&input);
+
+    assert_eq!(detail.message, "msg");
+    assert!(detail.files.is_empty());
+}

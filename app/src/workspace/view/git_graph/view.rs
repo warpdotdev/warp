@@ -1,8 +1,7 @@
 //! Git Graph 视图。
 //!
-//! Phase 2：先打通"flag → 按钮 → 视图 → 取数 → 渲染"全链路，主体渲染为**纯文本
-//! 提交列表**（短 hash + 引用标签 + subject）。图谱泳道绘制留待 Phase 3 接入
-//! [`super::layout`] 与自定义 row canvas。
+//! 渲染：左侧 panel 的提交图谱列表（泳道图 + 短 hash + 引用标签 + subject），
+//! 点击某行加载并展示该提交详情（完整信息 + 变更文件）。
 //!
 //! 状态直接持有在视图内（单实例、无共享），不引入单独的 Model 间接层——待后续
 //! 出现跨视图共享需求时再抽。
@@ -10,20 +9,27 @@
 use std::sync::Arc;
 
 use warpui::elements::{
-    Container, CrossAxisAlignment, Element, Flex, MainAxisAlignment, MainAxisSize, ParentElement,
-    Shrinkable, Text, UniformList, UniformListState,
+    Container, CrossAxisAlignment, Element, Empty, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, ParentElement, Shrinkable, Text, UniformList, UniformListState,
 };
-use warpui::{AppContext, Entity, SingletonEntity, View, ViewContext};
+use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
-use super::data::CommitNode;
+use super::data::{ChangedFile, CommitDetail, CommitNode};
 use super::layout::{assign_lanes, GraphLayout, GraphRow};
 use super::row_canvas::GitGraphRowCanvas;
 use crate::appearance::Appearance;
 
-/// 首屏加载的提交数上限（分页懒加载留待 Phase 4）。
+/// 首屏加载的提交数上限（分页懒加载留待后续）。
 const COMMIT_PAGE_SIZE: usize = 200;
 
-/// 视图向外发出的事件。Phase 2 暂无。
+/// 视图自身的 action。
+#[derive(Debug, Clone)]
+pub(crate) enum GitGraphAction {
+    /// 选中列表中第 N 行提交并加载其详情。
+    SelectCommit(usize),
+}
+
+/// 视图向外发出的事件。暂无。
 pub(crate) enum GitGraphEvent {}
 
 /// 提交图谱的加载状态。
@@ -38,6 +44,15 @@ enum LoadState {
     Error(String),
 }
 
+/// 选中提交详情的加载状态。
+enum DetailState {
+    /// 未选中任何提交。
+    None,
+    Loading,
+    Loaded(CommitDetail),
+    Error(String),
+}
+
 pub(crate) struct GitGraphView {
     /// 当前跟随的工作目录（由左侧 panel 在活跃目录变化时推入）。
     working_dir: Option<std::path::PathBuf>,
@@ -46,8 +61,16 @@ pub(crate) struct GitGraphView {
     /// 由 [`assign_lanes`] 算出的逐行泳道布局，与 `commits` 一一对应。
     layout: Arc<GraphLayout>,
     state: LoadState,
-    /// 列表滚动状态（保留滚动位置）。
+    /// 每行的鼠标状态句柄（供 [`Hoverable`] 点击/悬停使用），与 `commits` 等长。
+    row_mouse_states: Arc<Vec<MouseStateHandle>>,
+    /// 当前选中行下标。
+    selected: Option<usize>,
+    /// 选中提交的详情。
+    detail: DetailState,
+    /// 提交列表滚动状态。
     list_state: UniformListState,
+    /// 详情区文件列表的滚动状态。
+    detail_list_state: UniformListState,
 }
 
 /// 空布局，用于未加载/出错时。
@@ -65,7 +88,11 @@ impl GitGraphView {
             commits: Arc::new(Vec::new()),
             layout: Arc::new(empty_layout()),
             state: LoadState::NoRepo,
+            row_mouse_states: Arc::new(Vec::new()),
+            selected: None,
+            detail: DetailState::None,
             list_state: UniformListState::new(),
+            detail_list_state: UniformListState::new(),
         }
     }
 
@@ -82,11 +109,20 @@ impl GitGraphView {
         self.reload(ctx);
     }
 
+    /// 清空选中与详情（仓库变化/重新加载时调用）。
+    fn clear_selection(&mut self) {
+        self.selected = None;
+        self.detail = DetailState::None;
+    }
+
     /// 重新加载当前工作目录的提交图谱。
     fn reload(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_selection();
+
         let Some(dir) = self.working_dir.clone() else {
             self.commits = Arc::new(Vec::new());
             self.layout = Arc::new(empty_layout());
+            self.row_mouse_states = Arc::new(Vec::new());
             self.state = LoadState::NoRepo;
             ctx.notify();
             return;
@@ -109,12 +145,15 @@ impl GitGraphView {
                     match result {
                         Ok(commits) => {
                             view.layout = Arc::new(assign_lanes(&commits));
+                            view.row_mouse_states =
+                                Arc::new((0..commits.len()).map(|_| MouseStateHandle::default()).collect());
                             view.commits = Arc::new(commits);
                             view.state = LoadState::Loaded;
                         }
                         Err(err) => {
                             view.commits = Arc::new(Vec::new());
                             view.layout = Arc::new(empty_layout());
+                            view.row_mouse_states = Arc::new(Vec::new());
                             view.state = LoadState::Error(err.to_string());
                         }
                     }
@@ -129,19 +168,108 @@ impl GitGraphView {
             ctx.notify();
         }
     }
+
+    /// 选中某行并异步加载其详情。
+    fn select_commit(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
+        let Some(commit) = self.commits.get(index) else {
+            return;
+        };
+        let hash = commit.hash.clone();
+        self.selected = Some(index);
+        self.detail = DetailState::Loading;
+        ctx.notify();
+
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let Some(dir) = self.working_dir.clone() else {
+                return;
+            };
+            ctx.spawn(
+                async move { super::data::load_commit_detail(&dir, &hash).await },
+                move |view, result, ctx| {
+                    if view.selected != Some(index) {
+                        // 选中已变化，丢弃过期结果。
+                        return;
+                    }
+                    view.detail = match result {
+                        Ok(detail) => DetailState::Loaded(detail),
+                        Err(err) => DetailState::Error(err.to_string()),
+                    };
+                    ctx.notify();
+                },
+            );
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = hash;
+            self.detail = DetailState::None;
+            ctx.notify();
+        }
+    }
+
+    /// 渲染可点击的提交列表（每行 = 泳道 + 文字，包一层 [`Hoverable`] 派发选中）。
+    fn render_commit_list(&self) -> Box<dyn Element> {
+        let commits = self.commits.clone();
+        let layout = self.layout.clone();
+        let mouse_states = self.row_mouse_states.clone();
+        let list = UniformList::new(self.list_state.clone(), commits.len(), move |range, app| {
+            let appearance = Appearance::as_ref(app);
+            let lane_count = layout.max_lanes;
+            let rows: Vec<Box<dyn Element>> = range
+                .filter_map(|i| {
+                    let commit = commits.get(i)?;
+                    let row = layout.rows.get(i)?;
+                    let element = render_graph_row(row, lane_count, commit, appearance);
+                    let state = mouse_states.get(i).cloned().unwrap_or_default();
+                    Some(
+                        Hoverable::new(state, move |_| element)
+                            .on_click(move |ctx, _, _| {
+                                ctx.dispatch_typed_action(GitGraphAction::SelectCommit(i));
+                            })
+                            .finish(),
+                    )
+                })
+                .collect();
+            rows.into_iter()
+        });
+        list.finish()
+    }
+
+    /// 渲染选中提交的详情区。
+    fn render_detail(&self, appearance: &Appearance) -> Box<dyn Element> {
+        match &self.detail {
+            DetailState::None => Empty::new().finish(),
+            DetailState::Loading => render_message("Loading commit details…".to_string(), appearance),
+            DetailState::Error(err) => {
+                render_message(format!("Failed to load details: {err}"), appearance)
+            }
+            DetailState::Loaded(detail) => {
+                let commit = self.selected.and_then(|i| self.commits.get(i));
+                render_detail_body(commit, detail, &self.detail_list_state, appearance)
+            }
+        }
+    }
+}
+
+/// 一行普通文字（单行、不换行）。
+fn text_line(text: String, appearance: &Appearance, dim: bool) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let color = if dim {
+        theme.sub_text_color(theme.background())
+    } else {
+        theme.foreground()
+    };
+    Text::new_inline(text, appearance.ui_font_family(), appearance.ui_font_size())
+        .with_color(color.into())
+        .finish()
 }
 
 /// 渲染居中的单行提示文案（用于空 / 加载中 / 错误等状态）。
 fn render_message(text: String, appearance: &Appearance) -> Box<dyn Element> {
-    let theme = appearance.theme();
-    Container::new(
-        Text::new_inline(text, appearance.ui_font_family(), appearance.ui_font_size())
-            .with_color(theme.sub_text_color(theme.background()).into())
-            .finish(),
-    )
-    .with_horizontal_padding(12.)
-    .with_vertical_padding(8.)
-    .finish()
+    Container::new(text_line(text, appearance, true))
+        .with_horizontal_padding(12.)
+        .with_vertical_padding(8.)
+        .finish()
 }
 
 /// 渲染一行图谱：左侧泳道绘制 + 右侧提交文字。
@@ -208,8 +336,115 @@ fn render_commit_text(commit: &CommitNode, appearance: &Appearance) -> Box<dyn E
         .finish()
 }
 
+/// 渲染详情区主体：元信息 + 完整信息 + 变更文件列表。
+fn render_detail_body(
+    commit: Option<&CommitNode>,
+    detail: &CommitDetail,
+    list_state: &UniformListState,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let font = appearance.ui_font_family();
+    let size = appearance.ui_font_size();
+
+    let mut meta = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Start);
+    if let Some(c) = commit {
+        meta = meta.with_child(text_line(c.hash.clone(), appearance, true));
+        meta = meta.with_child(text_line(
+            format!("{} <{}>", c.author_name, c.author_email),
+            appearance,
+            false,
+        ));
+        if detail.committer_name != c.author_name {
+            meta = meta.with_child(text_line(
+                format!("committed by {}", detail.committer_name),
+                appearance,
+                true,
+            ));
+        }
+    }
+
+    // 完整提交信息（可换行）。
+    meta = meta.with_child(
+        Container::new(
+            Text::new(detail.message.clone(), font, size)
+                .with_color(appearance.theme().foreground().into())
+                .finish(),
+        )
+        .with_vertical_padding(6.)
+        .finish(),
+    );
+    meta = meta.with_child(text_line(
+        format!("{} changed files", detail.files.len()),
+        appearance,
+        true,
+    ));
+
+    // 文件列表（虚拟化、可滚动）。
+    let files = Arc::new(detail.files.clone());
+    let file_list = UniformList::new(list_state.clone(), files.len(), move |range, app| {
+        let appearance = Appearance::as_ref(app);
+        let rows: Vec<Box<dyn Element>> = range
+            .filter_map(|i| files.get(i).map(|f| render_file_row(f, appearance)))
+            .collect();
+        rows.into_iter()
+    });
+
+    Container::new(
+        Flex::column()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(meta.finish())
+            .with_child(Shrinkable::new(1.0, file_list.finish()).finish())
+            .finish(),
+    )
+    .with_horizontal_padding(12.)
+    .with_vertical_padding(8.)
+    .finish()
+}
+
+/// 渲染一个变更文件行：路径 + `+增 -删`。
+fn render_file_row(file: &ChangedFile, appearance: &Appearance) -> Box<dyn Element> {
+    let font = appearance.ui_font_family();
+    let size = appearance.ui_font_size();
+    let theme = appearance.theme();
+    Container::new(
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(
+                Text::new_inline(file.path.clone(), font, size)
+                    .with_color(theme.foreground().into())
+                    .finish(),
+            )
+            .with_child(
+                Container::new(
+                    Text::new_inline(
+                        format!("+{} -{}", file.additions, file.deletions),
+                        font,
+                        size,
+                    )
+                    .with_color(theme.sub_text_color(theme.background()).into())
+                    .finish(),
+                )
+                .with_padding_left(8.)
+                .finish(),
+            )
+            .finish(),
+    )
+    .with_vertical_padding(2.)
+    .finish()
+}
+
 impl Entity for GitGraphView {
     type Event = GitGraphEvent;
+}
+
+impl TypedActionView for GitGraphView {
+    type Action = GitGraphAction;
+
+    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        match action {
+            GitGraphAction::SelectCommit(index) => self.select_commit(*index, ctx),
+        }
+    }
 }
 
 impl View for GitGraphView {
@@ -220,42 +455,37 @@ impl View for GitGraphView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
 
-        let content: Box<dyn Element> = match &self.state {
-            LoadState::NoRepo => {
-                render_message("Current directory is not a git repository".to_string(), appearance)
+        // 单层纵向 column 直接承接 panel 的有界高度；用 Shrinkable 因子在列表与详情之间
+        // 分配空间（嵌套两层 MainAxisSize::Max 会导致内层收到无限约束而 panic）。
+        let mut column = Flex::column()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::Start)
+            .with_cross_axis_alignment(CrossAxisAlignment::Start);
+
+        column = match &self.state {
+            LoadState::NoRepo => column.with_child(render_message(
+                "Current directory is not a git repository".to_string(),
+                appearance,
+            )),
+            LoadState::Loading => {
+                column.with_child(render_message("Loading commit history…".to_string(), appearance))
             }
-            LoadState::Loading => render_message("Loading commit history…".to_string(), appearance),
-            LoadState::Error(err) => {
-                render_message(format!("Failed to load git history: {err}"), appearance)
-            }
+            LoadState::Error(err) => column.with_child(render_message(
+                format!("Failed to load git history: {err}"),
+                appearance,
+            )),
             LoadState::Loaded if self.commits.is_empty() => {
-                render_message("No commits yet".to_string(), appearance)
+                column.with_child(render_message("No commits yet".to_string(), appearance))
             }
+            LoadState::Loaded if self.selected.is_some() => column
+                // 列表与详情按 2:1 分配高度。
+                .with_child(Shrinkable::new(2.0, self.render_commit_list()).finish())
+                .with_child(Shrinkable::new(1.0, self.render_detail(appearance)).finish()),
             LoadState::Loaded => {
-                let commits = self.commits.clone();
-                let layout = self.layout.clone();
-                let list = UniformList::new(self.list_state.clone(), commits.len(), {
-                    move |range, app| {
-                        let appearance = Appearance::as_ref(app);
-                        let lane_count = layout.max_lanes;
-                        let rows: Vec<Box<dyn Element>> = range
-                            .filter_map(|i| {
-                                let commit = commits.get(i)?;
-                                let row = layout.rows.get(i)?;
-                                Some(render_graph_row(row, lane_count, commit, appearance))
-                            })
-                            .collect();
-                        rows.into_iter()
-                    }
-                });
-                Shrinkable::new(1.0, list.finish()).finish()
+                column.with_child(Shrinkable::new(1.0, self.render_commit_list()).finish())
             }
         };
 
-        Flex::column()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::Start)
-            .with_child(content)
-            .finish()
+        column.finish()
     }
 }
