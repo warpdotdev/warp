@@ -253,6 +253,28 @@ fn followup_github_auth_does_not_reuse_stored_initial_request() {
 }
 
 #[test]
+fn disabled_cloud_followups_do_not_show_or_submit_prompt() {
+    let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+        let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-000000000001".parse().unwrap();
+
+        model.update(&mut app, |model, ctx| {
+            model.status = Status::AgentRunning;
+            model.task_id = Some(task_id);
+            model.cloud_followups_enabled = false;
+
+            assert!(!model.is_ready_for_cloud_followup_prompt());
+            model.submit_cloud_followup("follow up".to_string(), ctx);
+            assert!(model.pending_followup_prompt().is_none());
+            assert!(matches!(model.status(), Status::AgentRunning));
+        });
+    });
+}
+
+#[test]
 fn queue_handoff_auto_submit_enters_waiting_state_without_consuming_launch() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);

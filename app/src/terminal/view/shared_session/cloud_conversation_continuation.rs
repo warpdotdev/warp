@@ -62,6 +62,9 @@ pub(in crate::terminal::view) fn resolve_cloud_conversation_continuation_ui_stat
     if task.has_active_execution() {
         return Err(CloudConversationContinuationError::ActiveTaskExecution);
     }
+    if !task.supports_warp_cloud_followups() {
+        return Ok(CloudConversationContinuationUiState::Tombstone { cta: None });
+    }
     let is_environment_setup_failure = task.state.is_failure_like()
         && task
             .status_message

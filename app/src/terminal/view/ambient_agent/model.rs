@@ -13,6 +13,7 @@ use super::AmbientAgentProgressUIState;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::extract_user_query_mode;
+use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::github_auth_notifier::{GitHubAuthEvent, GitHubAuthNotifier};
 use crate::ai::ambient_agents::spawn::{spawn_task, submit_run_followup, AmbientAgentEvent};
 use crate::ai::ambient_agents::task::{HarnessAuthSecretsConfig, HarnessConfig};
@@ -249,6 +250,8 @@ pub struct AmbientAgentViewModel {
 
     /// Prompt text for a follow-up that has been submitted but not yet attached to a new session.
     pending_followup_prompt: Option<String>,
+    /// Whether the current task source supports Warp-initiated cloud follow-ups.
+    cloud_followups_enabled: bool,
 
     /// See [`PendingHandoff`].
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
@@ -315,6 +318,7 @@ impl AmbientAgentViewModel {
             active_execution_session_id: None,
             last_ended_execution_session_id: None,
             pending_followup_prompt: None,
+            cloud_followups_enabled: true,
             #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
             pending_handoff: None,
         }
@@ -804,7 +808,8 @@ impl AmbientAgentViewModel {
     /// the status stays `AgentRunning` while the active session is cleared, which is the editable
     /// post-run state where follow-ups are allowed.
     pub fn is_ready_for_cloud_followup_prompt(&self) -> bool {
-        self.task_id.is_some()
+        self.cloud_followups_enabled
+            && self.task_id.is_some()
             && self.active_execution_session_id.is_none()
             && self.pending_followup_prompt.is_none()
             && matches!(self.status, Status::AgentRunning)
@@ -870,6 +875,10 @@ impl AmbientAgentViewModel {
 
         // Store the task ID for later use
         self.task_id = Some(task_id);
+        self.cloud_followups_enabled = true;
+        if let Some(task) = AgentConversationsModel::as_ref(ctx).get_task_data(&task_id) {
+            self.cloud_followups_enabled = task.supports_warp_cloud_followups();
+        }
 
         self.status = Status::AgentRunning;
         ctx.emit(AmbientAgentViewModelEvent::RunLifecycleChanged);
@@ -881,6 +890,7 @@ impl AmbientAgentViewModel {
             async move { ai_client.get_ambient_agent_task(&task_id).await },
             |me, result, ctx| match result {
                 Ok(task) => {
+                    me.cloud_followups_enabled = task.supports_warp_cloud_followups();
                     me.apply_viewed_task_config_snapshot(task.agent_config_snapshot.as_ref(), ctx);
                     ctx.emit(AmbientAgentViewModelEvent::ViewerHarnessResolved);
                 }
@@ -977,6 +987,11 @@ impl AmbientAgentViewModel {
             return;
         }
 
+        if !self.cloud_followups_enabled {
+            log::warn!("Attempted to submit cloud follow-up for a task source that does not support Warp follow-ups");
+            return;
+        }
+
         let Some(task_id) = self.task_id else {
             log::warn!("Attempted to submit cloud follow-up without an ambient task ID");
             return;
@@ -1041,6 +1056,7 @@ impl AmbientAgentViewModel {
         self.active_execution_session_id = None;
         self.last_ended_execution_session_id = None;
         self.pending_followup_prompt = None;
+        self.cloud_followups_enabled = true;
         self.request = None;
         self.setup_commands_state = Default::default();
         self.stop_progress_timer();

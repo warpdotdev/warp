@@ -452,6 +452,12 @@ impl AmbientAgentTask {
         self.is_terminal_run_state() && !self.has_active_execution()
     }
 
+    /// GitHub Actions Oz runs are unmanaged by Warp after the workflow-owned
+    /// process exits, so the Warp client should not offer cloud follow-ups.
+    pub fn supports_warp_cloud_followups(&self) -> bool {
+        !matches!(self.source, Some(AgentSource::GitHubAction))
+    }
+
     /// Total credits used (inference + compute + platform).
     pub fn credits_used(&self) -> Option<f32> {
         self.active_run_execution().request_usage.map(|u| {
