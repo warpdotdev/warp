@@ -28,6 +28,7 @@ use warp_core::features::FeatureFlag;
 use warp_core::{report_error, report_if_error, safe_debug, safe_error, safe_info};
 use warp_graphql::ai::AgentTaskState;
 use warp_managed_secrets::ManagedSecretValue;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::r#async::{FutureExt, TimeoutError};
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
 
@@ -1552,7 +1553,11 @@ impl AgentDriver {
                         .iter()
                         .map(|def| repo_path.join(&def.skills_path));
                     let repo_skills = read_skills_from_directories(skill_dirs);
-                    let filtered = filter_skills_by_spec(&repo_path, repo_skills, &specs);
+                    let filtered = filter_skills_by_spec(
+                        &LocalOrRemotePath::Local(repo_path),
+                        repo_skills,
+                        &specs,
+                    );
                     all_skills.extend(filtered);
                 }
                 all_skills

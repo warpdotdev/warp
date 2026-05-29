@@ -3,11 +3,10 @@
 
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
-    path::Path,
     str::FromStr,
 };
 
-use ai::skills::{provider_rank, ParsedSkill};
+use ai::skills::{ParsedSkill, provider_rank};
 use warp_cli::skill::SkillSpec;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 
@@ -49,7 +48,7 @@ pub fn resolve_skill_repos(raw_specs: &[String]) -> (Vec<SkillSpec>, Vec<GithubR
 /// in provider precedence order. For full-path specs, it matches the exact path relative to the
 /// repo root.
 pub fn filter_skills_by_spec(
-    repo_path: &Path,
+    repo_path: &LocalOrRemotePath,
     skills: Vec<ParsedSkill>,
     specs: &[SkillSpec],
 ) -> Vec<ParsedSkill> {
@@ -80,27 +79,26 @@ pub fn filter_skills_by_spec(
 }
 
 fn matching_skill_path(
-    repo_path: &Path,
+    repo_path: &LocalOrRemotePath,
     skills_by_path: &HashMap<LocalOrRemotePath, &ParsedSkill>,
     spec: &SkillSpec,
 ) -> Option<LocalOrRemotePath> {
     if spec.is_full_path() {
-        let path = LocalOrRemotePath::Local(repo_path.join(&spec.skill_identifier));
+        let path = repo_path.join(&spec.skill_identifier);
         return skills_by_path.contains_key(&path).then_some(path);
     }
     matching_simple_skill_path(repo_path, skills_by_path, &spec.skill_identifier)
 }
 
 fn matching_simple_skill_path(
-    repo_path: &Path,
+    repo_path: &LocalOrRemotePath,
     skills_by_path: &HashMap<LocalOrRemotePath, &ParsedSkill>,
     skill_name: &str,
 ) -> Option<LocalOrRemotePath> {
-    let repo_path = LocalOrRemotePath::Local(repo_path.to_path_buf());
     let mut matches = skills_by_path
         .values()
         .copied()
-        .filter(|skill| skill.path.starts_with(&repo_path) && skill.name == skill_name)
+        .filter(|skill| skill.path.starts_with(repo_path) && skill.name == skill_name)
         .collect::<Vec<_>>();
 
     matches.sort_by(|left, right| {

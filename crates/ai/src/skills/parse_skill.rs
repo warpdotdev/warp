@@ -4,7 +4,7 @@ use std::ops::Range;
 use std::path::Path;
 
 use super::parser::parse_markdown_content;
-use super::skill_provider::{get_provider_for_path, get_scope_for_path, SkillProvider, SkillScope};
+use super::skill_provider::{SkillProvider, SkillScope, get_provider_for_path, get_scope_for_path};
 use anyhow::Result;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -112,11 +112,7 @@ impl Display for ParsedSkill {
 pub fn parse_skill(path: &Path) -> Result<ParsedSkill> {
     let provider = get_provider_for_path(path).unwrap_or(SkillProvider::Agents);
     let scope = get_scope_for_path(path);
-    parse_skill_internal(
-        LocalOrRemotePath::Local(path.to_path_buf()),
-        provider,
-        scope,
-    )
+    parse_local_skill_internal(path, provider, scope)
 }
 
 /// Parse a bundled skill markdown file.
@@ -131,23 +127,21 @@ pub fn parse_skill(path: &Path) -> Result<ParsedSkill> {
 /// # Returns
 /// * `Result<ParsedSkill>` - Parsed skill with validated name and description
 pub fn parse_bundled_skill(path: &Path) -> Result<ParsedSkill> {
-    parse_skill_internal(
-        LocalOrRemotePath::Local(path.to_path_buf()),
-        SkillProvider::Warp,
-        SkillScope::Bundled,
-    )
+    parse_local_skill_internal(path, SkillProvider::Warp, SkillScope::Bundled)
 }
 
-fn parse_skill_internal(
-    path: LocalOrRemotePath,
+fn parse_local_skill_internal(
+    path: &Path,
     provider: SkillProvider,
     scope: SkillScope,
 ) -> Result<ParsedSkill> {
-    let local_path = path
-        .to_local_path()
-        .expect("parse_skill_internal only reads local files");
-    let content = fs::read_to_string(local_path)?;
-    parse_skill_content_at_location(path, &content, provider, scope)
+    let content = fs::read_to_string(path)?;
+    parse_skill_content_at_location(
+        LocalOrRemotePath::Local(path.to_path_buf()),
+        &content,
+        provider,
+        scope,
+    )
 }
 
 fn derive_skill_name_from_path(path: &LocalOrRemotePath) -> Result<String> {
