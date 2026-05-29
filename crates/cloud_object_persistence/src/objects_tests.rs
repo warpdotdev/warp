@@ -1,12 +1,11 @@
-use lazy_static::lazy_static;
-use session_sharing_protocol::common::{InputReplicaId, ProfileData};
-
-use crate::auth::UserUid;
-use crate::cloud_object::{CloudObjectGuest, ServerObjectContainer};
-use crate::drive::sharing::{
+use cloud_objects::auth::UserUid;
+use cloud_objects::cloud_object::{CloudObjectGuest, ServerObjectContainer};
+use cloud_objects::drive::sharing::{
     LinkSharingSubjectType, SharingAccessLevel, Subject, TeamKind, UserKind,
 };
-use crate::server::ids::ServerId;
+use cloud_objects::ids::ServerId;
+use lazy_static::lazy_static;
+use session_sharing_protocol::common::{InputReplicaId, ProfileData};
 
 #[test]
 fn test_roundtrip_guests() {

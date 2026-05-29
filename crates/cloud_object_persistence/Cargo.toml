@@ -19,5 +19,6 @@ warp_core.workspace = true
 warp_graphql.workspace = true
 
 [dev-dependencies]
+cloud_objects = { workspace = true, features = ["test-util"] }
 lazy_static.workspace = true
 session-sharing-protocol.workspace = true

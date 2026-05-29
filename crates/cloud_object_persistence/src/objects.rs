@@ -664,3 +664,7 @@ fn owner_for_permissions(
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "objects_tests.rs"]
+mod tests;
