@@ -274,10 +274,7 @@ mod tests {
             StandardizedPath::try_new("/repo/.claude/skills/my-skill/SKILL.md").unwrap(),
         ));
 
-        assert_eq!(
-            get_provider_for_path(&path),
-            Some(SkillProvider::Claude)
-        );
+        assert_eq!(get_provider_for_path(&path), Some(SkillProvider::Claude));
     }
 
     #[test]
