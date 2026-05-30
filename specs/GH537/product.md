@@ -315,9 +315,15 @@ inline. See #11.6.
     **Failure modes.** If the shell errors during widget invocation
     (the widget is undefined, the bound function exits non-zero, the
     shell crashes), Warp restores the user's pre-invocation buffer
-    and surfaces a one-time diagnostic naming the widget. The
-    keystroke is not silently swallowed and the user is never left
-    with a dead prompt.
+    and surfaces a one-time diagnostic naming the widget. The widget
+    name in the diagnostic follows the same allowlist-or-bucket
+    redaction policy as #11 and telemetry — verbatim only when the
+    widget name appears in the well-known ZLE/readline/fish
+    vocabulary; user-defined or plugin-private names are
+    redacted to the bucket `user-defined`. Key contents and
+    binding bodies never appear in the diagnostic. The
+    keystroke is not silently swallowed and the user is never
+    left with a dead prompt.
 
     **Latency.** Pass-through introduces a small round-trip: typically
     50–150 ms before the widget's TUI appears. This is not a hard
@@ -407,14 +413,34 @@ inline. See #11.6.
     process the user runs can write the same byte stream. To
     prevent a hostile or careless process from spoofing
     overlays, every payload carries the same per-tab nonce as
-    Warp's other shell-integration DCS payloads (set at
-    bootstrap, never transmitted in cleartext after that), and
-    payloads are subject to size caps, strict schema
-    validation, and whole-payload-discard on any failure. TECH
-    §6.4 specifies the exact validation phases and bounds.
-    User-visible result: a process that tries to inject a fake
-    buffer-state overlay does not affect Warp's editor; the
-    bad payload is dropped silently.
+    Warp's other shell-integration DCS payloads, and payloads
+    are subject to size caps, strict schema validation, and
+    whole-payload-discard on any failure. TECH §6.4 specifies
+    the exact validation phases and bounds.
+
+    The defense rests on the nonce staying secret from
+    descendant processes. The nonce is delivered to the shell
+    out-of-band — for zsh/bash via the initial environment as
+    `WARP_BOOTSTRAP_NONCE`, which the bootstrap copies into a
+    non-exported shell-local variable and *unsets* before any
+    user rc file runs; for fish via a `0600`-mode tempfile
+    whose path is passed in `--init-command` and which the
+    bootstrap reads-then-`rm`s before any further work. After
+    bootstrap, the nonce lives only in the shell process's own
+    memory: it is not in the environment, not in shell history,
+    not in command output, and not in any tempfile. Child
+    processes spawned by the shell inherit a clean environment
+    that does not contain the nonce. Same-user processes that
+    can already read the shell's memory (`/proc/<pid>/environ`,
+    debugger attach, `ptrace`) can defeat the nonce but they
+    can already break the user's session in many other ways;
+    those are out of scope as documented in TECH §1's threat
+    model. If a real leak occurs (a rc-file misconfiguration
+    that exports the variable, e.g.) the user can rotate by
+    closing and reopening the tab — every tab gets a fresh
+    nonce at bootstrap. User-visible result: a process that
+    tries to inject a fake buffer-state overlay does not affect
+    Warp's editor; the bad payload is dropped silently.
 
     **Failure mode.** If the plugin emits something Warp's renderer
     can't faithfully display (an obscure ANSI sequence, a 24-bit
@@ -559,13 +585,25 @@ inline. See #11.6.
       must ship together since #22 without the gate ships the
       flicker bug.
 
-22.5. **Interaction with the shell-vs-natural-language classifier.**
-    Warp's agent conversation input runs a per-keystroke classifier that
-    labels the current buffer as "shell command" or "natural language",
-    and the label can flicker as the user types (`cd ~/p` initially
-    looks shell-y, then `cd ~/please help me` flips to NL). If
-    bindkey honoring is gated on this classifier, naive gating
-    produces three failure modes the v1 must avoid:
+22.5. **Interaction with the shell-vs-natural-language classifier
+    (follow-up scope, ships with #22 opt-in).** This section
+    describes the design that lands *when* the AI-prompt opt-in
+    from #22 ships — v1 of this PR does *not* implement either
+    #22 or #22.5; the matcher's `Contextual` tier is inactive
+    in the AI prompt input throughout v1 (see #22's resolution
+    in Open Questions). The design is specified here so that
+    when #22 lands as a follow-up the classifier interaction is
+    already worked out and the two ship together; the
+    follow-ups list at the bottom of TECH.md tracks this as a
+    pair.
+
+    Warp's agent conversation input runs a per-keystroke classifier
+    that labels the current buffer as "shell command" or "natural
+    language", and the label can flicker as the user types
+    (`cd ~/p` initially looks shell-y, then `cd ~/please help me`
+    flips to NL). If bindkey honoring is gated on this classifier,
+    naive gating produces three failure modes the follow-up must
+    avoid:
 
     - **Flickering inline plugins.** Dimmed autosuggestions and
       syntax-highlight colors that appear and disappear as the
@@ -580,7 +618,8 @@ inline. See #11.6.
       autosuggest dimmed-text suggestion appears in the middle of
       their sentence and looks like a rendering bug.
 
-    The v1 rules that resolve these:
+    The follow-up rules that resolve these (engaged when #22 opts
+    in; not in v1 scope):
 
     a. **Explicit bound keystrokes are classifier-independent.** When
        the user presses a key bound to an external widget (Category
