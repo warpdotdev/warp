@@ -1,93 +1,90 @@
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::mcp::templatable::{CloudTemplatableMCPServerModel, TemplatableMCPServer};
-use crate::{
-    ai::{
-        agent::conversation::AIConversationId,
-        ambient_agents::scheduled::{CloudScheduledAmbientAgentModel, ScheduledAmbientAgent},
-        blocklist::BlocklistAIHistoryModel,
-        cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel},
-        execution_profiles::{
-            profiles::AIExecutionProfilesModel, AIExecutionProfile, CloudAIExecutionProfileModel,
-        },
-        facts::{AIFact, CloudAIFactModel},
-    },
-    auth::{auth_manager::AuthManager, AuthStateProvider},
-    cloud_object::{
-        model::{
-            actions::{ObjectAction, ObjectActionHistory, ObjectActionType, ObjectActions},
-            generic_string_model::{
-                GenericStringModel, GenericStringObjectId, Serializer, StringModel,
-            },
-            persistence::{CloudModel, CloudModelEvent, UpdateSource},
-            view::{CloudViewModel, Editor, EditorState},
-        },
-        CloudLinkSharing, CloudModelType, CloudObject, CloudObjectEventEntrypoint,
-        CloudObjectLocation, CloudObjectSyncStatus, CreateCloudObjectResult, CreateObjectRequest,
-        GenericCloudObject, GenericServerObject, GenericStringObjectFormat, JsonObjectType,
-        NumInFlightRequests, ObjectDeleteResult, ObjectIdType, ObjectMetadataUpdateResult,
-        ObjectPermissionsUpdateData, ObjectType, Owner, Revision, RevisionAndLastEditor,
-        ServerAIExecutionProfile, ServerAIFact, ServerAmbientAgentEnvironment,
-        ServerCloudAgentConfig, ServerCloudObject, ServerEnvVarCollection, ServerFolder,
-        ServerMCPServer, ServerMetadata, ServerNotebook, ServerObject, ServerPermissions,
-        ServerPreference, ServerScheduledAmbientAgent, ServerTemplatableMCPServer, ServerWorkflow,
-        ServerWorkflowEnum, Space, UpdateCloudObjectResult,
-    },
-    drive::{
-        folders::{CloudFolderModel, FolderId},
-        sharing::SharingAccessLevel,
-        CloudObjectTypeAndId,
-    },
-    env_vars::{CloudEnvVarCollectionModel, EnvVarCollection},
-    network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind},
-    notebooks::{CloudNotebookModel, NotebookId},
-    persistence::ModelEvent,
-    server::{
-        ids::{
-            parse_sqlite_id_to_uid, ClientId, HashableId, HashedSqliteId, ObjectUid, ServerId,
-            SyncId, ToServerId,
-        },
-        retry_strategies::{
-            OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL, PERIODIC_POLL_RETRY_STRATEGY,
-        },
-        server_api::object::{GuestIdentifier, ObjectClient},
-        sync_queue::{
-            CreationFailureReason, GenericStringObjectToCreate, QueueItem, SyncQueue,
-            SyncQueueEvent,
-        },
-    },
-    settings::cloud_preferences::Preference,
-    util::sync::Condition,
-    workflows::{
-        workflow::Workflow,
-        workflow_enum::{CloudWorkflowEnum, CloudWorkflowEnumModel, WorkflowEnum},
-        CloudWorkflowModel, WorkflowId,
-    },
-    workspaces::{
-        team_tester::{TeamTesterStatus, TeamTesterStatusEvent},
-        update_manager::TeamUpdateManager,
-        user_profiles::{UserProfileWithUID, UserProfiles},
-        user_workspaces::UserWorkspaces,
-    },
-};
+use std::collections::HashSet;
+use std::future::Future;
+use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
+#[cfg(test)]
+pub use cloud_object_client::GetCloudObjectResponse;
+pub use cloud_object_client::InitialLoadResponse;
 use futures::channel::oneshot::{self, Receiver};
 use futures::stream::AbortHandle;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
-use std::future::Future;
-use std::sync::{mpsc::SyncSender, Arc};
-use std::time::Duration;
 use warp_core::features::FeatureFlag;
+use warp_core::report_error;
 use warp_graphql::mcp_gallery_template::MCPGalleryTemplate;
 use warp_graphql::object_permissions::AccessLevel;
 use warp_graphql::scalars::time::ServerTimestamp;
+use warp_util::sync::Condition;
 use warpui::r#async::{FutureId, Timer};
-use warpui::{duration_with_jitter, AppContext};
-use warpui::{Entity, ModelContext, RequestState, RetryOption, SingletonEntity};
+use warpui::{
+    duration_with_jitter, AppContext, Entity, ModelContext, RequestState, RetryOption,
+    SingletonEntity,
+};
 
 use super::listener::ObjectUpdateMessage;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::ambient_agents::scheduled::{
+    CloudScheduledAmbientAgentModel, ScheduledAmbientAgent,
+};
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel};
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::execution_profiles::{AIExecutionProfile, CloudAIExecutionProfileModel};
+use crate::ai::facts::{AIFact, CloudAIFactModel};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::mcp::templatable::{CloudTemplatableMCPServerModel, TemplatableMCPServer};
+use crate::auth::auth_manager::AuthManager;
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::actions::{
+    ObjectAction, ObjectActionHistory, ObjectActionType, ObjectActions,
+};
+use crate::cloud_object::model::generic_string_model::{
+    GenericStringModel, GenericStringObjectId, Serializer, StringModel,
+};
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent, UpdateSource};
+use crate::cloud_object::model::view::{CloudViewModel, Editor, EditorState};
+use crate::cloud_object::{
+    CloudLinkSharing, CloudModelType, CloudObject, CloudObjectEventEntrypoint, CloudObjectLocation,
+    CloudObjectSyncStatus, CreateCloudObjectResult, CreateObjectRequest, GenericCloudObject,
+    GenericServerObject, GenericStringObjectFormat, JsonObjectType, NumInFlightRequests,
+    ObjectDeleteResult, ObjectIdType, ObjectMetadataUpdateResult, ObjectPermissionsUpdateData,
+    ObjectType, Owner, Revision, RevisionAndLastEditor, ServerAIExecutionProfile, ServerAIFact,
+    ServerAmbientAgentEnvironment, ServerCloudAgentConfig, ServerCloudObject,
+    ServerEnvVarCollection, ServerMCPServer, ServerMetadata, ServerPermissions, ServerPreference,
+    ServerScheduledAmbientAgent, ServerTemplatableMCPServer, ServerWorkflowEnum, Space,
+    UpdateCloudObjectResult,
+};
+use crate::drive::folders::{CloudFolderModel, FolderId};
+use crate::drive::sharing::SharingAccessLevel;
+use crate::drive::CloudObjectTypeAndId;
+use crate::env_vars::{CloudEnvVarCollectionModel, EnvVarCollection};
+use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
+use crate::notebooks::{CloudNotebookModel, NotebookId};
+use crate::persistence::ModelEvent;
+use crate::server::ids::{
+    parse_sqlite_id_to_uid, ClientId, HashableId, HashedSqliteId, ObjectUid, ServerId, SyncId,
+    ToServerId,
+};
+use crate::server::retry_strategies::{
+    OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL, PERIODIC_POLL_RETRY_STRATEGY,
+};
+use crate::server::server_api::object::{GuestIdentifier, ObjectClient};
+use crate::server::sync_queue::{
+    CreationFailureReason, GenericStringObjectToCreate, QueueItem, SyncQueue, SyncQueueEvent,
+};
+use crate::settings::cloud_preferences::Preference;
+use crate::workflows::workflow::Workflow;
+use crate::workflows::workflow_enum::{CloudWorkflowEnum, CloudWorkflowEnumModel, WorkflowEnum};
+use crate::workflows::{CloudWorkflowModel, WorkflowId};
+use crate::workspaces::team_tester::{TeamTesterStatus, TeamTesterStatusEvent};
+use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 lazy_static! {
     /// For online-only operations, we want to quickly determine if the operation can succeed,
@@ -135,10 +132,19 @@ pub struct ObjectOperationResult {
 
 #[derive(Debug)]
 pub enum UpdateManagerEvent {
-    ObjectOperationComplete { result: ObjectOperationResult },
-    CloudPreferencesUpdated { updated: Vec<Preference> },
-    MCPGalleryUpdated { templates: Vec<MCPGalleryTemplate> },
-    AmbientTaskUpdated { timestamp: DateTime<Utc> },
+    ObjectOperationComplete {
+        result: ObjectOperationResult,
+    },
+    CloudPreferencesUpdated {
+        updated: Vec<Preference>,
+    },
+    MCPGalleryUpdated {
+        templates: Vec<MCPGalleryTemplate>,
+    },
+    AmbientTaskUpdated {
+        task_id: AmbientAgentTaskId,
+        timestamp: DateTime<Utc>,
+    },
 }
 
 /// An enum for choosing the behavior of the fetch_single_cloud_object function.
@@ -158,27 +164,6 @@ pub enum FetchSingleObjectOption {
 pub enum InitiatedBy {
     User,
     System,
-}
-#[derive(Default)]
-pub struct InitialLoadResponse {
-    pub updated_notebooks: Vec<ServerNotebook>,
-    pub deleted_notebooks: Vec<NotebookId>,
-    pub updated_workflows: Vec<ServerWorkflow>,
-    pub deleted_workflows: Vec<WorkflowId>,
-    pub updated_folders: Vec<ServerFolder>,
-    pub deleted_folders: Vec<FolderId>,
-    pub updated_generic_string_objects:
-        HashMap<GenericStringObjectFormat, Vec<Box<dyn ServerObject>>>,
-    pub deleted_generic_string_objects: Vec<GenericStringObjectId>,
-    pub user_profiles: Vec<UserProfileWithUID>,
-    pub action_histories: Vec<ObjectActionHistory>,
-    pub mcp_gallery: Vec<MCPGalleryTemplate>,
-}
-
-pub struct GetCloudObjectResponse {
-    pub object: ServerCloudObject,
-    pub descendants: Vec<ServerCloudObject>,
-    pub action_histories: Vec<ObjectActionHistory>,
 }
 
 #[derive(Debug)]
@@ -422,7 +407,7 @@ impl UpdateManager {
                     }
                 });
 
-                // Delete the actions on the client ID. Once we get a server ID for an object, we start dequeing any pending object actions and those
+                // Delete the actions on the client ID. Once we get a server ID for an object, we start dequeuing any pending object actions and those
                 // directly populate the ObjectActions model with the server ID, so we don't need to worry about any conversion or anything like that.
                 ObjectActions::handle(ctx).update(ctx, |object_actions, ctx| {
                     object_actions.delete_actions_for_object(&client_id.to_string(), ctx);
@@ -1118,11 +1103,20 @@ impl UpdateManager {
 
     fn handle_ambient_task_changed(
         &mut self,
-        _task_id: String,
+        task_id: String,
         timestamp: DateTime<Utc>,
         ctx: &mut ModelContext<UpdateManager>,
     ) {
-        ctx.emit(UpdateManagerEvent::AmbientTaskUpdated { timestamp });
+        let task_id = match task_id.parse::<AmbientAgentTaskId>() {
+            Ok(task_id) => task_id,
+            Err(err) => {
+                report_error!(anyhow::Error::from(err).context(format!(
+                    "AmbientTaskUpdated has unparseable task_id: {task_id}"
+                )));
+                return;
+            }
+        };
+        ctx.emit(UpdateManagerEvent::AmbientTaskUpdated { task_id, timestamp });
     }
 
     /// Fetches environment "last used" timestamps from the server and merges them
@@ -1178,7 +1172,12 @@ impl UpdateManager {
                 )
             });
 
-        GenericCloudObject::<K, M>::bulk_upsert_event(&objects_without_pending_changes)
+        M::bulk_upsert_event(
+            objects_without_pending_changes
+                .iter()
+                .map(|object| object.upsert_params(object.object_type()))
+                .collect(),
+        )
     }
 
     /// Generic handler deleting all objects of a given model type from the server (e.g. all updated/deleted notebooks or workflows).
@@ -2877,7 +2876,7 @@ impl UpdateManager {
                 let cloud_model = CloudModel::as_ref(ctx);
                 let object: Option<&CloudWorkflowEnum> = cloud_model.get_object_of_type(enum_id);
                 let Some(object) = object else {
-                    log::error!("Could not find referenced worfklow enum to copy over to the new space, skipping");
+                    log::error!("Could not find referenced workflow enum to copy over to the new space, skipping");
                     continue;
                 };
 
@@ -3212,6 +3211,25 @@ impl UpdateManager {
             // When adding the initiated_by parameter to this function call, InitiatedBy::User was set as a default value.
             // This can be changed to InitiatedBy::System if this action was automatically kicked off by the system and we do not want a user facing toast.
             InitiatedBy::User,
+            ctx,
+        )
+    }
+
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn create_ambient_agent_environment_online(
+        &mut self,
+        ambient_agent_environment: AmbientAgentEnvironment,
+        client_id: ClientId,
+        owner: Owner,
+        ctx: &mut ModelContext<Self>,
+    ) -> impl Future<Output = anyhow::Result<ServerId>> {
+        self.create_object_online(
+            CloudAmbientAgentEnvironmentModel::new(ambient_agent_environment),
+            owner,
+            client_id,
+            Default::default(),
+            false,
+            None,
             ctx,
         )
     }
@@ -3571,7 +3589,10 @@ impl UpdateManager {
 
         // Update sqlite with a single bulk request
         self.save_to_db(vec![GenericStringModel::<T, S>::bulk_upsert_event(
-            &objects,
+            objects
+                .iter()
+                .map(|object| object.upsert_params(object.object_type()))
+                .collect(),
         )]);
 
         // Populate sync queue with a single bulk request
@@ -4804,5 +4825,5 @@ impl Entity for UpdateManager {
 impl SingletonEntity for UpdateManager {}
 
 #[cfg(test)]
-#[path = "update_manager_test.rs"]
+#[path = "update_manager_tests.rs"]
 mod tests;

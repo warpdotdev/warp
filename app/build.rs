@@ -3,12 +3,13 @@
 // Windows).
 #![allow(clippy::disallowed_types)]
 
-use cfg_aliases::cfg_aliases;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::{env, fs};
 
 use anyhow::Result;
+use cfg_aliases::cfg_aliases;
 use sha2::Digest;
-use std::path::{Path, PathBuf};
-use std::{env, fs, process::Command};
 use walkdir::WalkDir;
 use warp_util::assets::{
     ASSETS_DIR, ASYNC_ASSETS_DIR, CONPTY_DLL_FILE, DXCOMPILER_DLL_FILE, DXIL_DLL_FILE,
@@ -36,13 +37,10 @@ fn main() -> Result<()> {
         println!("cargo:rustc-link-lib=framework=UserNotifications");
         build_and_link_sentry();
 
-        println!("cargo:rerun-if-changed=src/platform/mac/objc/app_bundle.h");
-        println!("cargo:rerun-if-changed=src/platform/mac/objc/app_bundle.m");
         println!("cargo:rerun-if-changed=src/platform/mac/objc/services.h");
         println!("cargo:rerun-if-changed=src/platform/mac/objc/services.m");
 
         cc::Build::new()
-            .file("src/platform/mac/objc/app_bundle.m")
             .file("src/platform/mac/objc/services.m")
             .compile("warp_objc");
 

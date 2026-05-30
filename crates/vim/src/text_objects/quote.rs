@@ -63,15 +63,15 @@ where
                 break;
             }
         }
-        let mut quote_ahead_fount_at = None;
+        let mut quote_ahead_found_at = None;
         for (i, c) in &mut forward_iter {
             if quote_type.is_char(c) {
-                quote_ahead_fount_at = Some(offset + i);
+                quote_ahead_found_at = Some(offset + i);
                 break;
             }
         }
 
-        match (quote_behind_found_at, quote_ahead_fount_at) {
+        match (quote_behind_found_at, quote_ahead_found_at) {
             // If there are quotes surrounding the cursor, take that range.
             (Some(start), Some(end)) => Some(start..end + 1),
             // If there is no quote before, but there _is_ one after, treat the one after as the

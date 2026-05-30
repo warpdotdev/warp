@@ -2,18 +2,17 @@
 
 mod cloud_objects;
 
-use diesel::SqliteConnection;
-use diesel::result::Error;
-
-pub use cloud_objects::{decode_guests, decode_link_sharing, encode_guests, encode_link_sharing};
-
-use crate::cloud_object::{
+use ::cloud_objects::cloud_object::{
     CloudObjectMetadata, CloudObjectPermissions, ObjectIdType, ObjectType, Owner,
 };
-use crate::ids::SyncId;
+pub use cloud_objects::{decode_guests, decode_link_sharing, encode_guests, encode_link_sharing};
+use diesel::SqliteConnection;
+use diesel::result::Error;
 use persistence::model::{NewObjectMetadata, NewObjectPermissions, ObjectMetadata};
 use persistence::schema;
 use warp_core::features::FeatureFlag;
+
+use crate::ids::SyncId;
 
 /// The sqlite id of a cloud object.
 pub type CloudObjectId = i32;
@@ -39,6 +38,7 @@ pub fn upsert_cloud_object(
     create_object_fn: CreateCloudObjectFn,
     update_object_fn: UpdateCloudObjectFn,
 ) -> Result<(), Error> {
+    use diesel::prelude::*;
     use schema::object_metadata::dsl::{
         client_id, current_editor, folder_id, is_pending, last_editor_uid,
         metadata_last_updated_ts, object_metadata, revision_ts, server_id, trashed_ts,
@@ -47,8 +47,6 @@ pub fn upsert_cloud_object(
         anyone_with_link_access_level, anyone_with_link_source, object_guests, object_metadata_id,
         object_permissions, permissions_last_updated_at, subject_id, subject_type, subject_uid,
     };
-
-    use diesel::prelude::*;
 
     let (subject_type_value, subject_id_value, subject_uid_value) =
         match cloud_object_permissions.owner {

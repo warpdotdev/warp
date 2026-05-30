@@ -1,3 +1,20 @@
+use ordered_float::OrderedFloat;
+use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::vec2f;
+use warp_core::ui::color::blend::Blend;
+use warp_core::ui::color::coloru_with_opacity;
+use warp_core::ui::icons::Icon;
+use warp_core::ui::theme::color::internal_colors;
+use warpui::elements::{
+    AnchorPair, Container, CrossAxisAlignment, Expanded, Fill, Flex, Highlight, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, OffsetType, ParentElement, ParentOffsetBounds,
+    PositioningAxis, Stack, Text, XAxisAnchor, YAxisAnchor,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::ui_components::button::ButtonTooltipPosition;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, Gradient, SingletonEntity};
+
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::appearance::Appearance;
@@ -10,21 +27,6 @@ use crate::search::result_renderer::ItemHighlightState;
 use crate::search::SearchItem;
 use crate::ui_components::buttons::icon_button;
 use crate::util::time_format::format_approx_duration_from_now;
-use ordered_float::OrderedFloat;
-use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::color::{blend::Blend, coloru_with_opacity};
-use warp_core::ui::icons::Icon;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::{
-    AnchorPair, Container, CrossAxisAlignment, Expanded, Fill, Flex, Highlight, MainAxisSize,
-    MouseStateHandle, OffsetPositioning, OffsetType, ParentElement, ParentOffsetBounds,
-    PositioningAxis, Stack, Text, XAxisAnchor, YAxisAnchor,
-};
-use warpui::fonts::{Properties, Weight};
-use warpui::ui_components::button::ButtonTooltipPosition;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{AppContext, Element, Gradient, SingletonEntity};
 
 /// Information about which action to take once the conversation item is accepted.
 #[derive(Debug)]

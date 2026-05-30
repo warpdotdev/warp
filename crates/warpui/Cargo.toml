@@ -75,6 +75,25 @@ foreign-types = "0.5.0"
 libc.workspace = true
 metal = "0.33.0"
 objc.workspace = true
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = [
+    "NSAlert",
+    "NSApplication",
+    "NSCell",
+    "NSEvent",
+    "NSMenu",
+    "NSMenuItem",
+    "NSPasteboard",
+    "NSResponder",
+] }
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSData",
+    "NSGeometry",
+    "NSString",
+    "NSValue",
+    "objc2-core-foundation",
+] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 rand.workspace = true
@@ -113,7 +132,7 @@ web-sys.workspace = true
 workspace = true
 features = ["fragile-send-sync-non-atomic-wasm", "webgl"]
 
-[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))'.dependencies]
 arboard = { workspace = true, features = [
     "wayland-data-control",
     "image-data",
@@ -121,7 +140,7 @@ arboard = { workspace = true, features = [
 native-dialog = "0.7.0"
 open = "5.0.0"
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 blocking.workspace = true
 dirs.workspace = true
 fontconfig = { version = "0.8.0", features = ["dlopen"] }
@@ -139,7 +158,7 @@ x11rb.workspace = true
 x11-dl = "2.21.0"
 zbus.workspace = true
 
-[target.'cfg(target_os = "linux")'.dev-dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dev-dependencies]
 virtual-fs.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -148,7 +167,9 @@ winreg.workspace = true
 windows = { workspace = true, features = [
     "Win32_Graphics_Dwm",
     "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Gdi",
     "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
     "Win32_Networking",
     "Win32_System_Com",
     "Win32_Networking_NetworkListManager",

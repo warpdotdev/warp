@@ -1,43 +1,39 @@
-use crate::{
-    auth::AuthStateProvider,
-    changelog_model::ChangelogModel,
-    channel::ChannelState,
-    features::FeatureFlag,
-    resource_center::skip_tips_and_write_to_user_defaults,
-    send_telemetry_from_ctx,
-    server::telemetry::TelemetryEvent,
-    settings::Settings,
-    themes::theme::{Blend, Fill as FillTheme},
-};
 use pathfinder_geometry::vector::vec2f;
+use warpui::elements::{
+    Align, ClippedScrollStateHandle, ClippedScrollable, Container, CornerRadius, Element, Empty,
+    Fill, Flex, Hoverable, Icon, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
+    Radius, Shrinkable,
+};
+use warpui::platform::Cursor;
+use warpui::presenter::ChildView;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        Align, ClippedScrollStateHandle, ClippedScrollable, Container, CornerRadius, Element,
-        Empty, Fill, Flex, Hoverable, Icon, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-        ParentElement, Radius, Shrinkable,
-    },
-    platform::Cursor,
-    presenter::ChildView,
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle, WindowId,
 };
 
-use crate::{appearance::Appearance, workspace::WorkspaceAction};
-
+use super::section_views::feature_section::FeatureSectionEvent;
+use super::section_views::{
+    SectionViewHandle, BUTTON_PADDING, DETAIL_FONT_SIZE, FOOTER_ICON_SIZE, SCROLLBAR_OFFSET,
+    SCROLLBAR_WIDTH, SECTION_SPACING, SECTION_SPACING_BOTTOM,
+};
+use super::sections::sections;
 use super::{
-    section_views::{
-        feature_section::FeatureSectionEvent, SectionViewHandle, BUTTON_PADDING, DETAIL_FONT_SIZE,
-        FOOTER_ICON_SIZE, SCROLLBAR_OFFSET, SCROLLBAR_WIDTH, SECTION_SPACING,
-        SECTION_SPACING_BOTTOM,
-    },
-    sections::sections,
     ChangelogSectionView, ContentSectionData, ContentSectionView, FeatureSection,
     FeatureSectionData, FeatureSectionView, Section, TipsCompleted,
 };
+use crate::appearance::Appearance;
+use crate::auth::AuthStateProvider;
+use crate::changelog_model::ChangelogModel;
+use crate::channel::ChannelState;
+use crate::features::FeatureFlag;
+use crate::resource_center::skip_tips_and_write_to_user_defaults;
+use crate::send_telemetry_from_ctx;
+use crate::server::telemetry::TelemetryEvent;
+use crate::settings::Settings;
+use crate::themes::theme::{Blend, Fill as FillTheme};
+use crate::workspace::WorkspaceAction;
 
 const SEND_SVG_PATH: &str = "bundled/svg/send.svg";
 
@@ -456,12 +452,12 @@ impl ResourceCenterMainView {
 /// A model for tracking where the events from the resource center view should be dispatched
 ///
 /// Similar to command palette - we need a model to cache the information of where
-/// we should send the actions from the resouce center features. When the resource center is opened,
+/// we should send the actions from the resource center features. When the resource center is opened,
 /// we cache the current active window ID as well as the input ID of the active
 /// tab/pane. By sending all the actions to the input view, we ensure that
-/// they propgate correctly. This propogation assumes that each feature action
-/// must be in the reponder chain. If an action is not in the responder chain
-/// (such as a block navigation action) then it won't propogate correctly.
+/// they propagate correctly. This propagation assumes that each feature action
+/// must be in the responder chain. If an action is not in the responder chain
+/// (such as a block navigation action) then it won't propagate correctly.
 pub enum ActionTarget {
     None,
     View {

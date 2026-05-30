@@ -1,11 +1,9 @@
 pub mod helper;
 pub mod transaction;
 
-use std::{
-    collections::{HashMap, HashSet},
-    fmt::Display,
-    ops::Deref,
-};
+use std::collections::{HashMap, HashSet};
+use std::fmt::Display;
+use std::ops::Deref;
 
 use chrono::DateTime;
 use field_mask::{FieldMaskError, FieldMaskOperation};
@@ -14,31 +12,25 @@ use itertools::Itertools;
 use prost_types::FieldMask;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use warp_multi_agent_api::{
-    self as api,
-    message::{tool_call::subagent::Metadata, Message},
-};
+use warp_multi_agent_api::message::tool_call::subagent::Metadata;
+use warp_multi_agent_api::message::Message;
+use warp_multi_agent_api::{self as api};
 
-use crate::{
-    ai::{
-        agent::comment::CodeReview,
-        document::ai_document_model::{AIDocumentId, AIDocumentVersion},
-    },
-    server::datetime_ext::DateTimeExt,
-    terminal::model::block::BlockId,
-    AIAgentTodoList,
+use super::api::convert_conversation::convert_tool_call_result_to_input;
+use super::api::{
+    user_inputs_from_messages, ConversionParams, ConvertAPIMessageToClientOutputMessage,
 };
-
+use super::conversation::{context_in_exchanges, update_todo_list_from_todo_op};
 use super::{
-    api::{
-        convert_conversation::convert_tool_call_result_to_input, user_inputs_from_messages,
-        ConversionParams, ConvertAPIMessageToClientOutputMessage,
-    },
-    conversation::{context_in_exchanges, update_todo_list_from_todo_op},
     AIAgentContext, AIAgentExchange, AIAgentExchangeId, AIAgentOutput, AIAgentOutputMessage,
     AIAgentOutputStatus, MaybeAIAgentOutputMessage, MessageId, MessageToAIAgentOutputMessageError,
     Shared,
 };
+use crate::ai::agent::comment::CodeReview;
+use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
+use crate::server::datetime_ext::DateTimeExt;
+use crate::terminal::model::block::BlockId;
+use crate::AIAgentTodoList;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TaskId(String);
@@ -566,6 +558,19 @@ impl Task {
 
     pub fn source(&self) -> Option<&api::Task> {
         self.try_get_source().ok()
+    }
+
+    pub(super) fn source_for_persistence(&self) -> Option<api::Task> {
+        match &self.data {
+            TaskImpl::Server(server_data) => Some(server_data.source.clone()),
+            // Optimistic root tasks have a client-generated UUID and no
+            // server-side identity yet. Persisting a stub `api::Task` for them
+            // produces an orphan row in `agent_tasks` that survives the later
+            // server-side upgrade and breaks restore by competing with the
+            // real server root for parentless-task selection. See QUALITY-774.
+            TaskImpl::Optimistic(optimistic::Task::Root) => None,
+            TaskImpl::Optimistic(optimistic::Task::CLIAgent(_)) => None,
+        }
     }
 
     pub fn messages(&self) -> impl Iterator<Item = &api::Message> {

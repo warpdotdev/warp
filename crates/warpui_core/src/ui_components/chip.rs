@@ -1,16 +1,11 @@
-use crate::{
-    elements::{
-        ConstrainedBox, Container, CrossAxisAlignment, Flex, Icon, MainAxisAlignment, MainAxisSize,
-        ParentElement,
-    },
-    scene::Border,
-    Element,
+use super::components::{UiComponent, UiComponentStyles};
+use super::text::Span;
+use crate::elements::{
+    ConstrainedBox, Container, CrossAxisAlignment, Flex, Icon, MainAxisAlignment, MainAxisSize,
+    ParentElement,
 };
-
-use super::{
-    components::{UiComponent, UiComponentStyles},
-    text::Span,
-};
+use crate::scene::Border;
+use crate::Element;
 
 pub struct Chip {
     label: String,
@@ -54,6 +49,7 @@ impl UiComponent for Chip {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Min);
 
+        let has_icon = self.icon.is_some();
         if let Some(icon) = self.icon {
             label_and_button.add_child(
                 ConstrainedBox::new(icon.finish())
@@ -63,15 +59,15 @@ impl UiComponent for Chip {
             );
         }
 
-        label_and_button.add_child(
-            Container::new(
-                ConstrainedBox::new(Span::new(self.label, styles).build().finish())
-                    .with_max_width(240.)
-                    .finish(),
-            )
-            .with_margin_left(5.)
-            .finish(),
+        let mut label_container = Container::new(
+            ConstrainedBox::new(Span::new(self.label, styles).build().finish())
+                .with_max_width(240.)
+                .finish(),
         );
+        if has_icon {
+            label_container = label_container.with_margin_left(5.);
+        }
+        label_and_button.add_child(label_container.finish());
 
         if let Some(close_button) = self.close_button {
             label_and_button.add_child(Container::new(close_button).with_margin_left(10.).finish());

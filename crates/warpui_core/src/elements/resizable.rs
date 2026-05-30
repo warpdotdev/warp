@@ -1,20 +1,14 @@
-use std::{
-    mem,
-    sync::{Arc, Mutex, MutexGuard},
-};
+use std::mem;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use pathfinder_color::ColorU;
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
-};
-
-use crate::{
-    event::DispatchedEvent, platform::Cursor, AfterLayoutContext, AppContext, Element,
-    EventContext, PaintContext, SizeConstraint,
-};
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 
 use super::{Fill, Point, ZIndex};
+use crate::event::DispatchedEvent;
+use crate::platform::Cursor;
+use crate::{AfterLayoutContext, AppContext, Element, EventContext, PaintContext, SizeConstraint};
 
 const DRAGBAR_WIDTH: f32 = 5.0;
 

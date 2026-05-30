@@ -1,7 +1,9 @@
-use itertools::Itertools;
-use serde::{Deserialize, Serialize};
 #[cfg(not(test))]
 use std::env::var_os;
+
+use anyhow::Context;
+use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 use vec1::{vec1, Vec1};
 use warpui::keymap::Keystroke;
 #[cfg(not(test))]
@@ -9,7 +11,6 @@ use warpui::keymap::Trigger;
 use warpui::AppContext;
 
 use crate::settings::InputSettings;
-use anyhow::Context;
 use settings::Setting as _;
 use warpui::SingletonEntity as _;
 
@@ -21,7 +22,6 @@ pub fn sync_smart_binding_to_matcher(app: &mut AppContext) {
     let enabled = *InputSettings::as_ref(app).smart_layout_aware_bindings.value();
     app.set_smart_binding_enabled(enabled);
 }
-
 /// Environment variable to disable saving keybindings to file (used in integration tests)
 pub const DISABLE_SAVE_ENV_VAR: &str = "WARP_TEST_DISABLE_KEYBINDING_SAVE";
 const REMOVED_KEYBINDING_SERIALIZATION: &str = "none";
@@ -42,7 +42,6 @@ impl UserDefinedKeybinding {
     }
 }
 
-#[cfg(not(test))]
 const KEYBINDINGS_FILE_NAME: &str = "keybindings.yaml";
 
 /// Load all stored custom keybindings into the UI framework so that they are used
@@ -105,7 +104,6 @@ where
     save_custom_keybindings(map);
 }
 
-#[cfg(not(test))]
 pub fn keybinding_file_path() -> std::path::PathBuf {
     warp_core::paths::config_local_dir().join(KEYBINDINGS_FILE_NAME)
 }
@@ -227,5 +225,5 @@ impl TryFrom<PersistedTrigger> for UserDefinedKeybinding {
 }
 
 #[cfg(test)]
-#[path = "keyboard_test.rs"]
+#[path = "keyboard_tests.rs"]
 mod tests;

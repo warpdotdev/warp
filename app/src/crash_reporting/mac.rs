@@ -1,22 +1,27 @@
-#![allow(deprecated)]
-
-use cocoa::{
-    base::{id, nil, BOOL},
-    foundation::NSAutoreleasePool,
-};
-use warpui::platform::mac::make_nsstring;
+use objc2::rc::autoreleasepool;
+use objc2_foundation::NSString;
 
 use super::*;
 
 // Functions implemented in objC files.
 extern "C" {
-    fn startSentry(sentryUrl: id, environment: id, version: id, isDogfood: BOOL);
+    fn startSentry(
+        sentryUrl: &NSString,
+        environment: &NSString,
+        version: &NSString,
+        isDogfood: bool,
+    );
     fn stopSentry();
     #[allow(dead_code)] // Only gets called when built in debug mode.
     fn crashSentry();
-    fn setUser(userId: id);
-    fn recordBreadcrumb(message: id, category: id, level: id, seconds_since_epoch: f64);
-    fn setTag(key: id, value: id);
+    fn setUser(userId: &NSString);
+    fn recordBreadcrumb(
+        message: &NSString,
+        category: &NSString,
+        level: &NSString,
+        seconds_since_epoch: f64,
+    );
+    fn setTag(key: &NSString, value: &NSString);
 }
 
 pub fn init_cocoa_sentry() {
@@ -24,20 +29,23 @@ pub fn init_cocoa_sentry() {
     let environment = super::get_environment();
 
     log::info!("Initializing Sentry for cocoa app with endpoint {endpoint}");
-    unsafe {
-        let pool = NSAutoreleasePool::new(nil);
-        let dsn = make_nsstring(endpoint);
+    // This runs during early init from `init_sentry`, before the AppKit event
+    // loop drains its ambient pool, so open a local pool to bound the bridge
+    // NSStrings.
+    autoreleasepool(|_| {
+        let dsn = NSString::from_str(endpoint.as_ref());
         let environment_name: &str = environment.as_ref();
-        let environment = make_nsstring(environment_name);
-        let release = make_nsstring(release_version());
-        startSentry(
-            dsn,
-            environment,
-            release,
-            ChannelState::channel().is_dogfood() as BOOL,
-        );
-        pool.drain();
-    }
+        let environment = NSString::from_str(environment_name);
+        let release = NSString::from_str(release_version());
+        unsafe {
+            startSentry(
+                &dsn,
+                &environment,
+                &release,
+                ChannelState::channel().is_dogfood(),
+            );
+        }
+    });
 }
 
 pub fn uninit_cocoa_sentry() {
@@ -53,12 +61,15 @@ pub fn crash() {
 }
 
 pub fn set_user_id(user_id: &str) {
-    unsafe {
-        let pool = NSAutoreleasePool::new(nil);
-        let user_id = make_nsstring(user_id);
-        setUser(user_id);
-        pool.drain();
-    }
+    // Invoked from `set_optional_user_information` on auth state changes and
+    // init, whose thread of origin varies, so open a local pool to bound the
+    // bridge NSString.
+    autoreleasepool(|_| {
+        let user_id = NSString::from_str(user_id);
+        unsafe {
+            setUser(&user_id);
+        }
+    });
 }
 
 pub fn forward_breadcrumb(rust_breadcrumb: &sentry::Breadcrumb) {
@@ -69,22 +80,28 @@ pub fn forward_breadcrumb(rust_breadcrumb: &sentry::Breadcrumb) {
         .timestamp
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .map_or(0., |n| n.as_secs_f64());
-    unsafe {
-        let pool = NSAutoreleasePool::new(nil);
-        recordBreadcrumb(
-            make_nsstring(message),
-            make_nsstring(category),
-            make_nsstring(level.as_str()),
-            unix_timestamp,
-        );
-        pool.drain();
-    }
+    // Runs on whichever Rust thread emitted the breadcrumb (Sentry's
+    // `before_breadcrumb`), which has no ambient pool, so bound the bridge
+    // NSStrings in a local pool.
+    autoreleasepool(|_| {
+        let message = NSString::from_str(message);
+        let category = NSString::from_str(category);
+        let level = NSString::from_str(level.as_str());
+        unsafe {
+            recordBreadcrumb(&message, &category, &level, unix_timestamp);
+        }
+    });
 }
 
 pub fn set_tag(key: &str, value: &str) {
-    unsafe {
-        let pool = NSAutoreleasePool::new(nil);
-        setTag(make_nsstring(key), make_nsstring(value));
-        pool.drain();
-    }
+    // Called from `init_cocoa_sentry`'s tag loop and the `set_tag` wrapper in
+    // `mod.rs` on Rust threads, so open a local pool to bound the bridge
+    // NSStrings.
+    autoreleasepool(|_| {
+        let key = NSString::from_str(key);
+        let value = NSString::from_str(value);
+        unsafe {
+            setTag(&key, &value);
+        }
+    });
 }

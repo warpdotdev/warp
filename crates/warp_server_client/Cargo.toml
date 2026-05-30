@@ -7,12 +7,15 @@ publish.workspace = true
 license.workspace = true
 
 [features]
-test-util = []
+test-util = ["cloud_object_client/test-util", "cloud_objects/test-util"]
 
 [dependencies]
 anyhow.workspace = true
 bincode.workspace = true
 chrono.workspace = true
+cloud_object_client.workspace = true
+cloud_object_models.workspace = true
+cloud_objects.workspace = true
 cynic.workspace = true
 derivative.workspace = true
 itertools.workspace = true

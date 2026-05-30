@@ -1,8 +1,5 @@
-use crate::elements::{ConstrainedBox, Empty, Flex, ParentElement};
-use crate::{
-    elements::{Container, Element},
-    ui_components::components::{UiComponent, UiComponentStyles},
-};
+use crate::elements::{ConstrainedBox, Container, Element, Empty, Flex, ParentElement};
+use crate::ui_components::components::{UiComponent, UiComponentStyles};
 
 pub struct ProgressBar {
     progress: f32,

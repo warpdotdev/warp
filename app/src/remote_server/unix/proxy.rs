@@ -10,6 +10,8 @@
 //! 4. Connect to `server.sock` and bridge stdin/stdout to the socket using
 //!    the existing 4-byte length-prefixed frame format.
 
+use std::fs::Permissions;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -17,32 +19,117 @@ use std::time::Duration;
 
 use super::super::setup;
 
-/// Path to the daemon's Unix domain socket.
-pub(super) fn socket_path() -> PathBuf {
-    let dir = setup::remote_server_dir();
+/// Path to the daemon's Unix domain socket, versioned on release channels.
+pub(super) fn socket_path(identity_key: &str) -> PathBuf {
+    let dir = setup::remote_server_daemon_dir(identity_key);
     let expanded = shellexpand::tilde(&dir).into_owned();
-    PathBuf::from(expanded).join("server.sock")
+    PathBuf::from(expanded).join(setup::daemon_socket_name())
 }
 
-/// Path to the daemon's PID file (also used as the flock target).
-pub(super) fn pid_path() -> PathBuf {
-    let dir = setup::remote_server_dir();
+/// Path to the daemon's PID file (also used as the flock target),
+/// versioned on release channels.
+pub(super) fn pid_path(identity_key: &str) -> PathBuf {
+    let dir = setup::remote_server_daemon_dir(identity_key);
     let expanded = shellexpand::tilde(&dir).into_owned();
-    PathBuf::from(expanded).join("server.pid")
+    PathBuf::from(expanded).join(setup::daemon_pid_name())
 }
+
+/// Daemon directory for the given identity key (expanded, no tilde).
+fn daemon_dir(identity_key: &str) -> PathBuf {
+    let dir = setup::remote_server_daemon_dir(identity_key);
+    let expanded = shellexpand::tilde(&dir).into_owned();
+    PathBuf::from(expanded)
+}
+
+/// Scans the identity-key daemon directory and removes socket/PID files
+/// from previous daemon versions.
+///
+/// Old daemons are **not** killed — they may still be serving active
+/// connections from an older Warp client. Removing their socket file
+/// prevents new proxies from accidentally connecting to them, and the
+/// daemon's built-in grace timer (10 min with no connections) will shut
+/// it down naturally after the last client disconnects.
+///
+/// Errors are logged but do not prevent the proxy from proceeding.
+fn cleanup_old_versions(identity_key: &str) {
+    let dir = daemon_dir(identity_key);
+    let current_socket = setup::daemon_socket_name();
+    let current_pid = setup::daemon_pid_name();
+
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+
+        // Remove old PID files: server*.pid that aren't the current version.
+        if name_str.ends_with(".pid") && name_str.starts_with("server") && name_str != current_pid {
+            log::info!("Proxy: removing old PID file {name_str}");
+            let _ = std::fs::remove_file(entry.path());
+        }
+
+        // Remove old socket files: server*.sock that aren't the current version.
+        if name_str.ends_with(".sock")
+            && name_str.starts_with("server")
+            && name_str != current_socket
+        {
+            log::info!("Proxy: removing old socket file {name_str}");
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Ensures the daemon directory exists with owner-only permissions.
+pub(super) fn ensure_private_daemon_dir(path: &std::path::Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(path)?;
+    std::fs::set_permissions(path, Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+/// Maximum usable `sun_path` length for Unix domain sockets.
+///
+/// macOS has the strictest limit (104 bytes including null terminator,
+/// 103 usable). We use 103 on all platforms so a single binary works
+/// everywhere without per-target branching.
+const SUN_PATH_MAX: usize = 103;
 
 /// Entry point for `remote-server-proxy`.
 ///
 /// Ensures the daemon is running, then bridges stdin/stdout to the daemon's
 /// Unix socket for the lifetime of this SSH session.
-pub fn run() -> anyhow::Result<()> {
-    let socket_path = socket_path();
-    let pid_path = pid_path();
+pub fn run(identity_key: &str) -> anyhow::Result<()> {
+    let socket_path = socket_path(identity_key);
+    let pid_path = pid_path(identity_key);
+
+    // Guard against socket paths that exceed the sun_path limit.
+    // Without this check, UnixListener::bind fails silently in the
+    // daemon and the proxy times out after 10s with no actionable
+    // error.  With hashed identity + version names the path should
+    // always fit, so hitting this guard indicates a new path component
+    // was added without budgeting for sun_path.  The error surfaces in
+    // client telemetry (RemoteServerInitialization) and daemon logs.
+    let path_len = socket_path.as_os_str().len();
+    if path_len > SUN_PATH_MAX {
+        anyhow::bail!(
+            "daemon socket path is {path_len} bytes, which exceeds the \
+             sun_path limit of {SUN_PATH_MAX} bytes: {}",
+            socket_path.display()
+        );
+    }
 
     // Ensure the parent directory exists.
     if let Some(parent) = socket_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        ensure_private_daemon_dir(parent)?;
     }
+
+    // Clean up socket/PID files from previous daemon versions so stale
+    // daemons left over after autoupdate don't linger.
+    cleanup_old_versions(identity_key);
 
     // ---- Acquire exclusive flock on the PID file --------------------------------
     //
@@ -83,6 +170,8 @@ pub fn run() -> anyhow::Result<()> {
         let exe = std::env::current_exe()?;
         let mut cmd = command::blocking::Command::new(&exe);
         cmd.arg("remote-server-daemon")
+            .arg("--identity-key")
+            .arg(identity_key)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());

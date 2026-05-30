@@ -1,34 +1,27 @@
-use std::{
-    collections::{HashMap, VecDeque},
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use ai::index::build_outline;
 use async_channel::Sender;
 use futures::stream::AbortHandle;
 use instant::Instant;
-use repo_metadata::CanonicalizedPath;
-use repo_metadata::{
-    repositories::{DetectedRepositories, DetectedRepositoriesEvent},
-    repository::{BufferingRepositorySubscriber, RepositorySubscriber, SubscriberId},
-    DirectoryWatcher, Repository, RepositoryUpdate,
+use repo_metadata::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
+use repo_metadata::repository::{
+    BufferingRepositorySubscriber, RepositorySubscriber, SubscriberId,
 };
+use repo_metadata::{CanonicalizedPath, DirectoryWatcher, Repository, RepositoryUpdate};
 use settings::Setting as _;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
-use crate::{
-    ai::persisted_workspace::all_working_directories,
-    safe_info, safe_warn, send_telemetry_from_ctx,
-    settings::{
-        AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, InputSettings,
-        InputSettingsChangedEvent,
-    },
-    workspaces::user_workspaces::UserWorkspaces,
-    TelemetryEvent,
-};
-
 use super::OutlineStatus;
+use crate::ai::persisted_workspace::all_working_directories;
+use crate::settings::{
+    AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, InputSettings,
+    InputSettingsChangedEvent,
+};
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{safe_info, safe_warn, send_telemetry_from_ctx, TelemetryEvent};
 
 /// State for a repository outline, containing both the repository handle and the outline status.
 #[derive(Debug)]
@@ -55,12 +48,18 @@ pub struct RepoOutlines {
 
     /// An `AbortHandle` for the active outline computation task.
     active_outline_task: Option<AbortHandle>,
+
+    indexing_enabled: bool,
 }
 
 const REPO_WATCHER_DEBOUNCE_DURATION: Duration = Duration::from_secs(10);
 
 impl RepoOutlines {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
+        Self::new_with_indexing_enabled(true, ctx)
+    }
+
+    pub fn new_with_indexing_enabled(indexing_enabled: bool, ctx: &mut ModelContext<Self>) -> Self {
         ctx.subscribe_to_model(&AISettings::handle(ctx), |me, event, ctx| {
             if let AISettingsChangedEvent::IsAnyAIEnabled { .. } = event {
                 Self::handle_setting_change_event(me, ctx);
@@ -73,11 +72,13 @@ impl RepoOutlines {
             }
         });
 
-        if !cfg!(any(
-            test,
-            feature = "fast_dev",
-            feature = "integration_tests"
-        )) {
+        if indexing_enabled
+            && !cfg!(any(
+                test,
+                feature = "fast_dev",
+                feature = "integration_tests"
+            ))
+        {
             ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), |me, event, ctx| {
                 let DetectedRepositoriesEvent::DetectedGitRepo {
                     repository,
@@ -98,6 +99,7 @@ impl RepoOutlines {
             outlines: Default::default(),
             outline_queue: Default::default(),
             active_outline_task: Default::default(),
+            indexing_enabled,
         }
     }
 
@@ -108,13 +110,14 @@ impl RepoOutlines {
             outlines: Default::default(),
             outline_queue: Default::default(),
             active_outline_task: Default::default(),
+            indexing_enabled: true,
         }
     }
 
     fn index_repo(&mut self, repository: ModelHandle<Repository>, ctx: &mut ModelContext<Self>) {
         let repo_path = repository.as_ref(ctx).root_dir().to_local_path_lossy();
         if self.get_outline_internal(&repo_path).is_none()
-            && Self::should_build_outlines(ctx)
+            && self.should_build_outlines(ctx)
             && !self.outline_queue.contains(&repo_path)
         {
             let outline_state = OutlineState {
@@ -130,19 +133,20 @@ impl RepoOutlines {
 
     /// Check if outlines should be built based on if codebase context enabled OR
     /// outline codebase symbols for @ context menu settings.
-    fn should_build_outlines(ctx: &ModelContext<Self>) -> bool {
-        UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx)
-            || *InputSettings::as_ref(ctx)
-                .outline_codebase_symbols_for_at_context_menu
-                .value()
+    fn should_build_outlines(&self, ctx: &ModelContext<Self>) -> bool {
+        self.indexing_enabled
+            && (UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx)
+                || *InputSettings::as_ref(ctx)
+                    .outline_codebase_symbols_for_at_context_menu
+                    .value())
     }
 
     fn handle_setting_change_event(me: &mut RepoOutlines, ctx: &mut ModelContext<Self>) {
-        if Self::should_build_outlines(ctx) {
+        if me.should_build_outlines(ctx) {
             // Add all working directories to the queue and start processing.
             for dir in all_working_directories(ctx).into_iter() {
                 if let Some(repository) =
-                    DetectedRepositories::as_ref(ctx).get_watched_repo_for_path(&dir, ctx)
+                    DetectedRepositories::as_ref(ctx).get_local_watched_repo_for_path(&dir, ctx)
                 {
                     me.index_repo(repository, ctx);
                 }
@@ -193,7 +197,7 @@ impl RepoOutlines {
 
     /// Computes the outline for the repo containing the next path in the queue, if any.
     fn compute_next_outline(&mut self, ctx: &mut ModelContext<Self>) {
-        if Self::should_build_outlines(ctx) && self.active_outline_task.is_none() {
+        if self.should_build_outlines(ctx) && self.active_outline_task.is_none() {
             if let Some(repo_root) = self.outline_queue.pop_front() {
                 self.compute_outline_for_repo(repo_root, ctx);
             }
@@ -222,7 +226,7 @@ impl RepoOutlines {
                 move |me, res, ctx| {
                     // Don't process this result if the setting has been disabled.
                     // The abort handle doesn't always abort.
-                    if Self::should_build_outlines(ctx) {
+                    if me.should_build_outlines(ctx) {
                         match res {
                             Ok((canonicalized_path, outline, parse_duration)) => {
                                 send_telemetry_from_ctx!(

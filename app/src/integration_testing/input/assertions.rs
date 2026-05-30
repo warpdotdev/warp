@@ -1,9 +1,8 @@
-use warpui::{async_assert, async_assert_eq, integration::AssertionCallback};
+use warpui::integration::AssertionCallback;
+use warpui::{async_assert, async_assert_eq};
 
-use crate::{
-    integration_testing::view_getters::{input_view, single_input_view_for_tab},
-    terminal::input::InputSuggestionsMode,
-};
+use crate::integration_testing::view_getters::{input_view, single_input_view_for_tab};
+use crate::terminal::input::InputSuggestionsMode;
 
 pub fn assert_workflow_info_box_is_open(tab_idx: usize, pane_idx: usize) -> AssertionCallback {
     Box::new(move |app, window_id| {

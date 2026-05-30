@@ -14,9 +14,9 @@ use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::result_renderer::ItemHighlightState;
 use crate::search::{SearchItem, SyncDataSource};
 use crate::server::ids::SyncId;
-use crate::terminal::input::inline_menu::styles as inline_styles;
 use crate::terminal::input::inline_menu::{
-    default_navigation_message_items, InlineMenuAction, InlineMenuMessageArgs, InlineMenuType,
+    default_navigation_message_items, styles as inline_styles, InlineMenuAction,
+    InlineMenuMessageArgs, InlineMenuType,
 };
 use crate::terminal::input::message_bar::Message;
 use crate::workflows::CloudWorkflow;
@@ -113,9 +113,7 @@ impl SyncDataSource for PromptsMenuDataSource {
                     .collect()
             })
             .map_err(|e| {
-                Box::new(DataSourceSearchError {
-                    message: e.to_string(),
-                }) as DataSourceRunErrorWrapper
+                Box::new(DataSourceSearchError::new(e.to_string())) as DataSourceRunErrorWrapper
             })
     }
 }

@@ -6,31 +6,34 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use indexmap::IndexMap;
-
-use crate::ai::request_usage_model::RequestLimitInfo;
-use crate::auth::AuthStateProvider;
-use crate::report_if_error;
-use crate::terminal::CLIAgent;
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use cfg_if::cfg_if;
 use chrono::{DateTime, Utc};
-use lazy_static::lazy_static;
-use regex::Regex;
-use warpui::platform::OperatingSystem;
-use warpui::{
-    platform::keyboard::KeyCode, AppContext, Entity, ModelContext, SingletonEntity, UpdateModel,
+pub use cloud_object_models::{
+    AgentModeCommandExecutionPredicate, DEFAULT_COMMAND_EXECUTION_ALLOWLIST,
+    DEFAULT_COMMAND_EXECUTION_DENYLIST,
 };
-
+use indexmap::IndexMap;
+use regex::Regex;
+use serde::de::Deserializer;
+use serde::{Deserialize, Serialize};
 use settings::{
     define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
 };
-use warp_core::execution_mode::AppExecutionMode;
-use warp_core::features::FeatureFlag;
-
-use serde::{de::Deserializer, Deserialize, Serialize};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
+use warp_core::execution_mode::AppExecutionMode;
+use warp_core::features::FeatureFlag;
+use warpui::platform::keyboard::KeyCode;
+use warpui::platform::OperatingSystem;
+use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, UpdateModel};
+
+use crate::ai::agent::conversation::AIConversation;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::request_usage_model::RequestLimitInfo;
+use crate::auth::AuthStateProvider;
+use crate::report_if_error;
+use crate::settings::PrivacySettings;
+use crate::terminal::CLIAgent;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub enum FocusedTerminalInfoEvent {
     TerminalInfoUpdated,
@@ -484,148 +487,6 @@ pub enum AgentModeCodingPermissionsType {
     AllowReadingSpecificFiles,
 }
 
-/// Predicate types to match commands that can be executed by Agent Mode.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-enum AgentModeCommandExecutionPredicateType {
-    /// A regex with start (`^`) and end (`$`) anchors.
-    ///
-    /// We want regex rules to apply to the entire cmd string so we anchor them
-    /// (there isn't any efficient way to apply to the entire cmd string at match-time).
-    #[serde(with = "serde_regex")]
-    AnchoredRegex(Regex),
-}
-
-impl AgentModeCommandExecutionPredicateType {
-    fn new_regex(regex: &str) -> Result<Self, regex::Error> {
-        // Redundant anchors aren't a problem so we can unconditionally add them.
-        let anchored_regex = Regex::new(&format!("^{regex}$"))?;
-        Ok(Self::AnchoredRegex(anchored_regex))
-    }
-
-    fn matches(&self, cmd: &str) -> bool {
-        match self {
-            Self::AnchoredRegex(regex) => regex.is_match(cmd),
-        }
-    }
-}
-
-impl PartialEq for AgentModeCommandExecutionPredicateType {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::AnchoredRegex(a), Self::AnchoredRegex(b)) => {
-                // Indexing should be safe since they're guaranteed to have at least
-                // the anchors around them.
-                let a_unanchored = &a.as_str()[1..a.as_str().len() - 1];
-                let b_unanchored = &b.as_str()[1..b.as_str().len() - 1];
-                a_unanchored == b_unanchored
-            }
-        }
-    }
-}
-
-impl std::fmt::Display for AgentModeCommandExecutionPredicateType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::AnchoredRegex(regex) => {
-                write!(f, "{}", &regex.as_str()[1..regex.as_str().len() - 1])
-            }
-        }
-    }
-}
-
-/// A wrapper around [`AgentModeCommandExecutionPredicateType`] to enforce
-/// the use of the provided constructors rather than direct construction of the variants.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(transparent)]
-pub struct AgentModeCommandExecutionPredicate(AgentModeCommandExecutionPredicateType);
-
-impl schemars::JsonSchema for AgentModeCommandExecutionPredicate {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed("AgentModeCommandExecutionPredicate")
-    }
-
-    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        // In the settings file, predicates are serialized as plain regex strings.
-        gen.subschema_for::<String>()
-    }
-}
-
-impl AgentModeCommandExecutionPredicate {
-    pub fn new_regex(regex: &str) -> Result<Self, regex::Error> {
-        Ok(Self(AgentModeCommandExecutionPredicateType::new_regex(
-            regex,
-        )?))
-    }
-
-    pub fn matches(&self, cmd: &str) -> bool {
-        self.0.matches(cmd)
-    }
-}
-
-impl std::fmt::Display for AgentModeCommandExecutionPredicate {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl settings_value::SettingsValue for AgentModeCommandExecutionPredicate {
-    fn to_file_value(&self) -> serde_json::Value {
-        serde_json::Value::String(self.to_string())
-    }
-
-    fn from_file_value(value: &serde_json::Value) -> Option<Self> {
-        value.as_str().and_then(|s| Self::new_regex(s).ok())
-    }
-}
-
-lazy_static! {
-    // Matches optional args / options for a top-level command.
-    static ref OPTIONAL_ARGS_REGEX: Regex = Regex::new(r"(\s.*)?").expect("Can parse optional args regex");
-}
-
-cfg_if! {
-    // Compiling the regexes for the default command execution allowlist/denylist can be slow
-    // in an unoptimized build, so we use empty lists in unit tests.
-    if #[cfg(test)] {
-        lazy_static! {
-            pub static ref DEFAULT_COMMAND_EXECUTION_ALLOWLIST: Vec<AgentModeCommandExecutionPredicate> = vec![];
-            pub static ref DEFAULT_COMMAND_EXECUTION_DENYLIST: Vec<AgentModeCommandExecutionPredicate> = vec![];
-        }
-    } else {
-        lazy_static! {
-            pub static ref DEFAULT_COMMAND_EXECUTION_ALLOWLIST: Vec<AgentModeCommandExecutionPredicate> = vec![
-                AgentModeCommandExecutionPredicate::new_regex(&format!("cat{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default cat rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("echo{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default echo rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex("find .*").expect("Can parse default find rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("grep{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default grep rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("ls{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default ls rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex("which .*").expect("Can parse default which rule into regex"),
-            ];
-
-            pub static ref DEFAULT_COMMAND_EXECUTION_DENYLIST: Vec<AgentModeCommandExecutionPredicate> = vec![
-                AgentModeCommandExecutionPredicate::new_regex(&format!("bash{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default bash rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("fish{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default fish rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("pwsh{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default pwsh rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("sh{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default sh rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("zsh{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default zsh rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("curl{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default curl rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("eval{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default eval rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("exec{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default exec rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("source{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default source rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("wget{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default wget rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("dig{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default dig rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("nslookup{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default nslookup rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("host{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default host rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("ssh{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default ssh rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("scp{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default scp rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("rsync{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default rsync rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("telnet{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default telnet rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("rm{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default rm rule into regex"),
-            ];
-        }
-    }
-}
-
 /// Maps custom toolbar command regex patterns to CLI agent names.
 /// Keys are regex patterns (insertion-ordered), values are serialized CLIAgent names (e.g. "Claude").
 /// An empty string value means "Any CLI Agent" (CLIAgent::Unknown).
@@ -1007,6 +868,19 @@ define_settings_group!(AISettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: true,
     }
+    // Whether or not we should show the one-shot speedbump on Ask-User-Question cards.
+    //
+    // Not a user-visible setting - we model it as a setting so we can track state.
+    // Intentionally NOT cloud-synced: we want users to see the first-time nudge on
+    // each fresh device, and we avoid a cloud-sync race that would make the flag
+    // silently stay `false` on new devices after being consumed once elsewhere.
+    should_show_agent_mode_ask_user_question_speedbump: ShouldShowAgentModeAskUserQuestionSpeedbump {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: true,
+    }
     // Whether to use locally loaded AWS credentials for Bedrock-enabled requests.
     aws_bedrock_credentials_enabled: AwsBedrockCredentialsEnabled {
         type: bool,
@@ -1170,6 +1044,19 @@ define_settings_group!(AISettings, settings: [
         private: true,
     }
 
+    // This is not a user-visible setting - it's merely a one-time flag to track if the
+    // orchestration launch modal has been shown to the user.
+    //
+    // We model it as a setting so it's only shown once to a given user regardless of the number of
+    // devices they use.
+    did_check_to_trigger_orchestration_launch_modal: DidShowOrchestrationLaunchModal {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        private: true,
+    }
+
     // Used to determine whether the "What's new in Oz" section of the agent view
     // zero state is expanded or collapsed by default.
     should_expand_oz_updates: ShouldExpandOzUpdates {
@@ -1192,16 +1079,16 @@ define_settings_group!(AISettings, settings: [
         description: "Whether the \"What's new\" section is shown in the agent view.",
     }
 
-    // Whether or not the user has enabled the ability to use Warp credits even when providing
-    // their own LLM provider API key.
-    can_use_warp_credits_with_byok: CanUseWarpCreditsWithByok {
+    // Whether or not the user has enabled fallback to Warp credits for user-provided models.
+    can_use_warp_credits_for_fallback: CanUseWarpCreditsForFallback {
         type: bool,
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
+        storage_key: "CanUseWarpCreditsWithByok",
         toml_path: "cloud_platform.third_party_api_keys.can_use_warp_credits_with_byok",
-        description: "Whether Warp credits can be used even when providing your own API key.",
+        description: "Whether Warp credits can be used as a fallback for user-provided models.",
     }
 
     should_render_use_agent_footer_for_user_commands: ShouldRenderUseAgentToolbarForUserCommands {
@@ -1357,20 +1244,6 @@ define_settings_group!(AISettings, settings: [
         description: "Whether computer use is enabled for cloud agent conversations.",
     }
 
-    // Whether multi-agent orchestration is enabled. When enabled, the agent can
-    // spawn and coordinate parallel sub-agents via StartAgent / SendMessageToAgent
-    // tools. This setting is only effective when FeatureFlag::Orchestration is also
-    // enabled.
-    orchestration_enabled: OrchestrationEnabled {
-        type: bool,
-        default: true,
-        supported_platforms: SupportedPlatforms::DESKTOP,
-        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        private: false,
-        toml_path: "agents.warp_agent.other.orchestration_enabled",
-        description: "Whether multi-agent orchestration is enabled.",
-        feature_flag: FeatureFlag::Orchestration,
-    }
 
     // Whether file-based MCP servers from third-party AI tools (e.g. Claude, Codex) should
     // be automatically detected and spawned. Warp-native config files (.warp/.mcp.json) are
@@ -1445,6 +1318,50 @@ define_settings_group!(AISettings, settings: [
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Never,
         private: true,
+    }
+
+    // Whether Oz should add attribution (co-author line) to commit messages and PRs.
+    // This is the user-level preference; it may be overridden by the team-level
+    // `enable_warp_attribution` AdminEnablementSetting (see
+    // `UserWorkspaces::get_agent_attribution_setting`).
+    agent_attribution_enabled: AgentAttributionEnabled {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        private: false,
+        toml_path: "agents.warp_agent.other.agent_attribution_enabled",
+        description: "Whether the Warp Agent adds an attribution co-author line to commit messages and pull requests it creates.",
+    }
+
+    should_force_disable_cloud_handoff: ShouldForceDisableCloudHandoff {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::DESKTOP,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.other.should_force_disable_cloud_handoff",
+        description: "Whether to force-disable local-to-cloud handoff.",
+    }
+
+    should_force_disable_ampersand_handoff: ShouldForceDisableAmpersandHandoff {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::DESKTOP,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.other.should_force_disable_ampersand_handoff",
+        description: "Whether to force-disable the & prefix for cloud handoff compose mode.",
+    }
+
+    auto_handoff_on_sleep_enabled: AutoHandoffOnSleepEnabled {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::MAC,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.other.auto_handoff_on_sleep_enabled",
+        description: "Whether Warp automatically hands off local agent conversations to cloud when the computer is about to sleep.",
     }
 ]);
 
@@ -1623,9 +1540,78 @@ impl AISettings {
     }
 
     pub fn is_orchestration_enabled(&self, app: &warpui::AppContext) -> bool {
-        FeatureFlag::Orchestration.is_enabled()
-            && self.is_any_ai_enabled(app)
-            && *self.orchestration_enabled
+        FeatureFlag::OrchestrationV2.is_enabled() && self.is_any_ai_enabled(app)
+    }
+
+    /// Returns true when local-to-cloud handoff is effectively enabled.
+    /// False when the user/org has disabled it, cloud conversations are off,
+    /// or AI is globally off.
+    pub fn is_cloud_handoff_enabled(&self, app: &warpui::AppContext) -> bool {
+        if !self.is_any_ai_enabled(app) || *self.should_force_disable_cloud_handoff {
+            return false;
+        }
+        if !FeatureFlag::OzHandoff.is_enabled()
+            || !FeatureFlag::HandoffLocalCloud.is_enabled()
+            || !cfg!(all(feature = "local_fs", not(target_family = "wasm")))
+        {
+            return false;
+        }
+        let privacy = PrivacySettings::as_ref(app);
+        if !privacy.is_cloud_conversation_storage_enabled {
+            return false;
+        }
+        !matches!(
+            UserWorkspaces::as_ref(app).get_cloud_conversation_storage_enablement_setting(),
+            crate::workspaces::workspace::AdminEnablementSetting::Disable
+        )
+    }
+    pub fn is_cloud_handoff_enabled_for_conversation(
+        &self,
+        conversation: Option<&AIConversation>,
+        app: &warpui::AppContext,
+    ) -> bool {
+        self.is_cloud_handoff_enabled(app)
+            && !conversation
+                .is_some_and(|conversation| is_orchestration_conversation(conversation, app))
+    }
+
+    pub fn is_cloud_handoff_enabled_for_terminal_view(
+        &self,
+        terminal_view_id: EntityId,
+        app: &warpui::AppContext,
+    ) -> bool {
+        let active_conversation =
+            BlocklistAIHistoryModel::as_ref(app).active_conversation(terminal_view_id);
+        self.is_cloud_handoff_enabled_for_conversation(active_conversation, app)
+    }
+
+    pub fn is_ampersand_handoff_enabled(&self, app: &warpui::AppContext) -> bool {
+        self.is_cloud_handoff_enabled(app) && !*self.should_force_disable_ampersand_handoff
+    }
+    pub fn is_ampersand_handoff_enabled_for_conversation(
+        &self,
+        conversation: Option<&AIConversation>,
+        app: &warpui::AppContext,
+    ) -> bool {
+        self.is_cloud_handoff_enabled_for_conversation(conversation, app)
+            && !*self.should_force_disable_ampersand_handoff
+    }
+
+    pub fn is_ampersand_handoff_enabled_for_terminal_view(
+        &self,
+        terminal_view_id: EntityId,
+        app: &warpui::AppContext,
+    ) -> bool {
+        self.is_cloud_handoff_enabled_for_terminal_view(terminal_view_id, app)
+            && !*self.should_force_disable_ampersand_handoff
+    }
+
+    pub fn is_auto_handoff_on_sleep_enabled(&self, app: &warpui::AppContext) -> bool {
+        self.is_cloud_handoff_enabled(app)
+            && self
+                .auto_handoff_on_sleep_enabled
+                .is_supported_on_current_platform()
+            && *self.auto_handoff_on_sleep_enabled
     }
 
     /// Determines whether a quota reset banner should be displayed to the user.
@@ -1714,11 +1700,7 @@ impl AISettings {
     }
 
     pub fn is_command_denylist_editable(&self, app: &AppContext) -> bool {
-        let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
-            .has_override_for_execute_commands_denylist();
-
-        self.is_any_ai_enabled(app) && !set_by_workspace
+        self.is_any_ai_enabled(app)
     }
 
     pub fn is_command_allowlist_editable(&self, app: &AppContext) -> bool {
@@ -1782,6 +1764,10 @@ impl AISettings {
     pub fn is_mcp_permission_editable(&self, app: &AppContext) -> bool {
         // TODO: Allow workspace overrides on MCP permissions.
         self.is_any_ai_enabled(app)
+    }
+
+    pub fn is_run_agents_permissions_editable(&self, app: &AppContext) -> bool {
+        self.is_orchestration_enabled(app)
     }
 
     pub fn show_code_suggestion_speedbump(&self, app: &AppContext) -> bool {
@@ -1914,6 +1900,12 @@ impl AISettings {
     }
 }
 
+fn is_orchestration_conversation(conversation: &AIConversation, app: &AppContext) -> bool {
+    conversation.has_parent_agent()
+        || !BlocklistAIHistoryModel::as_ref(app)
+            .child_conversation_ids_of(&conversation.id())
+            .is_empty()
+}
 /// Singleton model that caches compiled regexes for the `cli_agent_footer_enabled_commands`
 /// setting. Each entry pairs a compiled regex with the CLI agent it maps to.
 pub struct CompiledCommandsForCodingAgentToolbar {

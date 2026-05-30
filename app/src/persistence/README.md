@@ -26,10 +26,10 @@ This will create a new folder with an up.sql and down.sql.
 
 ## Step 3: Run the migration + generate the schema
 ```
-cd <warp-internal repo>
+cd <repo root>
 diesel migration run --database-url="/Users/$USER/Library/Application Support/dev.warp.Warp-Local/warp.sqlite"
 ```
-This will run the migration on the same warp that runs when you run the app locally. This automatically generates or updates the `app/src/persistence/schema.rs`. We do not make manual edits to `schema.rs`.
+This will run the migration on the same warp that runs when you run the app locally. This automatically generates or updates the `crates/persistence/src/schema.rs`. We do not make manual edits to `schema.rs`.
 
 You can also print the schema from a database that already has the migration with:
 ```
@@ -49,12 +49,12 @@ diesel migration redo --database-url="/Users/$USER/Library/Application Support/d
 - If there's a table `foos` and a table `bars`, and `bars` has a column with a foreign key that references `foos.id`, name it `foo_id`.
 
 # The `schema.patch` file
-The `app/src/persistence/schema.patch` is manually updated by us. This file lets us make manual
+The `crates/persistence/schema.patch` is manually updated by us. This file lets us make manual
 changes on top of the auto-generated `schema.rs` file produced by `diesel_cli`.
 
 To create the `schema.patch` file, we:
 1. Run the diesel migrations
 1. Manually edit `schema.rs`
-1. Run `git diff -U6 > app/src/persistence/schema.patch`.
+1. Run `git diff -U6 > crates/persistence/schema.patch`.
 
 You can read more about this patch file in the official [Diesel documentation](https://diesel.rs/guides/configuring-diesel-cli.html#the-patch_file-field).

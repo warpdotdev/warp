@@ -2,14 +2,12 @@ use std::path::PathBuf;
 
 use futures_util::future::LocalBoxFuture;
 
+use super::menu::MenuItemPropertyChanges;
+use crate::keymap::Keystroke;
 use crate::modals::ModalId;
 use crate::windowing::state::ApplicationStage;
 use crate::windowing::{WindowCallbackDispatcher, WindowManager};
-use crate::{
-    keymap::Keystroke, notification, AppContext, ClosedWindowData, SingletonEntity, WindowId,
-};
-
-use super::menu::MenuItemPropertyChanges;
+use crate::{notification, AppContext, ClosedWindowData, SingletonEntity, WindowId};
 
 pub type AppInitCallbackFn =
     Box<dyn FnOnce(&mut crate::AppContext, LocalBoxFuture<'static, crate::App>)>;
@@ -105,7 +103,12 @@ impl AppCallbackDispatcher {
     // click on/interact with a notification.
     // TODO(CORE-2322): implement desktop notifications on Windows
     #[cfg_attr(
-        any(target_os = "linux", target_os = "windows", target_family = "wasm"),
+        any(
+            target_os = "linux",
+            target_os = "freebsd",
+            target_os = "windows",
+            target_family = "wasm"
+        ),
         allow(dead_code)
     )]
     pub fn notification_clicked(&mut self, response: notification::NotificationResponse) {
@@ -294,7 +297,12 @@ impl AppCallbackDispatcher {
 // application menus, so these never get called.
 // TODO(CORE-2691): implement native Windows OS app menus
 #[cfg_attr(
-    any(target_os = "linux", target_os = "windows", target_family = "wasm"),
+    any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "windows",
+        target_family = "wasm"
+    ),
     allow(dead_code)
 )]
 impl AppCallbackDispatcher {
@@ -316,7 +324,12 @@ impl AppCallbackDispatcher {
 // native platform modals on these platforms, so these never get called.
 // TODO(CORE-2323): implement native Windows OS modal
 #[cfg_attr(
-    any(target_os = "linux", target_os = "windows", target_family = "wasm"),
+    any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "windows",
+        target_family = "wasm"
+    ),
     allow(dead_code)
 )]
 impl AppCallbackDispatcher {

@@ -120,5 +120,5 @@ impl ContextPredicate {
 }
 
 #[cfg(test)]
-#[path = "context_test.rs"]
+#[path = "context_tests.rs"]
 mod tests;

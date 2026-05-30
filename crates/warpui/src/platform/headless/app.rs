@@ -1,17 +1,15 @@
-use futures::future::LocalBoxFuture;
+use std::sync::mpsc;
 
-use crate::platform::app::TerminationResult;
-use crate::platform::test::FontDB as TestFontDB;
-use crate::{
-    integration::TestDriver,
-    platform::{self},
-    AppContext, AssetProvider,
-};
+use futures::future::LocalBoxFuture;
 
 use super::delegate::{self, AppDelegate};
 use super::event_loop::{self, AppEvent};
 use super::windowing::WindowManager;
-use std::sync::mpsc;
+use crate::integration::TestDriver;
+use crate::platform::app::TerminationResult;
+use crate::platform::test::FontDB as TestFontDB;
+use crate::platform::{self};
+use crate::{AppContext, AssetProvider};
 
 pub struct App {
     callbacks: platform::app::AppCallbacks,

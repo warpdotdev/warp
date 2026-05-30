@@ -11,5 +11,5 @@ if [[ "$OS" == Windows_NT ]]; then WARP_IN_MSYS2=true; else WARP_IN_MSYS2=false;
 if [ "$WARP_IN_MSYS2" = true ]; then _msg="\e]9278;k;A;InitShell\a\e]9278;k;B;session_id;$WARP_SESSION_ID\a\e]9278;k;B;shell;bash\a\e]9278;k;B;user;$_user\a\e]9278;k;B;hostname;$_hostname\a\e]9278;k;C\a"; else _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $WARP_SESSION_ID, \"shell\": \"bash\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d " \n"); fi
 WARP_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@
 # We send the InitShell hook via OSCs when on Windows and via DCSs otherwise.
-if [ "$WARP_USING_WINDOWS_CON_PTY" = true ]; then if [ "$WARP_IN_MSYS2" = true ]; then printf "$_msg"; else printf '\e]9278;d;%s\x07' "$_msg"; fi; else printf '\e\x50\x24\x64%s\x9c' "$_msg"; fi
+if [ "$WARP_USING_WINDOWS_CON_PTY" = true ]; then if [ "$WARP_IN_MSYS2" = true ]; then printf "$_msg"; else printf '\e]9278;d;%s\x07' "$_msg"; fi; else printf '\x1b\x50\x24\x64%s\x1b\x5c' "$_msg"; fi
 unset _hostname _user _msg

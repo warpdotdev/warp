@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use std::borrow::Cow;
+
 use ai::LLMId;
 use anyhow::Result;
 use onboarding::slides::OnboardingModelInfo;
@@ -8,20 +10,20 @@ use onboarding::{
 };
 use pathfinder_color::ColorU;
 use rust_embed::RustEmbed;
-use std::borrow::Cow;
+use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
-use warp_core::ui::theme::{AnsiColor, AnsiColors, Details, Fill, Image, TerminalColors};
-use warp_core::ui::{appearance::Appearance, theme::WarpTheme};
+use warp_core::ui::theme::{
+    AnsiColor, AnsiColors, Details, Fill, Image, TerminalColors, WarpTheme,
+};
 use warpui::assets::asset_cache::AssetSource;
-use warpui::platform;
+use warpui::elements::{
+    Container, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize, ParentElement,
+};
+use warpui::fonts::{Cache, FamilyId, Weight};
+use warpui::presenter::ChildView;
+use warpui::ui_components::components::{UiComponent as _, UiComponentStyles};
 use warpui::{
-    elements::{
-        Container, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize, ParentElement,
-    },
-    fonts::{Cache, FamilyId, Weight},
-    presenter::ChildView,
-    ui_components::components::{UiComponent as _, UiComponentStyles},
-    AddWindowOptions, AppContext, AssetProvider, Element, Entity, SingletonEntity as _,
+    platform, AddWindowOptions, AppContext, AssetProvider, Element, Entity, SingletonEntity as _,
     TypedActionView, View, ViewContext, ViewHandle,
 };
 
@@ -44,6 +46,7 @@ fn main() -> Result<()> {
     warp_logging::init(warp_logging::LogConfig {
         is_cli: false,
         log_destination: None,
+        ..Default::default()
     })?;
 
     let app_builder =

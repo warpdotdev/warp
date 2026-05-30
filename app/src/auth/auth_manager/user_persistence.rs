@@ -3,10 +3,10 @@ use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::AppContext;
 use warpui_extras::secure_storage::{self, AppContextExt};
 
-use crate::auth::{
-    user::{AnonymousUserType, FirebaseAuthTokens, PersonalObjectLimits, UserMetadata},
-    UserUid,
+use crate::auth::user::{
+    AnonymousUserType, FirebaseAuthTokens, PersonalObjectLimits, UserMetadata,
 };
+use crate::auth::UserUid;
 
 const USER_STORAGE_KEY: &str = "User";
 
@@ -80,5 +80,5 @@ impl PersistedUser {
 }
 
 #[cfg(test)]
-#[path = "user_persistence_test.rs"]
+#[path = "user_persistence_tests.rs"]
 mod tests;

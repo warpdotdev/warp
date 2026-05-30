@@ -1,10 +1,8 @@
-use std::{
-    cell::Cell,
-    collections::HashMap,
-    mem,
-    ops::Range,
-    path::{Path, PathBuf},
-};
+use std::cell::Cell;
+use std::collections::HashMap;
+use std::mem;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
@@ -12,44 +10,57 @@ use markdown_parser::{Hyperlink, TableAlignment};
 use num_traits::SaturatingSub;
 use rangemap::RangeSet;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use string_offset::{ByteOffset, CharOffset};
 use urlocator::{UrlLocation, UrlLocator};
 use vec1::Vec1;
-use warp_core::{features::FeatureFlag, ui::theme::Fill as ThemeFill};
-use warpui::{
-    AppContext,
-    assets::asset_cache::AssetSource,
-    fonts::Weight,
-    text::point::Point,
-    text_layout::{StyleAndFont, TextAlignment},
-    units::{IntoPixels, Pixels},
-};
-
-use crate::{
-    parallel_util::Last,
-    render::{
-        TABLE_BASELINE_RATIO, TABLE_LINE_HEIGHT_RATIO,
-        layout::{InlineTextLayoutInput, TextLayout, add_link_to_style_and_font},
-        model::{
-            BlockItem, BlockLocation, BlockSpacing, CellLayout, Cursor, Decoration, FrameOffset,
-            HiddenBlockConfig, HorizontalRuleConfig, ImageBlockConfig, LaidOutEmbeddedItem,
-            LaidOutTable, LineCount, OffsetMap, Paragraph, ParagraphBlock, ParagraphStyles,
-            RenderLayoutOptions, SelectableTextRun, TableBlockConfig, TableStyle,
-            gutter_expansion_button_types,
-        },
-    },
-};
-use string_offset::{ByteOffset, CharOffset};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::theme::Fill as ThemeFill;
+use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
+use warpui::fonts::Weight;
+use warpui::image_cache::ImageType;
 use warpui::text::char_slice;
+use warpui::text::point::Point;
+use warpui::text_layout::{StyleAndFont, TextAlignment};
+use warpui::units::{IntoPixels, Pixels};
+use warpui::{AppContext, SingletonEntity};
 
-use super::{
-    buffer::{StyledBufferBlock, StyledBufferRun, StyledTextBlock},
-    mermaid_diagram::mermaid_diagram_layout,
-    text::{BufferBlockItem, BufferBlockStyle, CodeBlockType, FormattedTable, TableBlockCache},
+use super::buffer::{StyledBufferBlock, StyledBufferRun, StyledTextBlock};
+use super::mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout};
+use super::text::{
+    BufferBlockItem, BufferBlockStyle, CodeBlockType, FormattedTable, TableBlockCache,
 };
+use crate::parallel_util::Last;
+use crate::render::layout::{InlineTextLayoutInput, TextLayout, add_link_to_style_and_font};
+use crate::render::model::{
+    BlockItem, BlockLocation, BlockSpacing, CellLayout, Cursor, Decoration, FrameOffset,
+    HiddenBlockConfig, HorizontalRuleConfig, ImageBlockConfig, LaidOutEmbeddedItem, LaidOutTable,
+    LineCount, OffsetMap, Paragraph, ParagraphBlock, ParagraphStyles, RenderLayoutOptions,
+    SelectableTextRun, TableBlockConfig, TableStyle, gutter_expansion_button_types,
+};
+use crate::render::{TABLE_BASELINE_RATIO, TABLE_LINE_HEIGHT_RATIO};
 
 #[cfg(test)]
 #[path = "edit_tests.rs"]
 mod tests;
+
+#[cfg(any(test, feature = "test-util"))]
+#[allow(dead_code)]
+pub(crate) fn layout_mermaid_block_for_test(
+    text_block: StyledTextBlock,
+    layout: &TextLayout,
+    layout_options: RenderLayoutOptions,
+    app: &AppContext,
+) -> Result<(BlockItem, bool)> {
+    let task = LayoutTask::from_styled_block(
+        StyledBufferBlock::Text(text_block),
+        layout,
+        &layout_options,
+        CharOffset::from(1),
+        app,
+        None,
+    );
+    task.run(layout, BlockLocation::Middle, false)
+}
 
 /// Resolve an image source path to an AssetSource.
 ///
@@ -487,7 +498,7 @@ impl EditDelta {
         self,
         layout: &TextLayout,
         document_path: Option<&Path>,
-        layout_options: RenderLayoutOptions,
+        layout_options: &RenderLayoutOptions,
         hidden_ranges: Option<RangeSet<CharOffset>>,
         app: &AppContext,
     ) -> LaidOutRenderDelta {
@@ -505,10 +516,12 @@ impl EditDelta {
                 if content_length == CharOffset::zero() {
                     None
                 } else {
+                    let block_start = current_offset;
                     let task = LayoutTask::from_styled_block(
                         block,
                         layout,
                         layout_options,
+                        block_start,
                         app,
                         document_path,
                     );
@@ -646,6 +659,14 @@ enum LayoutTask {
         asset_source: AssetSource,
         config: ImageBlockConfig,
     },
+    /// A Mermaid-labeled code block whose contents are not currently renderable as a diagram
+    /// (either the render hasn't completed yet or it failed to parse). This lays out identically
+    /// to [`Self::Text`] but carries the Mermaid asset source so that the view layer can watch
+    /// for the asset to finish loading and re-run layout if it becomes parseable.
+    MermaidCodeFallback {
+        text_block: StyledTextBlock,
+        pending_mermaid_asset: Option<AssetSource>,
+    },
     /// A horizontal rule, which requires no layout.
     HorizontalRule(HorizontalRuleConfig),
     /// An image, which requires no layout.
@@ -668,7 +689,8 @@ impl LayoutTask {
     fn from_styled_block(
         content: StyledBufferBlock,
         layout: &TextLayout,
-        layout_options: RenderLayoutOptions,
+        layout_options: &RenderLayoutOptions,
+        block_start: CharOffset,
         app: &AppContext,
         document_path: Option<&Path>,
     ) -> Self {
@@ -720,29 +742,95 @@ impl LayoutTask {
                 }
             },
             StyledBufferBlock::Text(text_block) => {
-                if layout_options.render_mermaid_diagrams
-                    && matches!(
-                        text_block.style,
-                        BufferBlockStyle::CodeBlock {
-                            code_block_type: CodeBlockType::Mermaid,
-                        }
-                    )
-                {
+                let is_mermaid = matches!(
+                    text_block.style,
+                    BufferBlockStyle::CodeBlock {
+                        code_block_type: CodeBlockType::Mermaid,
+                    }
+                );
+                let is_user_rendered = layout_options.mermaid_render_offsets.contains(&block_start);
+                let should_render =
+                    is_mermaid && (layout_options.render_mermaid_diagrams || is_user_rendered);
+
+                if should_render {
                     let source = text_block
                         .block
                         .iter()
                         .map(|run| run.run.as_str())
                         .collect::<String>();
-                    let spacing = layout
-                        .rich_text_styles()
-                        .block_spacings
-                        .from_block_style(&text_block.style);
-                    let (asset_source, config) =
-                        mermaid_diagram_layout(&source, layout, spacing, app);
-                    Self::MermaidDiagram {
-                        text_block,
-                        asset_source,
-                        config,
+                    // Empty Mermaid blocks can never be rendered as a diagram, so avoid
+                    // kicking off any render work and fall through to a plain code block.
+                    if source.trim().is_empty() {
+                        return Self::MermaidCodeFallback {
+                            text_block,
+                            pending_mermaid_asset: None,
+                        };
+                    }
+
+                    let asset_source = mermaid_asset_source(&source);
+                    let asset_cache = AssetCache::as_ref(app);
+                    match asset_cache.load_asset::<ImageType>(asset_source.clone()) {
+                        AssetState::Loaded { .. } => {
+                            let spacing = layout
+                                .rich_text_styles()
+                                .block_spacings
+                                .from_block_style(&text_block.style);
+                            let (asset_source, config) =
+                                mermaid_diagram_layout(&source, layout, spacing, app);
+                            Self::MermaidDiagram {
+                                text_block,
+                                asset_source,
+                                config,
+                            }
+                        }
+                        AssetState::Loading { .. } => {
+                            if is_user_rendered {
+                                // User explicitly chose Rendered — show diagram frame immediately
+                                // (render element will display loading placeholder).
+                                let spacing = layout
+                                    .rich_text_styles()
+                                    .block_spacings
+                                    .from_block_style(&text_block.style);
+                                let (asset_source, config) =
+                                    mermaid_diagram_layout(&source, layout, spacing, app);
+                                Self::MermaidDiagram {
+                                    text_block,
+                                    asset_source,
+                                    config,
+                                }
+                            } else {
+                                // Auto-render mode: stay in code-block view while loading.
+                                Self::MermaidCodeFallback {
+                                    text_block,
+                                    pending_mermaid_asset: Some(asset_source),
+                                }
+                            }
+                        }
+                        AssetState::FailedToLoad(_) | AssetState::Evicted => {
+                            if is_user_rendered {
+                                // User explicitly chose Rendered — show diagram frame with error.
+                                let spacing = layout
+                                    .rich_text_styles()
+                                    .block_spacings
+                                    .from_block_style(&text_block.style);
+                                let (asset_source, config) =
+                                    mermaid_diagram_layout(&source, layout, spacing, app);
+                                Self::MermaidDiagram {
+                                    text_block,
+                                    asset_source,
+                                    config,
+                                }
+                            } else {
+                                // Rendering failed. Keep in code-block view so the user can
+                                // see and edit the raw text. No need to keep watching: the
+                                // asset state will not change until the source (and thus the
+                                // asset key) does.
+                                Self::MermaidCodeFallback {
+                                    text_block,
+                                    pending_mermaid_asset: None,
+                                }
+                            }
+                        }
                     }
                 } else {
                     Self::Text(text_block)
@@ -792,6 +880,26 @@ impl LayoutTask {
                 ))
             }
             Self::Text(text_block) => layout_text_block(text_block, layout, location, is_hidden),
+            Self::MermaidCodeFallback {
+                text_block,
+                pending_mermaid_asset,
+            } => {
+                let (block_item, has_trailing_newline) =
+                    layout_text_block(text_block, layout, location, is_hidden)?;
+                let block_item = match block_item {
+                    BlockItem::RunnableCodeBlock {
+                        paragraph_block,
+                        code_block_type,
+                        ..
+                    } => BlockItem::RunnableCodeBlock {
+                        paragraph_block,
+                        code_block_type,
+                        pending_mermaid_asset,
+                    },
+                    other => other,
+                };
+                Ok((block_item, has_trailing_newline))
+            }
             Self::MermaidDiagram {
                 text_block,
                 asset_source,
@@ -952,6 +1060,7 @@ fn layout_text_block(
                 BlockItem::RunnableCodeBlock {
                     paragraph_block,
                     code_block_type,
+                    pending_mermaid_asset: None,
                 }
             })
             .ok_or_else(|| anyhow!("Code block should have at least one paragraph")),

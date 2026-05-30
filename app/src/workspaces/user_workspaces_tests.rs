@@ -1,3 +1,11 @@
+use std::time::Duration;
+
+use mockall::Sequence;
+use settings::{PrivatePreferences, PublicPreferences};
+use warpui::{AddSingletonModel, App};
+use warpui_extras::user_preferences;
+
+use super::*;
 use crate::ai::llms::LLMModelHost;
 use crate::auth::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -21,14 +29,6 @@ use crate::workspaces::workspace::{
     AdminEnablementSetting, CodebaseContextSettings, HostEnablementSetting, LlmHostSettings,
     Workspace,
 };
-
-use mockall::Sequence;
-use settings::{PrivatePreferences, PublicPreferences};
-use std::time::Duration;
-use warpui::{AddSingletonModel, App};
-use warpui_extras::user_preferences;
-
-use super::*;
 
 #[derive(Default)]
 struct CachedResources {
@@ -105,6 +105,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
         teams: vec![team.clone()],
         billing_metadata: Default::default(),
         bonus_grants_purchased_this_month: Default::default(),
+        billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
         invite_code: None,
@@ -383,6 +384,7 @@ fn workspace_for_test(team: &Team) -> Workspace {
         teams: vec![team.clone()],
         billing_metadata: Default::default(),
         bonus_grants_purchased_this_month: Default::default(),
+        billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
         invite_code: None,
@@ -556,6 +558,7 @@ fn test_joining_team_moves_objects() {
         teams: vec![team.clone()],
         billing_metadata: Default::default(),
         bonus_grants_purchased_this_month: Default::default(),
+        billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
         invite_code: None,
@@ -615,6 +618,108 @@ fn test_joining_team_moves_objects() {
 }
 
 #[test]
+fn test_agent_attribution_default_with_no_workspace() {
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources { workspaces: vec![] },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            let setting = UserWorkspaces::as_ref(ctx).get_agent_attribution_setting();
+            assert_eq!(
+                setting,
+                AdminEnablementSetting::RespectUserSetting,
+                "attribution should default to RespectUserSetting when there is no workspace"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_agent_attribution_forced_on_by_team() {
+    let mut team = team_for_test();
+    team.organization_settings.enable_warp_attribution = AdminEnablementSetting::Enable;
+    let workspace = workspace_for_test(&team);
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            let setting = UserWorkspaces::as_ref(ctx).get_agent_attribution_setting();
+            assert_eq!(
+                setting,
+                AdminEnablementSetting::Enable,
+                "attribution should be Enable when forced on by the team"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_agent_attribution_forced_off_by_team() {
+    let mut team = team_for_test();
+    team.organization_settings.enable_warp_attribution = AdminEnablementSetting::Disable;
+    let workspace = workspace_for_test(&team);
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            let setting = UserWorkspaces::as_ref(ctx).get_agent_attribution_setting();
+            assert_eq!(
+                setting,
+                AdminEnablementSetting::Disable,
+                "attribution should be Disable when forced off by the team"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_agent_attribution_respects_user_setting() {
+    let mut team = team_for_test();
+    team.organization_settings.enable_warp_attribution = AdminEnablementSetting::RespectUserSetting;
+    let workspace = workspace_for_test(&team);
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            let setting = UserWorkspaces::as_ref(ctx).get_agent_attribution_setting();
+            assert_eq!(
+                setting,
+                AdminEnablementSetting::RespectUserSetting,
+                "attribution should be RespectUserSetting when the team defers to user preference"
+            );
+        });
+    })
+}
+
+#[test]
 fn test_leaving_team_moves_objects() {
     let _flag = FeatureFlag::SharedWithMe.override_enabled(true);
 
@@ -639,6 +744,7 @@ fn test_leaving_team_moves_objects() {
         teams: vec![team.clone()],
         billing_metadata: Default::default(),
         bonus_grants_purchased_this_month: Default::default(),
+        billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
         invite_code: None,

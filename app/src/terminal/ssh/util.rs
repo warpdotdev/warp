@@ -127,7 +127,7 @@ impl InteractiveSshCommand {
 
                 // Otherwise, it's a positional argument (e.g., hostname, command to run)
                 pos_arg => {
-                    // If we detect mutliple positional args, there's some type of unknown command formulation.
+                    // If we detect multiple positional args, there's some type of unknown command formulation.
                     if host.is_some() {
                         return None;
                     }

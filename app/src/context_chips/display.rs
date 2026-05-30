@@ -1,34 +1,30 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::ai::blocklist::agent_view::AgentViewController;
-use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
-use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
-use crate::context_chips::display_chip::format_git_branch_command;
-use crate::settings::InputSettings;
-use crate::terminal::model_events::ModelEventDispatcher;
-use crate::{
-    ai::blocklist::{BlocklistAIContextModel, BlocklistAIInputEvent, BlocklistAIInputModel},
-    completer::SessionContext,
-    context_chips::display_chip::DisplayChipAction,
-    terminal::input::MenuPositioningProvider,
-};
-use std::path::PathBuf;
 use warp_core::features::FeatureFlag;
+use warpui::elements::{
+    ChildView, Clipped, Container, CrossAxisAlignment, Element, Flex, MainAxisAlignment,
+    MainAxisSize, ParentElement, Wrap,
+};
 use warpui::{
-    elements::{
-        ChildView, Clipped, Container, CrossAxisAlignment, Element, Flex, MainAxisAlignment,
-        MainAxisSize, ParentElement, Wrap,
-    },
     AppContext, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity, TypedActionView,
     View, ViewContext, ViewHandle,
 };
 
-use super::{
-    display_chip::{DisplayChip, DisplayChipConfig, PromptDisplayChipEvent},
-    git_line_changes_from_chips,
-    prompt_type::PromptType,
-    ChipResult, ContextChipKind,
+use super::display_chip::{DisplayChip, DisplayChipConfig, PromptDisplayChipEvent};
+use super::prompt_type::PromptType;
+use super::{git_line_changes_from_chips, ChipResult, ContextChipKind};
+use crate::ai::blocklist::agent_view::AgentViewController;
+use crate::ai::blocklist::{
+    BlocklistAIContextModel, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+    BlocklistAIInputEvent, BlocklistAIInputModel,
 };
+use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
+use crate::completer::SessionContext;
+use crate::context_chips::display_chip::{format_git_branch_command, DisplayChipAction};
+use crate::settings::InputSettings;
+use crate::terminal::input::MenuPositioningProvider;
+use crate::terminal::model_events::ModelEventDispatcher;
 
 /// Enum introduced to abstract over the different row types we use for the prompt display,
 /// between the non-UDI and UDI cases.

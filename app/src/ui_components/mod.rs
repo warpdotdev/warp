@@ -2,6 +2,7 @@
 //! used for the apps design (our buttons with styling, headers and panels etc.) as well definition
 //! of colors (aka blended colors from the figma designs derived from Warp theme) and icons used
 //! within the app.
+pub(crate) mod agent_icon;
 pub(crate) mod avatar;
 pub(crate) mod blended_colors;
 pub(crate) mod breadcrumb;

@@ -1,22 +1,20 @@
 use std::time::Duration;
 
 use warp::features::FeatureFlag;
-use warp::integration_testing::{
-    step::new_step_with_default_assertions,
-    terminal::{
-        assert_long_running_block_executing_for_single_terminal_in_tab,
-        wait_until_bootstrapped_single_pane_for_tab,
-    },
-    view_getters::single_terminal_view_for_tab,
+use warp::integration_testing::step::new_step_with_default_assertions;
+use warp::integration_testing::terminal::{
+    assert_long_running_block_executing_for_single_terminal_in_tab,
+    wait_until_bootstrapped_single_pane_for_tab,
 };
+use warp::integration_testing::view_getters::single_terminal_view_for_tab;
 use warpui::event::{KeyEventDetails, KeyState};
+use warpui::integration::TestStep;
 use warpui::keymap::Keystroke;
 use warpui::platform::keyboard::KeyCode;
-use warpui::{async_assert, integration::TestStep, Event};
-
-use crate::Builder;
+use warpui::{async_assert, Event};
 
 use super::new_builder;
+use crate::Builder;
 
 /// Helper: creates a setup closure that writes a Python script asset to the test directory.
 macro_rules! setup_python_script {

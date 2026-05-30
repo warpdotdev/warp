@@ -4,6 +4,8 @@
 
 set -e
 
+. "$PWD/script/warp_sudo"
+
 # Define some control sequences for text formatting.
 red="\033[0;31m"
 reset="\033[0m"
@@ -34,7 +36,7 @@ if [[ "$(source /etc/os-release; echo $ID $ID_LIKE)" = *"debian"* ]]; then
     # Ensuring at least one cursor library for WSL.
     yaru-theme-icon
   )
-  sudo apt-get install -y "${PACKAGES[@]}"
+  warp_sudo apt-get install -y "${PACKAGES[@]}"
 else
   echo -e "⚠️  ${red}Unknown Linux distribution; necessary runtime dependencies may not be installed!${reset}"
 fi

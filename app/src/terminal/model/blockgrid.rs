@@ -1,25 +1,12 @@
-use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::SizeInfo;
-
-use crate::terminal::model::ansi::{
-    self, Attr, CharsetIndex, ClearMode, CursorShape, CursorStyle, LineClearMode, Mode,
-    PrecmdValue, PreexecValue, StandardCharset, TabulationClearMode,
-};
-use crate::terminal::model::grid::grid_handler::{GridHandler, PerformResetGridChecks, RegexIter};
-use crate::terminal::model::index::{Point, VisibleRow};
-use crate::terminal::model::iterm_image::ITermImage;
-
-use crate::terminal::model::grid::Dimensions;
-use crate::terminal::model::GridStorage;
-
-use crate::terminal::model::secrets::ObfuscateSecrets;
-use instant::Instant;
-use pathfinder_color::ColorU;
 use std::collections::HashMap;
 use std::io;
 use std::num::NonZeroUsize;
 use std::ops::{Range, RangeInclusive};
 use std::sync::{Arc, OnceLock};
+
+use instant::Instant;
+use pathfinder_color::ColorU;
+use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 
 use super::find::RegexDFAs;
 use super::grid::RespectDisplayedOutput;
@@ -27,7 +14,18 @@ use super::image_map::StoredImageMetadata;
 use super::kitty::{KittyAction, KittyResponse};
 use super::secrets::RespectObfuscatedSecrets;
 use super::selection::ScrollDelta;
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::ansi::{
+    self, Attr, CharsetIndex, ClearMode, CursorShape, CursorStyle, LineClearMode, Mode,
+    PrecmdValue, PreexecValue, StandardCharset, TabulationClearMode,
+};
+use crate::terminal::model::grid::grid_handler::{GridHandler, PerformResetGridChecks, RegexIter};
+use crate::terminal::model::grid::Dimensions;
+use crate::terminal::model::index::{Point, VisibleRow};
+use crate::terminal::model::iterm_image::ITermImage;
+use crate::terminal::model::secrets::ObfuscateSecrets;
+use crate::terminal::model::GridStorage;
+use crate::terminal::SizeInfo;
 
 #[derive(Clone)]
 pub struct BlockGrid {
@@ -297,6 +295,10 @@ impl BlockGrid {
     pub fn set_trim_trailing_blank_rows(&mut self, trim: bool) {
         self.trim_trailing_blank_rows = trim;
         self.grid_handler.set_track_content_length(trim);
+    }
+
+    pub(in crate::terminal) fn enable_full_grid_clear_behavior(&mut self) {
+        self.grid_handler.enable_full_grid_clear_behavior();
     }
 
     /// Returns a freshly-computed value of rightmost_nonempty_cell if this grid isn't
@@ -995,5 +997,5 @@ impl ansi::Handler for BlockGrid {
 }
 
 #[cfg(test)]
-#[path = "blockgrid_test.rs"]
+#[path = "blockgrid_tests.rs"]
 mod tests;

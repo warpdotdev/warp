@@ -203,6 +203,29 @@ impl RepoMetadataModel {
         }
     }
 
+    /// Returns a future that resolves once repository indexing has completed at least once.
+    ///
+    /// Callers should inspect [`Self::repository_state`] after awaiting this future to see whether
+    /// indexing succeeded or failed.
+    pub fn repository_indexed(
+        &self,
+        id: &RepositoryIdentifier,
+        ctx: &mut ModelContext<Self>,
+    ) -> futures::future::BoxFuture<'static, ()> {
+        match id {
+            RepositoryIdentifier::Local(path) => {
+                let path = path.clone();
+                self.local
+                    .update(ctx, |local, _| local.repository_indexed(&path))
+            }
+            RepositoryIdentifier::Remote(remote_id) => {
+                let remote_id = remote_id.clone();
+                self.remote
+                    .update(ctx, |remote, _| remote.repository_indexed(&remote_id))
+            }
+        }
+    }
+
     /// Returns repository contents for the specified repository.
     pub fn get_repo_contents<'a>(
         &self,
@@ -270,6 +293,22 @@ impl RepoMetadataModel {
         self.local.update(ctx, |local, ctx| {
             local.load_directory(&repo_root, &dir_path, ctx)
         })
+    }
+
+    /// Registers component-sequence paths that should be loaded even when ignored.
+    ///
+    /// This delegates to the local model because ignored-path matching happens
+    /// while building local file trees. Remote repositories receive the resulting
+    /// file-tree metadata over the existing remote sync protocol.
+    pub fn register_ignored_path_interests(
+        &self,
+        interests: impl IntoIterator<Item = std::path::PathBuf>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let interests: Vec<_> = interests.into_iter().collect();
+        self.local.update(ctx, |local, _| {
+            local.register_ignored_path_interests(interests);
+        });
     }
 
     /// Removes a lazily-loaded local standalone path from tracking.

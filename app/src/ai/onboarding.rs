@@ -6,10 +6,9 @@ use onboarding::OnboardingAuthState;
 use warp_core::ui::icons::Icon;
 use warpui::{AppContext, SingletonEntity};
 
+use super::llms::{DisableReason, LLMInfo, LLMPreferences};
 use crate::auth::AuthStateProvider;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-
-use super::llms::{DisableReason, LLMInfo, LLMPreferences};
 
 impl From<&LLMInfo> for OnboardingModelInfo {
     fn from(llm: &LLMInfo) -> Self {
@@ -23,10 +22,13 @@ impl From<&LLMInfo> for OnboardingModelInfo {
     }
 }
 
-pub fn build_onboarding_models(prefs: &LLMPreferences) -> (Vec<OnboardingModelInfo>, LLMId) {
+pub fn build_onboarding_models(
+    prefs: &LLMPreferences,
+    app: &AppContext,
+) -> (Vec<OnboardingModelInfo>, LLMId) {
     let default_id = prefs.get_default_base_model().id.clone();
     let models: Vec<OnboardingModelInfo> = prefs
-        .get_base_llm_choices_for_agent_mode()
+        .get_base_llm_choices_for_agent_mode(app)
         .map(|llm| {
             let mut info = OnboardingModelInfo::from(llm);
             info.is_default = info.id == default_id;

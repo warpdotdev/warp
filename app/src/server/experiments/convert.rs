@@ -36,6 +36,8 @@ impl Display for ServerExperiment {
             Self::FreeUserNoAiExperiment => "FREE_USER_NO_AI_EXPERIMENT",
             Self::OzMultiHarnessControl => "OZ_MULTI_HARNESS_CONTROL",
             Self::OzMultiHarnessExperiment => "OZ_MULTI_HARNESS_EXPERIMENT",
+            Self::SshRemoteServerControl => "SSH_REMOTE_SERVER_CONTROL",
+            Self::SshRemoteServerExperiment => "SSH_REMOTE_SERVER_EXPERIMENT",
             #[cfg(test)]
             Self::TestExperiment => "TEST_EXPERIMENT",
         };
@@ -69,6 +71,8 @@ impl ServerExperiment {
             "FREE_USER_NO_AI_EXPERIMENT" => Ok(Self::FreeUserNoAiExperiment),
             "OZ_MULTI_HARNESS_CONTROL" => Ok(Self::OzMultiHarnessControl),
             "OZ_MULTI_HARNESS_EXPERIMENT" => Ok(Self::OzMultiHarnessExperiment),
+            "SSH_REMOTE_SERVER_CONTROL" => Ok(Self::SshRemoteServerControl),
+            "SSH_REMOTE_SERVER_EXPERIMENT" => Ok(Self::SshRemoteServerExperiment),
             s => Err(anyhow::anyhow!(
                 "String doesn't match any server experiment variant {s}"
             )),
@@ -108,6 +112,8 @@ impl TryFrom<Experiment> for ServerExperiment {
             Experiment::FreeUserNoAiExperiment => Ok(Self::FreeUserNoAiExperiment),
             Experiment::OzMultiHarnessControl => Ok(Self::OzMultiHarnessControl),
             Experiment::OzMultiHarnessExperiment => Ok(Self::OzMultiHarnessExperiment),
+            Experiment::SshRemoteServerControl => Ok(Self::SshRemoteServerControl),
+            Experiment::SshRemoteServerExperiment => Ok(Self::SshRemoteServerExperiment),
             // Experiments that we no longer support on the client.
             e => Err(anyhow::anyhow!(
                 "Server-side enabled experiment '{e:?}' is no longer supported by the client."

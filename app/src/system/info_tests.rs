@@ -1,8 +1,8 @@
 use byte_unit::Byte;
 
-use crate::{terminal::model::test_utils::TestBlockBuilder, test_util::mock_blockgrid};
-
 use super::*;
+use crate::terminal::model::test_utils::TestBlockBuilder;
+use crate::test_util::mock_blockgrid;
 
 #[test]
 fn test_memory_usage_stats_construction() {

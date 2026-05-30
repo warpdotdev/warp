@@ -1,79 +1,77 @@
-use super::{
-    agent_assisted_environment_modal::{
-        AgentAssistedEnvironmentModal, AgentAssistedEnvironmentModalEvent,
-    },
-    delete_environment_confirmation_dialog::{
-        DeleteEnvironmentConfirmationDialog, DeleteEnvironmentConfirmationDialogEvent,
-    },
-    editor_text_colors,
-    settings_page::{
-        MatchData, PageType, SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle,
-        SettingsWidget, CONTENT_FONT_SIZE,
-    },
-    update_environment_form::{
-        EnvironmentFormInitArgs, EnvironmentFormValues, GithubAuthRedirectTarget,
-        UpdateEnvironmentForm, UpdateEnvironmentFormEvent,
-    },
-    SettingsSection,
-};
-use crate::{
-    ai::cloud_environments::{self, CloudAmbientAgentEnvironment},
-    appearance::Appearance,
-    cloud_object::{
-        model::persistence::{CloudModel, CloudModelEvent},
-        CloudObjectLocation, GenericStringObjectFormat, JsonObjectType, Owner, Space,
-    },
-    drive::CloudObjectTypeAndId,
-    editor::{EditorView, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextOptions},
-    root_view::CreateEnvironmentArg,
-    server::{
-        cloud_objects::update_manager::{
-            ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
-        },
-        ids::{ClientId, ServerId, SyncId},
-    },
-    terminal::view::init_environment::mode_selector::{
-        EnvironmentSetupMode, EnvironmentSetupModeSelector, EnvironmentSetupModeSelectorEvent,
-    },
-    themes::theme::Fill as ThemeFill,
-    ui_components::{blended_colors, buttons::icon_button_with_color, icons::Icon},
-    util::time_format::format_approx_duration_from_now_utc,
-    view_components::{
-        render_copyable_text_field, CopyButtonPlacement, CopyableTextFieldConfig, DismissibleToast,
-        COPY_FEEDBACK_DURATION,
-    },
-    workspace::{ToastStack, WorkspaceAction},
-    workspaces::user_workspaces::UserWorkspaces,
-};
+use std::collections::HashMap;
+
 use instant::Instant;
 use pathfinder_geometry::vector::vec2f;
-use std::collections::HashMap;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::color::internal_colors;
 use warp_editor::editor::NavigationKey;
 use warp_graphql::scalars::time::ServerTimestamp;
+use warpui::elements::{
+    Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Element, Empty, Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
+    Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::prelude::ChildView;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::windowing::state::ApplicationStage;
+use warpui::windowing::{self, WindowManager};
 use warpui::{
-    elements::{
-        Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, Element, Empty, Expanded, Flex, Hoverable, MainAxisAlignment,
-        MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-        ParentOffsetBounds, Radius, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch,
-        Stack, Text,
-    },
-    fonts::{Properties, Weight},
-    prelude::ChildView,
-    ui_components::{
-        button::ButtonVariant,
-        components::{UiComponent, UiComponentStyles},
-    },
-    windowing::{self, state::ApplicationStage, WindowManager},
     AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };
 
+use super::agent_assisted_environment_modal::{
+    AgentAssistedEnvironmentModal, AgentAssistedEnvironmentModalEvent,
+};
+use super::delete_environment_confirmation_dialog::{
+    DeleteEnvironmentConfirmationDialog, DeleteEnvironmentConfirmationDialogEvent,
+};
+use super::settings_page::{
+    MatchData, PageType, SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle,
+    SettingsWidget, CONTENT_FONT_SIZE,
+};
+use super::update_environment_form::{
+    EnvironmentFormInitArgs, EnvironmentFormValues, UpdateEnvironmentForm,
+    UpdateEnvironmentFormEvent,
+};
+use super::{editor_text_colors, SettingsSection};
+use crate::ai::ambient_agents::github_auth_url::GithubAuthRedirectTarget;
+use crate::ai::cloud_environments::{self, CloudAmbientAgentEnvironment};
+use crate::appearance::Appearance;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
+use crate::cloud_object::{
+    CloudObjectLocation, CloudObjectLookup as _, GenericStringObjectFormat, JsonObjectType, Owner,
+    Space,
+};
+use crate::drive::CloudObjectTypeAndId;
+use crate::editor::{
+    EditorView, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextOptions,
+};
+use crate::root_view::CreateEnvironmentArg;
+use crate::server::cloud_objects::update_manager::{
+    ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
+};
+use crate::server::ids::{ClientId, ServerId, SyncId};
+use crate::terminal::view::init_environment::mode_selector::{
+    EnvironmentSetupMode, EnvironmentSetupModeSelector, EnvironmentSetupModeSelectorEvent,
+};
+use crate::themes::theme::Fill as ThemeFill;
+use crate::ui_components::blended_colors;
+use crate::ui_components::buttons::icon_button_with_color;
+use crate::ui_components::icons::Icon;
+use crate::util::time_format::format_approx_duration_from_now_utc;
+use crate::view_components::{
+    render_copyable_text_field, CopyButtonPlacement, CopyableTextFieldConfig, DismissibleToast,
+    COPY_FEEDBACK_DURATION,
+};
+use crate::workspace::{ToastStack, WorkspaceAction};
+use crate::workspaces::user_workspaces::UserWorkspaces;
+
 mod new_environment_button;
 use new_environment_button::NewEnvironmentButtonView;
-
 #[cfg(not(target_family = "wasm"))]
 #[allow(unused_imports)] // IntegrationsClient trait is used in fetch_github_repos
 use {
@@ -2041,13 +2039,9 @@ impl SettingsPageMeta for EnvironmentsPageView {
     }
 }
 
-use crate::pane_group::{
-    focus_state::PaneFocusHandle,
-    pane::{
-        view::{HeaderContent, HeaderRenderContext},
-        BackingView,
-    },
-};
+use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::pane::view::{HeaderContent, HeaderRenderContext};
+use crate::pane_group::pane::BackingView;
 
 impl BackingView for EnvironmentsPageView {
     type PaneHeaderOverflowMenuAction = EnvironmentsPageAction;

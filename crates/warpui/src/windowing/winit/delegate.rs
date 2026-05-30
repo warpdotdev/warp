@@ -3,14 +3,12 @@
 #[cfg(not(target_family = "wasm"))]
 mod global_hotkey;
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::mem::ManuallyDrop;
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
-    thread::{self, panicking},
-};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
+use std::thread::{self, panicking};
 
 use anyhow::Result;
 use geometry::rect::RectF;
@@ -19,35 +17,27 @@ use parking_lot::Mutex;
 use serde::de::IntoDeserializer;
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 
-use crate::platform::MicrophoneAccessState;
-use crate::platform::{
-    file_picker::{
-        FilePickerCallback, FilePickerError, SaveFilePickerCallback, SaveFilePickerConfiguration,
-    },
-    Cursor, RequestNotificationPermissionsCallback, SendNotificationErrorCallback,
-};
-use crate::windowing::winit::app::CustomEvent::UpdateUIApp;
-use crate::windowing::WindowManager;
-use crate::Effect::Event;
-use crate::{
-    accessibility,
-    clipboard::{self, ClipboardContent, InMemoryClipboard},
-    geometry, keymap,
-    modals::{AlertDialog, ModalId},
-    notification, platform,
-    platform::file_picker::{FilePickerConfiguration, FileType},
-    windowing::{self, WindowCallbacks},
-    AppContext, ApplicationBundleInfo, Clipboard, DisplayId, DisplayIdx, WindowId,
-};
-use crate::{
-    notification::{NotificationSendError, RequestPermissionsOutcome},
-    platform::TerminationMode,
-};
-
-use super::{notifications, CustomEvent};
-
 #[cfg(not(target_family = "wasm"))]
 use self::global_hotkey::GlobalHotKeyHandler;
+use super::{notifications, CustomEvent};
+use crate::clipboard::{self, ClipboardContent, InMemoryClipboard};
+use crate::modals::{AlertDialog, ModalId};
+use crate::notification::{NotificationSendError, RequestPermissionsOutcome};
+use crate::platform::file_picker::{
+    FilePickerCallback, FilePickerConfiguration, FilePickerError, FileType, SaveFilePickerCallback,
+    SaveFilePickerConfiguration,
+};
+use crate::platform::{
+    Cursor, MicrophoneAccessState, RequestNotificationPermissionsCallback,
+    SendNotificationErrorCallback, TerminationMode,
+};
+use crate::windowing::winit::app::CustomEvent::UpdateUIApp;
+use crate::windowing::{self, WindowCallbacks, WindowManager};
+use crate::Effect::Event;
+use crate::{
+    accessibility, geometry, keymap, notification, platform, AppContext, ApplicationBundleInfo,
+    Clipboard, DisplayId, DisplayIdx, WindowId,
+};
 
 // No-op on WASM since the browser cannot provide this functionality.
 #[cfg(target_family = "wasm")]
@@ -71,7 +61,7 @@ pub fn open_url_in_system(url: &str) {
         let _ = window.open_with_url_and_target(url, "_blank");
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
         // Opening in WSL is complicated for a few reasons
         // 1. By default, wsl does not have an awareness of browsers installed in windows.
@@ -125,7 +115,7 @@ pub fn open_url_in_system(url: &str) {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn use_wsl_browser() -> bool {
     static USE_WSL_BROWSER: OnceLock<bool> = OnceLock::new();
     USE_WSL_BROWSER
@@ -214,7 +204,7 @@ impl AppDelegate {
         cfg_if::cfg_if! {
             if #[cfg(target_family = "wasm")] {
                 self.clipboard = Box::new(super::wasm::WebClipboard::new());
-            } else if #[cfg(target_os = "linux")] {
+            } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
                 match super::linux::LinuxClipboard::new() {
                     Ok(clipboard) => self.clipboard = Box::new(clipboard),
                     Err(err) => {
@@ -251,7 +241,7 @@ impl platform::Delegate for AppDelegate {
 
     #[cfg(not(target_family = "wasm"))]
     fn system_theme(&self) -> platform::SystemTheme {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         match super::linux::get_system_theme() {
             Ok(system_theme) => {
                 return system_theme;
@@ -295,7 +285,7 @@ impl platform::Delegate for AppDelegate {
 
     fn open_file_path(&self, path: &Path) {
         cfg_if::cfg_if! {
-            if #[cfg(target_os = "linux")] {
+            if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
                 let _ = command::blocking::Command::new("xdg-open")
                     .arg(path)
                     .spawn();

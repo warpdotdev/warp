@@ -41,9 +41,9 @@ Entities are of course entitled to own any state they like directly as well. Han
 
 The framework requires all views to implement the `View` trait, and a key method of this trait is `render`, which we showcased above. This method's job is to compute a visual description of the view based on its current state, and it is called whenever the view's state changes.
 
-To do describe the view's appearence, render returns an **element**. While a single view may exist for an arbitrary amount of time, changing its state as the user interacts with the application, an element is designed to exist for only a single frame. More precicely, elements returned by views that haven't changed are recycled across multiple frames, but conceptually you can think of an element as a throwaway object that is discarded and replaced whenever the view that returned it changes.
+To describe the view's appearance, render returns an **element**. While a single view may exist for an arbitrary amount of time, changing its state as the user interacts with the application, an element is designed to exist for only a single frame. More precisely, elements returned by views that haven't changed are recycled across multiple frames, but conceptually you can think of an element as a throwaway object that is discarded and replaced whenever the view that returned it changes.
 
-The framework ships with several elements that can be composed to perform common tasks such as drawing backgrounds and borders, adding padding, rendering label text, laying out elements horizontally and vertically, handlign events, etc. The stock elements are loosely based on the Flutter framework. It's also straightforward to define your own custom elements, giving you detailed control over layout and the ability to imperatively paint pixels on scene via the hardware-accelerated `Scene` API.
+The framework ships with several elements that can be composed to perform common tasks such as drawing backgrounds and borders, adding padding, rendering label text, laying out elements horizontally and vertically, handling events, etc. The stock elements are loosely based on the Flutter framework. It's also straightforward to define your own custom elements, giving you detailed control over layout and the ability to imperatively paint pixels on scene via the hardware-accelerated `Scene` API.
 
 ## Actions
 

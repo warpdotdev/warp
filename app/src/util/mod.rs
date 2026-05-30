@@ -9,9 +9,8 @@ pub mod image;
 pub(crate) mod link_detection;
 pub mod links;
 pub mod openable_file_type;
-#[cfg(feature = "local_tty")]
 pub mod path;
-pub mod sync;
+pub mod repo_detection;
 pub mod time_format;
 pub mod tooltips;
 pub(crate) mod traffic_lights;
@@ -20,10 +19,11 @@ pub mod vm_detection;
 #[cfg(windows)]
 pub mod windows;
 
-use itertools::Itertools;
 use std::cmp::Ordering;
 use std::fmt;
 use std::ops::Range;
+
+use itertools::Itertools;
 
 pub fn merge_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
     let mut i = 1;
@@ -75,7 +75,7 @@ impl fmt::Debug for AsciiDebug<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "\"")?;
         for &byte in self.0 {
-            // Check if the byte is a standard printable charcter.
+            // Check if the byte is a standard printable character.
             if (32..126).contains(&byte) {
                 write!(f, "{}", byte as char)?;
             } else {

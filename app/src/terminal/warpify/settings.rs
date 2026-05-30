@@ -1,14 +1,13 @@
 use anyhow::Result;
 use lazy_static::lazy_static;
 use regex::Regex;
+use settings::macros::{maybe_define_setting, register_settings_events};
 use settings::{
-    macros::{maybe_define_setting, register_settings_events},
     ChangeEventReason, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
 };
 use strum_macros::EnumIter;
 use warp_util::path::ShellFamily;
-use warpui::{AppContext, ModelContext};
-use warpui::{Entity, SingletonEntity};
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use crate::terminal::ssh::util::{parse_interactive_ssh_command, SshWarpifyCommand};
 
@@ -92,15 +91,15 @@ pub enum SshExtensionInstallMode {
     NeverInstall,
 }
 
-settings::macros::implement_setting_for_enum!(
-    SshExtensionInstallMode,
-    WarpifySettings,
-    SupportedPlatforms::ALL,
-    SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+maybe_define_setting!(SshExtensionInstallModeSetting, group: WarpifySettings, {
+    type: SshExtensionInstallMode,
+    default: SshExtensionInstallMode::default(),
+    supported_platforms: SupportedPlatforms::ALL,
+    sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
     private: false,
     toml_path: "warpify.ssh.ssh_extension_install_mode",
     description: "Controls SSH extension installation behavior.",
-);
+});
 
 impl SshExtensionInstallMode {
     pub fn display_name(&self) -> &'static str {
@@ -158,7 +157,7 @@ pub struct WarpifySettings {
 
     /// Controls the installation behavior for the SSH extension (remote server) when the binary
     /// is not installed on the remote host.
-    pub ssh_extension_install_mode: SshExtensionInstallMode,
+    pub ssh_extension_install_mode: SshExtensionInstallModeSetting,
 }
 
 #[cfg(windows)]
@@ -179,13 +178,13 @@ lazy_static! {
         // Matches "bash", "/bin/bash", any "./any/path/to/bash", plus the zsh/fish equivalents
         Regex::new(r"^/?([\w\.-]+/)*(bash|zsh|fish)$").expect("Direct shell regex invalid"),
 
-        // Matches "docker run [whatever args] bash", plus zsh/fish equivalents.
+        // Matches "docker/podman run [whatever args] bash", plus zsh/fish equivalents.
         // Optionally allows single or double quotes around the shell name.
-        Regex::new(r#"^docker\s+run\s+.*?['"]?(bash|zsh|fish)['"]?$"#).expect("docker run regex invalid"),
+        Regex::new(r#"^(docker|podman)\s+run\s+.*?['"]?(bash|zsh|fish)['"]?$"#).expect("docker/podman run regex invalid"),
 
-        // Matches "docker exec [whatever args] bash", plus zsh/fish equivalents.
+        // Matches "docker/podman exec [whatever args] bash", plus zsh/fish equivalents.
         // Optionally allows single or double quotes around the shell name.
-        Regex::new(r#"^docker\s+exec\s+.*?['"]?(bash|zsh|fish)['"]?$"#).expect("docker exec regex invalid"),
+        Regex::new(r#"^(docker|podman)\s+exec\s+.*?['"]?(bash|zsh|fish)['"]?$"#).expect("docker/podman exec regex invalid"),
 
         // Matches commands that spawn a poetry subshell.
         POETRY_SUBSHELL_COMMAND_REGEX.clone(),
@@ -224,7 +223,7 @@ impl WarpifySettings {
             ssh_hosts_denylist,
             enable_ssh_warpification: EnableSshWarpification::new_from_storage(ctx),
             use_ssh_tmux_wrapper: UseSshTmuxWrapper::new_from_storage(ctx),
-            ssh_extension_install_mode: SshExtensionInstallMode::new_from_storage(ctx),
+            ssh_extension_install_mode: SshExtensionInstallModeSetting::new_from_storage(ctx),
         }
     }
 
@@ -247,7 +246,7 @@ impl WarpifySettings {
             ssh_hosts_denylist,
             enable_ssh_warpification: EnableSshWarpification::new(None),
             use_ssh_tmux_wrapper: UseSshTmuxWrapper::new(None),
-            ssh_extension_install_mode: SshExtensionInstallMode::new(None),
+            ssh_extension_install_mode: SshExtensionInstallModeSetting::new(None),
         }
     }
 
@@ -272,7 +271,7 @@ impl WarpifySettings {
                 }
                 WarpifySettingsChangedEvent::EnableSshWarpification { .. } => {}
                 WarpifySettingsChangedEvent::UseSshTmuxWrapper { .. } => {}
-                WarpifySettingsChangedEvent::SshExtensionInstallMode { .. } => {}
+                WarpifySettingsChangedEvent::SshExtensionInstallModeSetting { .. } => {}
             })
         });
 
@@ -311,7 +310,7 @@ impl WarpifySettings {
         register_settings_events!(
             WarpifySettings,
             ssh_extension_install_mode,
-            SshExtensionInstallMode,
+            SshExtensionInstallModeSetting,
             handle.clone(),
             ctx
         );
@@ -345,7 +344,7 @@ pub enum WarpifySettingsChangedEvent {
     UseSshTmuxWrapper {
         change_event_reason: ChangeEventReason,
     },
-    SshExtensionInstallMode {
+    SshExtensionInstallModeSetting {
         change_event_reason: ChangeEventReason,
     },
 }
@@ -528,5 +527,5 @@ impl WarpifySettings {
 }
 
 #[cfg(test)]
-#[path = "settings_test.rs"]
+#[path = "settings_tests.rs"]
 mod tests;

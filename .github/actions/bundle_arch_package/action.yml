@@ -37,5 +37,6 @@ runs:
           -e GIT_RELEASE_TAG="$GIT_RELEASE_TAG" \
           -e GITHUB_ACTIONS="$GITHUB_ACTIONS" \
           -e GITHUB_OUTPUT="/dev/null" \
+          ${SETTINGS_SCHEMA_CACHE:+-e SETTINGS_SCHEMA_CACHE=/github/workspace/.settings_schema_cache.json} \
           arch-bundle-builder \
           ${{ inputs.channel }} ${{ inputs.release-tag }} ${{ inputs.arch }} ${{ inputs.artifact }}

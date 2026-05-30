@@ -1,22 +1,19 @@
 use itertools::Itertools;
-use warpui::{
-    elements::{Container, CrossAxisAlignment, Flex, ParentElement, Shrinkable},
-    presenter::ChildView,
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
-    Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
-};
+use warpui::elements::{Container, CrossAxisAlignment, Flex, ParentElement, Shrinkable};
+use warpui::presenter::ChildView;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
-use crate::{
-    appearance::Appearance,
-    editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions},
-    report_if_error, send_telemetry_from_ctx,
-    server::telemetry::TelemetryEvent,
-    settings_view::features_page::render_group,
-    terminal::session_settings::*,
-    view_components::{dropdown::TOP_MENU_BAR_HEIGHT, Dropdown, DropdownItem},
-};
+use crate::appearance::Appearance;
+use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions};
+use crate::server::telemetry::TelemetryEvent;
+use crate::settings_view::features_page::render_group;
+use crate::terminal::session_settings::*;
+use crate::view_components::dropdown::TOP_MENU_BAR_HEIGHT;
+use crate::view_components::{Dropdown, DropdownItem};
+use crate::{report_if_error, send_telemetry_from_ctx};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[allow(clippy::enum_variant_names)]
 pub enum WorkingDirectoryAction {
     /// Sets the mode that should be used for all new sessions, independent of

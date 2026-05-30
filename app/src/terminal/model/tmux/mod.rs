@@ -1,9 +1,10 @@
 pub mod commands;
 pub mod parser;
-use crate::terminal::event::ExecutedExecutorCommandEvent;
-use crate::util::parse_ascii_u32;
 use lazy_static::lazy_static;
 use regex::bytes::{Regex, RegexBuilder};
+
+use crate::terminal::event::ExecutedExecutorCommandEvent;
+use crate::util::parse_ascii_u32;
 
 pub enum ControlModeEvent {
     /// This event is sent when the control mode has started
@@ -63,5 +64,5 @@ pub fn parse_generator_output(input: &[u8]) -> Option<ExecutedExecutorCommandEve
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

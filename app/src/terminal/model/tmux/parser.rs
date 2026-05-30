@@ -461,5 +461,5 @@ fn report_parse_error(handler: &mut impl TmuxControlModeHandler, message: &'stat
 }
 
 #[cfg(test)]
-#[path = "parser_test.rs"]
+#[path = "parser_tests.rs"]
 mod tests;

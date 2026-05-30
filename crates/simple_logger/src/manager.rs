@@ -1,11 +1,13 @@
-use crate::{LogFileWriter, SimpleLogger};
 use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
+
 use thiserror::Error;
 use warpui::r#async::executor::Background;
 use warpui::{Entity, SingletonEntity};
+
+use crate::{LogFileWriter, SimpleLogger};
 
 #[derive(Error, Debug)]
 pub enum LogManagerError {

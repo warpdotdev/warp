@@ -1,3 +1,16 @@
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+
+use pathfinder_geometry::rect::RectF;
+use wgpu::util::BufferInitDescriptor;
+use wgpu::{
+    BindGroupLayout, BufferUsages, ColorTargetState, Device, FilterMode, RenderPass,
+    RenderPipeline, Sampler,
+};
+
+use super::util::create_buffer_init;
 use crate::fonts::SubpixelAlignment;
 use crate::rendering::atlas::TextureId;
 use crate::rendering::wgpu::renderer::WGPUContext;
@@ -6,17 +19,6 @@ use crate::rendering::wgpu::{resources, shader_types};
 use crate::rendering::{GlyphCache, GlyphConfig};
 use crate::scene::{GlyphFade, Layer};
 use crate::Scene;
-use pathfinder_geometry::rect::RectF;
-use std::borrow::Cow;
-use std::collections::HashMap;
-use std::sync::{atomic::AtomicBool, Arc};
-use wgpu::util::BufferInitDescriptor;
-use wgpu::{
-    BindGroupLayout, BufferUsages, ColorTargetState, Device, FilterMode, RenderPass,
-    RenderPipeline, Sampler,
-};
-
-use super::util::create_buffer_init;
 
 pub(super) struct Pipeline {
     glyph_cache: GlyphCache<TextureWithBindGroup>,
@@ -292,9 +294,10 @@ impl Pipeline {
 }
 
 mod shaders {
-    use crate::rendering::wgpu::shader_types::{ColorF, Vector4F};
     use pathfinder_color::ColorU;
     use pathfinder_geometry::rect::RectF;
+
+    use crate::rendering::wgpu::shader_types::{ColorF, Vector4F};
 
     #[repr(C)]
     #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]

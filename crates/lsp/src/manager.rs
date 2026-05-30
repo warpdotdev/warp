@@ -1,13 +1,12 @@
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
-use crate::{
-    config::LanguageId, model::LanguageServerId, supported_servers::LSPServerType, LspEvent,
-    LspServerConfig, LspServerModel,
-};
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+
+use crate::config::LanguageId;
+use crate::model::LanguageServerId;
+use crate::supported_servers::LSPServerType;
+use crate::{LspEvent, LspServerConfig, LspServerModel};
 
 #[derive(Debug)]
 pub enum LspManagerModelEvent {
@@ -234,7 +233,7 @@ impl LspManagerModel {
 
     pub fn stop_all(&mut self, path: PathBuf, ctx: &mut ModelContext<Self>) {
         let Some(servers) = self.servers.get(&path) else {
-            log::warn!("No server resgistered to stop at path: {}", path.display());
+            log::warn!("No server registered to stop at path: {}", path.display());
             return;
         };
 

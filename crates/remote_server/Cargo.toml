@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 async-channel.workspace = true
+bounded-vec-deque.workspace = true
 command.workspace = true
 dashmap.workspace = true
 futures.workspace = true
@@ -24,6 +25,7 @@ warp_util.workspace = true
 warpui.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
+async-io.workspace = true
 async-process.workspace = true
 
 [target.'cfg(target_family = "wasm")'.dependencies]

@@ -1,9 +1,10 @@
-use super::super::search_item::{FileSearchItem, FileSearchResult};
-use super::FileSearchModel;
 use fuzzy_match::FuzzyMatchResult;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::RepoMetadataModel;
 use warpui::{App, SingletonEntity};
+
+use super::super::search_item::{FileSearchItem, FileSearchResult};
+use super::FileSearchModel;
 
 #[cfg(test)]
 mod file_search_model_tests {
@@ -252,8 +253,9 @@ mod file_search_item_tests {
 
 #[cfg(test)]
 mod strip_absolute_path_prefix_tests {
-    use super::*;
     use std::path::{Path, PathBuf};
+
+    use super::*;
 
     /// Builds an absolute path from the given components, using the platform's
     /// root (`/` on Unix, `C:\` on Windows).  This ensures the constructed
@@ -398,7 +400,7 @@ mod integration_tests {
             "src/lib.rs",
             "src/components/button.tsx",
             "src/components/input.tsx",
-            "tests/integration_test.rs",
+            "tests/integration_tests.rs",
             "README.md",
         ];
 
@@ -434,7 +436,7 @@ mod integration_tests {
             "src/components/button.tsx",
             "src/components/input.tsx",
             "src/utils/button_helper.rs",
-            "tests/button_test.rs",
+            "tests/button_tests.rs",
         ];
 
         let query = "comp button";

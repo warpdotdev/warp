@@ -250,9 +250,17 @@ elif [[ $RELEASE_CHANNEL = "local" || $RELEASE_CHANNEL = "dev" ]]; then
   # For dev bundles, we want to enable debug assertions to
   # catch violations that would otherwise silently pass in
   # a normal release build (e.g. in stable).
-  CARGO_PROFILE="release-lto-debug_assertions"
+  if [[ "$ARTIFACT" == "cli" ]]; then
+    CARGO_PROFILE="release-cli-debug_assertions"
+  else
+    CARGO_PROFILE="release-lto-debug_assertions"
+  fi
 else
-  CARGO_PROFILE="release-lto"
+  if [[ "$ARTIFACT" == "cli" ]]; then
+    CARGO_PROFILE="release-cli"
+  else
+    CARGO_PROFILE="release-lto"
+  fi
 fi
 
 TARGET_PROFILE_DIR="$CARGO_PROFILE"
@@ -296,6 +304,8 @@ elif [[ $RELEASE_CHANNEL = "stable" ]]; then
     BUNDLE_ID="dev.warp.Warp-Stable"
     WARP_APP_NAME="Warp"
     WARP_SCHEME_NAME="warp"
+    # Enable heap usage tracking & profiling using jemalloc through pprof.
+    FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
 elif [[ $RELEASE_CHANNEL = "oss" ]]; then
     WARP_BIN="warp-oss"
     BUNDLE_ID="dev.warp.WarpOss"
@@ -342,7 +352,12 @@ if [[ "$ARTIFACT" == cli ]]; then
   OPEN_AFTER_BUNDLE=false
   FEATURES="$FEATURES,standalone"
 elif [[ "$ARTIFACT" == app ]]; then
-  FEATURES="$FEATURES,gui,nld_improvements"
+  FEATURES="$FEATURES,gui"
+  if [[ "$RELEASE_CHANNEL" == "local" || "$RELEASE_CHANNEL" == "dev" || "$RELEASE_CHANNEL" == "preview" ]]; then
+    FEATURES="$FEATURES,nld_classifier_v2,nld_heuristic_v2"
+  else
+    FEATURES="$FEATURES,nld_classifier_v1,nld_heuristic_v1"
+  fi
 fi
 
 # If we're building a universal bundle for the app artifact, make sure the additional target is available.

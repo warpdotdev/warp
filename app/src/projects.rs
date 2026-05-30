@@ -1,10 +1,12 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::mpsc::SyncSender;
-use std::{collections::HashMap, path::PathBuf};
 
 use chrono::Utc;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
-use crate::persistence::{model::Project, ModelEvent};
+use crate::persistence::model::Project;
+use crate::persistence::ModelEvent;
 
 #[derive(Debug)]
 pub enum ProjectEvent {

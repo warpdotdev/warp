@@ -7,9 +7,10 @@
     allow(dead_code)
 )]
 
-use owned_ttf_parser::{AsFaceRef, Face, FaceParsingError, OwnedFace};
 use std::fs::File;
 use std::path::PathBuf;
+
+use owned_ttf_parser::{AsFaceRef, Face, FaceParsingError, OwnedFace};
 
 /// A handle that wraps around a font face.
 pub struct FontHandle {
@@ -85,7 +86,7 @@ impl FontHandle {
         }
     }
 
-    /// Validates the the [`FontHandle`] is a parseable font.
+    /// Validates the [`FontHandle`] is a parseable font.
     pub fn validate_font_data(&self) -> Result<(), Error> {
         self.data.validate()
     }

@@ -16,8 +16,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentRichInputCloseReason, CLIAgentSession,
     CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
-use crate::terminal::CLIAgent;
-use crate::terminal::TerminalView;
+use crate::terminal::{CLIAgent, TerminalView};
 
 /// Handles updating the local LLM preferences when a selected agent model update is received.
 /// This function is shared between the viewer and sharer to ensure consistent behavior.
@@ -42,7 +41,7 @@ pub(crate) fn apply_selected_agent_model_update(
     // Check if the model is available to the viewer. If not, skip the update.
     // This handles cases where the viewer and sharer have different model permissions.
     let model_is_available = llm_prefs
-        .get_base_llm_choices_for_agent_mode()
+        .get_base_llm_choices_for_agent_mode(ctx)
         .any(|info| info.id == model_id);
     if !model_is_available {
         log::warn!("Skipping shared-session model update - {model_id} is unknown");
@@ -402,11 +401,21 @@ pub(crate) fn apply_cli_agent_state_update(
                 });
             }
 
+            // For cloud agent sessions with non-Oz harnesses, auto-open rich
+            // input when creating a new CLI agent session so the viewer gets the
+            // composer immediately (byte-sharing has roundtrip lag without it).
+            let effective_rich_input_open =
+                if !already_exists && view.as_ref(ctx).is_shared_ambient_agent_session() {
+                    true
+                } else {
+                    *is_rich_input_open
+                };
+
             // Update the rich input state.
             let currently_open = CLIAgentSessionsModel::as_ref(ctx).is_input_open(view_id);
-            if currently_open != *is_rich_input_open {
+            if currently_open != effective_rich_input_open {
                 view.update(ctx, |view, ctx| {
-                    if *is_rich_input_open {
+                    if effective_rich_input_open {
                         view.open_cli_agent_rich_input(
                             CLIAgentInputEntrypoint::SharedSessionSync,
                             ctx,
@@ -416,6 +425,10 @@ pub(crate) fn apply_cli_agent_state_update(
                     }
                 });
             }
+
+            view.update(ctx, |view, ctx| {
+                view.sync_agent_view_for_shared_third_party_viewer(ctx);
+            });
         }
         CLIAgentSessionState::Inactive => {
             // Session cleanup is handled by BlockCompleted events on the

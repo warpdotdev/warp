@@ -8,7 +8,7 @@ use warpui::{
     AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
-use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus, StatusColorStyle};
 use crate::ai::blocklist::agent_view::orchestration_conversation_links::conversation_navigation_card_with_icon;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
@@ -196,7 +196,9 @@ impl View for ChildAgentStatusCard {
 
             let agent_name = child.agent_name().unwrap_or("Agent").to_string();
             let title = child.title().unwrap_or_else(|| "Untitled".to_string());
-            let status_icon = child.status().status_icon_and_color(appearance.theme());
+            let status_icon = child
+                .status()
+                .status_icon_and_color(appearance.theme(), StatusColorStyle::Standard);
 
             let Some(mouse_state) = self.mouse_states.get(&conversation_id).cloned() else {
                 log::error!(

@@ -1,25 +1,22 @@
+use ai::api_keys::ApiKeyManager;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use warp_core::ui::appearance::Appearance;
-use warpui::{
-    elements::{
-        ConstrainedBox, Container, CrossAxisAlignment, Flex, FormattedTextElement,
-        HighlightedHyperlink, HyperlinkLens, MainAxisAlignment, MainAxisSize, ParentElement,
-    },
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
+use warpui::elements::{
+    ConstrainedBox, Container, CrossAxisAlignment, Flex, FormattedTextElement,
+    HighlightedHyperlink, HyperlinkLens, MainAxisAlignment, MainAxisSize, ParentElement,
 };
+use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
-use crate::{
-    ai::{blocklist::error_color, AIRequestUsageModel},
-    auth::AuthStateProvider,
-    network::NetworkStatus,
-    server::ids::ServerId,
-    settings::PrivacySettings,
-    settings_view::SettingsSection,
-    ui_components::icons::Icon,
-    workspace::WorkspaceAction,
-    workspaces::user_workspaces::UserWorkspaces,
-};
-use ai::api_keys::ApiKeyManager;
+use crate::ai::blocklist::error_color;
+use crate::ai::AIRequestUsageModel;
+use crate::auth::AuthStateProvider;
+use crate::network::NetworkStatus;
+use crate::server::ids::ServerId;
+use crate::settings::PrivacySettings;
+use crate::settings_view::SettingsSection;
+use crate::ui_components::icons::Icon;
+use crate::workspace::WorkspaceAction;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_PERCENTAGE: f32 = 0.5;
 
@@ -385,7 +382,7 @@ impl PromptAlertView {
                         };
                     text_fragments.push(FormattedTextFragment::hyperlink(label, upgrade_url));
                 }
-                if UserWorkspaces::as_ref(app).is_byo_api_key_enabled() {
+                if UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app) {
                     text_fragments.push(FormattedTextFragment::plain_text(" or "));
                     text_fragments.push(FormattedTextFragment::hyperlink_action(
                         "use your own API keys",

@@ -1,25 +1,21 @@
-use std::{
-    collections::{HashMap, HashSet},
-    future::Future,
-    path::{Path, PathBuf},
-    sync::mpsc::{self, channel},
-    thread,
-    time::Duration,
-};
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, channel};
+use std::thread;
+use std::time::Duration;
 
 pub mod home_watcher;
-pub use home_watcher::{HomeDirectoryWatcher, HomeDirectoryWatcherEvent};
-
 use anyhow::Result;
 use futures::channel::oneshot;
+pub use home_watcher::{HomeDirectoryWatcher, HomeDirectoryWatcherEvent};
+use notify_debouncer_full::notify::event::{ModifyKind, RenameMode};
+use notify_debouncer_full::notify::{
+    self, EventKind, RecommendedWatcher, RecursiveMode, WatchFilter,
+};
 use notify_debouncer_full::{
-    new_debouncer_opt,
-    notify::{
-        self,
-        event::{ModifyKind, RenameMode},
-        EventKind, RecommendedWatcher, RecursiveMode, WatchFilter,
-    },
-    DebounceEventHandler, DebounceEventResult, DebouncedEvent, Debouncer, NoCache,
+    new_debouncer_opt, DebounceEventHandler, DebounceEventResult, DebouncedEvent, Debouncer,
+    NoCache,
 };
 use warpui::{Entity, ModelContext};
 
@@ -47,20 +43,19 @@ impl BackgroundFileWatcher {
         debounce_duration: Duration,
         handler: WatcherEventHandler,
         rx: mpsc::Receiver<BackgroundFileWatcherCommand>,
-    ) -> Self {
+    ) -> Result<Self> {
         let debounced_watcher = new_debouncer_opt(
             debounce_duration,
             None,
             handler,
             NoCache,
             notify::Config::default(),
-        )
-        .expect("Should be able to create watcher");
+        )?;
 
-        Self {
+        Ok(Self {
             notifier: debounced_watcher,
             rx,
-        }
+        })
     }
 
     /// Listen to streamed in commands to modify the internal notifier state.
@@ -150,12 +145,24 @@ impl BulkFilesystemWatcher {
         if let Err(e) = thread::Builder::new()
             .name("Bulk Filesystem Watcher".into())
             .spawn(move || {
-                let watcher = BackgroundFileWatcher::new(
+                match BackgroundFileWatcher::new(
                     debounce_duration,
                     WatcherEventHandler { tx },
                     bg_rx,
-                );
-                watcher.run();
+                ) {
+                    Ok(watcher) => watcher.run(),
+                    Err(e) => {
+                        // The thread exits, which drops `bg_rx` and the
+                        // event-channel sender. Subsequent `register_path` /
+                        // `unregister_path` calls will get `SendError` and
+                        // log a warning — the app continues without file
+                        // watching.
+                        log::error!(
+                            "Failed to create filesystem watcher, \
+                             file watching will be disabled: {e:?}"
+                        );
+                    }
+                }
             })
         {
             log::error!("Failed to spawn thread for background file watcher {e:?}");

@@ -13,7 +13,7 @@
 # Gating is progressive: earlier gates include all skills from later gates.
 # For example, a dogfood build includes skills from both dogfood/ and
 # preview/.  The stable channel has no gate — stable-ready skills belong
-# in resources/skills/ (the always-bundled directory).
+# in resources/bundled/skills/ (the always-bundled directory).
 
 set -e
 
@@ -35,10 +35,10 @@ if [ ! -d "$GATED_SKILLS_SRC" ]; then
 fi
 
 # Error out if a stable/ gate directory exists — stable skills should live
-# in the always-bundled resources/skills/ directory instead.
+# in the always-bundled resources/bundled/skills/ directory instead.
 if [ -d "$GATED_SKILLS_SRC/stable" ]; then
   echo "Error: found a 'stable/' directory in $GATED_SKILLS_SRC." >&2
-  echo "The stable channel does not use gated skills. Move stable-ready skills to resources/skills/ (the always-bundled directory) instead." >&2
+  echo "The stable channel does not use gated skills. Move stable-ready skills to resources/bundled/skills/ (the always-bundled directory) instead." >&2
   exit 1
 fi
 

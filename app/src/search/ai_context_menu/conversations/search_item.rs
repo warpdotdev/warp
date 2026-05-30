@@ -1,5 +1,10 @@
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
+use warpui::elements::{
+    ConstrainedBox, Container, CrossAxisAlignment, Flex, Highlight, Icon, ParentElement, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::{AppContext, Element, SingletonEntity};
 
 use super::ConversationContextItem;
 use crate::appearance::Appearance;
@@ -9,11 +14,6 @@ use crate::search::item::SearchItem;
 use crate::search::result_renderer::ItemHighlightState;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::util::truncation::truncate_from_end;
-use warpui::elements::{
-    ConstrainedBox, Container, CrossAxisAlignment, Flex, Highlight, Icon, ParentElement, Text,
-};
-use warpui::fonts::{Properties, Weight};
-use warpui::{AppContext, Element, SingletonEntity};
 
 const MAX_TITLE_LENGTH: usize = 45;
 

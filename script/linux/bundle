@@ -118,9 +118,17 @@ elif [[ $RELEASE_CHANNEL = "local" || $RELEASE_CHANNEL = "dev" ]]; then
   # For dev bundles, we want to enable debug assertions to
   # catch violations that would otherwise silently pass in
   # a normal release build (e.g. in stable).
-  CARGO_PROFILE="release-lto-debug_assertions"
+  if [[ "$ARTIFACT" == "cli" ]]; then
+    CARGO_PROFILE="release-cli-debug_assertions"
+  else
+    CARGO_PROFILE="release-lto-debug_assertions"
+  fi
 else
-  CARGO_PROFILE="release-lto"
+  if [[ "$ARTIFACT" == "cli" ]]; then
+    CARGO_PROFILE="release-cli"
+  else
+    CARGO_PROFILE="release-lto"
+  fi
 fi
 
 if [[ "$CARGO_PROFILE" == "dev" ]]; then
@@ -187,7 +195,12 @@ fi
 if [[ "$ARTIFACT" == "cli" ]]; then
   FEATURES="$FEATURES,standalone"
 elif [[ "$ARTIFACT" == "app" ]]; then
-  FEATURES="$FEATURES,gui,nld_improvements"
+  FEATURES="$FEATURES,gui"
+  if [[ "$RELEASE_CHANNEL" == "local" || "$RELEASE_CHANNEL" == "dev" || "$RELEASE_CHANNEL" == "preview" ]]; then
+    FEATURES="$FEATURES,nld_classifier_v2,nld_heuristic_v2"
+  else
+    FEATURES="$FEATURES,nld_classifier_v1,nld_heuristic_v1"
+  fi
 fi
 
 BUNDLE_ID="dev.warp.$APP_NAME"

@@ -1,12 +1,12 @@
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
+
 use crate::terminal::block_list_viewport::InputMode;
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
-};
 
 define_settings_group!(InputModeSettings, settings: [
     input_mode: InputModeState {
         type: InputMode,
-        // Note that for new users, we now overrride this default value in SettingsInitializer
+        // Note that for new users, we now override this default value in SettingsInitializer
         // to set it to InputMode::Waterfall.
         default: InputMode::PinnedToBottom,
         supported_platforms: SupportedPlatforms::ALL,

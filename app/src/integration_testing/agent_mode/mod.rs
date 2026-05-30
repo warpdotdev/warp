@@ -7,10 +7,6 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write;
 
-use crate::ai::agent::{AIAgentOutputStatus, FinishedAIAgentOutput};
-pub use crate::ai::blocklist::agent_view::AgentViewState;
-use crate::BlocklistAIHistoryModel;
-use crate::{ai::agent::AIAgentActionType, integration_testing::view_getters::terminal_view};
 pub use assertions::*;
 pub use step::*;
 pub use user_defaults::*;
@@ -18,6 +14,11 @@ pub use util::*;
 use warpui::integration::PersistedDataMap;
 pub use warpui::integration::RUNTIME_TAG_FAILURE_REASON;
 use warpui::{App, SingletonEntity as _, WindowId};
+
+use crate::ai::agent::{AIAgentActionType, AIAgentOutputStatus, FinishedAIAgentOutput};
+pub use crate::ai::blocklist::agent_view::AgentViewState;
+use crate::integration_testing::view_getters::terminal_view;
+use crate::BlocklistAIHistoryModel;
 
 pub const TOTAL_REQUEST_COST_PREFIX: &str = "Total request cost: ";
 pub const TOTAL_EXCHANGES_PREFIX: &str = "Total number of exchanges: ";
@@ -94,8 +95,9 @@ pub fn output_code_diff_debug_info(app: &mut App, window_id: WindowId) {
 
         let mut output_file = open_debug_file_from_env(CODE_DIFF_OUTPUT_FILE_ENV_VAR);
         if let Some(output_file) = &mut output_file {
-            use command::blocking::Command;
             use std::io::Write;
+
+            use command::blocking::Command;
             if edited_files.is_empty() {
                 writeln!(output_file, "No files were edited for this test")
                     .expect("Failed to write to code diff file");

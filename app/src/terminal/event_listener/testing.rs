@@ -1,5 +1,6 @@
-use async_channel::Sender;
 use std::sync::Arc;
+
+use async_channel::Sender;
 
 use super::ChannelEventListener;
 use crate::terminal::event::Event as TerminalEvent;

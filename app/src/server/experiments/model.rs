@@ -2,13 +2,14 @@
 
 use std::collections::HashSet;
 
-use super::ServerExperiment;
-use crate::{persistence::ModelEvent, report_if_error, GlobalResourceHandlesProvider};
 use anyhow::Context;
-use warpui::{Entity, ModelContext, SingletonEntity};
-
 #[cfg(test)]
 pub use tests::TestModel;
+use warpui::{Entity, ModelContext, SingletonEntity};
+
+use super::ServerExperiment;
+use crate::persistence::ModelEvent;
+use crate::{report_if_error, GlobalResourceHandlesProvider};
 
 /// A global model for maintaining server-side experiment state.
 pub struct ServerExperiments {
@@ -29,7 +30,7 @@ impl ServerExperiments {
 
     /// Updates the model with the latest server-side state.
     ///
-    /// Assumes the set of proivded [`ServerExperiment`]s are unambiguous;
+    /// Assumes the set of provided [`ServerExperiment`]s are unambiguous;
     /// that is, there are not two arms enabled for the same experiment group.
     pub fn apply_latest_state(
         &mut self,

@@ -1,26 +1,22 @@
 pub mod text {
-    use std::{
-        collections::HashSet,
-        fmt,
-        io::{self, Write},
-    };
+    use std::collections::HashSet;
+    use std::fmt;
+    use std::io::{self, Write};
 
     const CANCELLED_MESSAGE: &str = "<cancelled>";
 
     use ai::agent::action_result::{FetchConversationResult, ReadSkillResult, UseComputerResult};
     use itertools::Itertools;
 
-    use crate::{
-        ai::agent::{
-            AIAgentActionType, AIAgentInput, AIAgentOutput, AIAgentOutputMessageType, AIAgentTodo,
-            ArtifactCreatedData, CallMCPToolResult, FileGlobResult, FileGlobV2Result, GrepResult,
-            ReadFilesResult, ReadMCPResourceResult, RequestCommandOutputResult,
-            RequestFileEditsResult, SearchCodebaseResult, SuggestNewConversationResult,
-            SuggestPromptResult, TodoOperation, UploadArtifactResult, WebFetchStatus,
-            WebSearchStatus, WriteToLongRunningShellCommandResult,
-        },
-        AIAgentActionResultType,
+    use crate::ai::agent::{
+        AIAgentActionType, AIAgentInput, AIAgentOutput, AIAgentOutputMessageType, AIAgentTodo,
+        ArtifactCreatedData, CallMCPToolResult, FileGlobResult, FileGlobV2Result, GrepResult,
+        ReadFilesResult, ReadMCPResourceResult, RequestCommandOutputResult, RequestFileEditsResult,
+        SearchCodebaseResult, SuggestNewConversationResult, SuggestPromptResult, TodoOperation,
+        UploadArtifactResult, WebFetchStatus, WebSearchStatus,
+        WriteToLongRunningShellCommandResult,
     };
+    use crate::AIAgentActionResultType;
 
     /// Format an agent input as a human-readable string. For action results, it's assumed that
     /// the action is shown immediately before this result.
@@ -42,7 +38,8 @@ pub mod text {
             | AIAgentInput::StartFromAmbientRunPrompt { .. }
             | AIAgentInput::MessagesReceivedFromAgents { .. }
             | AIAgentInput::PassiveSuggestionResult { .. }
-            | AIAgentInput::EventsFromAgents { .. } => {
+            | AIAgentInput::EventsFromAgents { .. }
+            | AIAgentInput::OrchestrationConfigUpdate { .. } => {
                 // Do not include the user query, since it's already provided as input to the agent.
                 Ok(())
             }
@@ -303,6 +300,8 @@ pub mod text {
                 // SendMessageToAgent is a client-side orchestration action, not used in SDK
                 AIAgentActionResultType::SendMessageToAgent(_) => Ok(()),
                 AIAgentActionResultType::AskUserQuestion(_) => Ok(()),
+                // RunAgents is a desktop-client-only action; not used in the SDK.
+                AIAgentActionResultType::RunAgents(_) => Ok(()),
             },
         }
     }
@@ -427,6 +426,8 @@ pub mod text {
                         )?;
                     }
                     AIAgentActionType::AskUserQuestion { .. } => (),
+                    // RunAgents is desktop-client-only; SDK driver renders nothing.
+                    AIAgentActionType::RunAgents(_) => (),
                 },
                 AIAgentOutputMessageType::TodoOperation(operation) => match operation {
                     TodoOperation::UpdateTodos { todos } => {
@@ -559,26 +560,22 @@ pub mod text {
 }
 
 pub mod json {
-    use crate::{
-        ai::agent::{
-            AIAgentActionType, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
-            AIAgentOutputMessageType, AIAgentTodo, ArtifactCreatedData, CallMCPToolResult,
-            FileContext, FileGlobResult, FileGlobV2Result, GrepResult, ReadFilesResult,
-            ReadMCPResourceResult, RequestCommandOutputResult, RequestFileEditsResult,
-            SearchCodebaseResult, SubagentCall, TodoOperation, UploadArtifactResult,
-            WriteToLongRunningShellCommandResult,
-        },
-        AIAgentActionResultType,
-    };
+    use std::borrow::Cow;
+    use std::io::{self, Write};
+    use std::ops::Range;
+
+    use serde::Serialize;
 
     use crate::ai::agent::comment::ReviewComment;
-    use serde::Serialize;
-    use std::path::Path;
-    use std::{
-        borrow::Cow,
-        io::{self, Write},
-        ops::Range,
+    use crate::ai::agent::{
+        AIAgentActionType, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
+        AIAgentOutputMessageType, AIAgentTodo, ArtifactCreatedData, CallMCPToolResult, FileContext,
+        FileGlobResult, FileGlobV2Result, GrepResult, ReadFilesResult, ReadMCPResourceResult,
+        RequestCommandOutputResult, RequestFileEditsResult, SearchCodebaseResult, SubagentCall,
+        TodoOperation, UploadArtifactResult, WriteToLongRunningShellCommandResult,
     };
+    use crate::code::buffer_location::LocalOrRemotePath;
+    use crate::AIAgentActionResultType;
 
     /// JSON representation of messages in an agent conversation. This is intentionally not 1:1 with our internal `AIAgent*` types - it's
     /// a stable interface for callers.
@@ -742,7 +739,7 @@ pub mod json {
     #[derive(Serialize)]
     struct JsonComment<'a> {
         comment_text: &'a str,
-        file_path: Option<&'a Path>,
+        file_path: Option<String>,
         line_number: Option<usize>,
         head_title: Option<&'a str>,
     }
@@ -791,7 +788,8 @@ pub mod json {
                 | AIAgentInput::StartFromAmbientRunPrompt { .. }
                 | AIAgentInput::MessagesReceivedFromAgents { .. }
                 | AIAgentInput::EventsFromAgents { .. }
-                | AIAgentInput::PassiveSuggestionResult { .. } => None,
+                | AIAgentInput::PassiveSuggestionResult { .. }
+                | AIAgentInput::OrchestrationConfigUpdate { .. } => None,
                 // These input types should not occur in a SDK-run agent.
                 AIAgentInput::ResumeConversation { .. }
                 | AIAgentInput::TriggerPassiveSuggestion { .. } => None,
@@ -1108,6 +1106,9 @@ pub mod json {
                     | AIAgentActionType::SendMessageToAgent { .. }
                     | AIAgentActionType::TransferShellCommandControlToUser { .. } => None,
                     AIAgentActionType::AskUserQuestion { .. } => None,
+                    // RunAgents is desktop-client-only; SDK has no JSON
+                    // representation for it.
+                    AIAgentActionType::RunAgents(_) => None,
                 },
                 AIAgentOutputMessageType::TodoOperation(operation) => match operation {
                     TodoOperation::UpdateTodos { todos } => Some(JsonMessage::UpdateTodos {
@@ -1169,7 +1170,11 @@ pub mod json {
         fn from(review_comment: &'a ReviewComment) -> Self {
             Self {
                 comment_text: review_comment.content.as_str(),
-                file_path: review_comment.diff.file_path.as_deref(),
+                file_path: review_comment
+                    .diff
+                    .file_path
+                    .as_ref()
+                    .map(LocalOrRemotePath::display_path),
                 line_number: review_comment.diff.line_number,
                 head_title: review_comment.head_title.as_deref(),
             }
@@ -1286,10 +1291,12 @@ pub mod json {
     }
 }
 
+use std::io::{self, BufWriter, Write};
+
+use warp_core::channel::ChannelState;
+
 use crate::ai::agent::{AIAgentText, AIAgentTextSection};
 use crate::code::editor_management::CodeSource;
-use std::io::{self, BufWriter, Write};
-use warp_core::channel::ChannelState;
 
 /// Constructs the Oz dashboard URL for a given run ID.
 fn run_url(run_id: &str) -> String {
@@ -1354,6 +1361,7 @@ fn format_agent_text<W: Write>(text: &AIAgentText, w: &mut W) -> io::Result<()> 
                     Some(CodeSource::AIAction { .. })
                     | Some(CodeSource::New { .. })
                     | Some(CodeSource::FileTree { .. })
+                    | Some(CodeSource::CommandPalette { .. })
                     | Some(CodeSource::Finder { .. })
                     | None => {}
                 }

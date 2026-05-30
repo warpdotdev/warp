@@ -1,13 +1,17 @@
-use super::*;
-use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
-use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
-use repo_metadata::{repositories::DetectedRepositories, DirectoryWatcher, RepoMetadataModel};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+
+use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::{DirectoryWatcher, RepoMetadataModel};
 use tempfile::TempDir;
 use warp_core::channel::ChannelState;
 use warpui::App;
 use watcher::HomeDirectoryWatcher;
+
+use super::*;
+use crate::settings::AISettings;
+use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 
 // ============================================================================
 // Tests for get_skills_for_working_directory subdirectory scoping
@@ -71,6 +75,7 @@ fn get_skills_for_working_directory_scopes_subdirectory_skills() {
 
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
         let repo_handle = app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
@@ -193,6 +198,7 @@ fn get_skills_for_working_directory_name_collision_returns_both() {
 
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
         let repo_handle = app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
@@ -289,6 +295,7 @@ fn cloud_environment_skills_always_included() {
 
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
         let repo_handle = app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
@@ -436,13 +443,14 @@ Plain content with no variables.
 fn test_build_bundled_skill_context() {
     let context = build_bundled_skill_context();
 
-    // At least 4 entries: server_url, cli_binary_name, url_scheme, settings_file_path.
+    // At least 5 entries: server_url, cli_binary_name, url_scheme, settings_file_path, keybindings_file_path.
     // settings_schema_path is only present when bundled_resources_dir() returns Some.
-    assert!(context.len() >= 4);
+    assert!(context.len() >= 5);
     assert!(context.contains_key("warp_server_url"));
     assert!(context.contains_key("warp_cli_binary_name"));
     assert!(context.contains_key("warp_url_scheme"));
     assert!(context.contains_key("settings_file_path"));
+    assert!(context.contains_key("keybindings_file_path"));
 
     assert_eq!(
         context.get("warp_server_url").unwrap(),
@@ -459,6 +467,12 @@ fn test_build_bundled_skill_context() {
     assert_eq!(
         context.get("settings_file_path").unwrap(),
         &crate::settings::user_preferences_toml_file_path()
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        context.get("keybindings_file_path").unwrap(),
+        &crate::keyboard::keybinding_file_path()
             .display()
             .to_string()
     );
@@ -490,6 +504,7 @@ fn best_supported_provider_fast_path_returns_deduped_provider() {
     // When the deduped provider is already in the supported set, return it immediately.
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
         app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
@@ -515,6 +530,7 @@ fn best_supported_provider_remaps_to_supported_provider() {
     // When supported set is [Claude], should re-map to Claude.
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
         app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
@@ -545,6 +561,7 @@ fn best_supported_provider_falls_back_when_no_match() {
     // Should fall back to the original deduped provider (Agents).
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
         app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);

@@ -2,9 +2,8 @@
 
 use std::io::Write as _;
 
-use crate::FileModel;
-
 use super::*;
+use crate::FileModel;
 
 fn make_accumulator(ranges: &[std::ops::Range<usize>], max_bytes: usize) -> TextFileAccumulator {
     TextFileAccumulator::new("test.txt".to_string(), None, ranges, max_bytes)
@@ -118,12 +117,50 @@ fn unsorted_ranges_are_sorted() {
 }
 
 #[test]
-fn empty_file_with_ranges_produces_no_segment() {
+fn empty_file_with_ranges_produces_empty_segment() {
     let acc = make_accumulator(&[1..5], 1000);
     let (segments, bytes_read) = acc.finalize();
 
-    assert_eq!(segments.len(), 0);
+    assert_eq!(segments.len(), 1);
+    assert_eq!(segments[0].content, "");
+    assert_eq!(segments[0].line_range, Some(1..5));
+    assert_eq!(segments[0].line_count, 0);
     assert_eq!(bytes_read, 0);
+}
+
+#[test]
+fn range_past_eof_produces_empty_segment() {
+    // File has 5 lines, but range requests lines 10..15 which are all past EOF.
+    let mut acc = make_accumulator(&[10..15], 1000);
+    for i in 1..=5 {
+        push(&mut acc, &format!("line{i}"));
+    }
+    let (segments, bytes_read) = acc.finalize();
+
+    assert_eq!(segments.len(), 1);
+    assert_eq!(segments[0].content, "");
+    assert_eq!(segments[0].line_range, Some(10..15));
+    assert_eq!(segments[0].line_count, 5);
+    assert_eq!(bytes_read, 0);
+}
+
+#[test]
+fn multiple_ranges_some_past_eof() {
+    // First range is valid, second is entirely past EOF.
+    let mut acc = make_accumulator(&[1..3, 10..15], 1000);
+    for i in 1..=5 {
+        push(&mut acc, &format!("line{i}"));
+    }
+    let (segments, _bytes_read) = acc.finalize();
+
+    assert_eq!(segments.len(), 2);
+    assert_eq!(segments[0].content, "line1\nline2");
+    assert_eq!(segments[0].line_range, Some(1..3));
+    assert_eq!(segments[1].content, "");
+    assert_eq!(segments[1].line_range, Some(10..15));
+    for seg in &segments {
+        assert_eq!(seg.line_count, 5);
+    }
 }
 
 #[test]

@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+use std::str::FromStr;
+
+use lazy_static::lazy_static;
+
 use super::Experiment;
 use crate::experiments::{BucketRange, Layer};
-use lazy_static::lazy_static;
-use std::{collections::HashMap, str::FromStr};
 
 lazy_static! {
     pub static ref BLOCK_ONBOARDING_LAYER: Layer = Layer {

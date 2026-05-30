@@ -25,7 +25,6 @@ tokio = { workspace = true, features = ["rt", "macros"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 command.workspace = true
-core-foundation.workspace = true
 dispatch2 = "0.3.0"
 image.workspace = true
 instant.workspace = true
@@ -36,7 +35,7 @@ objc2-core-graphics.workspace = true
 tempfile.workspace = true
 warpui.workspace = true
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 ashpd.workspace = true
 futures.workspace = true
 image.workspace = true

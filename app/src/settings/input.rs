@@ -1,12 +1,13 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
+use settings::Setting as _;
 /// TODO: move alias_expansion setting into this group.
 use settings::{define_settings_group, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
-use std::collections::HashMap;
 use warpui::{AppContext, SingletonEntity};
 
 use crate::terminal::input::inline_menu::InlineMenuType;
 use crate::terminal::session_settings::SessionSettings;
-use settings::Setting as _;
 
 pub const MAX_TIMES_TO_SHOW_AUTOSUGGESTION_HINT: i8 = 2;
 

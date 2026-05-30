@@ -1,14 +1,12 @@
 //! Supporting types for persisting cloud objects to SQLite.
 
 use anyhow::anyhow;
+use cloud_object_client::{CloudLinkSharing, CloudObjectGuest, ServerObjectContainer};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    auth::UserUid,
-    cloud_object::{CloudLinkSharing, CloudObjectGuest, ServerObjectContainer},
-    drive::sharing::{SharingAccessLevel, Subject, TeamKind, UserKind},
-    ids::ServerId,
-};
+use crate::auth::UserUid;
+use crate::drive::sharing::{SharingAccessLevel, Subject, TeamKind, UserKind};
+use crate::ids::ServerId;
 
 /// Decode a link-sharing setting.
 pub fn decode_link_sharing(

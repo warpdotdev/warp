@@ -2,20 +2,16 @@ use std::collections::HashMap;
 
 use chrono::DateTime;
 use handlebars::{get_arguments, render_template};
-
 #[cfg(feature = "local_fs")]
 use serde::Deserialize;
 
+use crate::ai::mcp::templatable::{JsonTemplate, TemplatableMCPServer, TemplateVariable};
+use crate::ai::mcp::templatable_installation::{
+    TemplatableMCPServerInstallation, VariableType, VariableValue,
+};
 #[cfg(feature = "local_fs")]
 use crate::ai::mcp::{JSONMCPServer, JSONTransportType};
-
-use crate::{
-    ai::mcp::{
-        templatable::{JsonTemplate, TemplatableMCPServer, TemplateVariable},
-        templatable_installation::{TemplatableMCPServerInstallation, VariableType, VariableValue},
-    },
-    server::datetime_ext::DateTimeExt,
-};
+use crate::server::datetime_ext::DateTimeExt;
 
 /// Normalize MCP JSON input to ensure it has a server name wrapper.
 ///
@@ -241,6 +237,7 @@ impl ParsedTemplatableMCPServerResult {
     /// Unlike [`from_user_json`], this only recognises servers under a known
     /// wrapper key (`mcpServers`, `servers`, etc.) and will **not** fall back to
     /// treating every top-level key as a server name.
+    #[cfg(not(target_family = "wasm"))]
     pub fn from_config_file_json(json: &str) -> serde_json::Result<Vec<Self>> {
         let json = json.trim();
         let json = if json.starts_with('{') {

@@ -5,12 +5,6 @@
 //!
 //! Separated into its own module so the two codepaths are easy to distinguish.
 
-use crate::code_review::code_review_view::{
-    CodeReviewAction, CodeReviewHeaderFields, PrimaryGitActionMode,
-};
-use crate::code_review::diff_selector::DiffSelector;
-use crate::menu::Menu;
-use crate::view_components::action_button::ActionButton;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
 use warpui::elements::{
@@ -20,9 +14,14 @@ use warpui::elements::{
 };
 use warpui::{Element, ViewHandle};
 
-use crate::appearance::Appearance;
-
 use super::CodeReviewHeader;
+use crate::appearance::Appearance;
+use crate::code_review::code_review_view::{
+    CodeReviewAction, CodeReviewHeaderFields, PrimaryGitActionMode,
+};
+use crate::code_review::diff_selector::DiffSelector;
+use crate::menu::Menu;
+use crate::view_components::action_button::ActionButton;
 
 impl CodeReviewHeader {
     /// Entry-point for the new header layout (feature-flagged behind
@@ -114,9 +113,7 @@ impl CodeReviewHeader {
             );
         }
 
-        let button_row = Container::new(row.finish()).with_margin_right(4.).finish();
-
-        let mut stack = Stack::new().with_child(button_row);
+        let mut stack = Stack::new().with_child(row.finish());
         if code_review_header_fields.git_operations_menu_open {
             stack.add_positioned_overlay_child(
                 ChildView::new(&code_review_header_fields.git_operations_menu).finish(),
@@ -129,7 +126,11 @@ impl CodeReviewHeader {
             );
         }
 
-        Some(stack.finish())
+        Some(
+            Container::new(stack.finish())
+                .with_margin_right(4.)
+                .finish(),
+        )
     }
 
     /// Like `render_header_dropdown_button` but without `margin_left(4.)`,

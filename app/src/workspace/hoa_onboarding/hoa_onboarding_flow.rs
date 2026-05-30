@@ -3,6 +3,10 @@ use std::path::PathBuf;
 use markdown_parser::{
     FormattedText, FormattedTextFragment, FormattedTextLine, FormattedTextStyles, Hyperlink,
 };
+use pathfinder_color::ColorU;
+use settings::Setting;
+use warp_core::ui::theme::phenomenon::PhenomenonStyle;
+use warp_core::ui::theme::Fill;
 use warpui::elements::{
     Align, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex,
     FormattedTextElement, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
@@ -19,9 +23,7 @@ use warpui::{
     ViewHandle,
 };
 
-use pathfinder_color::ColorU;
-use warp_core::ui::theme::{phenomenon::PhenomenonStyle, Fill};
-
+use super::{tab_config_step, welcome_banner};
 use crate::appearance::Appearance;
 use crate::settings::AISettings;
 use crate::tab_configs::session_config::{is_git_repo, SessionConfigSelection, SessionType};
@@ -35,11 +37,6 @@ use crate::view_components::callout_bubble::{
     render_callout_bubble, CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig,
 };
 use crate::workspace::tab_settings::TabSettings;
-
-use settings::Setting;
-
-use super::tab_config_step;
-use super::welcome_banner;
 
 const CALLOUT_WIDTH: f32 = 480.;
 
