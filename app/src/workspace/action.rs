@@ -300,6 +300,8 @@ pub enum WorkspaceAction {
     SetVerticalTabsDisplayGranularity(VerticalTabsDisplayGranularity),
     SetVerticalTabsTabItemMode(VerticalTabsTabItemMode),
     SetVerticalTabsViewMode(VerticalTabsViewMode),
+    PreviewVerticalTabsItemPadding(u8),
+    SetVerticalTabsItemPadding(u8),
     SetVerticalTabsPrimaryInfo(VerticalTabsPrimaryInfo),
     SetVerticalTabsCompactSubtitle(VerticalTabsCompactSubtitle),
     ToggleVerticalTabsShowPrLink,
@@ -901,6 +903,8 @@ impl WorkspaceAction {
             | SetVerticalTabsDisplayGranularity(_)
             | SetVerticalTabsTabItemMode(_)
             | SetVerticalTabsViewMode(_)
+            | PreviewVerticalTabsItemPadding(_)
+            | SetVerticalTabsItemPadding(_)
             | SetVerticalTabsPrimaryInfo(_)
             | SetVerticalTabsCompactSubtitle(_)
             | ToggleVerticalTabsShowPrLink

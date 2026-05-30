@@ -31,7 +31,8 @@ use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
 use warpui::prelude::Align;
 use warpui::text_layout::ClipConfig;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::slider::SliderStateHandle;
 use warpui::ui_components::text_input::TextInput;
 use warpui::{AppContext, EntityId, SingletonEntity, ViewHandle, WindowId};
 
@@ -73,7 +74,8 @@ use crate::workspace::hoa_onboarding::HoaOnboardingStep;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::tab_settings::{
     TabSettings, VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity,
-    VerticalTabsPrimaryInfo, VerticalTabsTabItemMode, VerticalTabsViewMode,
+    VerticalTabsItemPadding, VerticalTabsPrimaryInfo, VerticalTabsTabItemMode,
+    VerticalTabsViewMode,
 };
 use crate::workspace::view::vertical_tabs::telemetry::{
     VerticalTabsChipEntrypoint, VerticalTabsTelemetryEvent,
@@ -99,6 +101,7 @@ const TAB_GROUP_HEADER_ACTION_ICON_SIZE: f32 = 14.;
 const GROUP_ACTION_BUTTON_PADDING: f32 = 2.;
 const GROUP_ACTION_BUTTON_GAP: f32 = 2.;
 const ROW_CORNER_RADIUS: f32 = 4.;
+const ITEM_PADDING_SLIDER_WIDTH: f32 = 128.;
 const TAB_GROUP_MEMBER_INDENT: f32 = 12.;
 const TAB_GROUP_ICON_SIZE: f32 = 16.;
 const TAB_GROUP_CONTENT_INSET: f32 = 4.;
@@ -123,6 +126,21 @@ const VERTICAL_TABS_ICON_SIZE: f32 = 24.;
 /// Icon size for the per-line conversation status pill in Summary mode. Pairs with
 /// `STATUS_ELEMENT_PADDING` (2px) for an overall ~14px element next to a 12pt title.
 const VERTICAL_TABS_SUMMARY_STATUS_ICON_SIZE: f32 = 10.;
+
+fn vertical_tabs_item_padding_value(app: &AppContext) -> u8 {
+    *TabSettings::as_ref(app).vertical_tabs_item_padding.value()
+}
+
+fn vertical_tabs_item_padding_from_slider_value(value: f32) -> u8 {
+    value.round().clamp(
+        f32::from(VerticalTabsItemPadding::MIN),
+        f32::from(VerticalTabsItemPadding::MAX),
+    ) as u8
+}
+
+fn vertical_tabs_row_padding(app: &AppContext) -> Padding {
+    Padding::uniform(f32::from(vertical_tabs_item_padding_value(app)))
+}
 
 fn vtab_pane_row_position_id(pane_group_id: EntityId, pane_id: PaneId) -> String {
     format!("vertical_tabs:pane_row:{pane_group_id:?}:{pane_id}")
@@ -590,6 +608,8 @@ pub(super) struct VerticalTabsPanelState {
     summary_option_mouse_state: MouseStateHandle,
     compact_segment_mouse_state: MouseStateHandle,
     expanded_segment_mouse_state: MouseStateHandle,
+    item_padding_slider_state: SliderStateHandle,
+    item_padding_reset_mouse_state: MouseStateHandle,
     command_option_mouse_state: MouseStateHandle,
     directory_option_mouse_state: MouseStateHandle,
     branch_option_mouse_state: MouseStateHandle,
@@ -627,6 +647,8 @@ impl Default for VerticalTabsPanelState {
             summary_option_mouse_state: Default::default(),
             compact_segment_mouse_state: Default::default(),
             expanded_segment_mouse_state: Default::default(),
+            item_padding_slider_state: Default::default(),
+            item_padding_reset_mouse_state: Default::default(),
             command_option_mouse_state: Default::default(),
             directory_option_mouse_state: Default::default(),
             branch_option_mouse_state: Default::default(),
@@ -2953,7 +2975,7 @@ fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
         .with_child(Shrinkable::new(1., text_content).finish())
         .finish();
 
-    render_pane_row_element(props, Padding::uniform(8.), true, content, theme)
+    render_pane_row_element(props, vertical_tabs_row_padding(app), true, content, theme)
 }
 
 enum TypedPane<'a> {
@@ -4203,7 +4225,7 @@ fn render_summary_tab_item(
         .with_child(Shrinkable::new(1., text_col.finish()).finish())
         .finish();
 
-    render_pane_row_element(props, Padding::uniform(8.), true, content, theme)
+    render_pane_row_element(props, vertical_tabs_row_padding(app), true, content, theme)
 }
 
 fn render_summary_primary_label_line(
@@ -5042,6 +5064,7 @@ pub(super) fn render_settings_popup(
         .value();
     let current_tab_item_mode = *TabSettings::as_ref(app).vertical_tabs_tab_item_mode.value();
     let current_mode = *TabSettings::as_ref(app).vertical_tabs_view_mode.value();
+    let current_item_padding = vertical_tabs_item_padding_value(app);
     let current_primary_info = *TabSettings::as_ref(app).vertical_tabs_primary_info.value();
     let current_subtitle = resolve_compact_subtitle(
         current_primary_info,
@@ -5280,6 +5303,16 @@ pub(super) fn render_settings_popup(
         theme,
     );
 
+    let item_padding_header = render_item_padding_header(
+        state,
+        SETTINGS_POPUP_MENU_ITEM_FONT_SIZE,
+        sub_text,
+        appearance,
+        theme,
+    );
+    let item_padding_slider_row =
+        render_item_padding_slider(state, current_item_padding, appearance, theme);
+
     // Assemble popup — top-level display granularity first, then density and pane-row sections.
     let mut popup_col = Flex::column()
         .with_main_axis_size(MainAxisSize::Min)
@@ -5299,6 +5332,8 @@ pub(super) fn render_settings_popup(
         popup_col.add_child(make_divider(theme));
         popup_col.add_child(density_header);
         popup_col.add_child(segmented_control_row);
+        popup_col.add_child(item_padding_header);
+        popup_col.add_child(item_padding_slider_row);
         popup_col.add_child(make_divider(theme));
         popup_col.add_child(pane_title_header);
         popup_col.add_child(command_option);
@@ -5386,6 +5421,10 @@ pub(super) fn render_settings_popup(
                 theme,
             ));
         }
+    } else {
+        popup_col.add_child(make_divider(theme));
+        popup_col.add_child(item_padding_header);
+        popup_col.add_child(item_padding_slider_row);
     }
     popup_col.add_child(make_divider(theme));
 
@@ -5414,6 +5453,152 @@ pub(super) fn render_settings_popup(
         .finish(),
     )
     .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
+    .finish()
+}
+
+fn render_item_padding_slider(
+    state: &VerticalTabsPanelState,
+    current_item_padding: u8,
+    appearance: &Appearance,
+    theme: &WarpTheme,
+) -> Box<dyn Element> {
+    const FONT_SIZE: f32 = 12.;
+    const GAP: f32 = 8.;
+
+    let slider = appearance
+        .ui_builder()
+        .slider(state.item_padding_slider_state.clone())
+        .with_range(
+            f32::from(VerticalTabsItemPadding::MIN)..f32::from(VerticalTabsItemPadding::MAX),
+        )
+        .with_default_value(f32::from(current_item_padding))
+        .with_step(1.)
+        .with_style(UiComponentStyles {
+            width: Some(ITEM_PADDING_SLIDER_WIDTH),
+            margin: Some(Coords::default().top(2.).bottom(2.)),
+            ..Default::default()
+        })
+        .on_drag(|ctx, _, value| {
+            ctx.dispatch_typed_action(WorkspaceAction::PreviewVerticalTabsItemPadding(
+                vertical_tabs_item_padding_from_slider_value(value),
+            ));
+        })
+        .on_change(|ctx, _, value| {
+            ctx.dispatch_typed_action(WorkspaceAction::SetVerticalTabsItemPadding(
+                vertical_tabs_item_padding_from_slider_value(value),
+            ));
+        })
+        .build()
+        .finish();
+
+    let value_label = Text::new_inline(
+        format!("{current_item_padding}px"),
+        appearance.ui_font_family(),
+        FONT_SIZE,
+    )
+    .with_color(theme.sub_text_color(theme.background()).into())
+    .finish();
+
+    Container::new(
+        Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(GAP)
+            .with_child(slider)
+            .with_child(value_label)
+            .finish(),
+    )
+    .with_horizontal_padding(16.)
+    .with_padding_bottom(4.)
+    .finish()
+}
+
+fn render_item_padding_header(
+    state: &VerticalTabsPanelState,
+    font_size: f32,
+    text_color: WarpThemeFill,
+    appearance: &Appearance,
+    theme: &WarpTheme,
+) -> Box<dyn Element> {
+    let title = Text::new_inline(
+        "Item padding".to_string(),
+        appearance.ui_font_family(),
+        font_size,
+    )
+    .with_color(text_color.into())
+    .finish();
+
+    Container::new(
+        Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(title)
+            .with_child(render_item_padding_reset_button(
+                state.item_padding_reset_mouse_state.clone(),
+                appearance,
+                theme,
+            ))
+            .finish(),
+    )
+    .with_horizontal_padding(16.)
+    .with_margin_bottom(4.)
+    .finish()
+}
+
+fn render_item_padding_reset_button(
+    mouse_state: MouseStateHandle,
+    appearance: &Appearance,
+    theme: &WarpTheme,
+) -> Box<dyn Element> {
+    const BUTTON_PADDING: f32 = 3.;
+    const BUTTON_CORNER_RADIUS: f32 = 4.;
+    const ICON_SIZE: f32 = 12.;
+
+    let icon_color = theme.sub_text_color(theme.background());
+    let ui_builder = appearance.ui_builder().clone();
+
+    Hoverable::new(mouse_state, move |hover_state| {
+        let icon = ConstrainedBox::new(UiIcon::Refresh.to_warpui_icon(icon_color).finish())
+            .with_width(ICON_SIZE)
+            .with_height(ICON_SIZE)
+            .finish();
+
+        let mut button = Container::new(icon)
+            .with_uniform_padding(BUTTON_PADDING)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(BUTTON_CORNER_RADIUS)));
+        if hover_state.is_hovered() {
+            button = button.with_background(internal_colors::fg_overlay_1(theme));
+        }
+
+        let button = button.finish();
+        if hover_state.is_hovered() {
+            let tooltip = ui_builder
+                .tool_tip("Reset to default".to_string())
+                .build()
+                .finish();
+            let mut stack = Stack::new().with_child(button);
+            stack.add_positioned_overlay_child(
+                tooltip,
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., -4.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::TopMiddle,
+                    ChildAnchor::BottomMiddle,
+                ),
+            );
+            stack.finish()
+        } else {
+            button
+        }
+    })
+    .on_click(|ctx, _, _| {
+        ctx.dispatch_typed_action(WorkspaceAction::SetVerticalTabsItemPadding(
+            VerticalTabsItemPadding::default_value(),
+        ));
+    })
+    .with_cursor(Cursor::PointingHand)
     .finish()
 }
 
@@ -6694,7 +6879,7 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
         .with_child(Shrinkable::new(1., text_col.finish()).finish())
         .finish();
 
-    render_pane_row_element(props, Padding::uniform(8.), true, content, theme)
+    render_pane_row_element(props, vertical_tabs_row_padding(app), true, content, theme)
 }
 
 impl Workspace {

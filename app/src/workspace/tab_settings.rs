@@ -508,6 +508,15 @@ define_settings_group!(TabSettings, settings: [
     vertical_tabs_display_granularity: VerticalTabsDisplayGranularity,
     vertical_tabs_tab_item_mode: VerticalTabsTabItemMode,
     vertical_tabs_view_mode: VerticalTabsViewMode,
+    vertical_tabs_item_padding: VerticalTabsItemPadding {
+        type: u8,
+        default: 8,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "appearance.vertical_tabs.item_padding",
+        description: "The padding, in pixels, applied around each vertical tabs item.",
+    },
     vertical_tabs_primary_info: VerticalTabsPrimaryInfo,
     vertical_tabs_compact_subtitle: VerticalTabsCompactSubtitle,
     vertical_tabs_show_pr_link: VerticalTabsShowPrLink {
@@ -543,6 +552,15 @@ define_settings_group!(TabSettings, settings: [
     close_button_position: TabCloseButtonPosition,
     directory_tab_colors: DirectoryTabColors,
 ]);
+
+impl VerticalTabsItemPadding {
+    pub const MIN: u8 = 2;
+    pub const MAX: u8 = 16;
+
+    fn validate(&self, new_value: u8) -> u8 {
+        new_value.clamp(Self::MIN, Self::MAX)
+    }
+}
 
 #[cfg(test)]
 #[path = "tab_settings_tests.rs"]

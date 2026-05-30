@@ -1,10 +1,11 @@
+use settings::Setting as _;
 use warpui::EntityId;
 
 use super::WorkspaceAction;
 use crate::pane_group::TerminalPaneId;
 use crate::workspace::tab_settings::{
-    VerticalTabsDisplayGranularity, VerticalTabsPrimaryInfo, VerticalTabsTabItemMode,
-    VerticalTabsViewMode,
+    VerticalTabsDisplayGranularity, VerticalTabsItemPadding, VerticalTabsPrimaryInfo,
+    VerticalTabsTabItemMode, VerticalTabsViewMode,
 };
 use crate::workspace::PaneViewLocator;
 
@@ -14,6 +15,19 @@ fn vertical_tabs_view_mode_change_does_not_save_workspace_state() {
         !WorkspaceAction::SetVerticalTabsViewMode(VerticalTabsViewMode::Compact)
             .should_save_app_state_on_action()
     );
+}
+
+#[test]
+fn vertical_tabs_item_padding_defaults_to_existing_row_padding() {
+    assert_eq!(VerticalTabsItemPadding::default_value(), 8);
+    assert_eq!(VerticalTabsItemPadding::MIN, 2);
+    assert_eq!(VerticalTabsItemPadding::MAX, 16);
+}
+
+#[test]
+fn vertical_tabs_item_padding_changes_do_not_save_workspace_state() {
+    assert!(!WorkspaceAction::PreviewVerticalTabsItemPadding(2).should_save_app_state_on_action());
+    assert!(!WorkspaceAction::SetVerticalTabsItemPadding(16).should_save_app_state_on_action());
 }
 
 #[test]

@@ -15,7 +15,8 @@ use super::{
     sort_summary_primary_labels_status_first, summary_overflow_count,
     summary_search_text_fragments, terminal_kind_badge_label, terminal_primary_line_data,
     terminal_pull_request_badge_label, terminal_search_text_fragments,
-    terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
+    terminal_title_fallback_font, uses_outer_group_container,
+    vertical_tabs_item_padding_from_slider_value, visible_pane_ids_for_detail_target,
     vtab_diff_stats_text, AgentTabTextPreference, SummaryPaneKind, SummaryPaneKindIcons,
     TerminalAgentText, TerminalPrimaryLineData, TerminalPrimaryLineFont, VerticalTabsDetailTarget,
     VerticalTabsDetailTargetKind, VerticalTabsSummaryBranchEntry, VerticalTabsSummaryData,
@@ -634,6 +635,14 @@ fn tabs_granularity_does_not_use_outer_group_container() {
     assert!(!uses_outer_group_container(
         VerticalTabsDisplayGranularity::Tabs
     ));
+}
+
+#[test]
+fn vertical_tabs_item_padding_slider_values_are_rounded_and_clamped() {
+    assert_eq!(vertical_tabs_item_padding_from_slider_value(0.), 2);
+    assert_eq!(vertical_tabs_item_padding_from_slider_value(2.4), 2);
+    assert_eq!(vertical_tabs_item_padding_from_slider_value(8.6), 9);
+    assert_eq!(vertical_tabs_item_padding_from_slider_value(20.), 16);
 }
 
 #[test]

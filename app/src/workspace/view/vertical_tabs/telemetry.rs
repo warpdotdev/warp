@@ -15,6 +15,7 @@ pub enum VerticalTabsDisplayOption {
     DisplayGranularity(VerticalTabsDisplayGranularity),
     TabItemMode(VerticalTabsTabItemMode),
     ViewMode(VerticalTabsViewMode),
+    ItemPadding(u8),
     PrimaryInfo(VerticalTabsPrimaryInfo),
     CompactSubtitle(VerticalTabsCompactSubtitle),
     ShowPrLink(bool),
@@ -28,6 +29,7 @@ impl VerticalTabsDisplayOption {
             Self::DisplayGranularity(_) => "display_granularity",
             Self::TabItemMode(_) => "tab_item_mode",
             Self::ViewMode(_) => "view_mode",
+            Self::ItemPadding(_) => "item_padding",
             Self::PrimaryInfo(_) => "primary_info",
             Self::CompactSubtitle(_) => "compact_subtitle",
             Self::ShowPrLink(_) => "show_pr_link",
@@ -44,6 +46,7 @@ impl VerticalTabsDisplayOption {
             Self::TabItemMode(VerticalTabsTabItemMode::Summary) => json!("summary"),
             Self::ViewMode(VerticalTabsViewMode::Compact) => json!("compact"),
             Self::ViewMode(VerticalTabsViewMode::Expanded) => json!("expanded"),
+            Self::ItemPadding(value) => json!(value),
             Self::PrimaryInfo(VerticalTabsPrimaryInfo::Command) => json!("command"),
             Self::PrimaryInfo(VerticalTabsPrimaryInfo::WorkingDirectory) => {
                 json!("working_directory")

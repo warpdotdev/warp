@@ -3521,6 +3521,7 @@ impl Workspace {
             }
             TabSettingsChangedEvent::VerticalTabsViewMode { .. }
             | TabSettingsChangedEvent::VerticalTabsTabItemMode { .. }
+            | TabSettingsChangedEvent::VerticalTabsItemPadding { .. }
             | TabSettingsChangedEvent::VerticalTabsPrimaryInfo { .. }
             | TabSettingsChangedEvent::VerticalTabsCompactSubtitle { .. }
             | TabSettingsChangedEvent::UseLatestUserPromptAsConversationTitleInTabNames {
@@ -22061,6 +22062,31 @@ impl TypedActionView for Workspace {
                 send_telemetry_from_ctx!(
                     VerticalTabsTelemetryEvent::DisplayOptionChanged(
                         VerticalTabsDisplayOption::ViewMode(mode),
+                    ),
+                    ctx
+                );
+                ctx.notify();
+            }
+            PreviewVerticalTabsItemPadding(item_padding) => {
+                let item_padding = *item_padding;
+                TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let _ = settings
+                        .vertical_tabs_item_padding
+                        .set_value(item_padding, ctx);
+                });
+                ctx.notify();
+            }
+            SetVerticalTabsItemPadding(item_padding) => {
+                let item_padding = *item_padding;
+                let stored_item_padding = TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let _ = settings
+                        .vertical_tabs_item_padding
+                        .set_value(item_padding, ctx);
+                    *settings.vertical_tabs_item_padding.value()
+                });
+                send_telemetry_from_ctx!(
+                    VerticalTabsTelemetryEvent::DisplayOptionChanged(
+                        VerticalTabsDisplayOption::ItemPadding(stored_item_padding),
                     ),
                     ctx
                 );
