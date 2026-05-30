@@ -274,8 +274,23 @@ inline. See #11.6.
       input editor yields; the shell's line editor (ZLE / readline /
       fish-line-editor) takes over the prompt with the user's
       currently-typed buffer pre-populated as `$BUFFER` /
-      `$READLINE_LINE` / `commandline` and the cursor at the same
-      position the user had in Warp's editor.
+      `$READLINE_LINE` / `commandline`. The cursor starts at the
+      same position the user had in Warp's editor *on shells where
+      the v1 sync mechanism preserves cursor position* — namely
+      zsh and bash with blesh detected (`full`-mode shells, where
+      every keystroke has already reached the shell). On
+      `batched`-mode shells (vanilla bash, fish in v1) the cursor
+      lands at end-of-buffer because the v1 literal-paste sync
+      lacks a keymap-independent way to position the cursor (see
+      TECH §6.2.5); the v1 motivating widgets (atuin, fzf,
+      `edit-command-line`) operate on buffer content and are not
+      sensitive to cursor position, so this gap is acceptable for
+      v1. Cursor-sensitive widgets that *do* care (custom
+      buffer-transform widgets that delete from the cursor, etc.)
+      will see the cursor at end-of-buffer on these shells; this
+      is a tracked v1 limitation, not a permanent design choice.
+      Lifting it is a follow-up gated on a keymap-independent
+      cursor-set primitive.
     - The widget runs natively. If it draws a TUI (atuin, fzf,
       `edit-command-line` opening `$EDITOR`, etc.), the alt-screen
       handling Warp already uses for `vim` / `less` / `htop` applies —

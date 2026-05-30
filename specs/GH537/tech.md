@@ -779,6 +779,27 @@ the mirror; the shell receives the buffer at sync boundaries.
    set `$BUFFER` to the mirror, then injects `\n`; the shell
    runs `accept-line` natively and the block model fires from
    the existing `Preexec` / `Precmd` hooks.
+5. **Fish-specific space-trigger sync (PRODUCT #11.6
+   abbreviations).** Fish's defining `abbr` feature expands a
+   typed token into its full form when the user presses space.
+   Native fish runs this inside its line editor when space
+   arrives; in `batched` mode space would otherwise be a local
+   `SelfInsert` and never reach fish. To preserve the PRODUCT
+   #11.6 invariant on fish, the `batched`-mode dispatcher
+   treats space (`U+0020`) as an additional sync boundary on
+   fish tabs only: when space arrives, Warp syncs the mirror
+   to `commandline` via the literal-paste path, then injects
+   a literal space byte. Fish's abbreviation engine fires on
+   that space, possibly rewriting `commandline`; the post-
+   space `WarpBufferState` reports the expanded buffer and
+   Warp resyncs its mirror. Cost: one round-trip per space
+   keystroke on fish tabs only — measured at the same range
+   as `full` mode's per-keystroke round-trips (1–5 ms on
+   developer hardware), well under PRODUCT #29's perceptible-
+   lag bar. zsh and bash do not need this carve-out (zsh runs
+   in `full` mode where every keystroke already reaches the
+   shell; vanilla bash doesn't have an abbr-on-space feature
+   to honor).
 
 **Prefix accumulation ownership (PRODUCT #8).** Each prefix is
 owned by exactly one matcher; the two matchers never compete for
@@ -1116,15 +1137,44 @@ Two options, picked per binding category:
     double quotes around the key, `\C-`/`\M-`/`\e` escapes,
     backslash-escaped quotes) and emits a structured
     `{key_bytes: Vec<u8>, body: String}` pair.
-  - The wrapper is installed by a small bootstrap helper that
-    feeds the function declaration to bash through
+  - **Pre-wrap validation.** Before any wrapping happens, the
+    bootstrap validates that `$body` is a self-contained shell
+    statement that cannot escape a function-body context. The
+    check has three parts, all evaluated by bash's own parser
+    (no custom regex):
+
+    1. `bash -n -c "_warp_validate_body() { $body
+       }"` — bash parses the body as if it were the inside of
+       a function declaration, with `-n` set so it does *not*
+       execute. A non-zero exit means the body has unbalanced
+       structure (extra `}`, dangling heredoc terminator, etc.)
+       that would let it escape the wrapper. The original
+       binding stays in place; no Warp wrapper is installed;
+       a diagnostic logs the rejected `bind -x` (key only —
+       body is never logged).
+    2. Length cap: `${#body} > 64 KiB` is rejected with a
+       diagnostic. Bounds the bootstrap memory footprint and
+       catches pathological generators.
+    3. Forbidden constructs: the body must not contain a bare
+       `return` outside a function (would break out of Warp's
+       wrapper), nor `exec` (which would replace the wrapper's
+       process), nor `__warp_*` writes (reserved namespace).
+       Each forbidden token is checked via the same `bash -n`
+       parse tree, not by string match.
+
+    Bodies that pass validation are *structurally guaranteed*
+    to execute inside the wrapper's function body and nowhere
+    else.
+
+  - **Installation.** Validated bodies are installed via
     `source <(printf …)` (process substitution + `source`),
     not through string-concatenated `eval`. The body parses
     when `source` reads the function declaration, in exactly
     the same lexical context the original `bind -x`
     declaration parsed it. Conceptually:
     ```bash
-    # $body is the literal parsed source from bind -X.
+    # $body is the literal parsed source from bind -X,
+    # already validated above.
     # $wrapper_name is bootstrap-generated and contains no
     # user data.
     source <(printf '%s() {\n_warp_emit_pre\n%s\n_warp_emit_post\n}\n' \
@@ -1137,15 +1187,15 @@ Two options, picked per binding category:
     printf -v __bind_arg '"%s": %s' "$keyseq" "$wrapper_name"
     bind -x "$__bind_arg"
     ```
-    The safety property is "body parses once at bootstrap in
-    the same lexical context the original `bind -x` parsed
-    it" — not "no `eval`". `source <(…)` is `eval`-equivalent
-    by design, but it is `eval`-of-Warp-constructed-text whose
-    only user-controlled portion is `$body` itself (the same
-    code the user had already trusted readline to execute on
-    their behalf). The wrapper does *not* re-evaluate the body
-    at invoke time and does *not* re-interpolate it into any
-    further string.
+    The safety property is "validated body parses once at
+    bootstrap in the same lexical context the original
+    `bind -x` parsed it" — not "no `eval`". `source <(…)` is
+    `eval`-equivalent by design, but combined with the
+    pre-wrap validation above the input is structurally
+    constrained so that the body cannot escape the wrapper
+    function or execute outside the key-press call site. The
+    wrapper does *not* re-evaluate the body at invoke time and
+    does *not* re-interpolate it into any further string.
   - `$keyseq` is the readable form of the key sequence
     (`\C-r`, `\M-x`, etc.) as it appears in `bind -X` output
     after the parser has normalized escapes. It is composed of
@@ -1193,13 +1243,30 @@ fires per keystroke. Fish therefore defaults to `batched` mode
     String}` pair (fish bindings have a documented format —
     `bind \cR foo; bar` where everything after the key token
     is the command list).
-  - Wrapper installation feeds the function declaration to
-    fish through `source (printf … | psub)` (the fish analogue
-    of bash's process-substitution `source` from §6.3 bash).
-    The body parses once when `source` reads it, in the same
-    lexical context the original `bind` parsed it:
+  - **Pre-wrap validation** mirrors the bash safety model in
+    §6.3 bash: before any wrapping, the bootstrap validates
+    that `$body` is a self-contained fish statement that
+    cannot escape a function-body context. The check uses
+    fish's own parser via `fish --no-execute -c "function
+    _warp_validate_body; $body; end"`. A non-zero exit means
+    the body has unbalanced structure (extra `end`, dangling
+    block terminator, etc.) that would let it escape the
+    wrapper; the original binding stays in place, no Warp
+    wrapper is installed, and a diagnostic logs the rejected
+    `bind` (key only — body is never logged). The same 64 KiB
+    length cap and `__warp_*` reserved-namespace check from
+    §6.3 bash apply. Validated bodies are *structurally
+    guaranteed* to execute inside the wrapper's function and
+    nowhere else.
+  - **Installation.** Wrapper installation feeds the
+    function declaration to fish through `source (printf
+    … | psub)` (the fish analogue of bash's process-
+    substitution `source` from §6.3 bash). The body parses
+    once when `source` reads it, in the same lexical context
+    the original `bind` parsed it:
     ```fish
-    # $body is the literal parsed source from `bind`.
+    # $body is the literal parsed source from `bind`,
+    # already validated above.
     # $wrapper_name is bootstrap-generated and contains no
     # user data.
     source (printf 'function %s\n_warp_emit_pre\n%s\n_warp_emit_post\nend\n' \
@@ -1210,9 +1277,11 @@ fires per keystroke. Fish therefore defaults to `batched` mode
     # described below.
     bind $key $wrapper_name
     ```
-    The safety property mirrors bash: body parses once at
-    bootstrap in the same lexical context the original `bind`
-    parsed it. Fish has no `bind -x`-style direct primitive
+    The safety property mirrors bash: validated body parses
+    once at bootstrap in the same lexical context the
+    original `bind` parsed it, and the validation step
+    structurally guarantees the body can't escape the wrapper
+    function. Fish has no `bind -x`-style direct primitive
     that takes a function-name-plus-keyseq; `source` of a
     process substitution is the chosen install path.
   - Keys from `bind` output are validated against fish's key
@@ -1768,6 +1837,17 @@ Tests are organized to map to numbered PRODUCT invariants. Use
   a plugin emitting an unsupported escape). Assert: render
   degrades to plain text, no crash, one diagnostic emitted, prompt
   remains usable. Covers PRODUCT #11.6 failure mode.
+### Follow-up validation (with #22 opt-in)
+
+The tests in this subsection cover PRODUCT #22 (AI prompt
+input opt-in for shell bindings) and PRODUCT #22.5 (classifier
+interaction). Both are tracked as a follow-up (TECH §"#22") —
+v1 of this PR does *not* ship the AI-prompt path, so these
+tests are not in scope for the v1 implementation. They are
+listed here so that when the #22 follow-up lands, the test
+plan is ready and the `ClassifierGate` machinery has
+deterministic coverage.
+
 - **Classifier flicker hysteresis** — unit test on
   `ClassifierGate` feeding a synthetic stream of raw labels
   (Shell, Shell, NL, Shell, Shell, Shell, Shell) and asserting
