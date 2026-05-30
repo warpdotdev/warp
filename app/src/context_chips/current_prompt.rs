@@ -160,8 +160,8 @@ pub struct CurrentPrompt {
     prompt_chip_logger: PromptChipLogger,
     update_tx: async_channel::Sender<()>,
 
-    /// When set, git-backed chip values are populated from `GitRepoStatusModel`.
-    /// `ShellGitBranch` and `GitDiffStats` are driven by filesystem events.
+    /// When set, branch, branch status, and diff stats are populated from
+    /// `GitRepoStatusModel` filesystem events.
     #[cfg(feature = "local_fs")]
     git_repo_status: Option<WeakModelHandle<GitRepoStatusModel>>,
 
@@ -1397,11 +1397,16 @@ impl CurrentPrompt {
             }
         }
 
-        // Repo detached, clear GitDiffStats.
+        // Repo detached, clear git chips that require repository metadata.
         if handle.is_none() {
-            if let Some(state) = self.states.get_mut(&ContextChipKind::GitDiffStats) {
-                state.clear_abort_handlers();
-                state.clear_cache();
+            for chip_kind in [
+                ContextChipKind::GitDiffStats,
+                ContextChipKind::GitBranchStatus,
+            ] {
+                if let Some(state) = self.states.get_mut(&chip_kind) {
+                    state.clear_abort_handlers();
+                    state.clear_cache();
+                }
             }
             let _ = self.update_tx.try_send(());
             return;
@@ -1472,7 +1477,7 @@ impl CurrentPrompt {
     }
 
     /// Read the current `GitRepoStatusModel` metadata and push it into the
-    /// `ShellGitBranch` and `GitDiffStats` chip states.
+    /// git-backed chip states.
     #[cfg(feature = "local_fs")]
     fn apply_git_repo_metadata(&mut self, ctx: &mut ModelContext<Self>) {
         let metadata = self
@@ -1499,6 +1504,14 @@ impl CurrentPrompt {
                     self.refresh_on_click_values(&chip_kind, on_click_gen, ctx);
                 }
             }
+        }
+
+        let new_branch_status = ChipValue::GitBranchStatus(metadata.branch_tracking_status.clone());
+        let current_branch_status = self
+            .latest_chip_value(&ContextChipKind::GitBranchStatus)
+            .cloned();
+        if current_branch_status.as_ref() != Some(&new_branch_status) {
+            self.update_chip_value(&ContextChipKind::GitBranchStatus, Some(new_branch_status));
         }
 
         // Update GitDiffStats with structured data directly.
@@ -1540,7 +1553,9 @@ impl CurrentPrompt {
         #[cfg(feature = "local_fs")]
         {
             match chip_kind {
-                ContextChipKind::ShellGitBranch | ContextChipKind::GitDiffStats => {
+                ContextChipKind::ShellGitBranch
+                | ContextChipKind::GitBranchStatus
+                | ContextChipKind::GitDiffStats => {
                     return self.git_repo_status.is_some();
                 }
                 ContextChipKind::GithubPullRequest => {

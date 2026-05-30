@@ -163,6 +163,47 @@ pub fn shell_other_git_branches() -> ShellCommandGenerator {
     ShellCommandGenerator::new(command, Some(vec!["git".to_owned()]))
 }
 
+pub fn shell_git_branch_status() -> ShellCommandGenerator {
+    const SH_COMMAND: &str = "\
+        sh -c 'branch=$(GIT_OPTIONAL_LOCKS=0 git symbolic-ref --short HEAD 2>/dev/null || \
+        GIT_OPTIONAL_LOCKS=0 git rev-parse --short HEAD 2>/dev/null) || exit 1; \
+        [ -n \"$branch\" ] || exit 1; \
+        if counts=$(GIT_OPTIONAL_LOCKS=0 git rev-list --left-right --count HEAD...@{u} 2>/dev/null); then \
+            set -- $counts; \
+            printf \"%s ↑%s ↓%s\\n\" \"$branch\" \"$1\" \"$2\"; \
+        else \
+            printf \"%s\\n\" \"$branch\"; \
+        fi'";
+    let pwsh_command = safe_git_powershell(
+        "$branch = git symbolic-ref --short HEAD 2>$null; \
+        if ($LASTEXITCODE -ne 0 -or -not $branch) { \
+            $branch = git rev-parse --short HEAD 2>$null; \
+        } \
+        if ($LASTEXITCODE -ne 0 -or -not $branch) { throw } \
+        $counts = git rev-list --left-right --count 'HEAD...@{u}' 2>$null; \
+        if ($LASTEXITCODE -eq 0 -and $counts) { \
+            $parts = $counts -split '\\s+'; \
+            if ($parts.Length -ge 2) { \
+                \"$branch ↑$($parts[0]) ↓$($parts[1])\"; \
+            } else { \
+                $branch; \
+            } \
+        } else { \
+            $branch; \
+            $global:LASTEXITCODE = 0; \
+        }",
+    );
+
+    let command = ShellCommand::shell_specific([
+        (ShellType::PowerShell, pwsh_command),
+        (ShellType::Bash, SH_COMMAND.to_string()),
+        (ShellType::Zsh, SH_COMMAND.to_string()),
+        (ShellType::Fish, SH_COMMAND.to_string()),
+    ]);
+
+    ShellCommandGenerator::new(command, Some(vec!["git".to_owned()]))
+}
+
 /// Generator function to get summary of git diff (num files changed and num lines changed).
 ///
 /// Used as a remote-session fallback when GitRepoStatusModel is unavailable.
