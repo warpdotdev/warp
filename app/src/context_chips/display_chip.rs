@@ -29,7 +29,7 @@ use super::display_menu::{
 };
 use super::{
     agent_view_chip_color, github_pr_display_text_from_url, render_text_from_kind, ChipResult,
-    ContextChipKind,
+    ChipValue, ContextChipKind,
 };
 use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::ai::blocklist::prompt::plan_and_todo_list::{PlanAndTodoListEvent, PlanAndTodoListView};
@@ -286,6 +286,7 @@ pub struct DisplayChip {
     mouse_state: MouseStateHandle,
     diff_stats_mouse_state: MouseStateHandle,
     text: String,
+    value: Option<ChipValue>,
     chip_kind: ContextChipKind,
     display_chip_kind: DisplayChipKind,
     next_chip_kind: Option<ContextChipKind>,
@@ -357,6 +358,65 @@ impl GitLineChanges {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GitBranchTrackingStatus {
+    pub branch: String,
+    pub upstream: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
+    pub counts_available: bool,
+}
+
+impl GitBranchTrackingStatus {
+    pub fn new(branch: String, upstream: Option<String>, ahead: u32, behind: u32) -> Self {
+        let counts_available = upstream.is_some();
+        Self {
+            branch,
+            upstream,
+            ahead,
+            behind,
+            counts_available,
+        }
+    }
+
+    pub fn without_counts(branch: String, upstream: Option<String>) -> Self {
+        Self {
+            branch,
+            upstream,
+            ahead: 0,
+            behind: 0,
+            counts_available: false,
+        }
+    }
+
+    pub fn display_text(&self) -> String {
+        if self.counts_available {
+            format!("{} ↑{} ↓{}", self.branch, self.ahead, self.behind)
+        } else {
+            self.branch.clone()
+        }
+    }
+
+    fn tooltip_text(&self) -> String {
+        match &self.upstream {
+            Some(upstream) if self.counts_available => format!(
+                "Tracking {upstream} • ahead {}, behind {}",
+                self.ahead, self.behind
+            ),
+            Some(upstream) => {
+                format!("Tracking {upstream}; ahead/behind counts are unavailable")
+            }
+            None => "No upstream configured".to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for GitBranchTrackingStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.display_text())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum DisplayChipKind {
     Text,
@@ -381,6 +441,9 @@ pub enum DisplayChipKind {
         menu_open: bool,
         menu: ViewHandle<DisplayChipMenu>,
     },
+    GitBranchStatus {
+        tracking_status: Option<GitBranchTrackingStatus>,
+    },
     GithubPullRequest,
     GitDiffStats {
         line_changes_info: Option<GitLineChanges>,
@@ -394,6 +457,7 @@ impl DisplayChipKind {
             DisplayChipKind::NodeVersion { popup_open, .. } => *popup_open,
             DisplayChipKind::GitBranch { menu_open, .. } => *menu_open,
             DisplayChipKind::GithubPullRequest
+            | DisplayChipKind::GitBranchStatus { .. }
             | DisplayChipKind::GitDiffStats { .. }
             | DisplayChipKind::Text
             | DisplayChipKind::Ssh
@@ -663,6 +727,13 @@ impl DisplayChip {
             ContextChipKind::GitDiffStats => DisplayChipKind::GitDiffStats {
                 line_changes_info: None,
             },
+            ContextChipKind::GitBranchStatus => DisplayChipKind::GitBranchStatus {
+                tracking_status: chip_result
+                    .value
+                    .as_ref()
+                    .and_then(|value| value.as_git_branch_tracking_status())
+                    .cloned(),
+            },
             ContextChipKind::GithubPullRequest => DisplayChipKind::GithubPullRequest,
             ContextChipKind::WorkingDirectory => {
                 let dir_path = chip_result
@@ -883,7 +954,12 @@ impl DisplayChip {
         Self {
             mouse_state: Default::default(),
             diff_stats_mouse_state: Default::default(),
-            text: chip_result.value.map(|v| v.to_string()).unwrap_or_default(),
+            text: chip_result
+                .value
+                .as_ref()
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
+            value: chip_result.value,
             chip_kind: chip_result.kind,
             display_chip_kind,
             next_chip_kind,
@@ -917,6 +993,10 @@ impl DisplayChip {
 
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    pub fn value(&self) -> Option<&ChipValue> {
+        self.value.as_ref()
     }
 
     pub fn chip_kind(&self) -> &ContextChipKind {
@@ -971,6 +1051,7 @@ impl DisplayChip {
                 }
             }
             DisplayChipKind::GitDiffStats { .. }
+            | DisplayChipKind::GitBranchStatus { .. }
             | DisplayChipKind::Text
             | DisplayChipKind::Ssh
             | DisplayChipKind::Subshell
@@ -1199,6 +1280,51 @@ impl DisplayChip {
             })
             .with_cursor(Cursor::PointingHand)
             .finish()
+    }
+
+    fn git_branch_status_chip(
+        &self,
+        tracking_status: &Option<GitBranchTrackingStatus>,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let font_color = if self.is_in_agent_view {
+            agent_view_chip_color(appearance)
+        } else {
+            appearance.theme().ansi_fg_green()
+        };
+        let chip_text = tracking_status
+            .as_ref()
+            .map(GitBranchTrackingStatus::display_text)
+            .unwrap_or_else(|| self.text.clone());
+        let tooltip_text = tracking_status
+            .as_ref()
+            .map(GitBranchTrackingStatus::tooltip_text);
+        let is_in_agent_view = self.is_in_agent_view;
+
+        Hoverable::new(self.mouse_state.clone(), move |state| {
+            let mut config =
+                UdiChipConfig::new_with_icon(Icon::GitBranch, font_color, chip_text.clone())
+                    .with_hovered(state.is_hovered());
+            if is_in_agent_view {
+                config = config.for_agent_view();
+            }
+            let chip_element = render_udi_chip(config, appearance);
+
+            let mut stack = Stack::new().with_child(chip_element);
+            if state.is_hovered() {
+                if let Some(tooltip_text) = tooltip_text.clone() {
+                    let tool_tip = appearance
+                        .ui_builder()
+                        .tool_tip(tooltip_text)
+                        .build()
+                        .finish();
+                    stack.add_positioned_overlay_child(tool_tip, udi_tooltip_positioning());
+                }
+            }
+            stack.finish()
+        })
+        .finish()
     }
 
     fn git_diff_stats_chip(
@@ -1585,6 +1711,9 @@ impl DisplayChip {
             DisplayChipKind::GitBranch { menu_open, menu } => {
                 Some(self.git_branch_chip(*menu_open, menu, app))
             }
+            DisplayChipKind::GitBranchStatus { tracking_status } => {
+                Some(self.git_branch_status_chip(tracking_status, app))
+            }
             DisplayChipKind::GithubPullRequest => Some(self.github_pull_request_chip(app)),
             DisplayChipKind::GitDiffStats { line_changes_info } => {
                 self.git_diff_stats_chip(line_changes_info, app)
@@ -1703,6 +1832,7 @@ impl TypedActionView for DisplayChip {
                 | DisplayChipKind::AgentPlanAndTodoList { .. }
                 | DisplayChipKind::Text
                 | DisplayChipKind::GithubPullRequest
+                | DisplayChipKind::GitBranchStatus { .. }
                 | DisplayChipKind::GitDiffStats { .. } => {}
                 DisplayChipKind::NodeVersion { popup_open, .. } => {
                     *popup_open = false;

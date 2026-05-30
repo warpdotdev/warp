@@ -5050,7 +5050,9 @@ impl TerminalView {
         chips.iter().any(|chip| {
             matches!(
                 chip,
-                ContextChipKind::GitDiffStats | ContextChipKind::GithubPullRequest
+                ContextChipKind::GitBranchStatus
+                    | ContextChipKind::GitDiffStats
+                    | ContextChipKind::GithubPullRequest
             )
         })
     }

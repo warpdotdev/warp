@@ -1,4 +1,7 @@
-use super::{truncate_from_beginning, CreateGitBranch, GitBranch, GitLineChanges};
+use super::{
+    format_create_git_branch_command, format_git_branch_command, truncate_from_beginning,
+    CreateGitBranch, GitBranch, GitBranchTrackingStatus, GitLineChanges,
+};
 use crate::context_chips::display_chip::PromptChipShellCommand;
 use crate::context_chips::display_menu::GenericMenuItem;
 use crate::context_chips::git_branch_on_click::GitBranchOnClickValue;
@@ -41,6 +44,50 @@ fn test_github_pr_chip_display_value_falls_back_to_raw_value() {
     assert_eq!(
         ContextChipKind::GithubPullRequest.display_value(&value),
         "https://example.com/not-a-pr"
+    );
+}
+
+#[test]
+fn test_git_branch_tracking_status_displays_ahead_and_behind_when_upstream_exists() {
+    let status = GitBranchTrackingStatus::new(
+        "feature-a".to_string(),
+        Some("origin/feature-a".to_string()),
+        2,
+        1,
+    );
+
+    assert_eq!(status.display_text(), "feature-a ↑2 ↓1");
+}
+
+#[test]
+fn test_git_branch_tracking_status_displays_branch_only_without_upstream() {
+    let status = GitBranchTrackingStatus::new("feature-a".to_string(), None, 0, 0);
+
+    assert_eq!(status.display_text(), "feature-a");
+}
+
+#[test]
+fn test_git_branch_tracking_status_displays_branch_only_when_counts_are_unavailable() {
+    let status = GitBranchTrackingStatus::without_counts(
+        "feature-a".to_string(),
+        Some("origin/feature-a".to_string()),
+    );
+
+    assert_eq!(status.display_text(), "feature-a");
+}
+
+#[test]
+fn test_git_branch_status_chip_display_value_uses_git_prefix() {
+    let value = crate::context_chips::ChipValue::GitBranchStatus(GitBranchTrackingStatus::new(
+        "feature-a".to_string(),
+        Some("origin/feature-a".to_string()),
+        2,
+        1,
+    ));
+
+    assert_eq!(
+        ContextChipKind::GitBranchStatus.display_value(&value),
+        "git:(feature-a ↑2 ↓1)"
     );
 }
 
