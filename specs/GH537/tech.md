@@ -787,12 +787,15 @@ the mirror; the shell receives the buffer at sync boundaries.
    `SelfInsert` and never reach fish. To preserve the PRODUCT
    #11.6 invariant on fish, the `batched`-mode dispatcher
    treats space (`U+0020`) as an additional sync boundary on
-   fish tabs only: when space arrives, Warp syncs the mirror
-   to `commandline` via the literal-paste path, then injects
-   a literal space byte. Fish's abbreviation engine fires on
-   that space, possibly rewriting `commandline`; the post-
-   space `WarpBufferState` reports the expanded buffer and
-   Warp resyncs its mirror. Cost: one round-trip per space
+   fish tabs only. When the user presses space, Warp does
+   *not* append it to the mirror locally; instead it syncs the
+   pre-space mirror to `commandline` via the literal-paste
+   path and then injects one literal space byte. Fish's
+   abbreviation engine fires on that space, possibly rewriting
+   `commandline`; the post-space `WarpBufferState` reports the
+   (post-expansion, plus-space) buffer and Warp resyncs its
+   mirror — which now contains both the space and any
+   expansion fish performed. Cost: one round-trip per space
    keystroke on fish tabs only — measured at the same range
    as `full` mode's per-keystroke round-trips (1–5 ms on
    developer hardware), well under PRODUCT #29's perceptible-
@@ -1140,31 +1143,54 @@ Two options, picked per binding category:
   - **Pre-wrap validation.** Before any wrapping happens, the
     bootstrap validates that `$body` is a self-contained shell
     statement that cannot escape a function-body context. The
-    check has three parts, all evaluated by bash's own parser
-    (no custom regex):
+    check has two parts:
 
-    1. `bash -n -c "_warp_validate_body() { $body
-       }"` — bash parses the body as if it were the inside of
-       a function declaration, with `-n` set so it does *not*
-       execute. A non-zero exit means the body has unbalanced
-       structure (extra `}`, dangling heredoc terminator, etc.)
-       that would let it escape the wrapper. The original
-       binding stays in place; no Warp wrapper is installed;
-       a diagnostic logs the rejected `bind -x` (key only —
-       body is never logged).
+    1. Build the validation source via `printf -v`, then parse
+       it with `bash -n`:
+       ```bash
+       printf -v __validate_src '_warp_validate_body() { %s\n}\n' "$body"
+       if ! bash -n -c "$__validate_src" 2>/dev/null; then
+           # reject this binding; original `bind -x` stays in
+           # place; no Warp wrapper is installed; a diagnostic
+           # logs the rejected `bind -x` (key only — body is
+           # never logged).
+           continue
+       fi
+       ```
+       `printf -v` writes the constructed source into
+       `__validate_src` literally — `$body` is *not* re-parsed
+       as a shell command by the outer bash. The constructed
+       source is then passed to `bash -n` as a single quoted
+       argument. A non-zero exit means the body has unbalanced
+       structure (extra `}`, dangling heredoc terminator,
+       unclosed quoted string, etc.) that would let it escape
+       the wrapper. `bash -n` is the entire structural-escape
+       defense: any body that survives this check cannot
+       break out of the surrounding `__warp_wrap_NNN() { … }`
+       at execution time, because bash has already proven the
+       braces and other block structure are balanced.
     2. Length cap: `${#body} > 64 KiB` is rejected with a
        diagnostic. Bounds the bootstrap memory footprint and
        catches pathological generators.
-    3. Forbidden constructs: the body must not contain a bare
-       `return` outside a function (would break out of Warp's
-       wrapper), nor `exec` (which would replace the wrapper's
-       process), nor `__warp_*` writes (reserved namespace).
-       Each forbidden token is checked via the same `bash -n`
-       parse tree, not by string match.
 
     Bodies that pass validation are *structurally guaranteed*
     to execute inside the wrapper's function body and nowhere
-    else.
+    else. Semantic concerns (a body that contains `return`,
+    `exec`, or writes to `__warp_*` variables) are *not*
+    caught — but they aren't wrapper-escape vectors either.
+    A bare `return` returns from the wrapper itself, skipping
+    `_warp_emit_post` (symptom: missing buffer-state report
+    for that keystroke, not a security issue). `exec`
+    replaces the bash process running the wrapper (almost
+    never intended; the user already accepted this in their
+    `bind -x`). Writes to `__warp_*` collide with the
+    bootstrap's private namespace — a footgun, but the user
+    chose those names. None of these escape the wrapper at
+    the shell level, so v1 leaves them as documentation
+    rather than rejection. (Adding a forbidden-token check
+    would require either string-matching with false-positive
+    risk inside string literals/comments, or a custom bash
+    statement parser; not worth the complexity in v1.)
 
   - **Installation.** Validated bodies are installed via
     `source <(printf …)` (process substitution + `source`),
@@ -1247,17 +1273,28 @@ fires per keystroke. Fish therefore defaults to `batched` mode
     §6.3 bash: before any wrapping, the bootstrap validates
     that `$body` is a self-contained fish statement that
     cannot escape a function-body context. The check uses
-    fish's own parser via `fish --no-execute -c "function
-    _warp_validate_body; $body; end"`. A non-zero exit means
-    the body has unbalanced structure (extra `end`, dangling
-    block terminator, etc.) that would let it escape the
-    wrapper; the original binding stays in place, no Warp
-    wrapper is installed, and a diagnostic logs the rejected
-    `bind` (key only — body is never logged). The same 64 KiB
-    length cap and `__warp_*` reserved-namespace check from
-    §6.3 bash apply. Validated bodies are *structurally
-    guaranteed* to execute inside the wrapper's function and
-    nowhere else.
+    fish's own parser, with the validation source built via
+    `printf` so `$body` is not re-parsed as a shell command
+    by the outer fish:
+    ```fish
+    set -l __validate_src (printf 'function _warp_validate_body\n%s\nend\n' $body)
+    if not fish --no-execute -c $__validate_src 2>/dev/null
+        # reject this binding; original `bind` stays in place;
+        # no Warp wrapper is installed; a diagnostic logs the
+        # rejected `bind` (key only — body is never logged).
+        continue
+    end
+    ```
+    A non-zero exit means the body has unbalanced structure
+    (extra `end`, dangling block terminator, unclosed string,
+    etc.) that would let it escape the wrapper. `fish
+    --no-execute` is the entire structural-escape defense,
+    same role as `bash -n` in §6.3 bash. The same 64 KiB
+    length cap from §6.3 bash applies. Validated bodies are
+    *structurally guaranteed* to execute inside the
+    wrapper's function and nowhere else; semantic checks
+    (forbidden tokens, namespace collisions) are not
+    performed, for the same reasons §6.3 bash documents.
   - **Installation.** Wrapper installation feeds the
     function declaration to fish through `source (printf
     … | psub)` (the fish analogue of bash's process-
