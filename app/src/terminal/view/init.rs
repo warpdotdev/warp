@@ -438,6 +438,12 @@ pub fn init(app: &mut AppContext) {
         .with_key_binding("alt-down")
         .with_context_predicate(id!("Terminal") & !id!("IMEOpen")),
         EditableBinding::new(
+            "terminal:jump_to_latest_agent_message",
+            "Jump to latest agent message",
+            TerminalAction::JumpToLatestAgentMessage,
+        )
+        .with_context_predicate(id!("Terminal") & !id!("IMEOpen")),
+        EditableBinding::new(
             "terminal:open_block_list_context_menu_via_keybinding",
             "Open block context menu",
             TerminalAction::OpenBlockListContextMenu,
