@@ -1149,7 +1149,11 @@ Two options, picked per binding category:
     leaving the original `bind -x` intact. The check has two
     parts:
 
-    1. Build the validation source via `printf -v`, then parse
+    1. Length cap: `${#body} > 64 KiB` is rejected with a
+       diagnostic. Bounds the bootstrap memory footprint and
+       catches pathological generators *before* paying the
+       `bash -n` fork+exec cost.
+    2. Build the validation source via `printf -v`, then parse
        it with `bash -n`:
        ```bash
        printf -v __validate_src '_warp_validate_body() { %s\n}\n' "$body"
@@ -1173,9 +1177,6 @@ Two options, picked per binding category:
        break out of the surrounding `__warp_wrap_NNN() { … }`
        at execution time, because bash has already proven the
        braces and other block structure are balanced.
-    2. Length cap: `${#body} > 64 KiB` is rejected with a
-       diagnostic. Bounds the bootstrap memory footprint and
-       catches pathological generators.
 
     **Validation cost.** Each `bash -n` spawn costs one
     fork+exec — measured at ~5-15 ms on typical hardware.
@@ -1187,11 +1188,13 @@ Two options, picked per binding category:
     means earlier keystrokes use Warp defaults). If a real
     shell stack pushes the wall-clock overhead over a
     perceptible threshold, the implementation can amortize via
-    a single long-lived validator subshell — `coproc
-    __warp_bash_validator { bash --noprofile --norc; }`,
-    feeding bodies on stdin and reading valid/invalid lines on
-    its stdout — folding the per-spawn cost into one spawn at
-    bootstrap.
+    a long-lived validator subshell that reads bodies on stdin
+    and emits per-body verdicts on its stdout — folding the
+    per-spawn cost into one spawn at bootstrap. The protocol
+    is implementation-private (a small read-validate-respond
+    loop running under `bash --noprofile --norc`); the
+    spec leaves the wire format unspecified since it doesn't
+    cross the trust boundary.
 
     Bodies that pass validation are *structurally guaranteed*
     to execute inside the wrapper's function body and nowhere
@@ -1292,29 +1295,40 @@ fires per keystroke. Fish therefore defaults to `batched` mode
   - **Pre-wrap validation** mirrors the bash safety model in
     §6.3 bash: before any wrapping, the bootstrap validates
     that `$body` is a self-contained fish statement that
-    cannot escape a function-body context. The check pipes
-    the validation source to `fish --no-execute` on stdin —
-    fish reads it as a single contiguous script, with no
-    command-substitution newline splitting:
-    ```fish
-    if not printf 'function _warp_validate_body\n%s\nend\n' $body \
-        | fish --no-execute 2>/dev/null
-        # reject this binding; original `bind` stays in place;
-        # no Warp wrapper is installed; a diagnostic logs the
-        # rejected `bind` (key only — body is never logged).
-        continue
-    end
-    ```
+    cannot escape a function-body context. The check runs in
+    two steps:
+
+    1. Length cap: `string length -- $body` greater than
+       64 KiB rejects the binding with a diagnostic, before
+       paying the `fish --no-execute` spawn cost (same
+       cheap-check-first ordering as §6.3 bash).
+    2. Pipe the validation source to `fish --no-execute` on
+       stdin — fish reads it as a single contiguous script,
+       with no command-substitution newline splitting:
+       ```fish
+       if not printf 'function _warp_validate_body\n%s\nend\n' $body \
+           | fish --no-execute 2>/dev/null
+           # reject this binding; original `bind` stays in
+           # place; no Warp wrapper is installed; a diagnostic
+           # logs the rejected `bind` (key only — body is
+           # never logged).
+           continue
+       end
+       ```
+
     A non-zero exit means the body has unbalanced structure
     (extra `end`, dangling block terminator, unclosed string,
     etc.) that would let it escape the wrapper. `fish
     --no-execute` is the entire structural-escape defense,
-    same role as `bash -n` in §6.3 bash. The same 64 KiB
-    length cap from §6.3 bash applies. Validated bodies are
+    same role as `bash -n` in §6.3 bash. Validated bodies are
     *structurally guaranteed* to execute inside the
     wrapper's function and nowhere else; semantic checks
     (forbidden tokens, namespace collisions) are not
-    performed, for the same reasons §6.3 bash documents.
+    performed, for the same reasons §6.3 bash documents. The
+    same long-lived-validator amortization path from §6.3
+    bash applies (fish doesn't have `coproc` builtin but the
+    equivalent via a backgrounded `fish --no-execute`
+    reading from a FIFO is straightforward).
   - **Installation.** Wrapper installation feeds the
     function declaration to fish through `source (printf
     … | psub)` (the fish analogue of bash's process-
