@@ -746,8 +746,8 @@ blesh detected. The shell owns `$BUFFER`; Warp mirrors it.
    plugin wrappers, or dispatches the externally-bound widget in
    its own keymap.
 4. The bootstrap hook fires after the keystroke and emits
-   `WarpBufferState { buffer, cursor, vi_mode?, autosuggest?,
-   highlights? }` over DCS.
+   `WarpBufferState { schema_version, nonce, buffer, cursor,
+   vi_mode?, autosuggest?, highlights? }` over DCS.
 5. Warp reconciles the mirror with the reported buffer in one
    frame (no fade). If the speculative render disagrees with the
    shell-reported state — a plugin wrapper rewrote `$BUFFER`,
@@ -1430,11 +1430,11 @@ since the label is not used in any structural decision.
    mismatch, unknown `schema_version`, or any malformed sub-
    field discards the entire payload silently (same path as
    every other shell→app DCS spoof attempt — no oracle for an
-   attacker). The nonce is part of the JSON payload (per §1's
-   `ShellBindings` shape `{ shell, keymaps, active_keymap,
-   schema_version, nonce }`) rather than a DCS envelope
-   header, so the check happens here rather than as a
-   separate pre-decode phase.
+   attacker). The nonce is part of the JSON payload (per §6.1
+   step 4's `WarpBufferState { schema_version, nonce, buffer,
+   cursor, ... }` shape, parallel to §1's `ShellBindings`
+   shape) rather than a DCS envelope header, so the check
+   happens here rather than as a separate pre-decode phase.
 3. **Post-decode bounds.** After successful decode + nonce
    verification:
    - `buffer` content (hex-decoded by the shell-side emitter
