@@ -26,8 +26,6 @@ use winit::error::ExternalError;
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy, OwnedDisplayHandle};
 #[cfg(not(target_family = "wasm"))]
 use winit::monitor::MonitorHandle;
-#[cfg(windows)]
-use winit::platform::windows::{BackdropType, WindowExtWindows};
 use winit::window::{CursorIcon, Fullscreen, ResizeDirection, UserAttentionType, WindowLevel};
 
 use super::app::CustomEvent;
@@ -284,14 +282,12 @@ impl platform::WindowManager for WindowManager {
     fn set_all_windows_background_blur_texture(&self, use_blur_texture: bool) {
         #[cfg(windows)]
         {
-            let new_backdrop_texture = if use_blur_texture {
-                BackdropType::TransientWindow
-            } else {
-                BackdropType::None
-            };
+            use super::windows::WindowExt;
             for window in self.windows.values() {
                 if let Some(inner) = window.inner.borrow().as_ref() {
-                    inner.window.set_system_backdrop(new_backdrop_texture);
+                    if let Err(e) = inner.window.set_acrylic_backdrop(use_blur_texture) {
+                        log::error!("Failed to update acrylic backdrop: {e:#?}");
+                    }
                 }
             }
         }
@@ -1317,12 +1313,11 @@ fn create_window(
 
         use winit::platform::windows::{IconExtWindows, WindowAttributesExtWindows};
 
-        let background_texture = if window_options.background_blur_texture {
-            BackdropType::TransientWindow
-        } else {
-            BackdropType::None
-        };
-        window_attributes = window_attributes.with_system_backdrop(background_texture);
+        // NOTE: We intentionally do NOT use winit's `with_system_backdrop()` here.
+        // Instead, we apply the acrylic effect via our custom `set_acrylic_backdrop()`
+        // method after window creation, which allows us to set a dark tint color
+        // instead of the OS default light frosted appearance.
+        // See `WindowExt::set_acrylic_backdrop()` in windows/window_ext.rs.
 
         // On Windows, don't set the window to be visible until after it has been marked as
         // "cloaked". Winit doesn't support initializing a window as cloaked--so we temporarily set
@@ -1428,6 +1423,14 @@ fn create_window(
             if let Err(e) = window.set_cloaked(true) {
                 log::error!("Failed to mark window as cloaked: {e:#?}");
             };
+
+            // Apply acrylic backdrop with a dark tint (if enabled in settings).
+            // Applied here instead of via winit's with_system_backdrop() so we
+            // can control the tint color.
+            if let Err(e) = window.set_acrylic_backdrop(window_options.background_blur_texture)
+            {
+                log::error!("Failed to set acrylic backdrop: {e:#?}");
+            }
 
             if let Some(adjustment) = maybe_adjust_window_vertically(window) {
                 let direction = if adjustment > 0 { "down" } else { "up" };
