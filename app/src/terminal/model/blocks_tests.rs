@@ -2170,15 +2170,15 @@ fn test_device_status_uses_active_block_if_no_typeahead() {
 }
 
 #[test]
-fn test_latest_ai_block_index_returns_none_when_no_ai_block() {
+fn test_latest_agent_block_index_returns_none_when_no_ai_block() {
     let mut block_list =
         new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
     insert_block(&mut block_list, "echo hi", "hi");
-    assert_eq!(block_list.latest_ai_block_index(), None);
+    assert_eq!(block_list.latest_agent_block_index(), None);
 }
 
 #[test]
-fn test_latest_ai_block_index_finds_ai_block() {
+fn test_latest_agent_block_index_finds_ai_block() {
     let mut block_list =
         new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
     let command_index = insert_block(&mut block_list, "echo hi", "hi");
@@ -2187,7 +2187,7 @@ fn test_latest_ai_block_index_finds_ai_block() {
         false,
     );
     let ai_index = block_list
-        .latest_ai_block_index()
+        .latest_agent_block_index()
         .expect("AI block should be found");
     assert!(
         ai_index >= command_index,
@@ -2196,7 +2196,7 @@ fn test_latest_ai_block_index_finds_ai_block() {
 }
 
 #[test]
-fn test_latest_ai_block_index_returns_latest_among_multiple() {
+fn test_latest_agent_block_index_returns_latest_among_multiple() {
     let mut block_list =
         new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
     block_list.append_rich_content(
@@ -2204,7 +2204,7 @@ fn test_latest_ai_block_index_returns_latest_among_multiple() {
         false,
     );
     let first = block_list
-        .latest_ai_block_index()
+        .latest_agent_block_index()
         .expect("first AI block should be found");
     insert_block(&mut block_list, "ls", "a b c");
     block_list.append_rich_content(
@@ -2212,7 +2212,7 @@ fn test_latest_ai_block_index_returns_latest_among_multiple() {
         false,
     );
     let latest = block_list
-        .latest_ai_block_index()
+        .latest_agent_block_index()
         .expect("latest AI block should be found");
     // The index must advance to the newer AI block, proving "latest" (not "first") semantics.
     assert!(
@@ -2222,7 +2222,7 @@ fn test_latest_ai_block_index_returns_latest_among_multiple() {
 }
 
 #[test]
-fn test_latest_ai_block_index_skips_trailing_non_ai_rich_content() {
+fn test_latest_agent_block_index_skips_trailing_non_ai_rich_content() {
     let mut block_list =
         new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
     block_list.append_rich_content(
@@ -2230,18 +2230,18 @@ fn test_latest_ai_block_index_skips_trailing_non_ai_rich_content() {
         false,
     );
     let ai_index = block_list
-        .latest_ai_block_index()
+        .latest_agent_block_index()
         .expect("AI block should be found");
     block_list.append_rich_content(
         RichContentItem::new_for_test(None, EntityId::new(), None),
         false,
     );
     // The trailing non-AI rich content must not change the answer.
-    assert_eq!(block_list.latest_ai_block_index(), Some(ai_index));
+    assert_eq!(block_list.latest_agent_block_index(), Some(ai_index));
 }
 
 #[test]
-fn test_latest_ai_block_index_skips_hidden_ai_block() {
+fn test_latest_agent_block_index_skips_hidden_ai_block() {
     // Ensure the `!should_hide` filter is exercised: a conversation-scoped AIBlock
     // becomes hidden when AgentViewState is Inactive (should_hide_for_agent_view_state
     // returns true for any item with agent_view_conversation_id.is_some() in Inactive state).
@@ -2256,7 +2256,7 @@ fn test_latest_ai_block_index_skips_hidden_ai_block() {
         false,
     );
     let visible_index = block_list
-        .latest_ai_block_index()
+        .latest_agent_block_index()
         .expect("visible AIBlock should be found");
 
     // Append a later AIBlock that is scoped to a conversation.
@@ -2276,10 +2276,44 @@ fn test_latest_ai_block_index_skips_hidden_ai_block() {
     // Transition to Inactive — the conversation-scoped AIBlock becomes hidden.
     block_list.set_agent_view_state(AgentViewState::Inactive);
 
-    // latest_ai_block_index must skip the hidden tail block and return the earlier visible one.
+    // latest_agent_block_index must skip the hidden tail block and return the earlier visible one.
     assert_eq!(
-        block_list.latest_ai_block_index(),
+        block_list.latest_agent_block_index(),
         Some(visible_index),
         "hidden conversation-scoped AIBlock must be skipped"
+    );
+}
+
+#[test]
+fn test_latest_agent_block_index_falls_back_to_visible_enter_agent_view() {
+    // Once you ESC back to the terminal, the agent's AIBlock is hidden, but the
+    // collapsed conversation entry point (EnterAgentView) stays visible. The jump
+    // must fall back to that visible marker rather than returning None.
+    FeatureFlag::AgentView.set_enabled(true);
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+
+    // A conversation-scoped AIBlock (the agent's message) — hidden in terminal mode.
+    let conversation_id = AIConversationId::new();
+    block_list.append_rich_content(
+        RichContentItem::new_for_test(
+            Some(RichContentType::AIBlock),
+            EntityId::new(),
+            Some(conversation_id),
+        ),
+        false,
+    );
+    // The visible EnterAgentView entry marker (no conversation scope → stays visible).
+    block_list.append_rich_content(
+        RichContentItem::new_for_test(Some(RichContentType::EnterAgentView), EntityId::new(), None),
+        false,
+    );
+
+    block_list.set_agent_view_state(AgentViewState::Inactive);
+
+    // With the AIBlock hidden, fall back to the visible EnterAgentView marker.
+    assert!(
+        block_list.latest_agent_block_index().is_some(),
+        "should fall back to the visible EnterAgentView marker, not return None"
     );
 }

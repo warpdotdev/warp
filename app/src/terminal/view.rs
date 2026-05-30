@@ -21839,7 +21839,7 @@ impl TerminalView {
     }
 
     fn jump_to_latest_agent_message(&mut self, ctx: &mut ViewContext<Self>) {
-        let index = self.model.lock().block_list().latest_ai_block_index();
+        let index = self.model.lock().block_list().latest_agent_block_index();
         let Some(index) = index else {
             return;
         };
