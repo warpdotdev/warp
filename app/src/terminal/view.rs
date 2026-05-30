@@ -21838,6 +21838,17 @@ impl TerminalView {
         }
     }
 
+    fn jump_to_latest_agent_message(&mut self, ctx: &mut ViewContext<Self>) {
+        let index = self.model.lock().block_list().latest_ai_block_index();
+        let Some(index) = index else {
+            return;
+        };
+        self.reset_selection_to_single_block(index, ctx);
+        self.jump_to_previous_command(index, ctx);
+        send_telemetry_from_ctx!(TelemetryEvent::JumpToLatestAgentMessage, ctx);
+        ctx.notify();
+    }
+
     fn terminal_down(&mut self, ctx: &mut ViewContext<Self>) {
         if !self.selected_blocks.is_empty() {
             let input_mode = *InputModeSettings::as_ref(ctx).input_mode.value();
@@ -25367,6 +25378,7 @@ impl TypedActionView for TerminalView {
             | SelectNextBlock
             | SelectBookmarkUp
             | SelectBookmarkDown
+            | JumpToLatestAgentMessage
             | Up
             | Down
             | JumpToBookmark(_)
@@ -25888,6 +25900,7 @@ impl TypedActionView for TerminalView {
                 InputMode::PinnedToBottom | InputMode::Waterfall => self.bookmark_down(ctx),
                 InputMode::PinnedToTop => self.bookmark_up(ctx),
             },
+            JumpToLatestAgentMessage => self.jump_to_latest_agent_message(ctx),
             BookmarkSelectedBlock => self.bookmark_selected_block(ctx),
             UserInputSequence(bytes) => self.user_input_sequence(bytes, ctx),
             ControlSequence(bytes) => self.control_sequence_on_terminal(bytes, ctx),
