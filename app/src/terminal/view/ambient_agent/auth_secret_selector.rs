@@ -52,15 +52,15 @@ const SIDECAR_HORIZONTAL_GAP: f32 = 4.;
 
 const MENU_MAX_HEIGHT: f32 = 280.;
 
-const BUTTON_TOOLTIP: &str = "API key";
+const BUTTON_TOOLTIP: &str = "API 密钥";
 
-const MENU_HEADER_LABEL: &str = "API key";
+const MENU_HEADER_LABEL: &str = "API 密钥";
 
-const SIDECAR_HEADER_LABEL: &str = "Choose a type";
+const SIDECAR_HEADER_LABEL: &str = "选择类型";
 
 const NO_SECRET_LABEL: &str = "Inherit key from environment";
 
-const NEW_ITEM_LABEL: &str = "New";
+const NEW_ITEM_LABEL: &str = "新建";
 
 const MAIN_MENU_SAVE_POSITION_ID: &str = "auth_secret_selector_main_menu";
 type PendingDeleteKey = (Harness, String, SecretOwner);

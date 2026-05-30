@@ -40,22 +40,22 @@ use crate::{auth, report_if_error};
 type CheckmarkStatusGetter = dyn 'static + Fn(&mut AppContext) -> bool;
 
 const ENABLE_SHELL_DEBUG_MODE_MENU_ITEM_NAME: &str =
-    "Enable Shell Debug Mode (-x) for New Sessions";
+    "为新会话启用 Shell 调试模式 (-x)";
 const DISABLE_SHELL_DEBUG_MODE_MENU_ITEM_NAME: &str =
-    "Disable Shell Debug Mode (-x) for New Sessions";
-const ENABLE_IN_BAND_GENERATORS_MENU_ITEM_NAME: &str = "Enable In-band Generators for New Sessions";
+    "为新会话禁用 Shell 调试模式 (-x)";
+const ENABLE_IN_BAND_GENERATORS_MENU_ITEM_NAME: &str = "为新会话启用带内生成器";
 const DISABLE_IN_BAND_GENERATORS_MENU_ITEM_NAME: &str =
-    "Disable in-band generators for new sessions";
-const ENABLE_PTY_RECORDING: &str = "Enable PTY Recording Mode (warp.pty.recording)";
-const DISABLE_PTY_RECORDING: &str = "Disable PTY Recording Mode (warp.pty.recording)";
-const SHOW_BOOTSTRAP_BLOCK_MENU_ITEM_NAME: &str = "Show Initialization Block";
-const HIDE_BOOTSTRAP_BLOCK_MENU_ITEM_NAME: &str = "Hide Initialization Block";
-const SHOW_IN_BAND_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "Show In-band Command Blocks";
-const HIDE_IN_BAND_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "Hide In-band Command Blocks";
-const SHOW_SSH_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "Show Warpified SSH Blocks";
-const HIDE_SSH_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "Hide Warpified SSH Blocks";
+    "为新会话禁用带内生成器";
+const ENABLE_PTY_RECORDING: &str = "启用 PTY 记录模式 (warp.pty.recording)";
+const DISABLE_PTY_RECORDING: &str = "禁用 PTY 记录模式 (warp.pty.recording)";
+const SHOW_BOOTSTRAP_BLOCK_MENU_ITEM_NAME: &str = "显示初始化区块";
+const HIDE_BOOTSTRAP_BLOCK_MENU_ITEM_NAME: &str = "隐藏初始化区块";
+const SHOW_IN_BAND_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "显示带内命令区块";
+const HIDE_IN_BAND_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "隐藏带内命令区块";
+const SHOW_SSH_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "显示 Warp SSH 区块";
+const HIDE_SSH_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "隐藏 Warp SSH 区块";
 const EXPORT_DEFAULT_SETTINGS_CSV_MENU_ITEM_NAME: &str =
-    "Export Default Settings as CSV to home dir";
+    "将默认设置导出为 CSV 到 home 目录";
 
 const SETTINGS_CSV_FILE_NAME: &str = "warp_default_settings.csv";
 const MAX_RECENT_REPOS_IN_MENU: usize = 10;
@@ -847,7 +847,7 @@ fn debug_menu_items() -> Vec<MenuItem> {
         }
 
         debug_menu_items.push(MenuItem::Custom(CustomMenuItem::new(
-            "Manually Toggle Network Status",
+            "手动切换网络状态",
             move |ctx| ctx.dispatch_global_action("workspace:toggle_debug_network_status", &()),
             no_updates,
             None,
@@ -881,7 +881,7 @@ fn debug_menu_items() -> Vec<MenuItem> {
         )));
 
         debug_menu_items.push(MenuItem::Custom(CustomMenuItem::new(
-            "Create anonymous user",
+            "创建匿名用户",
             move |ctx| ctx.dispatch_global_action("workspace:debug_create_anonymous_user", &()),
             no_updates,
             None,
@@ -961,7 +961,7 @@ fn make_launch_config_menu_items(ctx: &mut AppContext) -> Vec<MenuItem> {
 
     // TODO(vorporeal): use non_updateable_custom_item() here instead
     launch_config_menu_items.push(MenuItem::Custom(CustomMenuItem::new(
-        "Save New...",
+        "另存为新配置...",
         custom_action_dispatcher(CustomAction::SaveCurrentConfig),
         no_updates,
         custom_shortcut(CustomAction::SaveCurrentConfig),

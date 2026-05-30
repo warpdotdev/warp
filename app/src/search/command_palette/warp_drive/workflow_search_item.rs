@@ -149,6 +149,6 @@ impl SearchItem for WorkflowSearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Workflow: {}", self.cloud_workflow.model().data.name())
+        format!("工作流：{}", self.cloud_workflow.model().data.name())
     }
 }

@@ -61,14 +61,14 @@ use crate::{report_if_error, send_telemetry_from_ctx};
 
 const FONT_SIZE: f32 = 12.;
 
-const SAFE_MODE_TITLE: &str = "Secret redaction";
+const SAFE_MODE_TITLE: &str = "机密信息脱敏";
 static SAFE_MODE_DESCRIPTION: LazyLock<&'static str> = LazyLock::new(|| {
     "When this setting is enabled, Warp will scan blocks, the contents of \
         Warp Drive objects, and Oz prompts for potential sensitive \
         information and prevent saving or sending this data to any \
         servers. You can customize this list via regexes."
 });
-const USER_SECRET_REGEX_TITLE: &str = "Custom secret redaction";
+const USER_SECRET_REGEX_TITLE: &str = "自定义机密信息脱敏";
 const USER_SECRET_REGEX_DESCRIPTION: &str =
     "Use regex to define additional secrets or data you'd like to redact. This will take effect \
     when the next command runs. You can use the inline (?i) flag as a prefix to your regex \
@@ -85,13 +85,13 @@ const TELEMETRY_FREE_TIER_NOTE: &str =
 const TELEMETRY_DOCS_URL: &str =
     "https://docs.warp.dev/support-and-community/privacy-and-security/privacy#what-telemetry-data-does-warp-collect-and-why";
 
-const DATA_MANAGEMENT_TITLE: &str = "Manage your data";
+const DATA_MANAGEMENT_TITLE: &str = "管理你的数据";
 const DATA_MANAGEMENT_DESCRIPTION: &str =
     "At any time, you may choose to delete your Warp account permanently. \
     You will no longer be able to use Warp.";
 const DATA_MANAGEMENT_LINK_TEXT: &str = "Visit the data management page";
 
-const PRIVACY_POLICY_TITLE: &str = "Privacy policy";
+const PRIVACY_POLICY_TITLE: &str = "隐私政策";
 const PRIVACY_POLICY_LINK_TEXT: &str = "Read Warp's privacy policy";
 
 pub fn data_management_url(custom_token: Option<&str>) -> String {
@@ -156,7 +156,7 @@ impl PrivacyPageView {
         });
 
         let add_regex_modal_view = ctx.add_typed_action_view(|ctx| {
-            Modal::new(Some("Add regex pattern".to_string()), add_regex_body, ctx)
+            Modal::new(Some("添加正则表达式".to_string()), add_regex_body, ctx)
                 .with_modal_style(UiComponentStyles {
                     width: Some(600.),
                     height: Some(400.),
@@ -760,7 +760,7 @@ impl SecretRedactionWidget {
             .count();
 
         let personal_tab = self.render_tab(
-            "Personal".to_string(),
+            "个人".to_string(),
             personal_count,
             SecretRedactionTab::Personal,
             active_tab == SecretRedactionTab::Personal,
@@ -771,7 +771,7 @@ impl SecretRedactionWidget {
         let is_enterprise_tab_active = active_tab == SecretRedactionTab::Enterprise;
 
         let enterprise_tab = self.render_tab(
-            "Enterprise".to_string(),
+            "企业".to_string(),
             enterprise_count,
             SecretRedactionTab::Enterprise,
             is_enterprise_tab_active,
@@ -998,7 +998,7 @@ impl SecretRedactionWidget {
         if !recommended_regexes.is_empty() {
             column.add_child(self.horizontal_divider(appearance));
 
-            // Add the "Recommended" header with "Add all" button
+            // Add the "推荐" header with "全部添加" button
             column.add_child(
                 Container::new(
                     Flex::row()
@@ -1006,7 +1006,7 @@ impl SecretRedactionWidget {
                         .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                         .with_cross_axis_alignment(CrossAxisAlignment::Center)
                         .with_child(
-                            self.render_section_title("Recommended".to_string(), appearance),
+                            self.render_section_title("推荐".to_string(), appearance),
                         )
                         .with_child(
                             Container::new(
@@ -1016,7 +1016,7 @@ impl SecretRedactionWidget {
                                         self.add_all_button_mouse_state.clone(),
                                     )
                                     .with_text_and_icon_label(Self::add_button(
-                                        "Add all", appearance,
+                                        "全部添加", appearance,
                                     ))
                                     .with_style(Self::add_button_style())
                                     .build()
@@ -1320,7 +1320,7 @@ impl SettingsWidget for SecretRedactionWidget {
                                 ButtonVariant::Secondary,
                                 self.add_regex_button_mouse_state.clone(),
                             )
-                            .with_text_and_icon_label(Self::add_button("Add regex", appearance))
+                            .with_text_and_icon_label(Self::add_button("添加正则", appearance))
                             .with_style(Self::add_button_style())
                             .build()
                             .on_click(move |ctx, _, _| {
@@ -1618,7 +1618,7 @@ impl SettingsWidget for CrashReportsWidget {
         let privacy_settings = PrivacySettings::as_ref(app);
         Flex::column()
             .with_child(render_body_item::<PrivacyPageAction>(
-                "Send crash reports".into(),
+                "发送崩溃报告".into(),
                 None,
                 // Crash report state is always synced to cloud, so no need to show local only icon.
                 LocalOnlyIconState::Hidden,

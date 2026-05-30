@@ -12,10 +12,10 @@ use crate::appearance::Appearance;
 use crate::terminal::view::inline_banner::InlineBannerIcon;
 use crate::terminal::view::{InlineBannerId, TerminalAction};
 
-const SPEEDBUMP_HEADER: &str = "Optimize Warp for this codebase?";
+const SPEEDBUMP_HEADER: &str = "优化 Warp 以适配此代码库？";
 const SPEEDBUMP_TEXT: &str = "Unlock smarter, more consistent responses by letting the Agent understand your codebase and generate rules for it. You can also do this at any point by running /init";
 /// Text for the button that allows execution
-const ALLOW_BUTTON_TEXT: &str = "Optimize";
+const ALLOW_BUTTON_TEXT: &str = "优化";
 
 #[derive(Clone, Copy, Debug)]
 pub enum AgentModeSetupSpeedbumpBannerAction {

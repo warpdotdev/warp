@@ -104,7 +104,7 @@ pub fn render_error_footer(error_message: &str, appearance: &Appearance) -> Box<
     let border_color = theme.ui_error_color();
 
     build_centered_footer(
-        "Agent failed".to_string(),
+        "代理失败".to_string(),
         error_message.to_string(),
         header_color,
         body_color,

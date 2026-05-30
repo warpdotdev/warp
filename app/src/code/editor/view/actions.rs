@@ -501,7 +501,7 @@ pub fn init(app: &mut AppContext) {
         )
         .with_context_predicate(text_entry.clone())
         .with_key_binding("cmdorctrl-/"),
-        EditableBinding::new("editor_view:delete", "Delete", CodeEditorViewAction::Delete)
+        EditableBinding::new("editor_view:delete", "删除", CodeEditorViewAction::Delete)
             .with_context_predicate(
                 text_entry.clone() & !id!("VimNormalMode") & !id!("VimVisualMode"),
             )

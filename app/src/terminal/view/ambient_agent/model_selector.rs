@@ -55,11 +55,11 @@ const SEARCH_VERTICAL_PADDING: f32 = 4.;
 // of total breathing room above the divider line.
 const SEARCH_FOOTER_TOP_MARGIN: f32 = 4.;
 
-const SEARCH_PLACEHOLDER_TEXT: &str = "Search models";
+const SEARCH_PLACEHOLDER_TEXT: &str = "搜索模型";
 
-const BUTTON_TOOLTIP: &str = "Choose agent model";
+const BUTTON_TOOLTIP: &str = "选择代理模型";
 
-const NO_RESULTS_LABEL: &str = "No results";
+const NO_RESULTS_LABEL: &str = "无结果";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ModelSelectorAction {
@@ -398,7 +398,7 @@ impl ModelSelector {
                                 .map(|info| info.display_name.clone())
                         })
                 })
-                .unwrap_or_else(|| "default".to_string()),
+                .unwrap_or_else(|| "默认".to_string()),
             _ => LLMPreferences::as_ref(ctx)
                 .get_active_base_model(ctx, Some(self.terminal_view_id))
                 .display_name
@@ -538,9 +538,9 @@ impl ModelSelector {
             reasoning_level: None,
         };
         let mut items: Vec<MenuItem<ModelSelectorAction>> = Vec::new();
-        if query.is_empty() || "default".contains(query) {
+        if query.is_empty() || "默认".contains(query) {
             items.push(MenuItem::Item(
-                MenuItemFields::new("default")
+                MenuItemFields::new("默认")
                     .with_icon(icon)
                     .with_icon_size_override(ITEM_ICON_SIZE)
                     .with_font_size_override(ITEM_FONT_SIZE)

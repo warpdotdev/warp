@@ -97,17 +97,17 @@ impl SearchItem for FileSearchItem {
 
     fn accessibility_label(&self) -> String {
         if self.is_directory {
-            format!("Directory: {}", self.path.display())
+            format!("目录：{}", self.path.display())
         } else {
-            format!("File: {}", self.path.display())
+            format!("文件：{}", self.path.display())
         }
     }
 
     fn accessibility_help_message(&self) -> Option<String> {
         Some(if self.is_directory {
-            "Press Enter to navigate to this directory".to_string()
+            "按 Enter 导航到此目录".to_string()
         } else {
-            "Press Enter to open this file".to_string()
+            "按 Enter 打开此文件".to_string()
         })
     }
 
@@ -161,7 +161,7 @@ impl SearchItem for CreateFileSearchItem {
         let text_color = highlight_state.sub_text_fill(appearance).into_solid();
 
         let label = Text::new_inline(
-            format!("Create a file named {}…", &self.file_name),
+            format!("创建文件 {}…", &self.file_name),
             appearance.ui_font_family(),
             appearance.monospace_font_size(),
         )
@@ -195,12 +195,12 @@ impl SearchItem for CreateFileSearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Create file: {}", self.file_name)
+        format!("创建文件：{}", self.file_name)
     }
 
     fn accessibility_help_message(&self) -> Option<String> {
         Some(format!(
-            "Press Enter to create {} in the current directory",
+            "按 Enter 在当前目录中创建 {}",
             self.file_name
         ))
     }

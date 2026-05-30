@@ -63,7 +63,7 @@ impl SearchItem for EnvVarCollectionSearchItem {
                 .string_model
                 .title
                 .clone()
-                .unwrap_or("Untitled".to_owned())
+                .unwrap_or("未命名".to_owned())
                 .to_owned(),
             appearance.ui_font_family(),
             appearance.monospace_font_size(),
@@ -164,13 +164,13 @@ impl SearchItem for EnvVarCollectionSearchItem {
 
     fn accessibility_label(&self) -> String {
         format!(
-            "Environment Variables: {}",
+            "环境变量：{}",
             self.cloud_env_var_collection
                 .model()
                 .string_model
                 .title
                 .clone()
-                .unwrap_or("Untitled".to_owned())
+                .unwrap_or("未命名".to_owned())
         )
     }
 }

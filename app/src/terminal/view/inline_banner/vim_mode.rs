@@ -27,7 +27,7 @@ pub fn render_vim_mode_banner(
     let active_ui_text_color = appearance.theme().active_ui_text_color();
 
     let buttons = vec![InlineBannerTextButton {
-        text: "Enable".to_owned(),
+        text: "启用".to_owned(),
         text_color: active_ui_text_color.into_solid(),
         button_state: InlineBannerButtonState {
             on_click_event: TerminalAction::VimModeBanner(VimModeBannerAction::Enable),
@@ -47,7 +47,7 @@ pub fn render_vim_mode_banner(
         InlineBannerStyle::LowPriority,
         appearance,
         InlineBannerContent {
-            title: "Enable Warp's Vim keybindings?".to_string(),
+            title: "启用 Warp 的 Vim 键绑定？".to_string(),
             buttons,
             close_button: Some(close_button),
             ..Default::default()

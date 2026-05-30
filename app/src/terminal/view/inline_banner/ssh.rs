@@ -16,9 +16,9 @@ pub enum SSHBannerAction {
 
 #[derive(Default)]
 pub struct SSHBannerMouseStates {
-    /// Hover state for the "Learn more" button in the SSH wrapper banner.
+    /// Hover state for the "了解更多" button in the SSH wrapper banner.
     pub learn_more: MouseStateHandle,
-    /// Hover state for the "Settings" button in the SSH wrapper banner.
+    /// Hover state for the "设置" button in the SSH wrapper banner.
     pub settings: MouseStateHandle,
 }
 
@@ -49,7 +49,7 @@ pub fn render_inline_ssh_wrapper_banner(
     };
     let buttons = vec![
         InlineBannerTextButton {
-            text: "Learn more".to_string(),
+            text: "了解更多".to_string(),
             text_color: label_text_color,
             button_state: InlineBannerButtonState {
                 on_click_event: TerminalAction::LegacySSHBanner(SSHBannerAction::LearnMore),
@@ -60,7 +60,7 @@ pub fn render_inline_ssh_wrapper_banner(
             variant: InlineBannerTextButtonVariant::Secondary,
         },
         InlineBannerTextButton {
-            text: "Settings".to_string(),
+            text: "设置".to_string(),
             text_color: label_text_color,
             button_state: InlineBannerButtonState {
                 on_click_event: TerminalAction::LegacySSHBanner(SSHBannerAction::Settings),

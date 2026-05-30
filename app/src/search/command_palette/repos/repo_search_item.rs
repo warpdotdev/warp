@@ -135,6 +135,6 @@ impl SearchItem for RepoSearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Repo: {}", self.metadata.path.display())
+        format!("仓库：{}", self.metadata.path.display())
     }
 }

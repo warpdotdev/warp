@@ -49,7 +49,7 @@ pub fn render_cloud_mode_loading_screen(
         // Add link at the end if it exists
         if let Some(link_target) = tip.link() {
             fragments.push(FormattedTextFragment::plain_text(" "));
-            fragments.push(FormattedTextFragment::hyperlink("Learn more", link_target));
+            fragments.push(FormattedTextFragment::hyperlink("了解更多", link_target));
         }
 
         let formatted_text = FormattedText::new(vec![FormattedTextLine::Line(fragments)]);
@@ -163,7 +163,7 @@ fn render_tier_limits_footer(
         .current_team()
         .map(|team| UserWorkspaces::upgrade_link_for_team(team.uid))?;
 
-    fragments.push(FormattedTextFragment::hyperlink("Upgrade", upgrade_url));
+    fragments.push(FormattedTextFragment::hyperlink("升级", upgrade_url));
     fragments.push(FormattedTextFragment::plain_text(
         " for more powerful cloud agents.",
     ));
@@ -233,7 +233,7 @@ pub fn render_cloud_mode_error_screen(
 
     // Error title text
     let title_text = Text::new(
-        "Failed to start environment",
+        "启动环境失败",
         appearance.ui_font_family(),
         appearance.monospace_font_size() + 2.,
     )

@@ -43,13 +43,13 @@ pub(super) struct DeleteAuthSecretConfirmationDialog {
 impl DeleteAuthSecretConfirmationDialog {
     pub(super) fn new(ctx: &mut ViewContext<Self>) -> Self {
         let cancel_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Cancel", NakedTheme).on_click(|ctx| {
+            ActionButton::new("取消", NakedTheme).on_click(|ctx| {
                 ctx.dispatch_typed_action(DeleteAuthSecretConfirmationDialogAction::Cancel);
             })
         });
 
         let delete_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Delete", DangerPrimaryTheme).on_click(|ctx| {
+            ActionButton::new("删除", DangerPrimaryTheme).on_click(|ctx| {
                 ctx.dispatch_typed_action(DeleteAuthSecretConfirmationDialogAction::Confirm);
             })
         });
@@ -101,7 +101,7 @@ impl View for DeleteAuthSecretConfirmationDialog {
         );
 
         let dialog = Dialog::new(
-            "Delete secret".to_string(),
+            "删除密钥".to_string(),
             Some(description),
             dialog_styles(appearance),
         )

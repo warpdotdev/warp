@@ -986,9 +986,9 @@ impl AuthSecretFtuxView {
         row.add_child(Expanded::new(1., Empty::new().finish()).finish());
 
         let (label, action) = if self.creation_state.is_some() {
-            ("Back", AuthSecretFtuxAction::Back)
+            ("返回", AuthSecretFtuxAction::Back)
         } else {
-            ("Cancel", AuthSecretFtuxAction::Cancel)
+            ("取消", AuthSecretFtuxAction::Cancel)
         };
         row.add_child(self.render_button(
             label,
@@ -1002,7 +1002,7 @@ impl AuthSecretFtuxView {
         let accent_fill = Appearance::as_ref(app).theme().accent();
         let continue_disabled = !self.can_submit_creation_form(app);
         row.add_child(self.render_button(
-            "Continue",
+            "继续",
             self.continue_mouse_state.clone(),
             Some(accent_fill),
             AuthSecretFtuxAction::Continue,

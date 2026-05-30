@@ -15,10 +15,10 @@ use crate::terminal::view::{InlineBannerId, TerminalAction};
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon as UiIcon;
 
-const TITLE: &str = "Login for AI";
+const TITLE: &str = "登录以使用 AI";
 const CONTENT: &str =
     "AI features are unavailable for logged-out users. Create an account to use AI.";
-const SIGN_UP_BUTTON_TEXT: &str = "Sign Up";
+const SIGN_UP_BUTTON_TEXT: &str = "注册";
 
 // Layout constants for three-column banner
 const ICON_SIZE_OFFSET: f32 = 3.0;

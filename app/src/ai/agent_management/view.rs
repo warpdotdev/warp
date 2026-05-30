@@ -222,7 +222,7 @@ impl AgentManagementView {
         let list_state = Self::construct_fresh_list_state(ctx.handle());
 
         let all_filter_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("All", NakedTheme)
+            ActionButton::new("全部", NakedTheme)
                 .with_size(ButtonSize::Small)
                 .with_tooltip("View your agent tasks plus all shared team tasks")
                 .on_click(|ctx| {
@@ -233,7 +233,7 @@ impl AgentManagementView {
         });
 
         let personal_filter_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Personal", NakedTheme)
+            ActionButton::new("个人", NakedTheme)
                 .with_size(ButtonSize::Small)
                 .with_tooltip("View agent tasks you created")
                 .on_click(|ctx| {
@@ -244,7 +244,7 @@ impl AgentManagementView {
         });
 
         let setup_guide_button = CompactibleActionButton::new(
-            "Get started".to_string(),
+            "开始使用".to_string(),
             None,
             ButtonSize::Small,
             AgentManagementViewAction::ToggleSetupGuide,
@@ -254,7 +254,7 @@ impl AgentManagementView {
         );
 
         let view_agents_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("View Agents", NakedTheme)
+            ActionButton::new("查看 AI 助手", NakedTheme)
                 .with_size(ButtonSize::Small)
                 .with_icon(Icon::ArrowLeft)
                 .on_click(|ctx| {
@@ -272,7 +272,7 @@ impl AgentManagementView {
         let creator_dropdown = ctx.add_typed_action_view(Self::create_creator_dropdown);
 
         let no_filter_results_button = ctx.add_typed_action_view(move |_ctx| {
-            ActionButton::new("Clear filters", SecondaryTheme)
+            ActionButton::new("清除筛选", SecondaryTheme)
                 .with_size(ButtonSize::Small)
                 .on_click(move |ctx| {
                     ctx.dispatch_typed_action(AgentManagementViewAction::ClearFilters)
@@ -280,7 +280,7 @@ impl AgentManagementView {
         });
 
         let clear_all_filters_button = ctx.add_typed_action_view(move |_ctx| {
-            ActionButton::new("Clear all", NakedTheme)
+            ActionButton::new("清除全部", NakedTheme)
                 .with_icon(Icon::X)
                 .with_size(ButtonSize::Small)
                 .on_click(move |ctx| {
@@ -311,7 +311,7 @@ impl AgentManagementView {
                 },
                 ctx,
             );
-            editor.set_placeholder_text("Search", ctx);
+            editor.set_placeholder_text("搜索", ctx);
             editor
         });
         ctx.subscribe_to_view(&search_editor, |me, _handle, event, ctx| {
@@ -319,7 +319,7 @@ impl AgentManagementView {
         });
 
         let new_agent_button = CompactibleActionButton::new(
-            "New agent".to_string(),
+            "新 AI 助手".to_string(),
             None,
             ButtonSize::Small,
             AgentManagementViewAction::ShowAgentTypeSelector,
@@ -487,7 +487,7 @@ impl AgentManagementView {
         };
 
         let mut dropdown = Dropdown::new(ctx);
-        Self::setup_filter_menu(&mut dropdown, "Status", ctx);
+        Self::setup_filter_menu(&mut dropdown, "状态", ctx);
 
         // Use this helper to make dropdown items with status icons
         let make_status_option =
@@ -502,22 +502,22 @@ impl AgentManagementView {
 
         let items = vec![
             make_status_option(
-                "All",
+                "全部",
                 AgentManagementViewAction::SetStatusFilter(StatusFilter::All),
                 None,
             ),
             make_status_option(
-                "Working",
+                "进行中",
                 AgentManagementViewAction::SetStatusFilter(StatusFilter::Working),
                 Some((Icon::ClockLoader, Fill::from(magenta))),
             ),
             make_status_option(
-                "Done",
+                "已完成",
                 AgentManagementViewAction::SetStatusFilter(StatusFilter::Done),
                 Some((Icon::Check, Fill::from(green))),
             ),
             make_status_option(
-                "Failed",
+                "失败",
                 AgentManagementViewAction::SetStatusFilter(StatusFilter::Failed),
                 Some((Icon::X, Fill::from(red))),
             ),
@@ -532,7 +532,7 @@ impl AgentManagementView {
         ctx: &mut ViewContext<Dropdown<AgentManagementViewAction>>,
     ) -> Dropdown<AgentManagementViewAction> {
         let mut dropdown = Dropdown::new(ctx);
-        Self::setup_filter_menu(&mut dropdown, "Source", ctx);
+        Self::setup_filter_menu(&mut dropdown, "来源", ctx);
         // Set a max height so we can fit all of the source options without scrolling
         dropdown.set_menu_max_height(200., ctx);
 
@@ -561,7 +561,7 @@ impl AgentManagementView {
         }
 
         let mut items = vec![MenuItem::Item(
-            MenuItemFields::new("All").with_on_select_action(
+            MenuItemFields::new("全部").with_on_select_action(
                 DropdownAction::select_action_and_close(
                     AgentManagementViewAction::SetSourceFilter(SourceFilter::All),
                 ),
@@ -596,25 +596,25 @@ impl AgentManagementView {
         ctx: &mut ViewContext<Dropdown<AgentManagementViewAction>>,
     ) -> Dropdown<AgentManagementViewAction> {
         let mut dropdown = Dropdown::new(ctx);
-        Self::setup_filter_menu(&mut dropdown, "Created on", ctx);
+        Self::setup_filter_menu(&mut dropdown, "创建时间", ctx);
 
         let items = vec![
-            MenuItem::Item(MenuItemFields::new("All").with_on_select_action(
+            MenuItem::Item(MenuItemFields::new("全部").with_on_select_action(
                 DropdownAction::select_action_and_close(
                     AgentManagementViewAction::SetCreatedOnFilter(CreatedOnFilter::All),
                 ),
             )),
-            MenuItem::Item(MenuItemFields::new("Last 24 hours").with_on_select_action(
+            MenuItem::Item(MenuItemFields::new("最近 24 小时").with_on_select_action(
                 DropdownAction::select_action_and_close(
                     AgentManagementViewAction::SetCreatedOnFilter(CreatedOnFilter::Last24Hours),
                 ),
             )),
-            MenuItem::Item(MenuItemFields::new("Past 3 days").with_on_select_action(
+            MenuItem::Item(MenuItemFields::new("过去 3 天").with_on_select_action(
                 DropdownAction::select_action_and_close(
                     AgentManagementViewAction::SetCreatedOnFilter(CreatedOnFilter::Past3Days),
                 ),
             )),
-            MenuItem::Item(MenuItemFields::new("Last week").with_on_select_action(
+            MenuItem::Item(MenuItemFields::new("最近一周").with_on_select_action(
                 DropdownAction::select_action_and_close(
                     AgentManagementViewAction::SetCreatedOnFilter(CreatedOnFilter::LastWeek),
                 ),
@@ -630,30 +630,30 @@ impl AgentManagementView {
         ctx: &mut ViewContext<Dropdown<AgentManagementViewAction>>,
     ) -> Dropdown<AgentManagementViewAction> {
         let mut dropdown = Dropdown::new(ctx);
-        Self::setup_filter_menu(&mut dropdown, "Has artifact", ctx);
+        Self::setup_filter_menu(&mut dropdown, "包含产出", ctx);
 
         let items = vec![
-            MenuItem::Item(MenuItemFields::new("All").with_on_select_action(
+            MenuItem::Item(MenuItemFields::new("全部").with_on_select_action(
                 DropdownAction::select_action_and_close(
                     AgentManagementViewAction::SetArtifactFilter(ArtifactFilter::All),
                 ),
             )),
-            MenuItem::Item(MenuItemFields::new("Pull Request").with_on_select_action(
+            MenuItem::Item(MenuItemFields::new("拉取请求").with_on_select_action(
                 DropdownAction::select_action_and_close(
                     AgentManagementViewAction::SetArtifactFilter(ArtifactFilter::PullRequest),
                 ),
             )),
-            MenuItem::Item(MenuItemFields::new("Plan").with_on_select_action(
+            MenuItem::Item(MenuItemFields::new("计划").with_on_select_action(
                 DropdownAction::select_action_and_close(
                     AgentManagementViewAction::SetArtifactFilter(ArtifactFilter::Plan),
                 ),
             )),
-            MenuItem::Item(MenuItemFields::new("Screenshot").with_on_select_action(
+            MenuItem::Item(MenuItemFields::new("截图").with_on_select_action(
                 DropdownAction::select_action_and_close(
                     AgentManagementViewAction::SetArtifactFilter(ArtifactFilter::Screenshot),
                 ),
             )),
-            MenuItem::Item(MenuItemFields::new("File").with_on_select_action(
+            MenuItem::Item(MenuItemFields::new("文件").with_on_select_action(
                 DropdownAction::select_action_and_close(
                     AgentManagementViewAction::SetArtifactFilter(ArtifactFilter::File),
                 ),
@@ -669,7 +669,7 @@ impl AgentManagementView {
         ctx: &mut ViewContext<Dropdown<AgentManagementViewAction>>,
     ) -> Dropdown<AgentManagementViewAction> {
         let mut dropdown = Dropdown::new(ctx);
-        Self::setup_filter_menu(&mut dropdown, "Harness", ctx);
+        Self::setup_filter_menu(&mut dropdown, "测试框架", ctx);
 
         let items = Self::build_harness_dropdown_items(ctx);
         dropdown.set_rich_items(items, ctx);
@@ -679,7 +679,7 @@ impl AgentManagementView {
 
     fn build_harness_dropdown_items(app: &AppContext) -> Vec<MenuItem<DropdownAction>> {
         let mut items = vec![MenuItem::Item(
-            MenuItemFields::new("All").with_on_select_action(
+            MenuItemFields::new("全部").with_on_select_action(
                 DropdownAction::select_action_and_close(
                     AgentManagementViewAction::SetHarnessFilter(HarnessFilter::All),
                 ),
@@ -707,12 +707,12 @@ impl AgentManagementView {
         ctx: &mut ViewContext<FilterableDropdown<AgentManagementViewAction>>,
     ) -> FilterableDropdown<AgentManagementViewAction> {
         let mut dropdown = FilterableDropdown::new(ctx);
-        Self::setup_searchable_filter_menu(&mut dropdown, "Environment", ctx);
+        Self::setup_searchable_filter_menu(&mut dropdown, "环境", ctx);
 
         // Keep the button compact when a specific environment ID is selected by abbreviating the
         // displayed ID. (The dropdown menu still shows the full ID.)
         dropdown.set_menu_header_text_override(|text| {
-            if matches!(text, "All" | "None") {
+            if matches!(text, "全部" | "无") {
                 return format!("Environment: {text}");
             }
 
@@ -734,7 +734,7 @@ impl AgentManagementView {
         ctx: &mut ViewContext<FilterableDropdown<AgentManagementViewAction>>,
     ) -> FilterableDropdown<AgentManagementViewAction> {
         let mut dropdown = FilterableDropdown::new(ctx);
-        Self::setup_searchable_filter_menu(&mut dropdown, "Created by", ctx);
+        Self::setup_searchable_filter_menu(&mut dropdown, "创建者", ctx);
         dropdown
     }
 
@@ -777,14 +777,14 @@ impl AgentManagementView {
         let envs = model.get_all_environment_ids_and_names(ctx);
 
         let selected_name = match &self.filters.environment {
-            EnvironmentFilter::All => Some("All".to_string()),
-            EnvironmentFilter::NoEnvironment => Some("None".to_string()),
+            EnvironmentFilter::All => Some("全部".to_string()),
+            EnvironmentFilter::NoEnvironment => Some("无".to_string()),
             EnvironmentFilter::Specific(id) => envs.get(id).cloned(),
         };
 
         self.environment_dropdown.update(ctx, |dropdown, ctx| {
             let mut items = vec![MenuItem::Item(
-                MenuItemFields::new("All").with_on_select_action(
+                MenuItemFields::new("全部").with_on_select_action(
                     DropdownAction::select_action_and_close(
                         AgentManagementViewAction::SetEnvironmentFilter(EnvironmentFilter::All),
                     ),
@@ -792,7 +792,7 @@ impl AgentManagementView {
             )];
 
             items.push(MenuItem::Item(
-                MenuItemFields::new("None").with_on_select_action(
+                MenuItemFields::new("无").with_on_select_action(
                     DropdownAction::select_action_and_close(
                         AgentManagementViewAction::SetEnvironmentFilter(
                             EnvironmentFilter::NoEnvironment,
@@ -826,12 +826,12 @@ impl AgentManagementView {
     fn update_creator_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
         let creators = AgentConversationsModel::as_ref(ctx).get_all_creators(ctx);
         let creator_filter_name = match &self.filters.creator {
-            CreatorFilter::All => "All",
+            CreatorFilter::All => "全部",
             CreatorFilter::Specific { name, .. } => name,
         };
         self.creator_dropdown.update(ctx, |dropdown, ctx| {
             let mut items = vec![MenuItem::Item(
-                MenuItemFields::new("All").with_on_select_action(
+                MenuItemFields::new("全部").with_on_select_action(
                     DropdownAction::select_action_and_close(
                         AgentManagementViewAction::SetCreatorFilter(CreatorFilter::All),
                     ),
@@ -1215,7 +1215,7 @@ impl AgentManagementView {
 
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast = DismissibleToast::default("Copied branch name".to_string());
+                    let toast = DismissibleToast::default("已复制分支名".to_string());
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
             }
@@ -1506,8 +1506,8 @@ impl AgentManagementView {
 
         // Early return if session is available - no status label rendered
         let (label_text, tooltip_text_opt) = match session_status {
-            SessionStatus::Expired => ("Session expired", Some(SESSION_EXPIRED_TEXT)),
-            SessionStatus::Unavailable => ("No session available", None),
+            SessionStatus::Expired => ("会话已过期", Some(SESSION_EXPIRED_TEXT)),
+            SessionStatus::Unavailable => ("无可用会话", None),
             SessionStatus::Available => return Empty::new().finish(),
         };
 
@@ -1740,7 +1740,7 @@ impl AgentManagementView {
             .creator
             .name
             .clone()
-            .unwrap_or_else(|| "Unknown".to_string());
+            .unwrap_or_else(|| "未知".to_string());
         let avatar = Self::render_avatar_with_tooltip(
             &creator_name,
             appearance,
@@ -1812,9 +1812,9 @@ impl AgentManagementView {
                         .principal_type
                         .is_some_and(|pt| pt.is_service_account())
                     {
-                        "Agent"
+                        "AI 助手"
                     } else {
-                        "Executor"
+                        "执行者"
                     };
                     metadata_parts.push(format!("{label}: {name}"));
                 }
@@ -1896,7 +1896,7 @@ impl AgentManagementView {
 
         let build_header = |use_expanded: bool| {
             let title = Text::new_inline(
-                "Runs",
+                "运行记录",
                 appearance.ui_font_family(),
                 appearance.ui_font_size() + 4.,
             )
@@ -2029,7 +2029,7 @@ impl AgentManagementView {
         let theme = appearance.theme();
 
         let title = Text::new_inline(
-            "Runs",
+            "运行记录",
             appearance.ui_font_family(),
             appearance.ui_font_size() + 4.,
         )
@@ -2051,7 +2051,7 @@ impl AgentManagementView {
             .with_child(Container::new(loading_icon).with_margin_right(10.).finish())
             .with_child(
                 Text::new_inline(
-                    "Loading agents...",
+                    "正在加载 AI 助手...",
                     appearance.ui_font_family(),
                     appearance.ui_font_size() + 2.,
                 )
@@ -2107,7 +2107,7 @@ impl AgentManagementView {
         .finish();
 
         let text = Text::new_inline(
-            "No results matched your filters",
+            "没有符合筛选条件的结果",
             appearance.ui_font_family(),
             appearance.ui_font_size(),
         )

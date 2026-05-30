@@ -32,7 +32,7 @@ fn render_inline_shared_session_banner(
     let today = Local::now();
     let is_today = datetime.year() == today.year() && datetime.ordinal() == today.ordinal();
     let day_str = if is_today {
-        String::from("Today")
+        String::from("今天")
     } else {
         // Formatted as "Month Day", e.g. "October 10".
         datetime.format("%B %e").to_string()

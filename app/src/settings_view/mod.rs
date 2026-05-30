@@ -168,7 +168,7 @@ pub(super) fn render_beta_chip(appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     let chip_color = theme.sub_text_color(theme.surface_3()).into_solid();
     Container::new(
-        Text::new_inline("BETA", appearance.ui_font_family(), 10.)
+        Text::new_inline("测试版", appearance.ui_font_family(), 10.)
             .with_color(chip_color)
             .finish(),
     )
@@ -281,20 +281,20 @@ use crate::util::bindings::custom_tag_to_keystroke;
 impl Display for SettingsSection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SettingsSection::BillingAndUsage => write!(f, "Billing and usage"),
-            SettingsSection::Keybindings => write!(f, "Keyboard shortcuts"),
-            SettingsSection::SharedBlocks => write!(f, "Shared blocks"),
-            SettingsSection::MCPServers => write!(f, "MCP Servers"),
+            SettingsSection::BillingAndUsage => write!(f, "计费与用量"),
+            SettingsSection::Keybindings => write!(f, "快捷键"),
+            SettingsSection::SharedBlocks => write!(f, "共享块"),
+            SettingsSection::MCPServers => write!(f, "MCP 服务器"),
             SettingsSection::WarpDrive => write!(f, "Warp Drive"),
             SettingsSection::WarpAgent => write!(f, "Warp Agent"),
-            SettingsSection::AgentProfiles => write!(f, "Profiles"),
+            SettingsSection::AgentProfiles => write!(f, "配置文件"),
             SettingsSection::AgentMCPServers => write!(f, "MCP servers"),
-            SettingsSection::Knowledge => write!(f, "Knowledge"),
-            SettingsSection::ThirdPartyCLIAgents => write!(f, "Third party CLI agents"),
-            SettingsSection::CodeIndexing => write!(f, "Indexing and projects"),
-            SettingsSection::EditorAndCodeReview => write!(f, "Editor and Code Review"),
-            SettingsSection::CloudEnvironments => write!(f, "Environments"),
-            SettingsSection::OzCloudAPIKeys => write!(f, "Oz Cloud API Keys"),
+            SettingsSection::Knowledge => write!(f, "知识库"),
+            SettingsSection::ThirdPartyCLIAgents => write!(f, "第三方 CLI 代理"),
+            SettingsSection::CodeIndexing => write!(f, "索引与项目"),
+            SettingsSection::EditorAndCodeReview => write!(f, "编辑器与代码审查"),
+            SettingsSection::CloudEnvironments => write!(f, "环境"),
+            SettingsSection::OzCloudAPIKeys => write!(f, "Oz Cloud API 密钥"),
             _ => write!(f, "{self:?}"),
         }
     }
@@ -374,28 +374,28 @@ impl FromStr for SettingsSection {
             "About" => Ok(Self::About),
             "Account" => Ok(Self::Account),
             "AI" => Ok(Self::AI),
-            "MCP Servers" => Ok(Self::MCPServers),
-            "Billing and usage" => Ok(Self::BillingAndUsage),
+            "MCP 服务器" => Ok(Self::MCPServers),
+            "计费与用量" => Ok(Self::BillingAndUsage),
             "Appearance" => Ok(Self::Appearance),
             "Code" => Ok(Self::Code),
             "Features" => Ok(Self::Features),
-            "Keyboard shortcuts" => Ok(Self::Keybindings),
+            "快捷键" => Ok(Self::Keybindings),
             "Privacy" => Ok(Self::Privacy),
             "Referrals" => Ok(Self::Referrals),
-            "Shared blocks" => Ok(Self::SharedBlocks),
+            "共享块" => Ok(Self::SharedBlocks),
             "Teams" => Ok(Self::Teams),
             "Warpify" => Ok(Self::Warpify),
             "WarpDrive" | "Warp Drive" => Ok(Self::WarpDrive),
             // This page was called "Oz" at one point, keep for backward compatibility.
             "Oz" | "Warp Agent" => Ok(Self::WarpAgent),
-            "Profiles" | "AgentProfiles" => Ok(Self::AgentProfiles),
+            "配置文件" | "AgentProfiles" => Ok(Self::AgentProfiles),
             "MCP servers" | "AgentMCPServers" => Ok(Self::AgentMCPServers),
-            "Knowledge" => Ok(Self::Knowledge),
-            "Third party CLI agents" | "ThirdPartyCLIAgents" => Ok(Self::ThirdPartyCLIAgents),
-            "Indexing and projects" | "CodeIndexing" => Ok(Self::CodeIndexing),
-            "Editor and Code Review" | "EditorAndCodeReview" => Ok(Self::EditorAndCodeReview),
+            "知识库" => Ok(Self::Knowledge),
+            "第三方 CLI 代理" | "ThirdPartyCLIAgents" => Ok(Self::ThirdPartyCLIAgents),
+            "索引与项目" | "CodeIndexing" => Ok(Self::CodeIndexing),
+            "编辑器与代码审查" | "EditorAndCodeReview" => Ok(Self::EditorAndCodeReview),
             "CloudEnvironments" => Ok(Self::CloudEnvironments),
-            "Oz Cloud API Keys" | "OzCloudAPIKeys" => Ok(Self::OzCloudAPIKeys),
+            "Oz Cloud API 密钥" | "OzCloudAPIKeys" => Ok(Self::OzCloudAPIKeys),
             _ => Err(()),
         }
     }
