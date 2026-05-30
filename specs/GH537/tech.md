@@ -862,13 +862,14 @@ held in the app's memory (`batched` mode).
 
 #### 6.2.5 Literal mirror-to-shell sync (`batched` mode)
 
-In `batched` mode, both Category C dispatch (§6.1 step 3) and
-Enter (§6.1 step 4) require Warp to install its locally-held
-mirror into the shell's `$BUFFER` before any bound keystroke
-fires. Injecting the mirror byte-for-byte through `self-insert`
-is unsafe: the mirror can contain newlines (would fire
-`accept-line` mid-sync) and control characters bound to widgets
-(would dispatch them instead of inserting).
+In `batched` mode, Category C dispatch (§6.1 step 3), Enter
+(§6.1 step 4), and fish's space-trigger sync (§6.1 step 5)
+all require Warp to install its locally-held mirror into the
+shell's `$BUFFER` before any bound keystroke fires. Injecting
+the mirror byte-for-byte through `self-insert` is unsafe: the
+mirror can contain newlines (would fire `accept-line`
+mid-sync) and control characters bound to widgets (would
+dispatch them instead of inserting).
 
 The sync path therefore does **not** route mirror bytes through
 the keymap. It uses bracketed paste:
