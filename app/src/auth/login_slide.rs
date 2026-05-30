@@ -6,6 +6,7 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use ui_components::{button, Component as _, Options as _};
 use warp_core::features::FeatureFlag;
+use warp_core::safe_error;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
 use warpui::actions::StandardAction;
@@ -381,7 +382,10 @@ impl LoginSlideView {
                 });
             }
             Err(error) => {
-                log::error!("Failed to parse AuthRedirectPayload from redirect URL: {error:#}");
+                safe_error!(
+                    safe: ("Failed to parse AuthRedirectPayload from redirect URL"),
+                    full: ("Failed to parse AuthRedirectPayload from redirect URL: {error:#}")
+                );
                 self.last_login_failure_reason =
                     Some(LoginFailureReason::InvalidRedirectUrl { was_pasted: true });
             }

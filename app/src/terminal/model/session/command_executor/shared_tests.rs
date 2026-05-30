@@ -1,6 +1,5 @@
-use crate::terminal::shell::ShellType;
-
 use super::shell_escape_single_quotes;
+use crate::terminal::shell::ShellType;
 
 #[test]
 fn no_quotes_returns_input_unchanged() {

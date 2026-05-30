@@ -8,7 +8,8 @@ use crate::ai::execution_profiles::{
     AIExecutionProfile, ActionPermission, CloudAIExecutionProfileModel, WriteToPtyPermission,
 };
 use crate::ai::mcp::TemplatableMCPServerManager;
-use crate::auth::{user::TEST_USER_UID, AuthStateProvider, UserUid};
+use crate::auth::user::TEST_USER_UID;
+use crate::auth::{AuthStateProvider, UserUid};
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::{
     Owner, Revision, ServerAIExecutionProfile, ServerGuestSubject, ServerMetadata,
