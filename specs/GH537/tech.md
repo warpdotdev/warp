@@ -211,9 +211,11 @@ bootstrap context:
   language is retired; the rule is uniform — every validation
   failure is whole-payload rejection so the app never applies a
   partial table.
-- The same nonce check applies to the binding-hash field on the
-  existing `Precmd` hook; an unsigned or mismatched hash leaves the
-  previous binding table in place.
+- The same nonce check applies to the existing `Precmd` hook;
+  a `Precmd` payload that fails the nonce check has its
+  contents ignored, so the previous binding table stays in
+  place and the re-query hash on that payload is discarded
+  along with everything else.
 
 ### Re-query mechanism
 
