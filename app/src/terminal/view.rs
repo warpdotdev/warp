@@ -21843,6 +21843,9 @@ impl TerminalView {
         // collapse to a hidden, zero-height block. So "jump to latest agent
         // message" re-enters the agent view for the most recent conversation,
         // which lands on its latest message.
+        if !FeatureFlag::AgentView.is_enabled() {
+            return;
+        }
         let Some(conversation_id) =
             BlocklistAIHistoryModel::as_ref(ctx).last_conversation_id(self.id())
         else {
@@ -21855,7 +21858,6 @@ impl TerminalView {
             ctx,
         );
         send_telemetry_from_ctx!(TelemetryEvent::JumpToLatestAgentMessage, ctx);
-        ctx.notify();
     }
 
     fn terminal_down(&mut self, ctx: &mut ViewContext<Self>) {
