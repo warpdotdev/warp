@@ -111,6 +111,14 @@ bindings are available when the user starts typing.
 The payload is emitted as a new `DProtoHook::ShellBindings` variant in
 `dcs_hooks.rs` carrying `{ shell, keymaps: Vec<KeymapTable>,
 active_keymap, schema_version, nonce }`. Reuse `HEX_ENCODED_JSON_MARKER`.
+`KeymapTable` is the wire-format helper (a serializable form of one
+keymap's bindings, distinct from §2's in-app `Vec<ShellBinding>`
+storage type); the receive path decodes wire-format `ShellBindings`
+and translates it into §2's in-app `ShellBindings` struct before
+storing it on `Shell`. The §1 shape and the §2 struct are
+related-but-distinct types — same name for brevity, different field
+layouts because the wire format prizes parser simplicity and the
+in-app form prizes lookup ergonomics.
 
 **`schema_version` policy.** The bootstrap script is shipped from
 the app to the PTY at runtime (`bundled/bootstrap/*.sh` are
