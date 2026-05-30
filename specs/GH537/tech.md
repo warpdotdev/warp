@@ -128,6 +128,9 @@ bootstrap. Schema-version bumps follow the existing
 field semantics change incompatibly; additive fields use
 `#[serde(default)]` and do not bump. Any future bump ships
 alongside an app release; the new bootstrap is always co-shipped.
+The same policy applies to `WarpBufferState` (§6.1 step 4): it
+carries the same `schema_version` field and follows the same
+co-shipped-bump rules.
 
 The `ShellBindings` payload is a privileged terminal-control message
 (it can rewrite local key handling) and is only accepted from the
@@ -191,11 +194,14 @@ bootstrap context:
      the framing layer and logged; no allocation for parsed structures
      happens. This bounds memory and CPU before untrusted data
      reaches `serde_json`.
-  2. **Schema decode.** JSON is decoded into the `ShellBindings`
-     struct. Any field type mismatch, unknown `schema_version`, or
-     malformed `Keystroke` string discards the entire payload — no
-     partial application. There is no per-entry "drop one and keep
-     the rest" branch.
+  2. **Schema decode (with nonce check).** JSON is decoded into the
+     `ShellBindings` struct via a single `serde_json` pass. The
+     decoded struct's `nonce` field is compared against the tab's
+     expected `WARP_BOOTSTRAP_NONCE` (zsh/bash) or fish tempfile-
+     nonce value. Missing/mismatched nonce, field type mismatch,
+     unknown `schema_version`, or malformed `Keystroke` string
+     discards the entire payload — no partial application. There
+     is no per-entry "drop one and keep the rest" branch.
   3. **Post-decode bounds.** After successful decode, the parsed
      structure is checked against the per-entry caps (max 4 KiB
      per binding entry, max 16 keymaps, max 8192 bindings total).
