@@ -1405,9 +1405,14 @@ malicious or careless process can't spoof the overlay channel
 to mutate Warp's editor.
 
 **Validation order, single rule.** Each `WarpBufferState`
-payload runs through four strictly ordered phases on the
-receive side; failure at any phase discards the entire payload
-(no partial-application path):
+payload runs through three strictly ordered phases on the
+receive side. Failures at phases 1-2 and *structural* failures
+at phase 3 (out-of-bounds cursor, overlong buffer, malformed
+numeric fields) discard the entire payload — there is no
+"drop one entry and keep the rest" branch. The one exception
+is the `last_dispatched_widget` telemetry label at phase 3,
+which is strip-on-unknown rather than whole-payload reject,
+since the label is not used in any structural decision.
 
 1. **Pre-decode byte cap.** The DCS frame's hex-decoded byte
    length is checked against a 64 KiB total cap for
@@ -1417,16 +1422,21 @@ receive side; failure at any phase discards the entire payload
    (`ShellBindings` carries a binding table and gets the
    256 KiB cap from §1; `WarpBufferState` carries one buffer
    plus overlay vectors and gets a tighter cap.)
-2. **Nonce gate.** Payloads use the existing DCS envelope with
-   `WARP_BOOTSTRAP_NONCE` (zsh/bash) or the fish tempfile-
-   nonce equivalent. Missing or mismatched nonce → drop
-   silently (same path as every other shell→app DCS).
-3. **Schema decode.** JSON is decoded into the
-   `WarpBufferState` struct. Field type mismatch, unknown
-   `schema_version`, or any malformed sub-field discards the
-   entire payload — no per-field "drop one, keep the rest"
-   branch.
-4. **Post-decode bounds.** After successful decode:
+2. **Schema decode (with nonce check).** JSON is decoded into
+   the `WarpBufferState` struct via a single `serde_json` pass.
+   The decoded struct's `nonce` field is compared against the
+   tab's expected `WARP_BOOTSTRAP_NONCE` (zsh/bash) or fish
+   tempfile-nonce value. Missing/mismatched nonce, field type
+   mismatch, unknown `schema_version`, or any malformed sub-
+   field discards the entire payload silently (same path as
+   every other shell→app DCS spoof attempt — no oracle for an
+   attacker). The nonce is part of the JSON payload (per §1's
+   `ShellBindings` shape `{ shell, keymaps, active_keymap,
+   schema_version, nonce }`) rather than a DCS envelope
+   header, so the check happens here rather than as a
+   separate pre-decode phase.
+3. **Post-decode bounds.** After successful decode + nonce
+   verification:
    - `buffer` content (hex-decoded by the shell-side emitter
      `_warp_encode_buffer_state` in zsh, equivalents in
      bash/fish; app-side decodes hex back into bytes and
@@ -1446,9 +1456,12 @@ receive side; failure at any phase discards the entire payload
      (`bindkey -L` / `bind -p` / `bind` output). Unknown name
      → strip the label, keep the rest of the report. Widget-
      name labels are never used in command construction —
-     telemetry only.
-   - Any bound violation discards the entire payload and
-     emits a one-time-per-session diagnostic.
+     telemetry only. This is the one strip-rather-than-reject
+     case the rule statement above carves out.
+   - Any *structural* bound violation (buffer overlong,
+     cursor out of range, highlight range invalid, autosuggest
+     overlong, highlight-count overflow) discards the entire
+     payload and emits a one-time-per-session diagnostic.
 
 **Why these particular caps.** 32 KiB is two orders of
 magnitude above the longest plausible interactive command line
