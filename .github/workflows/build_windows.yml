@@ -1,0 +1,64 @@
+name: Build Warp Windows
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest-large
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup Rust
+        shell: bash
+        run: |
+          rustup default 1.92.0
+          rustup target add x86_64-pc-windows-msvc
+
+      - name: Install protoc
+        uses: ConorMacBride/install-package@v1
+        continue-on-error: true
+        with:
+          choco: protoc
+
+      - name: Install protoc via winget (fallback)
+        if: failure()
+        shell: pwsh
+        run: winget install Google.Protobuf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.9.0'
+
+      - name: Enable Corepack
+        shell: bash
+        run: corepack enable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-build
+
+      - name: Build Warp binary
+        shell: bash
+        env:
+          CARGO_BIN_NAME: local
+          WARP_APP_NAME: WarpLocal
+          CARGO_FULL_PROFILE: rltoda
+        run: |
+          cargo build -p warp \
+            --profile rltoda \
+            --bin warp \
+            --features "release_bundle,crash_reporting,gui" \
+            --target x86_64-pc-windows-msvc
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: warp-windows-x64
+          path: target/x86_64-pc-windows-msvc/rltoda/warp.exe

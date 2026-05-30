@@ -25063,7 +25063,7 @@ impl TerminalView {
     fn warpify_ssh_session(&mut self, ctx: &mut ViewContext<Self>) {
         self.warpify_state.set_shell_detection_in_progress();
         self.begin_ssh_warpify_timeout(SSH_WARPIFY_TIMEOUT_DURATION, ctx);
-        self.clear_line_editor_and_write_to_pty(
+        self.clear_line_editor_and_write_to_pty_with_mac_workaround_hack(
             convert_script_to_one_line(&begin_warpify_ssh_session_command(ctx)).into_bytes(),
             ctx,
         );
