@@ -2083,40 +2083,6 @@ impl BlockList {
         None
     }
 
-    /// Returns the `BlockIndex` of the most recent *visible* agent-related rich
-    /// content, scanning from the tail. This is the agent's message
-    /// (`RichContentType::AIBlock`) while the agent view is open, or the
-    /// collapsed conversation entry point (`RichContentType::EnterAgentView`)
-    /// once you have returned to the terminal — agent messages are hidden
-    /// (`should_hide`, zero height) in terminal mode, so we fall back to the
-    /// visible entry marker. Skips hidden / unmeasured content so the jump
-    /// always targets something actually on screen, and skips non-agent rich
-    /// content and command blocks. Returns `None` when there is no agent
-    /// conversation. Stateless: recomputed on each call so it always points at
-    /// the latest agent output.
-    pub fn latest_agent_block_index(&self) -> Option<BlockIndex> {
-        let mut cursor = self.block_heights().cursor::<BlockHeight, BlockIndex>();
-        cursor.descend_to_last_item(self.block_heights());
-
-        while let Some(item) = cursor.item() {
-            if let BlockHeightItem::RichContent(rich) = item {
-                let is_agent_related = matches!(
-                    rich.content_type,
-                    Some(RichContentType::AIBlock | RichContentType::EnterAgentView)
-                );
-                if !rich.should_hide
-                    && rich.last_laid_out_height > BlockHeight::zero()
-                    && is_agent_related
-                {
-                    return Some(*cursor.start());
-                }
-            }
-            cursor.prev();
-        }
-
-        None
-    }
-
     pub fn size(&self) -> &SizeInfo {
         &self.size
     }

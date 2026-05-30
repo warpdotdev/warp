@@ -21839,12 +21839,21 @@ impl TerminalView {
     }
 
     fn jump_to_latest_agent_message(&mut self, ctx: &mut ViewContext<Self>) {
-        let index = self.model.lock().block_list().latest_agent_block_index();
-        let Some(index) = index else {
+        // Agent messages only render inside the agent view; in the terminal they
+        // collapse to a hidden, zero-height block. So "jump to latest agent
+        // message" re-enters the agent view for the most recent conversation,
+        // which lands on its latest message.
+        let Some(conversation_id) =
+            BlocklistAIHistoryModel::as_ref(ctx).last_conversation_id(self.id())
+        else {
             return;
         };
-        self.reset_selection_to_single_block(index, ctx);
-        self.jump_to_previous_command(index, ctx);
+        self.enter_agent_view_for_conversation(
+            None,
+            AgentViewEntryOrigin::JumpToLatestAgentMessage,
+            conversation_id,
+            ctx,
+        );
         send_telemetry_from_ctx!(TelemetryEvent::JumpToLatestAgentMessage, ctx);
         ctx.notify();
     }
