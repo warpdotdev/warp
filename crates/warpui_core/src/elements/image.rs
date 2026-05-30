@@ -41,6 +41,8 @@ pub struct Image {
     size: Option<Vector2F>,
     origin: Option<Point>,
     fit_type: FitType,
+    /// If true, layout will produce a size based on the bounds at which the image will
+    /// be painted instead of simply using the incoming max constraint.
     layout_using_paint_bounds: bool,
     animated_image_behavior: AnimatedImageBehavior,
     cache_option: CacheOption,
@@ -406,7 +408,7 @@ impl Element for Image {
         app: &AppContext,
     ) -> Vector2F {
         let mut size = constraint.max;
-        // If we want to lay out the image using the
+
         if self.layout_using_paint_bounds {
             let asset_cache = AssetCache::as_ref(app);
             let image_size = ImageCache::as_ref(app).image_size(self.source.clone(), asset_cache);
