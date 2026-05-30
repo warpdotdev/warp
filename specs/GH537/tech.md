@@ -1141,9 +1141,13 @@ Two options, picked per binding category:
     backslash-escaped quotes) and emits a structured
     `{key_bytes: Vec<u8>, body: String}` pair.
   - **Pre-wrap validation.** Before any wrapping happens, the
-    bootstrap validates that `$body` is a self-contained shell
-    statement that cannot escape a function-body context. The
-    check has two parts:
+    bootstrap iterates the parsed `bind -X` output (one
+    `{key_bytes, body}` pair per discovered binding) and
+    validates each body. The `continue` in the example below
+    sits inside that outer loop: a rejected binding skips its
+    wrapper installation and falls through to the next entry,
+    leaving the original `bind -x` intact. The check has two
+    parts:
 
     1. Build the validation source via `printf -v`, then parse
        it with `bash -n`:
@@ -1172,6 +1176,22 @@ Two options, picked per binding category:
     2. Length cap: `${#body} > 64 KiB` is rejected with a
        diagnostic. Bounds the bootstrap memory footprint and
        catches pathological generators.
+
+    **Validation cost.** Each `bash -n` spawn costs one
+    fork+exec — measured at ~5-15 ms on typical hardware.
+    With a heavy `bind -x` stack (atuin + fzf + plugin-manager
+    wrappers, ~30 entries) this adds 150-450 ms to bootstrap.
+    The validation loop runs sequentially after the binding
+    dump, so it's measurable but doesn't block the first
+    keystroke (PRODUCT #26: a late-arriving binding table just
+    means earlier keystrokes use Warp defaults). If a real
+    shell stack pushes the wall-clock overhead over a
+    perceptible threshold, the implementation can amortize via
+    a single long-lived validator subshell — `coproc
+    __warp_bash_validator { bash --noprofile --norc; }`,
+    feeding bodies on stdin and reading valid/invalid lines on
+    its stdout — folding the per-spawn cost into one spawn at
+    bootstrap.
 
     Bodies that pass validation are *structurally guaranteed*
     to execute inside the wrapper's function body and nowhere
@@ -1272,13 +1292,13 @@ fires per keystroke. Fish therefore defaults to `batched` mode
   - **Pre-wrap validation** mirrors the bash safety model in
     §6.3 bash: before any wrapping, the bootstrap validates
     that `$body` is a self-contained fish statement that
-    cannot escape a function-body context. The check uses
-    fish's own parser, with the validation source built via
-    `printf` so `$body` is not re-parsed as a shell command
-    by the outer fish:
+    cannot escape a function-body context. The check pipes
+    the validation source to `fish --no-execute` on stdin —
+    fish reads it as a single contiguous script, with no
+    command-substitution newline splitting:
     ```fish
-    set -l __validate_src (printf 'function _warp_validate_body\n%s\nend\n' $body)
-    if not fish --no-execute -c $__validate_src 2>/dev/null
+    if not printf 'function _warp_validate_body\n%s\nend\n' $body \
+        | fish --no-execute 2>/dev/null
         # reject this binding; original `bind` stays in place;
         # no Warp wrapper is installed; a diagnostic logs the
         # rejected `bind` (key only — body is never logged).
