@@ -4,7 +4,7 @@
 
 ## Summary
 
-Let users register custom Language Server Protocol (LSP) servers in their Warp settings so the editor can offer code intelligence (diagnostics, hover, go-to-definition, completions) for languages Warp does not ship support for out of the box. Configuration mirrors the shape of Neovim's `vim.lsp.config`: a server name, binary command and arguments, the filetypes it serves, and the workspace root markers it expects.
+Let users register custom Language Server Protocol (LSP) servers in their Warp settings so the editor can offer code intelligence (diagnostics, hover, go-to-definition, completions) for languages Warp does not ship support for out of the box. Configuration mirrors the shape of Neovim's `vim.lsp.config`: a server name, binary command and arguments, and the filetypes it serves. The workspace root is the directory currently open in the Warp window — the same root used by built-in servers today.
 
 The five built-in language servers (rust-analyzer, gopls, pyright, typescript-language-server, clangd) continue to ship and work as they do today. **Going forward, the `[[editor.language_servers]]` mechanism is how new language support is added** — the built-in set is frozen, and any additional language coverage comes from users configuring servers themselves (or, in the future, Warp publishing example configs that users copy into their settings). A user can also override any of the five built-ins by writing an `[[editor.language_servers]]` entry whose `filetypes` overlap a built-in language.
 
@@ -17,7 +17,7 @@ Warp's editor today only attaches an LSP client for five built-in languages (Rus
 ### Defining a custom server
 
 1. Users can declare one or more custom language servers in their Warp settings file under a new `[[editor.language_servers]]` array-of-tables. Each entry has these fields:
-   - `name` (string, required) — A unique identifier for this server within the user's settings, e.g. `"ruby-lsp"`. Used in UI surfaces and log output.
+   - `name` (string, required) — A unique identifier for this server within the user's settings, e.g. `"ruby-lsp"`. Used in UI surfaces, log output, and as a filesystem path component for the per-server cache directory. **Constraints:** 1–64 characters, drawn from `[A-Za-z0-9._-]` (ASCII letters, digits, dot, underscore, hyphen). Must not be `.` or `..`, must not start with `.` or `-`, and must not be empty. Names violating these constraints are settings errors per invariant 23.
    - `command` (string, required) — Path to the server binary. May be an absolute path or a bare name that will be resolved against the user's `PATH`.
    - `args` (array of strings, optional, defaults to `[]`) — Arguments passed to `command` on launch.
    - `filetypes` (array, required, non-empty) — Patterns that claim files for this server. Each array entry is either a bare **string** pattern, or an **inline table** `{ pattern = "...", language_id = "..." }` where `language_id` is optional. A bare string is equivalent to an inline table with only `pattern` set. The LSP `languageId` Warp sends for matched files is the inline table's `language_id` when provided; otherwise — including for bare strings and for inline tables that omit `language_id` — it defaults to the matched file's lowercase extension, or to the file's literal basename when there is no extension. Use the inline-table form with an explicit `language_id` to override the default, both for servers that expect the LSP-standard identifier (e.g. `{ pattern = "*.rb", language_id = "ruby" }`, `{ pattern = "*.sh", language_id = "shellscript" }`) and for servers that speak multiple languageIds (e.g. `{ pattern = "*.ts", language_id = "typescript" }` and `{ pattern = "*.tsx", language_id = "typescriptreact" }` in the same entry). Every pattern — whether a bare string or the `pattern` field of an inline table — takes one of two syntactic forms:
@@ -40,7 +40,7 @@ Warp's editor today only attaches an LSP client for five built-in languages (Rus
    - `{{cache_dir}}` — A per-server, per-user cache directory owned by Warp (e.g. under the OS cache dir, namespaced by the entry's `name`). Warp creates the directory before launch. Suitable as a parent for server scratch state.
    - `{{env_VAR}}` — The value of environment variable `VAR` in Warp's process environment at launch time. The `env_` prefix is used because the template parser only accepts alphanumeric characters, `-`, and `_` in placeholder names; `{{env_HOME}}` expands to the value of `$HOME`. An undefined variable expands to the empty string and is logged.
 
-6. Substitution is single-pass within a string: a substituted value containing `{{...}}` syntax is not re-expanded. Unknown placeholders (`{{...}}` patterns that do not match any name above) expand to themselves verbatim and are logged once per launch. Whitespace inside the braces invalidates the placeholder, so `{{ workspace_root }}` is not expanded. To produce a literal that contains a `{{...}}`-shaped run in the spawned process's args, wrap it in a third pair of braces: `{{{workspace_root}}}` in the settings file passes through verbatim as the eighteen-character string `{{{workspace_root}}}`. A single `{` or `}` is ordinary text.
+6. Substitution is single-pass within a string: a substituted value containing `{{...}}` syntax is not re-expanded. Unknown placeholders (`{{...}}` patterns that do not match any name above) expand to themselves verbatim and are logged once per launch. Whitespace inside the braces invalidates the placeholder, so `{{ workspace_root }}` is not expanded. A single `{` or `}` is ordinary text. There is no in-Warp escape for the recognized placeholder set — if a user needs to emit a literal string that exactly matches `{{workspace_root}}`, `{{workspace_slug}}`, `{{cache_dir}}`, or `{{env_VAR}}` into the spawned process's args, they must produce it via the consuming tool rather than via the settings file.
 
    In addition to `{{...}}` placeholders, a leading `~` or `~/` at the start of any substituted string expands to the current user's home directory. `~` is expanded only at the very beginning of a value; embedded `~` characters (e.g. `/opt/~/bin`) are passed through unchanged. Other-user home expansion (`~someuser/...`) is not supported. `~` expansion is needed because Warp spawns the server with a direct OS `exec`, not through a shell — without it, `command = "~/bin/lsp-server"` would fail with "no such file or directory."
 
@@ -93,6 +93,7 @@ Warp's editor today only attaches an LSP client for five built-in languages (Rus
    - Duplicate `name` across entries.
    - An entry with empty `filetypes`.
    - An entry missing `name` or `command`.
+   - An entry whose `name` violates the constraints in invariant 1.
    - An inline-table entry in `filetypes` missing `pattern`.
    - A pattern (string or inline-table) in `filetypes` whose glob form fails to compile as a valid shell-style glob.
 
@@ -100,7 +101,7 @@ Warp's editor today only attaches an LSP client for five built-in languages (Rus
 
 24. Unknown fields on an `[[editor.language_servers]]` entry are ignored with a warning logged but no in-app notification. This leaves room to add fields without breaking existing settings files.
 
-25. Warp generates a JSON Schema for the `[[editor.language_servers]]` array as part of the existing build-time settings schema artifact. The schema is consumed by **external editors that support TOML schema validation** (e.g. editing `settings.toml` in another editor via a TOML language server) and by Warp's in-app docs page. The schema describes every field above with descriptions and required/optional markers, and enumerates the recognized `{{...}}` placeholders (`{{workspace_root}}`, `{{workspace_slug}}`, `{{cache_dir}}`, `{{env_VAR}}`), the `{{{name}}}` triple-brace escape, and the leading-`~`/`~/` home-directory expansion. Warp's in-app `settings.toml` text view is not schema-aware in v1; schema-driven autocomplete inside Warp is a separate follow-up.
+25. Warp generates a JSON Schema for the `[[editor.language_servers]]` array as part of the existing build-time settings schema artifact. The schema is consumed by **external editors that support TOML schema validation** (e.g. editing `settings.toml` in another editor via a TOML language server) and by Warp's in-app docs page. The schema describes every field above with descriptions and required/optional markers, and enumerates the recognized `{{...}}` placeholders (`{{workspace_root}}`, `{{workspace_slug}}`, `{{cache_dir}}`, `{{env_VAR}}`) and the leading-`~`/`~/` home-directory expansion. Warp's in-app `settings.toml` text view is not schema-aware in v1; schema-driven autocomplete inside Warp is a separate follow-up.
 
 ### Non-goals
 
@@ -115,6 +116,10 @@ Warp's editor today only attaches an LSP client for five built-in languages (Rus
 30. v1 does not support merging a custom entry's `initialization_options` or other fields into a built-in server's configuration. A custom entry whose `filetypes` overlap a built-in language fully replaces the built-in server for those filetypes (see invariant 3). Users who want to tune a built-in server's behavior must define a complete custom entry that supplies its own `command`, `args`, and other fields.
 
 31. v1 does not ship a dedicated inspection or management surface (command-palette action, settings sub-page, or status-dropdown extension) for listing which servers are configured and running, resetting per-workspace enable/decline state, or restarting a server for a workspace root. The footer's existing per-workspace Enable button and status dropdown carry over from today's built-in flow and apply to custom servers too; a richer inspection/management surface is deferred to a future release.
+
+### Logging and redaction
+
+32. **Log redaction.** When Warp logs custom-server launch information (substituted `command`, `args`, `env`, and string leaves of `initialization_options`), values that match Warp's existing secret-redaction patterns (`app/src/settings/privacy.rs::CustomSecretRegex`) are redacted before being written. This applies to both the substituted output and the raw descriptor values, and applies at every log level. Users who reference `{{env_VAR}}` placeholders to inject secrets into a custom server get the same redaction protection as elsewhere in Warp; raw `env` *values* in `settings.toml` are also redacted on launch logging. `env` *keys*, the descriptor `name`, the resolved workspace_root path, `workspace_slug`, and `cache_dir` are not secret-bearing and are logged verbatim.
 
 ## Worked example: Eclipse JDT Language Server (Java)
 

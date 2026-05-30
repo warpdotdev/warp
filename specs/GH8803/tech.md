@@ -90,7 +90,8 @@ Sibling modules:
   - The Handlebars parser only allows alphanumeric / `-` / `_` in argument names. Env-var lookups therefore use the `env_` prefix instead of a colon: `{{env_HOME}}`. The descriptor module strips the prefix and looks up the env var. Names with whitespace inside the braces are invalid per the engine; the spec adopts that constraint.
   - `~` / `~/` at position 0 expand to `home_dir()` via `warp_util::path::expand_home_prefix`. Embedded `~` is untouched.
   - `pub fn expand_json(input: &serde_json::Value, ctx: &LspPlaceholderContext) -> serde_json::Value` walks `initialization_options` and calls `expand` on string leaves only.
-- `crates/lsp/src/descriptor/validate.rs` — runs after parse and produces `Vec<LspDescriptorError>`. Drops invalid entries per invariant 23. Validates duplicate `name`, empty `filetypes`, missing `pattern` in inline tables, and uses `globset::GlobBuilder::case_insensitive(true).build()` to validate glob patterns. Rejects `**` and brace alternation explicitly to match product.md invariant 1.
+  - **Redaction at log boundaries (invariant 32).** The substitution module exposes a sibling helper `pub fn redact_for_log(value: &str) -> Cow<'_, str>` that applies `app/src/settings/privacy.rs::CustomSecretRegex` to substituted strings before they reach `log::info!` / `log::warn!` / `log::error!`. Callers — Warp's own launch-time logging in `crates/lsp/src/manager.rs` and `crates/lsp/src/service.rs` — are responsible for invoking it. What goes where: ✅ always safe to log verbatim — descriptor `name`, resolved `workspace_root`, `cache_dir`, `workspace_slug`, `env` *keys*; ⚠️ must pass through `redact_for_log` — substituted `args` strings and `env` *values*; ❌ never log verbatim — substituted `initialization_options` JSON (recursively redacting nested fields is too easy to get wrong; emit only a structural summary like `"initialization_options: 4 keys"` or pass through `redact_for_log` on a serialized form). Verification: the `CustomSecretRegex` reference here is to a log-time filter and not a UI-display-only filter — confirm during Phase 4 implementation.
+- `crates/lsp/src/descriptor/validate.rs` — runs after parse and produces `Vec<LspDescriptorError>`. Per invariant 23, **any** validation failure rejects the entire `editor.language_servers` setting (all-or-nothing); the per-entry errors feed the synthesized `editor.language_servers[N]` keys consumed by `SettingsFileError::InvalidSettings` (see the bullet on `app/src/settings/mod.rs:69-116` above) so the log can identify which entry caused the rejection. Validates the `name` character set and length per invariant 1 (1–64 chars from `[A-Za-z0-9._-]`, not `.`/`..`, no leading `.` or `-`), duplicate `name`, empty `filetypes`, missing `pattern` in inline tables, and uses `globset::GlobBuilder::case_insensitive(true).build()` to validate glob patterns. Rejects `**` and brace alternation explicitly to match product.md invariant 1.
 
 Helpers in adjacent crates:
 
@@ -187,7 +188,7 @@ Covers product.md invariants 2, 8, 19, 23, 24 at the settings layer.
 
 ---
 
-After all three sub-phases land, the settings group mirrors the user's `[[editor.language_servers]]` in real time, parse errors surface in the existing settings UI, and the schema artifact for external editors is published. **No LSP runtime hookup yet** — that's Phase 3, which subscribes to `LanguageServersSettingsChangedEvent` to spawn/stop custom servers on edit.
+After all three sub-phases land, the settings group mirrors the user's `[[editor.language_servers]]` in real time, parse errors surface in the existing settings UI, and the schema artifact for external editors is published. **No LSP runtime hookup yet** — that comes in Phase 3, which reads descriptors on demand at file-open time (no settings-group subscription; see Phase 3 "No settings-group subscription" and product.md invariant 19).
 
 ### Phase 3 — Custom-server runtime path
 
@@ -290,7 +291,7 @@ Built-in callers wrap their existing `LspServerConfig` in `LspServerConfigKind::
 
 ### Phase 4 — File-open dispatch + footer + persistence
 
-Goal: wire the editor's file-open path to consult the custom registry first; implement custom-server root-marker walk; extend the footer and persistence layer to handle custom servers alongside built-ins.
+Goal: wire the editor's file-open path to consult the custom registry first; extend the footer and persistence layer to handle custom servers alongside built-ins. Workspace-root resolution reuses the existing chain (`PersistedWorkspace::root_for_workspace` → `DetectedRepositories::get_root_for_path` → `path.parent()` fallback) — see `app/src/code/local_code_editor.rs:1386-1397`. Custom descriptors do not declare their own root markers.
 
 **File-open dispatch sites.** `LanguageId::from_path` is called from 11 sites in `app/src/` (the "what LSP handles this file?" decision points). Each gets a registry-first lookup added:
 
@@ -361,7 +362,7 @@ The in-memory cache on `Workspace` (`persisted_workspace.rs:127-130`) — curren
 
 **Tests.** Integration tests in `crates/integration/src/test/` covering:
 
-- Open `.rb` file with a Ruby `[[editor.language_servers]]` entry → custom server spawns at the directory containing `Gemfile`, footer shows Enable button labeled `"Enable ruby-lsp"`, accepting persists per-workspace
+- Open `.rb` file with a Ruby `[[editor.language_servers]]` entry → custom server spawns at the workspace root (resolved via the existing `PersistedWorkspace`/`DetectedRepositories` chain), footer shows Enable button labeled `"Enable ruby-lsp"`, accepting persists per-workspace
 - Open `.rs` file with a custom entry whose `filetypes = [{ pattern = "*.rs" }]` → custom runs, built-in rust-analyzer does not spawn (invariant 3)
 - Remove the custom `.rs` entry from settings → running custom keeps running (invariant 19); next `.rs` file open in a *new* workspace routes back to built-in rust-analyzer
 - Edit a running custom's `args` in settings.toml → no restart
@@ -409,9 +410,9 @@ pub struct LspFiletypePattern {
 
 The `#[schemars(skip)]` attribute on `matcher` excludes the compiled artifact from the schema (it's not user-typed). The schema correctly describes what the user writes: `pattern` and `language_id`. This is the codebase convention — see `CustomSecretRegex.pattern: Regex` with `#[schemars(with = "String")]` for the same pattern applied to a regex.
 
-`Vec<LspServerDescriptor>: SettingsValue` resolves automatically via the blanket impl at `crates/settings_value/src/lib.rs:138` once `LspServerDescriptor: JsonSchema + Serialize + Deserialize`. The hand-written `inventory::submit!(SettingSchemaEntry { ... })` from Phase 2 references `<Vec<LspServerDescriptor> as SettingsValue>::file_schema` as its `schema_fn`.
+`Vec<LspServerDescriptor>: SettingsValue` resolves automatically via the blanket impl at `crates/settings_value/src/lib.rs:138` once `LspServerDescriptor: JsonSchema + Serialize + Deserialize`. From there, `define_settings_group!` generates the `SettingSchemaEntry` and submits it via `inventory` — see Phase 2 — so the build-time schema generator picks it up automatically with no hand-written registration.
 
-**Field documentation strings.** Each field gets a `///` doc comment that becomes the JSON Schema `description` (schemars derives this automatically). Per product.md invariant 25, the schema descriptions for `command`, `args`, `env`, and `initialization_options` explicitly enumerate the recognized `{{...}}` placeholders (`{{workspace_root}}`, `{{workspace_slug}}`, `{{cache_dir}}`, `{{env_VAR}}`), the `{{{name}}}` triple-brace escape, and the leading-`~`/`~/` home-directory expansion. These descriptions surface as hover text in external editors.
+**Field documentation strings.** Each field gets a `///` doc comment that becomes the JSON Schema `description` (schemars derives this automatically). Per product.md invariant 25, the schema descriptions for `command`, `args`, `env`, and `initialization_options` explicitly enumerate the recognized `{{...}}` placeholders (`{{workspace_root}}`, `{{workspace_slug}}`, `{{cache_dir}}`, `{{env_VAR}}`) and the leading-`~`/`~/` home-directory expansion. These descriptions surface as hover text in external editors.
 
 **Build-time artifact.** No changes to `app/src/bin/generate_settings_schema.rs`. It already walks the `inventory::iter::<SettingSchemaEntry>` registry and emits the JSON Schema document; the new entry from Phase 2 is picked up automatically. The schema is generated on demand (CI/build), not committed.
 
@@ -439,7 +440,7 @@ flowchart TD
     I --> J[spawn_lsp_service]
 ```
 
-Settings reload re-enters the registry build at Phase 2; the registry diffs by `name` and emits events; the LSP manager subscribes but takes no action on already-running servers per invariant 19.
+Settings reload re-enters the registry build at Phase 2 so `LanguageServersSettings::as_ref(ctx)` reflects the new descriptors. The LSP manager does **not** subscribe to those changes — descriptors are read on demand at file-open time, and already-running servers keep running per invariant 19. New entries take effect on the next matching file open; edited entries take effect on the next user-initiated launch (close-and-reopen, or the existing restart action).
 
 ## Testing and validation
 
@@ -449,7 +450,7 @@ Settings reload re-enters the registry build at Phase 2; the registry diffs by `
 | 2 (unique name) | 1, 2 | `descriptor/validate.rs` unit; settings integration |
 | 3 (custom overrides built-in for matched filetypes) | 4 | Integration: custom `*.rs` entry preempts rust-analyzer |
 | 4 (first-in-source-order, built-in fallback) | 1, 4 | matcher unit + file-open integration |
-| 5, 6 (placeholders, `{{{...}}}` escape, `~`) | 1 | `descriptor/placeholder.rs` unit tests |
+| 5, 6 (placeholders, `~` expansion) | 1 | `descriptor/placeholder.rs` unit tests |
 | 7 (substitution before spawn) | 3 | Integration: JDTLS-style entry with `{{workspace_slug}}` |
 | 8, 19 (edits take effect on next launch) | 2, 4 | Hot-reload integration test asserting no restart |
 | 9 (file-open routing) | 4 | Integration: `.rb` custom, `.rs` built-in, `.zig` unsupported |
@@ -463,11 +464,11 @@ Settings reload re-enters the registry build at Phase 2; the registry diffs by `
 | 24 (unknown fields ignored) | 2 | parse unit test with extra field, asserts log + clean parse |
 | 25 (JSON schema) | 5 | Schema is generated by `generate_settings_schema.rs` at build time; CI lint validates the product.md worked-example TOMLs against the generated artifact |
 
-Manual validation gate at the end of Phase 4: load settings.toml with the JDTLS entry from product.md, open a Java file in a workspace with `pom.xml`, confirm initialize-time logs show fully-substituted args, confirm hover/diagnostics work, confirm `{{workspace_slug}}` is stable across restarts. Separately, confirm rust-analyzer / gopls / pyright / typescript-language-server / clangd behave identically to today on a workspace without any custom entries.
+Manual validation gate at the end of Phase 4: load settings.toml with the JDTLS entry from product.md, open a Java file in a workspace with `pom.xml`, confirm initialize-time logs show the substituted command path and a redaction-safe summary of args (no `env` values logged verbatim; any args matching `CustomSecretRegex` patterns appear redacted per invariant 32), confirm hover/diagnostics work, confirm `{{workspace_slug}}` is stable across restarts. Separately, confirm rust-analyzer / gopls / pyright / typescript-language-server / clangd behave identically to today on a workspace without any custom entries.
 
 ## Risks and mitigations
 
-- **First hand-written `SettingSchemaEntry` next to the macro-generated set.** `[[editor.language_servers]]` bypasses `define_settings_group!` because the macro doesn't host `Vec<ComplexStruct>`. The hand-written `inventory::submit!` form is modeled on the macro's expansion at `crates/settings/src/schema.rs:65-98`. Risk: the macro evolves and the hand-written copy drifts. Mitigation: cover the hand-written entry with the existing settings schema integration tests (every `SettingSchemaEntry` is exercised by `generate_settings_schema.rs`), and reference the macro-template line range in a code comment so future maintainers know where to look if the convention changes.
+- **Schema correctness depends on two unenforced conventions.** `define_settings_group!` generates the `SettingSchemaEntry` for `[[editor.language_servers]]`, so there's no hand-written registration to drift. The remaining risks are (1) the `#[schemars(skip)]` attribute on the private compiled `globset::GlobMatcher` field — if it's dropped, schema generation will fail to compile or emit a bogus entry for an internal field; (2) the `///` doc comments on `command`/`args`/`env`/`initialization_options` that enumerate the `{{...}}` placeholders per invariant 25 — these are the *only* place placeholder semantics are documented for external editor tooling, and they can silently rot if the placeholder set changes without the doc comments being updated. Mitigation: the schema integration test (Phase 5) validates the product.md worked-example TOMLs against the generated schema, which would catch (1); (2) requires the placeholder-substitution code and these doc comments to live next to each other or be cross-referenced.
 - **`LspManagerModelEvent::ServerRemoved` payload change.** Today the event carries `server_type: LSPServerType`; the change makes it `key: ServerKey`. External subscribers in `app/` need updates. Mitigation: the rename is compiler-guided — every subscription site fails to build until updated. Land the rename as its own commit at the start of Phase 3 so the diff is purely mechanical.
 - **Glob crate edge cases.** product.md cites `glob` crate syntax; implementation uses `globset` (already a dependency, a superset). The validator at `crates/lsp/src/descriptor/validate.rs` rejects `**` and `{a,b}` explicitly to keep behavior matching the documented syntax. Tests in `validate_tests.rs` cover both.
 - **`workspace_hash` collision.** 64-bit prefix of SHA-256 has ~2^-32 collision probability across all workspaces a single user ever opens — well below the threshold where it matters. Documented in rustdoc on `warp_util::path::workspace_hash`.
