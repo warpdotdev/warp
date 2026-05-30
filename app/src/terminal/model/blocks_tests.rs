@@ -2168,3 +2168,74 @@ fn test_device_status_uses_active_block_if_no_typeahead() {
 
     assert_eq!(writer, "\x1b[1;21R".as_bytes());
 }
+
+#[test]
+fn test_latest_ai_block_index_returns_none_when_no_ai_block() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    insert_block(&mut block_list, "echo hi", "hi");
+    assert_eq!(block_list.latest_ai_block_index(), None);
+}
+
+#[test]
+fn test_latest_ai_block_index_finds_ai_block() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    let command_index = insert_block(&mut block_list, "echo hi", "hi");
+    block_list.append_rich_content(
+        RichContentItem::new_for_test(Some(RichContentType::AIBlock), EntityId::new(), None),
+        false,
+    );
+    let ai_index = block_list
+        .latest_ai_block_index()
+        .expect("AI block should be found");
+    assert!(
+        ai_index >= command_index,
+        "AI block {ai_index:?} should be at/after command {command_index:?}"
+    );
+}
+
+#[test]
+fn test_latest_ai_block_index_returns_latest_among_multiple() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    block_list.append_rich_content(
+        RichContentItem::new_for_test(Some(RichContentType::AIBlock), EntityId::new(), None),
+        false,
+    );
+    let first = block_list
+        .latest_ai_block_index()
+        .expect("first AI block should be found");
+    insert_block(&mut block_list, "ls", "a b c");
+    block_list.append_rich_content(
+        RichContentItem::new_for_test(Some(RichContentType::AIBlock), EntityId::new(), None),
+        false,
+    );
+    let latest = block_list
+        .latest_ai_block_index()
+        .expect("latest AI block should be found");
+    // The index must advance to the newer AI block, proving "latest" (not "first") semantics.
+    assert!(
+        latest > first,
+        "expected latest index {latest:?} > first index {first:?}"
+    );
+}
+
+#[test]
+fn test_latest_ai_block_index_skips_trailing_non_ai_rich_content() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    block_list.append_rich_content(
+        RichContentItem::new_for_test(Some(RichContentType::AIBlock), EntityId::new(), None),
+        false,
+    );
+    let ai_index = block_list
+        .latest_ai_block_index()
+        .expect("AI block should be found");
+    block_list.append_rich_content(
+        RichContentItem::new_for_test(None, EntityId::new(), None),
+        false,
+    );
+    // The trailing non-AI rich content must not change the answer.
+    assert_eq!(block_list.latest_ai_block_index(), Some(ai_index));
+}

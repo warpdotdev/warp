@@ -2083,6 +2083,31 @@ impl BlockList {
         None
     }
 
+    /// Returns the `BlockIndex` of the most recent visible agent message
+    /// (`RichContentType::AIBlock`) in the block list, scanning from the tail.
+    /// Skips hidden / unmeasured rich content and any non-AI rich content,
+    /// continuing past command blocks. Returns `None` when there is no agent
+    /// message. Stateless: recomputed on each call so it always points at the
+    /// latest agent output.
+    pub fn latest_ai_block_index(&self) -> Option<BlockIndex> {
+        let mut cursor = self.block_heights().cursor::<BlockHeight, BlockIndex>();
+        cursor.descend_to_last_item(self.block_heights());
+
+        while let Some(item) = cursor.item() {
+            if let BlockHeightItem::RichContent(rich) = item {
+                if !rich.should_hide
+                    && rich.last_laid_out_height > BlockHeight::zero()
+                    && rich.content_type == Some(RichContentType::AIBlock)
+                {
+                    return Some(*cursor.start());
+                }
+            }
+            cursor.prev();
+        }
+
+        None
+    }
+
     pub fn size(&self) -> &SizeInfo {
         &self.size
     }
