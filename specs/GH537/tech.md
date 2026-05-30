@@ -690,10 +690,10 @@ during typing.
 
 **Step 0 — reserved-key bypass (both modes).** If K matches one of
 the shell's reserved infrastructure keys (PRODUCT #14: zsh `^P` /
-`\ei`; bash `\C-p` / `\ei` / `\ep` / `\ew`; fish `\cP` / `\ep` /
-`\ew` / `\ei`), Warp handles it locally and returns; the byte is
-never written to the PTY. This step runs before the matcher and
-before any inject path.
+`\ei` / `\ep` / `\ew`; bash `\C-p` / `\ei` / `\ep` / `\ew`; fish
+`\cP` / `\ep` / `\ew` / `\ei`), Warp handles it locally and
+returns; the byte is never written to the PTY. This step runs
+before the matcher and before any inject path.
 
 **`full` mode** — inline plugins active. Defaults: zsh, bash with
 blesh detected. The shell owns `$BUFFER`; Warp mirrors it.
@@ -1395,34 +1395,76 @@ fires per keystroke. Fish therefore defaults to `batched` mode
 #### 6.4 Security and encoding
 
 The shell→app DCS direction is the only place plugin-influenced
-data crosses a trust boundary. Rules:
+data crosses a trust boundary. `WarpBufferState` payloads
+arrive over the PTY just like every other shell-integration DCS
+hook, which means any process the user runs can write the same
+byte stream. The defenses below mirror the `ShellBindings`
+payload protection in §1 — per-tab nonce gating, pre-decode
+size cap, schema validation, post-decode bounds — so a
+malicious or careless process can't spoof the overlay channel
+to mutate Warp's editor.
 
-- **Payload framing.** `WarpBufferState` payloads use the
-  existing DCS envelope with `WARP_BOOTSTRAP_NONCE` (zsh/bash) or
-  the fish tempfile-nonce equivalent. Missing/wrong nonce → drop
-  silently (same path as every other shell→app DCS).
-- **Payload encoding.** Buffer content and autosuggest text are
-  hex-encoded by the shell-side emitter (`_warp_encode_buffer_state`
-  in zsh, equivalents in bash/fish). The app-side parser decodes
-  hex back into bytes and treats the result as opaque UTF-8 (with
-  invalid-sequence replacement). No structured parsing of buffer
-  bytes; they are display data only.
-- **Numeric fields.** `cursor`, `vi_mode_id`, `highlight_start`,
-  `highlight_end` are parsed as ASCII decimal with strict bounds
-  validation (cursor ∈ [0, buffer.len()], etc.). Out-of-bounds →
-  drop the report and emit a one-time diagnostic.
-- **Widget-name fields.** A `last_dispatched_widget` label may
-  appear in reports for telemetry. App-side validates against the
-  set of widget names discovered by §1 (`bindkey -L` / `bind -p` /
-  `bind` output). Unknown name → drop the label, keep the rest of
-  the report. Widget-name labels are never used in command
-  construction — telemetry only.
-- **App→shell direction carries only bytes.** Warp writes
-  keystroke bytes into the PTY via `Message::Input`. There is no
-  shell-command construction with shell-reported data, so no
-  encoding/escaping question exists at the app→shell boundary.
-  This is the structural fix for the security concern raised
-  against earlier drafts.
+**Validation order, single rule.** Each `WarpBufferState`
+payload runs through three strictly ordered phases on the
+receive side; failure at any phase discards the entire payload
+(no partial-application path):
+
+1. **Pre-decode byte cap.** The DCS frame's hex-decoded byte
+   length is checked against a 64 KiB total cap for
+   `WarpBufferState` *before* JSON deserialization runs.
+   Frames exceeding the cap are dropped at the framing layer
+   and logged; no allocation for parsed structures happens.
+   (`ShellBindings` carries a binding table and gets the
+   256 KiB cap from §1; `WarpBufferState` carries one buffer
+   plus overlay vectors and gets a tighter cap.)
+2. **Nonce gate.** Payloads use the existing DCS envelope with
+   `WARP_BOOTSTRAP_NONCE` (zsh/bash) or the fish tempfile-
+   nonce equivalent. Missing or mismatched nonce → drop
+   silently (same path as every other shell→app DCS).
+3. **Schema decode.** JSON is decoded into the
+   `WarpBufferState` struct. Field type mismatch, unknown
+   `schema_version`, or any malformed sub-field discards the
+   entire payload — no per-field "drop one, keep the rest"
+   branch.
+4. **Post-decode bounds.** After successful decode:
+   - `buffer` content (hex-decoded by the shell-side emitter
+     `_warp_encode_buffer_state` in zsh, equivalents in
+     bash/fish; app-side decodes hex back into bytes and
+     treats the result as opaque UTF-8 with invalid-sequence
+     replacement) is bounded to 32 KiB. Buffer bytes are
+     display data only — no structured parsing.
+   - Numeric fields (`cursor`, `vi_mode_id`,
+     `highlight_start`, `highlight_end`) are parsed as ASCII
+     decimal with strict bounds: `cursor ∈ [0, buffer.len()]`,
+     each highlight range `[start, end]` satisfies
+     `0 ≤ start ≤ end ≤ buffer.len()`, total highlight count
+     ≤ 256.
+   - `autosuggest` text bounded to 8 KiB; same opaque-UTF-8
+     treatment as buffer.
+   - A `last_dispatched_widget` label, if present, is
+     validated against the widget-name set discovered by §1
+     (`bindkey -L` / `bind -p` / `bind` output). Unknown name
+     → strip the label, keep the rest of the report. Widget-
+     name labels are never used in command construction —
+     telemetry only.
+   - Any bound violation discards the entire payload and
+     emits a one-time-per-session diagnostic.
+
+**Why these particular caps.** 32 KiB is two orders of
+magnitude above the longest plausible interactive command line
+(observed p99 ≈ 4 KiB for shell-tool corpora) and bounds the
+work the renderer does. 8 KiB autosuggest covers any realistic
+zsh-autosuggestions hit (the suggestion is at most one shell
+history entry). 256 highlight regions covers
+zsh-syntax-highlighting's worst case on a 32 KiB buffer plus
+headroom.
+
+**App→shell direction carries only bytes.** Warp writes
+keystroke bytes into the PTY via `Message::Input`. There is no
+shell-command construction with shell-reported data, so no
+encoding/escaping question exists at the app→shell boundary.
+This is the structural fix for the security concern raised
+against earlier drafts.
 
 #### 6.5 Cancellation, timeout, accept-line, tab close
 

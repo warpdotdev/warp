@@ -373,13 +373,45 @@ inline. See #11.6.
     shell-emitted DCS overlays (see TECH §6, §7). Behavioral
     invariants above are the bar; TECH owns the latency budget
     and the per-shell capability matrix that determines whether
-    each shell hits all of them in v1. The short version of that
-    matrix: zsh and bash-with-blesh get the full inline-rendering
-    experience; vanilla bash and fish v1 honor Category C
-    bindings (atuin, fzf, custom widgets) natively but cannot
-    deliver per-keystroke inline overlays in v1 because their
-    line editors lack a per-keystroke hook. TECH §7.3 surfaces
-    that limitation with a one-time diagnostic.
+    each shell hits all of them in v1. The matrix:
+
+    - **zsh and bash-with-blesh:** all invariants above (inline
+      suggestions, syntax highlighting, vi-mode indicators,
+      acceptance keys, abbreviation-style expansion if any).
+      The shell's line editor exposes a per-keystroke hook
+      (`zle-line-pre-redraw` on zsh; blesh's hook surface on
+      bash) so every keystroke participates in the
+      inline-rendering pipeline.
+    - **fish v1:** Category C bindings (atuin, fzf, custom
+      widgets) plus `abbr` expansion on space and enter (the
+      one fish-specific inline behavior PRODUCT #11.6
+      requires). Fish has no per-keystroke hook, so per-
+      keystroke inline overlays (syntax highlighting,
+      autosuggestions painted as the user types) are not
+      delivered in v1; abbr expansion is delivered via a fish-
+      specific space-trigger sync (TECH §6.1 step 5) and an
+      Enter sync that catches all-other-cases. Continuous
+      inline-rendering parity for fish is a tracked follow-up.
+    - **vanilla bash (no blesh):** Category C bindings only.
+      Readline has no per-keystroke hook and no fish-style
+      abbr feature to honor; the inline-rendering invariants
+      above don't apply structurally. TECH §7.3 surfaces this
+      with a one-time diagnostic at tab start.
+
+    **Security of the overlay channel.** The shell-emitted DCS
+    overlays carrying buffer state and plugin output are
+    process-controlled input arriving over the PTY; any
+    process the user runs can write the same byte stream. To
+    prevent a hostile or careless process from spoofing
+    overlays, every payload carries the same per-tab nonce as
+    Warp's other shell-integration DCS payloads (set at
+    bootstrap, never transmitted in cleartext after that), and
+    payloads are subject to size caps, strict schema
+    validation, and whole-payload-discard on any failure. TECH
+    §6.4 specifies the exact validation phases and bounds.
+    User-visible result: a process that tries to inject a fake
+    buffer-state overlay does not affect Warp's editor; the
+    bad payload is dropped silently.
 
     **Failure mode.** If the plugin emits something Warp's renderer
     can't faithfully display (an obscure ANSI sequence, a 24-bit
@@ -444,7 +476,13 @@ inline. See #11.6.
     bindings on every other key follow the regular precedence above.
     The reserved set per shell:
 
-    - **zsh:** `^P` (Warp uses for `kill-buffer`), `\ei` (input reporting).
+    - **zsh:** `^P` (Warp uses for `kill-buffer`), `\ei` (input
+      reporting), `\ep` (switch to PS1 prompt), `\ew` (switch
+      to Warp prompt). The `\ep`/`\ew` bindings match the
+      bash/fish set; the zsh bootstrap already installs them
+      for prompt-mode switching, and treating them as
+      user-controlled would break Warp ↔ shell prompt
+      communication.
     - **bash:** `\C-p` (`kill-whole-line` for clear-buffer), `\ei`
       (input reporting), `\ep` (switch to PS1 prompt), `\ew` (switch to
       Warp prompt).
