@@ -1405,7 +1405,7 @@ malicious or careless process can't spoof the overlay channel
 to mutate Warp's editor.
 
 **Validation order, single rule.** Each `WarpBufferState`
-payload runs through three strictly ordered phases on the
+payload runs through four strictly ordered phases on the
 receive side; failure at any phase discards the entire payload
 (no partial-application path):
 

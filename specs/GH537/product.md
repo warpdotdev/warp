@@ -385,13 +385,16 @@ inline. See #11.6.
     - **fish v1:** Category C bindings (atuin, fzf, custom
       widgets) plus `abbr` expansion on space and enter (the
       one fish-specific inline behavior PRODUCT #11.6
-      requires). Fish has no per-keystroke hook, so per-
-      keystroke inline overlays (syntax highlighting,
-      autosuggestions painted as the user types) are not
-      delivered in v1; abbr expansion is delivered via a fish-
-      specific space-trigger sync (TECH §6.1 step 5) and an
-      Enter sync that catches all-other-cases. Continuous
-      inline-rendering parity for fish is a tracked follow-up.
+      requires) plus vi-mode indicators (the in-app state
+      machine in TECH §"#13" tracks dispatched vi widgets and
+      renders cursor shape per mode regardless of injection
+      mode). Fish has no per-keystroke hook, so the remaining
+      inline overlays (syntax highlighting, autosuggestions
+      painted as the user types) are not delivered in v1;
+      abbr expansion is delivered via a fish-specific
+      space-trigger sync (TECH §6.1 step 5) and an Enter sync
+      that catches all-other-cases. Continuous inline-
+      rendering parity for fish is a tracked follow-up.
     - **vanilla bash (no blesh):** Category C bindings only.
       Readline has no per-keystroke hook and no fish-style
       abbr feature to honor; the inline-rendering invariants
