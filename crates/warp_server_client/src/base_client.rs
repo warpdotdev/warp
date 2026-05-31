@@ -1,18 +1,16 @@
-use std::result::Result as StdResult;
 use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use instant::Duration;
 use warp_graphql::client::RequestOptions;
-use warp_server_auth::credentials::{AuthToken, Credentials, FirebaseToken, LoginToken};
 
-use crate::auth::{AgentIdentity, UserAuthenticationError};
+use crate::auth::AgentIdentity;
 
-/// Application-provided capabilities used by extracted server API clients.
+/// Application-provided transport and platform capabilities used by extracted server API clients.
 ///
-/// The base client keeps UI/model reactions and currently app-owned session
-/// lifecycle plumbing outside extracted endpoint implementations.
+/// The base client keeps UI/model reactions, ambient-agent integration, and transport
+/// construction outside extracted endpoint implementations.
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait BaseClient: Send + Sync {
@@ -37,41 +35,8 @@ pub trait BaseClient: Send + Sync {
     /// Returns GraphQL request options for an authenticated operation.
     ///
     /// Extracted GraphQL clients should use this method through the shared request
-    /// helper so token refresh, timeouts, and application-owned headers remain centralized.
+    /// helper so timeouts and application-owned headers remain centralized.
     async fn graphql_request_options(&self, timeout: Option<Duration>) -> Result<RequestOptions>;
-
-    /// Exchanges login credentials for the credential state used by authenticated requests.
-    ///
-    /// Auth client implementations invoke this while completing login; the application
-    /// remains responsible for Firebase, session, and other credential lifecycle behavior.
-    async fn exchange_credentials(
-        &self,
-        token: LoginToken,
-    ) -> StdResult<Credentials, UserAuthenticationError>;
-
-    /// Returns a currently valid authentication token, refreshing it when required.
-    ///
-    /// Extracted clients should use this for non-GraphQL authenticated requests or APIs
-    /// that expose token retrieval as part of their public client contract.
-    async fn get_or_refresh_access_token(&self) -> Result<AuthToken>;
-
-    /// Starts the OAuth device authorization flow and returns its server-issued device code.
-    ///
-    /// This capability remains application-provided because the OAuth client and its
-    /// platform-specific execution details are not owned by extracted API crates.
-    async fn request_device_code(
-        &self,
-    ) -> StdResult<oauth2::StandardDeviceAuthorizationResponse, UserAuthenticationError>;
-
-    /// Completes an OAuth device authorization flow and returns a Firebase login token.
-    ///
-    /// Auth client implementations expose this operation while the application supplies
-    /// the configured OAuth transport and timer behavior.
-    async fn exchange_device_access_token(
-        &self,
-        details: &oauth2::StandardDeviceAuthorizationResponse,
-        timeout: Duration,
-    ) -> StdResult<FirebaseToken, UserAuthenticationError>;
 
     /// Lists public agent identities available to API-key creation flows.
     ///

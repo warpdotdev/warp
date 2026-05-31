@@ -1,17 +1,12 @@
-use std::result::Result as StdResult;
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
-use futures::FutureExt as _;
 use instant::Duration;
-use oauth2::TokenResponse as _;
-use warp_server_client::auth::{AgentIdentity, UserAuthenticationError};
+use warp_server_client::auth::{AgentIdentity, AuthEvent};
 use warp_server_client::base_client::BaseClient;
 
-use super::auth::exchange_credentials;
-use super::{ServerApi, ServerApiEvent};
-use crate::auth::credentials::{AuthToken, Credentials, FirebaseToken, LoginToken};
+use super::ServerApi;
 use crate::server::graphql::default_request_options;
 
 /// Header key for the ambient workload token attached to multi-agent requests.
@@ -49,7 +44,7 @@ impl BaseClient for ServerApi {
         timeout: Option<Duration>,
     ) -> Result<warp_graphql::client::RequestOptions> {
         let auth_token = self
-            .access_token()
+            .get_or_refresh_access_token()
             .await
             .context("Failed to get access token for GraphQL request")?;
         let mut headers = std::collections::HashMap::new();
@@ -69,49 +64,6 @@ impl BaseClient for ServerApi {
             headers,
             ..default_request_options()
         })
-    }
-
-    async fn exchange_credentials(
-        &self,
-        token: LoginToken,
-    ) -> StdResult<Credentials, UserAuthenticationError> {
-        exchange_credentials(self.client.clone(), token).await
-    }
-
-    async fn get_or_refresh_access_token(&self) -> Result<AuthToken> {
-        ServerApi::get_or_refresh_access_token(self).await
-    }
-
-    async fn request_device_code(
-        &self,
-    ) -> StdResult<oauth2::StandardDeviceAuthorizationResponse, UserAuthenticationError> {
-        self.oauth_client
-            .exchange_device_code()
-            .request_async(self.client.as_ref())
-            .await
-            .context("Failed to generate device code")
-            .map_err(UserAuthenticationError::Unexpected)
-    }
-
-    async fn exchange_device_access_token(
-        &self,
-        details: &oauth2::StandardDeviceAuthorizationResponse,
-        timeout: Duration,
-    ) -> StdResult<FirebaseToken, UserAuthenticationError> {
-        let result = self
-            .oauth_client
-            .exchange_device_access_token(details)
-            .request_async(
-                self.client.as_ref(),
-                |delay| warpui::r#async::Timer::after(delay).map(|_| ()),
-                Some(timeout),
-            )
-            .await
-            .context("Unable to obtain access token")
-            .map_err(UserAuthenticationError::Unexpected)?;
-        Ok(FirebaseToken::Custom(
-            result.access_token().secret().to_string(),
-        ))
     }
 
     async fn list_agent_identities(&self) -> Result<Vec<AgentIdentity>> {
@@ -155,20 +107,14 @@ impl BaseClient for ServerApi {
     }
 
     fn on_graphql_staging_access_blocked(&self) {
-        let _ = self
-            .event_sender
-            .try_send(ServerApiEvent::StagingAccessBlocked);
+        let _ = self.event_sender.try_send(AuthEvent::StagingAccessBlocked);
     }
 
     fn on_graphql_iap_challenge_received(&self) {
-        let _ = self
-            .event_sender
-            .try_send(ServerApiEvent::IapChallengeReceived);
+        let _ = self.event_sender.try_send(AuthEvent::IapChallengeReceived);
     }
 
     fn on_graphql_user_account_disabled(&self) {
-        let _ = self
-            .event_sender
-            .try_send(ServerApiEvent::UserAccountDisabled);
+        let _ = self.event_sender.try_send(AuthEvent::UserAccountDisabled);
     }
 }

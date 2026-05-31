@@ -15122,6 +15122,7 @@ name = "warp_server_client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "async-trait",
  "bincode",
  "chrono",
@@ -15132,6 +15133,7 @@ dependencies = [
  "derivative",
  "diesel",
  "firebase",
+ "futures",
  "http 1.4.0",
  "http_client",
  "instant",
@@ -15146,6 +15148,7 @@ dependencies = [
  "session-sharing-protocol",
  "settings_value",
  "thiserror 2.0.17",
+ "url",
  "uuid",
  "warp_core",
  "warp_graphql",

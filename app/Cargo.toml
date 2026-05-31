@@ -813,7 +813,7 @@ settings_file = []
 sequential_storage = []
 session_sharing = []
 session_sharing_acls = []
-skip_login = ["warp_server_auth/skip_login"]
+skip_login = ["warp_server_client/skip_login"]
 # This feature should only be enabled when building a self-contained binary with the bundle script.
 standalone = ["warp_assets/standalone"]
 prompt_suggestions_via_maa = []
@@ -830,7 +830,7 @@ integration_tests = [
     "warpui/integration_tests",
     "warpui/test-util",
     "warp_core/integration_tests",
-    "warp_server_auth/integration_tests",
+    "warp_server_client/integration_tests",
 ]
 traces = []
 viewing_shared_sessions = []

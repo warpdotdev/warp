@@ -7,10 +7,13 @@ publish.workspace = true
 license.workspace = true
 
 [features]
+integration_tests = ["warp_server_auth/integration_tests"]
+skip_login = ["warp_server_auth/skip_login"]
 test-util = ["cloud_object_client/test-util", "cloud_objects/test-util", "dep:mockall"]
 
 [dependencies]
 anyhow.workspace = true
+async-channel.workspace = true
 async-trait.workspace = true
 bincode.workspace = true
 chrono.workspace = true
@@ -34,6 +37,7 @@ serde.workspace = true
 settings_value.workspace = true
 session-sharing-protocol.workspace = true
 thiserror.workspace = true
+url.workspace = true
 uuid.workspace = true
 warp_core.workspace = true
 warp_graphql.workspace = true
@@ -44,4 +48,5 @@ warpui_core.workspace = true
 diesel = { workspace = true, features = ["sqlite", "chrono"] }
 
 [dev-dependencies]
+futures.workspace = true
 mockall.workspace = true
