@@ -6,7 +6,6 @@ use std::fmt::Display;
 use std::ops::Deref;
 
 use ai::skills::SkillPathOrigin;
-use chrono::DateTime;
 use field_mask::{FieldMaskError, FieldMaskOperation};
 use helper::{MessageExt, SubagentExt, ToolCallExt};
 use itertools::Itertools;
@@ -29,7 +28,6 @@ use super::{
     Shared,
 };
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
-use crate::server::datetime_ext::DateTimeExt;
 use crate::terminal::model::block::BlockId;
 use crate::AIAgentTodoList;
 
@@ -299,7 +297,7 @@ impl Task {
             input: vec![],
             output_status: AIAgentOutputStatus::Streaming { output: None },
             added_message_ids: Default::default(),
-            start_time: DateTime::now().into(),
+            start_time: chrono::Local::now(),
             finish_time: None,
             time_to_first_token_ms: None,
             working_directory: existing_exchange.working_directory.clone(),
@@ -434,7 +432,7 @@ impl Task {
             input: vec![],
             output_status: AIAgentOutputStatus::Streaming { output: None },
             added_message_ids: Default::default(),
-            start_time: DateTime::now().into(),
+            start_time: chrono::Local::now(),
             finish_time: None,
             time_to_first_token_ms: None,
             working_directory: existing_exchange.working_directory.clone(),
