@@ -75,6 +75,8 @@ impl BaseClient for ServerApi {
         if cfg!(target_family = "wasm") {
             return Ok(None);
         }
+        // Check whether a cached token remains valid, using a five-minute buffer.
+        // Tokens without an expiration time are always considered valid.
         {
             let cached = self.ambient_workload_token.lock();
             if let Some(ref token) = *cached {
@@ -86,6 +88,7 @@ impl BaseClient for ServerApi {
                 }
             }
         }
+        // Issue a new token.
         let workload_token = match warp_isolation_platform::issue_workload_token(Some(
             AMBIENT_WORKLOAD_TOKEN_DURATION,
         ))

@@ -45,6 +45,7 @@ impl From<GqlUserOutput> for UserProperties {
             .and_then(|experiments| convert_to_server_experiment!(experiments))
             .unwrap_or_default();
 
+        // Convert LLM model choices from the GraphQL response.
         let llms = user_properties.llms.try_into().unwrap_or_default();
 
         let user = User {

@@ -58,6 +58,9 @@ where
                 safe: ("graphql response for {:?} had errors", operation_name),
                 full: ("graphql response for {:?} had errors {:?}", operation_name, errors)
             );
+            // The "User not in context: Not found" response indicates that warp-server
+            // could not resolve the required user because the user's account was disabled
+            // or deleted.
             if errors
                 .iter()
                 .any(|error| error.message.contains("User not in context: Not found"))

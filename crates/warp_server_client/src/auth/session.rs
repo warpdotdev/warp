@@ -136,6 +136,7 @@ impl AuthSession {
         }
     }
 
+    /// Exchanges a long-lived token for fresh [`Credentials`].
     pub async fn exchange_credentials(
         &self,
         token: LoginToken,
@@ -182,6 +183,8 @@ impl AuthSession {
             .await
             .context("Unable to obtain access token")
             .map_err(UserAuthenticationError::Unexpected)?;
+        // Firebase does not directly support the device flow, so the server mints a
+        // short-lived custom access token that can be exchanged for a refresh token.
         Ok(FirebaseToken::Custom(
             result.access_token().secret().to_string(),
         ))

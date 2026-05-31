@@ -1016,6 +1016,9 @@ pub trait AIClient: 'static + Send + Sync {
 
     async fn get_request_limit_info(&self) -> Result<RequestUsageInfo, anyhow::Error>;
 
+    /// Returns conversation usage history for the current user over the requested number of days.
+    ///
+    /// If `last_updated_end_timestamp` is provided, only conversations updated before that timestamp are returned.
     async fn get_conversation_usage_history(
         &self,
         days: Option<i32>,
