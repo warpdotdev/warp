@@ -6,7 +6,7 @@
 
 This feature is **purely additive**. The five built-in language servers (rust-analyzer, gopls, pyright, typescript-language-server, clangd) keep working exactly as they do today — same code paths, same persistence, same footer surfaces, same install flow. The new system lives next to the built-in pipeline and runs first when a file is opened. If a custom `[[editor.language_servers]]` entry's `filetypes` matches the file, the custom server handles it. Otherwise the existing built-in dispatch handles it unchanged.
 
-**Strategic framing:** the built-in set is frozen at five servers. No future LSP support gets added to the built-in pipeline; `[[editor.language_servers]]` is the only path. This shapes several design decisions below — most notably the choice to keep the runtime tracks fully separate (no shared identity enum across built-in + custom status) so the built-in pipeline can stay frozen while the custom pipeline iterates.
+**Design choice.** Built-in and custom runtime tracks are kept fully separate — no shared identity enum across built-in + custom status, separate in-memory caches, separate persistence rows (discriminated by `kind`). This isolation lets the built-in pipeline stay stable across releases while the custom pipeline iterates, and makes it straightforward for a reader to reason about each path independently.
 
 ### Current architecture, with line refs
 
@@ -26,9 +26,9 @@ Settings + persistence:
 - `[[editor.language_servers]]` is stored in the user's existing `settings.toml` — a new top-level array-of-tables in the same file all other Warp user settings live in. No new file or directory. The path is `warp_core::paths::config_local_dir().join("settings.toml")` (`crates/warp_core/src/paths.rs`), which resolves to `~/.warp/settings.toml` on macOS, `$XDG_CONFIG_HOME/dev.warp.Warp/settings.toml` on Linux, and `%LOCALAPPDATA%\dev.warp.Warp\settings.toml` on Windows. Per-workspace `.warp/settings.toml` overrides are out of scope for v1.
 - `crates/settings/src/macros.rs:702-790` — the `define_settings_group!` macro hosts every existing settings group (31 invocations across `app/src/settings/`). The macro accepts arbitrary types including `Vec<T>` of complex structs — see `app/src/settings/ai.rs::agent_mode_command_execution_allowlist` which uses `type: Vec<AgentModeCommandExecutionPredicate>`. We use the same macro for our setting; no hand-rolled `SettingSchemaEntry` registration is needed.
 - `crates/settings/src/manager.rs:73-95` — `SettingsManager` is the singleton that registers settings and dispatches `SettingsEvent::LocalPreferencesUpdated { storage_key, sync_to_cloud }` on changes. The macro's expansion (in particular `register_settings_events!` at `crates/settings/src/macros.rs:798-806`) emits these events automatically for every macro-registered setting.
-- `app/src/settings/mod.rs:69-116` — `SettingsFileError::InvalidSettings(Vec<String>)` carries the **storage keys** (not free-text messages) of settings whose values failed to load. The UI renders one line per key. Custom-server validation errors flow through this same surface, with one synthesized key per invalid entry (e.g. `editor.language_servers[2]`).
+- `app/src/settings/mod.rs:69-116` — `SettingsFileError::InvalidSettings(Vec<String>)` carries the **storage keys** (not free-text messages) of settings whose values failed to load. The UI renders one line per key. Per invariant 23, custom-server validation errors flow through this surface as a single bare key — `editor.language_servers` — when any entry is invalid; per-entry detail (which entry index, which field, why) is emitted via `log::warn!` and stays out of the banner. This matches the existing array-setting precedent at `agents.profiles.agent_mode_command_execution_allowlist`.
 - `app/src/settings/init.rs:114-150` — settings load + validation entry point. Hot-reload is already wired; saving `settings.toml` re-parses and re-validates without restart.
-- **Persistence shape (corrected from earlier drafts).** Per-workspace LSP enablement is stored in the SQLite table `workspace_language_server` (migration `crates/persistence/migrations/2025-10-31-201353_add_workspace_language_server/`). The table is `(workspace_id, language_server_name: TEXT, enabled: TEXT)`. Built-in servers are written as serialized `LSPServerType` variant names (`"RustAnalyzer"`, `"GoPls"`, etc.). The `HashMap<LSPServerType, EnablementState>` at `app/src/ai/persisted_workspace.rs:129` is an in-memory cache, not the on-disk shape. **There is no schema migration for custom servers** — they slot into the existing string-keyed column by inserting rows with `language_server_name = "ruby-lsp"` etc.
+- **Persistence shape.** Per-workspace LSP enablement is stored in the SQLite table `workspace_language_server`. The on-disk shape is `(workspace_id, language_server_name: TEXT, enabled: TEXT, kind: TEXT)`, built from three migrations: `2025-10-31-201353_add_workspace_language_server/` (initial table), `2025-11-11-230915_change_workspace_language_server_enabled_to_text/` (typing fix), and `2026-05-24-180000_add_kind_to_workspace_language_server/` (which adds `kind TEXT NOT NULL DEFAULT 'BuiltIn'` to discriminate built-in from custom rows). Built-in servers are written with `kind = 'BuiltIn'` and `language_server_name` set to the serialized `LSPServerType` variant name (`"RustAnalyzer"`, `"GoPls"`, etc.); custom servers are written with `kind = 'Custom'` and `language_server_name = descriptor.name` (e.g. `"ruby-lsp"`). The `HashMap<LSPServerType, EnablementState>` at `app/src/ai/persisted_workspace.rs:129` is an in-memory cache, not the on-disk shape. Reservation of built-in names at validation time (invariant 23) provides defense-in-depth against an attacker-controlled or hand-edited row with mismatched `kind`/`language_server_name`.
 
 JSON Schema generation:
 
@@ -49,7 +49,7 @@ Custom servers run on a separate code path from built-ins. The two tracks share 
 - **Matcher** — checks customs first via `LanguageServersSettings::match_for_path`, falls back to the existing `LanguageId::from_path` → `LSPServerType` dispatch.
 - **Status enums** — `LspRepoStatus` (built-in, 6 variants including install state) stays untouched. A new narrow `CustomLspRepoStatus` enum (3 variants: `Ready`, `Enabled`, `Disabled`) covers customs. Install-related variants intentionally don't exist for customs because there is no install flow for them. The footer dispatches "is this slot built-in or custom?" once at render time and enters one of two code paths.
 - **Manager registration** — `LspManagerModel.servers: HashMap<PathBuf, Vec<ModelHandle<LspServerModel>>>` already supports multiple servers per workspace. We extend `LspServerModel` to carry either a built-in `LspServerConfig` or a `CustomLspServerConfig`. Internal duplicate-detection keys on a small `ServerKey { BuiltIn(LSPServerType), Custom(String) }` enum scoped to the manager only — not propagated to `LspRepoStatus` or the footer.
-- **Persistence** — the SQLite `workspace_language_server` table is already string-keyed; customs slot in by inserting rows with `language_server_name = "ruby-lsp"`. **No schema migration.**
+- **Persistence** — the SQLite `workspace_language_server` table gets a `kind` column (migration `2026-05-24-180000`) to discriminate `'BuiltIn'` from `'Custom'` rows. Customs are inserted with `kind = 'Custom'` and `language_server_name = descriptor.name`. The reservation of built-in names at validation time means even with the discriminator, customs cannot use the five built-in variant names.
 - **Footer** — the existing built-in render path stays untouched. A new branch handles customs, reusing the same UI affordances (status indicator, Enable button, error inline) but driven by the descriptor's `name` instead of an `LSPServerType`.
 
 Everything else (process spawning, JSON-RPC, install flow, file watching, the LSP state machine) stays untouched for built-ins. The cost of the parallel-track design is some duplication in spawn / lifecycle plumbing; the benefit is no risk to in-flight built-in work, no persistence migration, and no rename touching ~24 pattern-match sites for an enum the built-in side doesn't need to know about.
@@ -90,8 +90,8 @@ Sibling modules:
   - The Handlebars parser only allows alphanumeric / `-` / `_` in argument names. Env-var lookups therefore use the `env_` prefix instead of a colon: `{{env_HOME}}`. The descriptor module strips the prefix and looks up the env var. Names with whitespace inside the braces are invalid per the engine; the spec adopts that constraint.
   - `~` / `~/` at position 0 expand to `home_dir()` via `warp_util::path::expand_home_prefix`. Embedded `~` is untouched.
   - `pub fn expand_json(input: &serde_json::Value, ctx: &LspPlaceholderContext) -> serde_json::Value` walks `initialization_options` and calls `expand` on string leaves only.
-  - **Redaction at log boundaries (invariant 32).** The substitution module exposes a sibling helper `pub fn redact_for_log(value: &str) -> Cow<'_, str>` that applies `app/src/settings/privacy.rs::CustomSecretRegex` to substituted strings before they reach `log::info!` / `log::warn!` / `log::error!`. Callers — Warp's own launch-time logging in `crates/lsp/src/manager.rs` and `crates/lsp/src/service.rs` — are responsible for invoking it. What goes where: ✅ always safe to log verbatim — descriptor `name`, resolved `workspace_root`, `cache_dir`, `workspace_slug`, `env` *keys*; ⚠️ must pass through `redact_for_log` — substituted `args` strings and `env` *values*; ❌ never log verbatim — substituted `initialization_options` JSON (recursively redacting nested fields is too easy to get wrong; emit only a structural summary like `"initialization_options: 4 keys"` or pass through `redact_for_log` on a serialized form). Verification: the `CustomSecretRegex` reference here is to a log-time filter and not a UI-display-only filter — confirm during Phase 4 implementation.
-- `crates/lsp/src/descriptor/validate.rs` — runs after parse and produces `Vec<LspDescriptorError>`. Per invariant 23, **any** validation failure rejects the entire `editor.language_servers` setting (all-or-nothing); the per-entry errors feed the synthesized `editor.language_servers[N]` keys consumed by `SettingsFileError::InvalidSettings` (see the bullet on `app/src/settings/mod.rs:69-116` above) so the log can identify which entry caused the rejection. Validates the `name` character set and length per invariant 1 (1–64 chars from `[A-Za-z0-9._-]`, not `.`/`..`, no leading `.` or `-`), duplicate `name`, empty `filetypes`, missing `pattern` in inline tables, and uses `globset::GlobBuilder::case_insensitive(true).build()` to validate glob patterns. Rejects `**` and brace alternation explicitly to match product.md invariant 1.
+  - **Redaction at log boundaries (invariant 32).** `crates/lsp` cannot directly depend on `app/src/settings/privacy.rs::CustomSecretRegex` — `app/` is downstream of `lsp/` in the workspace dependency graph. So the redactor is **injected from app at the LSP boundary** rather than imported. Concretely: `crates/lsp` defines a trait `pub trait LogRedactor: Send + Sync { fn redact_for_log<'a>(&self, value: &'a str) -> Cow<'a, str>; }`, and `LspPlaceholderContext` (or equivalent app-boundary type — confirm during Phase 4 implementation) carries an `Arc<dyn LogRedactor>` populated at construction by `app/`'s wiring, where `CustomSecretRegex` lives. Callers in `crates/lsp/src/manager.rs` and `crates/lsp/src/service.rs` call the trait method before reaching `log::info!` / `log::warn!` / `log::error!`. What goes where: ✅ always safe to log verbatim — descriptor `name`, resolved `workspace_root`, `cache_dir`, `workspace_slug`, `env` *keys*; ⚠️ must pass through the injected redactor — substituted `args` strings and `env` *values*; ❌ never log verbatim — substituted `initialization_options` JSON (recursively redacting nested fields is too easy to get wrong; emit only a structural summary like `"initialization_options: 4 keys"` or run the serialized form through the redactor). Verification during Phase 4: (1) the injection point exists or is added at the natural boundary, (2) `CustomSecretRegex` is a log-time filter and not a UI-display-only filter.
+- `crates/lsp/src/descriptor/validate.rs` — runs after parse and produces `Vec<LspDescriptorError>`. Per invariant 23, **any** validation failure rejects the entire `editor.language_servers` setting (all-or-nothing); `SettingsFileError::InvalidSettings` receives a single bare `editor.language_servers` entry (see the bullet on `app/src/settings/mod.rs:69-116` above), and per-entry detail (which entry index, which field, why it failed) is emitted via `log::warn!` so users can find the offending entry without that detail surfacing in the banner. Validates the `name` character set and length per invariant 1 (1–64 chars from `[A-Za-z0-9._-]`, not `.`/`..`, no leading `.` or `-`), rejects names that match a reserved built-in server type (`RustAnalyzer`, `GoPls`, `Pyright`, `TypeScriptLanguageServer`, `Clangd`) — the list is sourced from the `LSPServerType` enum so adding a built-in automatically extends the reservation — checks duplicate `name`, empty `filetypes`, missing `pattern` in inline tables, and uses `globset::GlobBuilder::case_insensitive(true).build()` to validate glob patterns. Rejects `**` and brace alternation explicitly to match product.md invariant 1.
 
 Helpers in adjacent crates:
 
@@ -118,21 +118,14 @@ Phase 2 lands as **three small, independently reviewable sub-phases**. Each comp
 
 New module `app/src/settings/language_servers.rs` introduces a thin newtype around `Vec<LspServerDescriptor>` and registers it through the macro. The newtype exists for one reason: the default `SettingsValue::from_file_value` uses `serde_json::from_value::<Self>`, which would deserialize each `LspFiletypePattern` with a placeholder matcher (because `matcher` is `#[serde(skip)]`). The newtype overrides `from_file_value` to route through `descriptor::parse::parse_entries`, which compiles real glob matchers from the user's pattern strings. This follows the hand-rolled-`SettingsValue` precedent at `app/src/settings/ai.rs:572-580` (`AgentModeCommandExecutionPredicate`) and `:688-709` (`ToolbarCommandMap`).
 
-```rust
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(transparent)]
-#[schemars(description = "User-configured language servers for the editor.")]
-pub struct LspServerDescriptors(pub Vec<LspServerDescriptor>);
+`LspServerDescriptors` is a transparent newtype over `Vec<LspServerDescriptor>` with the standard derives (`Serialize`, `Deserialize`, `JsonSchema`, `Default`). Its `SettingsValue::from_file_value` implements the all-or-nothing contract from invariant 23:
 
-impl SettingsValue for LspServerDescriptors {
-    fn from_file_value(value: &Value) -> Option<Self> {
-        let arr = value.as_array().cloned().unwrap_or_default();
-        let result = descriptor::parse::parse_entries(&arr);
-        // Errors are surfaced in Phase 2c via SettingsFileError::InvalidSettings.
-        Some(Self(result.descriptors))
-    }
-}
-```
+- If the underlying value is not an array → return `None` (wrong-type is a settings error per invariant 23).
+- Otherwise, call `descriptor::parse::parse_entries` over the array, which yields a `{ descriptors, errors }` pair.
+- If any per-entry validation errors exist → emit one `log::warn!` per entry containing the entry index and reason (per-entry detail stays out of the banner per the bullet on `app/src/settings/mod.rs:69-116` above), then return `None`.
+- Otherwise return `Some(LspServerDescriptors(descriptors))`.
+
+Returning `None` causes the macro's generated `load_fn` to surface `editor.language_servers` as a single bare key in `SettingsFileError::InvalidSettings`, which is what the banner reads.
 
 The macro invocation registers our setting alongside the existing pattern:
 
@@ -340,7 +333,7 @@ A parallel function `custom_lsp_repo_status(repo_root: &Path, name: &str, ctx: &
 
 Per product.md invariant 10, no new footer affordances or copy. Visual parity for both kinds.
 
-**Persistence — no schema migration.** The SQLite table `workspace_language_server` (migration `crates/persistence/migrations/2025-10-31-201353_add_workspace_language_server/`) is already string-keyed:
+**Persistence — schema discriminates on `kind`.** Three migrations shape the SQLite table `workspace_language_server`: `2025-10-31-201353_add_workspace_language_server/` (initial), `2025-11-11-230915_change_workspace_language_server_enabled_to_text/` (typing fix), and `2026-05-24-180000_add_kind_to_workspace_language_server/` (adds the kind discriminator):
 
 ```sql
 CREATE TABLE workspace_language_server (
@@ -348,11 +341,11 @@ CREATE TABLE workspace_language_server (
     workspace_id INTEGER NOT NULL REFERENCES workspace_metadata(id),
     language_server_name TEXT NOT NULL,
     enabled TEXT NOT NULL,
-    ...
+    kind TEXT NOT NULL DEFAULT 'BuiltIn'
 );
 ```
 
-Custom servers slot in by inserting rows with `language_server_name = "ruby-lsp"` (or whatever the descriptor's `name` is) alongside the existing built-in rows like `language_server_name = "RustAnalyzer"`. **Zero schema changes.** The dispatch handler at `app/src/persistence/sqlite.rs:780-784` (`ModelEvent::UpsertWorkspaceLanguageServer`) works as-is.
+Built-in rows: `kind = 'BuiltIn'`, `language_server_name` = serialized `LSPServerType` variant name (`"RustAnalyzer"`, `"GoPls"`, etc.). Custom rows: `kind = 'Custom'`, `language_server_name = descriptor.name` (e.g. `"ruby-lsp"`). The `(workspace_id, kind, language_server_name)` triple is the effective key — built-in and custom rows occupy disjoint subspaces. Per invariant 23, the validator additionally reserves the five built-in variant names from custom `name`, so a user cannot write a custom with `name = "RustAnalyzer"` even though the schema would now permit it. This is defense-in-depth: it eliminates any ambiguity in footer labels, log entries, and the per-server cache directory layout that share `language_server_name` across the two kinds. The dispatch handler at `app/src/persistence/sqlite.rs:780-784` (`ModelEvent::UpsertWorkspaceLanguageServer`) routes writes by `kind`.
 
 The in-memory cache on `Workspace` (`persisted_workspace.rs:127-130`) — currently `language_servers: HashMap<LSPServerType, EnablementState>` — gains a sibling `custom_language_servers: HashMap<String, EnablementState>`. Read-paths walk both; write-paths route to whichever map matches the request kind.
 
@@ -477,9 +470,9 @@ Manual validation gate at the end of Phase 4: load settings.toml with the JDTLS 
 
 ## Follow-ups
 
-These are product.md non-goals for v1, but the architecture supports each as additive work. The strategic framing ("plugin path is the way forward, built-in set is frozen") makes several of these more likely to ship than typical "deferred" items.
+These are product.md non-goals for v1, but the architecture supports each as additive work.
 
-- **Custom-server install registry.** Given that the plugin path is THE forward direction for new language support, "install this binary for me" becomes a real product need rather than a nice-to-have. Implementation: extend the existing `LanguageServerCandidate` install machinery to accept user-descriptor-defined install sources (GitHub release URL + asset selector). Likely the next feature after v1.
+- **Custom-server install registry.** Extend the existing `LanguageServerCandidate` install machinery to accept user-descriptor-defined install sources (GitHub release URL + asset selector). Likely the next feature after v1.
 - **Per-workspace `.warp/settings.toml` overrides** (PRODUCT invariant 27). Add a per-workspace settings layer that merges descriptors above the user-level `LanguageServersSettings` set. The matcher accessor (`match_for_path`) on the settings group is the natural extension point.
 - **Multi-server-per-file** (PRODUCT invariant 28). `match_for_path` already returns `Option<LspMatchedDescriptor>`; broaden to `Vec<LspMatchedDescriptor>` and update the file-open chain to fan out.
 - **Inspection/management surface** (PRODUCT invariant 31). With users configuring more LSPs over time, a "list of configured servers, with status indicators and per-workspace enable controls" page becomes valuable. The registry's `descriptors` field is the source of truth; a new settings page consumes it directly.
