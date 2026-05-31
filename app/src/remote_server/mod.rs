@@ -5,7 +5,8 @@ use remote_server::manager::RemoteServerManager;
 pub use remote_server::*;
 #[cfg(not(target_family = "wasm"))]
 use warp_server_client::auth::AuthEvent;
-use warpui::SingletonEntity;
+#[cfg(not(target_family = "wasm"))]
+use warpui::SingletonEntity as _;
 
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};

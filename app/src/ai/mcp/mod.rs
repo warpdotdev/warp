@@ -20,8 +20,6 @@ use crate::drive::items::WarpDriveItem;
 use crate::drive::CloudObjectTypeAndId;
 #[cfg(not(target_family = "wasm"))]
 use crate::persistence::model::MCPEnvironmentVariables;
-#[cfg(not(target_family = "wasm"))]
-#[cfg(not(target_family = "wasm"))]
 use crate::server::ids::SyncId;
 use crate::server::sync_queue::QueueItem;
 
