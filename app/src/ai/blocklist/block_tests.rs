@@ -4,6 +4,7 @@ use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode};
 use ai::agent::action_result::StartAgentVersion;
 use ai::skills::SkillReference;
 use settings::Setting;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{App, SingletonEntity};
 
 use super::{
@@ -16,7 +17,6 @@ use crate::ai::blocklist::action_model::{
 };
 use crate::settings::AISettings;
 use crate::test_util::settings::initialize_settings_for_tests;
-use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 #[test]
 fn reasoning_auto_collapses_when_user_has_not_manually_toggled() {

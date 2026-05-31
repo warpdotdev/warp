@@ -1,17 +1,17 @@
+use repo_metadata::entry::{DirectoryEntry, Entry, FileMetadata};
+use repo_metadata::file_tree_store::FileTreeState;
+use repo_metadata::file_tree_update::{
+    DirectoryNodeMetadata, FileNodeMetadata, FileTreeEntryUpdate, RepoNodeMetadata,
+};
+use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::{
-    entry::{DirectoryEntry, Entry, FileMetadata},
-    file_tree_store::FileTreeState,
-    file_tree_update::{
-        DirectoryNodeMetadata, FileNodeMetadata, FileTreeEntryUpdate, RepoNodeMetadata,
-    },
-    repositories::DetectedRepositories,
     DirectoryWatcher, RepoMetadataModel, RepoMetadataUpdate, RepositoryIdentifier,
 };
 use virtual_fs::{Stub, VirtualFS};
-use warp_util::{
-    host_id::HostId, local_or_remote_path::LocalOrRemotePath, remote_path::RemotePath,
-    standardized_path::StandardizedPath,
-};
+use warp_util::host_id::HostId;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 
 use super::{

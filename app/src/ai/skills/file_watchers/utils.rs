@@ -5,14 +5,12 @@ use ai::skills::{
     SKILL_PROVIDER_DEFINITIONS,
 };
 use anyhow::Error;
-use repo_metadata::{
-    local_model::GetContentsArgs, RepoContent, RepoMetadataModel, RepositoryIdentifier,
-};
+use repo_metadata::local_model::GetContentsArgs;
+use repo_metadata::{RepoContent, RepoMetadataModel, RepositoryIdentifier};
 use walkdir::{DirEntry, WalkDir};
-use warp_util::{
-    local_or_remote_path::LocalOrRemotePath, remote_path::RemotePath,
-    standardized_path::StandardizedPath,
-};
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
 use warpui::AppContext;
 
 use crate::warp_managed_paths_watcher::warp_managed_skill_dirs;

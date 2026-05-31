@@ -1,7 +1,7 @@
-use cloud_objects::{
-    cloud_object::{GenericCloudObject, GenericServerObject, ObjectType, ServerObjectModel},
-    ids::{GenericStringObjectId, ServerId, SyncId},
+use cloud_objects::cloud_object::{
+    GenericCloudObject, GenericServerObject, ObjectType, ServerObjectModel,
 };
+use cloud_objects::ids::{GenericStringObjectId, ServerId, SyncId};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 

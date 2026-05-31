@@ -219,13 +219,14 @@ pub fn get_scope_for_path(path: &Path) -> SkillScope {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        get_provider_for_path, get_scope_for_path, home_skills_path, SkillProvider, SkillScope,
-    };
     use warp_util::host_id::HostId;
     use warp_util::local_or_remote_path::LocalOrRemotePath;
     use warp_util::remote_path::RemotePath;
     use warp_util::standardized_path::StandardizedPath;
+
+    use super::{
+        get_provider_for_path, get_scope_for_path, home_skills_path, SkillProvider, SkillScope,
+    };
 
     #[test]
     fn warp_home_skills_path_uses_warp_home_path() {

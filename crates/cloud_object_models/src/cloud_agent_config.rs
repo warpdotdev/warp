@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use cloud_objects::{
-    cloud_object::{GenericCloudObject, GenericServerObject, GenericStringModel, JsonObjectType},
-    ids::GenericStringObjectId,
+use cloud_objects::cloud_object::{
+    GenericCloudObject, GenericServerObject, GenericStringModel, JsonObjectType,
 };
+use cloud_objects::ids::GenericStringObjectId;
 use serde::{Deserialize, Serialize};
 
 use crate::{AgentConfigSnapshot, JsonModel, JsonSerializer};

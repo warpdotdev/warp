@@ -1,7 +1,7 @@
 use std::path::PathBuf;
-use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 use super::*;
 

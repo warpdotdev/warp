@@ -1377,10 +1377,8 @@ fn open_file_editor(
     {
         use crate::code::editor_management::CodeSource;
         use crate::root_view::{open_new_with_workspace_source, NewWorkspaceSource};
-        use crate::util::{
-            file::external_editor::EditorSettings,
-            openable_file_type::resolve_file_target_to_open_in_warp,
-        };
+        use crate::util::file::external_editor::EditorSettings;
+        use crate::util::openable_file_type::resolve_file_target_to_open_in_warp;
 
         if !can_open_file_editor_path(&path) {
             log::warn!("open_file_editor action rejected non-openable path: {path:?}");

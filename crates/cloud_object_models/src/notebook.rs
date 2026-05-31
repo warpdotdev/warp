@@ -1,8 +1,8 @@
 use ai::document::AIDocumentId;
-use cloud_objects::{
-    cloud_object::{GenericCloudObject, GenericServerObject, ObjectType, ServerObjectModel},
-    ids::{ServerId, SyncId},
+use cloud_objects::cloud_object::{
+    GenericCloudObject, GenericServerObject, ObjectType, ServerObjectModel,
 };
+use cloud_objects::ids::{ServerId, SyncId};
 use serde::{Deserialize, Serialize};
 
 /// Serialized representation of a notebook for sync queue

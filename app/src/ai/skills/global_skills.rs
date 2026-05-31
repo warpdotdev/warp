@@ -1,10 +1,8 @@
 //! Helpers for resolving per-agent "global" skill specs into repos to
 //! ensure are available on disk before the agent runs.
 
-use std::{
-    collections::{BTreeSet, HashMap, HashSet},
-    str::FromStr,
-};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::str::FromStr;
 
 use ai::skills::{provider_rank, ParsedSkill};
 use warp_cli::skill::SkillSpec;

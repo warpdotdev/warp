@@ -1,7 +1,7 @@
-use cloud_objects::{
-    cloud_object::{GenericCloudObject, GenericServerObject, ObjectType, ServerObjectModel},
-    ids::FolderId,
+use cloud_objects::cloud_object::{
+    GenericCloudObject, GenericServerObject, ObjectType, ServerObjectModel,
 };
+use cloud_objects::ids::FolderId;
 
 /// The model for a `CloudFolder`.
 #[derive(Clone, Debug, PartialEq)]

@@ -1,43 +1,37 @@
 use std::collections::HashMap;
 
+use markdown_parser::parse_markdown;
+use warp_core::ui::external_product_icon::ExternalProductIcon;
+use warp_core::ui::icons::Icon;
+use warpui::elements::{
+    Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+    Flex, FormattedTextElement, HighlightedHyperlink, Hoverable, MainAxisAlignment,
+    MouseStateHandle, Padding, ParentElement, Radius, Shrinkable, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::Keystroke;
+use warpui::platform::Cursor;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{
+    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
+
 use crate::ai::mcp::templatable_installation::{VariableType, VariableValue};
+use crate::ai::mcp::{TemplatableMCPServer, TemplatableMCPServerManager, TemplateVariable};
 use crate::appearance::Appearance;
-use crate::editor::Event as EditorEvent;
-use crate::editor::{EditorView, SingleLineEditorOptions};
+use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions};
 use crate::settings_view::mcp_servers::style::{
     INSTALLATION_MODAL_BUTTON_GAP, INSTALLATION_MODAL_BUTTON_PADDING,
     INSTALLATION_MODAL_INPUT_VERTICAL_SPACING, INSTALLATION_MODAL_LABEL_VERTICAL_SPACING,
     INSTALLATION_MODAL_PADDING, INSTALLATION_MODAL_TITLE_VERTICAL_SPACING,
 };
+use crate::ui_components::avatar::{Avatar, AvatarContent};
+use crate::ui_components::blended_colors;
 use crate::view_components::action_button::{
     ActionButton, KeystrokeSource, NakedTheme, PrimaryTheme,
 };
 use crate::view_components::dropdown::{Dropdown, DropdownItem};
-use markdown_parser::parse_markdown;
-use warpui::elements::Shrinkable;
-use warpui::fonts::{Properties, Weight};
-use warpui::keymap::Keystroke;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{
-    elements::{
-        Align, Border, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Empty, Flex,
-        FormattedTextElement, HighlightedHyperlink, Hoverable, MainAxisAlignment, MouseStateHandle,
-        ParentElement, Text,
-    },
-    platform::Cursor,
-    AppContext, Element, Entity, FocusContext, TypedActionView, View, ViewHandle,
-};
-use warpui::{SingletonEntity, ViewContext};
-
-use crate::ai::mcp::{TemplatableMCPServer, TemplatableMCPServerManager, TemplateVariable};
-
-use crate::ui_components::{
-    avatar::{Avatar, AvatarContent},
-    blended_colors,
-};
-use warpui::elements::{CornerRadius, Padding, Radius};
-
-use warp_core::ui::{external_product_icon::ExternalProductIcon, icons::Icon};
 
 pub enum InstallationModalBodyEvent {
     Cancel,

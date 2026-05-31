@@ -3,13 +3,14 @@ use std::fs;
 use std::ops::Range;
 use std::path::Path;
 
-use super::parser::parse_markdown_content;
-use super::skill_provider::{get_provider_for_path, get_scope_for_path, SkillProvider, SkillScope};
 use anyhow::Result;
 use lazy_static::lazy_static;
 use regex::Regex;
 use thiserror::Error;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
+
+use super::parser::parse_markdown_content;
+use super::skill_provider::{get_provider_for_path, get_scope_for_path, SkillProvider, SkillScope};
 
 const MAX_SKILL_DESCRIPTION_CHARS: usize = 512;
 

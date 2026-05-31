@@ -17,8 +17,7 @@ use warpui::r#async::executor::Background;
 use warpui::{App, EntityId, ModelHandle};
 
 use super::{BlocklistAIContextModel, PendingAttachment, PendingFile};
-use crate::ai::agent::AIAgentContext;
-use crate::ai::agent::ImageContext;
+use crate::ai::agent::{AIAgentContext, ImageContext};
 use crate::ai::blocklist::agent_view::{AgentViewController, EphemeralMessageModel};
 #[cfg(feature = "local_fs")]
 use crate::code_review::git_status_update::GitRepoStatusModel;

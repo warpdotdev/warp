@@ -1,14 +1,15 @@
+use std::collections::{HashMap, HashSet};
+use std::fs;
+
 use ai::skills::{get_provider_for_path, ParsedSkill, SkillProvider, SkillReference, SkillScope};
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::{DirectoryWatcher, RepoMetadataModel};
-use std::collections::{HashMap, HashSet};
-use std::fs;
 use tempfile::TempDir;
 use warp_core::channel::ChannelState;
-use warp_util::{
-    host_id::HostId, local_or_remote_path::LocalOrRemotePath, remote_path::RemotePath,
-    standardized_path::StandardizedPath,
-};
+use warp_util::host_id::HostId;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 use watcher::HomeDirectoryWatcher;
 

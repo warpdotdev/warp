@@ -2,8 +2,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use ai::agent::action::LifecycleEventType as StartAgentLifecycleEventType;
-use ai::agent::action::ReadSkillRequest;
+use ai::agent::action::{LifecycleEventType as StartAgentLifecycleEventType, ReadSkillRequest};
 use ai::agent::action_result::StartAgentVersion;
 use ai::agent::convert::ToolToAIAgentActionError;
 use ai::agent::UnknownCitationTypeError;

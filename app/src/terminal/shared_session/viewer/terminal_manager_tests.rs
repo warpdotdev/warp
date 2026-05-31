@@ -10,11 +10,10 @@
 //! `DetachType::Closed`, while deliberately preserving it on
 //! `HiddenForClose` (undo-close grace window) and `Moved`.
 
-use super::*;
-
 use async_broadcast::broadcast;
 use warpui::App;
 
+use super::*;
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 // Bring the `TerminalManager` trait into scope (named under a different alias
 // since the local `TerminalManager` struct shadows it) so the trait method

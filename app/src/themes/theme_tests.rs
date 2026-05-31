@@ -1,6 +1,8 @@
-use super::*;
-use crate::{user_config, util::color::OPAQUE};
 use settings_value::SettingsValue as _;
+
+use super::*;
+use crate::user_config;
+use crate::util::color::OPAQUE;
 
 fn custom_theme_json(path: &str) -> serde_json::Value {
     serde_json::json!({

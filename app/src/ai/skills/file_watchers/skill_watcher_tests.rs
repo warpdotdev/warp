@@ -2,12 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
-use super::super::subscribers::SkillRepositoryMessage;
-use super::{
-    parse_project_skill_contents, read_remote_project_skill_contents, remote_skill_read_request,
-    SkillWatcher, REMOTE_SKILL_MAX_BATCH_BYTES, REMOTE_SKILL_MAX_FILE_BYTES,
-};
-use crate::ai::skills::skill_manager::SkillWatcherEvent;
 use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
 use remote_server::proto::{file_context_proto, FileContextProto};
 use repo_metadata::entry::{DirectoryEntry, Entry, FileMetadata};
@@ -17,11 +11,18 @@ use repo_metadata::{
     DirectoryWatcher, RepoMetadataModel, RepositoryIdentifier, RepositoryUpdate, TargetFile,
 };
 use tempfile::TempDir;
-use warp_util::{
-    host_id::HostId, local_or_remote_path::LocalOrRemotePath, remote_path::RemotePath,
-    standardized_path::StandardizedPath,
-};
+use warp_util::host_id::HostId;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
+
+use super::super::subscribers::SkillRepositoryMessage;
+use super::{
+    parse_project_skill_contents, read_remote_project_skill_contents, remote_skill_read_request,
+    SkillWatcher, REMOTE_SKILL_MAX_BATCH_BYTES, REMOTE_SKILL_MAX_FILE_BYTES,
+};
+use crate::ai::skills::skill_manager::SkillWatcherEvent;
 
 /// Helper function for creating a single skill file
 fn create_skill_file(dir: &TempDir, name: &str, description: &str, content: &str) -> ParsedSkill {

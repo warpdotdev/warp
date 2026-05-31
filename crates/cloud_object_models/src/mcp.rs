@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
-use cloud_objects::{
-    cloud_object::{GenericCloudObject, GenericServerObject, GenericStringModel, JsonObjectType},
-    ids::GenericStringObjectId,
+use cloud_objects::cloud_object::{
+    GenericCloudObject, GenericServerObject, GenericStringModel, JsonObjectType,
 };
+use cloud_objects::ids::GenericStringObjectId;
 use handlebars::get_arguments;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
