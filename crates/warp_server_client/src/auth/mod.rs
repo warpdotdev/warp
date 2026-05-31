@@ -180,7 +180,11 @@ impl AuthClientImpl {
         }
     }
 
-    async fn update_settings(&self, input: UpdateUserSettingsInput) -> Result<()> {
+    async fn update_settings(
+        &self,
+        input: UpdateUserSettingsInput,
+        unknown_error_message: &'static str,
+    ) -> Result<()> {
         let operation = UpdateUserSettings::build(UpdateUserSettingsVariables {
             input,
             request_context: warp_graphql::client::get_request_context(),
@@ -188,12 +192,19 @@ impl AuthClientImpl {
         let result = send_graphql_request(self.base_client.as_ref(), operation, None)
             .await?
             .update_user_settings;
+        Self::on_settings_updated(result, unknown_error_message)
+    }
+
+    fn on_settings_updated(
+        result: UpdateUserSettingsResult,
+        unknown_error_message: &'static str,
+    ) -> Result<()> {
         match result {
             UpdateUserSettingsResult::UpdateUserSettingsOutput(_) => Ok(()),
             UpdateUserSettingsResult::UserFacingError(error) => Err(anyhow!(
                 warp_graphql::client::get_user_facing_error_message(error)
             )),
-            UpdateUserSettingsResult::Unknown => Err(anyhow!("failed to update user settings")),
+            UpdateUserSettingsResult::Unknown => Err(anyhow!(unknown_error_message)),
         }
     }
 }
@@ -332,31 +343,41 @@ impl AuthClient for AuthClientImpl {
     }
 
     async fn set_is_telemetry_enabled(&self, value: bool) -> Result<()> {
-        self.update_settings(UpdateUserSettingsInput {
-            telemetry_enabled: Some(value),
-            ..Default::default()
-        })
+        self.update_settings(
+            UpdateUserSettingsInput {
+                telemetry_enabled: Some(value),
+                ..Default::default()
+            },
+            "failed to set telemetry enabled",
+        )
         .await
     }
 
     async fn set_is_crash_reporting_enabled(&self, value: bool) -> Result<()> {
-        self.update_settings(UpdateUserSettingsInput {
-            crash_reporting_enabled: Some(value),
-            ..Default::default()
-        })
+        self.update_settings(
+            UpdateUserSettingsInput {
+                crash_reporting_enabled: Some(value),
+                ..Default::default()
+            },
+            "failed to set crash reporting enabled",
+        )
         .await
     }
 
     async fn set_is_cloud_conversation_storage_enabled(&self, value: bool) -> Result<()> {
-        self.update_settings(UpdateUserSettingsInput {
-            cloud_conversation_storage_enabled: Some(value),
-            ..Default::default()
-        })
+        self.update_settings(
+            UpdateUserSettingsInput {
+                cloud_conversation_storage_enabled: Some(value),
+                ..Default::default()
+            },
+            "failed to set cloud conversation storage enabled",
+        )
         .await
     }
 
     async fn update_user_settings(&self, input: UpdateUserSettingsInput) -> Result<()> {
-        self.update_settings(input).await
+        self.update_settings(input, "failed to update user settings")
+            .await
     }
 
     async fn set_user_is_onboarded(&self) -> Result<bool> {
@@ -524,3 +545,7 @@ pub enum MintCustomTokenError {
     #[error("Failed to create new custom token with unknown error")]
     Unknown,
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

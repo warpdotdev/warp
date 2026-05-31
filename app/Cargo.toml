@@ -108,7 +108,6 @@ enclose = "1.1.8"
 enum-iterator.workspace = true
 event-listener.workspace = true
 field_mask.workspace = true
-firebase.workspace = true
 flate2 = "1.0.17"
 float-cmp.workspace = true
 futures-lite.workspace = true
@@ -412,6 +411,7 @@ winreg.workspace = true
 [dev-dependencies]
 ai = { workspace = true, features = ["test-util"] }
 async-process.workspace = true
+firebase.workspace = true
 jsonschema = { workspace = true, default-features = false }
 async-executor = "1.5.1"
 command = { workspace = true, features = ["test-util"] }

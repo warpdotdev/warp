@@ -50,3 +50,4 @@ diesel = { workspace = true, features = ["sqlite", "chrono"] }
 [dev-dependencies]
 futures.workspace = true
 mockall.workspace = true
+warp_server_auth = { workspace = true, features = ["test-util"] }
