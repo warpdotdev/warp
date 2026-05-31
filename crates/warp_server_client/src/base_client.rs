@@ -7,35 +7,28 @@ use warp_graphql::client::RequestOptions;
 
 use crate::auth::AgentIdentity;
 
-/// Application-provided transport and platform capabilities used by extracted server API clients.
-///
-/// The base client keeps UI/model reactions, ambient-agent integration, and transport
-/// construction outside extracted endpoint implementations.
+/// Application-provided transport and platform capabilities used by API clients.
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait BaseClient: Send + Sync {
     /// Returns the HTTP transport used to send server API requests.
     ///
-    /// Extracted client implementations should use this client rather than
-    /// constructing their own transport so application-level HTTP setup remains shared.
+    /// API clients should use this client rather than constructing their own
+    /// transport so application-level HTTP setup remains shared.
     fn http_client(&self) -> Arc<http_client::Client>;
 
-    /// Returns the anonymous installation identifier used to correlate unauthenticated requests.
-    ///
-    /// Endpoint implementations should add this identifier to requests whose
-    /// protocol includes anonymous experiment or pre-login identity handling.
     fn anonymous_id(&self) -> String;
 
     /// Returns GraphQL request options for a request that does not use the logged-in credentials.
     ///
-    /// Clients may extend these options with request-specific headers or tokens, such
+    /// API clients may extend these options with request-specific headers or tokens, such
     /// as the explicit token supplied while fetching a newly authenticated user.
     fn unauthenticated_graphql_request_options(&self) -> RequestOptions;
 
     /// Returns GraphQL request options for an authenticated operation.
     ///
-    /// Extracted GraphQL clients should use this method through the shared request
-    /// helper so timeouts and application-owned headers remain centralized.
+    /// API clients should use this method through the shared request helper so timeouts
+    /// and application-owned headers remain centralized.
     async fn graphql_request_options(&self, timeout: Option<Duration>) -> Result<RequestOptions>;
 
     /// Lists public agent identities available to API-key creation flows.

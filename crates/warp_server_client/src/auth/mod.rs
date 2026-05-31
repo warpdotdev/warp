@@ -159,14 +159,9 @@ pub trait AuthClient: Send + Sync {
 
     /// Fetches the list of named agent identities for the user's team.
     async fn list_agent_identities(&self) -> Result<Vec<AgentIdentity>>;
-
-    /// Returns a cached ambient workload token, or issues a new one if none is present or it has expired.
-    ///
-    /// This returns `Ok(None)` if the process is not running in an isolation platform or on WASM.
-    async fn get_or_create_ambient_workload_token(&self) -> Result<Option<String>>;
 }
 
-/// Extracted auth API implementation over application-provided base capabilities.
+/// Implements the [`AuthClient`] trait on top of a base client and auth session.
 pub struct AuthClientImpl {
     base_client: Arc<dyn BaseClient>,
     auth_session: Arc<AuthSession>,
@@ -457,12 +452,6 @@ impl AuthClient for AuthClientImpl {
 
     async fn list_agent_identities(&self) -> Result<Vec<AgentIdentity>> {
         self.base_client.list_agent_identities().await
-    }
-
-    async fn get_or_create_ambient_workload_token(&self) -> Result<Option<String>> {
-        self.base_client
-            .get_or_create_ambient_workload_token()
-            .await
     }
 }
 
