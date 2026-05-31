@@ -22,9 +22,9 @@ use super::subscribers::{
     HomeSkillSubscriber, ProjectSkillSubscriber, SkillRepositoryMessage, SymlinkSkillSubscriber,
 };
 use super::utils::{
-    find_skill_files_in_tree, find_symlinked_skill_files_in_tree, is_home_provider_path,
-    is_home_skill_directory, is_skill_file, read_local_project_skills_from_filesystem,
-    read_skills_from_directories, read_skills_from_files,
+    find_project_skill_files_in_tree, is_home_provider_path, is_home_skill_directory,
+    is_skill_file, read_local_project_skills_from_filesystem, read_skills_from_directories,
+    read_skills_from_files,
 };
 use crate::remote_server::manager::RemoteServerManager;
 use crate::warp_managed_paths_watcher::{
@@ -89,15 +89,7 @@ impl SkillWatcher {
         let skill_files: Vec<PathBuf> = repo_paths
             .iter()
             .filter_map(|repo_path| RepositoryIdentifier::try_local(repo_path))
-            .flat_map(|repo_id| {
-                let mut skill_files = find_skill_files_in_tree(&repo_id, repo_metadata, ctx);
-                skill_files.extend(
-                    find_symlinked_skill_files_in_tree(&repo_id, repo_metadata, ctx)
-                        .into_iter()
-                        .map(LocalOrRemotePath::Local),
-                );
-                skill_files
-            })
+            .flat_map(|repo_id| find_project_skill_files_in_tree(&repo_id, repo_metadata, ctx))
             .filter_map(|path| path.to_local_path().map(Path::to_path_buf))
             .collect();
         read_skills_from_files(skill_files)
@@ -232,13 +224,9 @@ impl SkillWatcher {
         let refresh_generation = self.advance_project_skill_refresh_generation(repo_id);
         let current_skill_files: HashSet<LocalOrRemotePath> = {
             let repo_metadata = RepoMetadataModel::as_ref(ctx);
-            let mut skill_files = find_skill_files_in_tree(repo_id, repo_metadata, ctx);
-            skill_files.extend(
-                find_symlinked_skill_files_in_tree(repo_id, repo_metadata, ctx)
-                    .into_iter()
-                    .map(LocalOrRemotePath::Local),
-            );
-            skill_files.into_iter().collect()
+            find_project_skill_files_in_tree(repo_id, repo_metadata, ctx)
+                .into_iter()
+                .collect()
         };
 
         let previous_skill_files = self

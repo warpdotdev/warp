@@ -15,7 +15,7 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 
 use super::{
-    extract_skill_parent_directory, find_skill_files_in_tree, is_home_provider_path,
+    extract_skill_parent_directory, find_project_skill_files_in_tree, is_home_provider_path,
     is_home_skill_directory, is_skill_file, read_skills_from_files,
 };
 
@@ -543,7 +543,7 @@ fn find_skill_files_in_tree_finds_root_skills() {
 
             model_handle.read(&app, |model, ctx| {
                 let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
-                let skill_files = find_skill_files_in_tree(&repo_id, model, ctx);
+                let skill_files = find_project_skill_files_in_tree(&repo_id, model, ctx);
                 assert_eq!(skill_files.len(), 2);
                 assert!(skill_files.contains(&LocalOrRemotePath::Local(
                     repo.join(".agents/skills/root-skill-1/SKILL.md")
@@ -696,7 +696,7 @@ fn find_skill_files_in_tree_finds_subdirectory_skills() {
 
             model_handle.read(&app, |model, ctx| {
                 let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
-                let skill_files = find_skill_files_in_tree(&repo_id, model, ctx);
+                let skill_files = find_project_skill_files_in_tree(&repo_id, model, ctx);
                 assert_eq!(skill_files.len(), 2);
                 assert!(skill_files.contains(&LocalOrRemotePath::Local(
                     repo.join(".agents/skills/root-skill/SKILL.md")
@@ -767,7 +767,7 @@ fn find_skill_files_in_tree_returns_remote_skill_paths_for_remote_repos() {
         });
 
         model_handle.read(&app, |model, ctx| {
-            let skill_files = find_skill_files_in_tree(&repo_id, model, ctx);
+            let skill_files = find_project_skill_files_in_tree(&repo_id, model, ctx);
             assert_eq!(
                 skill_files,
                 vec![LocalOrRemotePath::Remote(RemotePath::new(
@@ -839,7 +839,7 @@ fn find_skill_files_in_tree_includes_ignored_skill_files() {
             model_handle.read(&app, |model, ctx| {
                 let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
                 assert_eq!(
-                    find_skill_files_in_tree(&repo_id, model, ctx),
+                    find_project_skill_files_in_tree(&repo_id, model, ctx),
                     vec![LocalOrRemotePath::Local(
                         repo.join(".agents/skills/ignored-skill/SKILL.md")
                     )]
@@ -891,7 +891,7 @@ fn find_skill_files_in_tree_empty_repo() {
 
             model_handle.read(&app, |model, ctx| {
                 let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
-                let skill_files = find_skill_files_in_tree(&repo_id, model, ctx);
+                let skill_files = find_project_skill_files_in_tree(&repo_id, model, ctx);
                 assert!(skill_files.is_empty());
             });
         });
