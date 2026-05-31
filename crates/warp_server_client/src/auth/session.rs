@@ -19,7 +19,7 @@ use super::UserAuthenticationError;
 
 const FETCH_ACCESS_TOKEN_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Reports authentication or authenticated-access lifecycle changes to the application.
+/// Authentication and authenticated-transport conditions observed by shared client code.
 #[derive(Clone)]
 pub enum AuthEvent {
     /// A staging API call was blocked, which may indicate a firewall misconfiguration.
@@ -61,7 +61,12 @@ type OAuth2Client = oauth2::basic::BasicClient<
     oauth2::EndpointSet,
 >;
 
-/// Shared authentication-session mechanics used by extracted and app-owned API clients.
+/// Reusable authentication-session mechanics for server clients.
+///
+/// An `AuthSession` combines authentication state with the HTTP transport required to
+/// exchange credentials, refresh access tokens, and complete OAuth device authorization.
+/// Changes in authentication state that may require reactions from application logic are
+/// emitted through an [`AuthEvent`] channel.
 pub struct AuthSession {
     client: Arc<http_client::Client>,
     auth_state: Arc<AuthState>,
