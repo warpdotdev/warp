@@ -1,4 +1,5 @@
 use command::blocking::Command;
+use image::GenericImageView;
 
 use super::util::main_display_scale_factor;
 use super::window;
@@ -54,7 +55,7 @@ fn take_screen(params: ScreenshotParams) -> Result<crate::Screenshot, String> {
 }
 
 /// Captures a single window by its `CGWindowID` without raising it, returning the processed image
-/// plus metadata describing the captured pixels and scale factor.
+/// plus metadata describing the captured pixels.
 fn take_window(
     window_id: u32,
     params: ScreenshotParams,
@@ -78,29 +79,56 @@ fn take_window(
 
     check_status(&output)?;
 
-    let screenshot = crate::screenshot_utils::load_and_process_screenshot(&output_path, params)?;
+    let image = image::ImageReader::open(&output_path)
+        .map_err(|e| format!("Failed to open screenshot file: {e}"))?
+        .decode()
+        .map_err(|e| format!("Failed to decode screenshot: {e}"))?;
+    let (full_width_px, full_height_px) = image.dimensions();
+    let window = window::window_by_id(window_id)
+        .ok_or_else(|| format!("Failed to resolve captured window {window_id}."))?;
+    if window.width <= 0.0 {
+        return Err(format!(
+            "Captured window {window_id} has invalid point width."
+        ));
+    }
 
-    // Derive the scale factor (pixels per point) from the native capture dimensions and the
-    // window's point bounds. This assumes the window lives on the main display and shares its
-    // backing scale; multi-display / mixed-scale handling is a follow-up.
-    let window = window::window_by_id(window_id);
-    let scale_factor = window
-        .filter(|info| info.width > 0.0)
-        .map(|info| screenshot.original_width as f64 / info.width)
-        .unwrap_or_else(main_display_scale_factor);
+    // A single capture-derived ratio correctly maps windows wholly contained on any one display.
+    // Windows spanning displays with different backing scale factors are not yet supported,
+    // because no single pixels-per-point ratio can accurately map the entire window.
+    let pixels_per_point = full_width_px as f64 / window.width;
+    let image = if let Some(region) = params.region {
+        region.validate()?;
+        if region.bottom_right.x() as u32 > full_width_px
+            || region.bottom_right.y() as u32 > full_height_px
+        {
+            return Err(format!(
+                "Screenshot region ({}, {}) to ({}, {}) is outside window {window_id} dimensions {full_width_px}x{full_height_px}.",
+                region.top_left.x(),
+                region.top_left.y(),
+                region.bottom_right.x(),
+                region.bottom_right.y(),
+            ));
+        }
+        image.crop_imm(
+            region.top_left.x() as u32,
+            region.top_left.y() as u32,
+            (region.bottom_right.x() - region.top_left.x()) as u32,
+            (region.bottom_right.y() - region.top_left.y()) as u32,
+        )
+    } else {
+        image
+    };
+    let screenshot = crate::screenshot_utils::process_screenshot(image, params)?;
 
-    // Diagnostics for the agent-driven coordinate-conversion investigation. The model is shown the
-    // `sent` image (post-resize to the screenshot size limits), but the agent's coordinates are
-    // currently remapped as if they were `native` (pre-resize) window pixels. Logging both sizes
-    // makes any missing downscale-inverse obvious. Gated on COMPUTER_USE_DEBUG, via `log`.
+    // Diagnostics for target-relative capture and coordinate mapping. The model is shown the
+    // `sent` image after resize, while server coordinate translation uses the `native` size.
+    // Logging both sizes and the capture-derived point ratio makes mapping errors visible.
     if std::env::var_os("COMPUTER_USE_DEBUG").is_some() {
-        let (pt_w, pt_h) = window
-            .map(|info| (info.width, info.height))
-            .unwrap_or((0.0, 0.0));
+        let (pt_w, pt_h) = (window.width, window.height);
         let downscale = screenshot.width as f64 / (screenshot.original_width.max(1) as f64);
         log::info!(
             "[computer_use] window capture window#={window_id} native_px={}x{} sent_px={}x{} \
-             downscale={downscale:.4} window_pt={pt_w:.1}x{pt_h:.1} scale_factor={scale_factor:.3} \
+             downscale={downscale:.4} window_pt={pt_w:.1}x{pt_h:.1} pixels_per_point={pixels_per_point:.3} \
              (max_long_edge_px={:?} max_total_px={:?})",
             screenshot.original_width,
             screenshot.original_height,
@@ -117,9 +145,7 @@ fn take_window(
         window_id,
         width_px: screenshot.original_width as i32,
         height_px: screenshot.original_height as i32,
-        scale_factor,
     };
-
     Ok((screenshot, Some(captured)))
 }
 

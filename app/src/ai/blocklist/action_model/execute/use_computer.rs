@@ -70,9 +70,8 @@ impl UseComputerExecutor {
                 {
                     Ok(result) => {
                         if debug {
-                            // The model is shown the `sent` image; the agent's coordinates are
-                            // remapped as if they were `native` window pixels. Log both so a
-                            // missing downscale-inverse is visible.
+                            // The model is shown the sent image, while target-relative coordinate
+                            // translation uses native capture dimensions. Log both for diagnosis.
                             let screenshot_sent_native = result
                                 .screenshot
                                 .as_ref()

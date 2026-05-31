@@ -12,7 +12,7 @@ use pathfinder_geometry::vector::Vector2I;
 use warpui_core::r#async::Timer;
 
 use post::PostTarget;
-use util::main_display_scale_factor;
+use util::{display_scale_factor_for_window, main_display_scale_factor};
 
 use crate::{Action, ActionResult, Options, Target, TargetedAction};
 
@@ -42,64 +42,67 @@ fn post_target_for(target: Target) -> PostTarget {
 /// Returns a copy of `action` with its coordinates remapped for the given target.
 ///
 /// For a `Window` target the incoming coordinates are window-local pixels in the captured window
-/// screenshot's space; they are translated to global physical pixels that the mouse pipeline
-/// expects. This assumes the window shares the main display's backing scale factor (single-
-/// display); multi-display / mixed-scale handling is a follow-up. `Screen` targets and windows
-/// that cannot be resolved are left unchanged (legacy global-pixel behavior).
-fn remap_action_for_target(action: &Action, target: Target) -> Action {
+/// screenshot's space; they are translated to global points using the backing scale of the
+/// display containing the window, then encoded for the existing screen-pixel mouse pipeline.
+/// `Screen` targets retain the legacy global-pixel behavior.
+fn remap_action_for_target(action: &Action, target: Target) -> Result<Action, String> {
     let Target::Window { window_id, .. } = target else {
-        return action.clone();
+        return Ok(action.clone());
     };
-    let Some(info) = window::window_by_id(window_id) else {
-        return action.clone();
-    };
-    let scale = main_display_scale_factor();
-    // Diagnostics for the agent-driven coordinate-conversion investigation. Gated on
-    // COMPUTER_USE_DEBUG and routed through `log` so it lands in the app's log file. The incoming
-    // coordinate is treated as a window-local pixel in the captured-window image's space; note we
-    // do NOT apply any inverse of the screenshot downscale here (that is the suspected gap).
     let log_remap = std::env::var_os("COMPUTER_USE_DEBUG").is_some();
-    let remap = |p: Vector2I| {
+    let remap = |p: Vector2I| -> Result<Vector2I, String> {
+        let info = window::window_by_id(window_id)
+            .ok_or_else(|| format!("Failed to resolve target window {window_id}."))?;
+        let pixels_per_point =
+            display_scale_factor_for_window(info.x, info.y, info.width, info.height).ok_or_else(
+                || {
+                    format!(
+                        "Target window {window_id} is not fully contained on one display with a known scale factor."
+                    )
+                },
+            )?;
+        let screen_scale = main_display_scale_factor();
+        let global_point_x = info.x + f64::from(p.x()) / pixels_per_point;
+        let global_point_y = info.y + f64::from(p.y()) / pixels_per_point;
         let global = Vector2I::new(
-            (info.x * scale) as i32 + p.x(),
-            (info.y * scale) as i32 + p.y(),
+            (global_point_x * screen_scale).round() as i32,
+            (global_point_y * screen_scale).round() as i32,
         );
         if log_remap {
             log::info!(
                 "[computer_use] remap window#={window_id} in_coord=({},{}) \
-                 window_bounds_pt=({:.1},{:.1},{:.1},{:.1}) display_scale={scale:.3} \
-                 window_local_px=({},{}) -> global_px=({},{}) [no downscale inverse applied]",
+                 window_bounds_pt=({:.1},{:.1},{:.1},{:.1}) pixels_per_point={:.3} \
+                 window_local_px=({},{}) -> global_point=({global_point_x:.1},{global_point_y:.1})",
                 p.x(),
                 p.y(),
                 info.x,
                 info.y,
                 info.width,
                 info.height,
+                pixels_per_point,
                 p.x(),
                 p.y(),
-                global.x(),
-                global.y(),
             );
         }
-        global
+        Ok(global)
     };
-    match action {
-        Action::MouseMove { to } => Action::MouseMove { to: remap(*to) },
+    Ok(match action {
+        Action::MouseMove { to } => Action::MouseMove { to: remap(*to)? },
         Action::MouseDown { button, at } => Action::MouseDown {
             button: button.clone(),
-            at: remap(*at),
+            at: remap(*at)?,
         },
         Action::MouseWheel {
             at,
             direction,
             distance,
         } => Action::MouseWheel {
-            at: remap(*at),
+            at: remap(*at)?,
             direction: *direction,
             distance: *distance,
         },
         other => other.clone(),
-    }
+    })
 }
 
 /// Experimental: lists on-screen windows (number, owner PID/name, layer, bounds) for
@@ -166,8 +169,9 @@ impl super::Actor for Actor {
             self.mouse.set_target(post_target);
             self.keyboard.set_target(post_target);
 
-            // For a window target, translate window-local coordinates to global physical pixels.
-            let action = remap_action_for_target(&targeted.action, target);
+            // For a window target, translate window-local coordinates through the containing
+            // display's point mapping.
+            let action = remap_action_for_target(&targeted.action, target)?;
             match &action {
                 Action::Wait(duration) => {
                     Timer::after(*duration).await;

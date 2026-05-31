@@ -123,8 +123,8 @@ impl TargetedAction {
     }
 }
 
-/// Metadata about an on-screen window, so a caller can target a window and map window-local
-/// coordinates to a window screenshot. Mirrors the fields of the `WindowInfo` API message.
+/// Metadata about an on-screen window, so a caller can select a window to target.
+/// Mirrors the fields of the `WindowInfo` API message.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WindowInfo {
     /// The platform window id (a `CGWindowID` on macOS).
@@ -135,30 +135,18 @@ pub struct WindowInfo {
     pub app_name: String,
     /// The window title, if available.
     pub title: String,
-    /// The window's left edge in global screen points, top-left origin.
-    pub x: i32,
-    /// The window's top edge in global screen points, top-left origin.
-    pub y: i32,
-    /// The window width in screen points.
-    pub width: i32,
-    /// The window height in screen points.
-    pub height: i32,
     /// The window layer (0 is a normal application window).
     pub layer: i32,
 }
-
-/// Metadata describing a captured window screenshot, so window-local coordinates can be mapped
-/// onto the screenshot image.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Metadata describing a captured window screenshot.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct CapturedWindow {
     /// The platform window id that was captured.
     pub window_id: u32,
-    /// The width of the captured window image, in pixels.
+    /// The width of the native captured image, in pixels.
     pub width_px: i32,
-    /// The height of the captured window image, in pixels.
+    /// The height of the native captured image, in pixels.
     pub height_px: i32,
-    /// The scale factor relating window points to captured pixels (pixels per point).
-    pub scale_factor: f64,
 }
 
 #[async_trait]
@@ -239,7 +227,7 @@ pub enum ScrollDistance {
 }
 
 /// A rectangular region defined by top-left and bottom-right corners.
-/// Coordinates are in physical screen pixels (same coordinate space as mouse actions).
+/// Coordinates are physical pixels relative to the selected screenshot target.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ScreenshotRegion {
     #[serde(with = "Vector2IDef")]
@@ -288,8 +276,8 @@ pub struct ScreenshotParams {
     pub max_long_edge_px: Option<usize>,
     /// The maximum total number of pixels in the screenshot.
     pub max_total_px: Option<usize>,
-    /// Optional region to capture. If `None`, captures the full display. Ignored when `target`
-    /// is a window (the whole window is captured).
+    /// Optional sub-region of `target` to capture, in target-relative physical pixels.
+    /// If `None`, captures the full target.
     #[serde(default)]
     pub region: Option<ScreenshotRegion>,
     /// The surface to capture. `Screen` captures the main display (legacy); `Window` captures
@@ -321,9 +309,7 @@ pub enum MouseButton {
 }
 
 /// The result of performing an action.
-///
-/// `Eq` is intentionally not derived because `captured_window` carries an `f64` scale factor.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ActionResult {
     pub screenshot: Option<Screenshot>,
     pub cursor_position: Option<Vector2I>,

@@ -1050,7 +1050,6 @@ impl TryFrom<UseComputerResult> for api::request::input::tool_call_result::Resul
                                         window_id: c.window_id.to_string(),
                                         width_px: c.width_px,
                                         height_px: c.height_px,
-                                        scale_factor: c.scale_factor,
                                     }
                                 }),
                             },
@@ -1087,10 +1086,6 @@ fn convert_window_info(window: computer_use::WindowInfo) -> api::WindowInfo {
         pid: window.pid,
         app_name: window.app_name,
         title: window.title,
-        x: window.x,
-        y: window.y,
-        width: window.width,
-        height: window.height,
         layer: window.layer,
     }
 }

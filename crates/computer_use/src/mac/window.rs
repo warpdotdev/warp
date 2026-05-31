@@ -170,10 +170,6 @@ pub fn enumerate_windows() -> Vec<crate::WindowInfo> {
             pid: w.owner_pid as i32,
             app_name: w.owner_name.unwrap_or_default(),
             title: w.title.unwrap_or_default(),
-            x: w.x as i32,
-            y: w.y as i32,
-            width: w.width as i32,
-            height: w.height as i32,
             layer: w.layer as i32,
         })
         .collect()

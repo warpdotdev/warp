@@ -1378,7 +1378,6 @@ pub(crate) fn convert_tool_call_result_to_input(
                                 window_id: c.window_id.parse().unwrap_or(0),
                                 width_px: c.width_px,
                                 height_px: c.height_px,
-                                scale_factor: c.scale_factor,
                             }
                         });
                         UseComputerResult::Success(computer_use::ActionResult {
@@ -2157,10 +2156,6 @@ fn convert_api_window_info(window: &api::WindowInfo) -> computer_use::WindowInfo
         pid: window.pid,
         app_name: window.app_name.clone(),
         title: window.title.clone(),
-        x: window.x,
-        y: window.y,
-        width: window.width,
-        height: window.height,
         layer: window.layer,
     }
 }
