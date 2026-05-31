@@ -1,4 +1,5 @@
 use std::result::Result as StdResult;
+use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
@@ -133,12 +134,12 @@ pub trait AuthClient: Send + Sync {
 }
 
 /// Extracted auth API implementation over application-provided base capabilities.
-pub struct AuthClientImpl<'a> {
-    base_client: &'a dyn BaseClient,
+pub struct AuthClientImpl {
+    base_client: Arc<dyn BaseClient>,
 }
 
-impl<'a> AuthClientImpl<'a> {
-    pub fn new(base_client: &'a dyn BaseClient) -> Self {
+impl AuthClientImpl {
+    pub fn new(base_client: Arc<dyn BaseClient>) -> Self {
         Self { base_client }
     }
 
@@ -147,7 +148,7 @@ impl<'a> AuthClientImpl<'a> {
             input,
             request_context: warp_graphql::client::get_request_context(),
         });
-        let result = send_graphql_request(self.base_client, operation, None)
+        let result = send_graphql_request(self.base_client.as_ref(), operation, None)
             .await?
             .update_user_settings;
         match result {
@@ -162,7 +163,7 @@ impl<'a> AuthClientImpl<'a> {
 
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
-impl AuthClient for AuthClientImpl<'_> {
+impl AuthClient for AuthClientImpl {
     async fn create_anonymous_user(
         &self,
         referral_code: Option<String>,
@@ -224,7 +225,7 @@ impl AuthClient for AuthClientImpl<'_> {
                 request_context: warp_graphql::client::get_request_context(),
             },
         );
-        let response = send_graphql_request(self.base_client, operation, None).await?;
+        let response = send_graphql_request(self.base_client.as_ref(), operation, None).await?;
         Ok(response.mint_custom_token)
     }
 
@@ -273,7 +274,7 @@ impl AuthClient for AuthClientImpl<'_> {
         let operation = GetUserSettings::build(GetUserSettingsVariables {
             request_context: warp_graphql::client::get_request_context(),
         });
-        let response = send_graphql_request(self.base_client, operation, None).await?;
+        let response = send_graphql_request(self.base_client.as_ref(), operation, None).await?;
         match response.user {
             warp_graphql::queries::get_user_settings::UserResult::UserOutput(user_output) => {
                 Ok(user_output
@@ -324,7 +325,7 @@ impl AuthClient for AuthClientImpl<'_> {
         let operation = SetUserIsOnboarded::build(SetUserIsOnboardedVariables {
             request_context: warp_graphql::client::get_request_context(),
         });
-        let result = send_graphql_request(self.base_client, operation, None)
+        let result = send_graphql_request(self.base_client.as_ref(), operation, None)
             .await?
             .set_user_is_onboarded;
         match result {
@@ -356,7 +357,7 @@ impl AuthClient for AuthClientImpl<'_> {
         let operation = ApiKeys::build(ApiKeysVariables {
             request_context: warp_graphql::client::get_request_context(),
         });
-        let response = send_graphql_request(self.base_client, operation, None).await?;
+        let response = send_graphql_request(self.base_client.as_ref(), operation, None).await?;
         match response.api_keys {
             ApiKeyPropertiesResult::ApiKeyPropertiesOutput(output) => Ok(output.api_keys),
             ApiKeyPropertiesResult::UserFacingError(error) => Err(anyhow!(
@@ -382,7 +383,7 @@ impl AuthClient for AuthClientImpl<'_> {
             },
             request_context: warp_graphql::client::get_request_context(),
         });
-        let response = send_graphql_request(self.base_client, operation, None).await?;
+        let response = send_graphql_request(self.base_client.as_ref(), operation, None).await?;
         Ok(response.generate_api_key)
     }
 
@@ -391,7 +392,7 @@ impl AuthClient for AuthClientImpl<'_> {
             key_uid: key_uid.into(),
             request_context: warp_graphql::client::get_request_context(),
         });
-        let response = send_graphql_request(self.base_client, operation, None).await?;
+        let response = send_graphql_request(self.base_client.as_ref(), operation, None).await?;
         Ok(response.expire_api_key)
     }
 

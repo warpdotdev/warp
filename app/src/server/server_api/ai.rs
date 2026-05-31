@@ -109,7 +109,6 @@ use warp_graphql::queries::task_git_credentials::{
 };
 use warp_multi_agent_api::ConversationData;
 
-use super::auth::AuthClient;
 use super::harness_support::{UploadField, UploadFieldValue, UploadTarget};
 use super::ServerApi;
 use crate::ai::agent::api::ServerConversationToken;

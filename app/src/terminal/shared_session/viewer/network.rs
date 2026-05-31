@@ -489,10 +489,10 @@ impl Network {
 
     /// Fetches the new user id and reconnectes to the websocket.
     pub fn reauthenticate_viewer(&mut self, ctx: &mut ModelContext<Self>) {
-        let server_api = ServerApiProvider::as_ref(ctx).get();
+        let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
         ctx.spawn(
-            async move { Self::get_user_id(server_api, &auth_state).await },
+            async move { Self::get_user_id(auth_client, &auth_state).await },
             |network, res, ctx| match res {
                 Ok(user_id) => {
                     let message = UpstreamMessage::Reauthenticated { user_id };

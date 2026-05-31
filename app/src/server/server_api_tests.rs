@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -6,6 +7,7 @@ use cynic::{GraphQlError, GraphQlResponse};
 use futures::executor::block_on;
 
 use super::*;
+use crate::server::graphql::GraphQLError;
 
 struct FakeGraphqlOperation {
     expected_auth_token: Option<String>,
@@ -120,8 +122,10 @@ fn send_graphql_request_refresh_enabled_uses_auth_state() {
 #[test]
 fn send_graphql_request_refresh_disabled_uses_provided_bearer_token() {
     let (event_sender, _) = async_channel::unbounded();
-    let server_api =
-        ServerApi::new_for_test_with_bearer_token(Some("daemon-token".to_string()), event_sender);
+    let server_api = ServerApi::new_for_test_with_bearer_token(
+        Some("daemon-token".to_string()),
+        event_sender,
+    );
     let send_count = Arc::new(AtomicUsize::new(0));
 
     block_on(server_api.send_graphql_request(
@@ -157,8 +161,10 @@ fn send_graphql_request_refresh_disabled_missing_token_returns_auth_error() {
 #[test]
 fn send_graphql_request_refresh_disabled_auth_rejection_is_credentials_rejected() {
     let (event_sender, event_receiver) = async_channel::unbounded();
-    let server_api =
-        ServerApi::new_for_test_with_bearer_token(Some("daemon-token".to_string()), event_sender);
+    let server_api = ServerApi::new_for_test_with_bearer_token(
+        Some("daemon-token".to_string()),
+        event_sender,
+    );
     let send_count = Arc::new(AtomicUsize::new(0));
 
     let error = block_on(server_api.send_graphql_request(
@@ -182,8 +188,10 @@ fn send_graphql_request_refresh_disabled_auth_rejection_is_credentials_rejected(
 #[test]
 fn send_graphql_request_refresh_disabled_user_not_in_context_is_credentials_rejected() {
     let (event_sender, event_receiver) = async_channel::unbounded();
-    let server_api =
-        ServerApi::new_for_test_with_bearer_token(Some("daemon-token".to_string()), event_sender);
+    let server_api = ServerApi::new_for_test_with_bearer_token(
+        Some("daemon-token".to_string()),
+        event_sender,
+    );
     let send_count = Arc::new(AtomicUsize::new(0));
 
     let error = block_on(server_api.send_graphql_request(

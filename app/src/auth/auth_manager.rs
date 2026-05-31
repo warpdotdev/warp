@@ -117,13 +117,15 @@ impl AuthManager {
     pub fn new_for_test(ctx: &mut ModelContext<Self>) -> Self {
         use crate::server::server_api::ServerApiProvider;
 
-        let server_api = ServerApiProvider::as_ref(ctx).get();
+        let server_api_provider = ServerApiProvider::as_ref(ctx);
+        let server_api = server_api_provider.get();
+        let auth_client = server_api_provider.get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
 
         Self {
             auth_state,
-            server_api: server_api.clone(),
-            auth_client: server_api,
+            server_api,
+            auth_client,
             pending_auth_state: None,
         }
     }

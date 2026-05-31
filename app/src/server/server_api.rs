@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod auth;
+mod base_client;
 pub mod block;
 pub mod harness_support;
 pub mod integrations;
@@ -10,7 +11,6 @@ pub mod referral;
 pub mod team;
 pub mod workspace;
 
-use std::borrow::Cow;
 use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
@@ -19,9 +19,10 @@ use std::time::Duration;
 use ::http::header::CONTENT_LENGTH;
 use ai::AIClient;
 use anyhow::{anyhow, Context, Result};
-use auth::{AuthClient, AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT_ID_HEADER};
+use auth::AuthClient;
 use base64::prelude::BASE64_URL_SAFE;
 use base64::Engine;
+use base_client::{AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT_ID_HEADER};
 use block::BlockClient;
 use channel_versions::ChannelVersions;
 use chrono::{DateTime, FixedOffset};
@@ -39,13 +40,12 @@ use warp_core::context_flag::ContextFlag;
 use warp_core::errors::{register_error, AnyhowErrorExt, ErrorExt};
 use warp_core::telemetry::TelemetryEvent;
 use warp_managed_secrets::client::ManagedSecretsClient;
-use warp_server_client::auth::EXPERIMENT_ID_HEADER;
+use warp_server_client::auth::{AuthClientImpl, EXPERIMENT_ID_HEADER};
 use warpui::r#async::BoxFuture;
 use warpui::{Entity, ModelContext, SingletonEntity};
 use workspace::WorkspaceClient;
 
 use super::experiments::{ServerExperiment, ServerExperiments};
-use super::graphql::GraphQLError;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::get_relevant_files::api::{GetRelevantFiles, GetRelevantFilesResponse};
 use crate::ai::predict::generate_ai_input_suggestions::GenerateAIInputSuggestionsRequest;
@@ -56,7 +56,6 @@ use crate::ai::voice::transcribe::{TranscribeRequest, TranscribeResponse};
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::auth_state::AuthState;
 use crate::auth::UserUid;
-use crate::server::graphql::default_request_options;
 use crate::server::iap::{IapManager, IapState};
 use crate::server::server_api::presigned_upload::HttpStatusError;
 use crate::server::telemetry::TelemetryApi;
@@ -663,123 +662,11 @@ impl ServerApi {
         &'a self,
         operation: O,
         timeout: Option<Duration>,
-    ) -> BoxFuture<'a, Result<QF>> {
-        let client = self.client.clone();
-        let event_sender = self.event_sender.clone();
-
-        #[cfg(feature = "agent_mode_evals")]
-        let headers = if let Some(eval_user_id) = self.eval_user_id {
-            std::collections::HashMap::from([(
-                EVAL_USER_ID_HEADER.to_string(),
-                eval_user_id.to_string(),
-            )])
-        } else {
-            Default::default()
-        };
-
-        Box::pin(async move {
-            let operation_name = operation.operation_name().map(Cow::into_owned);
-            let auth_token = self
-                .access_token()
-                .await
-                .context("Failed to get access token for GraphQL request")?;
-
-            #[cfg(feature = "agent_mode_evals")]
-            let mut headers = headers;
-            #[cfg(not(feature = "agent_mode_evals"))]
-            let mut headers = std::collections::HashMap::new();
-
-            for (name, value) in self.ambient_agent_headers().await? {
-                headers.insert(name.to_string(), value);
-            }
-
-            let options = warp_graphql::client::RequestOptions {
-                auth_token: auth_token.bearer_token(),
-                timeout,
-                headers,
-                ..default_request_options()
-            };
-
-            let response = match operation.send_request(client, options).await {
-                Ok(response) => response,
-                Err(GraphQLError::StagingAccessBlocked) => {
-                    let _ = event_sender.try_send(ServerApiEvent::StagingAccessBlocked);
-                    anyhow::bail!(GraphQLError::StagingAccessBlocked)
-                }
-                Err(GraphQLError::IapChallengeBlocked) => {
-                    let _ = event_sender.try_send(ServerApiEvent::IapChallengeReceived);
-                    anyhow::bail!(GraphQLError::IapChallengeBlocked)
-                }
-                Err(err) => {
-                    if !self.allowed_to_refresh_token() && Self::is_graphql_auth_rejection(&err) {
-                        anyhow::bail!("server rejected authentication credentials");
-                    }
-                    anyhow::bail!(err)
-                }
-            };
-
-            if let Some(errors) = response.errors.as_ref() {
-                crate::safe_error!(
-                    safe: ("graphql response for {:?} had errors", operation_name),
-                    full: ("graphql response for {:?} had errors {:?}", operation_name, errors)
-                );
-
-                // "User not in context: Not found" comes from warp-server as an error when attempting
-                // to get a required user for some gql field. If we see that, since we have already
-                // successfully refreshed the user's access token earlier in this function, we know
-                // that this error is the result of the user's account being disabled/deleted.
-                if errors
-                    .iter()
-                    .any(|error| error.message.contains("User not in context: Not found"))
-                {
-                    if self.allowed_to_refresh_token() {
-                        log::error!("GraphQL request failed due to unauthenticated user");
-                        let _ = event_sender.try_send(ServerApiEvent::UserAccountDisabled);
-                    } else {
-                        anyhow::bail!("server rejected authentication credentials");
-                    }
-                }
-            }
-
-            response.data.ok_or_else(|| {
-                let operation_label = operation_name
-                    .as_deref()
-                    .unwrap_or("unknown GraphQL operation");
-                let error_messages = response
-                    .errors
-                    .as_ref()
-                    .map(|errors| {
-                        errors
-                            .iter()
-                            .filter_map(|error| {
-                                let message = error.message.trim();
-                                (!message.is_empty()).then(|| message.to_string())
-                            })
-                            .collect::<Vec<_>>()
-                            .join("; ")
-                    })
-                    .filter(|messages| !messages.is_empty());
-
-                match error_messages {
-                    Some(messages) => {
-                        anyhow!("missing response data for {operation_label}: {messages}")
-                    }
-                    None => anyhow!("missing response data for {operation_label}"),
-                }
-            })
-        })
-    }
-
-    fn is_graphql_auth_rejection(err: &GraphQLError) -> bool {
-        match err {
-            GraphQLError::HttpError { status, .. } => {
-                *status == StatusCode::UNAUTHORIZED || *status == StatusCode::FORBIDDEN
-            }
-            GraphQLError::RequestError(_)
-            | GraphQLError::StagingAccessBlocked
-            | GraphQLError::IapChallengeBlocked
-            | GraphQLError::ResponseError(_) => false,
-        }
+    ) -> BoxFuture<'a, Result<QF>>
+    where
+        QF: 'a,
+    {
+        warp_server_client::graphql_helpers::send_graphql_request(self, operation, timeout)
     }
 
     /// Sends a GET request to a public API endpoint.
@@ -1638,6 +1525,7 @@ impl ServerApi {
 /// or any of its implemented trait objects.
 pub struct ServerApiProvider {
     server_api: Arc<ServerApi>,
+    auth_client: Arc<dyn AuthClient>,
 }
 
 impl ServerApiProvider {
@@ -1697,8 +1585,11 @@ impl ServerApiProvider {
             },
             |_, _| {},
         );
+        let server_api = Arc::new(server_api);
+        let auth_client = Arc::new(AuthClientImpl::new(server_api.clone()));
         Self {
-            server_api: Arc::new(server_api),
+            server_api,
+            auth_client,
         }
     }
 
@@ -1718,8 +1609,11 @@ impl ServerApiProvider {
     /// Constructs a new SeverApiProvider for tests.
     #[cfg(test)]
     pub fn new_for_test() -> Self {
+        let server_api = Arc::new(ServerApi::new_for_test());
+        let auth_client = Arc::new(AuthClientImpl::new(server_api.clone()));
         Self {
-            server_api: Arc::new(ServerApi::new_for_test()),
+            server_api,
+            auth_client,
         }
     }
 
@@ -1730,7 +1624,7 @@ impl ServerApiProvider {
     }
 
     pub fn get_auth_client(&self) -> Arc<dyn AuthClient> {
-        self.server_api.clone()
+        self.auth_client.clone()
     }
 
     pub fn get_referrals_client(&self) -> Arc<dyn ReferralsClient> {
