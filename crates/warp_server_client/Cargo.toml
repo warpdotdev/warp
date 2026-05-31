@@ -35,6 +35,7 @@ pathfinder_geometry.workspace = true
 persistence.workspace = true
 schemars = { version = "1", features = ["uuid1"] }
 serde.workspace = true
+serde_json.workspace = true
 settings_value.workspace = true
 session-sharing-protocol.workspace = true
 thiserror.workspace = true
@@ -51,4 +52,5 @@ diesel = { workspace = true, features = ["sqlite", "chrono"] }
 [dev-dependencies]
 futures.workspace = true
 mockall.workspace = true
+mockito.workspace = true
 warp_server_auth = { workspace = true, features = ["test-util"] }

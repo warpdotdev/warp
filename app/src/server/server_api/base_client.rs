@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use instant::Duration;
-use warp_server_client::auth::{AgentIdentity, AuthEvent};
+use warp_server_client::auth::AuthEvent;
 use warp_server_client::base_client::BaseClient;
 
 use super::ServerApi;
@@ -17,12 +17,6 @@ pub const CLOUD_AGENT_ID_HEADER: &str = "X-Warp-Cloud-Agent-ID";
 
 /// Duration for which the ambient workload token is valid (3 hours).
 const AMBIENT_WORKLOAD_TOKEN_DURATION: Duration = Duration::from_secs(3 * 60 * 60);
-
-/// Wrapper for the `GET /api/v1/agent/identities` response.
-#[derive(serde::Deserialize)]
-struct AgentIdentitiesResponse {
-    agents: Vec<AgentIdentity>,
-}
 
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
@@ -66,9 +60,17 @@ impl BaseClient for ServerApi {
         })
     }
 
-    async fn list_agent_identities(&self) -> Result<Vec<AgentIdentity>> {
-        let response: AgentIdentitiesResponse = self.get_public_api("agent/identities").await?;
-        Ok(response.agents)
+    async fn authenticated_public_api_request_headers(&self) -> Result<Vec<(String, String)>> {
+        Ok(self
+            .ambient_agent_headers()
+            .await?
+            .into_iter()
+            .map(|(name, value)| (name.to_string(), value))
+            .collect())
+    }
+
+    fn on_authenticated_public_api_failure(&self, response: &http_client::Response) {
+        self.check_for_iap_challenge(response);
     }
 
     async fn get_or_create_ambient_workload_token(&self) -> Result<Option<String>> {

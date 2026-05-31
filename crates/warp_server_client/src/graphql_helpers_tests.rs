@@ -13,7 +13,6 @@ use instant::Duration;
 use warp_graphql::client::{GraphQLError, RequestOptions};
 
 use super::send_graphql_request;
-use crate::auth::AgentIdentity;
 use crate::base_client::BaseClient;
 
 struct FakeBaseClient {
@@ -69,9 +68,11 @@ impl BaseClient for FakeBaseClient {
         })
     }
 
-    async fn list_agent_identities(&self) -> Result<Vec<AgentIdentity>> {
+    async fn authenticated_public_api_request_headers(&self) -> Result<Vec<(String, String)>> {
         Ok(Vec::new())
     }
+
+    fn on_authenticated_public_api_failure(&self, _response: &http_client::Response) {}
 
     async fn get_or_create_ambient_workload_token(&self) -> Result<Option<String>> {
         Ok(None)

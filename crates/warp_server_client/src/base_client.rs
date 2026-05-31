@@ -5,8 +5,6 @@ use async_trait::async_trait;
 use instant::Duration;
 use warp_graphql::client::RequestOptions;
 
-use crate::auth::AgentIdentity;
-
 /// Application-provided transport and platform capabilities used by API clients.
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
@@ -31,11 +29,17 @@ pub trait BaseClient: Send + Sync {
     /// and application-owned headers remain centralized.
     async fn graphql_request_options(&self, timeout: Option<Duration>) -> Result<RequestOptions>;
 
-    /// Lists public agent identities available to API-key creation flows.
+    /// Returns application-owned headers for an authenticated public API request.
     ///
-    /// This is a base capability until its public REST endpoint is extracted alongside
-    /// the GraphQL-backed API client methods that consume its result.
-    async fn list_agent_identities(&self) -> Result<Vec<AgentIdentity>>;
+    /// The server client owns endpoint requests while the application remains responsible
+    /// for ambient-agent context attached to requests it initiates.
+    async fn authenticated_public_api_request_headers(&self) -> Result<Vec<(String, String)>>;
+
+    /// Allows the application to observe a failed public API response before its body is consumed.
+    ///
+    /// The server client uses this hook so application-owned authenticated-transport
+    /// reactions, such as IAP challenge handling, stay outside the transport crate.
+    fn on_authenticated_public_api_failure(&self, response: &http_client::Response);
 
     /// Returns an ambient workload token when the current runtime supports issuing one.
     ///
