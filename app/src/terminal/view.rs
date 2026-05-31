@@ -21846,8 +21846,14 @@ impl TerminalView {
         if !FeatureFlag::AgentView.is_enabled() {
             return;
         }
-        let Some(conversation_id) =
-            BlocklistAIHistoryModel::as_ref(ctx).last_conversation_id(self.id())
+        // Follow actual agent activity: prefer the most recently streamed
+        // conversation (which tracks where the latest agent message landed even
+        // after the user switches back to an older conversation), falling back
+        // to the last-created one only when there is no active conversation.
+        let history = BlocklistAIHistoryModel::as_ref(ctx);
+        let Some(conversation_id) = history
+            .active_conversation_id(self.id())
+            .or_else(|| history.last_conversation_id(self.id()))
         else {
             return;
         };
