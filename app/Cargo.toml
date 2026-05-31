@@ -719,6 +719,7 @@ agent_mode_evals = [
     "integration_tests",
     "full_source_code_embedding",
     "cross_repo_context",
+    "cloud_object_models/agent_mode_evals",
     "rust-embed/debug-embed",
     "warpui/log_named_telemetry_events",
     "warp_logging/agent_mode_evals",
