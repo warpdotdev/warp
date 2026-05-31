@@ -4,7 +4,9 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
-use ai::skills::{provider_rank, ParsedSkill, SkillProvider, SKILL_PROVIDER_DEFINITIONS};
+use ai::skills::{
+    provider_parent_directory_for_skills_root, provider_rank, ParsedSkill, SkillProvider,
+};
 use lazy_static::lazy_static;
 use siphasher::sip::SipHasher;
 use warp_core::ui::appearance::Appearance;
@@ -163,14 +165,12 @@ pub fn icon_override_for_skill_name(name: &str) -> Option<Icon> {
 pub fn skill_path_from_location(location: &LocalOrRemotePath) -> Option<LocalOrRemotePath> {
     let mut current = Some(location.clone());
     while let Some(candidate_skill_dir) = current {
-        if let Some(provider_dir) = candidate_skill_dir.parent() {
-            if SKILL_PROVIDER_DEFINITIONS.iter().any(|definition| {
-                provider_dir
-                    .path_component()
-                    .ends_with(&definition.skills_path.to_string_lossy())
-            }) {
-                return Some(candidate_skill_dir.join("SKILL.md"));
-            }
+        if candidate_skill_dir
+            .parent()
+            .and_then(|provider_dir| provider_parent_directory_for_skills_root(&provider_dir))
+            .is_some()
+        {
+            return Some(candidate_skill_dir.join("SKILL.md"));
         }
         current = candidate_skill_dir.parent();
     }

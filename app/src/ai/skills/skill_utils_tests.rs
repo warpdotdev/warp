@@ -1,10 +1,39 @@
 use std::path::PathBuf;
 
 use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
-use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::{
+    host_id::HostId, local_or_remote_path::LocalOrRemotePath, remote_path::RemotePath,
+    standardized_path::StandardizedPath,
+};
 
 use super::*;
 
+fn remote_location(path: &str) -> LocalOrRemotePath {
+    LocalOrRemotePath::Remote(RemotePath::new(
+        HostId::new("remote-host".to_string()),
+        StandardizedPath::try_new(path).unwrap(),
+    ))
+}
+
+#[test]
+fn skill_path_from_unix_encoded_remote_location() {
+    let location = remote_location("/repo/.agents/skills/deploy/scripts/run.sh");
+
+    assert_eq!(
+        skill_path_from_location(&location),
+        Some(remote_location("/repo/.agents/skills/deploy/SKILL.md"))
+    );
+}
+
+#[test]
+fn skill_path_from_windows_encoded_remote_location() {
+    let location = remote_location(r"C:\repo\.agents\skills\deploy\scripts\run.ps1");
+
+    assert_eq!(
+        skill_path_from_location(&location),
+        Some(remote_location(r"C:\repo\.agents\skills\deploy\SKILL.md"))
+    );
+}
 #[test]
 fn test_unique_skills_dedupes_identical_skills_same_dir() {
     let shared_skill_dir = PathBuf::from("/home/user");

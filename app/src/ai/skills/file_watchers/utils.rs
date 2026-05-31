@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use ai::skills::{
-    home_skills_path, parse_skill, read_skills, ParsedSkill, SkillProvider,
-    SKILL_PROVIDER_DEFINITIONS,
+    home_skills_path, parse_skill, provider_parent_directory_for_skills_root, read_skills,
+    ParsedSkill, SkillProvider, SKILL_PROVIDER_DEFINITIONS,
 };
 use anyhow::Error;
 use repo_metadata::local_model::GetContentsArgs;
@@ -224,30 +224,8 @@ pub fn extract_skill_parent_directory(
         return Err(anyhow::anyhow!("Not a skill path: {}", path.display_path()));
     };
 
-    for definition in SKILL_PROVIDER_DEFINITIONS.iter() {
-        let mut parent_directory = skills_root.clone();
-        let mut matches_provider = true;
-        for component in definition.skills_path.components().rev() {
-            let Some(expected_component) = component.as_os_str().to_str() else {
-                matches_provider = false;
-                break;
-            };
-            if parent_directory.file_name() != Some(expected_component) {
-                matches_provider = false;
-                break;
-            }
-            let Some(parent) = parent_directory.parent() else {
-                matches_provider = false;
-                break;
-            };
-            parent_directory = parent;
-        }
-        if matches_provider {
-            return Ok(parent_directory);
-        }
-    }
-
-    Err(anyhow::anyhow!("Not a skill path: {}", path.display_path()))
+    provider_parent_directory_for_skills_root(&skills_root)
+        .ok_or_else(|| anyhow::anyhow!("Not a skill path: {}", path.display_path()))
 }
 
 /// Check if this path is a skill directory under a home directory provider path

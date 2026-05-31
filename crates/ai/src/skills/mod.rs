@@ -13,7 +13,7 @@ pub use parse_skill::{
 };
 pub use read_skills::read_skills;
 pub use skill_provider::{
-    get_provider_for_path, home_skills_path, provider_rank, SkillProvider, SkillProviderDefinition,
-    SkillScope, SKILL_PROVIDER_DEFINITIONS,
+    get_provider_for_path, home_skills_path, provider_parent_directory_for_skills_root,
+    provider_rank, SkillProvider, SkillProviderDefinition, SkillScope, SKILL_PROVIDER_DEFINITIONS,
 };
 pub use skill_reference::SkillReference;
