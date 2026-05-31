@@ -1,0 +1,91 @@
+use std::borrow::Cow;
+
+use anyhow::{Result, anyhow};
+use http::StatusCode;
+use instant::Duration;
+use warp_graphql::client::{GraphQLError, Operation};
+
+use crate::base_client::BaseClient;
+
+/// Sends a GraphQL operation through a base client supplied by the application.
+///
+/// This function is deliberately generic so concrete endpoint operation
+/// instantiations occur in server client crates rather than in the app crate.
+pub async fn send_graphql_request<QF, O>(
+    base_client: &dyn BaseClient,
+    operation: O,
+    timeout: Option<Duration>,
+) -> Result<QF>
+where
+    O: Operation<QF> + Send,
+{
+    let operation_name = operation.operation_name().map(Cow::into_owned);
+    let options = base_client.graphql_request_options(timeout).await?;
+    let response = match operation
+        .send_request(base_client.http_client(), options)
+        .await
+    {
+        Ok(response) => response,
+        Err(GraphQLError::StagingAccessBlocked) => {
+            base_client.on_graphql_staging_access_blocked();
+            anyhow::bail!(GraphQLError::StagingAccessBlocked);
+        }
+        Err(GraphQLError::IapChallengeBlocked) => {
+            base_client.on_graphql_iap_challenge_received();
+            anyhow::bail!(GraphQLError::IapChallengeBlocked);
+        }
+        Err(err) => {
+            let is_auth_rejection = match &err {
+                GraphQLError::HttpError { status, .. } => {
+                    *status == StatusCode::UNAUTHORIZED || *status == StatusCode::FORBIDDEN
+                }
+                GraphQLError::RequestError(_)
+                | GraphQLError::StagingAccessBlocked
+                | GraphQLError::IapChallengeBlocked
+                | GraphQLError::ResponseError(_) => false,
+            };
+            if !base_client.is_auth_refresh_allowed() && is_auth_rejection {
+                anyhow::bail!("server rejected authentication credentials");
+            }
+            anyhow::bail!(err);
+        }
+    };
+
+    if let Some(errors) = response.errors.as_ref() {
+        log::error!("GraphQL response for {operation_name:?} had errors: {errors:?}");
+        if errors
+            .iter()
+            .any(|error| error.message.contains("User not in context: Not found"))
+        {
+            if base_client.is_auth_refresh_allowed() {
+                base_client.on_graphql_user_account_disabled();
+            } else {
+                anyhow::bail!("server rejected authentication credentials");
+            }
+        }
+    }
+
+    response.data.ok_or_else(|| {
+        let operation_label = operation_name
+            .as_deref()
+            .unwrap_or("unknown GraphQL operation");
+        let error_messages = response
+            .errors
+            .as_ref()
+            .map(|errors| {
+                errors
+                    .iter()
+                    .filter_map(|error| {
+                        let message = error.message.trim();
+                        (!message.is_empty()).then(|| message.to_string())
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })
+            .filter(|messages| !messages.is_empty());
+        match error_messages {
+            Some(messages) => anyhow!("missing response data for {operation_label}: {messages}"),
+            None => anyhow!("missing response data for {operation_label}"),
+        }
+    })
+}

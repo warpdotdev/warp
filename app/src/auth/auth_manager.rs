@@ -30,7 +30,7 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::graphql::get_user_facing_error_message;
 use crate::server::server_api::auth::{
     AnonymousUserCreationError, AuthClient, FetchUserResult, MintCustomTokenError,
-    UserAuthenticationError,
+    UserAuthenticationError, UserProperties,
 };
 use crate::server::server_api::{ServerApi, ServerApiProvider};
 use crate::server::telemetry::AnonymousUserSignupEntrypoint;
@@ -324,12 +324,15 @@ impl AuthManager {
         match fetch_user_result {
             Ok(fetch_user_result) => {
                 let FetchUserResult {
-                    user,
+                    user_output,
                     credentials,
-                    server_experiments,
                     from_refresh,
-                    llms,
                 } = fetch_user_result;
+                let UserProperties {
+                    user,
+                    server_experiments,
+                    llms,
+                } = user_output.into();
 
                 self.set_and_persist(Some(user.clone()), Some(credentials), ctx);
 
