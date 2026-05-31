@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    AmbientAgentEnvironment, AwsProviderConfig, BaseImage, GcpProviderConfig, GithubRepo,
+    ProvidersConfig,
+};
 
 #[test]
 fn deserialize_legacy_environment_without_providers() {

@@ -22,6 +22,7 @@ use num_traits::SaturatingSub;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
+use remote_server::manager::RemoteServerManager;
 #[cfg(feature = "local_fs")]
 use repo_metadata::repositories::DetectedRepositories;
 use string_offset::CharOffset;
@@ -56,8 +57,6 @@ use warpui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle, WindowId,
 };
-
-use remote_server::manager::RemoteServerManager;
 
 use crate::ai::persisted_workspace::{PersistedWorkspace, PersistedWorkspaceEvent};
 use crate::code::buffer_location::LocalOrRemotePath as BufferFileLocation;

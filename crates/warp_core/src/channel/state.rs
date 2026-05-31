@@ -7,7 +7,8 @@ use url::{Origin, ParseError, Url};
 
 use super::Channel;
 use crate::channel::config::{
-    ChannelConfig, McpOAuthProviderConfig, OzConfig, RudderStackDestination, WarpServerConfig,
+    ChannelConfig, IapConfig, McpOAuthProviderConfig, OzConfig, RudderStackDestination,
+    WarpServerConfig,
 };
 use crate::features::FeatureFlag;
 use crate::AppId;
@@ -213,6 +214,10 @@ impl ChannelState {
             .server_config
             .firebase_auth_api_key
             .clone()
+    }
+
+    pub fn iap_config() -> Option<IapConfig> {
+        CHANNEL_STATE.lock().config.server_config.iap_config.clone()
     }
 
     pub fn ws_server_url() -> Cow<'static, str> {

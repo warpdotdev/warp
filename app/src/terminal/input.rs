@@ -221,6 +221,7 @@ use crate::editor::{
     PropagateAndNoOpNavigationKeys, PropagateHorizontalNavigationKeys, ReplicaId, TextColors,
     TextRun, MAX_IMAGES_PER_CONVERSATION,
 };
+use crate::env_vars::EnvVarCollectionExt;
 use crate::features::FeatureFlag;
 use crate::input_suggestions::{
     Event as InputSuggestionsEvent, HistoryInputSuggestion, InputSuggestions,
@@ -338,6 +339,7 @@ use crate::workspace::{
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 #[allow(unused_imports)]
 use crate::ASSETS;
+#[allow(unused_imports)]
 use crate::{
     cmd_or_ctrl_shift, report_if_error, send_telemetry_from_ctx, AgentModeEntrypoint,
     ServerApiProvider,
@@ -3520,8 +3522,9 @@ impl Input {
         });
 
         let queued_prompts_panel = FeatureFlag::QueueSlashCommand.is_enabled().then(|| {
-            let panel =
-                ctx.add_typed_action_view(|ctx| QueuedPromptsPanelView::new(terminal_view_id, ctx));
+            let panel = ctx.add_typed_action_view(|ctx| {
+                QueuedPromptsPanelView::new(terminal_view_id, suggestions_mode_model.clone(), ctx)
+            });
             ctx.subscribe_to_view(&panel, |me, _, event, ctx| {
                 me.handle_queued_prompts_panel_event(event, ctx);
             });

@@ -420,9 +420,9 @@ pub fn custom_tag_to_keystroke(custom: CustomTag) -> Option<Keystroke> {
         }
         CustomAction::ToggleProjectExplorer => {
             if OperatingSystem::get().is_mac() {
-                Keystroke::parse("ctrl-2").ok()
+                Keystroke::parse("ctrl-1").ok()
             } else {
-                Keystroke::parse("ctrl-shift-2").ok()
+                Keystroke::parse("alt-1").ok()
             }
         }
         CustomAction::OpenRepository => {
@@ -442,9 +442,9 @@ pub fn custom_tag_to_keystroke(custom: CustomTag) -> Option<Keystroke> {
         }
         CustomAction::ToggleConversationListView => {
             if OperatingSystem::get().is_mac() {
-                Keystroke::parse("ctrl-1").ok()
+                Keystroke::parse("ctrl-2").ok()
             } else {
-                Keystroke::parse("alt-1").ok()
+                Keystroke::parse("alt-2").ok()
             }
         }
         CustomAction::NewTerminalTab

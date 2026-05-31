@@ -21,7 +21,7 @@ use warpui::elements::{
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::platform::Cursor;
 use warpui::{
-    AppContext, BlurContext, Element, Entity, EntityId, FocusContext, SingletonEntity,
+    AppContext, BlurContext, Element, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity,
     TypedActionView, View, ViewContext, ViewHandle,
 };
 
@@ -37,6 +37,7 @@ use crate::editor::{
 };
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
+use crate::terminal::input::suggestions_mode_model::InputSuggestionsModeModel;
 use crate::ui_components::icons::Icon as TerminalIcon;
 use crate::util::truncation::truncate_from_end;
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
@@ -94,6 +95,9 @@ pub struct QueuedPromptsPanelView {
     /// Terminal view this panel belongs to. Used to resolve the active conversation via
     /// [`BlocklistAIHistoryModel`].
     terminal_view_id: EntityId,
+    /// Input's suggestions-mode model. Used by [`Self::should_render`] to hide the panel while an
+    /// inline menu (slash commands, model selector, etc.) is open.
+    suggestions_mode_model: ModelHandle<InputSuggestionsModeModel>,
     /// Cached active conversation for this panel. `None` means there is no active conversation in
     /// the parent terminal view; the panel renders nothing in that case.
     active_conversation_id: Option<AIConversationId>,
@@ -137,7 +141,11 @@ impl Entity for QueuedPromptsPanelView {
 }
 
 impl QueuedPromptsPanelView {
-    pub fn new(terminal_view_id: EntityId, ctx: &mut ViewContext<Self>) -> Self {
+    pub fn new(
+        terminal_view_id: EntityId,
+        suggestions_mode_model: ModelHandle<InputSuggestionsModeModel>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
         let edit_editor = build_edit_editor(ctx);
 
         ctx.subscribe_to_view(&edit_editor, |me, _, event, ctx| {
@@ -153,14 +161,14 @@ impl QueuedPromptsPanelView {
             me.handle_history_event(event, ctx);
         });
 
-        ctx.subscribe_to_model(
-            &QueuedQueryModel::handle(ctx),
-            Self::handle_queued_query_event,
-        );
+        ctx.subscribe_to_model(&QueuedQueryModel::handle(ctx), |me, _, event, ctx| {
+            me.handle_queued_query_event(event, ctx);
+        });
 
         let mut me = Self {
             view_id: ctx.view_id(),
             terminal_view_id,
+            suggestions_mode_model,
             active_conversation_id,
             edit_editor,
             edit_editor_is_single_logical_line: true,
@@ -222,12 +230,7 @@ impl QueuedPromptsPanelView {
         }
     }
 
-    fn handle_queued_query_event(
-        &mut self,
-        _: warpui::ModelHandle<QueuedQueryModel>,
-        event: &QueuedQueryEvent,
-        ctx: &mut ViewContext<Self>,
-    ) {
+    fn handle_queued_query_event(&mut self, event: &QueuedQueryEvent, ctx: &mut ViewContext<Self>) {
         let Some(active_conv_id) = self.active_conversation_id else {
             return;
         };
@@ -377,6 +380,13 @@ impl QueuedPromptsPanelView {
     /// Visibility predicate used by the host to decide whether to render the panel.
     pub fn should_render(&self, ctx: &AppContext) -> bool {
         if !FeatureFlag::QueueSlashCommand.is_enabled() {
+            return false;
+        }
+        if self
+            .suggestions_mode_model
+            .as_ref(ctx)
+            .is_inline_menu_open()
+        {
             return false;
         }
         let Some(conv_id) = self.active_conversation_id else {

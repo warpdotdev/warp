@@ -555,6 +555,17 @@ pub fn test_focus_panes_on_hover() -> Builder {
             ),
         )
         .with_step(
+            // Hover the already-focused second pane first to clear the divider overlay's
+            // hovered state. Otherwise, in debug builds the divider's hover-out swallows the
+            // next mouse move and the following hover into pane 0 never reaches the pane.
+            new_step_with_default_assertions("Move mouse off the pane divider")
+                .with_hover_on_saved_position_fn(|app, window_id| {
+                    let terminal_view = terminal_view(app, window_id, 0, 1);
+                    terminal_view.read(app, |terminal, _| terminal.terminal_position_id())
+                })
+                .add_assertion(assert_focused_pane_index(0, 1)),
+        )
+        .with_step(
             new_step_with_default_assertions("Hover over the initial pane's terminal")
                 .with_hover_on_saved_position_fn(|app, window_id| {
                     let terminal_view = terminal_view(app, window_id, 0, 0);

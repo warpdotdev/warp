@@ -86,8 +86,7 @@ impl MCPServersSettingsPageView {
             me.handle_edit_view_event(event, ctx);
         });
 
-        let installation_modal_body =
-            ctx.add_typed_action_view(|_ctx| InstallationModalBody::new());
+        let installation_modal_body = ctx.add_typed_action_view(InstallationModalBody::new);
         ctx.subscribe_to_view(&installation_modal_body, |me, _, event, ctx| {
             me.handle_installation_modal_body_event(event, ctx);
         });

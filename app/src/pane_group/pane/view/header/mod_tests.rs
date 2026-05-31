@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use cloud_object_client::MockObjectClient;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::Empty;
 use warpui::platform::WindowStyle;
@@ -12,10 +13,7 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::menu::MenuItemFields;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::{BackingView, PaneConfiguration, PaneId, PaneView};
-use crate::server::server_api::object::MockObjectClient;
-#[cfg(test)]
 use crate::server::server_api::team::MockTeamClient;
-#[cfg(test)]
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::server_api::ServerApiProvider;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;

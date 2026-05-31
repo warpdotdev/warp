@@ -338,7 +338,7 @@ impl RemoteDiffStateManager {
                 ctx.emit(DiffStateUpdate::MetadataUpdate {
                     repo_path: key.repo_path.clone(),
                     mode: key.mode.clone(),
-                    metadata: metadata.clone(),
+                    metadata: metadata.as_ref().clone(),
                     subscribers: self.subscribed_connections(key),
                 });
             }

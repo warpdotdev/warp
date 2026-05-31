@@ -25,7 +25,8 @@ use crate::ai::execution_profiles::profiles::{
     AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId,
 };
 use crate::ai::execution_profiles::{
-    AIExecutionProfile, ActionPermission, RunAgentsPermission, WriteToPtyPermission,
+    AIExecutionProfile, AIExecutionProfileAppExt as _, ActionPermission, RunAgentsPermission,
+    WriteToPtyPermission,
 };
 use crate::ai::llms::{
     DisableReason, LLMContextWindow, LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent,
