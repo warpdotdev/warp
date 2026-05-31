@@ -17,16 +17,16 @@ Warp's editor today only attaches an LSP client for five built-in languages (Rus
 ### Defining a custom server
 
 1. Users can declare one or more custom language servers in their Warp settings file under a new `[[editor.language_servers]]` array-of-tables. Each entry has these fields:
-   - `name` (string, required) — A unique identifier for this server within the user's settings, e.g. `"ruby-lsp"`. Used in UI surfaces, log output, and as a filesystem path component for the per-server cache directory. **Constraints:** 1–64 characters, drawn from `[A-Za-z0-9._-]` (ASCII letters, digits, dot, underscore, hyphen). Must not be `.` or `..`, must not start with `.` or `-`, and must not be empty. Names that match a serialized built-in server type (`RustAnalyzer`, `GoPls`, `Pyright`, `TypeScriptLanguageServer`, `Clangd`) are reserved and rejected, to avoid ambiguous footer labels, log entries, and cache-directory layouts shared with the built-in servers of those names. Names violating any of these constraints are settings errors per invariant 23.
-   - `command` (string, required) — Path to the server binary. May be an absolute path or a bare name that will be resolved against the user's `PATH`.
+   - `name` (string, required) — A unique identifier for this server within the user's settings, e.g. `"ruby-lsp"`. Used in UI surfaces, log output, and as a filesystem path component for the per-server cache directory. **Constraints:** 1–64 characters, drawn from `[A-Za-z0-9._-]` (ASCII letters, digits, dot, underscore, hyphen). Must not be `.` or `..`, must not start with `.` or `-`, and must not be empty. Uniqueness and reserved-name checks are **case-insensitive** (ASCII fold). Reserved names cover **both** the serialized `LSPServerType` variant names (`RustAnalyzer`, `GoPls`, `Pyright`, `TypeScriptLanguageServer`, `Clangd`) **and** the binary display names (`rust-analyzer`, `gopls`, `pyright`, `typescript-language-server`, `clangd`); the reservation list is sourced from `LSPServerType` so adding a built-in automatically extends both halves. Names violating any of these constraints are settings errors per invariant 23.
+   - `command` (string, required) — Path to the server binary. Must be **either** an absolute path (after `~`/`~/` home expansion per invariant 5) **or** a bare name with no path separators (`/` or `\`), which will be resolved against the user's `PATH`. **Relative paths containing separators (e.g. `./server`, `bin/server`, `..\\server`) are rejected** as settings errors per invariant 23 — without this rule, the workspace cwd would let a malicious settings.toml execute a binary committed to the repository being opened.
    - `args` (array of strings, optional, defaults to `[]`) — Arguments passed to `command` on launch.
-   - `filetypes` (array, required, non-empty) — Patterns that claim files for this server. Each array entry is either a bare **string** pattern, or an **inline table** `{ pattern = "...", language_id = "..." }` where `language_id` is optional. A bare string is equivalent to an inline table with only `pattern` set. The LSP `languageId` Warp sends for matched files is the inline table's `language_id` when provided; otherwise — including for bare strings and for inline tables that omit `language_id` — it defaults to the matched file's lowercase extension, or to the file's literal basename when there is no extension. Use the inline-table form with an explicit `language_id` to override the default, both for servers that expect the LSP-standard identifier (e.g. `{ pattern = "*.rb", language_id = "ruby" }`, `{ pattern = "*.sh", language_id = "shellscript" }`) and for servers that speak multiple languageIds (e.g. `{ pattern = "*.ts", language_id = "typescript" }` and `{ pattern = "*.tsx", language_id = "typescriptreact" }` in the same entry). Every pattern — whether a bare string or the `pattern` field of an inline table — takes one of two syntactic forms:
+   - `filetypes` (array of inline tables, required, non-empty) — Patterns that claim files for this server. Each array entry is an inline table `{ pattern = "...", language_id = "..." }` where `pattern` is required and `language_id` is optional. The LSP `languageId` Warp sends for matched files is the entry's `language_id` when provided; otherwise it defaults to the matched file's lowercase extension, or to the file's literal basename when there is no extension. Use an explicit `language_id` to override the default, both for servers that expect the LSP-standard identifier (e.g. `{ pattern = "*.rb", language_id = "ruby" }`, `{ pattern = "*.sh", language_id = "shellscript" }`) and for servers that speak multiple languageIds (e.g. `{ pattern = "*.ts", language_id = "typescript" }` and `{ pattern = "*.tsx", language_id = "typescriptreact" }` in the same entry). The `pattern` field takes one of two syntactic forms:
      - **Glob** — contains any of `*`, `?`, or `[` (e.g. `"*.rb"`, `"*.rake"`, `"Dockerfile.*"`). Matched against the file's basename only (not the full path) using POSIX-style glob semantics — the syntax accepted by Rust's [`glob` crate `Pattern`](https://docs.rs/glob/latest/glob/struct.Pattern.html), which is a strict subset of POSIX.1-2017 §2.13 Pattern Matching Notation. Supported metacharacters are `*` (any sequence of characters except path separators), `?` (any single character), `[abc]` / `[!abc]` (character class / negated class), and `[a-z]` (ranges). Glob matching is case-insensitive — `"*.rb"` matches both `foo.rb` and `FOO.RB`. Brace alternation (`{a,b}`) and double-star recursion (`**`) are **not** supported in v1, since matching is basename-only.
      - **Literal basename** — any pattern that contains none of `*`, `?`, or `[` (e.g. `"Gemfile"`, `"Rakefile"`, `".bashrc"`). Matches files whose basename equals it exactly, case-sensitively. To match files by extension, write a glob (`"*.rb"`, `"*.ts"`); a bare token like `"rb"` is **not** treated as an extension match — it is a literal basename match against a file literally named `rb`.
    - `env` (table of string → string, optional, defaults to `{}`) — Extra environment variables merged into the server process's environment on launch.
    - `initialization_options` (arbitrary TOML value, optional) — Passed verbatim as the `initializationOptions` field of the LSP `initialize` request.
 
-2. `name` must be unique across all entries in `[[editor.language_servers]]`. Two entries with the same `name` are a settings error; see invariant 23.
+2. `name` must be unique across all entries in `[[editor.language_servers]]`. Two entries with the same `name` are a settings error; see invariant 23. Uniqueness is **case-insensitive**: `ruby-lsp` and `Ruby-LSP` are duplicates and produce a settings error. The cache directory namespacing (`{{cache_dir}}/lsp/<name>/`) uses the as-written form; case-insensitive uniqueness at validation time prevents collisions on case-insensitive filesystems (macOS APFS default, Windows NTFS default).
 
 3. Custom server entries override built-in servers when their `filetypes` overlap with a built-in language. For example, an entry with `filetypes = [{ pattern = "*.rs" }]` replaces the built-in `rust-analyzer` mapping for `.rs` files for that user. Removing the custom entry restores the built-in mapping with no further action.
 
@@ -94,7 +94,8 @@ Warp's editor today only attaches an LSP client for five built-in languages (Rus
    - An entry with empty `filetypes`.
    - An entry missing `name` or `command`.
    - An entry whose `name` violates the constraints in invariant 1.
-   - An entry whose `name` matches a reserved built-in server name (`RustAnalyzer`, `GoPls`, `Pyright`, `TypeScriptLanguageServer`, `Clangd`).
+   - An entry whose `name` matches a reserved built-in server name (case-insensitive over both the serialized variant names `RustAnalyzer`, `GoPls`, `Pyright`, `TypeScriptLanguageServer`, `Clangd` and the binary display names `rust-analyzer`, `gopls`, `pyright`, `typescript-language-server`, `clangd`).
+   - An entry whose `command`, after `~`/`~/` home-directory expansion, is neither absolute nor a bare name — i.e. contains a `/` or `\` and does not start with `/` or a Windows drive letter (per invariant 1's `command` rule).
    - An inline-table entry in `filetypes` missing `pattern`.
    - A pattern (string or inline-table) in `filetypes` whose glob form fails to compile as a valid shell-style glob.
 
@@ -168,41 +169,41 @@ Key observations:
 
 A user who wants to override one of the five built-in servers — to change its `args`, point at a different binary, or supply `initialization_options` the built-in does not expose — writes an `[[editor.language_servers]]` entry whose `filetypes` overlap the built-in language. Per invariant 3, the custom entry replaces the built-in for those filetypes; removing the entry restores the built-in.
 
-The five examples below show what an equivalent override looks like for each built-in server. They are not changes Warp ships — Warp continues to launch the built-ins through their existing code paths. The examples exist so a user can copy one as a starting point and modify it. They assume the relevant binary is on `PATH`; a node-wrapped install (`command = "node"`, `args = ["<path>/server.js", "--stdio"]`) is the alternative shape for the Node.js-based servers (pyright, typescript-language-server) and works identically.
+The five examples below show what an equivalent override looks like for each built-in server. They are not changes Warp ships — Warp continues to launch the built-ins through their existing code paths. The examples exist so a user can copy one as a starting point and modify it. They assume the relevant binary is on `PATH`; a node-wrapped install (`command = "node"`, `args = ["<path>/server.js", "--stdio"]`) is the alternative shape for the Node.js-based servers (pyright, typescript-language-server) and works identically. Each example uses a `my-<binary>` `name` because the binary display names (`rust-analyzer`, `gopls`, `pyright`, `typescript-language-server`, `clangd`) are reserved per invariant 1; the user can rename it to anything that satisfies the constraints.
 
-### rust-analyzer
+### Overriding rust-analyzer
 
 ```toml
 [[editor.language_servers]]
-name = "rust-analyzer"
+name = "my-rust-analyzer"
 command = "rust-analyzer"
 filetypes = [{ pattern = "*.rs", language_id = "rust" }]
 ```
 
-### gopls
+### Overriding gopls
 
 ```toml
 [[editor.language_servers]]
-name = "gopls"
+name = "my-gopls"
 command = "gopls"
 filetypes = [{ pattern = "*.go", language_id = "go" }]
 ```
 
-### pyright
+### Overriding pyright
 
 ```toml
 [[editor.language_servers]]
-name = "pyright"
+name = "my-pyright"
 command = "pyright-langserver"
 args = ["--stdio"]
 filetypes = [{ pattern = "*.py", language_id = "python" }]
 ```
 
-### typescript-language-server
+### Overriding typescript-language-server
 
 ```toml
 [[editor.language_servers]]
-name = "typescript-language-server"
+name = "my-typescript-language-server"
 command = "typescript-language-server"
 args = ["--stdio"]
 filetypes = [
@@ -215,11 +216,11 @@ filetypes = [
 ]
 ```
 
-### clangd
+### Overriding clangd
 
 ```toml
 [[editor.language_servers]]
-name = "clangd"
+name = "my-clangd"
 command = "clangd"
 filetypes = [
   { pattern = "*.c",   language_id = "c" },
