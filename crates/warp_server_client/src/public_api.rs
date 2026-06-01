@@ -28,7 +28,7 @@ where
     R: DeserializeOwned,
 {
     let url = format!("{}/api/v1/{path}", ChannelState::server_root_url());
-    let mut request = base_client.http_client_ref().get(&url);
+    let mut request = base_client.http_client().get(&url);
     if let Some(token) = auth_token.as_bearer_token() {
         request = request.bearer_auth(token);
     }

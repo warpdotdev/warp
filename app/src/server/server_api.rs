@@ -657,7 +657,7 @@ impl ServerApi {
 
         let url = format!("{}/api/v1/{}", ChannelState::server_root_url(), path);
 
-        let mut request = self.base_client.http_client_ref().get(&url);
+        let mut request = self.base_client.http_client().get(&url);
         if let Some(token) = auth_token.as_bearer_token() {
             request = request.bearer_auth(token);
         }
@@ -724,7 +724,7 @@ impl ServerApi {
             ChannelState::rtc_http_url()
         );
 
-        let mut request = self.base_client.http_client_ref().get(&url);
+        let mut request = self.base_client.http_client().get(&url);
         if let Some(token) = auth_token.as_bearer_token() {
             request = request.bearer_auth(token);
         }
@@ -763,7 +763,7 @@ impl ServerApi {
             urlencoding::encode(ancestor_run_id),
         );
 
-        let mut request = self.base_client.http_client_ref().get(&url);
+        let mut request = self.base_client.http_client().get(&url);
         if let Some(token) = auth_token.as_bearer_token() {
             request = request.bearer_auth(token);
         }
@@ -797,7 +797,7 @@ impl ServerApi {
             ChannelState::rtc_http_url()
         );
 
-        let mut request = self.base_client.http_client_ref().get(&url);
+        let mut request = self.base_client.http_client().get(&url);
         if let Some(token) = auth_token.as_bearer_token() {
             request = request.bearer_auth(token);
         }
@@ -825,7 +825,7 @@ impl ServerApi {
 
         let url = format!("{}/api/v1/{}", ChannelState::server_root_url(), path);
 
-        let mut request = self.base_client.http_client_ref().post(&url).json(body);
+        let mut request = self.base_client.http_client().post(&url).json(body);
         if let Some(token) = auth_token.as_bearer_token() {
             request = request.bearer_auth(token);
         }
@@ -923,7 +923,7 @@ impl ServerApi {
 
         let url = format!("{}/api/v1/{}", ChannelState::server_root_url(), path);
 
-        let mut request = self.base_client.http_client_ref().put(&url).json(body);
+        let mut request = self.base_client.http_client().put(&url).json(body);
         if let Some(token) = auth_token.as_bearer_token() {
             request = request.bearer_auth(token);
         }
@@ -976,7 +976,7 @@ impl ServerApi {
 
         let url = format!("{}/api/v1/{}", ChannelState::server_root_url(), path);
 
-        let mut request = self.base_client.http_client_ref().delete(&url);
+        let mut request = self.base_client.http_client().delete(&url);
         if let Some(token) = auth_token.as_bearer_token() {
             request = request.bearer_auth(token);
         }
@@ -1009,7 +1009,7 @@ impl ServerApi {
 
         let url = format!("{}/api/v1/{}", ChannelState::server_root_url(), path);
 
-        let mut request = self.base_client.http_client_ref().patch(&url).json(body);
+        let mut request = self.base_client.http_client().patch(&url).json(body);
         if let Some(token) = auth_token.as_bearer_token() {
             request = request.bearer_auth(token);
         }
@@ -1036,7 +1036,7 @@ impl ServerApi {
         match self.get_or_refresh_access_token().await {
             Ok(auth_token) => {
                 let url = format!("{}/client/login", ChannelState::server_root_url());
-                let mut request = self.base_client.http_client_ref().post(&url);
+                let mut request = self.base_client.http_client().post(&url);
                 if let Some(token) = auth_token.as_bearer_token() {
                     request = request.bearer_auth(token);
                 }
@@ -1120,7 +1120,7 @@ impl ServerApi {
     {
         let auth_token = self.get_or_refresh_access_token().await?;
 
-        let request_builder = self.base_client.http_client_ref().post(format!(
+        let request_builder = self.base_client.http_client().post(format!(
             "{}/ai/generate_input_suggestions",
             ChannelState::server_root_url()
         ));
@@ -1145,7 +1145,7 @@ impl ServerApi {
     ) -> Result<GetRelevantFilesResponse, AIApiError> {
         let auth_token = self.get_or_refresh_access_token().await?;
 
-        let request_builder = self.base_client.http_client_ref().post(format!(
+        let request_builder = self.base_client.http_client().post(format!(
             "{}/ai/relevant_files",
             ChannelState::server_root_url()
         ));
@@ -1186,7 +1186,7 @@ impl ServerApi {
             }
         }
 
-        let request_builder = self.base_client.http_client_ref().post(url);
+        let request_builder = self.base_client.http_client().post(url);
         let response = if let Some(token) = auth_token.as_bearer_token() {
             request_builder.bearer_auth(token)
         } else {
@@ -1207,7 +1207,7 @@ impl ServerApi {
         request: &PredictAMQueriesRequest,
     ) -> Result<PredictAMQueriesResponse, AIApiError> {
         let auth_token = self.get_or_refresh_access_token().await?;
-        let request_builder = self.base_client.http_client_ref().post(format!(
+        let request_builder = self.base_client.http_client().post(format!(
             "{}/ai/predict_am_queries",
             ChannelState::server_root_url()
         ));
@@ -1235,7 +1235,7 @@ impl ServerApi {
 
         let request_builder = self
             .base_client
-            .http_client_ref()
+            .http_client()
             .post(format!("{}/ai/transcribe", ChannelState::server_root_url()));
         let response = if let Some(token) = auth_token.as_bearer_token() {
             request_builder.bearer_auth(token)
@@ -1318,7 +1318,7 @@ impl ServerApi {
 
         let mut request_builder = self
             .base_client
-            .http_client_ref()
+            .http_client()
             .post(url)
             .proto(request)
             .prevent_sleep("Agent Mode request in-progress");
@@ -1428,7 +1428,7 @@ impl ServerApi {
         log::info!("Sending server time request to {}", &time_endpoint);
         let res = self
             .base_client
-            .http_client_ref()
+            .http_client()
             .get(&time_endpoint)
             .send()
             .await?;
@@ -1488,7 +1488,7 @@ impl ServerApi {
 
         let mut request_builder = self
             .base_client
-            .http_client_ref()
+            .http_client()
             .get(url.as_str())
             .timeout(FETCH_CHANNEL_VERSIONS_TIMEOUT)
             .header(EXPERIMENT_ID_HEADER, self.anonymous_id());

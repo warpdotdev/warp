@@ -10,7 +10,7 @@ use warp_server_auth::credentials::AuthToken;
 
 use crate::auth::{AuthEvent, AuthSession, UserUid};
 
-/// Header key for the ambient workload token attached to authenticated requests.
+/// Header key for the ambient agent workload token attached to authenticated requests.
 pub const AMBIENT_WORKLOAD_TOKEN_HEADER: &str = "X-Warp-Ambient-Workload-Token";
 
 /// Header key for the cloud agent task ID attached to ambient-agent requests.
@@ -19,7 +19,7 @@ pub const CLOUD_AGENT_ID_HEADER: &str = "X-Warp-Cloud-Agent-ID";
 /// Header used to communicate the source of an agent run.
 pub const AGENT_SOURCE_HEADER: &str = "X-Oz-Api-Source";
 
-/// Duration for which an ambient workload token is valid.
+/// Duration for which an ambient agent workload token is valid.
 const AMBIENT_WORKLOAD_TOKEN_DURATION: Duration = Duration::from_secs(3 * 60 * 60);
 
 /// Selects whether a contextual header is inherited, set, or omitted for one request.
@@ -30,7 +30,7 @@ pub enum HeaderOverride<T> {
     Omit,
 }
 
-/// Describes the request-local ambient headers that are safe to vary by endpoint.
+/// Describes the request-local ambient agent headers that are safe to vary by endpoint.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AmbientHeaderPolicy {
     pub workload_token: HeaderOverride<String>,
@@ -39,7 +39,7 @@ pub struct AmbientHeaderPolicy {
 }
 
 impl AmbientHeaderPolicy {
-    /// Inherits every ambient contextual header configured on the client.
+    /// Inherits every ambient agent contextual header configured on the client.
     pub fn inherit_all() -> Self {
         Self {
             workload_token: HeaderOverride::Inherit,
@@ -65,7 +65,7 @@ impl AmbientHeaderPolicy {
         }
     }
 
-    /// Omits all ambient contextual headers for a request.
+    /// Omits all ambient agent contextual headers for a request.
     pub fn omit_all() -> Self {
         Self {
             workload_token: HeaderOverride::Omit,
@@ -144,7 +144,7 @@ impl BaseClient {
         }
     }
 
-    /// Returns whether authenticated GraphQL decoration would override lower-owned request policy.
+    /// Returns whether authenticated GraphQL decoration would override BaseClient-owned headers.
     fn is_reserved_authenticated_graphql_header(name: &str) -> bool {
         [
             http::header::AUTHORIZATION.as_str(),
@@ -158,18 +158,15 @@ impl BaseClient {
         .iter()
         .any(|reserved| name.eq_ignore_ascii_case(reserved))
     }
+
     /// Returns the shared HTTP client for request construction.
     pub fn http_client(&self) -> &http_client::Client {
         self.client.as_ref()
     }
+
     /// Returns an owned handle to the shared HTTP client for GraphQL operations.
     pub fn owned_http_client(&self) -> Arc<http_client::Client> {
         self.client.clone()
-    }
-
-    /// Returns a borrowed shared HTTP client for traits that require a reference.
-    pub fn http_client_ref(&self) -> &http_client::Client {
-        self.http_client()
     }
 
     pub fn auth_session(&self) -> Arc<AuthSession> {
@@ -195,10 +192,12 @@ impl BaseClient {
     pub async fn get_or_refresh_access_token(&self) -> Result<AuthToken> {
         self.auth_session.get_or_refresh_access_token().await
     }
+
+    /// Returns a sender for asynchronous work that emits auth events without borrowing this client.
     pub fn event_sender(&self) -> async_channel::Sender<AuthEvent> {
         self.event_sender.clone()
     }
-
+    /// Sends an auth event from synchronous client-owned response handling.
     pub fn send_auth_event(
         &self,
         event: AuthEvent,
@@ -215,7 +214,7 @@ impl BaseClient {
         *self.ambient_agent_task_id.write() = task_id;
     }
 
-    /// Returns an ambient workload token when the current runtime can issue one.
+    /// Returns an ambient agent workload token when the current runtime can issue one.
     pub async fn get_or_create_ambient_workload_token(&self) -> Result<Option<String>> {
         if cfg!(target_family = "wasm") {
             return Ok(None);
@@ -247,7 +246,7 @@ impl BaseClient {
         Ok(Some(token))
     }
 
-    /// Resolves request-local ambient policy into wire headers.
+    /// Resolves request-local ambient agent policy into wire headers.
     pub async fn ambient_headers(
         &self,
         policy: AmbientHeaderPolicy,
@@ -256,7 +255,7 @@ impl BaseClient {
             HeaderOverride::Inherit => self
                 .get_or_create_ambient_workload_token()
                 .await
-                .context("Failed to get ambient workload token")?,
+                .context("Failed to get ambient agent workload token")?,
             HeaderOverride::Set(token) => Some(token),
             HeaderOverride::Omit => None,
         };

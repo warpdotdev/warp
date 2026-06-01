@@ -55,6 +55,7 @@ pub struct AgentIdentity {
     pub name: String,
     pub available: bool,
 }
+
 /// Wrapper for the `GET /api/v1/agent/identities` response.
 #[derive(serde::Deserialize)]
 struct AgentIdentitiesResponse {

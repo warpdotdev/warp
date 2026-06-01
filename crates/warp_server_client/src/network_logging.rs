@@ -139,7 +139,7 @@ impl NetworkLogItem {
     }
 
     /// Constructs a log item directly from a pre-formatted string. Used in
-    /// tests where we do not have a real `reqwest` request or response handy.
+    /// tests where we don't have a real `reqwest` request/response handy.
     #[cfg(test)]
     pub fn from_string(s: impl Into<String>) -> Self {
         Self(s.into())

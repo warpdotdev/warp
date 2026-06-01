@@ -109,7 +109,7 @@ fn authenticated_graphql_options_include_configured_and_ambient_headers() {
 }
 
 #[test]
-fn authenticated_graphql_configuration_cannot_override_lower_owned_headers() {
+fn authenticated_graphql_configuration_cannot_override_base_client_owned_headers() {
     let (event_sender, _) = async_channel::unbounded();
     let mut headers = HashMap::new();
     headers.insert("authorization".to_string(), "malicious".to_string());
