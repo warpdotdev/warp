@@ -34,14 +34,14 @@ use super::diff_state_tracker::{
 };
 use super::proto::{
     client_message, delete_file_response, discard_files_response, get_diff_state_response,
-    get_fragment_metadata_from_hash_response, resolve_conflict_response, run_command_response,
-    save_buffer_response, server_message, write_file_response, Abort, Authenticate, BranchInfo,
-    BufferEdit, BufferUpdatedPush, ClientMessage, CloseBuffer, CodebaseIndexLimits,
-    CodebaseIndexStatus, CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot,
-    CodebaseResyncMode, DeleteFile, DeleteFileResponse, DeleteFileSuccess, DiscardFilesError,
-    DiscardFilesResponse, DiscardFilesSuccess, DropCodebaseIndex, ErrorCode, ErrorResponse,
-    FailedFileRead, FileContextProto, FileOperationError,
-    FragmentMetadata as ProtoFragmentMetadata,
+    get_fragment_metadata_from_hash_response, host_scoped_request, notification,
+    resolve_conflict_response, run_command_response, save_buffer_response, server_message,
+    session_scoped_request, write_file_response, Abort, Authenticate, BranchInfo, BufferEdit,
+    BufferUpdatedPush, ClientMessage, CloseBuffer, CodebaseIndexLimits, CodebaseIndexStatus,
+    CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot, CodebaseResyncMode, DeleteFile,
+    DeleteFileResponse, DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse,
+    DiscardFilesSuccess, DropCodebaseIndex, ErrorCode, ErrorResponse, FailedFileRead,
+    FileContextProto, FileOperationError, FragmentMetadata as ProtoFragmentMetadata,
     FragmentMetadataLookupError as ProtoFragmentMetadataLookupError,
     FragmentMetadataLookupErrorCode, GetBranchesError, GetBranchesResponse, GetBranchesSuccess,
     GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashResponse,
@@ -230,6 +230,9 @@ pub struct ServerModel {
     buffers: ServerBufferTracker,
     /// Manages per-(repo, mode) diff state models and per-connection subscriptions.
     diff_states: ModelHandle<RemoteDiffStateManager>,
+    /// In-flight host-scoped requests whose response may be delivered on
+    /// a different connection if the originating connection disconnects.
+    host_scoped_requests: HashMap<RequestId, ConnectionId>,
 }
 
 impl Entity for ServerModel {
@@ -257,6 +260,7 @@ impl ServerModel {
             auth_state: AuthStateProvider::as_ref(ctx).get().clone(),
             buffers: ServerBufferTracker::new(),
             diff_states: ctx.add_model(|_| RemoteDiffStateManager::new()),
+            host_scoped_requests: HashMap::new(),
         };
         // Subscribe to FileModel and RepoMetadataModel events
         // file operation results and repo metadata pushes are forwarded to all
@@ -432,7 +436,10 @@ impl ServerModel {
                         })
                         .collect();
 
-                    for &conn_id in conns {
+                    // Collect to break the immutable borrow on `me.buffers`
+                    // before calling `me.send_server_message(&mut self)`.
+                    let conns: Vec<_> = conns.iter().copied().collect();
+                    for conn_id in conns {
                         if excluded.contains(&conn_id) {
                             continue;
                         }
@@ -544,8 +551,11 @@ impl ServerModel {
                     // to connected clients so they can show a resolution banner.
                     if !success {
                         if let Some(conns) = me.buffers.connections_for_buffer(file_id) {
+                            // Collect to break the immutable borrow on `me.buffers`
+                            // before calling `me.send_server_message(&mut self)`.
+                            let conns: Vec<_> = conns.iter().copied().collect();
                             let path = me.buffers.path_for_file_id(*file_id).unwrap_or_default();
-                            for &conn_id in conns {
+                            for conn_id in conns {
                                 me.send_server_message(
                                     Some(conn_id),
                                     None,
@@ -614,6 +624,31 @@ impl ServerModel {
             return;
         }
 
+        // Host-scoped in-flight requests that were sent through the dead
+        // connection are NOT eagerly reassigned here. Instead,
+        // `send_server_message` handles failover at delivery time: when it
+        // finds the target connection is gone, it picks any other open
+        // connection. If no connections remain at delivery time, the
+        // response is dropped (logged). If no connections remain NOW and
+        // there are in-progress handlers, abort them so they don't run
+        // to completion pointlessly.
+        if self.connection_senders.is_empty() {
+            let orphaned: Vec<RequestId> = self
+                .host_scoped_requests
+                .keys()
+                .cloned()
+                .collect();
+            for rid in orphaned {
+                self.host_scoped_requests.remove(&rid);
+                if let Some(handle) = self.in_progress.remove(&rid) {
+                    log::warn!(
+                        "Daemon: no connections remain, aborting host-scoped request {rid}"
+                    );
+                    handle.abort();
+                }
+            }
+        }
+
         // Remove this connection from all buffer connection sets.
         // Orphaned buffers (no connections left) are deallocated automatically.
         self.buffers.remove_connection(conn_id, ctx);
@@ -668,99 +703,140 @@ impl ServerModel {
     ) {
         let request_id = RequestId::from(msg.request_id);
 
-        let outcome = match msg.message {
-            Some(client_message::Message::Initialize(msg)) => {
-                self.handle_initialize(msg, &request_id, ctx)
+        let (outcome, is_host_scoped) = match msg.message {
+            // ── Host-scoped requests (daemon owns failover delivery) ───
+            Some(client_message::Message::HostScoped(wrapper)) => {
+                let outcome = match wrapper.message {
+                    Some(host_scoped_request::Message::WriteFile(m)) => {
+                        self.handle_write_file(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::DeleteFile(m)) => {
+                        self.handle_delete_file(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::ReadFileContext(m)) => {
+                        self.handle_read_file_context(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::OpenBuffer(m)) => {
+                        self.handle_open_buffer(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::SaveBuffer(m)) => {
+                        self.handle_save_buffer(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::ResolveConflict(m)) => {
+                        self.handle_resolve_conflict(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::GetDiffState(m)) => {
+                        self.handle_get_diff_state(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::DiscardFiles(m)) => {
+                        self.handle_discard_files(m, &request_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::IndexCodebase(m)) => {
+                        self.handle_index_codebase(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::DropCodebaseIndex(m)) => {
+                        self.handle_drop_codebase_index(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::GetFragmentMetadataFromHash(m)) => {
+                        self.handle_get_fragment_metadata_from_hash(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::GetBranches(m)) => {
+                        self.handle_get_branches(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::ResyncCodebase(m)) => {
+                        self.handle_resync_codebase(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::UploadHandoffSnapshot(m)) => {
+                        self.handle_upload_handoff_snapshot(m, &request_id, conn_id, ctx)
+                    }
+                    None => {
+                        log::warn!(
+                            "HostScopedRequest with no inner message (request_id={request_id})"
+                        );
+                        HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                            code: ErrorCode::InvalidRequest.into(),
+                            message: "HostScopedRequest had no message variant set".to_string(),
+                        }))
+                    }
+                };
+                (outcome, true)
             }
-            Some(client_message::Message::Authenticate(msg)) => {
-                self.handle_authenticate(msg);
-                return;
+            // ── Session-scoped requests (response tied to originating connection) ───
+            Some(client_message::Message::SessionScoped(wrapper)) => {
+                let outcome = match wrapper.message {
+                    Some(session_scoped_request::Message::Initialize(m)) => {
+                        self.handle_initialize(m, &request_id, ctx)
+                    }
+                    Some(session_scoped_request::Message::NavigatedToDirectory(m)) => {
+                        self.handle_navigated_to_directory(m, &request_id, conn_id, ctx)
+                    }
+                    Some(session_scoped_request::Message::LoadRepoMetadataDirectory(m)) => {
+                        self.handle_load_repo_metadata_directory(m, &request_id, ctx)
+                    }
+                    Some(session_scoped_request::Message::RunCommand(m)) => {
+                        self.handle_run_command(m, &request_id, conn_id, ctx)
+                    }
+                    None => {
+                        log::warn!(
+                            "SessionScopedRequest with no inner message (request_id={request_id})"
+                        );
+                        HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                            code: ErrorCode::InvalidRequest.into(),
+                            message: "SessionScopedRequest had no message variant set".to_string(),
+                        }))
+                    }
+                };
+                (outcome, false)
             }
-            Some(client_message::Message::UpdatePreferences(msg)) => {
-                self.handle_update_preferences(msg, ctx);
-                return;
-            }
-            Some(client_message::Message::SessionBootstrapped(msg)) => {
-                self.handle_session_bootstrapped(msg);
-                return;
-            }
-            Some(client_message::Message::Abort(abort)) => {
-                self.handle_abort(abort, &request_id, ctx);
-                return;
-            }
-            Some(client_message::Message::RunCommand(req)) => {
-                self.handle_run_command(req, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::NavigatedToDirectory(msg)) => {
-                self.handle_navigated_to_directory(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::LoadRepoMetadataDirectory(msg)) => {
-                self.handle_load_repo_metadata_directory(msg, &request_id, ctx)
-            }
-            Some(client_message::Message::WriteFile(msg)) => {
-                self.handle_write_file(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::DeleteFile(msg)) => {
-                self.handle_delete_file(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::ReadFileContext(msg)) => {
-                self.handle_read_file_context(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::OpenBuffer(msg)) => {
-                self.handle_open_buffer(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::BufferEdit(msg)) => {
-                self.handle_buffer_edit(msg, ctx);
-                return; // fire-and-forget notification
-            }
-            Some(client_message::Message::CloseBuffer(msg)) => {
-                self.handle_close_buffer(msg, conn_id, ctx);
-                return; // fire-and-forget notification
-            }
-            Some(client_message::Message::SaveBuffer(msg)) => {
-                self.handle_save_buffer(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::ResolveConflict(msg)) => {
-                self.handle_resolve_conflict(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::GetDiffState(msg)) => {
-                self.handle_get_diff_state(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::UnsubscribeDiffState(msg)) => {
-                self.handle_unsubscribe_diff_state(msg, conn_id, ctx);
-                return; // fire-and-forget notification
-            }
-            Some(client_message::Message::GetBranches(msg)) => {
-                self.handle_get_branches(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::DiscardFiles(msg)) => {
-                self.handle_discard_files(msg, &request_id, ctx)
-            }
-            Some(client_message::Message::IndexCodebase(msg)) => {
-                self.handle_index_codebase(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::ResyncCodebase(msg)) => {
-                self.handle_resync_codebase(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::DropCodebaseIndex(msg)) => {
-                self.handle_drop_codebase_index(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::GetFragmentMetadataFromHash(msg)) => {
-                self.handle_get_fragment_metadata_from_hash(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::UploadHandoffSnapshot(msg)) => {
-                self.handle_upload_handoff_snapshot(msg, &request_id, conn_id, ctx)
+            // ── Notifications (fire-and-forget) ───
+            Some(client_message::Message::Notification(wrapper)) => {
+                match wrapper.message {
+                    Some(notification::Message::Abort(m)) => {
+                        self.handle_abort(m, &request_id, ctx);
+                    }
+                    Some(notification::Message::Authenticate(m)) => {
+                        self.handle_authenticate(m);
+                    }
+                    Some(notification::Message::UpdatePreferences(m)) => {
+                        self.handle_update_preferences(m, ctx);
+                    }
+                    Some(notification::Message::SessionBootstrapped(m)) => {
+                        self.handle_session_bootstrapped(m);
+                    }
+                    Some(notification::Message::BufferEdit(m)) => {
+                        self.handle_buffer_edit(m, ctx);
+                    }
+                    Some(notification::Message::CloseBuffer(m)) => {
+                        self.handle_close_buffer(m, conn_id, ctx);
+                    }
+                    Some(notification::Message::UnsubscribeDiffState(m)) => {
+                        self.handle_unsubscribe_diff_state(m, conn_id, ctx);
+                    }
+                    None => {
+                        log::warn!("Notification with no inner message (request_id={request_id})");
+                    }
+                }
+                return; // Notifications never produce a response.
             }
             None => {
                 log::warn!(
                     "Received ClientMessage with no message variant (request_id={request_id})"
                 );
-                HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
-                    code: ErrorCode::InvalidRequest.into(),
-                    message: "ClientMessage had no message variant set".to_string(),
-                }))
+                (
+                    HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                        code: ErrorCode::InvalidRequest.into(),
+                        message: "ClientMessage had no message variant set".to_string(),
+                    })),
+                    false,
+                )
             }
         };
+
+        // Track host-scoped requests for failover delivery.
+        if is_host_scoped && !request_id.is_empty() {
+            self.host_scoped_requests
+                .insert(request_id.clone(), conn_id);
+        }
 
         match outcome {
             HandlerOutcome::Sync(server_message::Message::InitializeResponse(response)) => {
@@ -1208,12 +1284,28 @@ impl ServerModel {
     ///   the request (used for all request/response pairs).
     /// - `conn_id = None` — broadcasts to every connected proxy (used for
     ///   server-initiated push notifications such as repo metadata updates).
+    ///
+    /// For host-scoped requests: if the target connection is gone, the
+    /// response is delivered through any other open connection. This
+    /// handles the case where a session disconnects while a host-scoped
+    /// request is still in flight.
     fn send_server_message(
-        &self,
+        &mut self,
         conn_id: Option<ConnectionId>,
         request_id: Option<&RequestId>,
         message: server_message::Message,
     ) {
+        // Check if this is a host-scoped request eligible for failover
+        // delivery BEFORE removing from tracking.
+        let is_host_scoped_response = request_id
+            .is_some_and(|rid| !rid.is_empty() && self.host_scoped_requests.contains_key(rid));
+
+        // Remove from host-scoped tracking if this is a response
+        // (not a push notification).
+        if let Some(rid) = request_id {
+            self.host_scoped_requests.remove(rid);
+        }
+
         let msg = ServerMessage {
             request_id: request_id.map(|id| id.clone().into()).unwrap_or_default(),
             message: Some(message),
@@ -1222,6 +1314,25 @@ impl ServerModel {
             if let Some(conn_tx) = self.connection_senders.get(&target) {
                 if let Err(e) = conn_tx.try_send(msg) {
                     log::warn!("Daemon: failed to send to conn {target}: {e}");
+                }
+            } else if is_host_scoped_response {
+                // Target connection is gone. Deliver the host-scoped
+                // response through any other open connection.
+                if let Some((&alt_id, alt_tx)) = self.connection_senders.iter().next() {
+                    log::info!(
+                        "Daemon: failover delivery for request_id={} from disconnected \
+                         conn {target} to conn {alt_id}",
+                        msg.request_id
+                    );
+                    if let Err(e) = alt_tx.try_send(msg) {
+                        log::warn!("Daemon: failover delivery failed to conn {alt_id}: {e}");
+                    }
+                } else {
+                    log::warn!(
+                        "Daemon: cannot deliver host-scoped response for request_id={}, \
+                         no connections available",
+                        msg.request_id
+                    );
                 }
             } else {
                 log::debug!("Daemon: no sender for conn {target} (already disconnected)");
@@ -2361,7 +2472,7 @@ impl ServerModel {
 
     /// Converts a domain-level diff state dispatch to proto messages
     /// and sends them to the appropriate connections.
-    fn handle_diff_state_update(&self, update: &DiffStateUpdate) {
+    fn handle_diff_state_update(&mut self, update: &DiffStateUpdate) {
         match update {
             DiffStateUpdate::Snapshot {
                 repo_path,

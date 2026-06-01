@@ -14,17 +14,18 @@ use crate::codebase_index_proto::{
     RemoteCodebaseIndexStatus,
 };
 use crate::proto::{
-    client_message, get_branches_response, get_fragment_metadata_from_hash_response,
-    server_message, Abort, Authenticate, BranchInfo, BufferEdit, ClientMessage, CloseBuffer,
-    CodebaseIndexLimits, CodebaseResyncMode, DeleteFile, DiffMode, DiffStateFileDelta,
-    DiffStateMetadataUpdate, DiffStateSnapshot, DiscardFilesRequest, DropCodebaseIndex, ErrorCode,
-    FileStatusInfo, FragmentMetadataLookupErrorCode, GetBranches, GetDiffState,
-    GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashSuccess,
-    IndexCodebase, Initialize, InitializeResponse, LoadRepoMetadataDirectoryResponse,
-    NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, ReadFileContextRequest,
-    ReadFileContextResponse, ResyncCodebase, RunCommandRequest, RunCommandResponse, SaveBuffer,
-    ServerMessage, SessionBootstrapped, TextEdit, UnsubscribeDiffState, UploadHandoffSnapshot,
-    UploadHandoffSnapshotResponse, WriteFile,
+    get_branches_response, get_fragment_metadata_from_hash_response, host_scoped_request,
+    notification, server_message, session_scoped_request, Abort, Authenticate, BranchInfo,
+    BufferEdit, ClientMessage, CloseBuffer, CodebaseIndexLimits, CodebaseResyncMode, DeleteFile,
+    DiffMode, DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot, DiscardFilesRequest,
+    DropCodebaseIndex, ErrorCode, FileStatusInfo, FragmentMetadataLookupErrorCode, GetBranches,
+    GetDiffState, GetDiffStateResponse, GetFragmentMetadataFromHash,
+    GetFragmentMetadataFromHashSuccess, IndexCodebase, Initialize, InitializeResponse,
+    LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse, OpenBuffer,
+    OpenBufferResponse, ReadFileContextRequest, ReadFileContextResponse, ResyncCodebase,
+    RunCommandRequest, RunCommandResponse, SaveBuffer, ServerMessage, SessionBootstrapped,
+    TextEdit, UnsubscribeDiffState, UploadHandoffSnapshot, UploadHandoffSnapshotResponse,
+    WriteFile,
 };
 use crate::repo_metadata_proto::{proto_snapshot_to_update, proto_to_repo_metadata_update};
 
@@ -176,6 +177,8 @@ pub struct RemoteServerClient {
     outbound_tx: async_channel::Sender<ClientMessage>,
 
     /// Maps `request_id` → oneshot sender for the correlated response from the remote server.
+    /// Only used for session-scoped requests. Host-scoped requests bypass this
+    /// map entirely (see `send_host_scoped`).
     pending_requests: Arc<DashMap<RequestId, oneshot::Sender<Result<ServerMessage, ClientError>>>>,
 
     /// Set to `true` by the reader task when the connection is lost. Checked by
@@ -188,6 +191,14 @@ pub struct RemoteServerClient {
     /// lifecycle stream alive (which would prevent `spawn_stream_local`'s
     /// completion callback from firing `mark_session_disconnected`).
     failure_tx: async_channel::Sender<RequestFailedEvent>,
+
+    /// Channel for responses whose `request_id` is not in `pending_requests`.
+    /// These are host-scoped responses — either the normal path (the request
+    /// was sent via `send_host_scoped` on this connection) or daemon failover
+    /// (the daemon re-routed a response from a dead connection to this one).
+    /// The `RemoteServerManager` drains this channel to match against its
+    /// `pending_host_requests`.
+    host_response_tx: async_channel::Sender<ServerMessage>,
 }
 
 impl fmt::Debug for RemoteServerClient {
@@ -223,11 +234,12 @@ impl RemoteServerClient {
         Self,
         async_channel::Receiver<ClientEvent>,
         async_channel::Receiver<RequestFailedEvent>,
+        async_channel::Receiver<ServerMessage>,
         RemoteServerLog,
     ) {
         let stderr_tail = spawn_stderr_forwarder(stderr, executor);
-        let (client, event_rx, failure_rx) = Self::new(stdout, stdin, executor);
-        (client, event_rx, failure_rx, stderr_tail)
+        let (client, event_rx, failure_rx, host_response_rx) = Self::new(stdout, stdin, executor);
+        (client, event_rx, failure_rx, host_response_rx, stderr_tail)
     }
 }
 
@@ -245,6 +257,7 @@ impl RemoteServerClient {
         Self,
         async_channel::Receiver<ClientEvent>,
         async_channel::Receiver<RequestFailedEvent>,
+        async_channel::Receiver<ServerMessage>,
     ) {
         let pending_requests: Arc<
             DashMap<RequestId, oneshot::Sender<Result<ServerMessage, ClientError>>>,
@@ -252,6 +265,7 @@ impl RemoteServerClient {
         let (outbound_tx, outbound_rx) = async_channel::unbounded::<ClientMessage>();
         let (event_tx, event_rx) = async_channel::unbounded::<ClientEvent>();
         let (failure_tx, failure_rx) = async_channel::unbounded::<RequestFailedEvent>();
+        let (host_response_tx, host_response_rx) = async_channel::unbounded::<ServerMessage>();
         let disconnected = Arc::new(AtomicBool::new(false));
 
         executor
@@ -267,6 +281,7 @@ impl RemoteServerClient {
                 Arc::clone(&pending_requests),
                 event_tx,
                 Arc::clone(&disconnected),
+                host_response_tx.clone(),
             ))
             .detach();
 
@@ -276,9 +291,11 @@ impl RemoteServerClient {
                 pending_requests,
                 disconnected,
                 failure_tx,
+                host_response_tx,
             },
             event_rx,
             failure_rx,
+            host_response_rx,
         )
     }
 
@@ -303,16 +320,16 @@ impl RemoteServerClient {
         params: InitializeParams,
     ) -> Result<InitializeResponse, ClientError> {
         let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::Initialize(Initialize {
+        let msg = ClientMessage::session_scoped(
+            request_id.to_string(),
+            session_scoped_request::Message::Initialize(Initialize {
                 auth_token: auth_token.unwrap_or_default().to_owned(),
                 user_id: params.user_id,
                 user_email: params.user_email,
                 crash_reporting_enabled: params.crash_reporting_enabled,
                 codebase_index_limits: params.codebase_index_limits,
-            })),
-        };
+            }),
+        );
 
         let response = self.send_request_internal(request_id, msg).await?;
 
@@ -333,24 +350,15 @@ impl RemoteServerClient {
         repo_path: String,
         auth_token: String,
     ) -> Result<RemoteCodebaseIndexStatus, ClientError> {
-        let request_id = RequestId::new();
-        let repo_path_for_log = repo_path.clone();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::IndexCodebase(IndexCodebase {
-                repo_path,
-                auth_token,
-            })),
-        };
         log::info!(
-            "[Remote codebase indexing] Client sending IndexCodebase: request_id={request_id} \
-             repo_path={repo_path_for_log}"
+            "[Remote codebase indexing] Client sending IndexCodebase: repo_path={repo_path}"
         );
-
         let response = self
-            .send_request(
-                request_id,
-                msg,
+            .send_host_scoped_request(
+                host_scoped_request::Message::IndexCodebase(IndexCodebase {
+                    repo_path,
+                    auth_token,
+                }),
                 crate::manager::RemoteServerOperation::IndexCodebase,
             )
             .await?;
@@ -383,25 +391,17 @@ impl RemoteServerClient {
         auth_token: String,
         mode: CodebaseResyncMode,
     ) -> Result<RemoteCodebaseIndexStatus, ClientError> {
-        let request_id = RequestId::new();
-        let repo_path_for_log = repo_path.clone();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::ResyncCodebase(ResyncCodebase {
-                repo_path,
-                auth_token,
-                mode: mode.into(),
-            })),
-        };
         log::info!(
-            "[Remote codebase indexing] Client sending ResyncCodebase: request_id={request_id} \
-             repo_path={repo_path_for_log} mode={mode:?}"
+            "[Remote codebase indexing] Client sending ResyncCodebase: \
+             repo_path={repo_path} mode={mode:?}"
         );
-
         let response = self
-            .send_request(
-                request_id,
-                msg,
+            .send_host_scoped_request(
+                host_scoped_request::Message::ResyncCodebase(ResyncCodebase {
+                    repo_path,
+                    auth_token,
+                    mode: mode.into(),
+                }),
                 crate::manager::RemoteServerOperation::ResyncCodebase,
             )
             .await?;
@@ -440,30 +440,18 @@ impl RemoteServerClient {
         repo_path: String,
         auth_token: String,
     ) -> Result<RemoteCodebaseIndexStatus, ClientError> {
-        let request_id = RequestId::new();
-        let repo_path_for_log = repo_path.clone();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::DropCodebaseIndex(
-                DropCodebaseIndex {
+        log::info!(
+            "[Remote codebase indexing] Client sending DropCodebaseIndex: repo_path={repo_path}"
+        );
+        let response = self
+            .send_host_scoped_request(
+                host_scoped_request::Message::DropCodebaseIndex(DropCodebaseIndex {
                     repo_path,
                     auth_token,
-                },
-            )),
-        };
-        log::info!(
-            "[Remote codebase indexing] Client sending DropCodebaseIndex: request_id={request_id} \
-             repo_path={repo_path_for_log}"
-        );
-
-        let response = self
-            .send_request(
-                request_id,
-                msg,
+                }),
                 crate::manager::RemoteServerOperation::DropCodebaseIndex,
             )
             .await?;
-
         Self::codebase_index_status_from_response("DropCodebaseIndex", response)
     }
 
@@ -474,22 +462,15 @@ impl RemoteServerClient {
         root_hash: String,
         content_hashes: Vec<String>,
     ) -> Result<GetFragmentMetadataFromHashSuccess, ClientError> {
-        let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::GetFragmentMetadataFromHash(
-                GetFragmentMetadataFromHash {
-                    repo_path,
-                    root_hash,
-                    content_hashes,
-                },
-            )),
-        };
-
         let response = self
-            .send_request(
-                request_id,
-                msg,
+            .send_host_scoped_request(
+                host_scoped_request::Message::GetFragmentMetadataFromHash(
+                    GetFragmentMetadataFromHash {
+                        repo_path,
+                        root_hash,
+                        content_hashes,
+                    },
+                ),
                 crate::manager::RemoteServerOperation::GetFragmentMetadataFromHash,
             )
             .await?;
@@ -523,12 +504,9 @@ impl RemoteServerClient {
     /// Sends an `Authenticate` notification to rotate the daemon-wide
     /// credential after initialization.
     pub fn authenticate(&self, auth_token: &str) {
-        let msg = ClientMessage {
-            request_id: String::new(),
-            message: Some(client_message::Message::Authenticate(Authenticate {
-                auth_token: auth_token.to_owned(),
-            })),
-        };
+        let msg = ClientMessage::notification(notification::Message::Authenticate(Authenticate {
+            auth_token: auth_token.to_owned(),
+        }));
         self.send_notification(msg);
     }
 
@@ -539,15 +517,12 @@ impl RemoteServerClient {
         crash_reporting_enabled: bool,
         codebase_index_limits: Option<CodebaseIndexLimits>,
     ) {
-        let msg = ClientMessage {
-            request_id: String::new(),
-            message: Some(client_message::Message::UpdatePreferences(
-                crate::proto::UpdatePreferences {
-                    crash_reporting_enabled,
-                    codebase_index_limits,
-                },
-            )),
-        };
+        let msg = ClientMessage::notification(notification::Message::UpdatePreferences(
+            crate::proto::UpdatePreferences {
+                crash_reporting_enabled,
+                codebase_index_limits,
+            },
+        ));
         self.send_notification(msg);
     }
 
@@ -559,16 +534,13 @@ impl RemoteServerClient {
         shell_type: &str,
         shell_path: Option<&str>,
     ) {
-        let msg = ClientMessage {
-            request_id: String::new(),
-            message: Some(client_message::Message::SessionBootstrapped(
-                SessionBootstrapped {
-                    session_id: session_id.as_u64(),
-                    shell_type: shell_type.to_owned(),
-                    shell_path: shell_path.map(ToOwned::to_owned),
-                },
-            )),
-        };
+        let msg = ClientMessage::notification(notification::Message::SessionBootstrapped(
+            SessionBootstrapped {
+                session_id: session_id.as_u64(),
+                shell_type: shell_type.to_owned(),
+                shell_path: shell_path.map(ToOwned::to_owned),
+            },
+        ));
         self.send_notification(msg);
     }
 
@@ -578,12 +550,12 @@ impl RemoteServerClient {
         path: String,
     ) -> Result<NavigatedToDirectoryResponse, ClientError> {
         let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::NavigatedToDirectory(
+        let msg = ClientMessage::session_scoped(
+            request_id.to_string(),
+            session_scoped_request::Message::NavigatedToDirectory(
                 crate::proto::NavigatedToDirectory { path },
-            )),
-        };
+            ),
+        );
 
         let response = self
             .send_request(
@@ -612,15 +584,15 @@ impl RemoteServerClient {
         dir_path: String,
     ) -> Result<LoadRepoMetadataDirectoryResponse, ClientError> {
         let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::LoadRepoMetadataDirectory(
+        let msg = ClientMessage::session_scoped(
+            request_id.to_string(),
+            session_scoped_request::Message::LoadRepoMetadataDirectory(
                 crate::proto::LoadRepoMetadataDirectory {
                     repo_path,
                     dir_path,
                 },
-            )),
-        };
+            ),
+        );
 
         let response = self
             .send_request(
@@ -645,18 +617,9 @@ impl RemoteServerClient {
     /// Writes content to a file on the remote host.
     /// Creates parent directories if they don't exist.
     pub async fn write_file(&self, path: String, content: String) -> Result<(), ClientError> {
-        let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::WriteFile(WriteFile {
-                path,
-                content,
-            })),
-        };
         let response = self
-            .send_request(
-                request_id,
-                msg,
+            .send_host_scoped_request(
+                host_scoped_request::Message::WriteFile(WriteFile { path, content }),
                 crate::manager::RemoteServerOperation::WriteFile,
             )
             .await?;
@@ -687,15 +650,9 @@ impl RemoteServerClient {
         &self,
         request: ReadFileContextRequest,
     ) -> Result<ReadFileContextResponse, ClientError> {
-        let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::ReadFileContext(request)),
-        };
         let response = self
-            .send_request(
-                request_id,
-                msg,
+            .send_host_scoped_request(
+                host_scoped_request::Message::ReadFileContext(request),
                 crate::manager::RemoteServerOperation::ReadFileContext,
             )
             .await?;
@@ -720,18 +677,9 @@ impl RemoteServerClient {
         path: String,
         force_reload: bool,
     ) -> Result<OpenBufferResponse, ClientError> {
-        let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::OpenBuffer(OpenBuffer {
-                path,
-                force_reload,
-            })),
-        };
         let response = self
-            .send_request(
-                request_id,
-                msg,
+            .send_host_scoped_request(
+                host_scoped_request::Message::OpenBuffer(OpenBuffer { path, force_reload }),
                 crate::manager::RemoteServerOperation::OpenBuffer,
             )
             .await?;
@@ -752,29 +700,20 @@ impl RemoteServerClient {
         new_client_version: u64,
         edits: Vec<TextEdit>,
     ) {
-        let msg = ClientMessage {
-            request_id: String::new(), // notification — no response expected
-            message: Some(client_message::Message::BufferEdit(BufferEdit {
-                path,
-                expected_server_version,
-                new_client_version,
-                edits,
-            })),
-        };
+        let msg = ClientMessage::notification(notification::Message::BufferEdit(BufferEdit {
+            path,
+            expected_server_version,
+            new_client_version,
+            edits,
+        }));
         self.send_notification(msg);
     }
 
     /// Saves a buffer on the remote host to disk.
     pub async fn save_buffer(&self, path: String) -> Result<(), ClientError> {
-        let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::SaveBuffer(SaveBuffer { path })),
-        };
         let response = self
-            .send_request(
-                request_id,
-                msg,
+            .send_host_scoped_request(
+                host_scoped_request::Message::SaveBuffer(SaveBuffer { path }),
                 crate::manager::RemoteServerOperation::SaveBuffer,
             )
             .await?;
@@ -794,24 +733,16 @@ impl RemoteServerClient {
 
     /// Tells the remote host to close a buffer (stop watching).
     pub fn close_buffer(&self, path: String) {
-        let msg = ClientMessage {
-            request_id: String::new(),
-            message: Some(client_message::Message::CloseBuffer(CloseBuffer { path })),
-        };
+        let msg =
+            ClientMessage::notification(notification::Message::CloseBuffer(CloseBuffer { path }));
         self.send_notification(msg);
     }
 
     /// Deletes a file on the remote host.
     pub async fn delete_file(&self, path: String) -> Result<(), ClientError> {
-        let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::DeleteFile(DeleteFile { path })),
-        };
         let response = self
-            .send_request(
-                request_id,
-                msg,
+            .send_host_scoped_request(
+                host_scoped_request::Message::DeleteFile(DeleteFile { path }),
                 crate::manager::RemoteServerOperation::DeleteFile,
             )
             .await?;
@@ -963,19 +894,12 @@ impl RemoteServerClient {
         repo_path: &StandardizedPath,
         mode: DiffMode,
     ) -> Result<GetDiffStateResponse, ClientError> {
-        let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::GetDiffState(GetDiffState {
-                repo_path: repo_path.to_string(),
-                mode: Some(mode),
-            })),
-        };
-
         let response = self
-            .send_request(
-                request_id,
-                msg,
+            .send_host_scoped_request(
+                host_scoped_request::Message::GetDiffState(GetDiffState {
+                    repo_path: repo_path.to_string(),
+                    mode: Some(mode),
+                }),
                 crate::manager::RemoteServerOperation::GetDiffState,
             )
             .await?;
@@ -994,15 +918,12 @@ impl RemoteServerClient {
 
     /// Sends an `UnsubscribeDiffState` notification (fire-and-forget).
     pub fn unsubscribe_diff_state(&self, repo_path: &StandardizedPath, mode: DiffMode) {
-        let msg = ClientMessage {
-            request_id: String::new(),
-            message: Some(client_message::Message::UnsubscribeDiffState(
-                UnsubscribeDiffState {
-                    repo_path: repo_path.to_string(),
-                    mode: Some(mode),
-                },
-            )),
-        };
+        let msg = ClientMessage::notification(notification::Message::UnsubscribeDiffState(
+            UnsubscribeDiffState {
+                repo_path: repo_path.to_string(),
+                mode: Some(mode),
+            },
+        ));
         self.send_notification(msg);
     }
 
@@ -1013,20 +934,13 @@ impl RemoteServerClient {
         max_branch_count: Option<u32>,
         include_remotes: bool,
     ) -> Result<Vec<BranchInfo>, ClientError> {
-        let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::GetBranches(GetBranches {
-                repo_path: repo_path.to_string(),
-                max_branch_count,
-                include_remotes,
-            })),
-        };
-
         let response = self
-            .send_request(
-                request_id,
-                msg,
+            .send_host_scoped_request(
+                host_scoped_request::Message::GetBranches(GetBranches {
+                    repo_path: repo_path.to_string(),
+                    max_branch_count,
+                    include_remotes,
+                }),
                 crate::manager::RemoteServerOperation::GetBranches,
             )
             .await?;
@@ -1065,21 +979,15 @@ impl RemoteServerClient {
         branch_name: Option<String>,
         mode: DiffMode,
     ) -> Result<(), ClientError> {
-        let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::DiscardFiles(DiscardFilesRequest {
-                repo_path: repo_path.to_string(),
-                files,
-                should_stash,
-                branch_name,
-                mode: Some(mode),
-            })),
-        };
         let response = self
-            .send_request(
-                request_id,
-                msg,
+            .send_host_scoped_request(
+                host_scoped_request::Message::DiscardFiles(DiscardFilesRequest {
+                    repo_path: repo_path.to_string(),
+                    files,
+                    should_stash,
+                    branch_name,
+                    mode: Some(mode),
+                }),
                 crate::manager::RemoteServerOperation::DiscardFiles,
             )
             .await?;
@@ -1116,15 +1024,15 @@ impl RemoteServerClient {
         environment_variables: HashMap<String, String>,
     ) -> Result<RunCommandResponse, ClientError> {
         let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::RunCommand(RunCommandRequest {
+        let msg = ClientMessage::session_scoped(
+            request_id.to_string(),
+            session_scoped_request::Message::RunCommand(RunCommandRequest {
                 command,
                 working_directory,
                 environment_variables,
                 session_id: session_id.as_u64(),
-            })),
-        };
+            }),
+        );
 
         let response = self
             .send_request(
@@ -1152,20 +1060,11 @@ impl RemoteServerClient {
         &self,
         paths: Vec<StandardizedPath>,
     ) -> Result<UploadHandoffSnapshotResponse, ClientError> {
-        let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::UploadHandoffSnapshot(
-                UploadHandoffSnapshot {
-                    paths: paths.into_iter().map(|p| p.to_string()).collect(),
-                },
-            )),
-        };
-
         let response = self
-            .send_request(
-                request_id,
-                msg,
+            .send_host_scoped_request(
+                host_scoped_request::Message::UploadHandoffSnapshot(UploadHandoffSnapshot {
+                    paths: paths.into_iter().map(|p| p.to_string()).collect(),
+                }),
                 crate::manager::RemoteServerOperation::UploadHandoffSnapshot,
             )
             .await?;
@@ -1201,6 +1100,22 @@ impl RemoteServerClient {
             });
         }
         result
+    }
+
+    /// Sends a host-scoped request and awaits the raw `ServerMessage` response.
+    ///
+    /// This is the generic entry point for all host-scoped request/response
+    /// calls. It assigns a fresh `RequestId`, wraps the inner message in
+    /// `ClientMessage::host_scoped`, and routes the round-trip through
+    /// `send_request` (which instruments failures for telemetry).
+    pub async fn send_host_scoped_request(
+        &self,
+        inner: host_scoped_request::Message,
+        operation: crate::manager::RemoteServerOperation,
+    ) -> Result<ServerMessage, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage::host_scoped(request_id.to_string(), inner);
+        self.send_request(request_id, msg, operation).await
     }
 
     /// Generic request/response correlation.
@@ -1258,12 +1173,9 @@ impl RemoteServerClient {
 
     /// Sends an `Abort` notification for the given request ID.
     fn send_abort(&self, request_id_to_abort: &RequestId) {
-        let msg = ClientMessage {
-            request_id: RequestId::new().to_string(),
-            message: Some(client_message::Message::Abort(Abort {
-                request_id_to_abort: request_id_to_abort.to_string(),
-            })),
-        };
+        let msg = ClientMessage::notification(notification::Message::Abort(Abort {
+            request_id_to_abort: request_id_to_abort.to_string(),
+        }));
         self.send_notification(msg);
     }
 
@@ -1273,6 +1185,19 @@ impl RemoteServerClient {
         // the notification is best-effort.
         if let Err(e) = self.outbound_tx.try_send(msg) {
             log::debug!("Failed to send notification (best-effort): {e}");
+        }
+    }
+
+    /// Sends a host-scoped request without registering it in `pending_requests`.
+    ///
+    /// The response lifecycle for host-scoped requests is owned by the
+    /// `RemoteServerManager`, not this client. The daemon may deliver the
+    /// response on a different connection if this one disconnects. The
+    /// `reader_task` forwards unmatched responses to `host_response_tx`
+    /// so the manager can match them.
+    pub fn send_host_scoped(&self, msg: ClientMessage) {
+        if let Err(e) = self.outbound_tx.try_send(msg) {
+            log::warn!("Failed to send host-scoped request: {e}");
         }
     }
 
@@ -1312,6 +1237,7 @@ impl RemoteServerClient {
         >,
         event_tx: async_channel::Sender<ClientEvent>,
         disconnected: Arc<AtomicBool>,
+        host_response_tx: async_channel::Sender<ServerMessage>,
     ) {
         let mut reader = futures::io::BufReader::new(reader);
         loop {
@@ -1326,10 +1252,17 @@ impl RemoteServerClient {
                             }
                         }
                     } else if let Some((_, tx)) = pending_requests.remove(&request_id) {
-                        // Ignore send failure — the caller may have dropped the receiver.
+                        // Session-scoped response — resolve the caller's oneshot.
                         let _ = tx.send(Ok(msg));
                     } else {
-                        log::warn!("Received unexpected response with request_id={request_id}");
+                        // Host-scoped response (either normal path or daemon
+                        // failover). Forward to the manager for matching.
+                        if host_response_tx.try_send(msg).is_err() {
+                            log::warn!(
+                                "Host response channel closed, dropping response \
+                                 with request_id={request_id}"
+                            );
+                        }
                     }
                 }
                 Err(ProtocolError::Decode(ref err, Some(ref request_id))) => {

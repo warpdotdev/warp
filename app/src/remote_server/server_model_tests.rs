@@ -24,6 +24,7 @@ fn test_model(app: &mut App) -> ServerModel {
         auth_state: Arc::new(AuthState::new_logged_out_for_test()),
         buffers: ServerBufferTracker::new(),
         diff_states: app.add_model(|_| RemoteDiffStateManager::new()),
+        host_scoped_requests: HashMap::new(),
     }
 }
 

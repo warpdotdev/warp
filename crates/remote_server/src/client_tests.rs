@@ -5,14 +5,40 @@ use warpui_core::r#async::executor;
 
 use super::*;
 use crate::proto::{
-    client_message, get_fragment_metadata_from_hash_response, run_command_response, server_message,
-    ClientMessage, CodebaseIndexStatus, CodebaseIndexStatusState, CodebaseIndexStatusUpdated,
+    client_message, get_fragment_metadata_from_hash_response, host_scoped_request, notification,
+    run_command_response, server_message, session_scoped_request, ClientMessage,
+    CodebaseIndexStatus, CodebaseIndexStatusState, CodebaseIndexStatusUpdated,
     CodebaseIndexStatusesSnapshot, ErrorCode, FileOperationError, FragmentMetadata,
     FragmentMetadataLookupError, FragmentMetadataLookupErrorCode,
-    GetFragmentMetadataFromHashResponse, GetFragmentMetadataFromHashSuccess, InitializeResponse,
-    MissingFragmentMetadata, RunCommandResponse, RunCommandSuccess, ServerMessage,
+    GetFragmentMetadataFromHashResponse, GetFragmentMetadataFromHashSuccess, Initialize,
+    InitializeResponse, MissingFragmentMetadata, RunCommandResponse, RunCommandSuccess,
+    ServerMessage,
 };
 use crate::protocol;
+
+/// Extract the session-scoped inner message from a ClientMessage wrapper.
+fn unwrap_session_scoped(msg: &ClientMessage) -> &session_scoped_request::Message {
+    match &msg.message {
+        Some(client_message::Message::SessionScoped(w)) => w.message.as_ref().unwrap(),
+        other => panic!("Expected SessionScoped, got {other:?}"),
+    }
+}
+
+/// Extract the host-scoped inner message from a ClientMessage wrapper.
+fn unwrap_host_scoped(msg: &ClientMessage) -> &host_scoped_request::Message {
+    match &msg.message {
+        Some(client_message::Message::HostScoped(w)) => w.message.as_ref().unwrap(),
+        other => panic!("Expected HostScoped, got {other:?}"),
+    }
+}
+
+/// Extract the notification inner message from a ClientMessage wrapper.
+fn unwrap_notification(msg: &ClientMessage) -> &notification::Message {
+    match &msg.message {
+        Some(client_message::Message::Notification(w)) => w.message.as_ref().unwrap(),
+        other => panic!("Expected Notification, got {other:?}"),
+    }
+}
 
 /// Generic mock server: loops reading ClientMessages and responds using the
 /// provided closure. Exits cleanly on EOF.
@@ -60,7 +86,7 @@ async fn codebase_index_push_messages_become_client_events() {
     drop(server_read);
 
     let executor = executor::Background::default();
-    let (_client, event_rx, _failure_rx) =
+    let (_client, event_rx, _failure_rx, _host_rx) =
         RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
     let mut writer = server_write.compat_write();
 
@@ -131,7 +157,7 @@ where
     ));
 
     let executor = executor::Background::default();
-    let (client, event_rx, _failure_rx) =
+    let (client, event_rx, _failure_rx, _host_rx) =
         RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
     (client, event_rx, executor)
 }
@@ -165,10 +191,13 @@ async fn initialize_round_trip() {
 async fn initialize_sends_empty_auth_token_when_none() {
     let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
         match &msg.message {
-            Some(client_message::Message::Initialize(init)) => {
+            _ => {
+                let session_scoped_request::Message::Initialize(init) = unwrap_session_scoped(msg)
+                else {
+                    panic!("Expected Initialize");
+                };
                 assert!(init.auth_token.is_empty());
             }
-            other => panic!("Expected Initialize, got {other:?}"),
         }
         server_message::Message::InitializeResponse(InitializeResponse {
             server_version: "test-0.1.0".to_string(),
@@ -194,10 +223,13 @@ async fn initialize_sends_empty_auth_token_when_none() {
 async fn initialize_sends_auth_token_when_provided() {
     let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
         match &msg.message {
-            Some(client_message::Message::Initialize(init)) => {
+            _ => {
+                let session_scoped_request::Message::Initialize(init) = unwrap_session_scoped(msg)
+                else {
+                    panic!("Expected Initialize");
+                };
                 assert_eq!(init.auth_token, "secret-token");
             }
-            other => panic!("Expected Initialize, got {other:?}"),
         }
         server_message::Message::InitializeResponse(InitializeResponse {
             server_version: "test-0.1.0".to_string(),
@@ -223,12 +255,16 @@ async fn initialize_sends_auth_token_when_provided() {
 async fn get_fragment_metadata_from_hash_round_trip() {
     let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
         match &msg.message {
-            Some(client_message::Message::GetFragmentMetadataFromHash(request)) => {
+            _ => {
+                let host_scoped_request::Message::GetFragmentMetadataFromHash(request) =
+                    unwrap_host_scoped(msg)
+                else {
+                    panic!("Expected GetFragmentMetadataFromHash");
+                };
                 assert_eq!(request.repo_path, "/repo");
                 assert_eq!(request.root_hash, "root-hash");
                 assert_eq!(request.content_hashes, vec!["found-hash", "missing-hash"]);
             }
-            other => panic!("Expected GetFragmentMetadataFromHash, got {other:?}"),
         }
         server_message::Message::GetFragmentMetadataFromHashResponse(
             GetFragmentMetadataFromHashResponse {
@@ -273,12 +309,15 @@ async fn get_fragment_metadata_from_hash_round_trip() {
 async fn resync_codebase_round_trip() {
     let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
         match &msg.message {
-            Some(client_message::Message::ResyncCodebase(request)) => {
+            _ => {
+                let host_scoped_request::Message::ResyncCodebase(request) = unwrap_host_scoped(msg)
+                else {
+                    panic!("Expected ResyncCodebase");
+                };
                 assert_eq!(request.repo_path, "/repo");
                 assert_eq!(request.auth_token, "auth-token");
                 assert_eq!(request.mode, CodebaseResyncMode::Full as i32);
             }
-            other => panic!("Expected ResyncCodebase, got {other:?}"),
         }
         server_message::Message::CodebaseIndexStatusUpdated(CodebaseIndexStatusUpdated {
             status: Some(not_enabled_codebase_status("/repo")),
@@ -297,12 +336,15 @@ async fn resync_codebase_round_trip() {
 async fn trigger_codebase_incremental_sync_round_trip() {
     let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
         match &msg.message {
-            Some(client_message::Message::ResyncCodebase(request)) => {
+            _ => {
+                let host_scoped_request::Message::ResyncCodebase(request) = unwrap_host_scoped(msg)
+                else {
+                    panic!("Expected ResyncCodebase");
+                };
                 assert_eq!(request.repo_path, "/repo");
                 assert_eq!(request.auth_token, "auth-token");
                 assert_eq!(request.mode, CodebaseResyncMode::Incremental as i32);
             }
-            other => panic!("Expected incremental ResyncCodebase, got {other:?}"),
         }
         server_message::Message::CodebaseIndexStatusUpdated(CodebaseIndexStatusUpdated {
             status: Some(not_enabled_codebase_status("/repo")),
@@ -320,10 +362,15 @@ async fn trigger_codebase_incremental_sync_round_trip() {
 async fn get_fragment_metadata_from_hash_error_maps_to_typed_client_error() {
     let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
         match &msg.message {
-            Some(client_message::Message::GetFragmentMetadataFromHash(request)) => {
+            _ => {
+                let host_scoped_request::Message::GetFragmentMetadataFromHash(request) =
+                    unwrap_host_scoped(msg)
+                else {
+                    panic!("Expected GetFragmentMetadataFromHash");
+                };
                 assert_eq!(request.repo_path, "/repo");
+                assert_eq!(request.root_hash, "root-hash");
             }
-            other => panic!("Expected GetFragmentMetadataFromHash, got {other:?}"),
         }
         server_message::Message::GetFragmentMetadataFromHashResponse(
             GetFragmentMetadataFromHashResponse {
@@ -362,7 +409,7 @@ async fn authenticate_sends_fire_and_forget_message() {
     let (server_read, _server_write) = tokio::io::split(server_stream);
     let (client_read, client_write) = tokio::io::split(client_stream);
     let executor = executor::Background::default();
-    let (client, _event_rx, _failure_rx) =
+    let (client, _event_rx, _failure_rx, _host_rx) =
         RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
 
     client.authenticate("rotated-secret");
@@ -370,12 +417,10 @@ async fn authenticate_sends_fire_and_forget_message() {
     let msg = protocol::read_client_message(&mut server_read.compat())
         .await
         .unwrap();
-    match msg.message {
-        Some(client_message::Message::Authenticate(auth)) => {
-            assert_eq!(auth.auth_token, "rotated-secret");
-        }
-        other => panic!("Expected Authenticate, got {other:?}"),
-    }
+    let notification::Message::Authenticate(auth) = unwrap_notification(&msg) else {
+        panic!("Expected Authenticate");
+    };
+    assert_eq!(auth.auth_token, "rotated-secret");
 }
 
 #[tokio::test]
@@ -386,7 +431,7 @@ async fn disconnected_on_closed_stream() {
 
     let (client_read, client_write) = tokio::io::split(client_stream);
     let executor = executor::Background::default();
-    let (client, disconnect_rx, _failure_rx) =
+    let (client, disconnect_rx, _failure_rx, _host_rx) =
         RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
 
     // An initialize call on a dead stream must complete with an error rather than hang.
@@ -429,10 +474,10 @@ async fn is_disconnected_starts_false() {
 #[tokio::test]
 async fn run_command_round_trip() {
     let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
-        let command = match &msg.message {
-            Some(client_message::Message::RunCommand(req)) => req.command.clone(),
-            other => panic!("Expected RunCommand, got {other:?}"),
+        let session_scoped_request::Message::RunCommand(req) = unwrap_session_scoped(msg) else {
+            panic!("Expected RunCommand");
         };
+        let command = req.command.clone();
         server_message::Message::RunCommandResponse(RunCommandResponse {
             result: Some(run_command_response::Result::Success(RunCommandSuccess {
                 stdout: format!("output of: {command}").into_bytes(),
