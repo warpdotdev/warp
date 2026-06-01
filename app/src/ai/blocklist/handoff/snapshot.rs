@@ -41,7 +41,7 @@ pub(crate) enum HandoffUploadResult {
 /// Determines whether the snapshot upload runs locally or delegates to a
 /// remote SSH daemon.
 ///
-/// Callers resolve this from `RemoteServerManager::client_for_session` before
+/// Callers resolve this from `RemoteServerManager::host_request_handle` before
 /// calling [`spawn_handoff_snapshot_upload`], keeping session-awareness out of
 /// the upload function itself.
 pub(crate) enum SnapshotUploadTarget {
@@ -52,7 +52,7 @@ pub(crate) enum SnapshotUploadTarget {
     },
     /// Delegate to the remote server daemon via `UploadHandoffSnapshot` RPC.
     Remote {
-        client: Arc<remote_server::client::RemoteServerClient>,
+        handle: remote_server::manager::HostRequestHandle,
     },
 }
 
@@ -156,10 +156,28 @@ async fn upload_handoff_snapshot(
     target: SnapshotUploadTarget,
 ) -> (TouchedWorkspace, Result<HandoffUploadResult, anyhow::Error>) {
     match target {
-        SnapshotUploadTarget::Remote { client } => {
-            let result = match client.upload_handoff_snapshot(paths).await {
-                Ok(resp) => try_upload_result_from_proto(resp),
-                Err(err) => Err(anyhow::anyhow!(err).context("Remote handoff snapshot RPC failed")),
+        SnapshotUploadTarget::Remote { handle } => {
+            let result = match handle
+                .send(
+                    remote_server::proto::host_scoped_request::Message::UploadHandoffSnapshot(
+                        remote_server::proto::UploadHandoffSnapshot {
+                            paths: paths.into_iter().map(|p| p.to_string()).collect(),
+                        },
+                    ),
+                )
+                .await
+            {
+                Ok(msg) => match msg.message {
+                    Some(
+                        remote_server::proto::server_message::Message::UploadHandoffSnapshotResponse(
+                            resp,
+                        ),
+                    ) => try_upload_result_from_proto(resp),
+                    _ => Err(anyhow::anyhow!("Unexpected response for UploadHandoffSnapshot")),
+                },
+                Err(err) => {
+                    Err(anyhow::anyhow!(err).context("Remote handoff snapshot RPC failed"))
+                }
             };
             (TouchedWorkspace::default(), result)
         }
@@ -191,11 +209,13 @@ pub(crate) fn resolve_upload_target(
     session_id: SessionId,
     ctx: &mut ViewContext<Workspace>,
 ) -> SnapshotUploadTarget {
-    let remote_client = RemoteServerManager::as_ref(ctx)
-        .client_for_session(session_id)
+    let host_id = RemoteServerManager::as_ref(ctx)
+        .host_id_for_session(session_id)
         .cloned();
-    match remote_client {
-        Some(client) => SnapshotUploadTarget::Remote { client },
+    match host_id {
+        Some(host_id) => SnapshotUploadTarget::Remote {
+            handle: RemoteServerManager::as_ref(ctx).host_request_handle(&host_id),
+        },
         None => {
             let server_api_provider = ServerApiProvider::as_ref(ctx);
             SnapshotUploadTarget::Local {

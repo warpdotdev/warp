@@ -633,17 +633,11 @@ impl ServerModel {
         // there are in-progress handlers, abort them so they don't run
         // to completion pointlessly.
         if self.connection_senders.is_empty() {
-            let orphaned: Vec<RequestId> = self
-                .host_scoped_requests
-                .keys()
-                .cloned()
-                .collect();
+            let orphaned: Vec<RequestId> = self.host_scoped_requests.keys().cloned().collect();
             for rid in orphaned {
                 self.host_scoped_requests.remove(&rid);
                 if let Some(handle) = self.in_progress.remove(&rid) {
-                    log::warn!(
-                        "Daemon: no connections remain, aborting host-scoped request {rid}"
-                    );
+                    log::warn!("Daemon: no connections remain, aborting host-scoped request {rid}");
                     handle.abort();
                 }
             }

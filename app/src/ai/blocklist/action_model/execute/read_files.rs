@@ -110,20 +110,21 @@ impl ReadFilesExecutor {
 
         // Check if this is a remote session with a connected host.
         let session_type = self.active_session.as_ref(ctx).session_type(ctx);
-        let remote_client = match &session_type {
+        let host_request_handle = match &session_type {
             Some(SessionType::WarpifiedRemote {
                 host_id: Some(host_id),
-            }) => remote_server::manager::RemoteServerManager::as_ref(ctx)
-                .client_for_host(host_id)
-                .cloned(),
+            }) => Some(
+                remote_server::manager::RemoteServerManager::as_ref(ctx)
+                    .host_request_handle(host_id),
+            ),
             _ => None,
         };
 
-        // Remote session without a usable remote server client. File reading
+        // Remote session without a usable remote server connection. File reading
         // requires either local access or a connected remote server, neither
         // of which is available.
         if matches!(session_type, Some(SessionType::WarpifiedRemote { .. }))
-            && remote_client.is_none()
+            && host_request_handle.is_none()
         {
             return ActionExecution::Sync(AIAgentActionResultType::ReadFiles(
                 ReadFilesResult::Error(
@@ -134,7 +135,7 @@ impl ReadFilesExecutor {
             ));
         }
 
-        if let Some(client) = remote_client {
+        if let Some(handle) = host_request_handle {
             return ActionExecution::Async {
                 execute_future: Box::pin(async move {
                     let request = remote_server::proto::ReadFileContextRequest {
@@ -163,10 +164,24 @@ impl ReadFilesExecutor {
                         max_batch_bytes: None,
                     };
 
-                    let response = client
-                        .read_file_context(request)
+                    let msg = handle
+                        .send(
+                            remote_server::proto::host_scoped_request::Message::ReadFileContext(
+                                request,
+                            ),
+                        )
                         .await
                         .map_err(|e| anyhow::anyhow!("Remote read failed: {e}"))?;
+                    let response = match msg.message {
+                        Some(
+                            remote_server::proto::server_message::Message::ReadFileContextResponse(
+                                resp,
+                            ),
+                        ) => resp,
+                        _ => {
+                            return Err(anyhow::anyhow!("Unexpected response for ReadFileContext"))
+                        }
+                    };
 
                     if !response.failed_files.is_empty() && response.file_contexts.is_empty() {
                         let failed = response

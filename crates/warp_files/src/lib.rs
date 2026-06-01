@@ -730,32 +730,36 @@ impl FileModel {
                 );
             }
             FileBackend::Remote { host_id, path } => {
-                let client = Self::resolve_remote_client(host_id, ctx)?;
-                let path = path.as_str().to_string();
-                let future = async move {
-                    client
-                        .write_file(path, content)
-                        .await
-                        .map_err(|e| e.to_string())
-                };
-                ctx.spawn(
-                    future,
-                    move |me, result: Result<(), String>, ctx| match result {
-                        Ok(()) => {
-                            me.set_version(file_id, version);
-                            ctx.emit(FileModelEvent::FileSaved {
-                                id: file_id,
-                                version,
-                            });
-                        }
-                        Err(err) => {
-                            ctx.emit(FileModelEvent::FailedToSave {
-                                id: file_id,
-                                error: Rc::new(FileSaveError::RemoteError(err)),
-                            });
-                        }
-                    },
-                );
+                let rx = RemoteServerManager::handle(ctx).update(ctx, |mgr, _ctx| {
+                    mgr.send_host_scoped_request(
+                        host_id,
+                        remote_server::proto::host_scoped_request::Message::WriteFile(
+                            remote_server::proto::WriteFile {
+                                path: path.as_str().to_string(),
+                                content,
+                            },
+                        ),
+                    )
+                });
+                ctx.spawn(async move { rx.await }, move |me, result, ctx| {
+                    let err_msg = match &result {
+                        Ok(Ok(_)) => None,
+                        Ok(Err(e)) => Some(e.to_string()),
+                        Err(_) => Some("request cancelled".to_string()),
+                    };
+                    if let Some(msg) = err_msg {
+                        ctx.emit(FileModelEvent::FailedToSave {
+                            id: file_id,
+                            error: Rc::new(FileSaveError::RemoteError(msg)),
+                        });
+                    } else {
+                        me.set_version(file_id, version);
+                        ctx.emit(FileModelEvent::FileSaved {
+                            id: file_id,
+                            version,
+                        });
+                    }
+                });
             }
         }
 
@@ -881,28 +885,35 @@ impl FileModel {
                 );
             }
             FileBackend::Remote { host_id, path } => {
-                let client = Self::resolve_remote_client(host_id, ctx)?;
-                let path = path.as_str().to_string();
-                let future =
-                    async move { client.delete_file(path).await.map_err(|e| e.to_string()) };
-                ctx.spawn(
-                    future,
-                    move |me, result: Result<(), String>, ctx| match result {
-                        Ok(()) => {
-                            me.set_version(file_id, version);
-                            ctx.emit(FileModelEvent::FileSaved {
-                                id: file_id,
-                                version,
-                            });
-                        }
-                        Err(err) => {
-                            ctx.emit(FileModelEvent::FailedToSave {
-                                id: file_id,
-                                error: Rc::new(FileSaveError::RemoteError(err)),
-                            });
-                        }
-                    },
-                );
+                let rx = RemoteServerManager::handle(ctx).update(ctx, |mgr, _ctx| {
+                    mgr.send_host_scoped_request(
+                        host_id,
+                        remote_server::proto::host_scoped_request::Message::DeleteFile(
+                            remote_server::proto::DeleteFile {
+                                path: path.as_str().to_string(),
+                            },
+                        ),
+                    )
+                });
+                ctx.spawn(async move { rx.await }, move |me, result, ctx| {
+                    let err_msg = match &result {
+                        Ok(Ok(_)) => None,
+                        Ok(Err(e)) => Some(e.to_string()),
+                        Err(_) => Some("request cancelled".to_string()),
+                    };
+                    if let Some(msg) = err_msg {
+                        ctx.emit(FileModelEvent::FailedToSave {
+                            id: file_id,
+                            error: Rc::new(FileSaveError::RemoteError(msg)),
+                        });
+                    } else {
+                        me.set_version(file_id, version);
+                        ctx.emit(FileModelEvent::FileSaved {
+                            id: file_id,
+                            version,
+                        });
+                    }
+                });
             }
         }
 

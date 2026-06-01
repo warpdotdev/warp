@@ -604,21 +604,6 @@ impl FileNotebookView {
                 _ => {}
             }
         });
-        let client = manager.as_ref(ctx).client_for_host(&host_id).cloned();
-
-        let Some(client) = client else {
-            safe_warn!(
-                safe: ("No remote server client for host when opening markdown file"),
-                full: ("No remote server client for host {host_id:?} when opening markdown file")
-            );
-            self.file_state = match mem::replace(&mut self.file_state, FileState::NoFile) {
-                FileState::Loading(source) => FileState::Error(source),
-                other => other,
-            };
-            ctx.notify();
-            return;
-        };
-
         let request = remote_server::proto::ReadFileContextRequest {
             files: vec![remote_server::proto::ReadFileContextFile {
                 path: path_str,
@@ -628,47 +613,35 @@ impl FileNotebookView {
             max_batch_bytes: None,
         };
 
-        ctx.spawn(
-            async move { client.read_file_context(request).await },
-            move |me, result, ctx| match result {
-                Ok(response) => {
-                    if let Some(file_ctx) = response.file_contexts.first() {
-                        let text = match &file_ctx.content {
-                            Some(
-                                remote_server::proto::file_context_proto::Content::TextContent(
-                                    text,
-                                ),
-                            ) => text.as_str(),
-                            _ => "",
-                        };
-                        me.set_content(text, ctx);
-                        me.file_state = match mem::replace(&mut me.file_state, FileState::NoFile) {
-                            FileState::Loading(source) => FileState::Loaded(source),
-                            other => other,
-                        };
-                        me.pane_configuration.update(ctx, |pane_config, ctx| {
-                            pane_config.refresh_pane_header_overflow_menu_items(ctx);
-                        });
-                        ctx.notify();
-                        ctx.emit(FileNotebookEvent::FileLoaded);
-                    } else if let Some(failed) = response.failed_files.first() {
-                        let error_msg = failed
-                            .error
-                            .as_ref()
-                            .map(|e| e.message.as_str())
-                            .unwrap_or("unknown error");
+        let rx = manager.update(ctx, |mgr, _ctx| {
+            mgr.send_host_scoped_request(
+                &host_id,
+                remote_server::proto::host_scoped_request::Message::ReadFileContext(request),
+            )
+        });
+
+        ctx.spawn(async move { rx.await }, move |me, result, ctx| {
+            let response = match result {
+                Ok(Ok(msg)) => match msg.message {
+                    Some(
+                        remote_server::proto::server_message::Message::ReadFileContextResponse(
+                            resp,
+                        ),
+                    ) => resp,
+                    _ => {
                         safe_warn!(
-                            safe: ("Failed to read remote markdown file"),
-                            full: ("Failed to read remote markdown file: {error_msg}")
+                            safe: ("Remote server unexpected response for ReadFileContext"),
+                            full: ("Remote server unexpected response for ReadFileContext")
                         );
                         me.file_state = match mem::replace(&mut me.file_state, FileState::NoFile) {
                             FileState::Loading(source) => FileState::Error(source),
                             other => other,
                         };
                         ctx.notify();
+                        return;
                     }
-                }
-                Err(err) => {
+                },
+                Ok(Err(err)) => {
                     safe_warn!(
                         safe: ("Remote server error reading markdown file"),
                         full: ("Remote server error reading markdown file: {err}")
@@ -678,9 +651,51 @@ impl FileNotebookView {
                         other => other,
                     };
                     ctx.notify();
+                    return;
                 }
-            },
-        );
+                Err(_) => {
+                    me.file_state = match mem::replace(&mut me.file_state, FileState::NoFile) {
+                        FileState::Loading(source) => FileState::Error(source),
+                        other => other,
+                    };
+                    ctx.notify();
+                    return;
+                }
+            };
+            if let Some(file_ctx) = response.file_contexts.first() {
+                let text = match &file_ctx.content {
+                    Some(remote_server::proto::file_context_proto::Content::TextContent(text)) => {
+                        text.as_str()
+                    }
+                    _ => "",
+                };
+                me.set_content(text, ctx);
+                me.file_state = match mem::replace(&mut me.file_state, FileState::NoFile) {
+                    FileState::Loading(source) => FileState::Loaded(source),
+                    other => other,
+                };
+                me.pane_configuration.update(ctx, |pane_config, ctx| {
+                    pane_config.refresh_pane_header_overflow_menu_items(ctx);
+                });
+                ctx.notify();
+                ctx.emit(FileNotebookEvent::FileLoaded);
+            } else if let Some(failed) = response.failed_files.first() {
+                let error_msg = failed
+                    .error
+                    .as_ref()
+                    .map(|e| e.message.as_str())
+                    .unwrap_or("unknown error");
+                safe_warn!(
+                    safe: ("Failed to read remote markdown file"),
+                    full: ("Failed to read remote markdown file: {error_msg}")
+                );
+                me.file_state = match mem::replace(&mut me.file_state, FileState::NoFile) {
+                    FileState::Loading(source) => FileState::Error(source),
+                    other => other,
+                };
+                ctx.notify();
+            }
+        });
     }
 
     #[cfg(feature = "local_fs")]

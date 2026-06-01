@@ -156,30 +156,33 @@ impl RemoteCodebaseIndexUpdateOperation {
         }
     }
 
-    async fn send(
+    fn to_proto_message(
         self,
-        client: Arc<RemoteServerClient>,
         repo_path: String,
         auth_token: String,
-    ) -> Result<RemoteCodebaseIndexStatus, crate::client::ClientError> {
+    ) -> crate::proto::host_scoped_request::Message {
+        use crate::proto::host_scoped_request::Message;
         match self {
-            Self::IndexNewRepo {
-                is_auto_index: true,
+            Self::IndexNewRepo { .. } => Message::IndexCodebase(crate::proto::IndexCodebase {
+                repo_path,
+                auth_token,
+            }),
+            Self::Sync { is_full_sync } => {
+                let mode = if is_full_sync {
+                    crate::proto::CodebaseResyncMode::Full
+                } else {
+                    crate::proto::CodebaseResyncMode::Incremental
+                };
+                Message::ResyncCodebase(crate::proto::ResyncCodebase {
+                    repo_path,
+                    auth_token,
+                    mode: mode.into(),
+                })
             }
-            | Self::IndexNewRepo {
-                is_auto_index: false,
-            } => client.index_codebase(repo_path, auth_token).await,
-            Self::Sync {
-                is_full_sync: false,
-            } => {
-                client
-                    .trigger_codebase_incremental_sync(repo_path, auth_token)
-                    .await
-            }
-            Self::Sync { is_full_sync: true } => {
-                client.resync_codebase(repo_path, auth_token).await
-            }
-            Self::Drop => client.drop_codebase_index(repo_path, auth_token).await,
+            Self::Drop => Message::DropCodebaseIndex(crate::proto::DropCodebaseIndex {
+                repo_path,
+                auth_token,
+            }),
         }
     }
 }
@@ -653,6 +656,47 @@ struct PendingHostRequest {
     result_tx: oneshot::Sender<Result<crate::proto::ServerMessage, HostRequestError>>,
 }
 
+/// Handle for dispatching host-scoped requests from async contexts.
+///
+/// Pure-async callers (e.g. `execute_remote_codebase_search`) don't have
+/// direct access to `&mut RemoteServerManager`. This handle wraps a
+/// `ModelSpawner` so the async function can bounce each request to the
+/// main thread for registration in `pending_host_requests`, then await
+/// the response on the background thread.
+///
+/// Obtain via [`RemoteServerManager::host_request_handle`].
+pub struct HostRequestHandle {
+    spawner: ModelSpawner<RemoteServerManager>,
+    host_id: HostId,
+}
+
+impl HostRequestHandle {
+    /// Sends a host-scoped request and awaits the raw `ServerMessage`.
+    ///
+    /// Bounces to the main thread to call `send_host_request`, then
+    /// awaits the response on the caller's thread.
+    pub async fn send(
+        &self,
+        inner: crate::proto::host_scoped_request::Message,
+    ) -> Result<crate::proto::ServerMessage, HostRequestError> {
+        let host_id = self.host_id.clone();
+        let request_id = crate::protocol::RequestId::new();
+        let msg = crate::proto::ClientMessage::host_scoped(request_id.to_string(), inner);
+        let rx = self
+            .spawner
+            .spawn(move |me, _ctx| me.send_host_request(&host_id, msg))
+            .await
+            .map_err(|_| HostRequestError::AllSessionsDisconnected)?;
+        rx.await
+            .map_err(|_| HostRequestError::AllSessionsDisconnected)?
+    }
+
+    /// Returns the `HostId` this handle targets.
+    pub fn host_id(&self) -> &HostId {
+        &self.host_id
+    }
+}
+
 /// Cached navigation state per session. Stores the last requested path
 /// (for dedup) and the result from the last successful response (so dedup
 /// returns a meaningful value instead of `None`).
@@ -811,6 +855,30 @@ impl RemoteServerManager {
 
         client.send_host_scoped(msg);
         result_rx
+    }
+
+    /// Convenience wrapper: constructs a `ClientMessage::host_scoped` from
+    /// the inner message and dispatches via [`Self::send_host_request`].
+    ///
+    /// Prefer this over raw `send_host_request` when the caller doesn't
+    /// need to control the `RequestId`.
+    pub fn send_host_scoped_request(
+        &mut self,
+        host_id: &HostId,
+        inner: crate::proto::host_scoped_request::Message,
+    ) -> oneshot::Receiver<Result<crate::proto::ServerMessage, HostRequestError>> {
+        let request_id = crate::protocol::RequestId::new();
+        let msg = crate::proto::ClientMessage::host_scoped(request_id.to_string(), inner);
+        self.send_host_request(host_id, msg)
+    }
+
+    /// Creates a [`HostRequestHandle`] for dispatching host-scoped requests
+    /// from async contexts that don't have `&mut self` access.
+    pub fn host_request_handle(&self, host_id: &HostId) -> HostRequestHandle {
+        HostRequestHandle {
+            spawner: self.spawner.clone(),
+            host_id: host_id.clone(),
+        }
     }
 
     /// Fail all pending host requests for hosts that no longer have any
@@ -1670,7 +1738,7 @@ impl RemoteServerManager {
             return false;
         };
         let current_identity_key = auth_context.remote_server_identity_key();
-        let Some((session_id, client, remote_identity_key)) =
+        let Some((session_id, _client, remote_identity_key)) =
             self.connected_session_for_host(&host_id, &current_identity_key)
         else {
             log::warn!(
@@ -1685,6 +1753,7 @@ impl RemoteServerManager {
              remote_identity_key={remote_identity_key} repo_path={repo_path}"
         );
 
+        let handle = self.host_request_handle(&host_id);
         let spawner = self.spawner.clone();
         ctx.background_executor()
             .spawn(async move {
@@ -1712,28 +1781,53 @@ impl RemoteServerManager {
                     return;
                 };
 
-                match mutation_kind.send(client, repo_path, auth_token).await {
-                    Ok(status) => {
-                        log::info!(
-                            "[Remote codebase indexing] Manager received codebase index mutation response: \
-                             operation={operation:?} host={host_id} session={session_id:?} \
-                             remote_identity_key={remote_identity_key} repo_path={} state={:?} \
-                             failure_message={:?}",
-                            status.repo_path,
-                            status.state,
-                            status.failure_message
-                        );
-                        let remote_path = remote_path_for_status(&host_id, &status).unwrap_or(remote_path);
-                        let _ = spawner
-                            .spawn(move |_me, ctx| {
-                                ctx.emit(RemoteServerManagerEvent::CodebaseIndexStatusUpdated {
-                                    session_id: Some(session_id),
-                                    remote_path,
-                                    status,
-                                    mutation_kind: Some(mutation_kind),
-                                });
-                            })
-                            .await;
+                let proto_msg = mutation_kind.to_proto_message(repo_path, auth_token);
+                match handle.send(proto_msg).await {
+                    Ok(msg) => {
+                        // Parse CodebaseIndexStatusUpdated from response.
+                        let status = match msg.message {
+                            Some(crate::proto::server_message::Message::CodebaseIndexStatusUpdated(update)) => {
+                                crate::codebase_index_proto::proto_to_codebase_index_status_updated(&update)
+                            }
+                            _ => None,
+                        };
+                        if let Some(status) = status {
+                            log::info!(
+                                "[Remote codebase indexing] Manager received codebase index mutation response: \
+                                 operation={operation:?} host={host_id} session={session_id:?} \
+                                 remote_identity_key={remote_identity_key} repo_path={} state={:?} \
+                                 failure_message={:?}",
+                                status.repo_path,
+                                status.state,
+                                status.failure_message
+                            );
+                            let remote_path = remote_path_for_status(&host_id, &status).unwrap_or(remote_path);
+                            let _ = spawner
+                                .spawn(move |_me, ctx| {
+                                    ctx.emit(RemoteServerManagerEvent::CodebaseIndexStatusUpdated {
+                                        session_id: Some(session_id),
+                                        remote_path,
+                                        status,
+                                        mutation_kind: Some(mutation_kind),
+                                    });
+                                })
+                                .await;
+                        } else {
+                            log::warn!(
+                                "Remote server codebase index mutation: unexpected response \
+                                 operation={operation:?} host={host_id} session={session_id:?} \
+                                 repo_path={repo_path_for_log}"
+                            );
+                            let _ = spawner
+                                .spawn(move |_me, ctx| {
+                                    ctx.emit(RemoteServerManagerEvent::CodebaseIndexMutationFailed {
+                                        session_id,
+                                        mutation_kind,
+                                        error_kind: RemoteServerErrorKind::Other,
+                                    });
+                                })
+                                .await;
+                        }
                     }
                     Err(e) => {
                         log::warn!(
@@ -1741,7 +1835,11 @@ impl RemoteServerManager {
                              operation={operation:?} host={host_id} session={session_id:?} \
                              repo_path={repo_path_for_log} error={e}"
                         );
-                        let error_kind = RemoteServerErrorKind::from_client_error(&e);
+                        let error_kind = match &e {
+                            HostRequestError::AllSessionsDisconnected => RemoteServerErrorKind::Disconnected,
+                            HostRequestError::Timeout => RemoteServerErrorKind::Timeout,
+                            HostRequestError::ServerError { .. } => RemoteServerErrorKind::ServerError,
+                        };
                         let _ = spawner
                             .spawn(move |_me, ctx| {
                                 ctx.emit(RemoteServerManagerEvent::CodebaseIndexMutationFailed {
@@ -1751,8 +1849,6 @@ impl RemoteServerManager {
                                 });
                             })
                             .await;
-                        // Transport-level telemetry is emitted automatically
-                        // by send_tracked_request via ClientEvent::RequestFailed.
                     }
                 }
             })

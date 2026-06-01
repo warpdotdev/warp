@@ -50,17 +50,15 @@ impl ApplyDiffModel {
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
         let ai_identifiers = ai_identifiers.clone();
 
-        let remote_client = session_context.host_id().and_then(|host_id| {
-            remote_server::manager::RemoteServerManager::as_ref(ctx)
-                .client_for_host(host_id)
-                .cloned()
+        let host_request_handle = session_context.host_id().map(|host_id| {
+            remote_server::manager::RemoteServerManager::as_ref(ctx).host_request_handle(host_id)
         });
 
         let is_remote = session_context.is_remote();
         let fut = async move {
             if is_remote {
-                match remote_client {
-                    Some(client) => {
+                match host_request_handle {
+                    Some(handle) => {
                         apply_edits(
                             edits,
                             &session_context,
@@ -69,8 +67,8 @@ impl ApplyDiffModel {
                             auth_state,
                             passive_diff,
                             |path| {
-                                let client = client.clone();
-                                async move { read_remote_file(&client, &path).await }
+                                let handle = &handle;
+                                async move { read_remote_file(handle, &path).await }
                             },
                         )
                         .await
@@ -108,7 +106,7 @@ impl ApplyDiffModel {
 const MAX_DIFF_READ_BYTES: u32 = 10_000_000;
 
 async fn read_remote_file(
-    client: &remote_server::client::RemoteServerClient,
+    handle: &remote_server::manager::HostRequestHandle,
     path: &str,
 ) -> FileReadResult {
     let request = remote_server::proto::ReadFileContextRequest {
@@ -119,43 +117,50 @@ async fn read_remote_file(
         max_file_bytes: Some(MAX_DIFF_READ_BYTES),
         max_batch_bytes: None,
     };
-    match client.read_file_context(request).await {
-        Ok(response) => {
-            if let Some(fc) = response.file_contexts.into_iter().next() {
-                // A whole-file read that was truncated by the byte limit will
-                // have line_range_start/end set even though no ranges were
-                // requested. Detect this and fail explicitly rather than
-                // applying the diff to partial content.
-                if fc.line_range_start.is_some() || fc.line_range_end.is_some() {
-                    return FileReadResult::ReadError(format!(
-                        "File exceeds the {MAX_DIFF_READ_BYTES}-byte limit for remote diff \
-                         application and was truncated. The diff cannot be applied safely."
-                    ));
-                }
-                match fc.content {
-                    Some(remote_server::proto::file_context_proto::Content::TextContent(
-                        content,
-                    )) => FileReadResult::Found(content),
-                    Some(remote_server::proto::file_context_proto::Content::BinaryContent(_)) => {
-                        // apply-diff only works with text files
-                        FileReadResult::ReadError("File is binary".to_string())
-                    }
-                    None => FileReadResult::Found(String::new()),
-                }
-            } else if let Some(failed) = response.failed_files.into_iter().next() {
-                let message = failed
-                    .error
-                    .map(|e| e.message)
-                    .unwrap_or_else(|| "Unknown error".to_string());
-                if message.contains("not found") || message.contains("Not found") {
-                    FileReadResult::NotFound
-                } else {
-                    FileReadResult::ReadError(message)
-                }
-            } else {
-                FileReadResult::NotFound
+    let response = match handle
+        .send(remote_server::proto::host_scoped_request::Message::ReadFileContext(request))
+        .await
+    {
+        Ok(msg) => match msg.message {
+            Some(remote_server::proto::server_message::Message::ReadFileContextResponse(resp)) => {
+                resp
             }
+            _ => return FileReadResult::ReadError("Unexpected response".to_string()),
+        },
+        Err(err) => return FileReadResult::ReadError(format!("{err}")),
+    };
+    if let Some(fc) = response.file_contexts.into_iter().next() {
+        // A whole-file read that was truncated by the byte limit will
+        // have line_range_start/end set even though no ranges were
+        // requested. Detect this and fail explicitly rather than
+        // applying the diff to partial content.
+        if fc.line_range_start.is_some() || fc.line_range_end.is_some() {
+            return FileReadResult::ReadError(format!(
+                "File exceeds the {MAX_DIFF_READ_BYTES}-byte limit for remote diff \
+                         application and was truncated. The diff cannot be applied safely."
+            ));
         }
-        Err(err) => FileReadResult::ReadError(format!("{err}")),
+        match fc.content {
+            Some(remote_server::proto::file_context_proto::Content::TextContent(content)) => {
+                FileReadResult::Found(content)
+            }
+            Some(remote_server::proto::file_context_proto::Content::BinaryContent(_)) => {
+                // apply-diff only works with text files
+                FileReadResult::ReadError("File is binary".to_string())
+            }
+            None => FileReadResult::Found(String::new()),
+        }
+    } else if let Some(failed) = response.failed_files.into_iter().next() {
+        let message = failed
+            .error
+            .map(|e| e.message)
+            .unwrap_or_else(|| "Unknown error".to_string());
+        if message.contains("not found") || message.contains("Not found") {
+            FileReadResult::NotFound
+        } else {
+            FileReadResult::ReadError(message)
+        }
+    } else {
+        FileReadResult::NotFound
     }
 }
