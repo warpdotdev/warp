@@ -294,8 +294,8 @@ pub struct AIConversation {
     // is_remote_child, pinned) into a ChildAgentState sub-struct. See
     // PR #10777 review.
     /// Server-side identifier of the parent agent that spawned this child, if any.
-    /// In v1 this holds the parent's `server_conversation_token`; in v2 (OrchestrationV2)
-    /// it holds the parent's `run_id`. Persisted as `parent_agent_id` for serde compat.
+    /// For current orchestration, this holds the parent's `run_id`. Persisted as
+    /// `parent_agent_id` for serde compatibility with older conversation data.
     parent_agent_id: Option<String>,
     /// The display name for this agent (e.g. "Agent 1"), assigned by the orchestrator.
     agent_name: Option<String>,
