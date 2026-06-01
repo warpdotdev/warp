@@ -105,13 +105,11 @@ pub fn aggregated_orchestrator_status(
     ConversationStatus::Success
 }
 
-/// Returns a conversation's direct status unless it is a known orchestration
-/// parent, in which case it returns [`aggregated_orchestrator_status`].
+/// Returns a conversation's direct status, or the aggregated subtree status
+/// ([`aggregated_orchestrator_status`]) when it's a known orchestration parent.
 ///
-/// This is intended for top-level conversation chrome (tab icons, pane header
-/// icons, status rows) where the user expects the visible status badge to keep
-/// representing active child agents after the orchestrator's own turn has
-/// finished.
+/// Used by top-level chrome (tab/header icons, status rows) so the badge keeps
+/// reflecting active children after the orchestrator's own turn finishes.
 pub fn orchestration_aware_conversation_status(
     history: &BlocklistAIHistoryModel,
     conversation: &AIConversation,

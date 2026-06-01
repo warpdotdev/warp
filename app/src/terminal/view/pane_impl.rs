@@ -993,8 +993,8 @@ impl TerminalView {
     /// Selected conversation status for chrome, or [`ConversationStatus::InProgress`] while the
     /// active block is long-running (terminal-derived; not mirrored in history events) or while
     /// a cloud-mode ambient agent is still in its environment-setup phase. For orchestrator
-    /// conversations, this returns the aggregated status across known child agents so tab and
-    /// header badges continue reflecting active descendants after the orchestrator turn finishes.
+    /// conversations, returns the aggregated child status so tab/header badges keep reflecting
+    /// active descendants after its turn finishes.
     pub fn selected_conversation_status(&self, ctx: &AppContext) -> Option<ConversationStatus> {
         let long_running = self.is_long_running();
         let cloud_setup = self.is_in_cloud_agent_setup_phase(ctx);

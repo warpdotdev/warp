@@ -167,8 +167,7 @@ fn descendant_conversation_ids_in_spawn_order_returns_empty_without_children() {
     });
 }
 
-/// Convenience: build an orchestrator with two children for status-aggregation
-/// tests so individual cases stay focused on the precedence logic.
+/// Builds an orchestrator with two children for the status-aggregation tests.
 fn build_orchestrator_with_two_children(
     app: &mut App,
     history_model: &ModelHandle<BlocklistAIHistoryModel>,
