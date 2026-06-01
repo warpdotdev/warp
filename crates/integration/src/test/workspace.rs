@@ -90,7 +90,10 @@ fn vertical_tab_pane_row_position_id_for_pane_index(
     })
 }
 
-fn first_vertical_tab_pane_row_position_id(app: &mut warpui_core::App, window_id: WindowId) -> String {
+fn first_vertical_tab_pane_row_position_id(
+    app: &mut warpui_core::App,
+    window_id: WindowId,
+) -> String {
     vertical_tab_pane_row_position_id_for_pane_index(app, window_id, 0)
 }
 

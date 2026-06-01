@@ -42,7 +42,12 @@ impl RenderableBlock for RenderableTemporaryBlock {
     ) {
     }
 
-    fn paint(&mut self, model: &RenderState, ctx: &mut RenderContext, _app: &warpui_core::AppContext) {
+    fn paint(
+        &mut self,
+        model: &RenderState,
+        ctx: &mut RenderContext,
+        _app: &warpui_core::AppContext,
+    ) {
         // We cannot use `extract_block` macro here since we need to locate the viewport item by content height instead of charoffset
         // (temporary block has an offset of zero).
         let content = model.content();

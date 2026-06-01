@@ -71,7 +71,12 @@ impl RenderableBlock for RenderableOrderedListItem {
             });
     }
 
-    fn paint(&mut self, model: &RenderState, ctx: &mut RenderContext, _app: &warpui_core::AppContext) {
+    fn paint(
+        &mut self,
+        model: &RenderState,
+        ctx: &mut RenderContext,
+        _app: &warpui_core::AppContext,
+    ) {
         let content = model.content();
         let paragraph = extract_block!(self.viewport_item, content, (block, BlockItem::OrderedList{ paragraph: inner, ..}) => block.ordered_list(inner));
 

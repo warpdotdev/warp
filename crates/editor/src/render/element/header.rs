@@ -49,7 +49,12 @@ impl RenderableBlock for RenderableHeader {
             });
     }
 
-    fn paint(&mut self, model: &RenderState, ctx: &mut RenderContext, _app: &warpui_core::AppContext) {
+    fn paint(
+        &mut self,
+        model: &RenderState,
+        ctx: &mut RenderContext,
+        _app: &warpui_core::AppContext,
+    ) {
         let content = model.content();
         let (paragraph, header_size) = extract_block!(
             self.viewport_item, content,

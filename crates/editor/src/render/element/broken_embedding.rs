@@ -148,13 +148,19 @@ impl RenderableBlock for RenderableBrokenEmbedding {
             );
         }
 
-        ctx.paint.scene.start_layer(warpui_core::ClipBounds::ActiveLayer);
+        ctx.paint
+            .scene
+            .start_layer(warpui_core::ClipBounds::ActiveLayer);
         self.row
             .paint(ctx.content_to_screen(content_origin), ctx.paint, app);
         ctx.paint.scene.stop_layer();
     }
 
-    fn after_layout(&mut self, ctx: &mut warpui_core::AfterLayoutContext, app: &warpui_core::AppContext) {
+    fn after_layout(
+        &mut self,
+        ctx: &mut warpui_core::AfterLayoutContext,
+        app: &warpui_core::AppContext,
+    ) {
         self.row.after_layout(ctx, app);
     }
 

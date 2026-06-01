@@ -42,7 +42,12 @@ impl RenderableBlock for RenderableRunnableCommand {
         &self.viewport_item
     }
 
-    fn layout(&mut self, _model: &RenderState, ctx: &mut warpui_core::LayoutContext, app: &AppContext) {
+    fn layout(
+        &mut self,
+        _model: &RenderState,
+        ctx: &mut warpui_core::LayoutContext,
+        app: &AppContext,
+    ) {
         self.footer.layout(
             SizeConstraint::strict(vec2f(
                 self.viewport_item.content_size.x(),
@@ -81,7 +86,9 @@ impl RenderableBlock for RenderableRunnableCommand {
 
         // Place the button at a higher z-index for event handling. See the comment on
         // `RichTextElement::content_z_index` for context.
-        ctx.paint.scene.start_layer(warpui_core::ClipBounds::ActiveLayer);
+        ctx.paint
+            .scene
+            .start_layer(warpui_core::ClipBounds::ActiveLayer);
 
         // Position the block footer right below the content area, flush with its right-hand edge.
         // This gives the footer some padding relative to the visible area with a background.
@@ -96,7 +103,11 @@ impl RenderableBlock for RenderableRunnableCommand {
         ctx.paint.scene.stop_layer();
     }
 
-    fn after_layout(&mut self, ctx: &mut warpui_core::AfterLayoutContext, app: &warpui_core::AppContext) {
+    fn after_layout(
+        &mut self,
+        ctx: &mut warpui_core::AfterLayoutContext,
+        app: &warpui_core::AppContext,
+    ) {
         self.footer.after_layout(ctx, app);
     }
 

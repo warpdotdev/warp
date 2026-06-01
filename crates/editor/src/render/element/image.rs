@@ -54,7 +54,12 @@ impl RenderableBlock for RenderableImage {
         self.image_element = Some(Box::new(image));
     }
 
-    fn paint(&mut self, model: &RenderState, ctx: &mut RenderContext, app: &warpui_core::AppContext) {
+    fn paint(
+        &mut self,
+        model: &RenderState,
+        ctx: &mut RenderContext,
+        app: &warpui_core::AppContext,
+    ) {
         let content = model.content();
         let positioned_image = extract_block!(
             self.viewport_item,

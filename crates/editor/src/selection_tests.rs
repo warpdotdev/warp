@@ -32,7 +32,9 @@ impl SelectionModel {
     }
 }
 
-fn selection_model_with_rendered_mermaid(app: &mut App) -> warpui_core::ModelHandle<SelectionModel> {
+fn selection_model_with_rendered_mermaid(
+    app: &mut App,
+) -> warpui_core::ModelHandle<SelectionModel> {
     app.add_model(|ctx| {
         let buffer = ctx.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
         let buffer_selection = ctx.add_model(|_| BufferSelectionModel::new(buffer.clone()));

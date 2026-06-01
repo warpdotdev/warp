@@ -27,7 +27,12 @@ impl RenderableBlock for RenderableTextBlock {
     ) {
     }
 
-    fn paint(&mut self, model: &RenderState, ctx: &mut RenderContext, _app: &warpui_core::AppContext) {
+    fn paint(
+        &mut self,
+        model: &RenderState,
+        ctx: &mut RenderContext,
+        _app: &warpui_core::AppContext,
+    ) {
         let content = model.content();
         let text_block = extract_block!(
             self.viewport_item,

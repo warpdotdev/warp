@@ -43,7 +43,12 @@ impl RenderableBlock for RenderableMermaidDiagram {
         &self.viewport_item
     }
 
-    fn layout(&mut self, model: &RenderState, ctx: &mut warpui_core::LayoutContext, app: &AppContext) {
+    fn layout(
+        &mut self,
+        model: &RenderState,
+        ctx: &mut warpui_core::LayoutContext,
+        app: &AppContext,
+    ) {
         let content = model.content();
         let (asset_source, config) = extract_block!(
             self.viewport_item,
@@ -160,7 +165,9 @@ impl RenderableBlock for RenderableMermaidDiagram {
                 model.styles(),
             );
         }
-        ctx.paint.scene.start_layer(warpui_core::ClipBounds::ActiveLayer);
+        ctx.paint
+            .scene
+            .start_layer(warpui_core::ClipBounds::ActiveLayer);
         let button_origin = content_rect.lower_right()
             - vec2f(
                 self.footer.size().expect("Footer should be laid out").x(),
@@ -170,7 +177,11 @@ impl RenderableBlock for RenderableMermaidDiagram {
         ctx.paint.scene.stop_layer();
     }
 
-    fn after_layout(&mut self, ctx: &mut warpui_core::AfterLayoutContext, app: &warpui_core::AppContext) {
+    fn after_layout(
+        &mut self,
+        ctx: &mut warpui_core::AfterLayoutContext,
+        app: &warpui_core::AppContext,
+    ) {
         if let Some(ref mut image_element) = self.image_element {
             image_element.after_layout(ctx, app);
         }

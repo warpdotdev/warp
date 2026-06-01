@@ -82,7 +82,12 @@ impl RenderableBlock for RenderableBulletList {
             })
     }
 
-    fn paint(&mut self, model: &RenderState, ctx: &mut RenderContext, app: &warpui_core::AppContext) {
+    fn paint(
+        &mut self,
+        model: &RenderState,
+        ctx: &mut RenderContext,
+        app: &warpui_core::AppContext,
+    ) {
         let content = model.content();
         let unordered_list = extract_block!(self.viewport_item, content, (block, BlockItem::UnorderedList{ paragraph: inner, ..}) => block.unordered_list(inner));
 

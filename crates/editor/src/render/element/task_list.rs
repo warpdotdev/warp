@@ -136,7 +136,12 @@ impl RenderableBlock for RenderableTaskList {
             })
     }
 
-    fn paint(&mut self, model: &RenderState, ctx: &mut RenderContext, app: &warpui_core::AppContext) {
+    fn paint(
+        &mut self,
+        model: &RenderState,
+        ctx: &mut RenderContext,
+        app: &warpui_core::AppContext,
+    ) {
         let content = model.content();
         let task_list = extract_block!(self.viewport_item, content, (block, BlockItem::TaskList{ paragraph: inner, ..}) => block.task_list(inner));
         let text_styling = &model.styles().base_text;
