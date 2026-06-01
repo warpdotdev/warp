@@ -236,12 +236,13 @@ impl Client {
     }
 
     /// Returns the IAP bearer token to attach to a request targeting
-    /// `url`, scoped to the Warp server's origin.
+    /// `url`, scoped to the Warp server-family origins (the main server
+    /// pool and the RTC server). Returns `None` for any other origin so the
+    /// token never leaks to third parties.
     fn iap_token_for<U: IntoUrl>(&self, url: U) -> Option<String> {
         let provider = self.iap_token_provider.as_ref()?;
         let url = url.into_url().ok()?;
-        let server_url = reqwest::Url::parse(ChannelState::server_root_url().as_ref()).ok()?;
-        if url.origin() != server_url.origin() {
+        if !is_warp_server_origin(&url) {
             return None;
         }
         provider.cached_token()
@@ -384,6 +385,22 @@ impl Client {
 
         Ok(Response(result))
     }
+}
+
+/// Returns `true` if `url` targets one of the Warp server-family origins that
+/// sit behind the staging IAP: the main server pool
+/// ([`ChannelState::server_root_url`]) or the RTC server
+/// ([`ChannelState::rtc_http_url`]). Used to scope the IAP
+/// `Proxy-Authorization` header to Warp's own backends so it is never leaked to
+/// a third-party host.
+fn is_warp_server_origin(url: &reqwest::Url) -> bool {
+    [
+        ChannelState::server_root_url(),
+        ChannelState::rtc_http_url(),
+    ]
+    .iter()
+    .filter_map(|candidate| reqwest::Url::parse(candidate.as_ref()).ok())
+    .any(|candidate| candidate.origin() == url.origin())
 }
 
 impl<'a> RequestBuilder<'a> {
@@ -758,5 +775,29 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Client {
                 .body(response_body)
                 .map_err(oauth2::HttpClientError::Http)
         })
+    }
+}
+
+#[cfg(test)]
+mod origin_tests {
+    use super::*;
+
+    #[test]
+    fn server_and_rtc_origins_match() {
+        // Derive the expected origins from `ChannelState` so the assertion holds
+        // regardless of which channel config the test build resolves to.
+        let server = reqwest::Url::parse(ChannelState::server_root_url().as_ref()).unwrap();
+        assert!(is_warp_server_origin(&server.join("/graphql/v2").unwrap()));
+
+        let rtc = reqwest::Url::parse(ChannelState::rtc_http_url().as_ref()).unwrap();
+        assert!(is_warp_server_origin(
+            &rtc.join("/api/v1/agent/events/stream").unwrap()
+        ));
+    }
+
+    #[test]
+    fn third_party_origin_does_not_match() {
+        let url = reqwest::Url::parse("https://evil.example.com/graphql/v2").unwrap();
+        assert!(!is_warp_server_origin(&url));
     }
 }

@@ -97,7 +97,12 @@ impl IapState {
 
     pub fn get_cached(&self) -> Option<String> {
         match &*self.inner.read().expect("IAP state lock poisoned") {
-            IapCredentialsState::Loaded(cached) => Some(cached.token.clone()),
+            // Gate on expiry even while `Loaded`: if a proactive refresh is
+            // delayed (e.g. the machine slept across the refresh window), the
+            // token may already be expired, and attaching it would guarantee an
+            // IAP challenge. Returning `None` lets the caller proceed without a
+            // doomed token while the reactive refresh recovers.
+            IapCredentialsState::Loaded(cached) => cached.valid_token(),
             IapCredentialsState::EnvInjected { token } => Some(token.clone()),
             IapCredentialsState::Refreshing { previous }
             | IapCredentialsState::Failed { previous, .. } => {
@@ -419,3 +424,7 @@ fn parse_exp_from_jwt(token: &str) -> Option<u64> {
     let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).ok()?;
     payload.get("exp")?.as_u64()
 }
+
+#[cfg(test)]
+#[path = "iap_tests.rs"]
+mod tests;

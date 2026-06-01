@@ -688,7 +688,14 @@ impl ObjectClient for ServerApi {
 
         let subscription = GetWarpDriveUpdates::build(());
 
-        start_graphql_streaming_operation(
+        // Attach the IAP handshake header (staging only) so the websocket
+        // upgrade can transit the proxy. The bearer token in `init_payload` is
+        // only seen by warp-server *after* the upgrade completes, so it can't
+        // satisfy IAP, which validates the handshake itself.
+        let handshake_headers: Vec<(&str, String)> =
+            self.iap_handshake_header().into_iter().collect();
+
+        let result = start_graphql_streaming_operation(
             &ChannelState::ws_server_url(),
             init_payload,
             subscription,
@@ -700,8 +707,16 @@ impl ObjectClient for ServerApi {
             },
             message_sender,
             stream_ready_sender,
+            handshake_headers,
         )
-        .await
+        .await;
+
+        // If the handshake was rejected by IAP, notify the IapManager so it can
+        // refresh; the listener's retry loop then reconnects with a fresh token.
+        if let Err(err) = &result {
+            self.report_ws_iap_challenge(err);
+        }
+        result
     }
 
     async fn fetch_changed_objects(

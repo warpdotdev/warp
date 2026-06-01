@@ -309,12 +309,16 @@ impl Network {
         session_id: SessionId,
         auth_client: Arc<dyn AuthClient>,
         auth_state: Arc<AuthState>,
+        iap_headers: Vec<(&'static str, String)>,
     ) -> anyhow::Result<((impl Sink, impl Stream), UserID)> {
         let Some(join_endpoint) = connect_endpoint(format!("/sessions/join/{session_id}")) else {
             bail!("This channel does not support session-sharing.");
         };
         let user_id = Self::get_user_id(auth_client, &auth_state).await?;
-        let socket = websocket::WebSocket::connect(join_endpoint, None /* protocols */).await?;
+        // Attach the IAP handshake header (staging only) so the upgrade can transit the proxy.
+        let socket =
+            websocket::WebSocket::connect_with_headers(&join_endpoint, None::<&str>, iap_headers)
+                .await?;
         anyhow::Ok(((socket.split().await), user_id))
     }
 
@@ -386,9 +390,19 @@ impl Network {
     ) {
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
+        let iap_headers: Vec<(&'static str, String)> = ServerApiProvider::as_ref(ctx)
+            .get()
+            .iap_handshake_header()
+            .into_iter()
+            .collect();
         // Open a websocket to the server to join the session.
         ctx.spawn(
-            Self::connect_websocket_and_get_user_id(session_id, auth_client, auth_state.clone()),
+            Self::connect_websocket_and_get_user_id(
+                session_id,
+                auth_client,
+                auth_state.clone(),
+                iap_headers,
+            ),
             move |network, conn, ctx| match conn {
                 Ok(((sink, stream), user_id)) => {
                     let initialize_message = UpstreamMessage::Initialize(InitPayload {
@@ -415,6 +429,9 @@ impl Network {
                         "viewer Network::start_websocket: WS connect FAILED for \
                          session_id={session_id}: {e:#}; emitting FailedToJoin (no automatic retry)"
                     );
+                    ServerApiProvider::as_ref(ctx)
+                        .get()
+                        .report_ws_iap_challenge(&e);
                     ctx.emit(NetworkEvent::FailedToJoin {
                         reason: FailedToJoinReason::FailedToConnectToServer,
                     });
@@ -439,10 +456,20 @@ impl Network {
         let session_id = self.session_id;
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
+        let server_api = ServerApiProvider::as_ref(ctx).get();
         let abort_handle = ctx.spawn_with_retry_on_error(
             move || {
                 log::info!("Attempting to reconnect to session sharing server as viewer");
-                Self::connect_websocket_and_get_user_id(session_id, auth_client.clone(), auth_state.clone())
+                // Re-read the IAP header each attempt so a refresh that landed
+                // since the last try is picked up (staging only).
+                let iap_headers: Vec<(&'static str, String)> =
+                    server_api.iap_handshake_header().into_iter().collect();
+                Self::connect_websocket_and_get_user_id(
+                    session_id,
+                    auth_client.clone(),
+                    auth_state.clone(),
+                    iap_headers,
+                )
             },
             RECONNECT_RETRY_STRATEGY,
             move |network, conn, ctx| match conn {

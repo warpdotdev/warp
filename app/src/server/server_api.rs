@@ -610,6 +610,56 @@ impl ServerApi {
         }
     }
 
+    /// Returns the cached IAP token (staging only), or `None` when IAP is not
+    /// enabled for this build or no token has been fetched yet.
+    pub fn iap_cached_token(&self) -> Option<String> {
+        self.iap_state.as_ref().and_then(|state| state.get_cached())
+    }
+
+    /// Returns the IAP `Proxy-Authorization` header (name + value) to attach to
+    /// a Warp-server websocket handshake, or `None` when IAP is not active. The
+    /// handshake is the only place this can ride, since IAP validates the HTTP
+    /// upgrade itself rather than any post-upgrade payload.
+    pub fn iap_handshake_header(&self) -> Option<(&'static str, String)> {
+        self.iap_cached_token().map(|token| {
+            (
+                http_client::iap::IAP_PROXY_AUTH_HEADER,
+                format!("Bearer {token}"),
+            )
+        })
+    }
+
+    /// Inspects a websocket *handshake* connect error for an IAP challenge and
+    /// emits an `IapChallengeReceived` event if detected, so the `IapManager`
+    /// can refresh credentials before the caller's retry loop reconnects.
+    /// Returns `true` if the error was an IAP challenge.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn report_ws_iap_challenge(&self, err: &anyhow::Error) -> bool {
+        if self.iap_state.is_none() {
+            return false;
+        }
+        let Some(response) = websocket::connect_error_http_response(err) else {
+            return false;
+        };
+        if http_client::iap::is_iap_challenge(response.status(), response.headers()) {
+            log::warn!("Received IAP challenge on websocket handshake; notifying IapManager");
+            if let Err(err) = self
+                .event_sender
+                .try_send(ServerApiEvent::IapChallengeReceived)
+            {
+                log::warn!("Failed to enqueue IapChallengeReceived from websocket: {err}");
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub fn report_ws_iap_challenge(&self, _err: &anyhow::Error) -> bool {
+        false
+    }
+
     /// Returns ambient agent headers to attach to requests.
     async fn ambient_agent_headers(&self) -> Result<Vec<(&'static str, String)>> {
         let workload_token = self
@@ -922,7 +972,7 @@ impl ServerApi {
             request = request.header(name, value);
         }
 
-        Ok(request.eventsource())
+        Ok(self.wrap_eventsource_with_iap_detection(request.eventsource()))
     }
 
     pub async fn stream_agent_events_for_task(
@@ -956,7 +1006,7 @@ impl ServerApi {
             request = request.header(name, value);
         }
 
-        Ok(request.eventsource())
+        Ok(self.wrap_eventsource_with_iap_detection(request.eventsource()))
     }
 
     /// Sends a POST request to a public API endpoint and returns the raw response on success.
