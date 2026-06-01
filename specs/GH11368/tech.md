@@ -143,7 +143,8 @@ These changes are **unconditional** (not feature-flag gated), matching the estab
        skills_path: PathBuf::from(".antigravitycli").join("skills"),
    }
    ```
-3. Map it in `crates/ai/src/skills/conversion.rs` (`From<SkillProvider>` and `convert_provider` conversions). Since `warp_multi_agent_api` is imported from `warp-proto-apis`, if the proto does not yet contain `Antigravity` as a provider type, the implementation-safe behavior is to fall back by mapping `SkillProvider::Antigravity` to the generic `Agents` proto enum variant. This ensures the `From<SkillProvider>` conversion remains infallible (a `From` impl in Rust cannot return `None`).
+3. Add a match arm in `SkillProvider::icon()`: returns `Icon::AntigravityLogo`. The `icon_fill()` method uses a wildcard `_ => fallback` and needs no change. `provider_rank()` and `home_skills_path()` are derived from `SKILL_PROVIDER_DEFINITIONS` position and need no explicit changes.
+4. Map it in `crates/ai/src/skills/conversion.rs` (`From<SkillProvider>` and `convert_provider` conversions). Since `warp_multi_agent_api` is imported from `warp-proto-apis`, if the proto does not yet contain `Antigravity` as a provider type, the implementation-safe behavior is to fall back by mapping `SkillProvider::Antigravity` to the generic `Agents` proto enum variant. This ensures the `From<SkillProvider>` conversion remains infallible (a `From` impl in Rust cannot return `None`).
 
 ## 4. End-to-End Flow
 
