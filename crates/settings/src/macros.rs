@@ -113,6 +113,7 @@
 //! # use settings::manager::SettingsManager;
 //! # use settings::*;
 //! # use warpui_core::prelude::*;
+//! # use warpui_core::{elements, App};
 //! # use warpui_extras::user_preferences;
 //! define_settings_group!(ExampleGroup, settings: [
 //!     bool_setting: BoolSetting {
