@@ -1,23 +1,19 @@
 //! Shared styles for notebooks.
 
-use warpui::{
-    elements::{
-        Container, CrossAxisAlignment, Flex, Hoverable, MainAxisAlignment, MouseStateHandle,
-        ParentElement,
-    },
-    fonts,
-    platform::Cursor,
-    ui_components::components::UiComponent as _,
-    units::{IntoPixels, Pixels},
-    Element,
+use warpui::elements::{
+    Container, CrossAxisAlignment, Flex, Hoverable, MainAxisAlignment, MouseStateHandle,
+    ParentElement,
 };
+use warpui::platform::Cursor;
+use warpui::ui_components::components::UiComponent as _;
+use warpui::units::{IntoPixels, Pixels};
+use warpui::{fonts, Element};
 
-use crate::{
-    appearance::Appearance,
-    settings::{derived_notebook_font_size, FontSettings},
-    themes::theme::Fill,
-    ui_components::{buttons::icon_button, icons::Icon},
-};
+use crate::appearance::Appearance;
+use crate::settings::{derived_notebook_font_size, FontSettings};
+use crate::themes::theme::Fill;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
 
 /// Multiplier of the notebook font size for the title. At the default size, this
 /// is 20px.

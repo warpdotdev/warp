@@ -1,72 +1,25 @@
 //! [`TerminalView`]-specific implementation for shared sessions.
 
-use crate::ai::agent_conversations_model::AgentConversationsModel;
-use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::auth::UserUid;
-use crate::context_chips::ContextChipKind;
-use crate::drive::sharing::ShareableObject;
-use crate::editor::{InteractionState, ReplicaId};
-use crate::server::telemetry::SharingDialogSource;
-use crate::settings::InputModeSettings;
-use crate::terminal::block_list_viewport::ScrollPositionUpdate;
-use crate::terminal::model::blocks::BlockListPoint;
-use crate::terminal::model::index::Point;
-use crate::terminal::model::terminal_model::WithinBlock;
-use crate::terminal::session_settings::SessionSettings;
-use crate::terminal::shared_session::manager::Manager;
-use crate::terminal::shared_session::role_change_modal::{
-    RoleChangeCloseSource, RoleChangeOpenSource,
-};
-use crate::terminal::shared_session::settings::SharedSessionSettings;
-use crate::terminal::shared_session::{
-    join_link, SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionStatus,
-    COPY_LINK_TEXT,
-};
-use crate::terminal::view::{
-    ContextMenuAction, Event, InlineBannerItem, InlineBannerType, PendingUserQueryKind,
-    RichContentInsertionPosition, SharedSessionBanners, SizeUpdateBuilder, TerminalAction,
-    TerminalView,
-};
-use crate::terminal::TerminalModel;
-use crate::view_components::{DismissibleToast, ToastFlavor};
-use crate::{
-    menu::{MenuItem, MenuItemFields},
-    terminal::shared_session::presence_manager::{Event as PresenceManagerEvent, PresenceManager},
-};
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
 use chrono::{DateTime, Local};
 use itertools::Itertools;
 use session_sharing_protocol::common::{
-    ParticipantId, Role, RoleRequestId, RoleRequestResponse, SessionId, WindowSize,
+    ParticipantId, ParticipantList, ParticipantPresenceUpdate, Role, RoleRequestId,
+    RoleRequestResponse, SessionId, WindowSize,
 };
-use session_sharing_protocol::sharer::SessionSourceType;
-use session_sharing_protocol::sharer::{RoleUpdateReason, SessionEndedReason};
+use session_sharing_protocol::sharer::{RoleUpdateReason, SessionEndedReason, SessionSourceType};
 use session_sharing_protocol::viewer::RoleUpdatedReason;
-use warp_core::features::FeatureFlag;
-use warpui::r#async::Timer;
-
 use settings::Setting as _;
+use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::ui::appearance::Appearance;
 use warpui::clipboard::ClipboardContent;
+use warpui::elements::MouseStateHandle;
 use warpui::platform::Cursor;
+use warpui::r#async::Timer;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::UiComponent;
 use warpui::units::IntoLines;
-use warpui::{Element, SingletonEntity};
-use warpui::{ModelHandle, ViewContext};
-
-use crate::menu::Event as MenuEvent;
-
-use crate::terminal::shared_session::participant_avatar_view::ParticipantAvatarEvent;
-use crate::terminal::shared_session::participant_avatar_view::ParticipantAvatarView;
-
-use session_sharing_protocol::common::ParticipantList;
-use session_sharing_protocol::common::ParticipantPresenceUpdate;
-
-use warpui::elements::MouseStateHandle;
-use warpui::AppContext;
+use warpui::{AppContext, Element, ModelHandle, SingletonEntity, ViewContext};
 
 use super::adapter::{Adapter, Kind, Participant};
 use super::cloud_conversation_continuation::{
@@ -76,8 +29,45 @@ use super::cloud_conversation_continuation::{
 use super::sharer::inactivity_modal::InactivityModalEvent;
 use super::sharer::Sharer;
 use super::viewer::Viewer;
-use super::ConversationEndedTombstoneEvent;
-use super::ConversationEndedTombstoneView;
+use super::{ConversationEndedTombstoneEvent, ConversationEndedTombstoneView};
+use crate::ai::agent_conversations_model::AgentConversationsModel;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::auth::UserUid;
+use crate::context_chips::ContextChipKind;
+use crate::drive::sharing::ShareableObject;
+use crate::editor::{InteractionState, ReplicaId};
+use crate::menu::{Event as MenuEvent, MenuItem, MenuItemFields};
+use crate::server::telemetry::SharingDialogSource;
+use crate::settings::InputModeSettings;
+use crate::terminal::block_list_viewport::ScrollPositionUpdate;
+use crate::terminal::model::blocks::BlockListPoint;
+use crate::terminal::model::index::Point;
+use crate::terminal::model::terminal_model::WithinBlock;
+use crate::terminal::session_settings::SessionSettings;
+use crate::terminal::shared_session::manager::Manager;
+use crate::terminal::shared_session::participant_avatar_view::{
+    ParticipantAvatarEvent, ParticipantAvatarView,
+};
+use crate::terminal::shared_session::presence_manager::{
+    Event as PresenceManagerEvent, PresenceManager,
+};
+use crate::terminal::shared_session::role_change_modal::{
+    RoleChangeCloseSource, RoleChangeOpenSource,
+};
+use crate::terminal::shared_session::settings::SharedSessionSettings;
+use crate::terminal::shared_session::{
+    join_link, SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
+    SharedSessionStatus, COPY_LINK_TEXT,
+};
+use crate::terminal::view::{
+    ContextMenuAction, Event, InlineBannerItem, InlineBannerType, PendingUserQueryKind,
+    RichContentInsertionPosition, SharedSessionBanners, SizeUpdateBuilder, TerminalAction,
+    TerminalView,
+};
+use crate::terminal::TerminalModel;
+use crate::view_components::{DismissibleToast, ToastFlavor};
+use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 impl TerminalView {
     pub fn sharer_session_kind(&self) -> Option<&Kind> {
@@ -153,6 +143,29 @@ impl TerminalView {
                 .should_fallback_to_tombstone()
                 .then_some(CloudConversationContinuationUiState::Tombstone { cta: None }),
         }
+    }
+
+    pub(in crate::terminal::view) fn blocks_cloud_followups_for_ambient_agent_session_from_model(
+        &self,
+        model: &TerminalModel,
+        ctx: &AppContext,
+    ) -> bool {
+        if self
+            .ambient_agent_view_model
+            .as_ref()
+            .is_some_and(|model| model.as_ref(ctx).blocks_cloud_followups())
+        {
+            return true;
+        }
+
+        let Some(task_id) = self.ambient_agent_task_id_for_details_panel_from_model(model, ctx)
+        else {
+            return false;
+        };
+
+        AgentConversationsModel::as_ref(ctx)
+            .get_task_data(&task_id)
+            .is_some_and(|task| task.blocks_cloud_followups())
     }
 
     pub(crate) fn owned_ambient_agent_task_id(
@@ -521,8 +534,8 @@ impl TerminalView {
     pub fn attempt_to_share_session(
         &mut self,
         scrollback_type: SharedSessionScrollbackType,
-        source: Option<SharedSessionActionSource>,
-        source_type: SessionSourceType,
+        action_source: Option<SharedSessionActionSource>,
+        source: SharedSessionSource,
         bypass_conversation_guard: bool,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -558,7 +571,7 @@ impl TerminalView {
 
         self.set_show_pane_accent_border(false, ctx);
 
-        self.pending_share_source = source;
+        self.pending_share_source = action_source;
 
         self.model
             .lock()
@@ -567,16 +580,16 @@ impl TerminalView {
 
         ctx.emit(Event::StartSharingCurrentSession {
             scrollback_type,
-            source_type,
+            source,
         });
-        if let Some(source) = source {
+        if let Some(action_source) = action_source {
             send_telemetry_from_ctx!(
                 TelemetryEvent::StartedSharingCurrentSession {
                     includes_scrollback: !matches!(
                         scrollback_type,
                         SharedSessionScrollbackType::None
                     ),
-                    source,
+                    source: action_source,
                 },
                 ctx
             );
@@ -584,6 +597,7 @@ impl TerminalView {
     }
 
     /// Sets the PresenceManager and decorates the view accordingly when a shared session has been started.
+    #[allow(clippy::too_many_arguments)]
     pub fn on_session_share_started(
         &mut self,
         sharer_id: ParticipantId,
@@ -656,6 +670,15 @@ impl TerminalView {
         reason: SessionEndedReason,
         ctx: &mut ViewContext<Self>,
     ) {
+        let session_id = self.shared_session_id().cloned();
+        let source_task_id = self
+            .model
+            .lock()
+            .shared_session_source()
+            .and_then(|share_source| share_source.orchestrator_task_id().map(str::to_owned));
+        log::info!(
+            "Shared session view stop requested: session_id={session_id:?} source_task_id={source_task_id:?} action_source={source:?} reason={reason:?}"
+        );
         ctx.emit(Event::StopSharingCurrentSession { reason });
 
         send_telemetry_from_ctx!(
@@ -1536,6 +1559,12 @@ impl TerminalView {
         send_telemetry_from_ctx!(TelemetryEvent::CopiedSharedSessionLink { source }, ctx);
     }
 
+    pub fn open_shared_session_qr_code(&mut self, ctx: &mut ViewContext<Self>) {
+        self.pane_configuration.update(ctx, |pane_config, ctx| {
+            pane_config.open_sharing_qr_code(SharingDialogSource::StartedSessionShare, ctx);
+        });
+    }
+
     fn insert_shared_session_started_banner(
         &mut self,
         scrollback_type: SharedSessionScrollbackType,
@@ -1750,6 +1779,9 @@ impl TerminalView {
             }
         });
         let tombstone_view_id = tombstone_view_handle.id();
+        // The cloud-mode queued-prompt block is pinned to the bottom so it stays below any
+        // streaming agent output. When inserting the conversation-ended tombstone we want the
+        // tombstone below the queued prompt instead, so unpin the queued prompt first.
         if self.pending_user_query_kind == Some(PendingUserQueryKind::CloudMode) {
             if let Some(pending_query_view_id) = self.pending_user_query_view_id {
                 self.model
@@ -1758,15 +1790,13 @@ impl TerminalView {
                     .unpin_rich_content_from_bottom(pending_query_view_id);
             }
         }
-        self.insert_rich_content(
-            None,
-            tombstone_view_handle,
-            None,
-            RichContentInsertionPosition::Append {
+        let insertion_position = self
+            .pending_user_query_view_id
+            .map(RichContentInsertionPosition::AfterRichContent)
+            .unwrap_or(RichContentInsertionPosition::Append {
                 insert_below_long_running_block: true,
-            },
-            ctx,
-        );
+            });
+        self.insert_rich_content(None, tombstone_view_handle, None, insertion_position, ctx);
         self.conversation_ended_tombstone_view_id = Some(tombstone_view_id);
     }
 

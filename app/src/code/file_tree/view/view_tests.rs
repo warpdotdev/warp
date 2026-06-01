@@ -8,18 +8,19 @@ use repo_metadata::watcher::DirectoryWatcher;
 use repo_metadata::RepoMetadataModel;
 use virtual_fs::{Stub, VirtualFS};
 use warp_core::ui::appearance::Appearance;
-use warpui::{platform::WindowStyle, App, ModelHandle};
+use warpui::platform::WindowStyle;
+use warpui::{App, ModelHandle};
 
+use super::FileTreeView;
 use crate::auth::AuthStateProvider;
-use crate::server::server_api::{team::MockTeamClient, workspace::MockWorkspaceClient};
+use crate::server::server_api::team::MockTeamClient;
+use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::vim_registers::VimRegisters;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::ToastStack;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-
-use super::FileTreeView;
 
 fn std_path(path: &std::path::Path) -> warp_util::standardized_path::StandardizedPath {
     warp_util::standardized_path::StandardizedPath::try_from_local(path).unwrap()

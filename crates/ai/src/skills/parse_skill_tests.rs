@@ -1,5 +1,7 @@
 use std::path::PathBuf;
+
 use tempfile::TempDir;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 use super::*;
 
@@ -48,7 +50,7 @@ Show concrete examples of using this Skill.
     // Total of 12 lines, so line_range is 5..13
     assert_eq!(result.line_range, Some(5..13));
     // Verify path is the full file path
-    assert_eq!(result.path, skill_file);
+    assert_eq!(result.path, LocalOrRemotePath::Local(skill_file));
 }
 
 #[test]

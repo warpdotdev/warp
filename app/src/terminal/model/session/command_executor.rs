@@ -14,20 +14,13 @@ mod remote_command_executor;
 pub(crate) mod remote_server_executor;
 mod shared;
 
-use std::{any::Any, fmt::Debug, sync::Arc};
+use std::any::Any;
+use std::fmt::Debug;
+use std::sync::Arc;
 
 use anyhow::Result;
 use async_channel::{Receiver, Sender};
 use async_trait::async_trait;
-use warp_completer::completer::CommandOutput;
-use warpui::ModelContext;
-
-use crate::terminal::{
-    event::ExecutedExecutorCommandEvent, model::session::Sessions, shell::Shell,
-};
-
-use super::SessionInfo;
-
 pub use in_band_command_executor::{
     is_in_band_command, InBandCommand, InBandCommandCancelledEvent, InBandCommandExecutor,
     InBandCommandOutputReceiver,
@@ -38,6 +31,13 @@ pub use noop_command_executor::NoOpCommandExecutor;
 #[cfg(feature = "local_tty")]
 pub use remote_command_executor::RemoteCommandExecutor;
 pub use shared::{shell_escape_single_quotes, ExecutorCommandEvent};
+use warp_completer::completer::CommandOutput;
+use warpui::ModelContext;
+
+use super::SessionInfo;
+use crate::terminal::event::ExecutedExecutorCommandEvent;
+use crate::terminal::model::session::Sessions;
+use crate::terminal::shell::Shell;
 
 #[derive(Copy, Clone, Debug)]
 pub struct ExecuteCommandOptions {
@@ -154,18 +154,13 @@ fn new_command_executor_for_local_tty_session(
     use warpui::SingletonEntity as _;
     use wsl_command_executor::WslCommandExecutor;
 
-    use crate::{
-        features::FeatureFlag,
-        remote_server::manager::RemoteServerManager,
-        settings::DebugSettings,
-        terminal::{
-            available_shells::AvailableShells,
-            model::session::{BootstrapSessionType, ShellLaunchData},
-            shell::ShellType,
-        },
-    };
-
     use super::IsLegacySSHSession;
+    use crate::features::FeatureFlag;
+    use crate::remote_server::manager::RemoteServerManager;
+    use crate::settings::DebugSettings;
+    use crate::terminal::available_shells::AvailableShells;
+    use crate::terminal::model::session::{BootstrapSessionType, ShellLaunchData};
+    use crate::terminal::shell::ShellType;
 
     // When the remote server feature flag is enabled and the session is a
     // legacy SSH session, use the remote server executor *if* the manager
@@ -369,13 +364,12 @@ fn new_command_executor_for_local_tty_session(
 
 #[cfg(test)]
 pub mod testing {
-    use crate::terminal::shell::ShellType;
-
     use anyhow::anyhow;
     use command::r#async::Command;
     use warp_completer::completer::CommandOutput;
 
     use super::*;
+    use crate::terminal::shell::ShellType;
 
     /// Implementation of `CommandExecutor` for use in tests. This implementation simply executes
     /// the given command in a bash subprocess.

@@ -1,20 +1,17 @@
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use chrono::Utc;
 use session_sharing_protocol::common::SessionId;
-
-use crate::ai::agent::UserQueryMode;
-use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
-use crate::server::server_api::ai::{MockAIClient, SpawnAgentResponse, TaskStatusMessage};
-use crate::terminal::shared_session;
 
 use super::{
     spawn_task, submit_run_followup, AmbientAgentEvent, SessionJoinInfo,
     MAX_STALE_POLLS_BEFORE_FAILURE,
 };
+use crate::ai::agent::UserQueryMode;
+use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
+use crate::server::server_api::ai::{MockAIClient, SpawnAgentResponse, TaskStatusMessage};
+use crate::terminal::shared_session;
 
 fn task_with(
     state: AmbientAgentTaskState,
@@ -30,6 +27,7 @@ fn task_with(
         created_at: Utc::now(),
         started_at: Some(Utc::now()),
         updated_at: Utc::now(),
+        run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: None,
         session_id,
@@ -671,8 +669,9 @@ fn permanent_http_error() -> anyhow::Error {
 
 #[tokio::test]
 async fn poll_retries_transient_429_errors() {
-    use crate::server::retry_strategies::MAX_ATTEMPTS;
     use futures::StreamExt;
+
+    use crate::server::retry_strategies::MAX_ATTEMPTS;
 
     let mut mock = MockAIClient::new();
     let call_count = Arc::new(AtomicUsize::new(0));
@@ -700,7 +699,7 @@ async fn poll_retries_transient_429_errors() {
 
     let ai_client = Arc::new(mock);
     let request = crate::server::server_api::ai::SpawnAgentRequest {
-        prompt: "test".to_string(),
+        prompt: Some("test".to_string()),
         mode: crate::ai::agent::UserQueryMode::Normal,
         config: None,
         title: None,
@@ -715,6 +714,7 @@ async fn poll_retries_transient_429_errors() {
         conversation_id: None,
         initial_snapshot_token: None,
         snapshot_disabled: None,
+        orchestration_handoff: None,
     };
 
     let mut stream = Box::pin(spawn_task(request, ai_client, None));
@@ -768,7 +768,7 @@ async fn poll_fails_on_permanent_http_error() {
 
     let ai_client = Arc::new(mock);
     let request = crate::server::server_api::ai::SpawnAgentRequest {
-        prompt: "test".to_string(),
+        prompt: Some("test".to_string()),
         mode: crate::ai::agent::UserQueryMode::Normal,
         config: None,
         title: None,
@@ -783,6 +783,7 @@ async fn poll_fails_on_permanent_http_error() {
         conversation_id: None,
         initial_snapshot_token: None,
         snapshot_disabled: None,
+        orchestration_handoff: None,
     };
 
     let mut stream = Box::pin(spawn_task(request, ai_client, None));
@@ -811,8 +812,9 @@ async fn poll_fails_on_permanent_http_error() {
 
 #[tokio::test]
 async fn poll_gives_up_after_max_transient_retries() {
-    use crate::server::retry_strategies::MAX_ATTEMPTS;
     use futures::StreamExt;
+
+    use crate::server::retry_strategies::MAX_ATTEMPTS;
 
     let mut mock = MockAIClient::new();
     let call_count = Arc::new(AtomicUsize::new(0));
@@ -836,7 +838,7 @@ async fn poll_gives_up_after_max_transient_retries() {
 
     let ai_client = Arc::new(mock);
     let request = crate::server::server_api::ai::SpawnAgentRequest {
-        prompt: "test".to_string(),
+        prompt: Some("test".to_string()),
         mode: crate::ai::agent::UserQueryMode::Normal,
         config: None,
         title: None,
@@ -851,6 +853,7 @@ async fn poll_gives_up_after_max_transient_retries() {
         conversation_id: None,
         initial_snapshot_token: None,
         snapshot_disabled: None,
+        orchestration_handoff: None,
     };
 
     let mut stream = Box::pin(spawn_task(request, ai_client, None));
@@ -899,7 +902,7 @@ async fn poll_stops_on_terminal_failure_like_state() {
 
     let ai_client = Arc::new(mock);
     let request = crate::server::server_api::ai::SpawnAgentRequest {
-        prompt: "test".to_string(),
+        prompt: Some("test".to_string()),
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
@@ -914,6 +917,7 @@ async fn poll_stops_on_terminal_failure_like_state() {
         conversation_id: None,
         initial_snapshot_token: None,
         snapshot_disabled: None,
+        orchestration_handoff: None,
     };
 
     let mut stream = Box::pin(spawn_task(request, ai_client, None));
@@ -1045,7 +1049,7 @@ async fn poll_for_session_join_info_waits_until_link_is_available() {
 
     let ai_client = Arc::new(mock);
     let request = crate::server::server_api::ai::SpawnAgentRequest {
-        prompt: "test".to_string(),
+        prompt: Some("test".to_string()),
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
@@ -1060,6 +1064,7 @@ async fn poll_for_session_join_info_waits_until_link_is_available() {
         conversation_id: None,
         initial_snapshot_token: None,
         snapshot_disabled: None,
+        orchestration_handoff: None,
     };
 
     let mut stream = Box::pin(spawn_task(request, ai_client, None));

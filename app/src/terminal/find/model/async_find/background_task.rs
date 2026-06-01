@@ -12,19 +12,16 @@ use futures_lite::future::yield_now;
 use instant::Instant;
 use parking_lot::FairMutex;
 use warp_terminal::model::grid::Dimensions;
-use warpui::ModelContext;
+use warpui::{Entity, ModelContext};
 
-use warpui::Entity;
-
+use super::work_queue::{FindWorkItem, FindWorkQueue};
+use super::{AbsoluteMatch, AsyncFindConfig, FindTaskMessage};
 use crate::terminal::block_list_element::GridType;
 use crate::terminal::model::find::{FindConfig, RegexDFAs};
 use crate::terminal::model::grid::grid_handler::GridHandler;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::model::TerminalModel;
-
-use super::work_queue::{FindWorkItem, FindWorkQueue};
-use super::{AbsoluteMatch, AsyncFindConfig, FindTaskMessage};
 
 /// Maximum time (in milliseconds) to hold the terminal model lock during a find chunk.
 const MAX_LOCK_DURATION_MS: u64 = 5;

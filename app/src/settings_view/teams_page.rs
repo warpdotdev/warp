@@ -1,56 +1,8 @@
-use super::admin_actions::AdminActions;
-use super::settings_page::{render_customer_type_badge, MatchData, PageType, SettingsWidget};
-use super::transfer_ownership_confirmation_modal::{
-    TransferOwnershipConfirmationEvent, TransferOwnershipConfirmationModal,
-};
-use super::SettingsSection;
-use super::{
-    settings_page::{
-        render_separator, render_sub_header, SettingsPageMeta, SettingsPageViewHandle,
-    },
-    tab_menu::Tabs,
-};
-
-use crate::ai::AIRequestUsageModel;
-use crate::auth::auth_manager::{AuthManager, LoginGatedFeature};
-use crate::auth::auth_state::AuthState;
-use crate::auth::auth_view_modal::AuthViewVariant;
-use crate::auth::{AuthStateProvider, UserUid};
-use crate::menu::{self, Menu, MenuItem, MenuItemFields};
-use crate::modal::{Modal, ModalEvent, ModalViewState};
-use crate::pricing::PricingInfoModel;
-use crate::view_components::ToastFlavor;
-use crate::workspaces::team::{MembershipRole, TeamDeleteDisabledReason};
-use crate::{
-    appearance::Appearance,
-    channel::ChannelState,
-    cloud_object::{model::persistence::CloudModel, CloudObjectEventEntrypoint, Space},
-    drive::cloud_action_confirmation_dialog::{
-        CloudActionConfirmationDialog, CloudActionConfirmationDialogEvent,
-        CloudActionConfirmationDialogVariant,
-    },
-    editor::{
-        EditorView, Event as EditorEvent, InteractionState, SingleLineEditorOptions, TextOptions,
-    },
-    network::NetworkStatus,
-    send_telemetry_from_ctx,
-    server::{
-        cloud_objects::update_manager::UpdateManager, ids::ServerId, telemetry::TelemetryEvent,
-    },
-    themes::{self, theme::Blend},
-    ui_components::icons::Icon,
-    view_components::{ClickableTextInput, ClickableTextInputAction, ClickableTextInputEvent},
-    word_block_editor::{ChipEditorState, WordBlockEditorView, WordBlockEditorViewEvent},
-    workspace::WorkspaceAction,
-    workspaces::{
-        team::{DiscoverableTeam, Team},
-        update_manager::{TeamUpdateManager, TeamUpdateManagerEvent},
-        user_workspaces::{UserWorkspaces, UserWorkspacesEvent},
-        workspace::{BillingMetadata, CustomerType, DelinquencyStatus, WorkspaceSizePolicy},
-    },
-};
-
 use core::default::Default;
+use std::cmp::Ordering;
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use email_address::EmailAddress;
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -58,31 +10,74 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::{cmp::Ordering, collections::HashSet};
+use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
-use warpui::FocusContext;
-
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::{
+    Align, Border, ChildAnchor, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Element, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
+    SavePosition, ScrollTarget, ScrollToPositionMode, Shrinkable, Stack, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::platform::Cursor;
+use warpui::presenter::ChildView;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::SwitchStateHandle;
+use warpui::ui_components::text_input::TextInput;
 use warpui::{
-    clipboard::ClipboardContent,
-    elements::{
-        Align, Border, ChildAnchor, ClippedScrollStateHandle, ConstrainedBox, Container,
-        CornerRadius, CrossAxisAlignment, Element, Flex, Hoverable, MainAxisAlignment,
-        MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-        ParentOffsetBounds, Radius, SavePosition, ScrollTarget, ScrollToPositionMode, Shrinkable,
-        Stack, Text,
-    },
-    fonts::{Properties, Weight},
-    platform::Cursor,
-    presenter::ChildView,
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponent, UiComponentStyles},
-        switch::SwitchStateHandle,
-        text_input::TextInput,
-    },
-    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
+    AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle,
+};
+
+use super::admin_actions::AdminActions;
+use super::settings_page::{
+    render_customer_type_badge, render_separator, render_sub_header, MatchData, PageType,
+    SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
+};
+use super::tab_menu::Tabs;
+use super::transfer_ownership_confirmation_modal::{
+    TransferOwnershipConfirmationEvent, TransferOwnershipConfirmationModal,
+};
+use super::SettingsSection;
+use crate::ai::AIRequestUsageModel;
+use crate::appearance::Appearance;
+use crate::auth::auth_manager::{AuthManager, LoginGatedFeature};
+use crate::auth::auth_state::AuthState;
+use crate::auth::auth_view_modal::AuthViewVariant;
+use crate::auth::{AuthStateProvider, UserUid};
+use crate::channel::ChannelState;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{CloudObjectEventEntrypoint, Space};
+use crate::drive::cloud_action_confirmation_dialog::{
+    CloudActionConfirmationDialog, CloudActionConfirmationDialogEvent,
+    CloudActionConfirmationDialogVariant,
+};
+use crate::editor::{
+    EditorView, Event as EditorEvent, InteractionState, SingleLineEditorOptions, TextOptions,
+};
+use crate::menu::{self, Menu, MenuItem, MenuItemFields};
+use crate::modal::{Modal, ModalEvent, ModalViewState};
+use crate::network::NetworkStatus;
+use crate::pricing::PricingInfoModel;
+use crate::send_telemetry_from_ctx;
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::ids::ServerId;
+use crate::server::telemetry::TelemetryEvent;
+use crate::themes::theme::Blend;
+use crate::themes::{self};
+use crate::ui_components::icons::Icon;
+use crate::view_components::{
+    ClickableTextInput, ClickableTextInputAction, ClickableTextInputEvent, ToastFlavor,
+};
+use crate::word_block_editor::{ChipEditorState, WordBlockEditorView, WordBlockEditorViewEvent};
+use crate::workspace::WorkspaceAction;
+use crate::workspaces::team::{DiscoverableTeam, MembershipRole, Team, TeamDeleteDisabledReason};
+use crate::workspaces::update_manager::{TeamUpdateManager, TeamUpdateManagerEvent};
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::workspace::{
+    BillingMetadata, CustomerType, DelinquencyStatus, WorkspaceSizePolicy,
 };
 
 const TEAM_MEMBERS_HEADER_POSITION_ID: &str = "team_settings:team_members_header";
@@ -110,6 +105,7 @@ const TEXT_FIELD_TOP_PADDING: f32 = 12.;
 const HORIZONTAL_BAR_TO_SUB_HEADER_PADDING: f32 = 9.;
 const SUBSECTION_HEADER_FONT_SIZE: f32 = 18.;
 const SUBSUBSECTION_HEADER_FONT_SIZE: f32 = 14.;
+const OWNER_STATE_CHIP_ACCENT_OPACITY: u8 = 30;
 
 const INVITE_LINK_PREFIX: &str = "/team/";
 const INVALID_DOMAINS_INSTRUCTIONS: &str =
@@ -135,6 +131,13 @@ lazy_static! {
     static ref PAST_DUE_BADGE_COLOR: ColorU = ColorU::new(254, 253, 194, 255);
     static ref UNPAID_BADGE_COLOR: ColorU = ColorU::new(255, 130, 114, 255);
     static ref DELINQUENCY_BADGE_TEXT_COLOR: ColorU = ColorU::new(0, 0, 0, 190);
+}
+
+fn owner_state_chip_text_color(theme: &themes::theme::WarpTheme) -> ColorU {
+    let chip_background = theme
+        .background()
+        .blend(&theme.accent().with_opacity(OWNER_STATE_CHIP_ACCENT_OPACITY));
+    theme.main_text_color(chip_background).into_solid()
 }
 
 #[derive(Debug, Clone)]
@@ -308,7 +311,6 @@ struct TeamsWidgetMouseHandles {
     grow_team_warning_cta_button: MouseStateHandle,
     team_members_count_tooltip: MouseStateHandle,
     outgrow_upgrade_link: MouseStateHandle,
-    outgrow_contact_sales_link: MouseStateHandle,
 }
 
 /// TeamsInviteOption is whether the user is looking at invite-by-link or invite-by-email.
@@ -364,8 +366,6 @@ enum GrowTeamWarning {
 enum GrowTeamWarningCta {
     /// Self-serve upgrade is available; route to `/upgrade`.
     Upgrade,
-    /// Team is on the highest self-serve plan; needs sales for more capacity.
-    ContactSales,
     /// Self-serve admin can resolve billing via the Stripe portal.
     UpdateBilling,
     /// Non-self-serve admin (e.g. enterprise) should reach out to support.
@@ -443,6 +443,15 @@ impl DiscoverableTeamState {
 pub struct OpenTeamsSettingsModalArgs {
     pub invite_email: Option<String>,
 }
+#[derive(Clone)]
+enum TeamActionConfirmationTarget {
+    Leave,
+    Delete,
+    RemoveUser {
+        user_uid: UserUid,
+        team_uid: ServerId,
+    },
+}
 
 pub struct TeamsPageView {
     page: PageType<Self>,
@@ -461,8 +470,9 @@ pub struct TeamsPageView {
     invite_view: TeamsInviteOption,
     team_members_mouse_state_handles: Vec<MouseStateHandle>,
     team_approved_domains_mouse_state_handles: Vec<MouseStateHandle>,
-    delete_or_leave_team_confirmation_dialog: ViewHandle<CloudActionConfirmationDialog>,
-    show_delete_or_leave_team_confirmation_dialog: bool,
+    team_action_confirmation_dialog: ViewHandle<CloudActionConfirmationDialog>,
+    show_team_action_confirmation_dialog: bool,
+    pending_team_action_confirmation: Option<TeamActionConfirmationTarget>,
     transfer_ownership_modal_state: ModalViewState<Modal<TransferOwnershipConfirmationModal>>,
     clipped_scroll_state: ClippedScrollStateHandle,
     discoverable_teams_states: Vec<DiscoverableTeamState>,
@@ -501,7 +511,18 @@ impl TypedActionView for TeamsPageView {
             TeamsPageAction::LeaveTeam => self.leave_team(ctx),
             TeamsPageAction::CreateTeam => self.create_team(ctx),
             TeamsPageAction::RemoveUserFromTeam { user_uid, team_uid } => {
-                self.remove_user_from_team(*user_uid, *team_uid, ctx)
+                if FeatureFlag::BillingAndUsagePageV2.is_enabled() {
+                    self.show_team_action_confirmation(
+                        CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits,
+                        TeamActionConfirmationTarget::RemoveUser {
+                            user_uid: *user_uid,
+                            team_uid: *team_uid,
+                        },
+                        ctx,
+                    );
+                } else {
+                    self.remove_user_from_team(*user_uid, *team_uid, ctx);
+                }
             }
             TeamsPageAction::ChangeInviteViewOption(view_option) => {
                 self.change_invite_view_option(view_option, ctx);
@@ -512,22 +533,23 @@ impl TypedActionView for TeamsPageView {
             }
             TeamsPageAction::OpenWarpDrive => ctx.emit(TeamsPageViewEvent::OpenWarpDrive),
             TeamsPageAction::ShowLeaveTeamConfirmationDialog => {
-                self.delete_or_leave_team_confirmation_dialog
-                    .update(ctx, |dialog, ctx| {
-                        dialog.set_variant(CloudActionConfirmationDialogVariant::LeaveTeam);
-                        ctx.notify();
-                    });
-                self.show_delete_or_leave_team_confirmation_dialog = true;
-                self.enable_confirmation_dialog_confirm_button(ctx);
+                let variant = if self.should_show_reload_credits_confirmation(ctx) {
+                    CloudActionConfirmationDialogVariant::LeaveTeamReloadCredits
+                } else {
+                    CloudActionConfirmationDialogVariant::LeaveTeam
+                };
+                self.show_team_action_confirmation(
+                    variant,
+                    TeamActionConfirmationTarget::Leave,
+                    ctx,
+                );
             }
             TeamsPageAction::ShowDeleteTeamConfirmationDialog => {
-                self.delete_or_leave_team_confirmation_dialog
-                    .update(ctx, |dialog, ctx| {
-                        dialog.set_variant(CloudActionConfirmationDialogVariant::DeleteTeam);
-                        ctx.notify();
-                    });
-                self.show_delete_or_leave_team_confirmation_dialog = true;
-                self.enable_confirmation_dialog_confirm_button(ctx);
+                self.show_team_action_confirmation(
+                    CloudActionConfirmationDialogVariant::DeleteTeam,
+                    TeamActionConfirmationTarget::Delete,
+                    ctx,
+                );
             }
             TeamsPageAction::ToggleIsInviteLinkEnabled {
                 team_uid,
@@ -766,14 +788,11 @@ impl TeamsPageView {
             ctx.notify()
         });
 
-        let delete_or_leave_team_confirmation_dialog =
+        let team_action_confirmation_dialog =
             ctx.add_typed_action_view(|_| CloudActionConfirmationDialog::new());
-        ctx.subscribe_to_view(
-            &delete_or_leave_team_confirmation_dialog,
-            |me, _, event, ctx| {
-                me.handle_cloud_action_confirmation_dialog_event(event, ctx);
-            },
-        );
+        ctx.subscribe_to_view(&team_action_confirmation_dialog, |me, _, event, ctx| {
+            me.handle_cloud_action_confirmation_dialog_event(event, ctx);
+        });
 
         let transfer_ownership_modal_body =
             ctx.add_typed_action_view(|_| TransferOwnershipConfirmationModal::new());
@@ -837,8 +856,9 @@ impl TeamsPageView {
             team_members_mouse_state_handles,
             team_approved_domains_mouse_state_handles,
             clipped_scroll_state: Default::default(),
-            delete_or_leave_team_confirmation_dialog,
-            show_delete_or_leave_team_confirmation_dialog: false,
+            team_action_confirmation_dialog,
+            show_team_action_confirmation_dialog: false,
+            pending_team_action_confirmation: None,
             transfer_ownership_modal_state: ModalViewState::new(transfer_ownership_modal),
             discoverable_teams_states: Vec::new(),
             rename_team_editor,
@@ -1037,6 +1057,72 @@ impl TeamsPageView {
         }
     }
 
+    fn should_show_reload_credits_confirmation(&self, ctx: &AppContext) -> bool {
+        FeatureFlag::BillingAndUsagePageV2.is_enabled()
+            && self
+                .ai_request_usage_model
+                .as_ref(ctx)
+                .total_user_interactive_bonus_credits_remaining()
+                > 0
+    }
+
+    fn show_team_action_confirmation(
+        &mut self,
+        variant: CloudActionConfirmationDialogVariant,
+        target: TeamActionConfirmationTarget,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.pending_team_action_confirmation = Some(target);
+        self.open_member_actions_menu_index = None;
+        self.team_action_confirmation_dialog
+            .update(ctx, |dialog, ctx| {
+                dialog.set_variant(variant);
+                dialog.set_confirmation_button_enabled(true);
+                ctx.notify();
+            });
+        self.show_team_action_confirmation_dialog = true;
+        ctx.notify();
+    }
+
+    fn hide_team_action_confirmation(&mut self, ctx: &mut ViewContext<Self>) {
+        self.pending_team_action_confirmation = None;
+        self.show_team_action_confirmation_dialog = false;
+        ctx.notify();
+    }
+
+    fn confirm_pending_team_action(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(target) = self.pending_team_action_confirmation.take() else {
+            self.hide_team_action_confirmation(ctx);
+            return;
+        };
+        self.show_team_action_confirmation_dialog = false;
+        match target {
+            TeamActionConfirmationTarget::Leave | TeamActionConfirmationTarget::Delete => {
+                self.leave_team(ctx);
+            }
+            TeamActionConfirmationTarget::RemoveUser { user_uid, team_uid } => {
+                self.remove_user_from_team(user_uid, team_uid, ctx);
+            }
+        }
+        ctx.notify();
+    }
+
+    fn should_show_delete_or_leave_team_confirmation_dialog(&self) -> bool {
+        self.show_team_action_confirmation_dialog
+            && matches!(
+                &self.pending_team_action_confirmation,
+                Some(TeamActionConfirmationTarget::Leave | TeamActionConfirmationTarget::Delete)
+            )
+    }
+
+    fn should_show_remove_user_from_team_confirmation_dialog(&self) -> bool {
+        self.show_team_action_confirmation_dialog
+            && matches!(
+                &self.pending_team_action_confirmation,
+                Some(TeamActionConfirmationTarget::RemoveUser { .. })
+            )
+    }
+
     /// Scroll to the team membership settings. If an email is provided, it's prepopulated in the
     /// invite editor.
     pub fn open_team_members(&mut self, email: Option<&String>, ctx: &mut ViewContext<Self>) {
@@ -1087,12 +1173,10 @@ impl TeamsPageView {
     ) {
         match event {
             CloudActionConfirmationDialogEvent::Cancel => {
-                self.show_delete_or_leave_team_confirmation_dialog = false;
-                ctx.notify();
+                self.hide_team_action_confirmation(ctx);
             }
             CloudActionConfirmationDialogEvent::Confirm => {
-                self.leave_team(ctx);
-                self.show_delete_or_leave_team_confirmation_dialog = false;
+                self.confirm_pending_team_action(ctx);
             }
         }
     }
@@ -1313,13 +1397,6 @@ impl TeamsPageView {
             );
             ctx.notify();
         });
-    }
-
-    fn enable_confirmation_dialog_confirm_button(&mut self, ctx: &mut ViewContext<Self>) {
-        self.delete_or_leave_team_confirmation_dialog
-            .update(ctx, |dialog, _ctx| {
-                dialog.set_confirmation_button_enabled(true);
-            })
     }
 
     fn show_toast(
@@ -1857,13 +1934,10 @@ impl TeamsWidget {
                 }
             }
             GrowTeamWarning::SeatCapReached | GrowTeamWarning::SeatCapExceeded => {
-                // Build Business / legacy Business are the top of the self-serve
-                // ladder; the only path to more seats is an enterprise / sales
-                // conversation.
-                if billing_metadata.is_on_build_business_plan()
-                    || billing_metadata.is_on_legacy_business_plan()
-                {
-                    return GrowTeamWarningCta::ContactSales;
+                // Business teams route through the upgrade flow for the
+                // Enterprise upsell when they need more seats.
+                if billing_metadata.customer_type == CustomerType::Business {
+                    return GrowTeamWarningCta::Upgrade;
                 }
                 if billing_metadata.is_enterprise_plan() {
                     return GrowTeamWarningCta::None;
@@ -1961,7 +2035,6 @@ impl TeamsWidget {
         } else {
             match cta {
                 GrowTeamWarningCta::Upgrade => "Upgrade to grow your team.",
-                GrowTeamWarningCta::ContactSales => "Contact sales to grow your team.",
                 GrowTeamWarningCta::UpdateBilling => {
                     "Update your payment information to restore access."
                 }
@@ -2003,9 +2076,6 @@ impl TeamsWidget {
                 "Upgrade",
                 TeamsPageAction::GenerateUpgradeLink { team_uid: team.uid },
             )),
-            GrowTeamWarningCta::ContactSales => {
-                Some(("Contact sales", TeamsPageAction::ContactSales))
-            }
             GrowTeamWarningCta::UpdateBilling => Some((
                 "Update billing",
                 TeamsPageAction::GenerateStripeBillingPortalLink { team_uid: team.uid },
@@ -2064,6 +2134,19 @@ impl TeamsWidget {
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
             .with_border(Border::all(1.).with_border_fill(border_fill))
             .finish()
+    }
+
+    fn outgrow_upgrade_line_copy(
+        billing_metadata: &BillingMetadata,
+    ) -> (&'static str, &'static str) {
+        if billing_metadata.customer_type == CustomerType::Business {
+            (
+                "Upgrade to Enterprise",
+                " for an unlimited team member limit.",
+            )
+        } else {
+            ("Upgrade to Business", " for a higher team member limit.")
+        }
     }
 
     fn render_team_member_cost_info(
@@ -2213,7 +2296,7 @@ impl TeamsWidget {
 
         // 6) Optional outgrow CTA
         let pricing_info_model = view.pricing_info_model.as_ref(app);
-        if let Some(cta) = self.render_outgrow_cta(
+        if let Some(cta) = self.render_outgrow_upgrade_cta(
             team_metadata,
             has_admin_permissions,
             pricing_info_model,
@@ -2860,22 +2943,6 @@ impl TeamsWidget {
         } else {
             format!("{count} team members")
         };
-        let theme = appearance.theme();
-        let count_color = theme.active_ui_text_color();
-        // Info icon uses the muted gray that matches other secondary UI hints.
-        let muted_color = theme.active_ui_text_color().with_opacity(60);
-
-        let count_text = appearance
-            .ui_builder()
-            .span(count_label)
-            .with_style(UiComponentStyles {
-                font_family_id: Some(appearance.ui_font_family()),
-                font_color: Some(count_color.into()),
-                font_size: Some(12.),
-                ..Default::default()
-            })
-            .build()
-            .finish();
 
         // No capacity tooltip when the plan is unlimited (or workspace size
         // policy is missing). Just render the count text on its own.
@@ -2884,6 +2951,34 @@ impl TeamsWidget {
             Some(p) if !p.is_unlimited => Some(p.limit),
             _ => None,
         };
+        let theme = appearance.theme();
+        let count_color = match finite_cap {
+            Some(cap) => {
+                let count = i64::try_from(count).unwrap_or(i64::MAX);
+                if count >= cap {
+                    theme.ui_error_color()
+                } else if count >= cap.saturating_sub(2) {
+                    theme.ansi_fg_yellow()
+                } else {
+                    theme.active_ui_text_color().into_solid()
+                }
+            }
+            None => theme.active_ui_text_color().into_solid(),
+        };
+        // Info icon uses the muted gray that matches other secondary UI hints.
+        let muted_color = theme.active_ui_text_color().with_opacity(60);
+
+        let count_text = appearance
+            .ui_builder()
+            .span(count_label)
+            .with_style(UiComponentStyles {
+                font_family_id: Some(appearance.ui_font_family()),
+                font_color: Some(count_color),
+                font_size: Some(12.),
+                ..Default::default()
+            })
+            .build()
+            .finish();
         let Some(cap) = finite_cap else {
             return count_text;
         };
@@ -2918,8 +3013,8 @@ impl TeamsWidget {
             .finish()
     }
 
-    // "Want to upgrade your team? <Do X>"
-    fn render_outgrow_cta(
+    /// "Need more seats? <Upgrade to ...> ..."
+    fn render_outgrow_upgrade_cta(
         &self,
         team: &Team,
         has_admin_permissions: bool,
@@ -2929,36 +3024,25 @@ impl TeamsWidget {
         if team.billing_metadata.is_delinquent_due_to_payment_issue() {
             return None;
         }
-        let cta = Self::grow_team_warning_cta(
+        match Self::grow_team_warning_cta(
             GrowTeamWarning::SeatCapReached,
             has_admin_permissions,
             &team.billing_metadata,
             pricing_info,
-        );
-        match cta {
-            GrowTeamWarningCta::Upgrade => {
-                Some(self.render_outgrow_upgrade_line(team.uid, appearance))
-            }
-            GrowTeamWarningCta::ContactSales => {
-                Some(self.render_outgrow_contact_sales_line(appearance))
-            }
+        ) {
             GrowTeamWarningCta::UpdateBilling
             | GrowTeamWarningCta::ContactSupport
-            | GrowTeamWarningCta::None => None,
+            | GrowTeamWarningCta::None => return None,
+            GrowTeamWarningCta::Upgrade => {}
         }
-    }
 
-    /// "Want to grow your team? <Upgrade>" — routes through self-serve upgrade.
-    fn render_outgrow_upgrade_line(
-        &self,
-        team_uid: ServerId,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        let prefix = self.render_sub_text("Want to grow your team? ".to_string(), appearance, None);
+        let team_uid = team.uid;
+        let (link_text, suffix) = Self::outgrow_upgrade_line_copy(&team.billing_metadata);
+        let prefix = self.render_sub_text("Need more seats? ".to_string(), appearance, None);
         let link = appearance
             .ui_builder()
             .link(
-                "Upgrade".to_string(),
+                link_text.to_string(),
                 None,
                 Some(Box::new(move |ctx| {
                     ctx.dispatch_typed_action(TeamsPageAction::GenerateUpgradeLink { team_uid });
@@ -2968,38 +3052,17 @@ impl TeamsWidget {
             .soft_wrap(false)
             .build()
             .finish();
+        let suffix = self.render_sub_text(suffix.to_string(), appearance, None);
 
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_child(prefix)
-            .with_child(link)
-            .finish()
-    }
-
-    /// "Want to grow your team? <Contact sales>" — opens the contact sales page.
-    fn render_outgrow_contact_sales_line(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let prefix = self.render_sub_text("Want to grow your team? ".to_string(), appearance, None);
-        let link = appearance
-            .ui_builder()
-            .link(
-                "Contact sales".into(),
-                None,
-                Some(Box::new(move |ctx| {
-                    ctx.dispatch_typed_action(TeamsPageAction::ContactSales);
-                })),
-                self.mouse_state_handles.outgrow_contact_sales_link.clone(),
-            )
-            .soft_wrap(false)
-            .build()
-            .finish();
-
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_child(prefix)
-            .with_child(link)
-            .finish()
+        Some(
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_main_axis_size(MainAxisSize::Min)
+                .with_child(prefix)
+                .with_child(link)
+                .with_child(suffix)
+                .finish(),
+        )
     }
 
     fn render_approved_domains_section(
@@ -3291,9 +3354,9 @@ impl TeamsWidget {
                 .finish(),
         );
 
-        if view.show_delete_or_leave_team_confirmation_dialog {
+        if view.should_show_delete_or_leave_team_confirmation_dialog() {
             stack.add_positioned_overlay_child(
-                ChildView::new(&view.delete_or_leave_team_confirmation_dialog).finish(),
+                ChildView::new(&view.team_action_confirmation_dialog).finish(),
                 OffsetPositioning::offset_from_parent(
                     vec2f(0., 0.),
                     ParentOffsetBounds::Unbounded,
@@ -3447,14 +3510,20 @@ impl TeamsWidget {
                         );
                     }
                     ItemState::Owner => {
-                        pending_and_close_row.add_child(self.render_state_chip(
-                            appearance,
-                            "OWNER".into(),
-                            appearance.theme().accent().into(),
-                            appearance.theme().accent().with_opacity(30).into(),
-                            appearance.ui_font_size() - 1.,
-                            Weight::Normal,
-                        ));
+                        pending_and_close_row.add_child(
+                            self.render_state_chip(
+                                appearance,
+                                "OWNER".into(),
+                                owner_state_chip_text_color(appearance.theme()),
+                                appearance
+                                    .theme()
+                                    .accent()
+                                    .with_opacity(OWNER_STATE_CHIP_ACCENT_OPACITY)
+                                    .into(),
+                                appearance.ui_font_size() - 1.,
+                                Weight::Normal,
+                            ),
+                        );
                     }
                     ItemState::Admin => {
                         pending_and_close_row.add_child(
@@ -4336,6 +4405,17 @@ impl SettingsWidget for TeamsWidget {
                 ),
             );
         }
+        if view.should_show_remove_user_from_team_confirmation_dialog() {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&view.team_action_confirmation_dialog).finish(),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., 0.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::Center,
+                    ChildAnchor::Center,
+                ),
+            );
+        }
 
         stack.finish()
     }
@@ -4357,4 +4437,31 @@ pub fn test_valid_domains() {
     assert!(TeamsPageView::is_valid_domain("warp0.dev0"));
     assert!(TeamsPageView::is_valid_domain("warp.dev"));
     assert!(TeamsPageView::is_valid_domain("miniclip.com"));
+}
+
+#[cfg(test)]
+#[test]
+pub fn test_owner_state_chip_text_contrasts_with_accent_overlay() {
+    let theme_config = themes::theme::WarpThemeConfig::new();
+
+    for theme_kind in [
+        themes::theme::ThemeKind::CyberWave,
+        themes::theme::ThemeKind::WillowDream,
+        themes::theme::ThemeKind::SolarFlare,
+    ] {
+        let theme = theme_config.theme(&theme_kind);
+        let chip_background = theme
+            .background()
+            .blend(&theme.accent().with_opacity(OWNER_STATE_CHIP_ACCENT_OPACITY));
+        let text_color = owner_state_chip_text_color(&theme);
+
+        assert!(
+            crate::util::color::high_enough_contrast(
+                text_color,
+                chip_background.into_solid(),
+                crate::util::color::MinimumAllowedContrast::Text,
+            ),
+            "{theme_kind} owner chip text should contrast with its accent overlay"
+        );
+    }
 }

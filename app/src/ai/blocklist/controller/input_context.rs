@@ -1,39 +1,33 @@
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use chrono::Local;
 use lazy_static::lazy_static;
 use regex::Regex;
 use warp_core::features::FeatureFlag;
+use warp_graphql::generic_string_object::GenericStringObjectFormat as GraphQLFormat;
 use warpui::{AppContext, SingletonEntity};
 
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{
+    AIAgentAttachment, AIAgentContext, DocumentContentAttachmentSource, DriveObjectPayload,
+};
+use crate::ai::block_context::BlockContext;
+use crate::ai::blocklist::{BlocklistAIContextModel, SessionContext};
+use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel};
+use crate::ai::facts::CloudAIFactModel;
+use crate::ai::skills::list_skills_if_changed;
+use crate::cloud_object::model::generic_string_model::{CloudStringObject, GenericStringObjectId};
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{
+    GenericCloudObject, GenericStringObjectFormat, JsonObjectType, ObjectType,
+};
 #[cfg(not(target_family = "wasm"))]
 use crate::remote_server::codebase_index_model::RemoteCodebaseIndexModel;
-use crate::{
-    ai::{
-        agent::{
-            conversation::AIConversationId, AIAgentAttachment, AIAgentContext,
-            DocumentContentAttachmentSource, DriveObjectPayload,
-        },
-        block_context::BlockContext,
-        blocklist::{BlocklistAIContextModel, SessionContext},
-        document::ai_document_model::{AIDocumentId, AIDocumentModel},
-        facts::CloudAIFactModel,
-        skills::list_skills_if_changed,
-    },
-    cloud_object::{
-        model::{
-            generic_string_model::{CloudStringObject, GenericStringObjectId},
-            persistence::CloudModel,
-        },
-        GenericCloudObject, GenericStringObjectFormat, JsonObjectType, ObjectType,
-    },
-    terminal::{
-        model::{block::BlockId, session::active_session::ActiveSession},
-        TerminalView,
-    },
-};
-use warp_graphql::generic_string_object::GenericStringObjectFormat as GraphQLFormat;
+use crate::terminal::model::block::BlockId;
+use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::TerminalView;
 
 lazy_static! {
     // Regex to match <block:[block_id]> patterns
@@ -73,7 +67,7 @@ pub(super) fn input_context_for_request(
     {
         let session_context = SessionContext::from_session(active_session, app);
         if session_context.is_remote() {
-            add_remote_codebase_context(&mut context, app);
+            add_remote_codebase_context(&mut context, &session_context, app);
         } else {
             add_local_codebase_context(&mut context, app);
         }
@@ -81,7 +75,9 @@ pub(super) fn input_context_for_request(
 
     if FeatureFlag::ListSkills.is_enabled() {
         let skills = list_skills_if_changed(
-            active_session.current_working_directory().map(Path::new),
+            active_session
+                .current_working_directory_location(app)
+                .as_ref(),
             conversation_id,
             app,
         );
@@ -118,8 +114,15 @@ fn add_local_codebase_context(context: &mut Vec<AIAgentContext>, app: &AppContex
 }
 
 #[cfg(not(target_family = "wasm"))]
-fn add_remote_codebase_context(context: &mut Vec<AIAgentContext>, app: &AppContext) {
-    for codebase in RemoteCodebaseIndexModel::as_ref(app).codebases_for_agent_context() {
+fn add_remote_codebase_context(
+    context: &mut Vec<AIAgentContext>,
+    session_context: &SessionContext,
+    app: &AppContext,
+) {
+    let Some(host_id) = session_context.host_id() else {
+        return;
+    };
+    for codebase in RemoteCodebaseIndexModel::as_ref(app).codebases_for_agent_context(host_id) {
         context.push(AIAgentContext::Codebase {
             name: codebase.name,
             path: codebase.path,
@@ -128,7 +131,12 @@ fn add_remote_codebase_context(context: &mut Vec<AIAgentContext>, app: &AppConte
 }
 
 #[cfg(target_family = "wasm")]
-fn add_remote_codebase_context(_context: &mut Vec<AIAgentContext>, _app: &AppContext) {}
+fn add_remote_codebase_context(
+    _context: &mut Vec<AIAgentContext>,
+    _session_context: &SessionContext,
+    _app: &AppContext,
+) {
+}
 
 /// Parses context reference strings like <block:123> from the user query and returns
 /// a map of reference strings to AIAgentAttachment objects.

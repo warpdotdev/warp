@@ -1,231 +1,16 @@
-use super::path_passes_filters;
+use std::fs;
+
 use ignore::gitignore::Gitignore;
-use virtual_fs::{Stub, VirtualFS};
 
-#[cfg(unix)]
-#[test]
-fn test_path_passes_filters_unix() {
-    VirtualFS::test("test_path_passes_filters", |dirs, mut sandbox| {
-        sandbox.mkdir("my_repo");
-        sandbox.mkdir("my_repo/.git");
-        sandbox.mkdir("my_repo/.git/refs");
-        sandbox.mkdir("my_repo/.git/refs/heads");
-        sandbox.mkdir("my_repo/src");
-        sandbox.mkdir("my_repo/target");
-        sandbox.mkdir("my_repo/target/debug");
-        sandbox.mkdir("outside_of_codebase");
-        sandbox.with_files(vec![
-            Stub::EmptyFile("my_repo/README.txt"),
-            Stub::EmptyFile("my_repo/.git/blob.txt"),
-            Stub::EmptyFile("my_repo/.git/HEAD"),
-            Stub::EmptyFile("my_repo/.git/refs/heads/main"),
-            Stub::EmptyFile("my_repo/.git/refs/heads/feature-branch"),
-            Stub::EmptyFile("my_repo/src/main.rs"),
-            Stub::EmptyFile("my_repo/target/debug/a.out"),
-            Stub::EmptyFile("outside_of_codebase/text.txt"),
-        ]);
-        sandbox.with_files(vec![Stub::FileWithContent("my_repo/.gitignore", "target")]);
-
-        let test_gitignore_entry = dirs.tests().join("my_repo/.gitignore");
-        let gitignores = vec![Gitignore::new(test_gitignore_entry).0];
-
-        // Do NOT ignore a file that does not exist (for deletions)
-        assert!(path_passes_filters(
-            dirs.tests().join("my_repo/does_not_exist.txt").as_path(),
-            &gitignores
-        ));
-
-        assert!(path_passes_filters(
-            dirs.tests().join("my_repo/src").as_path(),
-            &gitignores
-        ));
-        assert!(path_passes_filters(
-            dirs.tests().join("my_repo/src/main.rs").as_path(),
-            &gitignores
-        ));
-        assert!(path_passes_filters(
-            dirs.tests().join("outside_of_codebase/text.txt").as_path(),
-            &gitignores
-        ));
-
-        // Allow .git internal files that provide useful signals
-        assert!(path_passes_filters(
-            dirs.tests().join("my_repo/.git/HEAD").as_path(),
-            &gitignores
-        ));
-        assert!(path_passes_filters(
-            dirs.tests().join("my_repo/.git/refs/heads").as_path(),
-            &gitignores
-        ));
-        assert!(path_passes_filters(
-            dirs.tests().join("my_repo/.git/refs/heads/main").as_path(),
-            &gitignores
-        ));
-        assert!(path_passes_filters(
-            dirs.tests()
-                .join("my_repo/.git/refs/heads/feature-branch")
-                .as_path(),
-            &gitignores
-        ));
-        // Non-allowlisted .git/ internal files are filtered out
-        assert!(!path_passes_filters(
-            dirs.tests().join("my_repo/.git/index").as_path(),
-            &gitignores
-        ));
-        assert!(!path_passes_filters(
-            dirs.tests().join("my_repo/.git/blob.txt").as_path(),
-            &gitignores
-        ));
-
-        // .git directory itself is still ignored
-        assert!(!path_passes_filters(
-            dirs.tests().join("my_repo/.git").as_path(),
-            &gitignores
-        ));
-
-        // Ignore .gitignored paths and their children.
-        assert!(!path_passes_filters(
-            dirs.tests().join("my_repo/target/").as_path(),
-            &gitignores
-        ));
-        assert!(!path_passes_filters(
-            dirs.tests().join("my_repo/target/debug").as_path(),
-            &gitignores
-        ));
-        assert!(!path_passes_filters(
-            dirs.tests().join("my_repo/target/debug/a.out").as_path(),
-            &gitignores
-        ));
-
-        // Ignore a .gitignored file that does not exist (for deletions)
-        assert!(!path_passes_filters(
-            &dirs.tests().join("my_repo/target/does_not_exist.txt"),
-            &gitignores
-        ));
-
-        // Ensure paths are canonicalized before being matched against gitignores.
-        assert!(path_passes_filters(
-            dirs.tests()
-                .join("outside_of_codebase/../my_repo/README.txt")
-                .as_path(),
-            &gitignores
-        ));
-        assert!(!path_passes_filters(
-            dirs.tests()
-                .join("outside_of_codebase/../my_repo/target/debug/a.out")
-                .as_path(),
-            &gitignores
-        ));
-    });
-}
-
-#[cfg_attr(
-    windows,
-    ignore = "TODO(CODE-312): issue with Gitignore matching on Windows"
-)]
-#[cfg(windows)]
-#[test]
-fn test_path_passes_filters_windows() {
-    VirtualFS::test("test_path_passes_filters", |dirs, mut sandbox| {
-        sandbox.mkdir("my_repo");
-        sandbox.mkdir(r"my_repo\.git");
-        sandbox.mkdir(r"my_repo\.git\refs");
-        sandbox.mkdir(r"my_repo\.git\refs\heads");
-        sandbox.mkdir(r"my_repo\src");
-        sandbox.mkdir(r"my_repo\target");
-        sandbox.mkdir(r"my_repo\target\debug");
-        sandbox.mkdir("outside_of_codebase");
-        sandbox.with_files(vec![
-            Stub::EmptyFile(r"my_repo\README.txt"),
-            Stub::EmptyFile(r"my_repo\.git\blob.txt"),
-            Stub::EmptyFile(r"my_repo\.git\HEAD"),
-            Stub::EmptyFile(r"my_repo\.git\refs\heads\main"),
-            Stub::EmptyFile(r"my_repo\.git\refs\heads\feature-branch"),
-            Stub::EmptyFile(r"my_repo\src\main.rs"),
-            Stub::EmptyFile(r"my_repo\target\debug\a.out"),
-            Stub::EmptyFile(r"outside_of_codebase\text.txt"),
-        ]);
-        sandbox.with_files(vec![Stub::FileWithContent(r"my_repo\.gitignore", "target")]);
-
-        let test_gitignore_entry = dirs.tests().join(r"my_repo\.gitignore");
-        let gitignores = vec![Gitignore::new(test_gitignore_entry).0];
-
-        assert!(path_passes_filters(
-            dirs.tests().join(r"my_repo\src").as_path(),
-            &gitignores
-        ));
-        assert!(path_passes_filters(
-            dirs.tests().join(r"my_repo\src\main.rs").as_path(),
-            &gitignores
-        ));
-        assert!(path_passes_filters(
-            dirs.tests().join(r"outside_of_codebase\text.txt").as_path(),
-            &gitignores
-        ));
-
-        // Allow .git internal files that provide useful signals
-        assert!(path_passes_filters(
-            dirs.tests().join(r"my_repo\.git\HEAD").as_path(),
-            &gitignores
-        ));
-        assert!(path_passes_filters(
-            dirs.tests().join(r"my_repo\.git\refs\heads").as_path(),
-            &gitignores
-        ));
-        assert!(path_passes_filters(
-            dirs.tests().join(r"my_repo\.git\refs\heads\main").as_path(),
-            &gitignores
-        ));
-        assert!(path_passes_filters(
-            dirs.tests()
-                .join(r"my_repo\.git\refs\heads\feature-branch")
-                .as_path(),
-            &gitignores
-        ));
-
-        // .git directory itself is still ignored
-        assert!(!path_passes_filters(
-            dirs.tests().join(r"my_repo\.git").as_path(),
-            &gitignores
-        ));
-
-        // Ignore .gitignored paths and their children.
-        assert!(!path_passes_filters(
-            dirs.tests().join(r"my_repo\target").as_path(),
-            &gitignores
-        ));
-        assert!(!path_passes_filters(
-            dirs.tests().join(r"my_repo\target\debug").as_path(),
-            &gitignores
-        ));
-        assert!(!path_passes_filters(
-            dirs.tests().join(r"my_repo\target\debug\a.out").as_path(),
-            &gitignores
-        ));
-
-        // Ensure paths are canonicalized before being matched against gitignores.
-        assert!(path_passes_filters(
-            dirs.tests()
-                .join(r"outside_of_codebase\..\my_repo\README.txt")
-                .as_path(),
-            &gitignores
-        ));
-        assert!(!path_passes_filters(
-            dirs.tests()
-                .join(r"outside_of_codebase\..\my_repo\target\debug\a.out")
-                .as_path(),
-            &gitignores
-        ));
-    });
-}
-
+use super::{Entry, IgnoredPathStrategy};
 #[test]
 fn test_git_path_filtering_allowlist() {
+    use std::path::Path;
+
     use super::{
         is_commit_related_git_file, is_common_git_config, is_index_lock_file,
         is_remote_tracking_ref, is_tracking_state_git_file, should_ignore_git_path,
     };
-    use std::path::Path;
 
     // Non-git paths should not be ignored
     assert!(!should_ignore_git_path(Path::new(
@@ -388,10 +173,280 @@ fn test_git_path_filtering_allowlist() {
     }
 }
 
+fn find_entry<'a>(entry: &'a super::Entry, path: &std::path::Path) -> Option<&'a super::Entry> {
+    let std_path = warp_util::standardized_path::StandardizedPath::try_from_local(path).ok()?;
+    if entry.path() == &std_path {
+        return Some(entry);
+    }
+    let super::Entry::Directory(directory) = entry else {
+        return None;
+    };
+    directory
+        .children
+        .iter()
+        .find_map(|child| find_entry(child, path))
+}
+
+fn build_skill_tree_with_gitignore(root: &std::path::Path, gitignore: &str) -> super::Entry {
+    std::fs::write(root.join(".gitignore"), gitignore).unwrap();
+    let mut files = Vec::new();
+    let mut gitignores = Vec::new();
+    let mut file_limit = 1000;
+    super::Entry::build_tree_with_ignored_path_interests(
+        root,
+        &mut files,
+        &mut gitignores,
+        Some(&mut file_limit),
+        super::BuildTreeOptions {
+            max_depth: 200,
+            current_depth: 0,
+            ignored_path_strategy: &super::IgnoredPathStrategy::IncludeLazy,
+            ignored_path_interests: &[std::path::PathBuf::from(".agents/skills")],
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn ignored_skill_file_is_loaded_for_registered_provider_path() {
+    virtual_fs::VirtualFS::test("ignored_skill_file_loaded", |dirs, mut vfs| {
+        vfs.mkdir("repo/.agents/skills/test")
+            .with_files(vec![virtual_fs::Stub::FileWithContent(
+                "repo/.agents/skills/test/SKILL.md",
+                "name: test",
+            )]);
+        let repo = dirs.tests().join("repo");
+
+        let tree = build_skill_tree_with_gitignore(&repo, ".agents/skills/test/SKILL.md\n");
+        let skill_file = find_entry(&tree, &repo.join(".agents/skills/test/SKILL.md"))
+            .expect("ignored skill file should be present");
+        assert!(skill_file.ignored());
+    });
+}
+
+#[test]
+fn ignored_skill_directory_is_loaded_for_registered_provider_path() {
+    virtual_fs::VirtualFS::test("ignored_skill_dir_loaded", |dirs, mut vfs| {
+        vfs.mkdir("repo/.agents/skills/test")
+            .with_files(vec![virtual_fs::Stub::FileWithContent(
+                "repo/.agents/skills/test/SKILL.md",
+                "name: test",
+            )]);
+        let repo = dirs.tests().join("repo");
+
+        let tree = build_skill_tree_with_gitignore(&repo, ".agents/skills/test/\n");
+        let skill_dir = find_entry(&tree, &repo.join(".agents/skills/test"))
+            .expect("ignored skill directory should be present");
+        assert!(skill_dir.ignored());
+        assert!(skill_dir.loaded());
+        assert!(find_entry(&tree, &repo.join(".agents/skills/test/SKILL.md")).is_some());
+    });
+}
+
+#[test]
+fn ignored_agents_directory_is_loaded_for_registered_provider_path() {
+    virtual_fs::VirtualFS::test("ignored_agents_dir_loaded", |dirs, mut vfs| {
+        vfs.mkdir("repo/.agents/skills/test")
+            .with_files(vec![virtual_fs::Stub::FileWithContent(
+                "repo/.agents/skills/test/SKILL.md",
+                "name: test",
+            )]);
+        let repo = dirs.tests().join("repo");
+
+        let tree = build_skill_tree_with_gitignore(&repo, ".agents/\n");
+        let agents_dir = find_entry(&tree, &repo.join(".agents"))
+            .expect("ignored .agents directory should be present");
+        assert!(agents_dir.ignored());
+        assert!(agents_dir.loaded());
+        assert!(find_entry(&tree, &repo.join(".agents/skills/test/SKILL.md")).is_some());
+    });
+}
+
+#[test]
+fn ignored_agents_skills_directory_is_loaded_for_registered_provider_path() {
+    virtual_fs::VirtualFS::test("ignored_agents_skills_dir_loaded", |dirs, mut vfs| {
+        vfs.mkdir("repo/.agents/skills/test")
+            .with_files(vec![virtual_fs::Stub::FileWithContent(
+                "repo/.agents/skills/test/SKILL.md",
+                "name: test",
+            )]);
+        let repo = dirs.tests().join("repo");
+
+        let tree = build_skill_tree_with_gitignore(&repo, ".agents/skills/\n");
+        let skills_dir = find_entry(&tree, &repo.join(".agents/skills"))
+            .expect("ignored .agents/skills directory should be present");
+        assert!(skills_dir.ignored());
+        assert!(skills_dir.loaded());
+        assert!(find_entry(&tree, &repo.join(".agents/skills/test/SKILL.md")).is_some());
+    });
+}
+
+#[test]
+fn unrelated_ignored_directory_stays_lazy_without_registered_interest() {
+    virtual_fs::VirtualFS::test("unrelated_ignored_dir_lazy", |dirs, mut vfs| {
+        vfs.mkdir("repo/.agents/skills/test")
+            .mkdir("repo/target/debug")
+            .with_files(vec![
+                virtual_fs::Stub::FileWithContent(
+                    "repo/.agents/skills/test/SKILL.md",
+                    "name: test",
+                ),
+                virtual_fs::Stub::FileWithContent("repo/target/debug/app", "binary"),
+            ]);
+        let repo = dirs.tests().join("repo");
+
+        let tree = build_skill_tree_with_gitignore(&repo, "target/\n");
+        let target_dir = find_entry(&tree, &repo.join("target"))
+            .expect("ignored unrelated directory should be present as lazy");
+        assert!(target_dir.ignored());
+        assert!(!target_dir.loaded());
+        assert!(find_entry(&tree, &repo.join("target/debug/app")).is_none());
+    });
+}
+
+#[test]
+fn build_tree_marks_descendants_of_ignored_directory_as_ignored() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root_path = dunce::canonicalize(temp_dir.path()).unwrap();
+    fs::write(root_path.join(".gitignore"), "ignored-dir/\n").unwrap();
+    fs::create_dir(root_path.join("ignored-dir")).unwrap();
+    fs::write(root_path.join("ignored-dir").join("ignored-file.txt"), "").unwrap();
+
+    let mut files = Vec::new();
+    let mut gitignores = Vec::<Gitignore>::new();
+    let tree = Entry::build_tree(
+        &root_path,
+        &mut files,
+        &mut gitignores,
+        None,
+        10,
+        0,
+        &IgnoredPathStrategy::Include,
+    )
+    .unwrap();
+
+    let Entry::Directory(root) = tree else {
+        panic!("root should be a directory");
+    };
+    let ignored_dir = root
+        .children
+        .iter()
+        .find(|entry| entry.path().file_name() == Some("ignored-dir"))
+        .unwrap();
+    let Entry::Directory(ignored_dir) = ignored_dir else {
+        panic!("ignored child should be a directory");
+    };
+    assert!(ignored_dir.ignored);
+
+    let ignored_file = ignored_dir
+        .children
+        .iter()
+        .find(|entry| entry.path().file_name() == Some("ignored-file.txt"))
+        .unwrap();
+    assert!(ignored_file.ignored());
+}
+
+#[test]
+fn lazy_loaded_ignored_directory_marks_loaded_children_as_ignored() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root_path = dunce::canonicalize(temp_dir.path()).unwrap();
+    fs::write(root_path.join(".gitignore"), "ignored-dir/\n").unwrap();
+    fs::create_dir(root_path.join("ignored-dir")).unwrap();
+    fs::write(root_path.join("ignored-dir").join("ignored-file.txt"), "").unwrap();
+
+    let mut files = Vec::new();
+    let mut gitignores = Vec::<Gitignore>::new();
+    let mut tree = Entry::build_tree(
+        &root_path,
+        &mut files,
+        &mut gitignores,
+        None,
+        10,
+        0,
+        &IgnoredPathStrategy::IncludeLazy,
+    )
+    .unwrap();
+
+    let ignored_path = root_path.join("ignored-dir");
+    let ignored_dir = tree.find_mut(&ignored_path).unwrap();
+    let Entry::Directory(directory) = ignored_dir else {
+        panic!("ignored child should be a directory");
+    };
+    assert!(directory.ignored);
+    assert!(!directory.loaded);
+    assert!(directory.children.is_empty());
+
+    ignored_dir.load(&mut gitignores).unwrap();
+
+    let Entry::Directory(directory) = ignored_dir else {
+        panic!("ignored child should still be a directory");
+    };
+    assert!(directory.ignored);
+    assert!(directory.loaded);
+
+    let ignored_file = directory
+        .children
+        .iter()
+        .find(|entry| entry.path().file_name() == Some("ignored-file.txt"))
+        .unwrap();
+    assert!(ignored_file.ignored());
+}
+
+#[test]
+fn should_watch_directory_in_git_path_prunes_non_allowlisted_subtrees() {
+    use std::path::Path;
+
+    use super::should_watch_directory_in_git_path;
+    for path in [
+        "/repo/.git",
+        "/repo/.git/refs",
+        "/repo/.git/refs/heads",
+        "/repo/.git/refs/remotes",
+        "/repo/.git/refs/remotes/origin",
+        "/repo/.git/worktrees",
+        "/repo/.git/worktrees/my-wt",
+        "/repo/.git/worktrees/my-wt/refs",
+        "/repo/.git/worktrees/my-wt/refs/heads",
+    ] {
+        assert!(
+            should_watch_directory_in_git_path(Path::new(path)),
+            "{path} should remain traversable so allowlisted git children stay reachable"
+        );
+    }
+
+    for path in [
+        "/repo/.git/objects",
+        "/repo/.git/hooks",
+        "/repo/.git/logs",
+        "/repo/.git/info",
+        "/repo/.git/lfs",
+        "/repo/.git/refs/tags",
+        "/repo/.git/worktrees/my-wt/objects",
+        "/repo/.git/worktrees/my-wt/logs",
+    ] {
+        assert!(
+            !should_watch_directory_in_git_path(Path::new(path)),
+            "{path} should be pruned from recursive watcher registration"
+        );
+    }
+    assert!(!should_watch_directory_in_git_path(Path::new(
+        "/repo/.git/objects/ab/blob"
+    )));
+    // The predicate is only consulted on directories during recursive registration;
+    // file paths like `.git/HEAD` would never actually reach it, but the default
+    // false return here documents that they're not treated as descend roots.
+    assert!(!should_watch_directory_in_git_path(Path::new(
+        "/repo/.git/HEAD"
+    )));
+    assert!(!should_watch_directory_in_git_path(Path::new(
+        "/repo/.git/config"
+    )));
+}
 #[test]
 fn test_is_shared_git_ref() {
-    use super::is_shared_git_ref;
     use std::path::Path;
+
+    use super::is_shared_git_ref;
 
     // Shared refs — broadcast to all repos
     assert!(is_shared_git_ref(Path::new("/repo/.git/refs/heads/main")));
@@ -424,8 +479,9 @@ fn test_is_shared_git_ref() {
 
 #[test]
 fn test_extract_worktree_git_dir() {
-    use super::extract_worktree_git_dir;
     use std::path::{Path, PathBuf};
+
+    use super::extract_worktree_git_dir;
 
     // Standard worktree path extracts the per-worktree gitdir
     assert_eq!(

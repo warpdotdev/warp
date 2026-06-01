@@ -1,21 +1,17 @@
-use crate::index::Entry;
+use std::collections::{HashSet, VecDeque};
+use std::path::PathBuf;
+
 use anyhow::anyhow;
 use cfg_if::cfg_if;
-use std::{
-    collections::{HashSet, VecDeque},
-    path::PathBuf,
-};
 
+use super::node::{ChildrenPath, MerkleNode, NodeLens, NodeMask};
+use super::serialized_tree::SerializedMerkleTree;
+use super::DirEntryOrFragment;
 use crate::index::full_source_code_embedding::fragment_metadata::{
     LeafToFragmentMetadata, LeafToFragmentMetadataUpdates,
 };
 use crate::index::full_source_code_embedding::Error;
-
-use super::{
-    node::{ChildrenPath, MerkleNode, NodeLens, NodeMask},
-    serialized_tree::SerializedMerkleTree,
-    DirEntryOrFragment,
-};
+use crate::index::Entry;
 
 pub(super) enum UpdateFileResult {
     Deleted,

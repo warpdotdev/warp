@@ -2,17 +2,13 @@
 //! when the query was submitted.
 use warp_core::features::FeatureFlag;
 use warp_util::path::user_friendly_path;
-use warpui::elements::MouseStateHandle;
-use warpui::elements::{ChildView, Hoverable, SavePosition};
-use warpui::platform::Cursor;
-use warpui::EntityId;
-use warpui::{
-    elements::{
-        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisAlignment,
-        MainAxisSize, ParentElement, Radius, Text,
-    },
-    AppContext, Element, SingletonEntity, ViewHandle,
+use warpui::elements::{
+    ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
+    Icon as ElementIcon, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
+    SavePosition, Text,
 };
+use warpui::platform::Cursor;
+use warpui::{AppContext, Element, EntityId, SingletonEntity, ViewHandle};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
@@ -26,7 +22,6 @@ use crate::terminal::view::{TerminalAction, WARP_PROMPT_HEIGHT_LINES};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::ActionButton;
-use warpui::elements::Icon as ElementIcon;
 
 /// Data required to render the AI block header.
 pub(super) struct Props<'a> {

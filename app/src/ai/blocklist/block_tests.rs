@@ -1,3 +1,12 @@
+use std::path::PathBuf;
+
+use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode};
+use ai::agent::action_result::StartAgentVersion;
+use ai::skills::SkillReference;
+use settings::Setting;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warpui::{App, SingletonEntity};
+
 use super::{
     default_collapsible_state_for_orchestration_action, received_message_collapsible_id,
     CollapsibleElementState, CollapsibleExpansionState,
@@ -8,13 +17,6 @@ use crate::ai::blocklist::action_model::{
 };
 use crate::settings::AISettings;
 use crate::test_util::settings::initialize_settings_for_tests;
-use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode};
-use ai::agent::action_result::StartAgentVersion;
-use ai::skills::SkillReference;
-use settings::Setting;
-use std::path::PathBuf;
-use warp_core::features::FeatureFlag;
-use warpui::{App, SingletonEntity};
 
 #[test]
 fn reasoning_auto_collapses_when_user_has_not_manually_toggled() {
@@ -206,7 +208,9 @@ fn agent_cfg() -> RunAgentsAgentRunConfig {
 fn remote_arm_propagates_skills_into_skill_references() {
     let skills = vec![
         SkillReference::BundledSkillId("writing-pr-descriptions".to_string()),
-        SkillReference::Path(PathBuf::from("/tmp/skill/SKILL.md")),
+        SkillReference::Path(LocalOrRemotePath::Local(PathBuf::from(
+            "/tmp/skill/SKILL.md",
+        ))),
     ];
     let mode = run_agents_to_start_agent_mode(
         &RunAgentsExecutionMode::Remote {
@@ -287,26 +291,21 @@ fn remote_arm_rejects_opencode() {
 }
 
 #[test]
-fn local_arm_rejects_disabled_claude() {
+fn local_arm_rejects_disabled_codex() {
     let err = run_agents_to_start_agent_mode(
         &RunAgentsExecutionMode::Local,
-        "claude",
+        "codex",
         "auto",
         &[],
         None,
         &agent_cfg(),
     )
-    .expect_err("Local+claude must be rejected while disabled");
-    assert_eq!(
-        err,
-        "Local Claude Code child agents are temporarily disabled."
-    );
+    .expect_err("Local+codex must be rejected while disabled");
+    assert_eq!(err, "Local Codex child agents are temporarily disabled.");
 }
 
 #[test]
-fn local_arm_allows_claude_when_feature_enabled() {
-    let _local_harnesses = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
-
+fn local_arm_allows_claude() {
     let mode = run_agents_to_start_agent_mode(
         &RunAgentsExecutionMode::Local,
         "claude",
@@ -315,7 +314,7 @@ fn local_arm_allows_claude_when_feature_enabled() {
         None,
         &agent_cfg(),
     )
-    .expect("Local+claude should convert when feature is enabled");
+    .expect("Local+claude should convert");
     assert!(matches!(
         mode,
         StartAgentExecutionMode::Local {
@@ -375,7 +374,6 @@ fn remote_arm_filters_whitespace_auth_secret_name_to_none() {
 
 #[test]
 fn local_arm_ignores_auth_secret_name() {
-    let _local_harnesses = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
     let mode = run_agents_to_start_agent_mode(
         &RunAgentsExecutionMode::Local,
         "claude",
@@ -384,7 +382,7 @@ fn local_arm_ignores_auth_secret_name() {
         Some("my-claude-key"),
         &agent_cfg(),
     )
-    .expect("Local+claude should convert when feature is enabled");
+    .expect("Local+claude should convert");
     // Local children don't carry an auth_secret_name field.
     assert!(matches!(mode, StartAgentExecutionMode::Local { .. }));
 }

@@ -1,12 +1,12 @@
+use std::collections::HashMap;
+
+use api::response_event::stream_finished as stream_finished_event;
+use api::{client_action as api_client_action, response_event as api_response_event};
+use warp_multi_agent_api::{self as api, ResponseEvent};
+
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent::task::TaskId;
-use crate::ai::agent::AIAgentExchange;
-use crate::ai::agent::MessageId;
-use api::client_action as api_client_action;
-use api::response_event as api_response_event;
-use api::response_event::stream_finished as stream_finished_event;
-use std::collections::HashMap;
-use warp_multi_agent_api::{self as api, ResponseEvent};
+use crate::ai::agent::{AIAgentExchange, MessageId};
 
 // Reconstructs all response events from conversations for use in session sharing.
 // These messages are used to replay conversations as if they were happening live.
@@ -132,8 +132,16 @@ pub fn reconstruct_response_events_from_conversations(
             ));
         }
 
-        // Finish this exchange
-        events.push(create_finished_event_from_conversation(conversation));
+        // Finish this exchange — but ONLY if it actually finished. If an
+        // exchange is still in-flight when the scrollback is built, emitting a
+        // synthetic Finished here corrupts the late-joining viewer's stream:
+        // the viewer clears `current_response_id` and then drops every live
+        // ClientAction that arrives for the same in-flight stream. Skipping
+        // the synthetic Finished lets the live wire's real Finished close the
+        // stream naturally for the viewer.
+        if exchange.output_status.is_finished() {
+            events.push(create_finished_event_from_conversation(conversation));
+        }
     }
 
     events
@@ -159,6 +167,7 @@ fn create_finished_event_from_conversation(conversation: &AIConversation) -> Res
         api_response_event::stream_finished::ConversationUsageMetadata {
             context_window_usage: conversation.context_window_usage(),
             credits_spent: conversation.credits_spent(),
+            platform_credits_spent: 0.0,
             summarized: conversation.was_summarized(),
             #[allow(deprecated)]
             token_usage: conversation
@@ -176,6 +185,11 @@ fn create_finished_event_from_conversation(conversation: &AIConversation) -> Res
                 .token_usage()
                 .iter()
                 .filter_map(|u| u.to_proto_byok_usage())
+                .collect(),
+            custom_endpoint_token_usage: conversation
+                .token_usage()
+                .iter()
+                .filter_map(|u| u.to_proto_custom_endpoint_usage())
                 .collect(),
         },
     );

@@ -2823,6 +2823,96 @@ dependencies = [
 ]
 
 [[package]]
+name = "cloud_object_client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "async-trait",
+ "chrono",
+ "cloud_object_models",
+ "cloud_objects",
+ "mockall",
+ "serde",
+ "serde_json",
+ "uuid",
+ "warp_core",
+ "warp_graphql",
+]
+
+[[package]]
+name = "cloud_object_models"
+version = "0.1.0"
+dependencies = [
+ "ai",
+ "anyhow",
+ "cfg-if",
+ "chrono",
+ "cloud_object_persistence",
+ "cloud_objects",
+ "diesel",
+ "handlebars",
+ "lazy_static",
+ "log",
+ "persistence",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_regex",
+ "session-sharing-protocol",
+ "settings",
+ "settings_value",
+ "uuid",
+ "warp-workflows",
+ "warp_cli",
+ "warp_core",
+ "warp_graphql",
+ "warp_util",
+]
+
+[[package]]
+name = "cloud_object_persistence"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "chrono",
+ "cloud_objects",
+ "diesel",
+ "lazy_static",
+ "log",
+ "persistence",
+ "serde",
+ "session-sharing-protocol",
+ "warp_core",
+ "warp_graphql",
+]
+
+[[package]]
+name = "cloud_objects"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "cynic",
+ "derivative",
+ "itertools 0.14.0",
+ "lasso",
+ "pathfinder_geometry",
+ "schemars",
+ "serde",
+ "session-sharing-protocol",
+ "settings_value",
+ "thiserror 2.0.17",
+ "uuid",
+ "warp_core",
+ "warp_graphql",
+ "warp_server_auth",
+ "warpui_core",
+]
+
+[[package]]
 name = "cmac"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3055,7 +3145,6 @@ dependencies = [
  "clap",
  "command",
  "computer_use",
- "core-foundation 0.10.1",
  "dispatch2",
  "futures",
  "image",
@@ -4765,7 +4854,7 @@ dependencies = [
 [[package]]
 name = "file-id"
 version = "0.2.2"
-source = "git+https://github.com/warpdotdev/notify?rev=f3afcda3058941e17e09689afea40e2a2db057e0#f3afcda3058941e17e09689afea40e2a2db057e0"
+source = "git+https://github.com/warpdotdev/notify?rev=91b719849bc04ef251bcb2cc61076b099204e970#91b719849bc04ef251bcb2cc61076b099204e970"
 dependencies = [
  "windows-sys 0.59.0",
 ]
@@ -6222,6 +6311,7 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+ "warp_core",
  "warpui",
 ]
 
@@ -6878,6 +6968,17 @@ name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
+
+[[package]]
+name = "iso8601-duration"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a26adff60a5d3ca10dc271ad37a34ff376595d2a1e5f21d02564929ca888c511"
+dependencies = [
+ "chrono",
+ "nom 7.1.3",
+ "serde",
+]
 
 [[package]]
 name = "itertools"
@@ -7891,21 +7992,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "metal"
-version = "0.33.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7047791b5bc903b8cd963014b355f71dc9864a9a0b727057676c1dcae5cbc15"
-dependencies = [
- "bitflags 2.9.4",
- "block",
- "core-graphics-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "foreign-types 0.5.0",
- "log",
- "objc",
- "paste",
-]
-
-[[package]]
 name = "migrations_internals"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8385,7 +8471,7 @@ checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 [[package]]
 name = "notify"
 version = "8.0.0"
-source = "git+https://github.com/warpdotdev/notify?rev=f3afcda3058941e17e09689afea40e2a2db057e0#f3afcda3058941e17e09689afea40e2a2db057e0"
+source = "git+https://github.com/warpdotdev/notify?rev=91b719849bc04ef251bcb2cc61076b099204e970#91b719849bc04ef251bcb2cc61076b099204e970"
 dependencies = [
  "bitflags 2.9.4",
  "filetime",
@@ -8403,7 +8489,7 @@ dependencies = [
 [[package]]
 name = "notify-debouncer-full"
 version = "0.5.0"
-source = "git+https://github.com/warpdotdev/notify?rev=f3afcda3058941e17e09689afea40e2a2db057e0#f3afcda3058941e17e09689afea40e2a2db057e0"
+source = "git+https://github.com/warpdotdev/notify?rev=91b719849bc04ef251bcb2cc61076b099204e970#91b719849bc04ef251bcb2cc61076b099204e970"
 dependencies = [
  "file-id",
  "log",
@@ -8429,7 +8515,7 @@ dependencies = [
 [[package]]
 name = "notify-types"
 version = "2.0.0"
-source = "git+https://github.com/warpdotdev/notify?rev=f3afcda3058941e17e09689afea40e2a2db057e0#f3afcda3058941e17e09689afea40e2a2db057e0"
+source = "git+https://github.com/warpdotdev/notify?rev=91b719849bc04ef251bcb2cc61076b099204e970#91b719849bc04ef251bcb2cc61076b099204e970"
 
 [[package]]
 name = "ntapi"
@@ -8573,7 +8659,7 @@ version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77e878c846a8abae00dd069496dbe8751b16ac1c3d6bd2a7283a938e8228f90d"
 dependencies = [
- "proc-macro-crate 1.3.1",
+ "proc-macro-crate 3.3.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -8684,6 +8770,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
+ "objc2-quartz-core 0.3.2",
 ]
 
 [[package]]
@@ -8908,6 +8995,7 @@ checksum = "a0125f776a10d00af4152d74616409f0d4a2053a6f57fa5b7d6aa2854ac04794"
 dependencies = [
  "bitflags 2.9.4",
  "block2 0.6.2",
+ "dispatch2",
  "objc2 0.6.3",
  "objc2-foundation 0.3.2",
 ]
@@ -10194,6 +10282,12 @@ name = "pxfm"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5a041e753da8b807c9255f28de81879c78c876392ff2469cde94799b2896b9d"
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quick-error"
@@ -11912,7 +12006,7 @@ dependencies = [
 [[package]]
 name = "session-sharing-protocol"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=3a12b871dfd1019a66057e4d9b7d5c812b73ee8c#3a12b871dfd1019a66057e4d9b7d5c812b73ee8c"
+source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=9e437df5be3c318999a9c94dba1826ebb33ad679#9e437df5be3c318999a9c94dba1826ebb33ad679"
 dependencies = [
  "byte-unit",
  "serde",
@@ -12120,8 +12214,10 @@ dependencies = [
  "async-fs",
  "chrono",
  "futures",
+ "instant",
  "log",
  "thiserror 2.0.17",
+ "tokio",
  "warp_core",
  "warpui",
 ]
@@ -14319,6 +14415,10 @@ dependencies = [
  "channel_versions",
  "chrono",
  "clap",
+ "cloud_object_client",
+ "cloud_object_models",
+ "cloud_object_persistence",
+ "cloud_objects",
  "cocoa 0.26.0",
  "comfy-table",
  "command",
@@ -14383,6 +14483,7 @@ dependencies = [
  "inventory",
  "ipc",
  "is_executable",
+ "iso8601-duration",
  "itertools 0.14.0",
  "jaq-all",
  "jaq-json",
@@ -14419,6 +14520,9 @@ dependencies = [
  "num_cpus",
  "oauth2",
  "objc",
+ "objc2 0.6.3",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
  "objc2-foundation 0.3.2",
  "onboarding",
  "once_cell",
@@ -14426,7 +14530,6 @@ dependencies = [
  "os_info",
  "palette",
  "parking_lot",
- "paste",
  "pathfinder_color",
  "pathfinder_geometry",
  "permissions",
@@ -14437,6 +14540,7 @@ dependencies = [
  "prost 0.14.3",
  "prost-build",
  "prost-types",
+ "qrcode",
  "rand 0.8.6",
  "rangemap",
  "rayon",
@@ -14486,7 +14590,6 @@ dependencies = [
  "syntect",
  "sysinfo",
  "tabwriter",
- "tantivy",
  "tempfile",
  "thiserror 2.0.17",
  "thousands",
@@ -14517,6 +14620,7 @@ dependencies = [
  "walkdir",
  "warp-command-signatures",
  "warp-workflows",
+ "warp_assets",
  "warp_cli",
  "warp_completer",
  "warp_core",
@@ -14529,6 +14633,8 @@ dependencies = [
  "warp_managed_secrets",
  "warp_multi_agent_api",
  "warp_ripgrep",
+ "warp_search_core",
+ "warp_server_auth",
  "warp_server_client",
  "warp_terminal",
  "warp_util",
@@ -14552,7 +14658,7 @@ dependencies = [
 [[package]]
 name = "warp-command-signatures"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=00a032b8ea0ee5711e2077e39a92dc9ca2051cd3#00a032b8ea0ee5711e2077e39a92dc9ca2051cd3"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=a1000677e302b8fdcefb08365f3f7a81bbba23b3#a1000677e302b8fdcefb08365f3f7a81bbba23b3"
 dependencies = [
  "cfg-if",
  "itertools 0.10.5",
@@ -14570,7 +14676,7 @@ dependencies = [
 [[package]]
 name = "warp-completion-metadata"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=00a032b8ea0ee5711e2077e39a92dc9ca2051cd3#00a032b8ea0ee5711e2077e39a92dc9ca2051cd3"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=a1000677e302b8fdcefb08365f3f7a81bbba23b3#a1000677e302b8fdcefb08365f3f7a81bbba23b3"
 dependencies = [
  "html-escape",
  "itertools 0.10.5",
@@ -14600,6 +14706,15 @@ version = "0.1.0"
 source = "git+https://github.com/warpdotdev/workflows?rev=793a98ddda6ef19682aed66364faebd2829f0e01#793a98ddda6ef19682aed66364faebd2829f0e01"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "warp_assets"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "rust-embed 8.7.2",
+ "warpui_core",
 ]
 
 [[package]]
@@ -14671,7 +14786,6 @@ dependencies = [
  "async-broadcast",
  "cfg-if",
  "chrono",
- "cocoa 0.26.0",
  "command-corrections",
  "concat-idents",
  "dashmap",
@@ -14679,6 +14793,7 @@ dependencies = [
  "dirs 6.0.0",
  "enum-iterator",
  "futures",
+ "futures-lite 1.13.0",
  "getset",
  "http 1.4.0",
  "instant",
@@ -14688,9 +14803,9 @@ dependencies = [
  "line-ending",
  "log",
  "mockito",
- "objc",
  "objc2-foundation 0.3.2",
  "parking_lot",
+ "pin-project",
  "rand 0.8.6",
  "regex",
  "reqwest",
@@ -14872,6 +14987,7 @@ dependencies = [
  "log-panics",
  "sentry",
  "sentry-log",
+ "tempfile",
  "warp_core",
  "warp_web_event_bus",
  "wasm-bindgen",
@@ -14909,7 +15025,7 @@ dependencies = [
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=9a2d2425c5d1eb40fb547956e659511906e03f9e#9a2d2425c5d1eb40fb547956e659511906e03f9e"
+source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=c67de64fc4949f693a679552dc88cebc9f7d0180#c67de64fc4949f693a679552dc88cebc9f7d0180"
 dependencies = [
  "prost 0.14.3",
  "prost-reflect",
@@ -14939,20 +15055,70 @@ dependencies = [
 ]
 
 [[package]]
+name = "warp_search_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "async-trait",
+ "enum-iterator",
+ "futures",
+ "futures-util",
+ "instant",
+ "itertools 0.14.0",
+ "lazy_static",
+ "log",
+ "ordered-float 3.9.2",
+ "parking_lot",
+ "paste",
+ "pathfinder_color",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "string-offset",
+ "strum",
+ "strum_macros",
+ "tantivy",
+ "warp_core",
+ "warpui_core",
+]
+
+[[package]]
+name = "warp_server_auth"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "cynic",
+ "lasso",
+ "log",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "uuid",
+ "warp_core",
+ "warp_graphql",
+ "warp_managed_secrets",
+ "warpui_core",
+ "warpui_extras",
+]
+
+[[package]]
 name = "warp_server_client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bincode",
  "chrono",
+ "cloud_object_client",
+ "cloud_object_models",
+ "cloud_objects",
  "cynic",
  "derivative",
- "diesel",
  "itertools 0.14.0",
  "lasso",
  "log",
  "pathfinder_geometry",
- "persistence",
  "schemars",
  "serde",
  "session-sharing-protocol",
@@ -14961,6 +15127,7 @@ dependencies = [
  "uuid",
  "warp_core",
  "warp_graphql",
+ "warp_server_auth",
  "warpui_core",
 ]
 
@@ -15069,12 +15236,12 @@ dependencies = [
  "derive_more 0.99.17",
  "dirs 6.0.0",
  "dispatch",
+ "dispatch2",
  "dwrote",
  "env_logger",
  "font-kit",
  "fontconfig",
  "fontdb",
- "foreign-types 0.5.0",
  "futures",
  "futures-lite 1.13.0",
  "futures-timer",
@@ -15090,12 +15257,16 @@ dependencies = [
  "log",
  "markdown_parser",
  "memmap2 0.9.7",
- "metal",
  "native-dialog",
  "nix 0.26.4",
  "notify-rust",
  "num-traits",
  "objc",
+ "objc2 0.6.3",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "objc2-metal 0.3.2",
+ "objc2-quartz-core 0.3.2",
  "open",
  "ordered-float 3.9.2",
  "owned_ttf_parser",
@@ -15215,10 +15386,10 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-channel",
- "cocoa 0.26.0",
  "gloo-storage",
  "log",
- "objc",
+ "objc2 0.6.3",
+ "objc2-foundation 0.3.2",
  "ouroboros",
  "rand 0.8.6",
  "ring",

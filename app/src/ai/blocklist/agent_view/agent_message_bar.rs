@@ -25,10 +25,8 @@ use crate::ai::blocklist::{
     BlocklistAIInputEvent, BlocklistAIInputModel,
 };
 use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentModelEvent};
-use crate::ai::mcp::{
-    templatable_manager::{FigmaMcpStatus, TemplatableMCPServerManagerEvent},
-    TemplatableMCPServerManager,
-};
+use crate::ai::mcp::templatable_manager::{FigmaMcpStatus, TemplatableMCPServerManagerEvent};
+use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::ai::request_usage_model::{
     AIRequestUsageModel, AIRequestUsageModelEvent, AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD,
 };
@@ -583,10 +581,7 @@ impl MessageProvider<AgentMessageArgs<'_>> for ZeroStateMessageProducer {
         let ai_settings = AISettings::as_ref(app);
 
         // Handoff to cloud only available for local agents.
-        if !is_cloud_agent
-            && ai_settings
-                .is_ampersand_handoff_enabled_for_conversation(Some(active_conversation), app)
-        {
+        if !is_cloud_agent && ai_settings.is_ampersand_handoff_enabled(app) {
             items.push(
                 MessageItem::clickable(
                     vec![
@@ -639,8 +634,7 @@ impl MessageProvider<AgentMessageArgs<'_>> for ZeroStateMessageProducer {
         // Code review only works locally.
         #[cfg(not(target_family = "wasm"))]
         if !is_cloud_agent
-            && !ai_settings
-                .is_cloud_handoff_enabled_for_conversation(Some(active_conversation), app)
+            && !ai_settings.is_cloud_handoff_enabled(app)
             && *TabSettings::as_ref(app).show_code_review_button
         {
             let code_review_keystroke = if OperatingSystem::get().is_mac() {
@@ -859,8 +853,8 @@ impl MessageProvider<AgentMessageArgs<'_>> for AutodetectedBashModeMessageProduc
             input_buffer_model,
             input_model,
             appearance,
-            slash_command_model,
             app,
+            slash_command_model,
             ..
         } = args;
         if input_model.is_ai_input_enabled()
@@ -950,42 +944,25 @@ struct ExitBashModeMessageProducer;
 impl MessageProvider<AgentMessageArgs<'_>> for ExitBashModeMessageProducer {
     fn produce_message(&self, args: AgentMessageArgs<'_>) -> Option<Message> {
         let AgentMessageArgs {
-            input_buffer_model,
             input_model,
             appearance,
+            app,
             ..
         } = args;
         if input_model.is_ai_input_enabled() || !input_model.is_input_type_locked() {
             return None;
         }
+        let set_input_mode_agent_keystroke =
+            keybinding_name_to_keystroke(SET_INPUT_MODE_AGENT_ACTION_NAME, app)?;
 
-        let (text_color, keystroke_color_override, keystroke_bg_color_override) =
-            if input_buffer_model.current_value().is_empty() {
-                (appearance.theme().ansi_fg_blue(), None, None)
-            } else {
-                (
-                    Fill::from(appearance.theme().ansi_fg_blue())
-                        .with_opacity(60)
-                        .into_solid(),
-                    Some(
-                        appearance
-                            .theme()
-                            .sub_text_color(appearance.theme().background())
-                            .into_solid(),
-                    ),
-                    Some(blended_colors::neutral_1(appearance.theme())),
-                )
-            };
+        let text_color = appearance.theme().ansi_fg_blue();
 
         Some(
             Message::new(vec![
                 MessageItem::Keystroke {
-                    keystroke: Keystroke {
-                        key: "backspace".to_owned(),
-                        ..Default::default()
-                    },
-                    color: keystroke_color_override,
-                    background_color: keystroke_bg_color_override,
+                    keystroke: set_input_mode_agent_keystroke,
+                    color: None,
+                    background_color: None,
                 },
                 MessageItem::text("to exit shell mode"),
             ])

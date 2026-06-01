@@ -1,11 +1,14 @@
 use std::collections::BTreeSet;
 
-use crate::ai::agent_sdk::output::{self, TableFormat};
-use crate::ai::llms::LLMPreferences;
 use comfy_table::Cell;
 use serde::Serialize;
-use warp_cli::{model::ModelCommand, GlobalOptions};
-use warpui::{platform::TerminationMode, AppContext, ModelContext, SingletonEntity};
+use warp_cli::model::ModelCommand;
+use warp_cli::GlobalOptions;
+use warpui::platform::TerminationMode;
+use warpui::{AppContext, ModelContext, SingletonEntity};
+
+use crate::ai::agent_sdk::output::{self, TableFormat};
+use crate::ai::llms::LLMPreferences;
 
 /// Handle model-related CLI commands.
 pub fn run(

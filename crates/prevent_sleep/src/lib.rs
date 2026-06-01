@@ -3,14 +3,11 @@
 #[cfg_attr(noop, path = "noop.rs")]
 mod imp;
 
-use std::{
-    pin::Pin,
-    task::{Context, Poll},
-};
-
-use pin_project::pin_project;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 pub use imp::Guard;
+use pin_project::pin_project;
 
 /// Returns a guard that prevents the system from going to sleep while the guard is held.
 ///

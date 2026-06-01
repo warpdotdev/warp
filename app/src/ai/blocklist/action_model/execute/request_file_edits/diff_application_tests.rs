@@ -7,11 +7,10 @@ use tempfile::NamedTempFile;
 use vec1::vec1;
 use warpui::App;
 
+use super::*;
 use crate::ai::agent::{AIIdentifiers, FileEdit};
 use crate::ai::blocklist::SessionContext;
 use crate::auth::auth_state::AuthState;
-
-use super::*;
 
 fn update_deltas(diff: &AIRequestedCodeDiff) -> &[DiffDelta] {
     match &diff.diff_type {
@@ -458,6 +457,124 @@ fn test_mixed_create_and_edit_for_same_path() {
         // Should fail due to mixed create and edit for the same file
         let errors =
             result.expect_err("Expected an error due to mixed create and edit for same file");
+        match &errors[..] {
+            [DiffApplicationError::MultipleFileCreation { file }] => {
+                assert_eq!(*file, file_path);
+            }
+            other => panic!("Expected a single MultipleFileCreation error, got {other:?}"),
+        }
+    });
+}
+
+#[test]
+fn test_delete_and_create_same_path_replaces_existing_file() {
+    App::test((), |app| async move {
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+        let file_path = temp_file.path().to_string_lossy().to_string();
+        writeln!(&mut temp_file, "Old line one\nOld line two").unwrap();
+
+        let delete_edit = FileEdit::Delete {
+            file: Some(file_path.clone()),
+        };
+        let create_edit = FileEdit::Create {
+            file: Some(file_path.clone()),
+            content: Some("New file content".to_string()),
+        };
+
+        let result = apply_edits(
+            vec![delete_edit, create_edit],
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
+            false,
+            |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
+        )
+        .await;
+
+        assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
+        let diffs = result.unwrap();
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].file_name, file_path);
+        assert_eq!(diffs[0].original_content, "Old line one\nOld line two\n");
+
+        let deltas = update_deltas(&diffs[0]);
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].replacement_line_range, 1..3);
+        assert_eq!(deltas[0].insertion, "New file content");
+    });
+}
+
+#[test]
+fn test_create_then_delete_same_path_replaces_existing_file() {
+    App::test((), |app| async move {
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+        let file_path = temp_file.path().to_string_lossy().to_string();
+        writeln!(&mut temp_file, "Old line one\nOld line two").unwrap();
+
+        let create_edit = FileEdit::Create {
+            file: Some(file_path.clone()),
+            content: Some("New file content".to_string()),
+        };
+        let delete_edit = FileEdit::Delete {
+            file: Some(file_path.clone()),
+        };
+
+        let result = apply_edits(
+            vec![create_edit, delete_edit],
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
+            false,
+            |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
+        )
+        .await;
+
+        assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
+        let diffs = result.unwrap();
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].file_name, file_path);
+
+        let deltas = update_deltas(&diffs[0]);
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].replacement_line_range, 1..3);
+        assert_eq!(deltas[0].insertion, "New file content");
+    });
+}
+
+#[test]
+fn test_delete_create_and_edit_same_path_still_fails() {
+    App::test((), |app| async move {
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+        let file_path = temp_file.path().to_string_lossy().to_string();
+        writeln!(&mut temp_file, "Existing content").unwrap();
+
+        let delete_edit = FileEdit::Delete {
+            file: Some(file_path.clone()),
+        };
+        let create_edit = FileEdit::Create {
+            file: Some(file_path.clone()),
+            content: Some("New file content".to_string()),
+        };
+        let edit_diff = ParsedDiff::StrReplaceEdit {
+            file: Some(file_path.clone()),
+            search: Some("1|Existing content".to_string()),
+            replace: Some("Modified content".to_string()),
+        };
+
+        let result = apply_edits(
+            vec![delete_edit, create_edit, FileEdit::Edit(edit_diff)],
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
+            false,
+            |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
+        )
+        .await;
+
+        let errors = result.expect_err("Expected an error due to create/edit/delete same path");
         match &errors[..] {
             [DiffApplicationError::MultipleFileCreation { file }] => {
                 assert_eq!(*file, file_path);

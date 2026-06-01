@@ -1,13 +1,21 @@
+use std::sync::Arc;
+
 use chrono::Utc;
 use persistence::model::ConversationUsageMetadata;
+use warp_cli::agent::Harness;
+use warp_graphql::object_permissions::AccessLevel;
+use warpui::{App, EntityId, SingletonEntity};
 
+use super::*;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIAgentHarness, ServerAIConversationMetadata};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::task::{
     AgentConfigSnapshot, HarnessConfig, TaskPrincipalInfo, TaskStatusErrorCode, TaskStatusMessage,
 };
-use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState};
+use crate::ai::ambient_agents::{
+    AgentSource, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
+};
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::auth::user::TEST_USER_UID;
 use crate::auth::{AuthStateProvider, UserUid};
@@ -21,12 +29,6 @@ use crate::workspaces::team::Team;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::Workspace;
 use crate::FeatureFlag;
-use std::sync::Arc;
-use warp_cli::agent::Harness;
-use warp_graphql::object_permissions::AccessLevel;
-use warpui::{App, EntityId, SingletonEntity};
-
-use super::*;
 
 const CONVERSATION_TOKEN: &str = "server-conversation-token";
 
@@ -171,6 +173,7 @@ fn ambient_agent_task(
         created_at: now,
         started_at: Some(now),
         updated_at: now,
+        run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: None,
         session_id: None,
@@ -343,6 +346,33 @@ fn missing_task_returns_error() {
                 ctx,
             );
             assert_eq!(state, Err(CloudConversationContinuationError::MissingTask));
+        });
+    });
+}
+
+#[test]
+fn github_action_source_shows_tombstone_without_cta() {
+    App::test((), |mut app| async move {
+        let TestHandles {
+            terminal_view_id,
+            task_id,
+        } = setup_owned_task_without_server_metadata(&mut app);
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            let mut task = ambient_agent_task(
+                task_id,
+                CONVERSATION_TOKEN,
+                AmbientAgentTaskState::Succeeded,
+            )
+            .with_creator(TEST_USER_UID);
+            task.source = Some(AgentSource::GitHubAction);
+            model.insert_task_for_test(task);
+        });
+
+        app.update(|ctx| {
+            assert_eq!(
+                resolve_cloud_conversation_continuation_ui_state(terminal_view_id, task_id, ctx),
+                Ok(CloudConversationContinuationUiState::Tombstone { cta: None })
+            );
         });
     });
 }

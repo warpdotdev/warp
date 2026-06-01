@@ -1,15 +1,15 @@
+use warpui::{AppContext, ModelHandle, SingletonEntity, View, ViewContext, ViewHandle};
+
+use super::view::PaneView;
 use super::{
-    view::PaneView, DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId, ShareableLink,
+    DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId, ShareableLink,
     ShareableLinkError,
 };
-use crate::{
-    ai::execution_profiles::editor::{
-        ExecutionProfileEditorManager, ExecutionProfileEditorView, ExecutionProfileEditorViewEvent,
-    },
-    ai::execution_profiles::profiles::ClientProfileId,
-    app_state::LeafContents,
+use crate::ai::execution_profiles::editor::{
+    ExecutionProfileEditorManager, ExecutionProfileEditorView, ExecutionProfileEditorViewEvent,
 };
-use warpui::{AppContext, ModelHandle, SingletonEntity, View, ViewContext, ViewHandle};
+use crate::ai::execution_profiles::profiles::ClientProfileId;
+use crate::app_state::LeafContents;
 
 pub struct ExecutionProfileEditorPane {
     view: ViewHandle<PaneView<ExecutionProfileEditorView>>,

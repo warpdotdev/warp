@@ -1,24 +1,20 @@
-use warp::{
-    cmd_or_ctrl_shift,
-    features::FeatureFlag,
-    integration_testing::{
-        command_palette::open_command_palette_and_run_action,
-        notebook::{
-            assert_notebook_contents, assert_notebook_id, assert_notebook_not_open,
-            assert_notebook_open, assert_open_in_warp_banner_open, create_a_personal_notebook,
-            enter_notebook_edit_mode_and_set_markdown, move_notebook_cursor_to_offset,
-            open_notebook,
-        },
-        step::new_step_with_default_assertions,
-        tab::{assert_pane_title, assert_tab_title},
-        terminal::{
-            assert_single_terminal_in_tab_bootstrapped, execute_command_for_single_terminal_in_tab,
-            util::ExpectedExitStatus, wait_until_bootstrapped_single_pane_for_tab,
-        },
-        view_getters::terminal_view,
-        window::{add_and_save_window, close_window, save_active_window_id},
-    },
+use warp::cmd_or_ctrl_shift;
+use warp::features::FeatureFlag;
+use warp::integration_testing::command_palette::open_command_palette_and_run_action;
+use warp::integration_testing::notebook::{
+    assert_notebook_contents, assert_notebook_id, assert_notebook_not_open, assert_notebook_open,
+    assert_open_in_warp_banner_open, create_a_personal_notebook,
+    enter_notebook_edit_mode_and_set_markdown, move_notebook_cursor_to_offset, open_notebook,
 };
+use warp::integration_testing::step::new_step_with_default_assertions;
+use warp::integration_testing::tab::{assert_pane_title, assert_tab_title};
+use warp::integration_testing::terminal::util::ExpectedExitStatus;
+use warp::integration_testing::terminal::{
+    assert_single_terminal_in_tab_bootstrapped, execute_command_for_single_terminal_in_tab,
+    wait_until_bootstrapped_single_pane_for_tab,
+};
+use warp::integration_testing::view_getters::terminal_view;
+use warp::integration_testing::window::{add_and_save_window, close_window, save_active_window_id};
 use warpui::integration::TestStep;
 
 use super::{new_builder, Builder};

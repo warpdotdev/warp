@@ -1,23 +1,22 @@
-use super::{CornerRadius, Element, Point};
-use crate::{
-    assets::asset_cache::{AssetCache, AssetSource, AssetState},
-    event::DispatchedEvent,
-    image_cache::{AnimatedImage, AnimatedImageBehavior, FitType, ImageCache, StaticImage},
-    AfterLayoutContext, AppContext, EventContext, LayoutContext, PaintContext, SingletonEntity,
-    SizeConstraint,
-};
+use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::Arc;
+use std::time::Duration;
 
-pub use crate::image_cache::CacheOption;
 use instant::Instant;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F, Vector2I};
-use std::time::Duration;
-use std::{
-    collections::HashMap,
-    hash::{DefaultHasher, Hash, Hasher},
-    sync::Arc,
+
+use super::{CornerRadius, Element, Point};
+use crate::assets::asset_cache::{AssetCache, AssetSource, AssetState};
+use crate::event::DispatchedEvent;
+pub use crate::image_cache::CacheOption;
+use crate::image_cache::{AnimatedImage, AnimatedImageBehavior, FitType, ImageCache, StaticImage};
+use crate::{
+    AfterLayoutContext, AppContext, EventContext, LayoutContext, PaintContext, SingletonEntity,
+    SizeConstraint,
 };
 
 lazy_static! {
@@ -42,6 +41,9 @@ pub struct Image {
     size: Option<Vector2F>,
     origin: Option<Point>,
     fit_type: FitType,
+    /// If true, layout will produce a size based on the bounds at which the image will
+    /// be painted instead of simply using the incoming max constraint.
+    layout_using_paint_bounds: bool,
     animated_image_behavior: AnimatedImageBehavior,
     cache_option: CacheOption,
     started_at: Option<Instant>,
@@ -92,6 +94,7 @@ impl Image {
             failed_to_load_element: None,
             load_timeout: None,
             requested_repaint_after_load: false,
+            layout_using_paint_bounds: false,
             #[cfg(debug_assertions)]
             constructor_location: Some(std::panic::Location::caller()),
         }
@@ -142,6 +145,16 @@ impl Image {
     /// and the empty space should appear on the left rather than being split on both sides.
     pub fn right_aligned(mut self) -> Self {
         self.right_aligned = true;
+        self
+    }
+
+    /// Uses the paint boundary of the image as the laid-out size.
+    ///
+    /// By default, the [`Image`] element bounds will be the incoming max constraint.
+    /// For some cases, we'd prefer for the element's laid-out size to match the painted
+    /// image size.
+    pub fn layout_using_paint_bounds(mut self) -> Self {
+        self.layout_using_paint_bounds = true;
         self
     }
 
@@ -394,7 +407,16 @@ impl Element for Image {
         ctx: &mut LayoutContext,
         app: &AppContext,
     ) -> Vector2F {
-        let size = constraint.max;
+        let mut size = constraint.max;
+
+        if self.layout_using_paint_bounds {
+            let asset_cache = AssetCache::as_ref(app);
+            let image_size = ImageCache::as_ref(app).image_size(self.source.clone(), asset_cache);
+            if let Some(image_size) = image_size {
+                size = dimensions(image_size.to_f32(), size, self.fit_type);
+            }
+        }
+
         self.size = Some(size);
 
         if let Some(before_load_element) = self.before_load_element.as_mut() {

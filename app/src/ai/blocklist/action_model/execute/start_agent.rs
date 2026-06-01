@@ -1,8 +1,12 @@
 use std::collections::HashMap;
 
-use futures::{future::BoxFuture, FutureExt};
+use futures::future::BoxFuture;
+use futures::FutureExt;
+use warp_cli::agent::Harness;
+use warp_core::features::FeatureFlag;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
+use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionResultType, AIAgentActionType, LifecycleEventType,
@@ -11,11 +15,7 @@ use crate::ai::agent::{
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
-use crate::ai::local_child_harnesses::local_child_harness_disabled_message;
-use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
-
-use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
+use crate::ai::local_harness_setup::local_harness_product_disabled_message;
 
 /// Per-request outcome of a StartAgent dispatch.
 #[derive(Debug, Clone)]
@@ -271,7 +271,8 @@ impl StartAgentExecutor {
             | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
             | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. } => {}
             BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
-            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. } => {}
+            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
+            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => {}
         }
     }
 
@@ -356,7 +357,7 @@ impl StartAgentExecutor {
                         },
                     ));
                 };
-                if let Some(message) = local_child_harness_disabled_message(harness) {
+                if let Some(message) = local_harness_product_disabled_message(harness) {
                     return ActionExecution::Sync(AIAgentActionResultType::StartAgent(
                         StartAgentResult::Error {
                             error: message.to_string(),

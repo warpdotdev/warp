@@ -1,14 +1,11 @@
 mod context;
 mod handle;
 
-use crate::{
-    accessibility::{AccessibilityContent, ActionAccessibilityContent},
-    keymap, Action, AppContext, CursorInfo, Element, Entity,
-};
-
-pub use self::{context::*, handle::*};
-
+pub use self::context::*;
+pub use self::handle::*;
 use super::EntityId;
+use crate::accessibility::{AccessibilityContent, ActionAccessibilityContent};
+use crate::{keymap, Action, AppContext, CursorInfo, Element, Entity};
 
 pub enum FocusContext {
     SelfFocused,

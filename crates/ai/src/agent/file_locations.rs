@@ -5,7 +5,8 @@ use itertools::Itertools as _;
 use warp_terminal::shell::ShellLaunchData;
 
 use crate::agent::action_result::FileContext;
-use crate::{index::locations::CodeContextLocation, paths::shell_native_absolute_path};
+use crate::index::locations::CodeContextLocation;
+use crate::paths::shell_native_absolute_path;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileLocations {

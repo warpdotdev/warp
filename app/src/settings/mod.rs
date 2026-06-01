@@ -115,23 +115,25 @@ impl SettingsFileError {
     }
 }
 
-use crate::{
-    root_view::QuakeModePinPosition,
-    terminal::{BlockListSettings, BlockPadding},
-    themes::theme::{ThemeKind, WarpTheme},
-    user_config::WarpConfig,
-};
+use std::collections::HashMap;
+use std::ops::Mul;
+use std::path::PathBuf;
+
 use lazy_static::lazy_static;
-use pathfinder_geometry::{rect::RectF, vector::Vector2F};
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::Vector2F;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use settings::Setting as _;
-use std::{collections::HashMap, ops::Mul, path::PathBuf};
 use warp_core::features::FeatureFlag;
-use warpui::{
-    elements::DEFAULT_UI_LINE_HEIGHT_RATIO, keymap::Keystroke, AppContext, DisplayIdx,
-    SingletonEntity,
-};
+use warpui::elements::DEFAULT_UI_LINE_HEIGHT_RATIO;
+use warpui::keymap::Keystroke;
+use warpui::{AppContext, DisplayIdx, SingletonEntity};
+
+use crate::root_view::QuakeModePinPosition;
+use crate::terminal::{BlockListSettings, BlockPadding};
+use crate::themes::theme::{ThemeKind, WarpTheme};
+use crate::user_config::WarpConfig;
 
 // The following are user preferences keys.
 pub const CHANGELOG_VERSIONS: &str = "ChangelogVersions";
@@ -256,7 +258,7 @@ pub struct Settings;
 /// later allow users to have both quake mode and activation mode enabled simultaneously. If/when
 /// that happens we'll remove this enum. These options are not modeled as a ternary option in the
 /// serialized user-defaults, but as independent options.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GlobalHotkeyMode {
     #[default]
     Disabled,

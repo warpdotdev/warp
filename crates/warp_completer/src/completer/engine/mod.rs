@@ -20,16 +20,13 @@ cfg_if::cfg_if! {
     }
 }
 
-use crate::{
-    completer::{CompletionContext, TopLevelCommandCaseSensitivity},
-    meta::{HasSpan, Span, Spanned, SpannedItem},
-    parsers::{
-        hir::{Command, Expression, ExternalCommand, FlagType, ShellCommand},
-        ArgumentError, ClassifiedCommand, ParseError, ParseErrorReason, ParsedExpression,
-        ParsedToken,
-    },
-    signatures::CommandRegistry,
+use crate::completer::{CompletionContext, TopLevelCommandCaseSensitivity};
+use crate::meta::{HasSpan, Span, Spanned, SpannedItem};
+use crate::parsers::hir::{Command, Expression, ExternalCommand, FlagType, ShellCommand};
+use crate::parsers::{
+    ArgumentError, ClassifiedCommand, ParseError, ParseErrorReason, ParsedExpression, ParsedToken,
 };
+use crate::signatures::CommandRegistry;
 
 pub type CompletionLocation = Spanned<LocationType>;
 

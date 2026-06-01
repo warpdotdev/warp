@@ -19,20 +19,23 @@ mod unix;
 #[cfg(windows)]
 pub mod windows;
 
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::io;
+use std::path::PathBuf;
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, ffi::OsString, io, path::PathBuf};
-
-#[cfg(unix)]
-pub use self::unix::*;
-#[cfg(windows)]
-pub use self::windows::*;
-use super::SizeInfo;
 use shell::ShellStarter;
 
 #[cfg(windows)]
 pub use self::terminal_manager::shutdown_all_pty_event_loops;
 pub use self::terminal_manager::{get_shell_starter, TerminalManager};
+#[cfg(unix)]
+pub use self::unix::*;
+#[cfg(windows)]
+pub use self::windows::*;
+use super::SizeInfo;
 
 /// This trait defines the behaviour needed to read and/or write to a stream.
 /// It defines an abstraction over mio's interface in order to allow either one

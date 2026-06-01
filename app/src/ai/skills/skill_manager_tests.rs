@@ -1,13 +1,21 @@
-use super::*;
-use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
-use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
-use repo_metadata::{repositories::DetectedRepositories, DirectoryWatcher, RepoMetadataModel};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+
+use ai::skills::{get_provider_for_path, ParsedSkill, SkillProvider, SkillReference, SkillScope};
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::{DirectoryWatcher, RepoMetadataModel};
 use tempfile::TempDir;
 use warp_core::channel::ChannelState;
+use warp_util::host_id::HostId;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 use watcher::HomeDirectoryWatcher;
+
+use super::*;
+use crate::settings::AISettings;
+use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 
 // ============================================================================
 // Tests for get_skills_for_working_directory subdirectory scoping
@@ -31,8 +39,9 @@ fn get_skills_for_working_directory_scopes_subdirectory_skills() {
     fs::create_dir_all(&backend_dir).unwrap();
 
     // Create mock skills
-    let root_skill_path = repo.join(".agents/skills/root-skill/SKILL.md");
-    let frontend_skill_path = frontend_dir.join(".agents/skills/frontend-skill/SKILL.md");
+    let root_skill_path = LocalOrRemotePath::Local(repo.join(".agents/skills/root-skill/SKILL.md"));
+    let frontend_skill_path =
+        LocalOrRemotePath::Local(frontend_dir.join(".agents/skills/frontend-skill/SKILL.md"));
 
     let root_skill = ParsedSkill {
         name: "root-skill".to_string(),
@@ -55,22 +64,24 @@ fn get_skills_for_working_directory_scopes_subdirectory_skills() {
     };
 
     // Build the internal state manually
-    let mut directory_skills: HashMap<PathBuf, HashSet<PathBuf>> = HashMap::new();
+    let mut directory_skills: HashMap<LocalOrRemotePath, HashSet<LocalOrRemotePath>> =
+        HashMap::new();
     directory_skills
-        .entry(repo.clone())
+        .entry(LocalOrRemotePath::Local(repo.clone()))
         .or_default()
         .insert(root_skill_path.clone());
     directory_skills
-        .entry(frontend_dir.clone())
+        .entry(LocalOrRemotePath::Local(frontend_dir.clone()))
         .or_default()
         .insert(frontend_skill_path.clone());
 
-    let mut skills_by_path: HashMap<PathBuf, ParsedSkill> = HashMap::new();
+    let mut skills_by_path: HashMap<LocalOrRemotePath, ParsedSkill> = HashMap::new();
     skills_by_path.insert(root_skill_path.clone(), root_skill);
     skills_by_path.insert(frontend_skill_path.clone(), frontend_skill);
 
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
         let repo_handle = app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
@@ -93,7 +104,10 @@ fn get_skills_for_working_directory_scopes_subdirectory_skills() {
 
         // Test 1: From frontend directory, should see both root and frontend skills
         let skills_from_frontend = skill_manager_handle.read(&app, |manager, ctx| {
-            manager.get_skills_for_working_directory(Some(&frontend_dir), ctx)
+            manager.get_skills_for_working_directory(
+                Some(&LocalOrRemotePath::Local(frontend_dir.clone())),
+                ctx,
+            )
         });
         let names_from_frontend: Vec<&str> = skills_from_frontend
             .iter()
@@ -110,7 +124,10 @@ fn get_skills_for_working_directory_scopes_subdirectory_skills() {
 
         // Test 2: From backend directory, should only see root skill (not frontend skill)
         let skills_from_backend = skill_manager_handle.read(&app, |manager, ctx| {
-            manager.get_skills_for_working_directory(Some(&backend_dir), ctx)
+            manager.get_skills_for_working_directory(
+                Some(&LocalOrRemotePath::Local(backend_dir.clone())),
+                ctx,
+            )
         });
         let names_from_backend: Vec<&str> = skills_from_backend
             .iter()
@@ -127,7 +144,10 @@ fn get_skills_for_working_directory_scopes_subdirectory_skills() {
 
         // Test 3: From repo root, should only see root skill (not frontend skill)
         let skills_from_root = skill_manager_handle.read(&app, |manager, ctx| {
-            manager.get_skills_for_working_directory(Some(&repo), ctx)
+            manager.get_skills_for_working_directory(
+                Some(&LocalOrRemotePath::Local(repo.clone())),
+                ctx,
+            )
         });
         let names_from_root: Vec<&str> = skills_from_root.iter().map(|s| s.name.as_str()).collect();
         assert!(
@@ -154,8 +174,8 @@ fn get_skills_for_working_directory_name_collision_returns_both() {
     let subdir = repo.join("packages/frontend");
     fs::create_dir_all(&subdir).unwrap();
 
-    let root_skill_path = repo.join(".agents/skills/deploy/SKILL.md");
-    let subdir_skill_path = subdir.join(".agents/skills/deploy/SKILL.md");
+    let root_skill_path = LocalOrRemotePath::Local(repo.join(".agents/skills/deploy/SKILL.md"));
+    let subdir_skill_path = LocalOrRemotePath::Local(subdir.join(".agents/skills/deploy/SKILL.md"));
 
     let root_skill = ParsedSkill {
         name: "deploy".to_string(),
@@ -177,22 +197,24 @@ fn get_skills_for_working_directory_name_collision_returns_both() {
         scope: SkillScope::Project,
     };
 
-    let mut directory_skills: HashMap<PathBuf, HashSet<PathBuf>> = HashMap::new();
+    let mut directory_skills: HashMap<LocalOrRemotePath, HashSet<LocalOrRemotePath>> =
+        HashMap::new();
     directory_skills
-        .entry(repo.clone())
+        .entry(LocalOrRemotePath::Local(repo.clone()))
         .or_default()
         .insert(root_skill_path.clone());
     directory_skills
-        .entry(subdir.clone())
+        .entry(LocalOrRemotePath::Local(subdir.clone()))
         .or_default()
         .insert(subdir_skill_path.clone());
 
-    let mut skills_by_path: HashMap<PathBuf, ParsedSkill> = HashMap::new();
+    let mut skills_by_path: HashMap<LocalOrRemotePath, ParsedSkill> = HashMap::new();
     skills_by_path.insert(root_skill_path.clone(), root_skill);
     skills_by_path.insert(subdir_skill_path.clone(), subdir_skill);
 
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
         let repo_handle = app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
@@ -214,7 +236,10 @@ fn get_skills_for_working_directory_name_collision_returns_both() {
 
         // From subdir: should see both "deploy" skills (root + subdir)
         let skills = skill_manager_handle.read(&app, |manager, ctx| {
-            manager.get_skills_for_working_directory(Some(&subdir), ctx)
+            manager.get_skills_for_working_directory(
+                Some(&LocalOrRemotePath::Local(subdir.clone())),
+                ctx,
+            )
         });
         let deploy_skills: Vec<_> = skills.iter().filter(|s| s.name == "deploy").collect();
         assert_eq!(
@@ -225,7 +250,10 @@ fn get_skills_for_working_directory_name_collision_returns_both() {
 
         // From repo root: should only see root "deploy"
         let skills = skill_manager_handle.read(&app, |manager, ctx| {
-            manager.get_skills_for_working_directory(Some(&repo), ctx)
+            manager.get_skills_for_working_directory(
+                Some(&LocalOrRemotePath::Local(repo.clone())),
+                ctx,
+            )
         });
         let deploy_skills: Vec<_> = skills.iter().filter(|s| s.name == "deploy").collect();
         assert_eq!(
@@ -250,8 +278,8 @@ fn cloud_environment_skills_always_included() {
     fs::create_dir_all(&repo_a).unwrap();
     fs::create_dir_all(&repo_b).unwrap();
 
-    let skill_a_path = repo_a.join(".agents/skills/build/SKILL.md");
-    let skill_b_path = repo_b.join(".agents/skills/deploy/SKILL.md");
+    let skill_a_path = LocalOrRemotePath::Local(repo_a.join(".agents/skills/build/SKILL.md"));
+    let skill_b_path = LocalOrRemotePath::Local(repo_b.join(".agents/skills/deploy/SKILL.md"));
 
     let skill_a = ParsedSkill {
         name: "build".to_string(),
@@ -273,22 +301,24 @@ fn cloud_environment_skills_always_included() {
         scope: SkillScope::Project,
     };
 
-    let mut directory_skills: HashMap<PathBuf, HashSet<PathBuf>> = HashMap::new();
+    let mut directory_skills: HashMap<LocalOrRemotePath, HashSet<LocalOrRemotePath>> =
+        HashMap::new();
     directory_skills
-        .entry(repo_a.clone())
+        .entry(LocalOrRemotePath::Local(repo_a.clone()))
         .or_default()
         .insert(skill_a_path.clone());
     directory_skills
-        .entry(repo_b.clone())
+        .entry(LocalOrRemotePath::Local(repo_b.clone()))
         .or_default()
         .insert(skill_b_path.clone());
 
-    let mut skills_by_path: HashMap<PathBuf, ParsedSkill> = HashMap::new();
+    let mut skills_by_path: HashMap<LocalOrRemotePath, ParsedSkill> = HashMap::new();
     skills_by_path.insert(skill_a_path.clone(), skill_a);
     skills_by_path.insert(skill_b_path.clone(), skill_b);
 
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
         let repo_handle = app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
@@ -311,7 +341,10 @@ fn cloud_environment_skills_always_included() {
         // From inside repo_a, both repo_a and repo_b skills are visible
         // because is_cloud_environment skips the ancestor filter.
         let skills = skill_manager_handle.read(&app, |manager, ctx| {
-            manager.get_skills_for_working_directory(Some(&repo_a), ctx)
+            manager.get_skills_for_working_directory(
+                Some(&LocalOrRemotePath::Local(repo_a.clone())),
+                ctx,
+            )
         });
         let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
         assert!(
@@ -471,23 +504,107 @@ fn test_build_bundled_skill_context() {
     );
 }
 
+fn make_remote_skill(host_id: &HostId, name: &str) -> ParsedSkill {
+    ParsedSkill {
+        name: name.to_string(),
+        description: format!("{name} remote skill"),
+        path: LocalOrRemotePath::Remote(RemotePath::new(
+            host_id.clone(),
+            StandardizedPath::try_new(format!("/repo/.agents/skills/{name}/SKILL.md").as_str())
+                .unwrap(),
+        )),
+        content: format!("# {name}"),
+        line_range: None,
+        provider: SkillProvider::Agents,
+        scope: SkillScope::Project,
+    }
+}
+
+#[test]
+fn active_skill_by_reference_resolves_exact_remote_identity() {
+    let remote_skill = make_remote_skill(&HostId::new("remote-host".to_string()), "deploy");
+    let reference = SkillReference::Path(remote_skill.path.clone());
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+
+        handle.update(&mut app, |manager, _| {
+            manager.add_skill_for_testing(remote_skill.clone());
+        });
+
+        let resolved = handle.read(&app, |manager, ctx| {
+            manager
+                .active_skill_by_reference(&reference, ctx)
+                .map(|skill| skill.path.clone())
+        });
+
+        assert_eq!(resolved, Some(remote_skill.path));
+    });
+}
+
+#[test]
+fn active_skill_by_reference_distinguishes_remote_hosts_with_the_same_display_path() {
+    let first_skill = make_remote_skill(&HostId::new("first-host".to_string()), "deploy");
+    let second_skill = make_remote_skill(&HostId::new("second-host".to_string()), "deploy");
+    let first_path = first_skill.path.clone();
+    let second_path = second_skill.path.clone();
+    let first_reference = SkillReference::Path(first_skill.path.clone());
+    let second_reference = SkillReference::Path(second_skill.path.clone());
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+
+        handle.update(&mut app, |manager, _| {
+            manager.add_skill_for_testing(first_skill);
+            manager.add_skill_for_testing(second_skill);
+        });
+
+        let resolved = handle.read(&app, |manager, ctx| {
+            (
+                manager
+                    .active_skill_by_reference(&first_reference, ctx)
+                    .map(|skill| skill.path.clone()),
+                manager
+                    .active_skill_by_reference(&second_reference, ctx)
+                    .map(|skill| skill.path.clone()),
+            )
+        });
+        assert_eq!(resolved, (Some(first_path), Some(second_path)));
+    });
+}
+
 // ============================================================================
 // Tests for best_supported_provider
 // ============================================================================
 
 /// Helper: creates a ParsedSkill under a given provider directory.
 fn make_skill(name: &str, provider_dir: &str) -> ParsedSkill {
-    let path = PathBuf::from(format!("/repo/{provider_dir}/skills/{name}/SKILL.md"));
+    let local_path = std::env::temp_dir()
+        .join("repo")
+        .join(provider_dir)
+        .join("skills")
+        .join(name)
+        .join("SKILL.md");
+    let path = LocalOrRemotePath::Local(local_path);
     ParsedSkill {
         name: name.to_string(),
         description: format!("{name} skill"),
-        path,
+        path: path.clone(),
         content: format!("# {name}"),
         line_range: None,
-        provider: get_provider_for_path(&PathBuf::from(format!(
-            "/repo/{provider_dir}/skills/{name}/SKILL.md"
-        )))
-        .unwrap_or(SkillProvider::Warp),
+        provider: get_provider_for_path(&path).unwrap_or(SkillProvider::Warp),
         scope: SkillScope::Project,
     }
 }
@@ -497,6 +614,7 @@ fn best_supported_provider_fast_path_returns_deduped_provider() {
     // When the deduped provider is already in the supported set, return it immediately.
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
         app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
@@ -522,6 +640,7 @@ fn best_supported_provider_remaps_to_supported_provider() {
     // When supported set is [Claude], should re-map to Claude.
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
         app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
@@ -552,6 +671,7 @@ fn best_supported_provider_falls_back_when_no_match() {
     // Should fall back to the original deduped provider (Agents).
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
         app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);

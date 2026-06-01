@@ -14,13 +14,12 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 
+use super::protocol::RequestId;
+use super::server_model::ConnectionId;
 use crate::code_review::diff_state::{
     DiffMetadata, DiffMode, DiffState, DiffStateModelEvent, FileDiffAndContent,
     GitDiffWithBaseContent, LocalDiffStateModel,
 };
-
-use super::protocol::RequestId;
-use super::server_model::ConnectionId;
 
 // ── Key type ────────────────────────────────────────────────────────
 
@@ -281,7 +280,7 @@ impl RemoteDiffStateManager {
             let mode = key.mode.clone();
             let model = ctx.add_model(|ctx| {
                 let mut m = LocalDiffStateModel::new(Some(repo_path_str), ctx);
-                m.set_diff_mode(mode, false, ctx);
+                m.set_diff_mode(mode, false, false, ctx);
                 m.set_code_review_metadata_refresh_enabled(true, ctx);
                 m
             });
@@ -306,7 +305,7 @@ impl RemoteDiffStateManager {
         ctx: &mut ModelContext<Self>,
     ) {
         match event {
-            DiffStateModelEvent::NewDiffsComputed(diffs) => {
+            DiffStateModelEvent::NewDiffsComputed { diffs, .. } => {
                 let Some((state, metadata)) = self.read_state_and_metadata(key, ctx) else {
                     log::warn!("NewDiffsComputed for absent model key={key:?}");
                     return;
@@ -339,7 +338,7 @@ impl RemoteDiffStateManager {
                 ctx.emit(DiffStateUpdate::MetadataUpdate {
                     repo_path: key.repo_path.clone(),
                     mode: key.mode.clone(),
-                    metadata: metadata.clone(),
+                    metadata: metadata.as_ref().clone(),
                     subscribers: self.subscribed_connections(key),
                 });
             }

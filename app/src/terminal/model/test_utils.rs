@@ -6,26 +6,22 @@
 //! is marked as no_run only  because it's currently not possible
 //! to reference `#[cfg(test)]` symbols from doctests.
 
-use std::{io::sink, sync::Arc};
+use std::io::sink;
+use std::sync::Arc;
 
 use warp_core::command::ExitCode;
 use warpui::r#async::executor::Background;
 
+use super::ansi::{CommandFinishedValue, Handler, PrecmdValue, PreexecValue, Processor};
+use super::block::{Block, BlockId, BlockSize};
+use super::blocks::BlockList;
+use super::bootstrap::BootstrapStage;
+use super::terminal_model::BlockIndex;
+use super::{ObfuscateSecrets, TerminalModel};
 use crate::ai::blocklist::SerializedBlockListItem;
-use crate::terminal::{
-    color::{self, Colors},
-    event_listener::ChannelEventListener,
-    BlockPadding, SizeInfo,
-};
-
-use super::{
-    ansi::{CommandFinishedValue, Handler, PrecmdValue, PreexecValue, Processor},
-    block::{Block, BlockId, BlockSize},
-    blocks::BlockList,
-    bootstrap::BootstrapStage,
-    terminal_model::BlockIndex,
-    ObfuscateSecrets, TerminalModel,
-};
+use crate::terminal::color::{self, Colors};
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::{BlockPadding, SizeInfo};
 
 pub fn block_size() -> BlockSize {
     BlockSize {

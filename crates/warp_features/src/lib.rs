@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use enum_iterator::{cardinality, Sequence};
-
 #[cfg(feature = "test-util")]
 pub use overrides::{get_overrides, set_overrides};
 
@@ -723,6 +722,13 @@ pub enum FeatureFlag {
     /// and switches the view to its transcript.
     OrchestrationViewerPillBar,
 
+    /// Replaces `OrchestrationViewerModel`'s REST polling loop with an SSE-driven
+    /// `ancestor_run_id` stream consumed via `OrchestrationEventStreamer`'s new
+    /// viewer-mode entry. Off by default; flipping it on activates the
+    /// per-orchestrator viewer-mode consumer and the broadcast `ChildSpawned`
+    /// / `ChildStatusChanged` events. See `specs/orch-viewer-polling/TECH.md`.
+    OrchestrationViewerStreamer,
+
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
     PendingUserQueryIndicator,
@@ -730,6 +736,8 @@ pub enum FeatureFlag {
     /// Gates the `/queue` slash command, which lets users queue a follow-up prompt
     /// while the agent is mid-response.
     QueueSlashCommand,
+    /// Extends queued prompts to Cloud Mode setup and follow-up draining.
+    QueuedPromptsV2,
 
     /// Enables an agent tool for the CLI subagent to explicitly transfer command control to the
     /// user.
@@ -877,6 +885,9 @@ pub enum FeatureFlag {
 
     /// Enables the code review view for remote sessions.
     RemoteCodeReview,
+
+    /// Gates the Grouped Tabs feature.
+    GroupedTabs,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -925,6 +936,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::LocalComputerUse,
     FeatureFlag::OzLaunchModal,
     FeatureFlag::QueueSlashCommand,
+    FeatureFlag::QueuedPromptsV2,
     // These are enabled via 100% experiment on prod warp-server,
     // but we need to enable here for dogfood builds.
     FeatureFlag::CrossRepoContext,
@@ -940,20 +952,15 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
     FeatureFlag::DragTabsToWindows,
-    FeatureFlag::SoloUserByok,
-    FeatureFlag::CustomInferenceEndpoints,
     FeatureFlag::RemoteCodebaseIndexing,
-    FeatureFlag::RemoteCodeReview,
+    FeatureFlag::GroupedTabs,
+    FeatureFlag::AsyncFind,
+    FeatureFlag::OrchestrationViewerStreamer,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
-pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
-    FeatureFlag::BlocklistMarkdownTableRendering,
-    FeatureFlag::MarkdownTables,
-    FeatureFlag::GitOperationsInCodeReview,
-    FeatureFlag::GitCredentialRefresh,
-];
+pub const PREVIEW_FLAGS: &[FeatureFlag] = &[];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
 /// NOTE: if you are promoting a feature from Preview to launch, you'll likely
@@ -1071,7 +1078,8 @@ mod overrides {
 /// should use overrides instead of globally modifying flags with [`super::FeatureFlag::set_enabled`].
 #[cfg(feature = "test-util")]
 mod overrides {
-    use std::{cell::RefCell, collections::HashMap};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
 
     use super::FeatureFlag;
 

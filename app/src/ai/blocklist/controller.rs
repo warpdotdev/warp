@@ -8,28 +8,48 @@ mod pending_response_streams;
 pub mod response_stream;
 pub(super) mod shared_session;
 mod slash_command;
+use std::collections::{HashMap, HashSet};
+#[cfg(not(target_family = "wasm"))]
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use ai::skills::SkillPathOrigin;
+use anyhow::anyhow;
+use chrono::{DateTime, Local};
 use input_context::{input_context_for_request, parse_context_attachments};
+use itertools::Itertools;
+use parking_lot::FairMutex;
+use pending_response_streams::PendingResponseStreams;
+use session_sharing_protocol::common::ParticipantId;
 pub use slash_command::*;
+use warp_core::assertions::safe_assert;
+use warp_multi_agent_api::{message, Task, ToolType};
+use warpui::r#async::{SpawnedFutureHandle, Timer};
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use self::response_stream::{ResponseStream, ResponseStreamEvent};
-use super::agent_view::AgentViewEntryOrigin;
-use super::ResponseStreamId;
-use super::{
-    action_model::{BlocklistAIActionEvent, BlocklistAIActionModel},
-    agent_view::{AgentViewController, AgentViewControllerEvent},
-    context_model::BlocklistAIContextModel,
-    history_model::BlocklistAIHistoryModel,
-    input_model::InputConfig,
-    BlocklistAIInputModel, InputType,
+use super::action_model::{BlocklistAIActionEvent, BlocklistAIActionModel};
+use super::agent_view::{AgentViewController, AgentViewControllerEvent, AgentViewEntryOrigin};
+use super::context_model::BlocklistAIContextModel;
+use super::history_model::BlocklistAIHistoryModel;
+use super::input_model::InputConfig;
+use super::orchestration_event_streamer::{
+    OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
 };
+use super::orchestration_events::{OrchestrationEventService, OrchestrationEventServiceEvent};
+use super::{BlocklistAIInputModel, InputType, ResponseStreamId};
 use crate::ai::agent::api::{self, ServerConversationToken};
-use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
+use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentActionResult, CancellationReason, PassiveSuggestionResultType, PassiveSuggestionTrigger,
-    PassiveSuggestionTriggerType, RunningCommand,
+    extract_user_query_mode, AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment,
+    AIAgentContext, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, AIIdentifiers,
+    CancellationReason, DocumentContentAttachmentSource, EntrypointType, FileContext,
+    FinishedAIAgentOutput, PassiveSuggestionResultType, PassiveSuggestionTrigger,
+    PassiveSuggestionTriggerType, RenderableAIError, RequestCost, RequestMetadata, RunningCommand,
+    StaticQueryType, UserQueryMode,
 };
-use crate::ai::agent::{DocumentContentAttachmentSource, FileContext};
 use crate::ai::agent_events::AgentMessageEventMetadata;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::ClaudeHarness;
@@ -37,58 +57,29 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::document::ai_document_model::{
     AIDocumentId, AIDocumentModel, AIDocumentUserEditStatus,
 };
-use crate::ai::llms::LLMId;
-use crate::ai::{
-    agent::{
-        conversation::AIConversationId, extract_user_query_mode, AIAgentActionResultType,
-        AIAgentAttachment, AIAgentContext, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus,
-        AIIdentifiers, EntrypointType, FinishedAIAgentOutput, RenderableAIError, RequestCost,
-        RequestMetadata, StaticQueryType, UserQueryMode,
-    },
-    llms::LLMPreferences,
-    AIRequestUsageModel,
-};
+use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::ai::AIRequestUsageModel;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::features::FeatureFlag;
 use crate::global_resource_handles::GlobalResourceHandlesProvider;
 use crate::network::NetworkStatus;
 use crate::notebooks::editor::model::FileLinkResolutionContext;
 use crate::persistence::ModelEvent;
+use crate::send_telemetry_from_ctx;
 use crate::server::server_api::AIApiError;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
+use crate::server::telemetry::TelemetryEvent;
 use crate::terminal::model::block::{
     formatted_terminal_contents_for_input, BlockId, CURSOR_MARKER,
 };
+use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model::session::SessionType;
+use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
-use crate::terminal::{
-    model::session::{active_session::ActiveSession, SessionType},
-    model::terminal_model::TerminalModel,
-    ShellLaunchData,
-};
+use crate::terminal::ShellLaunchData;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{send_telemetry_from_ctx, server::telemetry::TelemetryEvent};
-use anyhow::anyhow;
-use chrono::{DateTime, Local};
-use itertools::Itertools;
-use parking_lot::FairMutex;
-use pending_response_streams::PendingResponseStreams;
-use session_sharing_protocol::common::ParticipantId;
-use std::collections::{HashMap, HashSet};
-#[cfg(not(target_family = "wasm"))]
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
-use warp_core::assertions::safe_assert;
-use warp_multi_agent_api::{message, Task, ToolType};
-use warpui::r#async::{SpawnedFutureHandle, Timer};
-
-use super::orchestration_event_streamer::{
-    OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
-};
-use super::orchestration_events::{OrchestrationEventService, OrchestrationEventServiceEvent};
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 #[derive(Debug, Clone)]
 pub struct SessionContext {
@@ -131,6 +122,18 @@ impl SessionContext {
     /// the remote server client is connected).
     pub fn is_remote(&self) -> bool {
         matches!(self.session_type, Some(SessionType::WarpifiedRemote { .. }))
+    }
+
+    pub fn skill_path_origin(&self) -> SkillPathOrigin {
+        match &self.session_type {
+            Some(SessionType::WarpifiedRemote {
+                host_id: Some(host_id),
+            }) => SkillPathOrigin::Remote {
+                host_id: host_id.clone(),
+            },
+            Some(SessionType::WarpifiedRemote { host_id: None }) => SkillPathOrigin::Unavailable,
+            Some(SessionType::Local) | None => SkillPathOrigin::Local,
+        }
     }
 
     #[cfg(test)]
@@ -591,12 +594,20 @@ impl BlocklistAIController {
         }
         if FeatureFlag::OrchestrationV2.is_enabled() {
             let streamer = OrchestrationEventStreamer::handle(ctx);
-            ctx.subscribe_to_model(&streamer, move |me, event, ctx| {
-                let OrchestrationEventStreamerEvent::DormantClaudeWakeReady {
+            ctx.subscribe_to_model(&streamer, move |me, event, ctx| match event {
+                OrchestrationEventStreamerEvent::DormantClaudeWakeReady {
                     conversation_id,
                     wake_message,
-                } = event;
-                me.handle_dormant_claude_wake_ready(*conversation_id, wake_message.clone(), ctx);
+                } => {
+                    me.handle_dormant_claude_wake_ready(
+                        *conversation_id,
+                        wake_message.clone(),
+                        ctx,
+                    );
+                }
+                // Viewer-mode events are handled by `OrchestrationViewerModel`.
+                OrchestrationEventStreamerEvent::ChildSpawned { .. }
+                | OrchestrationEventStreamerEvent::ChildStatusChanged { .. } => {}
             });
         }
         Self {
@@ -2020,7 +2031,9 @@ impl BlocklistAIController {
                 forked_from_conversation_token: conversation
                     .forked_from_server_conversation_token()
                     .cloned(),
-                ambient_agent_task_id: self.ambient_agent_task_id,
+                // Do not tie passive suggestion requests to the cloud agent task, since they are
+                // separate, read-only requests.
+                ambient_agent_task_id: None,
                 existing_suggestions: None,
             };
             (conversation_id, task_id, conversation_data)
@@ -2036,7 +2049,9 @@ impl BlocklistAIController {
                 tasks: vec![],
                 server_conversation_token: None,
                 forked_from_conversation_token: None,
-                ambient_agent_task_id: self.ambient_agent_task_id,
+                // Do not tie passive suggestion requests to the cloud agent task, since they are
+                // separate, read-only requests.
+                ambient_agent_task_id: None,
                 existing_suggestions: None,
             };
             (conversation_id, task_id, conversation_data)
@@ -2146,6 +2161,11 @@ impl BlocklistAIController {
         self.action_model.update(ctx, |action_model, ctx| {
             action_model.set_ambient_agent_task_id(id, ctx);
         });
+    }
+
+    #[cfg(test)]
+    pub fn get_ambient_agent_task_id(&self) -> Option<AmbientAgentTaskId> {
+        self.ambient_agent_task_id
     }
 
     /// Set the per-session directory for downloading file attachments.
@@ -2614,6 +2634,11 @@ impl BlocklistAIController {
                             }
                             warp_multi_agent_api::response_event::Type::ClientActions(actions) => {
                                 let client_actions = actions.actions;
+                                let skill_path_origin = SessionContext::from_session(
+                                    self.active_session.as_ref(ctx),
+                                    ctx,
+                                )
+                                .skill_path_origin();
                                 let apply_result =
                                     history_model.update(ctx, |history_model, ctx| {
                                         history_model.apply_client_actions(
@@ -2621,6 +2646,7 @@ impl BlocklistAIController {
                                             client_actions,
                                             conversation_id,
                                             self.terminal_view_id,
+                                            &skill_path_origin,
                                             ctx,
                                         )
                                     });
@@ -3183,3 +3209,7 @@ fn get_running_command(terminal_model: &TerminalModel) -> Option<RunningCommand>
         is_alt_screen_active,
     })
 }
+
+#[cfg(test)]
+#[path = "controller_tests.rs"]
+mod tests;

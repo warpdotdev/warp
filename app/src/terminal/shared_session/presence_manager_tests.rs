@@ -1,9 +1,3 @@
-use crate::auth::UserUid;
-use crate::terminal::model::ansi::{CommandFinishedValue, Handler};
-use crate::terminal::model::blocks::BlockList;
-use crate::terminal::model::test_utils::TestBlockListBuilder;
-use crate::terminal::shared_session::presence_manager::{PresenceManager, PRESET_COLORS};
-
 use std::collections::{HashMap, HashSet};
 use std::iter;
 
@@ -13,6 +7,12 @@ use session_sharing_protocol::common::{
 };
 use warp_core::command::ExitCode;
 use warpui::App;
+
+use crate::auth::UserUid;
+use crate::terminal::model::ansi::{CommandFinishedValue, Handler};
+use crate::terminal::model::blocks::BlockList;
+use crate::terminal::model::test_utils::TestBlockListBuilder;
+use crate::terminal::shared_session::presence_manager::{PresenceManager, PRESET_COLORS};
 
 fn viewer_with_uid(uid: &str, is_present: bool) -> Viewer {
     Viewer {

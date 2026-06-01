@@ -1,18 +1,16 @@
-use std::{fmt, marker::PhantomData};
-
-use serde_json::Value;
-use strum::IntoEnumIterator;
-use warpui::{AppContext, Entity, SingletonEntity};
+use std::fmt;
+use std::marker::PhantomData;
 
 // Re-export for macro use.
 #[doc(hidden)]
 #[cfg(not(target_family = "wasm"))]
 pub use inventory::submit;
+use serde_json::Value;
+use strum::IntoEnumIterator;
+use warpui::{AppContext, Entity, SingletonEntity};
 
-use crate::{
-    channel::{Channel, ChannelState},
-    features::FeatureFlag,
-};
+use crate::channel::{Channel, ChannelState};
+use crate::features::FeatureFlag;
 
 /// Core trait defining telemetry event behavior.
 ///
@@ -153,11 +151,11 @@ macro_rules! send_telemetry_from_ctx {
         let event = $event;
         if event.enablement_state().is_enabled() {
             let auth_state =
-                <$crate::telemetry::TelemetryContextModel as warpui::SingletonEntity>::handle($ctx)
+                <$crate::telemetry::TelemetryContextModel as $crate::warpui::SingletonEntity>::handle($ctx)
                     .as_ref($ctx);
             let user_id = auth_state.user_id($ctx);
             let anonymous_id = auth_state.anonymous_id($ctx);
-            warpui::record_telemetry_from_ctx!(
+            $crate::warpui::record_telemetry_from_ctx!(
                 user_id,
                 anonymous_id,
                 event.name().into(),
@@ -237,3 +235,28 @@ impl Entity for TelemetryContextModel {
 }
 
 impl SingletonEntity for TelemetryContextModel {}
+
+#[cfg(any(test, feature = "test-util"))]
+pub mod testing {
+    use warpui::prelude::*;
+
+    pub struct MockTelemetryContextProvider;
+
+    impl MockTelemetryContextProvider {
+        pub fn register(ctx: &mut AppContext) {
+            ctx.add_singleton_model(|_| {
+                Box::new(MockTelemetryContextProvider) as super::TelemetryContextModel
+            });
+        }
+    }
+
+    impl super::TelemetryContextProvider for MockTelemetryContextProvider {
+        fn user_id(&self, _ctx: &AppContext) -> Option<String> {
+            None
+        }
+
+        fn anonymous_id(&self, _ctx: &AppContext) -> String {
+            "test_anonymous_id".to_string()
+        }
+    }
+}

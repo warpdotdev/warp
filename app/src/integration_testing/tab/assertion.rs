@@ -1,6 +1,8 @@
-use warpui::{async_assert, integration::AssertionCallback};
+use warpui::async_assert;
+use warpui::integration::AssertionCallback;
 
-use crate::integration_testing::{terminal::util::ExpectedOutput, view_getters::pane_group_view};
+use crate::integration_testing::terminal::util::ExpectedOutput;
+use crate::integration_testing::view_getters::pane_group_view;
 
 /// Asserts that the tab has a pane at the given index with the expected title.
 pub fn assert_pane_title(

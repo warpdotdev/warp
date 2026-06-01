@@ -1,80 +1,75 @@
+use std::cell::Cell;
+use std::sync::Arc;
+
+use markdown_parser::{FormattedTextStyles, Hyperlink};
 use rangemap::RangeSet;
-use std::{cell::Cell, sync::Arc};
+use string_offset::CharOffset;
 use sum_tree::SumTree;
 use vec1::{Vec1, vec1};
 use warpui::assets::asset_cache::AssetSource;
-use warpui::{
-    color::ColorU,
-    fonts::FamilyId,
-    geometry::{rect::RectF, vector::vec2f},
-    text_layout::TextFrame,
-    units::{IntoPixels, Pixels},
-};
+use warpui::color::ColorU;
+use warpui::elements::ListIndentLevel;
+use warpui::fonts::FamilyId;
+use warpui::geometry::rect::RectF;
+use warpui::geometry::vector::vec2f;
+use warpui::text_layout::TextFrame;
+use warpui::units::{IntoPixels, Pixels};
 
+use super::debug::Describe;
+use super::test_utils::{layout_paragraph, layout_paragraphs};
 use super::{
     BlockItem, BlockLocation, COMMAND_SPACING, CellLayout, DEFAULT_BLOCK_SPACINGS,
     HiddenBlockConfig, ImageBlockConfig, LaidOutTable, ParagraphBlock, RenderState,
-    TableBlockConfig, TableStyle,
-    debug::Describe,
-    table_offset_map,
-    test_utils::{layout_paragraph, layout_paragraphs},
+    TableBlockConfig, TableStyle, table_offset_map,
 };
-use crate::{
-    content::{
-        edit::ParsedUrl,
-        text::{
-            BufferBlockStyle, CodeBlockType, FormattedTable, FormattedTextFragment,
-            table_cell_offset_maps,
-        },
-    },
-    render::model::{
-        Height, LayoutSummary, LineCount, RenderedSelection, SoftWrapPoint, TEXT_SPACING,
-        test_utils::{TEST_STYLES, laid_out_paragraph, mock_paragraph},
-    },
+use crate::content::edit::ParsedUrl;
+use crate::content::text::{
+    BufferBlockStyle, CodeBlockType, FormattedTable, FormattedTextFragment, table_cell_offset_maps,
 };
-use markdown_parser::{FormattedTextStyles, Hyperlink};
-use string_offset::CharOffset;
-use warpui::elements::ListIndentLevel;
+use crate::render::model::test_utils::{TEST_STYLES, laid_out_paragraph, mock_paragraph};
+use crate::render::model::{
+    Height, LayoutSummary, LineCount, RenderedSelection, SoftWrapPoint, TEXT_SPACING,
+};
 
 #[test]
 fn test_height() {
     let mut render_state =
         RenderState::new_for_test(TEST_STYLES, 10.0.into_pixels(), 10.0.into_pixels());
     let mut content = SumTree::new();
-    // Height: 32
+    // Height: 24
     content.push(mock_paragraph(24., 1., 1));
-    // Height: 56
+    // Height: 48
     content.push(mock_paragraph(48., 1., 2));
-    // Height: 32
+    // Height: 24
     content.push(mock_paragraph(24., 1., 3));
-    // Height: 32
+    // Height: 24
     content.push(mock_paragraph(24., 1., 4));
-    // Height: 40
+    // Height: 32
     content.push(mock_paragraph(32., 1., 5));
     render_state.set_content(content);
 
     // This includes all content plus the trailing newline marker.
-    assert_eq!(render_state.height(), 224.0.into_pixels());
+    assert_eq!(render_state.height(), 176.0.into_pixels());
     let content = render_state.content.borrow();
     let mut cursor = content.cursor::<Height, Height>();
     // Ensure we can seek in between items for scrolling.
     cursor.seek(&Height::from(64.), sum_tree::SeekBias::Left);
     assert_eq!(
         cursor.item().expect("Seek succeeded").height().as_f32(),
-        56.
+        48.
     );
-    assert_eq!(cursor.start().into_pixels().as_f32(), 32.);
-    assert_eq!(cursor.end().into_pixels().as_f32(), 88.);
+    assert_eq!(cursor.start().into_pixels().as_f32(), 24.);
+    assert_eq!(cursor.end().into_pixels().as_f32(), 72.);
 
     let end = cursor.slice(&Height::from(152.), sum_tree::SeekBias::Right);
     assert_eq!(
         end.summary(),
         LayoutSummary {
-            content_length: 9.into(),
-            height: 56. + 32. + 32.,
-            width: (21.).into_pixels(),
-            lines: LineCount(3),
-            item_count: 3,
+            content_length: 14.into(),
+            height: 48. + 24. + 24. + 32.,
+            width: (17.).into_pixels(),
+            lines: LineCount(4),
+            item_count: 4,
         }
     );
 }
@@ -138,7 +133,7 @@ fn test_width() {
     render_state.set_content(content);
 
     // This includes all content plus the trailing newline marker.
-    assert_eq!(render_state.width(), (45.).into_pixels());
+    assert_eq!(render_state.width(), (41.).into_pixels());
     let content = render_state.content.borrow();
     let mut cursor = content.cursor::<Height, Height>();
     let end = cursor.slice(&Height::from(40.), sum_tree::SeekBias::Right);
@@ -146,8 +141,8 @@ fn test_width() {
         end.summary(),
         LayoutSummary {
             content_length: 1.into(),
-            height: 32.,
-            width: (30.).into_pixels(),
+            height: 24.,
+            width: (26.).into_pixels(),
             lines: LineCount(1),
             item_count: 1,
         }
@@ -280,39 +275,38 @@ fn test_character_bounds() {
     ));
     model.set_content(content);
 
-    // Due to the minimum block height, there is 6px of top spacing. In addition, there's a 4px
-    // left margin.
+    // Due to the minimum block height, there is 2px of top spacing.
 
     let char_size = vec2f(10., 10.);
 
     // The middle of the first line.
     assert_eq!(
         model.character_bounds(2.into()),
-        Some(RectF::new(vec2f(24., 6.), char_size))
+        Some(RectF::new(vec2f(20., 2.), char_size))
     );
 
     // The first character of the second soft-wrapped line.
     assert_eq!(
         model.character_bounds(4.into()),
-        Some(RectF::new(vec2f(4., 16.), char_size))
+        Some(RectF::new(vec2f(0., 12.), char_size))
     );
 
     // The middle of the first line of the second paragraph.
     assert_eq!(
         model.character_bounds(9.into()),
-        Some(RectF::new(vec2f(14., 38.), char_size))
+        Some(RectF::new(vec2f(10., 26.), char_size))
     );
 
     // The end of the first line of the second paragraph.
     assert_eq!(
         model.character_bounds(11.into()),
-        Some(RectF::new(vec2f(34., 38.), char_size))
+        Some(RectF::new(vec2f(30., 26.), char_size))
     );
 
     // The middle of the second line of the second paragraph.
     assert_eq!(
         model.character_bounds(13.into()),
-        Some(RectF::new(vec2f(14., 48.), char_size))
+        Some(RectF::new(vec2f(10., 36.), char_size))
     );
 }
 
@@ -354,7 +348,7 @@ fn test_empty_content_keeps_final_trailing_newline_when_suppressed() {
     model.set_show_final_trailing_newline_when_non_empty(false);
 
     assert_eq!(model.blocks(), 1);
-    assert_eq!(model.height(), 32.0.into_pixels());
+    assert_eq!(model.height(), 24.0.into_pixels());
 }
 
 #[test]
@@ -621,12 +615,12 @@ fn test_first_line_bounds() {
     let text_block = content
         .block_at_offset(CharOffset::zero())
         .expect("Block should exist");
-    // Because the paragraph is soft-wrapped, it doesn't need centering, so the top offset is 4px.
+    // Because the paragraph is soft-wrapped, it doesn't need centering.
     assert_eq!(
         text_block.first_line_bounds().expect("Bounds should exist"),
-        RectF::new(vec2f(0., 4.), vec2f(104., 10.))
+        RectF::new(vec2f(0., 0.), vec2f(100., 10.))
     );
-    assert_eq!(text_block.item.height().as_f32(), 48.);
+    assert_eq!(text_block.item.height().as_f32(), 40.);
 
     let list_block = content
         .block_at_offset(CharOffset::from(33))
@@ -634,7 +628,7 @@ fn test_first_line_bounds() {
     assert_eq!(
         list_block.first_line_bounds().expect("Bounds should exist"),
         RectF::new(
-            vec2f(0., 52.),
+            vec2f(0., 44.),
             vec2f(
                 64., /* 4px margin + 20px list padding + 40px of text */
                 10.
@@ -651,7 +645,7 @@ fn test_first_line_bounds() {
             .first_line_bounds()
             .expect("Bounds should exist"),
         RectF::new(
-            vec2f(0., 70. /* 66px y-offset + 4px margin */),
+            vec2f(0., 62. /* 58px y-offset + 4px margin */),
             vec2f(
                 144., /* 4px margin + 40px list padding + 10px of text - the test layout logic doesn't account for spacing */
                 10.
@@ -666,7 +660,7 @@ fn test_first_line_bounds() {
     assert_eq!(
         code_block.first_line_bounds().expect("Bounds should exist"),
         RectF::new(
-            vec2f(0., 112. /* 104px y-offset + 8px margin */),
+            vec2f(0., 104. /* 96px y-offset + 8px margin */),
             vec2f(
                 70., /* 4px margin + 16px padding + 50px text */
                 16.  /* 16px padding area */
@@ -686,10 +680,8 @@ fn test_first_line_bounds() {
             .first_line_bounds()
             .expect("Bounds should exist"),
         RectF::new(
-            vec2f(
-                0., 219., /* 198px y-offset + 14px margin + 7px centering */
-            ),
-            vec2f(5. /* 4px margin + 1px cursor */, 10.)
+            vec2f(0., 207. /* 200px y-offset + 7px centering */,),
+            vec2f(1. /* 1px cursor */, 10.)
         )
     )
 }
@@ -717,8 +709,8 @@ fn test_scroll_snapshot() {
     layout_content(&mut model);
 
     let content = model.content();
-    // Verify the height of each block. Each text paragraph has 8px of vertical padding and 10px
-    // per soft-wrapped line. The trailing newline block is 32px high.
+    // Verify the height of each block. Each text paragraph has 10px per soft-wrapped line with a
+    // 24px minimum height. The trailing newline block is 24px high.
     assert_eq!(
         content
             .block_at_offset(CharOffset::zero())
@@ -726,7 +718,7 @@ fn test_scroll_snapshot() {
             .item
             .height()
             .as_f32(),
-        38.
+        30.
     );
     assert_eq!(
         content
@@ -735,7 +727,7 @@ fn test_scroll_snapshot() {
             .item
             .height()
             .as_f32(),
-        48.
+        40.
     );
     assert_eq!(
         content
@@ -744,14 +736,14 @@ fn test_scroll_snapshot() {
             .item
             .height()
             .as_f32(),
-        32.
+        24.
     );
     drop(content);
 
     // Scroll so that the EEEE line is at the top of the viewport.
-    model.viewport.scroll((-52.).into_pixels(), model.height());
+    model.viewport.scroll((-44.).into_pixels(), model.height());
     let scroll_position = model.snapshot_scroll_position();
-    assert_eq!(scroll_position.first_character_offset(), 17.into());
+    assert_eq!(scroll_position.first_character_offset(), 13.into());
 
     // Now, double the viewport width, halving the number of soft-wrapped lines.
     model
@@ -760,11 +752,11 @@ fn test_scroll_snapshot() {
 
     // At first, the content will not have been laid out again, so the scroll position is
     // unaffected.
-    assert_eq!(model.viewport.scroll_top(), 52.0.into_pixels());
-    // After laying out again, each block is exactly 32px high (the two soft-wrapped blocks are
+    assert_eq!(model.viewport.scroll_top(), 34.0.into_pixels());
+    // After laying out again, each block is exactly 24px high (the two soft-wrapped blocks are
     // below the minimum height otherwise).
     layout_content(&mut model);
-    assert_eq!(model.height().as_f32(), 32. * 3.);
+    assert_eq!(model.height().as_f32(), 24. * 3.);
 
     // Restore the scroll position at the new height. It should still start at the same content.
     assert!(
@@ -772,16 +764,15 @@ fn test_scroll_snapshot() {
             .viewport
             .scroll_to(scroll_position.to_scroll_top(&model), model.height())
     );
-    // The new scroll position is 32px (the first block) plus 4px of padding on the second block.
-    // The EEEE line is now part of that first line.
-    assert_eq!(model.viewport.scroll_top().as_f32(), 36.);
+    // The reduced content height clamps the restored position to the last viewport.
+    assert_eq!(model.viewport.scroll_top().as_f32(), 12.);
 
     // Halve the original viewport width, leading to twice as many soft-wrapped lines.
     model
         .viewport
         .set_size(vec2f(20., 60.), model.width(), model.height());
     layout_content(&mut model);
-    assert_eq!(model.height().as_f32(), 68. + 88. + 32.);
+    assert_eq!(model.height().as_f32(), 60. + 80. + 24.);
 
     // Restore the scroll position at the new height.
     assert!(
@@ -789,8 +780,8 @@ fn test_scroll_snapshot() {
             .viewport
             .scroll_to(scroll_position.to_scroll_top(&model), model.height())
     );
-    // The new scroll position is on the third soft-wrapped line of the second paragraph.
-    assert_eq!(model.viewport.scroll_top().as_f32(), 92.);
+    // The new scroll position is at the start of the second paragraph.
+    assert_eq!(model.viewport.scroll_top().as_f32(), 60.);
 }
 
 #[test]

@@ -1,51 +1,38 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
+use cloud_object_models::JsonSerializer;
 use lazy_static::lazy_static;
 use settings::{Setting as _, SyncToCloud};
-use std::time::Duration;
+use warp_core::execution_mode::AppExecutionMode;
+use warp_core::r#async::debounce;
 use warp_core::settings::ChangeEventReason;
 use warp_core::user_preferences::GetUserPreferences;
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, SingletonEntity};
 use warpui_extras::user_preferences::toml_backed::TomlBackedUserPreferences;
 
-use crate::{
-    auth::auth_state::AuthState,
-    cloud_object::{
-        model::{
-            generic_string_model::GenericStringObjectId, json_model::JsonSerializer,
-            persistence::CloudModel,
-        },
-        CloudObjectEventEntrypoint, GenericStringObjectFormat, JsonObjectType,
-    },
-    debounce::debounce,
-    drive::CloudObjectTypeAndId,
-    report_if_error,
-    server::{
-        cloud_objects::update_manager::{
-            GenericStringObjectInput, InitiatedBy, UpdateManager, UpdateManagerEvent,
-        },
-        ids::{ClientId, SyncId},
-        sync_queue::{SyncQueue, SyncQueueEvent},
-    },
-    settings::{
-        cloud_preferences::{CloudPreference, CloudPreferenceModel, Platform, Preference},
-        manager::SettingsManager,
-    },
-    workspaces::user_workspaces::UserWorkspaces,
+use super::cloud_preferences::{CloudPreferencesSettings, CloudPreferencesSettingsChangedEvent};
+use super::manager::SettingsEvent;
+use super::PrivacySettings;
+use crate::auth::auth_state::AuthState;
+use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{CloudObjectEventEntrypoint, GenericStringObjectFormat, JsonObjectType};
+use crate::drive::CloudObjectTypeAndId;
+use crate::report_if_error;
+use crate::server::cloud_objects::update_manager::{
+    GenericStringObjectInput, InitiatedBy, UpdateManager, UpdateManagerEvent,
 };
-
-use warp_core::execution_mode::AppExecutionMode;
-
-use super::{
-    cloud_preferences::{CloudPreferencesSettings, CloudPreferencesSettingsChangedEvent},
-    manager::SettingsEvent,
-    PrivacySettings,
+use crate::server::ids::{ClientId, SyncId};
+use crate::server::sync_queue::{SyncQueue, SyncQueueEvent};
+use crate::settings::cloud_preferences::{
+    CloudPreference, CloudPreferenceModel, Platform, Preference,
 };
+use crate::settings::manager::SettingsManager;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// Provides client ids for creating cloud preferences.
 /// We define this as a trait so tests can track what client ids are created and use

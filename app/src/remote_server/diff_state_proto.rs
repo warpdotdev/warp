@@ -8,9 +8,9 @@
 //! (`code_review::diff_state`, `util::git`) that are not available in the crate.
 use std::sync::Arc;
 
-use super::proto;
 use warp_util::standardized_path::StandardizedPath;
 
+use super::proto;
 use crate::code_review::diff_size_limits::DiffSize;
 use crate::code_review::diff_state::{
     DiffHunk, DiffLine, DiffLineType, DiffMetadata, DiffMetadataAgainstBase, DiffMode, DiffState,
@@ -29,6 +29,18 @@ impl From<&proto::DiffMode> for DiffMode {
             Some(proto::diff_mode::Mode::OtherBranch(ob)) => {
                 DiffMode::OtherBranch(ob.branch_name.clone())
             }
+        }
+    }
+}
+
+impl From<&proto::PrInfo> for PrInfo {
+    fn from(pr_info: &proto::PrInfo) -> Self {
+        PrInfo {
+            number: pr_info.number,
+            url: pr_info.url.clone(),
+            state: String::new(),
+            draft: false,
+            base_branch: String::new(),
         }
     }
 }
@@ -111,15 +123,6 @@ impl From<&proto::Commit> for Commit {
             files_changed: commit.files_changed as usize,
             additions: commit.additions as usize,
             deletions: commit.deletions as usize,
-        }
-    }
-}
-
-impl From<&proto::PrInfo> for PrInfo {
-    fn from(pr: &proto::PrInfo) -> Self {
-        PrInfo {
-            number: pr.number,
-            url: pr.url.clone(),
         }
     }
 }
@@ -407,10 +410,10 @@ impl From<&Commit> for proto::Commit {
 }
 
 impl From<&PrInfo> for proto::PrInfo {
-    fn from(p: &PrInfo) -> Self {
+    fn from(pr_info: &PrInfo) -> Self {
         proto::PrInfo {
-            number: p.number,
-            url: p.url.clone(),
+            number: pr_info.number,
+            url: pr_info.url.clone(),
         }
     }
 }

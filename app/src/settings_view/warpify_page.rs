@@ -7,46 +7,35 @@ use regex::Regex;
 use settings::{Setting, ToggleableSetting};
 use strum::IntoEnumIterator;
 use warp_core::features::FeatureFlag;
-use warpui::elements::{FormattedTextElement, HighlightedHyperlink};
+use warpui::elements::{
+    Container, Flex, FormattedTextElement, HighlightedHyperlink, MouseStateHandle, ParentElement,
+};
 use warpui::keymap::ContextPredicate;
+use warpui::presenter::ChildView;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{
-    elements::{Container, Flex, MouseStateHandle, ParentElement},
-    presenter::ChildView,
-    ui_components::{
-        components::{Coords, UiComponent, UiComponentStyles},
-        switch::SwitchStateHandle,
-    },
     Action, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };
 
-use crate::terminal::warpify::settings::{
-    EnableSshWarpification, SshExtensionInstallMode, SshExtensionInstallModeSetting,
-    UseSshTmuxWrapper, WarpifySettingsChangedEvent,
-};
-use crate::ui_components::blended_colors;
-use crate::{
-    appearance::Appearance,
-    report_if_error, send_telemetry_from_ctx,
-    server::telemetry::TelemetryEvent,
-    terminal::warpify::settings::WarpifySettings,
-    view_components::{SubmittableTextInput, SubmittableTextInputEvent},
-};
-
 use super::settings_page::{
-    render_body_item, render_dropdown_item, render_page_title, AdditionalInfo, Category,
-    LocalOnlyIconState, MatchData, PageType, SettingsPageEvent, SettingsWidget, ToggleState,
+    add_setting, render_alternating_color_list, render_body_item, render_dropdown_item,
+    render_page_title, AdditionalInfo, Category, LocalOnlyIconState, MatchData, PageType,
+    SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState,
     HEADER_FONT_SIZE, HEADER_PADDING,
 };
-use super::SettingsSection;
-use super::{
-    flags,
-    settings_page::{
-        add_setting, render_alternating_color_list, SettingsPageMeta, SettingsPageViewHandle,
-    },
-    SettingsAction, ToggleSettingActionPair,
+use super::{flags, SettingsAction, SettingsSection, ToggleSettingActionPair};
+use crate::appearance::Appearance;
+use crate::server::telemetry::TelemetryEvent;
+use crate::terminal::warpify::settings::{
+    EnableSshWarpification, SshExtensionInstallMode, SshExtensionInstallModeSetting,
+    UseSshTmuxWrapper, WarpifySettings, WarpifySettingsChangedEvent,
 };
+use crate::ui_components::blended_colors;
 use crate::view_components::dropdown::{Dropdown, DropdownItem};
+use crate::view_components::{SubmittableTextInput, SubmittableTextInputEvent};
+use crate::{report_if_error, send_telemetry_from_ctx};
 
 pub fn init_actions_from_parent_view<T: Action + Clone>(
     app: &mut AppContext,
@@ -55,8 +44,26 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 ) {
     // Add all of the toggle settings from the Warpify Page that you want to show up on the Command Palette here.
     let mut toggle_binding_pairs = vec![];
+    if FeatureFlag::SSHTmuxWrapper.is_enabled()
+        && WarpifySettings::as_ref(app)
+            .enable_ssh_warpification
+            .is_supported_on_current_platform()
+    {
+        toggle_binding_pairs.push(ToggleSettingActionPair::new(
+            "SSH Warpification",
+            builder(SettingsAction::WarpifyPageToggle(
+                WarpifyPageAction::ToggleSshWarpification,
+            )),
+            context,
+            flags::SSH_WARPIFICATION_CONTEXT_FLAG,
+        ));
+    }
 
-    if FeatureFlag::SSHTmuxWrapper.is_enabled() {
+    if FeatureFlag::SSHTmuxWrapper.is_enabled()
+        && WarpifySettings::as_ref(app)
+            .use_ssh_tmux_wrapper
+            .is_value_explicitly_set()
+    {
         toggle_binding_pairs.push(ToggleSettingActionPair::new(
             "SSH session detection for Warpification",
             builder(SettingsAction::WarpifyPageToggle(
@@ -734,6 +741,16 @@ impl SettingsWidget for SSHWidget {
                     .finish()
                 },
             );
+        }
+
+        // Only show the tmux warpification toggle if the user has explicitly changed
+        // the setting. We are gradually deprecating tmux warpification, so new users
+        // should not see this option, but existing users who opted in keep it.
+        if !WarpifySettings::as_ref(app)
+            .use_ssh_tmux_wrapper
+            .is_value_explicitly_set()
+        {
+            return column.finish();
         }
 
         add_setting(

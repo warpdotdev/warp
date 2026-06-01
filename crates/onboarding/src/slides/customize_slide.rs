@@ -1,25 +1,27 @@
+use ui_components::{button, Component as _, Options as _};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::color::internal_colors;
+use warpui::elements::{
+    ClippedScrollStateHandle, Container, CrossAxisAlignment, Flex, FormattedTextElement,
+    MainAxisSize, MouseStateHandle, ParentElement,
+};
+use warpui::fonts::Weight;
+use warpui::keymap::Keystroke;
+use warpui::prelude::Align;
+use warpui::text_layout::TextAlignment;
+use warpui::ui_components::components::{UiComponent as _, UiComponentStyles};
+use warpui::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
+    ViewContext,
+};
+
 use super::toggle_card::{render_toggle_card, ChipSpec, ToggleCardSpec};
 use super::OnboardingSlide;
 use crate::model::{OnboardingStateEvent, OnboardingStateModel, UICustomizationSettings};
 use crate::slides::{bottom_nav, layout, slide_content};
 use crate::visuals::{intention_terminal_visual, intention_visual};
 use crate::OnboardingIntention;
-use ui_components::{button, Component as _, Options as _};
-use warp_core::features::FeatureFlag;
-use warp_core::ui::{appearance::Appearance, theme::color::internal_colors};
-use warpui::prelude::Align;
-use warpui::{
-    elements::{
-        ClippedScrollStateHandle, Container, CrossAxisAlignment, Flex, FormattedTextElement,
-        MainAxisSize, MouseStateHandle, ParentElement,
-    },
-    fonts::Weight,
-    keymap::Keystroke,
-    text_layout::TextAlignment,
-    ui_components::components::{UiComponent as _, UiComponentStyles},
-    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
-    ViewContext,
-};
 
 /// Which setting card is currently selected (expanded).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -255,6 +257,24 @@ impl CustomizeUISlide {
         let mut chips = vec![];
 
         if ui.tools_panel_enabled(&intention) {
+            chips.push(ChipSpec {
+                label: "File explorer",
+                is_enabled: ui.show_project_explorer,
+                mouse_state: self.chip_file_explorer_mouse.clone(),
+                on_click: Box::new(|ctx, _, _| {
+                    ctx.dispatch_typed_action(CustomizeSlideAction::ToggleToolsSubSetting {
+                        setting: ToolsPanelSubSetting::ProjectExplorer,
+                    });
+                }),
+                on_hover: Some(Box::new(|is_hovered, ctx, _, _| {
+                    if is_hovered {
+                        ctx.dispatch_typed_action(CustomizeSlideAction::HoverToolsChip {
+                            setting: ToolsPanelSubSetting::ProjectExplorer,
+                        });
+                    }
+                })),
+            });
+
             // Conversation history chip is only shown for the agent intention.
             if is_agent {
                 chips.push(ChipSpec {
@@ -275,24 +295,6 @@ impl CustomizeUISlide {
                     })),
                 });
             }
-
-            chips.push(ChipSpec {
-                label: "File explorer",
-                is_enabled: ui.show_project_explorer,
-                mouse_state: self.chip_file_explorer_mouse.clone(),
-                on_click: Box::new(|ctx, _, _| {
-                    ctx.dispatch_typed_action(CustomizeSlideAction::ToggleToolsSubSetting {
-                        setting: ToolsPanelSubSetting::ProjectExplorer,
-                    });
-                }),
-                on_hover: Some(Box::new(|is_hovered, ctx, _, _| {
-                    if is_hovered {
-                        ctx.dispatch_typed_action(CustomizeSlideAction::HoverToolsChip {
-                            setting: ToolsPanelSubSetting::ProjectExplorer,
-                        });
-                    }
-                })),
-            });
 
             chips.push(ChipSpec {
                 label: "Global file search",
@@ -537,12 +539,8 @@ impl CustomizeUISlide {
                         "async/png/onboarding/terminal_intention/terminal_customize_horizontal_tabs.png"
                     }
                 } else {
-                    // Default chip: conversation for agent, file explorer for terminal.
-                    let default_chip = if is_agent {
-                        ToolsPanelSubSetting::ConversationHistory
-                    } else {
-                        ToolsPanelSubSetting::ProjectExplorer
-                    };
+                    // Default chip: file explorer for both intents (matches the new tools panel order).
+                    let default_chip = ToolsPanelSubSetting::ProjectExplorer;
                     let chip = hovered_chip.unwrap_or(default_chip);
                     if is_agent {
                         match (chip, vertical) {

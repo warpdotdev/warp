@@ -1,21 +1,18 @@
-use super::{new_builder, Builder};
 use regex::Regex;
-
-use warp::{
-    integration_testing::{
-        goto_line::{
-            assert_cursor_at_line, assert_cursor_at_line_and_column,
-            assert_goto_line_dialog_is_open, goto_line_confirm, open_goto_line_dialog,
-        },
-        step::new_step_with_default_assertions,
-        tab::assert_pane_title,
-        terminal::wait_until_bootstrapped_single_pane_for_tab,
-        view_getters::{pane_group_view, workspace_view},
-    },
-    workspace::WorkspaceAction,
+use warp::integration_testing::goto_line::{
+    assert_code_editor_line_numbers, assert_cursor_at_line, assert_cursor_at_line_and_column,
+    assert_goto_line_dialog_is_open, goto_line_confirm, open_goto_line_dialog,
+    set_code_editor_line_number_mode,
 };
+use warp::integration_testing::step::new_step_with_default_assertions;
+use warp::integration_testing::tab::assert_pane_title;
+use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
+use warp::integration_testing::view_getters::{pane_group_view, workspace_view};
+use warp::settings::CodeEditorLineNumberMode;
+use warp::workspace::WorkspaceAction;
 use warpui::{async_assert_eq, App};
 
+use super::{new_builder, Builder};
 use crate::util::write_all_rc_files_for_test;
 
 fn open_file_tree_panel(app: &mut App) {
@@ -138,5 +135,48 @@ pub fn test_goto_line_clamps_out_of_range() -> Builder {
             new_step_with_default_assertions("Verify cursor clamped to last line")
                 .add_assertion(assert_goto_line_dialog_is_open(false))
                 .add_assertion(assert_cursor_at_line(20)),
+        )
+}
+
+pub fn test_code_editor_line_numbers_default_to_absolute() -> Builder {
+    file_open_steps(new_builder()).with_step(
+        new_step_with_default_assertions("Verify code editor line numbers are absolute by default")
+            .add_assertion(assert_code_editor_line_numbers(vec![
+                (1, 1),
+                (10, 10),
+                (20, 20),
+            ])),
+    )
+}
+
+pub fn test_code_editor_relative_line_numbers_follow_cursor() -> Builder {
+    file_open_steps(new_builder())
+        .with_step(
+            new_step_with_default_assertions("Enable relative line numbers and move to line 10")
+                .with_action(|app, window_id, _| {
+                    set_code_editor_line_number_mode(app, CodeEditorLineNumberMode::Relative);
+                    goto_line_confirm(app, window_id, "10");
+                })
+                .add_assertion(assert_goto_line_dialog_is_open(false))
+                .add_assertion(assert_cursor_at_line(10))
+                .add_assertion(assert_code_editor_line_numbers(vec![
+                    (5, 5),
+                    (9, 1),
+                    (10, 10),
+                    (11, 1),
+                    (20, 10),
+                ])),
+        )
+        .with_step(
+            new_step_with_default_assertions("Verify relative line numbers update on cursor move")
+                .with_action(|app, window_id, _| goto_line_confirm(app, window_id, "12"))
+                .add_assertion(assert_cursor_at_line(12))
+                .add_assertion(assert_code_editor_line_numbers(vec![
+                    (5, 7),
+                    (10, 2),
+                    (12, 12),
+                    (13, 1),
+                    (20, 8),
+                ])),
         )
 }

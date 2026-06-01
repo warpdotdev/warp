@@ -1,36 +1,27 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
-use std::{collections::HashSet, sync::mpsc::SyncSender};
 
+use ai::index::full_source_code_embedding::manager::{
+    CodebaseIndexManager, CodebaseIndexManagerEvent,
+};
+use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
+use ai::workspace::{WorkspaceMetadata, WorkspaceMetadataEvent};
+use anyhow::Context;
+use chrono::Utc;
+use itertools::Itertools;
+use lsp::supported_servers::LSPServerType;
 use lsp::LanguageId;
+#[cfg(feature = "local_fs")]
+use lsp::LspEvent;
 #[cfg(feature = "local_fs")]
 use lsp::{LspManagerModel, LspServerConfig};
 #[cfg(feature = "local_fs")]
 use repo_metadata::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
 use serde::{Deserialize, Serialize};
-
-use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 #[cfg(feature = "local_fs")]
-use crate::ai::codebase_auto_indexing::{
-    auto_index_candidate_roots, should_auto_index_codebase, CodebaseAutoIndexingSurface,
-};
-use crate::ai::AIRequestUsageModel;
-use crate::persistence::ModelEvent;
-use crate::report_if_error;
-use crate::send_telemetry_from_ctx;
-use crate::settings::CodeSettings;
-use crate::terminal::TerminalView;
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
-use crate::TelemetryEvent;
-use ai::{
-    index::full_source_code_embedding::manager::{CodebaseIndexManager, CodebaseIndexManagerEvent},
-    workspace::{WorkspaceMetadata, WorkspaceMetadataEvent},
-};
-use anyhow::Context;
-use chrono::Utc;
-use itertools::Itertools;
-use lsp::supported_servers::LSPServerType;
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 #[cfg(feature = "local_fs")]
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -38,22 +29,27 @@ use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+#[cfg(feature = "local_fs")]
+use crate::ai::codebase_auto_indexing::{
+    auto_index_candidate_roots, should_auto_index_codebase, CodebaseAutoIndexingSurface,
+};
+use crate::ai::AIRequestUsageModel;
 #[cfg(feature = "local_fs")]
 use crate::code::language_server_shutdown_manager::LanguageServerShutdownManager;
 #[cfg(feature = "local_fs")]
 use crate::code::lsp_telemetry::LspTelemetryEvent;
+use crate::persistence::ModelEvent;
 #[cfg(feature = "local_fs")]
 use crate::server::server_api::ServerApiProvider;
+use crate::settings::CodeSettings;
 #[cfg(feature = "local_fs")]
 use crate::terminal::local_shell::LocalShellState;
+use crate::terminal::TerminalView;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::{report_if_error, send_telemetry_from_ctx, TelemetryEvent};
 #[cfg(feature = "local_fs")]
 use crate::{view_components::DismissibleToast, workspace::ToastStack};
-#[cfg(feature = "local_fs")]
-use lsp::LspEvent;
-#[cfg(feature = "local_fs")]
-use warp_core::channel::ChannelState;
-
-use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
 
 /// Represents whether an LSP server is enabled or disabled for a workspace.
 ///
@@ -635,7 +631,9 @@ impl PersistedWorkspace {
             if !manager.is_indexing_enabled() {
                 return;
             }
-            if UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx) {
+            let codebase_context_enabled =
+                UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx);
+            if codebase_context_enabled {
                 Self::enable_codebase_indexing(manager, ctx);
             } else {
                 manager.reset_codebase_indexing(ctx);
@@ -674,17 +672,13 @@ impl PersistedWorkspace {
         ProjectContextModel::handle(ctx).update(ctx, |model, ctx| {
             let _ = model.index_and_store_rules(directory_path.clone(), ctx);
         });
-
-        if FeatureFlag::FullSourceCodeEmbedding.is_enabled() {
-            let auto_indexing_enabled = UserWorkspaces::as_ref(ctx)
-                .is_codebase_context_enabled(ctx)
-                && *CodeSettings::as_ref(ctx).auto_indexing_enabled;
-
-            if auto_indexing_enabled {
-                CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
-                    manager.index_directory(directory_path, ctx);
-                });
-            }
+        if FeatureFlag::FullSourceCodeEmbedding.is_enabled()
+            && UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx)
+            && *CodeSettings::as_ref(ctx).auto_indexing_enabled
+        {
+            CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
+                manager.index_directory(directory_path, ctx);
+            });
         }
     }
 

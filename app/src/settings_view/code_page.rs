@@ -1,47 +1,7 @@
-#[cfg(feature = "local_fs")]
-use super::features::external_editor::ExternalEditorView;
-use super::{
-    flags,
-    settings_page::{
-        build_sub_header, render_body_item, render_separator, Category, MatchData, PageType,
-        SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, HEADER_PADDING,
-        TOGGLE_BUTTON_RIGHT_PADDING,
-    },
-    LocalOnlyIconState, SettingsAction, SettingsSection, ToggleSettingActionPair, ToggleState,
-};
-#[cfg(not(target_family = "wasm"))]
-use crate::remote_server::codebase_index_model::{
-    RemoteCodebaseIndexModel, RemoteCodebaseIndexModelEvent, RemoteCodebaseIndexSettingsEntry,
-};
-use crate::{
-    ai::persisted_workspace::{
-        EnablementState, LspRepoStatus, PersistedWorkspace, PersistedWorkspaceEvent,
-    },
-    appearance::Appearance,
-    code::{
-        buffer_location::LocalOrRemotePath,
-        lsp_telemetry::{LspControlActionType, LspEnablementSource, LspTelemetryEvent},
-    },
-    send_telemetry_from_ctx,
-    settings::{AISettings, CodeSettings},
-    terminal::general_settings::GeneralSettings,
-    ui_components::{
-        avatar::{Avatar, AvatarContent, StatusElementTypes},
-        buttons::icon_button,
-        icons::Icon,
-    },
-    view_components::{
-        action_button::{ActionButton, SecondaryTheme},
-        DismissibleToast,
-    },
-    workspace::tab_settings::TabSettings,
-    workspace::ToastStack,
-    workspaces::{
-        update_manager::TeamUpdateManager, user_workspaces::UserWorkspaces,
-        workspace::AdminEnablementSetting,
-    },
-    TelemetryEvent,
-};
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
 use ai::index::full_source_code_embedding::manager::{
     CodebaseIndexFinishedStatus, CodebaseIndexManager, CodebaseIndexManagerEvent,
     CodebaseIndexStatus, CodebaseIndexingError,
@@ -54,36 +14,63 @@ use lsp::{LspManagerModel, LspManagerModelEvent, LspServerModel, LspState};
 use pathfinder_color::ColorU;
 #[cfg(not(target_family = "wasm"))]
 use remote_server::codebase_index_proto::{RemoteCodebaseIndexState, RemoteCodebaseIndexStatus};
-use std::borrow::Cow;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use warp_core::{
-    features::FeatureFlag,
-    report_if_error,
-    settings::ToggleableSetting as _,
-    ui::theme::{AnsiColorIdentifier, Fill as ThemeFill},
-};
+use warp_core::features::FeatureFlag;
+use warp_core::report_if_error;
+use warp_core::settings::ToggleableSetting as _;
+use warp_core::ui::theme::{AnsiColorIdentifier, Fill as ThemeFill};
 use warp_util::path::user_friendly_path;
 #[cfg(not(target_family = "wasm"))]
 use warp_util::remote_path::RemotePath;
-use warpui::{
-    elements::{
-        ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Empty,
-        Expanded, Fill, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
-        Radius, Shrinkable,
-    },
-    fonts::Weight,
-    id,
-    keymap::ContextPredicate,
-    platform::{Cursor, FilePickerConfiguration},
-    ui_components::{
-        button::ButtonVariant,
-        components::{Coords, UiComponent, UiComponentStyles},
-        switch::{SwitchStateHandle, TooltipConfig},
-    },
-    Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
+use warpui::elements::{
+    ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Empty,
+    Expanded, Fill, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
+    Shrinkable,
 };
+use warpui::fonts::Weight;
+use warpui::keymap::ContextPredicate;
+use warpui::platform::{Cursor, FilePickerConfiguration};
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::{SwitchStateHandle, TooltipConfig};
+use warpui::{
+    id, Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle,
+};
+
+#[cfg(feature = "local_fs")]
+use super::features::external_editor::ExternalEditorView;
+use super::settings_page::{
+    build_sub_header, render_body_item, render_separator, Category, MatchData, PageType,
+    SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, HEADER_PADDING,
+    TOGGLE_BUTTON_RIGHT_PADDING,
+};
+use super::{
+    flags, LocalOnlyIconState, SettingsAction, SettingsSection, ToggleSettingActionPair,
+    ToggleState,
+};
+use crate::ai::persisted_workspace::{
+    EnablementState, LspRepoStatus, PersistedWorkspace, PersistedWorkspaceEvent,
+};
+use crate::appearance::Appearance;
+use crate::code::buffer_location::LocalOrRemotePath;
+use crate::code::lsp_telemetry::{LspControlActionType, LspEnablementSource, LspTelemetryEvent};
+#[cfg(not(target_family = "wasm"))]
+use crate::remote_server::codebase_index_model::{
+    RemoteCodebaseIndexModel, RemoteCodebaseIndexModelEvent, RemoteCodebaseIndexSettingsEntry,
+};
+use crate::settings::{AISettings, CodeSettings};
+use crate::terminal::general_settings::GeneralSettings;
+use crate::ui_components::avatar::{Avatar, AvatarContent, StatusElementTypes};
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{ActionButton, SecondaryTheme};
+use crate::view_components::DismissibleToast;
+use crate::workspace::tab_settings::TabSettings;
+use crate::workspace::ToastStack;
+use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::AdminEnablementSetting;
+use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 const MAIN_SECTION_MARGIN: f32 = 12.;
 const SUB_SECTION_MARGIN: f32 = 8.;
@@ -141,43 +128,8 @@ fn remote_codebase_index_limit_reached(status: &RemoteCodebaseIndexStatus) -> bo
 }
 
 #[cfg(all(test, not(target_family = "wasm")))]
-mod tests {
-    use remote_server::codebase_index_proto::{
-        RemoteCodebaseIndexState, RemoteCodebaseIndexStatus,
-    };
-
-    use super::remote_codebase_index_limit_reached;
-
-    fn remote_status_with_failure(failure_message: Option<&str>) -> RemoteCodebaseIndexStatus {
-        RemoteCodebaseIndexStatus {
-            repo_path: "/workspaces/repo".to_string(),
-            state: RemoteCodebaseIndexState::Unavailable,
-            last_updated_epoch_millis: Some(1),
-            progress_completed: None,
-            progress_total: None,
-            failure_message: failure_message.map(ToOwned::to_owned),
-            root_hash: None,
-        }
-    }
-
-    #[test]
-    fn remote_index_limit_failure_is_detected_from_status_message() {
-        let status = remote_status_with_failure(Some(
-            "Cannot index remote codebase because the maximum number of codebase indexes has been reached.",
-        ));
-
-        assert!(remote_codebase_index_limit_reached(&status));
-    }
-
-    #[test]
-    fn other_unavailable_failures_are_not_index_limit_failures() {
-        let status = remote_status_with_failure(Some(
-            "Cannot index remote codebase because indexing did not start.",
-        ));
-
-        assert!(!remote_codebase_index_limit_reached(&status));
-    }
-}
+#[path = "code_page_tests.rs"]
+mod tests;
 
 #[derive(Clone, Default)]
 struct LspServerRowMouseStates {
@@ -977,6 +929,54 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 &(context.clone() & id!(flags::IS_CODEBASE_INDEXING_ENABLED)),
                 flags::IS_AUTOINDEXING_ENABLED,
             )],
+            app,
+        );
+    }
+
+    if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
+        ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
+            vec![
+                ToggleSettingActionPair::new(
+                    "auto open code review panel",
+                    builder(SettingsAction::Code(
+                        CodeSettingsPageAction::ToggleAutoOpenCodeReviewPane,
+                    )),
+                    context,
+                    flags::AUTO_OPEN_CODE_REVIEW_PANE_FLAG,
+                ),
+                ToggleSettingActionPair::new(
+                    "code review button",
+                    builder(SettingsAction::Code(
+                        CodeSettingsPageAction::ToggleCodeReviewPanel,
+                    )),
+                    context,
+                    flags::SHOW_CODE_REVIEW_BUTTON_FLAG,
+                ),
+                ToggleSettingActionPair::new(
+                    "diff stats on code review button",
+                    builder(SettingsAction::Code(
+                        CodeSettingsPageAction::ToggleShowCodeReviewDiffStats,
+                    )),
+                    context,
+                    flags::SHOW_CODE_REVIEW_DIFF_STATS_FLAG,
+                ),
+                ToggleSettingActionPair::new(
+                    "project explorer",
+                    builder(SettingsAction::Code(
+                        CodeSettingsPageAction::ToggleProjectExplorer,
+                    )),
+                    context,
+                    flags::SHOW_PROJECT_EXPLORER,
+                ),
+                ToggleSettingActionPair::new(
+                    "global file search",
+                    builder(SettingsAction::Code(
+                        CodeSettingsPageAction::ToggleGlobalSearch,
+                    )),
+                    context,
+                    flags::SHOW_GLOBAL_SEARCH,
+                ),
+            ],
             app,
         );
     }

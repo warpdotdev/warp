@@ -1,29 +1,24 @@
 #[path = "file_watchers/mod.rs"]
 mod file_watchers;
-use crate::ai::mcp::{McpIntegration, TemplatableMCPServerManager};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+use ai::skills::{parse_bundled_skill, provider_rank, ParsedSkill, SkillProvider, SkillReference};
 pub use file_watchers::{
     extract_skill_parent_directory, read_skills_from_directories, SkillWatcher, SkillWatcherEvent,
 };
-
-use std::{
-    collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
-};
-
-use crate::keyboard::keybinding_file_path;
-use crate::settings::user_preferences_toml_file_path;
-
-use super::SkillDescriptor;
-use crate::ai::skills::skill_utils::unique_skills;
-use ai::skills::{
-    get_provider_for_path, parse_bundled_skill, provider_rank, ParsedSkill, SkillProvider,
-    SkillReference,
-};
-use warp_core::{
-    channel::ChannelState, features::FeatureFlag, report_error, safe_warn, ui::icons::Icon,
-};
+use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
+use warp_core::ui::icons::Icon;
+use warp_core::{report_error, safe_warn};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+
+use super::{SkillDescriptor, SkillPathQuery};
+use crate::ai::mcp::{McpIntegration, TemplatableMCPServerManager};
+use crate::ai::skills::skill_utils::unique_skills;
+use crate::keyboard::keybinding_file_path;
+use crate::settings::user_preferences_toml_file_path;
 
 /// Activation condition for a bundled skill.
 #[derive(Debug, Clone)]
@@ -68,11 +63,11 @@ pub struct SkillManager {
     ///
     /// NOT:
     /// - Key: `/repo/frontend/.agents/skills`
-    directory_skills: HashMap<PathBuf, HashSet<PathBuf>>,
-    skills_by_path: HashMap<PathBuf, ParsedSkill>,
+    directory_skills: HashMap<LocalOrRemotePath, HashSet<LocalOrRemotePath>>,
+    skills_by_path: HashMap<LocalOrRemotePath, ParsedSkill>,
     /// Reverse lookup: skill name → set of paths with that name.
     /// This allows efficient lookup by skill name without scanning all paths.
-    skills_by_name: HashMap<String, HashSet<PathBuf>>,
+    skills_by_name: HashMap<String, HashSet<LocalOrRemotePath>>,
     /// Skills bundled into Warp, each with activation condition and icon.
     bundled_skills: HashMap<String, BundledSkill>,
     /// When true, all skills in `directory_skills` are in scope regardless of
@@ -127,7 +122,7 @@ impl SkillManager {
     /// Returns skills available for the given working directory.
     pub fn get_skills_for_working_directory(
         &self,
-        working_directory: Option<&Path>,
+        working_directory: Option<&LocalOrRemotePath>,
         ctx: &AppContext,
     ) -> Vec<SkillDescriptor> {
         // Collect skill paths as (dir_path, skill_path) tuples for later deduplication.
@@ -139,7 +134,7 @@ impl SkillManager {
             skill_paths.extend(
                 self.home_skill_paths()
                     .into_iter()
-                    .map(|path| (home_dir.clone(), path)),
+                    .map(|path| (LocalOrRemotePath::Local(home_dir.clone()), path)),
             );
         }
 
@@ -155,8 +150,7 @@ impl SkillManager {
             }
         } else if let Some(working_directory) = working_directory {
             let repo_root = repo_metadata::repositories::DetectedRepositories::as_ref(ctx)
-                .get_root_for_path(&LocalOrRemotePath::Local(working_directory.to_path_buf()))
-                .and_then(|r| PathBuf::try_from(r).ok());
+                .get_root_for_path(working_directory);
 
             for (dir, dir_skill_paths) in &self.directory_skills {
                 if is_home_directory(dir) {
@@ -208,12 +202,12 @@ impl SkillManager {
     }
 
     /// Returns the currently-known home skill file paths.
-    pub fn home_skill_paths(&self) -> Vec<PathBuf> {
+    pub fn home_skill_paths(&self) -> Vec<LocalOrRemotePath> {
         let Some(home_dir) = dirs::home_dir() else {
             return vec![];
         };
         self.directory_skills
-            .get(&home_dir)
+            .get(&LocalOrRemotePath::Local(home_dir))
             .map(|skills| skills.iter().cloned().collect())
             .unwrap_or_default()
     }
@@ -221,7 +215,11 @@ impl SkillManager {
     /// Returns the currently-known directories which have skills registered.
     /// This includes both repo roots and subdirectories with skills.
     pub fn directories_with_skills(&self) -> Vec<PathBuf> {
-        let mut dirs: Vec<PathBuf> = self.directory_skills.keys().cloned().collect();
+        let mut dirs: Vec<PathBuf> = self
+            .directory_skills
+            .keys()
+            .filter_map(|path| path.to_local_path().map(Path::to_path_buf))
+            .collect();
         dirs.sort();
         dirs
     }
@@ -237,11 +235,16 @@ impl SkillManager {
     /// Both will be returned.
     pub fn skill_paths_in_scope(&self, scope_dir: &Path) -> Vec<PathBuf> {
         let mut paths = HashSet::new();
+        let scope_dir = LocalOrRemotePath::Local(scope_dir.to_path_buf());
 
         for (dir, skill_paths) in &self.directory_skills {
             // Include skills from directories that are under scope_dir
-            if dir.starts_with(scope_dir) {
-                paths.extend(skill_paths.iter().cloned());
+            if dir.starts_with(&scope_dir) {
+                paths.extend(
+                    skill_paths
+                        .iter()
+                        .filter_map(|path| path.to_local_path().map(Path::to_path_buf)),
+                );
             }
         }
 
@@ -267,7 +270,7 @@ impl SkillManager {
         // Slow path: check all paths for this skill name.
         self.skill_paths_by_name(&skill.name)
             .iter()
-            .filter_map(|path| get_provider_for_path(path))
+            .filter_map(|path| self.skills_by_path.get(path).map(|skill| skill.provider))
             .any(|provider| providers.contains(&provider))
     }
 
@@ -294,7 +297,7 @@ impl SkillManager {
         // Find the supported provider with the best (lowest) rank among all paths.
         self.skill_paths_by_name(&skill.name)
             .iter()
-            .filter_map(|path| get_provider_for_path(path))
+            .filter_map(|path| self.skills_by_path.get(path).map(|skill| skill.provider))
             .filter(|provider| supported_providers.contains(provider))
             .min_by_key(|provider| provider_rank(*provider))
             .unwrap_or(skill.provider)
@@ -302,25 +305,32 @@ impl SkillManager {
 
     /// Returns skill file paths that have the given skill name.
     /// A skill's name comes from the `name` field in its SKILL.md front matter.
-    pub fn skill_paths_by_name(&self, name: &str) -> Vec<PathBuf> {
+    pub fn skill_paths_by_name(&self, name: &str) -> Vec<LocalOrRemotePath> {
         self.skills_by_name
             .get(name)
             .map(|paths| {
-                let mut paths: Vec<PathBuf> = paths.iter().cloned().collect();
-                paths.sort();
+                let mut paths: Vec<LocalOrRemotePath> = paths.iter().cloned().collect();
+                paths.sort_by_key(LocalOrRemotePath::display_path);
                 paths
             })
             .unwrap_or_default()
     }
 
     /// Returns a reference to a parsed skill for a specific SKILL.md file path, if it is cached.
-    pub fn skill_by_path(&self, skill_path: &Path) -> Option<&ParsedSkill> {
-        self.skills_by_path.get(skill_path)
+    pub fn skill_by_path<P: SkillPathQuery + ?Sized>(
+        &self,
+        skill_path: &P,
+    ) -> Option<&ParsedSkill> {
+        self.skills_by_path.get(&skill_path.to_skill_location())
     }
 
     /// Returns the appropriate `SkillReference` for a skill at the given path.
     /// For bundled skills, returns `BundledSkillId`; otherwise returns `Path`.
-    pub fn reference_for_skill_path(&self, skill_path: &Path) -> SkillReference {
+    pub fn reference_for_skill_path<P: SkillPathQuery + ?Sized>(
+        &self,
+        skill_path: &P,
+    ) -> SkillReference {
+        let skill_path = skill_path.to_skill_location();
         // Check if this path belongs to a bundled skill.
         for (id, bundled) in &self.bundled_skills {
             if bundled.skill.path == skill_path {
@@ -328,7 +338,7 @@ impl SkillManager {
             }
         }
         // Default to path-based reference.
-        SkillReference::Path(skill_path.to_path_buf())
+        SkillReference::Path(skill_path)
     }
 
     /// Get the definition of a skill, if it is cached.
@@ -338,6 +348,22 @@ impl SkillManager {
             SkillReference::BundledSkillId(id) => {
                 self.bundled_skills.get(id).map(|bundled| &bundled.skill)
             }
+        }
+    }
+
+    /// Get the definition of a skill only if it is currently available for invocation.
+    ///
+    /// Path-based user skills are always controlled by normal path scoping. Bundled
+    /// skills additionally respect their runtime activation state so stale references
+    /// cannot invoke disabled bundled skills.
+    pub fn active_skill_by_reference(
+        &self,
+        reference: &SkillReference,
+        ctx: &AppContext,
+    ) -> Option<&ParsedSkill> {
+        match reference {
+            SkillReference::Path(path) => self.skill_by_path(path),
+            SkillReference::BundledSkillId(id) => self.active_bundled_skill(id, ctx),
         }
     }
 
@@ -380,13 +406,13 @@ impl SkillManager {
         }
     }
 
-    fn handle_skills_deleted(&mut self, paths: Vec<PathBuf>) {
+    fn handle_skills_deleted(&mut self, paths: Vec<LocalOrRemotePath>) {
         for path in paths {
             self.handle_path_deleted(&path);
         }
     }
 
-    fn handle_path_deleted(&mut self, path: &Path) {
+    fn handle_path_deleted(&mut self, path: &LocalOrRemotePath) {
         // Delete all skills that are affected by this deleted path
         for (dir, skill_paths) in &self.directory_skills.clone() {
             if dir.starts_with(path) {
@@ -475,6 +501,25 @@ impl SkillManager {
         self.skills_by_path.insert(path.clone(), skill);
         self.skills_by_name.entry(name).or_default().insert(path);
     }
+
+    /// Adds a bundled skill to the skill manager for testing purposes.
+    #[cfg(test)]
+    pub fn add_bundled_skill_for_testing(
+        &mut self,
+        id: impl Into<String>,
+        skill: ParsedSkill,
+        activation: BundledSkillActivation,
+    ) {
+        let id = id.into();
+        self.bundled_skills.insert(
+            id.clone(),
+            BundledSkill {
+                skill,
+                activation,
+                icon: icon_for_bundled_skill(&id),
+            },
+        );
+    }
 }
 
 /// Read bundled skill definitions from the specified directory.
@@ -510,7 +555,7 @@ async fn read_bundled_skills(skills_dir: &Path) -> HashMap<String, ParsedSkill> 
         let Some(skill_id) = entry_path.file_name().and_then(|s| s.to_str()) else {
             safe_warn!(
                 safe: ("Could not resolve bundled skill ID, skipping skill"),
-                full: ("Could not resolve bundled skill ID from {}, skipping skill", skill.path.display())
+                full: ("Could not resolve bundled skill ID from {}, skipping skill", skill.path.display_path())
             );
             continue;
         };
@@ -595,11 +640,11 @@ fn activation_for_bundled_skill(skill_id: &str, resources_dir: &Path) -> Bundled
     }
 }
 
-fn is_home_directory(path: &Path) -> bool {
+fn is_home_directory(path: &LocalOrRemotePath) -> bool {
     let Some(home_dir) = dirs::home_dir() else {
         return false;
     };
-    path == home_dir
+    path == &LocalOrRemotePath::Local(home_dir)
 }
 
 impl Entity for SkillManager {

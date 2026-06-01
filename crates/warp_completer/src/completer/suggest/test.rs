@@ -3,6 +3,9 @@ use std::iter::FromIterator;
 
 use typed_path::TypedPathBuf;
 
+use super::{
+    suggestions, CompleterOptions, CompletionsFallbackStrategy, SuggestionResults, SuggestionType,
+};
 use crate::completer::context::CompletionContext;
 use crate::completer::engine::EngineDirEntry;
 use crate::completer::matchers::MatchStrategy;
@@ -15,9 +18,6 @@ use crate::signatures::testing::{
     ls_signature, npm_signature, signature_with_empty_positional, test_signature,
 };
 use crate::signatures::CommandRegistry;
-
-use super::CompleterOptions;
-use super::{suggestions, CompletionsFallbackStrategy, SuggestionResults, SuggestionType};
 
 cfg_if::cfg_if! {
     if #[cfg(not(feature = "v2"))] {

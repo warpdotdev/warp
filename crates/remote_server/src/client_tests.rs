@@ -1,6 +1,9 @@
 use futures::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+use warp_core::SessionId;
+use warpui::r#async::executor;
 
+use super::*;
 use crate::proto::{
     client_message, get_fragment_metadata_from_hash_response, run_command_response, server_message,
     ClientMessage, CodebaseIndexStatus, CodebaseIndexStatusState, CodebaseIndexStatusUpdated,
@@ -10,10 +13,6 @@ use crate::proto::{
     MissingFragmentMetadata, RunCommandResponse, RunCommandSuccess, ServerMessage,
 };
 use crate::protocol;
-use warp_core::SessionId;
-use warpui::r#async::executor;
-
-use super::*;
 
 /// Generic mock server: loops reading ClientMessages and responds using the
 /// provided closure. Exits cleanly on EOF.
@@ -407,6 +406,24 @@ async fn disconnected_on_closed_stream() {
     // The reader task should detect EOF and emit a Disconnected event.
     let event = disconnect_rx.recv().await.unwrap();
     assert!(matches!(event, ClientEvent::Disconnected));
+
+    // After the Disconnected event has been observed, the reader task has
+    // already stored `true` into the atomic flag (it does the store before
+    // sending the event), so callers can rely on `is_disconnected()` to
+    // short-circuit further requests.
+    assert!(client.is_disconnected());
+}
+
+#[tokio::test]
+async fn is_disconnected_starts_false() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|_| {
+        server_message::Message::InitializeResponse(InitializeResponse {
+            server_version: "test-0.1.0".to_string(),
+            host_id: "test-host-id".to_string(),
+        })
+    });
+
+    assert!(!client.is_disconnected());
 }
 
 #[tokio::test]

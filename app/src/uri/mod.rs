@@ -5,44 +5,51 @@ pub mod web_intent_parser;
 #[cfg(target_family = "wasm")]
 pub mod browser_url_handler;
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+
+use anyhow::{anyhow, ensure, Result};
+use itertools::Itertools;
+use session_sharing_protocol::common::SessionId;
+use url::Url;
+use warp_util::path::LineAndColumnArg;
+use warpui::notification::UserNotification;
+use warpui::platform::TerminationMode;
+use warpui::{AppContext, EntityId, SingletonEntity as _, TypedActionView, ViewHandle, WindowId};
+
+use self::docker::open_docker_container;
 use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
 use crate::ai::agent::api::ServerConversationToken;
-use crate::drive::OpenWarpDriveObjectSettings;
+use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
+use crate::cloud_object::ObjectType;
+use crate::drive::{OpenWarpDriveObjectArgs, OpenWarpDriveObjectSettings};
+use crate::features::FeatureFlag;
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::linear::{LinearAction, LinearIssueWork};
-use crate::root_view::{open_new_window_get_handles, OpenLaunchConfigArg};
+use crate::root_view::{
+    open_new_window_get_handles, open_new_with_workspace_source, NewWorkspaceSource,
+    OpenLaunchConfigArg,
+};
 use crate::server::ids::ServerId;
 use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
+use crate::settings_view::{OpenTeamsSettingsModalArgs, SettingsSection};
 use crate::tab_configs::TabConfig;
+use crate::user_config::{load_launch_configs, load_tab_configs, tab_configs_dir};
 use crate::util::openable_file_type::{
     is_file_openable_in_warp, is_markdown_file, is_runnable_shell_script, starts_with_shebang,
 };
+use crate::view_components::DismissibleToast;
+use crate::workspace::auto_handoff::trigger_auto_handoff_to_cloud;
 use crate::workspace::util::PaneViewLocator;
-use crate::workspace::{Workspace, WorkspaceAction, WorkspaceRegistry};
-use crate::{cloud_object::ObjectType, workspace::ToastStack};
-use crate::{drive::OpenWarpDriveObjectArgs, view_components::DismissibleToast};
-use crate::{features::FeatureFlag, workspace::active_terminal_in_window};
-
-use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
-use crate::settings_view::{OpenTeamsSettingsModalArgs, SettingsSection};
-use crate::user_config::{load_launch_configs, load_tab_configs, tab_configs_dir};
+use crate::workspace::{
+    active_terminal_in_window, AutoCloudHandoffTrigger, ToastStack, Workspace, WorkspaceAction,
+    WorkspaceRegistry,
+};
 use crate::{
     quake_mode_window_id, quake_mode_window_is_open, safe_info, send_telemetry_from_app_ctx,
     ChannelState, OpenPath,
 };
-use anyhow::{anyhow, ensure, Result};
-use itertools::Itertools;
-use session_sharing_protocol::common::SessionId;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
-use url::Url;
-use warpui::notification::UserNotification;
-use warpui::{platform::TerminationMode, SingletonEntity as _, TypedActionView};
-
-use warpui::{AppContext, EntityId, ViewHandle, WindowId};
-
-use self::docker::open_docker_container;
 
 const DESKTOP_REDIRECT_URI_PATH: &str = "/desktop_redirect";
 
@@ -802,17 +809,77 @@ fn parse_tab_path(url: &Url) -> Option<PathBuf> {
     Some(PathBuf::from(shellexpand::tilde(&raw).into_owned()))
 }
 
+fn parse_positive_usize_query_param(url: &Url, name: &str) -> Result<Option<usize>> {
+    let Some(raw) = url.query_pairs().find(|(k, _)| k == name).map(|(_, v)| v) else {
+        return Ok(None);
+    };
+
+    let value = raw.parse::<usize>()?;
+    ensure!(value > 0, "`{name}` must be greater than 0");
+    Ok(Some(value))
+}
+
+fn parse_open_file_editor_url(url: &Url) -> Result<(PathBuf, Option<LineAndColumnArg>)> {
+    let raw_path = url
+        .query_pairs()
+        .find(|(k, _)| k == "path")
+        .map(|(_, v)| v)
+        .ok_or_else(|| anyhow!("missing path for open_file_editor action"))?;
+    let path = PathBuf::from(shellexpand::tilde(&raw_path).into_owned());
+    ensure!(
+        path.is_absolute(),
+        "`path` must be absolute for open_file_editor action"
+    );
+
+    let line = parse_positive_usize_query_param(url, "line")?;
+    let column = parse_positive_usize_query_param(url, "column")?;
+    ensure!(
+        line.is_some() || column.is_none(),
+        "`column` requires `line` for open_file_editor action"
+    );
+
+    Ok((
+        path,
+        line.map(|line_num| LineAndColumnArg {
+            line_num,
+            column_num: column,
+        }),
+    ))
+}
+
+fn parse_auto_handoff_trigger(url: &Url) -> AutoCloudHandoffTrigger {
+    match url
+        .query_pairs()
+        .find(|(k, _)| k == "trigger")
+        .map(|(_, v)| v)
+    {
+        Some(trigger) if matches!(trigger.as_ref(), "sleep" | "macos_sleep" | "macos-sleep") => {
+            AutoCloudHandoffTrigger::MacOsSleep
+        }
+        Some(_) | None => AutoCloudHandoffTrigger::Uri,
+    }
+}
+
 #[derive(Debug)]
 enum Action {
     NewTab,
     NewWindow,
+    OpenFileEditor {
+        path: PathBuf,
+        line_col: Option<LineAndColumnArg>,
+    },
     Docker,
     OpenRepo,
     CloudAgentSetup,
     NewCloudAgentConversation,
     NewAgentConversation,
-    CreateEnvironment { repos: Vec<String> },
+    CreateEnvironment {
+        repos: Vec<String>,
+    },
     FocusCloudMode,
+    AutoHandoffToCloud {
+        trigger: AutoCloudHandoffTrigger,
+    },
 }
 
 impl Action {
@@ -820,6 +887,10 @@ impl Action {
         match url.path() {
             "/new_tab" => Ok(Self::NewTab),
             "/new_window" => Ok(Self::NewWindow),
+            "/open_file_editor" => {
+                let (path, line_col) = parse_open_file_editor_url(url)?;
+                Ok(Self::OpenFileEditor { path, line_col })
+            }
             "/docker/open_subshell" => Ok(Self::Docker),
             "/open-repo" => Ok(Self::OpenRepo),
             "/cloud_agent_setup" => Ok(Self::CloudAgentSetup),
@@ -834,6 +905,9 @@ impl Action {
                 Ok(Self::CreateEnvironment { repos })
             }
             "/focus_cloud_mode" => Ok(Self::FocusCloudMode),
+            "/auto_handoff_to_cloud" | "/auto-handoff-to-cloud" => Ok(Self::AutoHandoffToCloud {
+                trigger: parse_auto_handoff_trigger(url),
+            }),
             _ => Err(anyhow!(
                 "Received \"action\" intent with unexpected action: {}",
                 url.path()
@@ -856,6 +930,15 @@ impl Action {
                     return;
                 };
                 open_file(window_id, path, ctx);
+            }
+            Self::OpenFileEditor { path, line_col } => {
+                #[cfg(feature = "local_fs")]
+                open_file_editor(primary_window_id, path.clone(), *line_col, ctx);
+                #[cfg(not(feature = "local_fs"))]
+                {
+                    let _ = (path, line_col);
+                    log::warn!("open_file_editor action requires local_fs support");
+                }
             }
             Action::Docker => {
                 if let Err(err) = open_docker_container(url, ctx) {
@@ -920,13 +1003,8 @@ impl Action {
                 }
             }
             Action::NewCloudAgentConversation => {
-                let window_id =
-                    primary_window_id.or_else(|| Some(open_new_window_get_handles(None, ctx).0));
-
-                let Some(window_id) = window_id else {
-                    log::warn!(
-                        "unable to determine window for new cloud agent conversation action"
-                    );
+                let Some(window_id) = primary_window_id else {
+                    open_new_with_workspace_source(NewWorkspaceSource::AmbientAgent, ctx);
                     return;
                 };
 
@@ -1046,6 +1124,9 @@ impl Action {
                     ctx,
                 );
             }
+            Action::AutoHandoffToCloud { trigger } => {
+                trigger_auto_handoff_to_cloud(*trigger, ctx);
+            }
         }
     }
 
@@ -1055,12 +1136,14 @@ impl Action {
         use WindowBehaviorHint as W;
         match self {
             Self::Docker
+            | Self::OpenFileEditor { .. }
             | Self::CreateEnvironment { .. }
             | Self::OpenRepo
             | Self::CloudAgentSetup
             | Self::NewCloudAgentConversation
             | Self::NewAgentConversation
-            | Self::FocusCloudMode => W::default(),
+            | Self::FocusCloudMode
+            | Self::AutoHandoffToCloud { .. } => W::default(),
             Self::NewTab => W::ShowPrimaryWindow(WindowActivationFallbackBehavior::Notify {
                 title: "New tab created".to_owned(),
                 description: "Go to Warp to see your new tab.".to_owned(),
@@ -1160,21 +1243,21 @@ enum OpenFileAction {
 /// standing up a full `AppContext`.
 fn classify_open_file_action(path: &Path) -> OpenFileAction {
     if is_markdown_file(path) {
-        return OpenFileAction::Notebook;
+        OpenFileAction::Notebook
+    } else if is_runnable_shell_script(path) {
+        OpenFileAction::ExecuteInSession
+    } else if path.is_file()
+        && (is_file_openable_in_warp(path).is_some() || starts_with_shebang(path))
+    {
+        OpenFileAction::Editor
+    } else {
+        OpenFileAction::ExecuteInSession
     }
-    if path.is_file() {
-        if is_runnable_shell_script(path) {
-            return OpenFileAction::ExecuteInSession;
-        }
-        // Anything we can show in the editor opens there. The second branch catches
-        // shebang scripts that `is_file_openable_in_warp` rejects on extension alone
-        // (e.g. an extensionless `#!/bin/sh` file without the user-execute bit) so
-        // they don't fall through to the executor and produce a `permission denied`.
-        if is_file_openable_in_warp(path).is_some() || starts_with_shebang(path) {
-            return OpenFileAction::Editor;
-        }
-    }
-    OpenFileAction::ExecuteInSession
+}
+
+#[cfg(feature = "local_fs")]
+fn can_open_file_editor_path(path: &Path) -> bool {
+    path.is_file() && is_file_openable_in_warp(path).is_some()
 }
 
 /// Handle an incoming `file://` URL.
@@ -1189,6 +1272,7 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
     });
 
     let action = classify_open_file_action(&path);
+
     if action == OpenFileAction::Notebook {
         if let Some((primary_window_id, root_view_id)) = primary_window_and_view {
             ctx.dispatch_action(
@@ -1206,10 +1290,8 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
         {
             use crate::code::editor_management::CodeSource;
             use crate::root_view::{open_new_with_workspace_source, NewWorkspaceSource};
-            use crate::util::{
-                file::external_editor::EditorSettings,
-                openable_file_type::resolve_file_target_to_open_in_warp,
-            };
+            use crate::util::file::external_editor::EditorSettings;
+            use crate::util::openable_file_type::resolve_file_target_to_open_in_warp;
 
             // Open text/code files in Warp's code editor, respecting the user's layout preference.
             let editor_settings = EditorSettings::as_ref(ctx);
@@ -1281,6 +1363,60 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
         }
 
         send_telemetry_from_app_ctx!(TelemetryEvent::OpenNewSessionFromFilePath, ctx);
+    }
+}
+
+#[cfg(feature = "local_fs")]
+fn open_file_editor(
+    primary_window_id: Option<WindowId>,
+    path: PathBuf,
+    line_col: Option<LineAndColumnArg>,
+    ctx: &mut AppContext,
+) {
+    #[cfg(feature = "local_fs")]
+    {
+        use crate::code::editor_management::CodeSource;
+        use crate::root_view::{open_new_with_workspace_source, NewWorkspaceSource};
+        use crate::util::file::external_editor::EditorSettings;
+        use crate::util::openable_file_type::resolve_file_target_to_open_in_warp;
+
+        if !can_open_file_editor_path(&path) {
+            log::warn!("open_file_editor action rejected non-openable path: {path:?}");
+            return;
+        }
+
+        let editor_settings = EditorSettings::as_ref(ctx);
+        let target = resolve_file_target_to_open_in_warp(&path, editor_settings, None);
+
+        let window_id = if let Some((wid, _)) = primary_window_id.and_then(|window_id| {
+            ctx.root_view_id(window_id)
+                .map(|view_id| (window_id, view_id))
+        }) {
+            wid
+        } else {
+            open_new_with_workspace_source(
+                NewWorkspaceSource::Session {
+                    options: Box::default(),
+                },
+                ctx,
+            )
+            .0
+        };
+
+        ctx.windows().show_window_and_focus_app(window_id);
+
+        if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
+            if let Some(workspace) = workspaces.into_iter().next() {
+                workspace.update(ctx, |workspace, ctx| {
+                    let source = CodeSource::Link {
+                        path: path.clone(),
+                        range_start: line_col,
+                        range_end: None,
+                    };
+                    workspace.open_file_with_target(path, target, line_col, source, ctx);
+                });
+            }
+        }
     }
 }
 

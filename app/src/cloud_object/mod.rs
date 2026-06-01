@@ -1,79 +1,48 @@
-use self::{
-    breadcrumbs::ContainingObject,
-    model::{
-        actions::ObjectActions,
-        generic_string_model::{
-            GenericStringModel, GenericStringObjectId, Serializer, StringModel,
-        },
-        persistence::CloudModel,
-    },
-};
-use crate::server::cloud_objects::update_manager::InitiatedBy;
-use crate::{
-    ai::cloud_agent_config::CloudAgentConfigModel,
-    ai::cloud_environments::CloudAmbientAgentEnvironmentModel,
-    ai::{
-        ambient_agents::scheduled::CloudScheduledAmbientAgentModel,
-        document::ai_document_model::AIDocumentId,
-        execution_profiles::CloudAIExecutionProfileModel,
-        facts::CloudAIFactModel,
-        mcp::{templatable::CloudTemplatableMCPServerModel, CloudMCPServerModel},
-    },
-    appearance::Appearance,
-    auth::UserUid,
-    channel::ChannelState,
-    drive::{
-        folders::{CloudFolderModel, FolderId},
-        items::WarpDriveItem,
-        CloudObjectTypeAndId, OpenWarpDriveObjectArgs, OpenWarpDriveObjectSettings,
-    },
-    env_vars::CloudEnvVarCollectionModel,
-    notebooks::{CloudNotebookModel, NotebookId},
-    persistence::ModelEvent,
-    server::{
-        ids::{
-            ClientId, HashableId, HashedSqliteId, ObjectUid, ServerId, ServerIdAndType, SyncId,
-            ToServerId,
-        },
-        server_api::object::ObjectClient,
-        sync_queue::{QueueItem, SerializedModel},
-    },
-    settings::cloud_preferences::CloudPreferenceModel,
-    util::time_format::format_approx_duration_from_now_utc,
-    workflows::{
-        workflow_enum::CloudWorkflowEnumModel, CloudWorkflow, CloudWorkflowModel, WorkflowId,
-        WorkflowSource,
-    },
-    workspaces::{
-        user_profiles::{UserProfileWithUID, UserProfiles},
-        user_workspaces::UserWorkspaces,
-    },
-};
+use std::any::Any;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
+use std::sync::Arc;
+
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use derivative::Derivative;
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::{
-    any::Any,
-    collections::{HashMap, HashSet},
-    fmt::Debug,
-    sync::Arc,
-};
 use url::Url;
-use warp_core::{channel::Channel, features::FeatureFlag};
-use warp_graphql::{
-    queries::get_updated_cloud_objects::UpdatedObjectInput, scalars::time::ServerTimestamp,
-};
+use warp_core::channel::Channel;
+use warp_core::features::FeatureFlag;
+use warp_graphql::queries::get_updated_cloud_objects::UpdatedObjectInput;
+use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::{AppContext, SingletonEntity};
+
+use self::breadcrumbs::ContainingObject;
+use self::model::actions::ObjectActions;
+use self::model::generic_string_model::{
+    GenericStringModel, GenericStringObjectId, Serializer, StringModel,
+};
+use self::model::persistence::CloudModel;
+use crate::appearance::Appearance;
+use crate::auth::UserUid;
+use crate::channel::ChannelState;
+use crate::drive::items::WarpDriveItem;
+use crate::drive::{CloudObjectTypeAndId, OpenWarpDriveObjectArgs, OpenWarpDriveObjectSettings};
+use crate::persistence::ModelEvent;
+use crate::server::cloud_objects::update_manager::InitiatedBy;
+use crate::server::ids::{HashableId, HashedSqliteId, ObjectUid, ServerId, SyncId, ToServerId};
+use crate::server::server_api::object::ObjectClient;
+use crate::server::sync_queue::{QueueItem, SerializedModel};
+use crate::util::time_format::format_approx_duration_from_now_utc;
+use crate::workflows::{CloudWorkflow, WorkflowSource};
+use crate::workspaces::user_profiles::UserProfiles;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub mod breadcrumbs;
 pub mod grab_edit_access_modal;
 pub mod model;
 pub mod toast_message;
 
-pub use warp_server_client::cloud_object::*;
+pub use cloud_objects::cloud_object::*;
 
 /// A CloudObject represents
 /// therefore shareable and editable (i.e. Notebooks and Workflows). In order
@@ -495,10 +464,14 @@ pub trait CloudModelType: Debug + Clone + Send + Sync {
     fn set_display_name(&mut self, _name: &str) {}
 
     /// Returns the upsert event for putting this model into the SQLite database.
-    fn upsert_event(&self, object: &Self::CloudObjectType) -> ModelEvent;
+    fn upsert_event(params: CloudObjectUpsertParams<Self>) -> ModelEvent
+    where
+        Self: Sized;
 
     /// Returns a bulk upsert event for putting a list of this model into the SQLite database.
-    fn bulk_upsert_event(objects: &[Self::CloudObjectType]) -> ModelEvent;
+    fn bulk_upsert_event(objects: Vec<CloudObjectUpsertParams<Self>>) -> ModelEvent
+    where
+        Self: Sized;
 
     /// Returns the sync queue item for creating this model on the server.
     fn create_object_queue_item(
@@ -554,12 +527,57 @@ pub trait CloudModelType: Debug + Clone + Send + Sync {
     /// revision, which doesn't go through this code path.
     fn should_update_after_server_conflict(&self) -> bool;
 
-    /// Returns a new instance from a server update, or None if the update should be ignored.
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self>;
-
     /// Whether this model type can be exported.
     fn can_export(&self) -> bool {
         false
+    }
+}
+/// Provides app-local typed lookup helpers for generic cloud object aliases.
+pub trait CloudObjectLookup: Sized + Clone {
+    fn get_all(app: &AppContext) -> Vec<Self>;
+
+    fn get_by_id<'a>(sync_id: &'a SyncId, app: &'a AppContext) -> Option<&'a Self>;
+}
+
+impl<K, M> CloudObjectLookup for GenericCloudObject<K, M>
+where
+    K: HashableId + ToServerId + Debug + Into<String> + Clone + 'static,
+    M: CloudModelType<IdType = K, CloudObjectType = GenericCloudObject<K, M>> + 'static,
+{
+    fn get_all(app: &AppContext) -> Vec<Self> {
+        CloudModel::as_ref(app)
+            .get_all_objects_of_type::<K, M>()
+            .cloned()
+            .collect()
+    }
+
+    fn get_by_id<'a>(sync_id: &'a SyncId, app: &'a AppContext) -> Option<&'a Self> {
+        CloudModel::as_ref(app).get_object_of_type::<K, M>(sync_id)
+    }
+}
+
+/// Marks string model payloads that can be looked up by UUID.
+pub trait CloudObjectUuid {
+    fn uuid(&self) -> uuid::Uuid;
+}
+
+/// Provides app-local UUID lookups for cloud objects whose payload exposes a UUID.
+pub trait CloudObjectUuidLookup: Sized {
+    fn get_by_uuid<'a>(uuid: &'a uuid::Uuid, app: &'a AppContext) -> Option<&'a Self>;
+}
+
+impl<T, S> CloudObjectUuidLookup
+    for GenericCloudObject<GenericStringObjectId, GenericStringModel<T, S>>
+where
+    T: StringModel<
+            CloudObjectType = GenericCloudObject<GenericStringObjectId, GenericStringModel<T, S>>,
+        > + CloudObjectUuid,
+    S: Serializer<T>,
+{
+    fn get_by_uuid<'a>(uuid: &'a uuid::Uuid, app: &'a AppContext) -> Option<&'a Self> {
+        CloudModel::as_ref(app)
+            .get_all_objects_of_type::<GenericStringObjectId, GenericStringModel<T, S>>()
+            .find(|object| object.model().string_model.uuid() == *uuid)
     }
 }
 
@@ -569,52 +587,13 @@ lazy_static! {
         Regex::new(r"[^a-zA-Z0-9\s-]").expect("Expect regex to be valid");
 }
 
-/// A generic implementation of cloud objects that can be used for any model and id types.
-///
-/// For instance, rather than directly implementing the CloudObject trait, CloudObjects can
-/// implement GenericCloudObject<K, M> where K is their id type and M is their model type.
-///
-/// For example, CloudNotebook becomes:
-///
-///   pub type CloudNotebook = GenericCloudObject<NotebookId, CloudNotebookModel>
-///
-/// The advantage of using the generic model is you get common implementations
-/// of CloudObject methods like ```versions``` for free.
-///
-/// See the comments for CloudObject to understand the relationship between
-/// this trait, CloudObject and CloudModelType.  They are tightly coupled.
-#[derive(Clone, Debug)]
-pub struct GenericCloudObject<K, M>
-where
-    K: HashableId + ToServerId + Debug + Into<String> + Clone + 'static,
-    M: CloudModelType<IdType = K> + 'static,
-{
-    pub id: SyncId,
-    pub metadata: CloudObjectMetadata,
-    pub permissions: CloudObjectPermissions,
-    /// Tracks whether this object has a conflict with the server version.
-    /// This is runtime state (not persisted) - conflicts are always NoConflicts when loaded from SQLite.
-    pub conflict_status: ConflictStatus<GenericServerObject<K, M>>,
-
-    // Intentionally not public to prevent users of this class from holding
-    // onto references to the model outside of this struct.
-    //
-    // This is an Arc in order to support clone-on-write semantics for the model.
-    // By wrapping the model in an Arc, clones become cheap, and we can avoid
-    // doing deep clones of the model whenever the containing object is cloned.
-    //
-    // Callers who want to update the model need to call set_model to update the
-    // entire model atomically.
-    model: Arc<M>,
-}
-
 impl<K, M> CloudObject for GenericCloudObject<K, M>
 where
     K: HashableId + ToServerId + Debug + Into<String> + Clone + 'static,
     M: CloudModelType<IdType = K, CloudObjectType = GenericCloudObject<K, M>> + 'static,
 {
     fn model_type_name(&self) -> &'static str {
-        self.model.model_type_name()
+        self.model().model_type_name()
     }
 
     fn uid(&self) -> ObjectUid {
@@ -630,11 +609,11 @@ where
     }
 
     fn should_show_activity_toasts(&self) -> bool {
-        self.model.should_show_activity_toasts()
+        self.model().should_show_activity_toasts()
     }
 
     fn warn_if_unsaved_at_quit(&self) -> bool {
-        self.model.warn_if_unsaved_at_quit()
+        self.model().warn_if_unsaved_at_quit()
     }
 
     fn metadata(&self) -> &CloudObjectMetadata {
@@ -654,19 +633,19 @@ where
     }
 
     fn object_type(&self) -> ObjectType {
-        self.model.object_type()
+        self.model().object_type()
     }
 
     fn cloud_object_type_and_id(&self) -> CloudObjectTypeAndId {
-        self.model.cloud_object_type_and_id(self.id)
+        self.model().cloud_object_type_and_id(self.id)
     }
 
     fn should_clear_on_unique_key_conflict(&self) -> bool {
-        self.model.should_clear_on_unique_key_conflict()
+        self.model().should_clear_on_unique_key_conflict()
     }
 
     fn can_move_to_space(&self, space: Space, app: &AppContext) -> bool {
-        self.model.can_move_to_space(self.space(app), space)
+        self.model().can_move_to_space(self.space(app), space)
     }
 
     fn has_conflicting_changes(&self) -> bool {
@@ -691,11 +670,11 @@ where
         self.set_pending_content_changes_status(CloudObjectSyncStatus::NoLocalChanges);
 
         if let ConflictStatus::ConflictingChanges { object } = new_conflict {
-            if self.model.should_update_after_server_conflict() {
+            if self.model().should_update_after_server_conflict() {
                 // Update metadata revision from the server object.
                 self.metadata.update_revision_from_server(&object.metadata);
                 // Update the model from the server.
-                self.model = object.model.clone().into();
+                self.set_model(object.model.clone());
                 // Update conflict status - this may create a new conflict if there are pending changes.
                 if self.metadata.has_pending_content_changes() {
                     self.conflict_status = ConflictStatus::ConflictingChanges { object };
@@ -711,11 +690,11 @@ where
     }
 
     fn object_link(&self) -> Option<String> {
-        if !self.model.supports_linking() {
+        if !self.model().supports_linking() {
             return None;
         }
 
-        let display_name = self.model.display_name();
+        let display_name = self.model().display_name();
         // First remove all the url unsafe chars
         let name_without_unsafe_chars = SAFE_URL_CHAR_RE.replace_all(display_name.trim(), "");
         // Then turn all the spaces into dashes
@@ -753,11 +732,11 @@ where
     }
 
     fn upsert_event(&self) -> ModelEvent {
-        self.model.upsert_event(self)
+        M::upsert_event(self.upsert_params(self.object_type()))
     }
 
     fn display_name(&self) -> String {
-        self.model.display_name()
+        self.model().display_name()
     }
 
     fn versions(&self, app: &AppContext) -> Option<UpdatedObjectInput> {
@@ -783,24 +762,24 @@ where
         entrypoint: CloudObjectEventEntrypoint,
         initiated_by: InitiatedBy,
     ) -> Option<QueueItem> {
-        self.model
+        self.model()
             .create_object_queue_item(self, entrypoint, initiated_by)
     }
 
     fn update_object_queue_item(&self, revision_ts: Option<Revision>) -> QueueItem {
-        self.model.update_object_queue_item(revision_ts, self)
+        self.model().update_object_queue_item(revision_ts, self)
     }
 
     fn renders_in_warp_drive(&self) -> bool {
-        self.model.renders_in_warp_drive()
+        self.model().renders_in_warp_drive()
     }
 
     fn to_warp_drive_item(&self, appearance: &Appearance) -> Option<Box<dyn WarpDriveItem>> {
-        self.model.to_warp_drive_item(self.id, appearance, self)
+        self.model().to_warp_drive_item(self.id, appearance, self)
     }
 
     fn can_export(&self) -> bool {
-        self.model.can_export()
+        self.model().can_export()
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -813,120 +792,6 @@ where
 
     fn clone_box(&self) -> Box<dyn CloudObject> {
         Box::new(self.clone())
-    }
-}
-
-impl<K, M> GenericCloudObject<K, M>
-where
-    K: HashableId + ToServerId + Debug + Into<String> + Clone + 'static,
-    M: CloudModelType<IdType = K, CloudObjectType = GenericCloudObject<K, M>> + 'static,
-{
-    /// Gets a reference to the model held by the object.
-    pub fn model(&self) -> &M {
-        &self.model
-    }
-
-    /// Returns a shared handle to the model.
-    pub fn shared_model(&self) -> Arc<M> {
-        self.model.clone()
-    }
-
-    /// Sets a new version of the model on the object, replacing the old version.
-    pub fn set_model(&mut self, model: M) {
-        self.model = model.into();
-    }
-
-    /// Returns a bulk upsert event for putting a list of this model into the SQLite database.
-    pub fn bulk_upsert_event(objects: &[Self]) -> ModelEvent {
-        M::bulk_upsert_event(objects)
-    }
-
-    /// Constructs a new instance of this model with the given id, model, metadata and permissions.
-    pub fn new(
-        id: SyncId,
-        model: M,
-        metadata: CloudObjectMetadata,
-        permissions: CloudObjectPermissions,
-    ) -> Self {
-        Self {
-            id,
-            model: model.into(),
-            metadata,
-            permissions,
-            conflict_status: ConflictStatus::NoConflicts,
-        }
-    }
-
-    /// Creates a new GenericCloudObject with the given model, owner, and initial folder id.
-    /// This is for the local creation flow, as opposed to creating from a server update.
-    pub fn new_local(
-        model: M,
-        owner: Owner,
-        initial_folder_id: Option<SyncId>,
-        client_id: ClientId,
-    ) -> Self {
-        Self {
-            id: SyncId::ClientId(client_id),
-            model: model.into(),
-            metadata: CloudObjectMetadata {
-                pending_changes_statuses: CloudObjectStatuses {
-                    content_sync_status: CloudObjectSyncStatus::InFlight(NumInFlightRequests(1)),
-                    has_pending_metadata_change: false,
-                    has_pending_permissions_change: false,
-                    pending_untrash: false,
-                    pending_delete: false,
-                },
-                folder_id: initial_folder_id,
-                revision: Default::default(),
-                metadata_last_updated_ts: Default::default(),
-                current_editor_uid: Default::default(),
-                trashed_ts: Default::default(),
-                // Objects created from the client are never welcome objects.
-                is_welcome_object: false,
-                creator_uid: None,
-                last_editor_uid: None,
-                last_task_run_ts: None,
-            },
-            permissions: CloudObjectPermissions {
-                owner,
-                anyone_with_link: None,
-                guests: Default::default(),
-                permissions_last_updated_ts: None,
-            },
-            conflict_status: ConflictStatus::NoConflicts,
-        }
-    }
-
-    /// Creates a new `GenericCloudObject` from a `ServerObject`.
-    pub fn new_from_server(server_object: GenericServerObject<K, M>) -> Self {
-        Self {
-            id: server_object.id,
-            model: server_object.model.into(),
-            metadata: CloudObjectMetadata::new_from_server(server_object.metadata),
-            permissions: CloudObjectPermissions::new_from_server(server_object.permissions),
-            conflict_status: ConflictStatus::NoConflicts,
-        }
-    }
-
-    /// Marks this object as being in conflict with the provided object.
-    pub fn set_conflicting_object(&mut self, object: Arc<GenericServerObject<K, M>>) {
-        self.conflict_status = ConflictStatus::ConflictingChanges { object };
-    }
-
-    fn update_from_server_object(&mut self, server_object: GenericServerObject<K, M>) {
-        // Check if we should create a conflict or apply the update.
-        if self.metadata.has_pending_content_changes() || self.has_conflicting_changes() {
-            // There are pending changes, so this creates a conflict.
-            self.conflict_status = ConflictStatus::ConflictingChanges {
-                object: Arc::new(server_object),
-            };
-        } else {
-            // No pending changes, apply the server update.
-            self.metadata
-                .update_revision_from_server(&server_object.metadata);
-            self.model = server_object.model.clone().into();
-            self.conflict_status = ConflictStatus::NoConflicts;
-        }
     }
 }
 
@@ -1005,39 +870,6 @@ impl Clone for Box<dyn CloudObject> {
     fn clone(&self) -> Self {
         self.clone_box()
     }
-}
-
-#[derive(Clone, Debug, Default)]
-pub enum ConflictStatus<T> {
-    #[default]
-    NoConflicts,
-    ConflictingChanges {
-        object: Arc<T>,
-    },
-}
-
-impl<T> ConflictStatus<T> {
-    /// Utility function that allows for a more ergonomic way of figuring out whether there is a
-    /// conflict (for cases where we don't care about the conflict details).
-    pub fn has_conflicts(&self) -> bool {
-        matches!(self, ConflictStatus::ConflictingChanges { .. })
-    }
-}
-
-/// Represents a unique key for a generic string object. The server enforces that
-/// no two generic string objects have the same key.
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub struct GenericStringObjectUniqueKey {
-    /// The unique key.  E.g. for cloud prefs this is the storage_key of the pref
-    pub key: String,
-
-    /// Whether this key is unique for all generic string objects, or unique per user.
-    pub unique_per: UniquePer,
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub enum UniquePer {
-    User,
 }
 
 impl From<&dyn CloudObject> for ObjectType {
@@ -1145,362 +977,15 @@ fn get_top_folder_trashed_ts(
     None
 }
 
-#[derive(Clone, Debug)]
-pub enum ObjectPermissionUpdateResult {
-    Success, // TODO: we should return the full permissions here
-    Failure,
-}
-
-#[derive(Clone, Debug)]
-pub struct ObjectPermissionsUpdateData {
-    /// Updated permissions for the modified object.
-    pub permissions: ServerPermissions,
-    /// Relevant user profiles for the permissions change. This is not *all* profiles that the user
-    /// should have access to.
-    pub profiles: Vec<UserProfileWithUID>,
-}
-
-#[derive(Clone, Debug)]
-pub enum ObjectMetadataUpdateResult {
-    Success { metadata: Box<ServerMetadata> },
-    Failure,
-}
-
-pub enum ObjectDeleteResult {
-    Success { deleted_ids: Vec<SyncId> },
-    Failure,
-}
-
-/// A cloud object from the server.
-#[derive(Clone, Debug)]
-pub enum ServerCloudObject {
-    Notebook(ServerNotebook),
-    Workflow(Box<ServerWorkflow>),
-    Folder(ServerFolder),
-    Preference(ServerPreference),
-    EnvVarCollection(ServerEnvVarCollection),
-    WorkflowEnum(ServerWorkflowEnum),
-    AIFact(ServerAIFact),
-    MCPServer(ServerMCPServer),
-    AIExecutionProfile(ServerAIExecutionProfile),
-    TemplatableMCPServer(ServerTemplatableMCPServer),
-    AmbientAgentEnvironment(ServerAmbientAgentEnvironment),
-    ScheduledAmbientAgent(ServerScheduledAmbientAgent),
-    CloudAgentConfig(ServerCloudAgentConfig),
-}
-
-impl ServerCloudObject {
-    pub fn metadata(&self) -> &ServerMetadata {
-        match self {
-            ServerCloudObject::Notebook(notebook) => &notebook.metadata,
-            ServerCloudObject::Workflow(workflow) => &workflow.metadata,
-            ServerCloudObject::Folder(folder) => &folder.metadata,
-            ServerCloudObject::Preference(preferences) => &preferences.metadata,
-            ServerCloudObject::EnvVarCollection(env_var_collection) => &env_var_collection.metadata,
-            ServerCloudObject::WorkflowEnum(workflow_enum) => &workflow_enum.metadata,
-            ServerCloudObject::AIFact(aifact) => &aifact.metadata,
-            ServerCloudObject::MCPServer(mcp_server) => &mcp_server.metadata,
-            ServerCloudObject::TemplatableMCPServer(templatable_mcp_server) => {
-                &templatable_mcp_server.metadata
-            }
-            ServerCloudObject::AIExecutionProfile(ai_execution_profile) => {
-                &ai_execution_profile.metadata
-            }
-            ServerCloudObject::AmbientAgentEnvironment(ambient_agent_environment) => {
-                &ambient_agent_environment.metadata
-            }
-            ServerCloudObject::ScheduledAmbientAgent(scheduled_ambient_agent) => {
-                &scheduled_ambient_agent.metadata
-            }
-            ServerCloudObject::CloudAgentConfig(cloud_agent_config) => &cloud_agent_config.metadata,
-        }
-    }
-
-    pub fn uid(&self) -> ObjectUid {
-        match self {
-            ServerCloudObject::Notebook(notebook) => notebook.id.uid(),
-            ServerCloudObject::Workflow(workflow) => workflow.id.uid(),
-            ServerCloudObject::Folder(folder) => folder.id.uid(),
-            ServerCloudObject::Preference(preferences) => preferences.id.uid(),
-            ServerCloudObject::EnvVarCollection(env_var_collection) => env_var_collection.id.uid(),
-            ServerCloudObject::WorkflowEnum(workflow_enum) => workflow_enum.id.uid(),
-            ServerCloudObject::AIFact(aifact) => aifact.id.uid(),
-            ServerCloudObject::MCPServer(mcp_server) => mcp_server.id.uid(),
-            ServerCloudObject::AIExecutionProfile(ai_execution_profile) => {
-                ai_execution_profile.id.uid()
-            }
-            ServerCloudObject::TemplatableMCPServer(templatable_mcp_server) => {
-                templatable_mcp_server.id.uid()
-            }
-            ServerCloudObject::AmbientAgentEnvironment(ambient_agent_environment) => {
-                ambient_agent_environment.id.uid()
-            }
-            ServerCloudObject::ScheduledAmbientAgent(scheduled_ambient_agent) => {
-                scheduled_ambient_agent.id.uid()
-            }
-            ServerCloudObject::CloudAgentConfig(cloud_agent_config) => cloud_agent_config.id.uid(),
-        }
-    }
-}
-
-impl<K, M> From<&GenericServerObject<K, M>> for ServerCloudObject
-where
-    K: HashableId + ToServerId + Debug + Into<String> + Clone + 'static,
-    M: CloudModelType<IdType = K> + 'static,
-{
-    fn from(value: &GenericServerObject<K, M>) -> Self {
-        if let Some(server_notebook) = value.as_any().downcast_ref::<ServerNotebook>() {
-            ServerCloudObject::Notebook(server_notebook.clone())
-        } else if let Some(server_workflow) = value.as_any().downcast_ref::<ServerWorkflow>() {
-            ServerCloudObject::Workflow(Box::new(server_workflow.clone()))
-        } else if let Some(server_folder) = value.as_any().downcast_ref::<ServerFolder>() {
-            ServerCloudObject::Folder(server_folder.clone())
-        } else if let Some(server_preferences) = value.as_any().downcast_ref::<ServerPreference>() {
-            ServerCloudObject::Preference(server_preferences.clone())
-        } else if let Some(server_env_var_collection) =
-            value.as_any().downcast_ref::<ServerEnvVarCollection>()
-        {
-            ServerCloudObject::EnvVarCollection(server_env_var_collection.clone())
-        } else if let Some(server_workflow_enum) =
-            value.as_any().downcast_ref::<ServerWorkflowEnum>()
-        {
-            ServerCloudObject::WorkflowEnum(server_workflow_enum.clone())
-        } else if let Some(server_aifact) = value.as_any().downcast_ref::<ServerAIFact>() {
-            ServerCloudObject::AIFact(server_aifact.clone())
-        } else if let Some(server_mcp_server) = value.as_any().downcast_ref::<ServerMCPServer>() {
-            ServerCloudObject::MCPServer(server_mcp_server.clone())
-        } else if let Some(server_ai_execution_profile) =
-            value.as_any().downcast_ref::<ServerAIExecutionProfile>()
-        {
-            ServerCloudObject::AIExecutionProfile(server_ai_execution_profile.clone())
-        } else if let Some(server_templatable_mcp_server) =
-            value.as_any().downcast_ref::<ServerTemplatableMCPServer>()
-        {
-            ServerCloudObject::TemplatableMCPServer(server_templatable_mcp_server.clone())
-        } else if let Some(server_ambient_agent_environment) = value
-            .as_any()
-            .downcast_ref::<ServerAmbientAgentEnvironment>(
-        ) {
-            ServerCloudObject::AmbientAgentEnvironment(server_ambient_agent_environment.clone())
-        } else if let Some(server_scheduled_ambient_agent) =
-            value.as_any().downcast_ref::<ServerScheduledAmbientAgent>()
-        {
-            ServerCloudObject::ScheduledAmbientAgent(server_scheduled_ambient_agent.clone())
-        } else if let Some(server_cloud_agent_config) =
-            value.as_any().downcast_ref::<ServerCloudAgentConfig>()
-        {
-            ServerCloudObject::CloudAgentConfig(server_cloud_agent_config.clone())
-        } else {
-            panic!("Unknown server object type");
-        }
-    }
-}
-
-/// Common trait for server objects that allows us to use them as trait objects
-/// and downcast to concrete types when needed.
-pub trait ServerObject: Debug + Send + Sync {
-    /// Returns the object type of this server object
-    fn object_type(&self) -> ObjectType;
-
-    /// Returns this object as a ref to the Any type.  Needed for typecasts.
-    fn as_any(&self) -> &dyn Any;
-
-    /// Returns the trait object as a concrete type reference by downcasting it.
-    /// Returns None if the downcast fails.
-    fn as_concrete_type<K, M>(
-        server_object: &dyn ServerObject,
-    ) -> Option<&GenericServerObject<K, M>>
-    where
-        Self: Sized,
-        K: HashableId + ToServerId + Debug + Into<String> + Clone + 'static,
-        M: CloudModelType<IdType = K> + 'static,
-    {
-        server_object
-            .as_any()
-            .downcast_ref::<GenericServerObject<K, M>>()
-    }
-
-    /// Returns a cloned boxed version of this server object.
-    /// Note that we can't force the ServerObject trait to derive from Cloned
-    /// directly because that would make the trait not object safe.  This
-    /// is a workaround.
-    fn clone_box(&self) -> Box<dyn ServerObject>;
-}
-
-/// An object that maps directly to the data returned from the server
-/// for a given model and id type.
-#[derive(Debug, Clone)]
-pub struct GenericServerObject<K, M>
-where
-    K: HashableId + ToServerId + Debug + Into<String> + Clone + 'static,
-    M: CloudModelType<IdType = K> + 'static,
-{
-    pub id: SyncId,
-    pub model: M,
-    pub metadata: ServerMetadata,
-    pub permissions: ServerPermissions,
-}
-
-impl<'a, K, M> From<&'a dyn ServerObject> for Option<&'a GenericServerObject<K, M>>
-where
-    K: HashableId + ToServerId + Debug + Into<String> + Clone + 'static,
-    M: CloudModelType<IdType = K> + 'static,
-{
-    fn from(value: &'a dyn ServerObject) -> Self {
-        <GenericServerObject<K, M> as ServerObject>::as_concrete_type(value)
-    }
-}
-
-impl<'a, K, M> From<&'a Box<dyn ServerObject>> for Option<&'a GenericServerObject<K, M>>
-where
-    K: HashableId + ToServerId + Debug + Into<String> + Clone + 'static,
-    M: CloudModelType<IdType = K> + 'static,
-{
-    fn from(value: &'a Box<dyn ServerObject>) -> Self {
-        <GenericServerObject<K, M> as ServerObject>::as_concrete_type(value.as_ref())
-    }
-}
-
-impl<K, M> ServerObject for GenericServerObject<K, M>
-where
-    K: HashableId + ToServerId + Debug + Into<String> + Clone + 'static,
-    M: CloudModelType<IdType = K> + 'static,
-{
-    fn object_type(&self) -> ObjectType {
-        self.model.object_type()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn clone_box(&self) -> Box<dyn ServerObject> {
-        Box::new(self.clone())
-    }
-}
-
-pub type ServerPreference = GenericServerObject<GenericStringObjectId, CloudPreferenceModel>;
-pub type ServerFolder = GenericServerObject<FolderId, CloudFolderModel>;
-pub type ServerWorkflow = GenericServerObject<WorkflowId, CloudWorkflowModel>;
-pub type ServerNotebook = GenericServerObject<NotebookId, CloudNotebookModel>;
-pub type ServerEnvVarCollection =
-    GenericServerObject<GenericStringObjectId, CloudEnvVarCollectionModel>;
-pub type ServerWorkflowEnum = GenericServerObject<GenericStringObjectId, CloudWorkflowEnumModel>;
-pub type ServerAIFact = GenericServerObject<GenericStringObjectId, CloudAIFactModel>;
-pub type ServerMCPServer = GenericServerObject<GenericStringObjectId, CloudMCPServerModel>;
-pub type ServerAIExecutionProfile =
-    GenericServerObject<GenericStringObjectId, CloudAIExecutionProfileModel>;
-pub type ServerTemplatableMCPServer =
-    GenericServerObject<GenericStringObjectId, CloudTemplatableMCPServerModel>;
-pub type ServerAmbientAgentEnvironment =
-    GenericServerObject<GenericStringObjectId, CloudAmbientAgentEnvironmentModel>;
-pub type ServerScheduledAmbientAgent =
-    GenericServerObject<GenericStringObjectId, CloudScheduledAmbientAgentModel>;
-pub type ServerCloudAgentConfig = GenericServerObject<GenericStringObjectId, CloudAgentConfigModel>;
-
-impl<T, S> GenericServerObject<GenericStringObjectId, GenericStringModel<T, S>>
-where
-    T: StringModel<
-        CloudObjectType = GenericCloudObject<GenericStringObjectId, GenericStringModel<T, S>>,
-    >,
-    S: Serializer<T>,
-{
-    /// Helper function to create a `ServerObject` that has a GenericStringObjectId from common graphql fields.
-    pub fn try_from_graphql_fields(
-        uid: ServerId,
-        serialized_model: Option<String>,
-        metadata: ServerMetadata,
-        permissions: ServerPermissions,
-    ) -> Result<Self> {
-        if let Some(serialized_model) = serialized_model {
-            let model = GenericStringModel::<T, S>::deserialize_owned(&serialized_model)?;
-            let id = SyncId::ServerId(uid);
-            Ok(Self {
-                id,
-                model,
-                metadata,
-                permissions,
-            })
-        } else {
-            Err(anyhow::anyhow!(
-                "Missing serialized model in the generic string object value"
-            ))
-        }
-    }
-}
-
-impl ServerFolder {
-    /// Helper function to create a `ServerFolder` from common graphql fields.
-    pub fn try_from_graphql_fields(
-        uid: ServerId,
-        name: Option<String>,
-        metadata: ServerMetadata,
-        permissions: ServerPermissions,
-        is_warp_pack: bool,
-    ) -> Result<Self> {
-        match name {
-            Some(name) => Ok(Self {
-                id: SyncId::ServerId(uid),
-                model: CloudFolderModel::new(&name, is_warp_pack),
-                metadata,
-                permissions,
-            }),
-            _ => Err(anyhow::anyhow!("Missing fields in the folder value")),
-        }
-    }
-}
-
-impl ServerNotebook {
-    /// Helper function to create a `ServerNotebook` from common graphql fields.
-    pub fn try_from_graphql_fields(
-        uid: ServerId,
-        title: Option<String>,
-        data: Option<String>,
-        ai_document_id: Option<String>,
-        metadata: ServerMetadata,
-        permissions: ServerPermissions,
-    ) -> Result<Self> {
-        let ai_document_id: Option<AIDocumentId> = ai_document_id
-            .map(|id| AIDocumentId::try_from(&id[..]))
-            .transpose()?;
-        match (title, data) {
-            (Some(title), Some(data)) => Ok(Self {
-                id: SyncId::ServerId(uid),
-                model: CloudNotebookModel {
-                    title,
-                    data,
-                    ai_document_id,
-                    conversation_id: None,
-                },
-                metadata,
-                permissions,
-            }),
-            (title, data) => Err(anyhow::anyhow!(
-                "Missing fields in the team notebook value - title: {}, data: {}",
-                title.is_some(),
-                data.is_some()
-            )),
-        }
-    }
-}
-
-impl ServerWorkflow {
-    /// Helper function to create a `ServerWorkflow` from common graphql fields.
-    pub fn try_from_graphql_fields(
-        uid: ServerId,
-        data: String,
-        metadata: ServerMetadata,
-        permissions: ServerPermissions,
-    ) -> Result<Self> {
-        let data = serde_json::from_str(data.as_str());
-        data.map_err(Into::into).map(|workflow| Self {
-            id: SyncId::ServerId(uid),
-            model: CloudWorkflowModel { data: workflow },
-            metadata,
-            permissions,
-        })
-    }
-}
+pub use cloud_object_client::{
+    ObjectDeleteResult, ObjectMetadataUpdateResult, ObjectPermissionsUpdateData,
+};
+pub use cloud_object_models::{
+    ServerAIExecutionProfile, ServerAIFact, ServerAmbientAgentEnvironment, ServerCloudAgentConfig,
+    ServerCloudObject, ServerEnvVarCollection, ServerFolder, ServerMCPServer, ServerNotebook,
+    ServerPreference, ServerScheduledAmbientAgent, ServerTemplatableMCPServer, ServerWorkflow,
+    ServerWorkflowEnum, TryFromGql,
+};
 
 #[derive(Default, Clone, Copy, Debug, Eq, Derivative)]
 #[derivative(PartialEq, Hash)]
@@ -1540,130 +1025,6 @@ pub enum CloudObjectLocation {
     Trash,
 }
 
-/// Result of attempting to update a cloud object.
-#[derive(Debug)]
-pub enum UpdateCloudObjectResult<T> {
-    /// The update was successful and the object now has the specified revision.
-    Success {
-        revision_and_editor: RevisionAndLastEditor,
-    },
-    /// The update was rejected because the update was not sent from the current revision in
-    /// storage. The object and revision in storage are returned.
-    Rejected { object: T },
-}
-
-/// Helper struct that contains all the info needed to create an object
-/// on the server
-pub struct CreateObjectRequest {
-    pub serialized_model: Option<SerializedModel>,
-    pub title: Option<String>,
-    pub owner: Owner,
-    pub client_id: ClientId,
-    pub initial_folder_id: Option<FolderId>,
-    pub entrypoint: CloudObjectEventEntrypoint,
-}
-
-#[derive(PartialEq, Eq, Debug)]
-pub struct BulkCreateGenericStringObjectsRequest {
-    pub id: ClientId,
-    pub format: GenericStringObjectFormat,
-    pub uniqueness_key: Option<GenericStringObjectUniqueKey>,
-    pub serialized_model: SerializedModel,
-    pub initial_folder_id: Option<FolderId>,
-    pub entrypoint: CloudObjectEventEntrypoint,
-}
-
-/// Helper struct that contains all the info needed to fetch changed
-/// objects from the server
-#[derive(Default)]
-pub struct ObjectsToUpdate {
-    pub notebooks: Vec<UpdatedObjectInput>,
-    pub workflows: Vec<UpdatedObjectInput>,
-    pub folders: Vec<UpdatedObjectInput>,
-    pub generic_string_objects: Vec<UpdatedObjectInput>,
-}
-
-impl Clone for ObjectsToUpdate {
-    fn clone(&self) -> Self {
-        Self {
-            notebooks: self
-                .notebooks
-                .iter()
-                .map(copy_updated_object_input)
-                .collect(),
-            workflows: self
-                .workflows
-                .iter()
-                .map(copy_updated_object_input)
-                .collect(),
-            folders: self.folders.iter().map(copy_updated_object_input).collect(),
-            generic_string_objects: self
-                .generic_string_objects
-                .iter()
-                .map(copy_updated_object_input)
-                .collect(),
-        }
-    }
-}
-
-fn copy_updated_object_input(input: &UpdatedObjectInput) -> UpdatedObjectInput {
-    UpdatedObjectInput {
-        uid: input.uid.clone(),
-        actions_ts: input.actions_ts,
-        metadata_ts: input.metadata_ts,
-        permissions_ts: input.permissions_ts,
-        revision_ts: input.revision_ts,
-    }
-}
-
-/// The data returned by the server when an object is created, generic to any object type.
-#[derive(Debug)]
-pub struct CreatedCloudObject {
-    pub client_id: ClientId,
-    pub revision_and_editor: RevisionAndLastEditor,
-    pub metadata_ts: ServerTimestamp,
-    pub server_id_and_type: ServerIdAndType,
-    pub creator_uid: Option<String>,
-    pub permissions: ServerPermissions,
-}
-
-/// Result of attempting to create a cloud object.
-/// Allow large enum variant because success is the most common by far
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
-pub enum CreateCloudObjectResult {
-    /// The object creation was successful
-    Success {
-        created_cloud_object: CreatedCloudObject,
-    },
-    /// The object creation denied due to an expected user error
-    UserFacingError(String),
-    /// The object creation was rejected because the generic string object had
-    /// already been created by another client.
-    GenericStringObjectUniqueKeyConflict,
-}
-
-/// Result of attempting to bulk create a cloud object.
-#[derive(Debug)]
-pub enum BulkCreateCloudObjectResult {
-    /// The bulk object creation was successful
-    Success {
-        created_cloud_objects: Vec<CreatedCloudObject>,
-    },
-    /// The bulk object creation was rejected because at least one generic string object had
-    /// already been created by another client.
-    GenericStringObjectUniqueKeyConflict,
-}
-
-/// The creation-specific data returned by the server, which is inserted into CloudModel and persisted
-/// just once.
-#[derive(Debug, PartialEq, Clone)]
-pub struct ServerCreationInfo {
-    pub server_id_and_type: ServerIdAndType,
-    pub creator_uid: Option<String>,
-    pub permissions: ServerPermissions,
-}
-
 impl From<Space> for WorkflowSource {
     fn from(space: Space) -> Self {
         match space {
@@ -1683,10 +1044,4 @@ impl From<Owner> for WorkflowSource {
             Owner::Team { team_uid } => Self::Team { team_uid },
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct RevisionAndLastEditor {
-    pub revision: Revision,
-    pub last_editor_uid: Option<String>,
 }

@@ -1,10 +1,10 @@
+use url::Url;
 use warpui::{App, EntityId};
 
 use super::*;
 use crate::ai::blocklist::handoff::HandoffLaunchAttachments;
 use crate::ai::llms::LLMPreferences;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
-use url::Url;
 
 fn attachment() -> AttachmentInput {
     AttachmentInput {
@@ -32,6 +32,7 @@ fn pending_handoff() -> PendingHandoff {
         snapshot_upload: SnapshotUploadStatus::Pending,
         submission_state: HandoffSubmissionState::Idle,
         auto_submit: Some(pending_launch()),
+        orchestration_handoff: None,
     }
 }
 
@@ -43,6 +44,19 @@ fn pending_handoff_fresh_launch() -> PendingHandoff {
         snapshot_upload: SnapshotUploadStatus::Pending,
         submission_state: HandoffSubmissionState::Idle,
         auto_submit: Some(pending_launch()),
+        orchestration_handoff: None,
+    }
+}
+
+fn pending_handoff_with_orchestration() -> PendingHandoff {
+    PendingHandoff {
+        forked_conversation_id: Some("forked-conversation".to_owned()),
+        title: None,
+        touched_workspace: None,
+        snapshot_upload: SnapshotUploadStatus::Pending,
+        submission_state: HandoffSubmissionState::Idle,
+        auto_submit: Some(pending_launch()),
+        orchestration_handoff: Some(true),
     }
 }
 
@@ -52,7 +66,7 @@ fn add_model(app: &mut App) -> warpui::ModelHandle<AmbientAgentViewModel> {
 
 fn retry_request(prompt: impl Into<String>) -> SpawnAgentRequest {
     SpawnAgentRequest {
-        prompt: prompt.into(),
+        prompt: Some(prompt.into()),
         mode: crate::server::server_api::ai::UserQueryMode::Normal,
         config: Some(AgentConfigSnapshot {
             environment_id: Some("env-123".to_string()),
@@ -75,6 +89,7 @@ fn retry_request(prompt: impl Into<String>) -> SpawnAgentRequest {
             serde_json::from_str("\"snapshot-token-123\"").expect("snapshot token should parse"),
         ),
         snapshot_disabled: Some(true),
+        orchestration_handoff: None,
     }
 }
 
@@ -103,6 +118,7 @@ fn github_auth_url_for_initial_run_includes_focus_cloud_mode_next() {
 
         model.read(&app, |model, _| {
             let auth_url = model.github_auth_url().expect("auth url should be present");
+            assert_eq!(model.github_auth_error_message(), Some("auth required"));
             let parsed = Url::parse(auth_url).expect("auth url should parse");
             let next = parsed
                 .query_pairs()
@@ -140,7 +156,7 @@ fn github_auth_completed_retries_stored_initial_run_request() {
                 }
             ));
             let request = model.request().expect("retry should spawn a request");
-            assert_eq!(request.prompt, "retry this");
+            assert_eq!(request.prompt.as_deref(), Some("retry this"));
             assert_eq!(request.attachments.len(), 1);
             assert_eq!(request.interactive, Some(true));
             assert_eq!(request.team, Some(true));
@@ -273,7 +289,7 @@ fn queue_handoff_auto_submit_enters_waiting_state_without_consuming_launch() {
                 }
             ));
             let request = model.request().expect("request should be populated");
-            assert_eq!(request.prompt, "fix tests");
+            assert_eq!(request.prompt.as_deref(), Some("fix tests"));
             assert_eq!(
                 request.conversation_id.as_deref(),
                 Some("forked-conversation")
@@ -336,7 +352,7 @@ fn fresh_launch_queues_handoff_with_no_conversation_id() {
         assert!(queued);
         model.read(&app, |model, _| {
             let request = model.request().expect("request should be populated");
-            assert_eq!(request.prompt, "fix tests");
+            assert_eq!(request.prompt.as_deref(), Some("fix tests"));
             assert!(request.conversation_id.is_none());
             assert_eq!(request.attachments.len(), 1);
         });
@@ -365,6 +381,70 @@ fn fresh_launch_auto_submits_after_snapshot_settles() {
                 .expect("ready fresh-launch handoff should auto-submit");
             assert_eq!(launch.prompt, "fix tests");
             assert!(model.maybe_auto_submit_handoff(ctx).is_none());
+        });
+    });
+}
+
+#[test]
+fn handoff_request_omits_orchestration_handoff_when_pending_handoff_has_none() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.set_pending_handoff(Some(pending_handoff()), ctx);
+            model.queue_handoff_auto_submit(ctx);
+        });
+
+        model.read(&app, |model, _| {
+            let request = model.request().expect("request should be populated");
+            assert!(request.orchestration_handoff.is_none());
+            let json = serde_json::to_value(request).expect("request should serialize to JSON");
+            assert!(json.get("orchestration_handoff").is_none());
+        });
+    });
+}
+
+#[test]
+fn handoff_request_carries_universal_orchestration_handoff_marker() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.set_pending_handoff(Some(pending_handoff_with_orchestration()), ctx);
+            model.queue_handoff_auto_submit(ctx);
+        });
+
+        model.read(&app, |model, _| {
+            let request = model.request().expect("request should be populated");
+            assert_eq!(request.orchestration_handoff, Some(true));
+
+            let json = serde_json::to_value(request).expect("request should serialize to JSON");
+            assert_eq!(
+                json.get("orchestration_handoff")
+                    .and_then(serde_json::Value::as_bool),
+                Some(true)
+            );
+        });
+    });
+}
+
+#[test]
+fn spawn_agent_omits_orchestration_handoff_for_fresh_launches() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.spawn_agent("new run".to_owned(), vec![], ctx);
+        });
+
+        model.read(&app, |model, _| {
+            let request = model.request().expect("request should be populated");
+            assert!(request.orchestration_handoff.is_none());
+            let json = serde_json::to_value(request).expect("request should serialize to JSON");
+            assert!(json.get("orchestration_handoff").is_none());
         });
     });
 }

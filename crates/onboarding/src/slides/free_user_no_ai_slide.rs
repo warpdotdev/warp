@@ -1,28 +1,30 @@
+use ui_components::{button, Component as _, Options as _};
+use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::Fill;
+use warp_core::ui::Icon;
+use warpui::elements::{
+    Border, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    DropShadow, Flex, FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, ParentElement, Radius, SizeConstraintCondition, SizeConstraintSwitch,
+};
+use warpui::fonts::Weight;
+use warpui::keymap::Keystroke;
+use warpui::platform::Cursor;
+use warpui::prelude::Align;
+use warpui::text_layout::TextAlignment;
+use warpui::ui_components::components::{UiComponent as _, UiComponentStyles};
+use warpui::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
+    ViewContext,
+};
+
 use super::OnboardingSlide;
 use crate::model::OnboardingStateModel;
 use crate::slides::{bottom_nav, layout, slide_content};
 use crate::telemetry::OnboardingEvent;
 use crate::OnboardingIntention;
-use ui_components::{button, Component as _, Options as _};
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::theme::Fill;
-use warp_core::ui::{appearance::Appearance, theme::color::internal_colors, Icon};
-use warpui::prelude::Align;
-use warpui::{
-    elements::{
-        Border, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, DropShadow, Flex, FormattedTextElement, Hoverable, MainAxisAlignment,
-        MainAxisSize, MouseStateHandle, ParentElement, Radius, SizeConstraintCondition,
-        SizeConstraintSwitch,
-    },
-    fonts::Weight,
-    keymap::Keystroke,
-    platform::Cursor,
-    text_layout::TextAlignment,
-    ui_components::components::{UiComponent as _, UiComponentStyles},
-    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
-    ViewContext,
-};
 
 const SUBSCRIBE_ITEMS: &[&str] = &[
     "1,500 credits per month",

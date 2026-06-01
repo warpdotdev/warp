@@ -1,5 +1,9 @@
-use super::text_layout::{layout_line, layout_text};
-use crate::fonts::font_kit::{properties_to_font_kit, Rasterizer};
+use std::any::Any;
+use std::collections::HashMap;
+use std::ops::Range;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
 use anyhow::{anyhow, bail, Result};
 use core_foundation::array::{CFArray, CFArrayRef};
 use core_foundation::base::{CFType, ItemRef, TCFType};
@@ -14,7 +18,8 @@ use core_text::font_descriptor::{
     SymbolicTraitAccessors, TraitAccessors,
 };
 use core_text::{font, font_collection, font_descriptor};
-use dashmap::{mapref::entry::Entry, DashMap};
+use dashmap::mapref::entry::Entry;
+use dashmap::DashMap;
 use font_kit::font::Font;
 use font_kit::loaders::core_text::NativeFont;
 use futures::future::BoxFuture;
@@ -23,20 +28,16 @@ use itertools::Itertools as _;
 use ordered_float::OrderedFloat;
 use pathfinder_geometry::rect::RectI;
 use pathfinder_geometry::vector::{Vector2F, Vector2I};
-use std::any::Any;
-use std::collections::HashMap;
-use std::ops::Range;
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
+use warpui_core::fonts::canvas::RasterFormat;
 use warpui_core::fonts::{
-    canvas::RasterFormat, FamilyId, FontId, FontInfo, GlyphId, Metrics, Properties,
-    RasterizedGlyph, SubpixelAlignment,
+    FamilyId, FontId, FontInfo, GlyphId, Metrics, Properties, RasterizedGlyph, SubpixelAlignment,
 };
 use warpui_core::platform::{self, FontDB as _, LineStyle, TextLayoutSystem};
 use warpui_core::rendering;
 use warpui_core::text_layout::{ClipConfig, StyleAndFont, TextAlignment, TextFrame};
+
+use super::text_layout::{layout_line, layout_text};
+use crate::fonts::font_kit::{properties_to_font_kit, Rasterizer};
 
 struct FontFamily {
     name: String,

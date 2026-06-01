@@ -1,3 +1,7 @@
+use ai::agent::action_result::StartAgentVersion;
+use warp_core::features::FeatureFlag;
+use warpui::{App, EntityId};
+
 use super::*;
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent::task::TaskId;
@@ -8,9 +12,7 @@ use crate::ai::agent::{
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::server::server_api::ServerApiProvider;
-use ai::agent::action_result::StartAgentVersion;
-use warp_core::features::FeatureFlag;
-use warpui::{App, EntityId};
+use crate::test_util::settings::initialize_history_persistence_for_tests;
 
 const FIRST_REQUEST_ID: StartAgentRequestId = StartAgentRequestId::from_raw_for_test(0);
 
@@ -42,6 +44,7 @@ fn build_start_agent_action(
 fn execute_returns_error_when_child_startup_is_blocked_before_initialization() {
     App::test((), |mut app| async move {
         let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let executor = app.add_model(StartAgentExecutor::new);
@@ -140,6 +143,7 @@ fn execute_returns_error_when_child_startup_is_blocked_before_initialization() {
 fn execute_resolves_error_when_request_linkage_happens_after_child_already_failed() {
     App::test((), |mut app| async move {
         let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let executor = app.add_model(StartAgentExecutor::new);
@@ -224,6 +228,7 @@ fn execute_resolves_error_when_request_linkage_happens_after_child_already_faile
 fn execute_resolves_success_when_request_linkage_happens_after_child_already_started() {
     App::test((), |mut app| async move {
         let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         app.add_singleton_model(|_| ServerApiProvider::new_for_test());
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
@@ -312,6 +317,7 @@ fn execute_resolves_success_when_request_linkage_happens_after_child_already_sta
 fn execute_returns_detailed_error_when_child_startup_fails_before_initialization() {
     App::test((), |mut app| async move {
         let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let executor = app.add_model(StartAgentExecutor::new);
@@ -391,7 +397,6 @@ fn execute_returns_detailed_error_when_child_startup_fails_before_initialization
 #[test]
 fn execute_returns_error_when_local_harness_child_requires_orchestration_v2() {
     App::test((), |mut app| async move {
-        let _local_harnesses = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let executor = app.add_model(StartAgentExecutor::new);
@@ -400,7 +405,7 @@ fn execute_returns_error_when_local_harness_child_requires_orchestration_v2() {
         });
         let action = build_start_agent_action(
             StartAgentVersion::V2,
-            StartAgentExecutionMode::local_harness("codex".to_string()),
+            StartAgentExecutionMode::local_harness("claude".to_string()),
         );
 
         let execution = executor.update(&mut app, |executor, ctx| {
@@ -466,7 +471,6 @@ fn execute_rejects_invalid_local_harness_names_before_pane_creation() {
 fn execute_returns_error_when_local_harness_child_missing_parent_run_id() {
     App::test((), |mut app| async move {
         let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-        let _local_harnesses = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let executor = app.add_model(StartAgentExecutor::new);
@@ -502,7 +506,7 @@ fn execute_returns_error_when_local_harness_child_missing_parent_run_id() {
 }
 
 #[test]
-fn execute_rejects_disabled_local_claude_before_other_local_harness_validation() {
+fn execute_rejects_disabled_local_codex_before_other_local_harness_validation() {
     App::test((), |mut app| async move {
         let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
         let terminal_view_id = EntityId::new();
@@ -513,7 +517,7 @@ fn execute_rejects_disabled_local_claude_before_other_local_harness_validation()
         });
         let action = build_start_agent_action(
             StartAgentVersion::V2,
-            StartAgentExecutionMode::local_harness("claude".to_string()),
+            StartAgentExecutionMode::local_harness("codex".to_string()),
         );
 
         let execution = executor.update(&mut app, |executor, ctx| {
@@ -532,7 +536,7 @@ fn execute_rejects_disabled_local_claude_before_other_local_harness_validation()
         assert!(matches!(
             result,
             AIAgentActionResultType::StartAgent(StartAgentResult::Error { error, version })
-                if error == "Local Claude Code child agents are temporarily disabled."
+                if error == "Local Codex child agents are temporarily disabled."
                     && version == StartAgentVersion::V2
         ));
     });
@@ -542,6 +546,7 @@ fn execute_rejects_disabled_local_claude_before_other_local_harness_validation()
 fn parallel_dispatch_keeps_two_pendings_distinguishable_by_request_id() {
     App::test((), |mut app| async move {
         let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let executor = app.add_model(StartAgentExecutor::new);
@@ -601,6 +606,7 @@ fn parallel_dispatch_keeps_two_pendings_distinguishable_by_request_id() {
 fn parallel_pendings_each_resolve_independently_via_recorded_child_id() {
     App::test((), |mut app| async move {
         let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let executor = app.add_model(StartAgentExecutor::new);
