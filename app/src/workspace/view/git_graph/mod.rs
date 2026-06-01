@@ -14,3 +14,5 @@ pub(crate) mod row_canvas;
 pub(crate) mod view;
 
 pub(crate) use view::{init, GitGraphView};
+#[cfg(not(target_family = "wasm"))]
+pub(crate) use view::GitGraphEvent;

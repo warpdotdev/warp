@@ -13,6 +13,7 @@ pub(super) mod ai_fact_pane;
 pub(super) mod code_diff_pane;
 pub(super) mod code_diff_pane_model;
 pub(super) mod code_pane;
+pub(super) mod commit_diff_pane;
 pub(super) mod env_var_collection_pane;
 pub(crate) mod environment_management_pane;
 pub(super) mod execution_profile_editor_pane;
@@ -52,6 +53,7 @@ use crate::ai::execution_profiles::editor::ExecutionProfileEditorView;
 use crate::ai::facts::AIFactView;
 #[cfg(feature = "local_fs")]
 use crate::code::buffer_location::LocalOrRemotePath;
+use crate::code::commit_diff_view::CommitDiffView;
 use crate::code::view::CodeView;
 use crate::drive::sharing::ShareableObject;
 use crate::env_vars::view::env_var_collection::EnvVarCollectionView;
@@ -139,6 +141,7 @@ pub(crate) enum IPaneType {
     File,
     Code,
     CodeDiff,
+    CommitDiff,
     EnvVarCollection,
     EnvironmentManagement,
     Workflow,
@@ -163,6 +166,7 @@ impl Display for IPaneType {
             IPaneType::File => write!(f, "File"),
             IPaneType::Code => write!(f, "Code"),
             IPaneType::CodeDiff => write!(f, "Code Diff"),
+            IPaneType::CommitDiff => write!(f, "Commit Diff"),
             IPaneType::EnvVarCollection => write!(f, "Environment Variable Collection"),
             IPaneType::EnvironmentManagement => write!(f, "Environment Management"),
             IPaneType::Workflow => write!(f, "Workflow"),
@@ -239,6 +243,11 @@ impl PaneId {
         Self::new_from_ctx(IPaneType::CodeDiff, ctx)
     }
 
+    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<CommitDiffView>>`]
+    pub fn from_commit_diff_pane_ctx(ctx: &ViewContext<PaneView<CommitDiffView>>) -> Self {
+        Self::new_from_ctx(IPaneType::CommitDiff, ctx)
+    }
+
     /// Creates a [`PaneId`] from a [`ViewContext<PaneView<SettingsView>>`]
     pub fn from_settings_pane_ctx(ctx: &ViewContext<PaneView<SettingsView>>) -> Self {
         Self::new_from_ctx(IPaneType::Settings, ctx)
@@ -303,6 +312,13 @@ impl PaneId {
         code_diff_pane_view: &ViewHandle<PaneView<CodeDiffView>>,
     ) -> Self {
         Self::new(IPaneType::CodeDiff, code_diff_pane_view)
+    }
+
+    /// Creates a [`PaneId`] from a [`PaneView<CommitDiffView>`] entity ID.
+    pub fn from_commit_diff_pane_view(
+        commit_diff_pane_view: &ViewHandle<PaneView<CommitDiffView>>,
+    ) -> Self {
+        Self::new(IPaneType::CommitDiff, commit_diff_pane_view)
     }
 
     /// Creates a [`PaneId`] from a [`PaneView<EnvVarCollection>`] entity ID.
@@ -461,6 +477,9 @@ impl PaneId {
             }
             IPaneType::CodeDiff => {
                 ChildView::<PaneView<CodeDiffView>>::with_id(self.0.pane_view_id).finish()
+            }
+            IPaneType::CommitDiff => {
+                ChildView::<PaneView<CommitDiffView>>::with_id(self.0.pane_view_id).finish()
             }
             IPaneType::EnvVarCollection => {
                 ChildView::<PaneView<EnvVarCollectionView>>::with_id(self.0.pane_view_id).finish()

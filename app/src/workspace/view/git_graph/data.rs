@@ -409,6 +409,65 @@ fn parse_numstat(stdout: &str) -> Vec<ChangedFile> {
         .collect()
 }
 
+/// 选中提交对某个文件的改动（`commit~1..commit`，即"该提交自身改了什么"）：
+/// 父版本的完整文件内容（作为 diff base）+ 解析好的 unified diff hunks。
+/// 供"点击提交详情里的变更文件 → 主区只读 diff pane"使用。
+#[cfg(not(target_family = "wasm"))]
+#[derive(Debug, Clone)]
+pub(crate) struct CommitFileDiff {
+    /// 文件在父提交处的完整内容；新增文件或根提交无父版本时为空串（此时 diff 全为新增行）。
+    pub base_content: String,
+    /// 该提交对此文件的 unified diff hunks（复用 code review 的解析器与类型）。
+    pub hunks: Vec<crate::code_review::diff_state::DiffHunk>,
+}
+
+/// 加载某提交对单个文件的改动。`path` 为仓库相对路径。
+///
+/// 取数策略兼顾 普通 / 新增 / 删除 / 根 / 合并 提交：
+/// - base 内容：`git show <hash>~1:<path>`；取不到（新增文件或根提交无父版本）按空串处理。
+/// - diff：优先 `git diff <hash>~1 <hash> -- <path>`（对合并提交也能拿到"对比第一父"的常规 hunks，
+///   避免 `git show` 合并提交输出的 combined diff `@@@` 无法解析）；`<hash>~1` 不存在（根提交）时
+///   退回 `git show <hash> --format= -- <path>`（整文件按新增展示）。
+#[cfg(not(target_family = "wasm"))]
+pub(crate) async fn load_file_diff_at_commit(
+    repo_root: &Path,
+    hash: &str,
+    path: &str,
+) -> Result<CommitFileDiff> {
+    use crate::code_review::diff_state::LocalDiffStateModel;
+
+    let parent = format!("{hash}~1");
+
+    // base：父版本完整内容；新增文件 / 根提交无父版本 → git 出错，按空串处理。
+    let base_spec = format!("{parent}:{path}");
+    let base_content = warp_util::git::run_git_command(repo_root, &["show", base_spec.as_str()])
+        .await
+        .unwrap_or_default();
+
+    // diff：先按"对比第一父"取常规两路 diff；根提交无父则退回整文件新增。
+    let diff_output = match warp_util::git::run_git_command(
+        repo_root,
+        &["diff", "--no-color", parent.as_str(), hash, "--", path],
+    )
+    .await
+    {
+        Ok(out) => out,
+        Err(_) => {
+            warp_util::git::run_git_command(
+                repo_root,
+                &["show", "--no-color", "--format=", hash, "--", path],
+            )
+            .await?
+        }
+    };
+
+    let hunks = LocalDiffStateModel::parse_diff_hunks(&diff_output)?;
+    Ok(CommitFileDiff {
+        base_content,
+        hunks,
+    })
+}
+
 #[cfg(test)]
 #[path = "data_tests.rs"]
 mod tests;

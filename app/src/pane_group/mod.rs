@@ -80,6 +80,7 @@ use crate::channel::{Channel, ChannelState};
 use crate::cloud_object::Space;
 use crate::code::active_file::ActiveFileModel;
 use crate::code::buffer_location::LocalOrRemotePath;
+use crate::code::commit_diff_view::CommitDiffView;
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
 use crate::code::view::{CodeView, CodeViewAction};
@@ -180,6 +181,7 @@ pub use pane::ai_document_pane::AIDocumentPane;
 pub use pane::ai_fact_pane::AIFactPane;
 pub use pane::code_diff_pane::CodeDiffPane;
 pub use pane::code_pane::CodePane;
+pub use pane::commit_diff_pane::CommitDiffPane;
 pub use pane::env_var_collection_pane::EnvVarCollectionPane;
 pub use pane::environment_management_pane::EnvironmentManagementPane;
 pub use pane::execution_profile_editor_pane::ExecutionProfileEditorPane;
@@ -2236,6 +2238,20 @@ impl PaneGroup {
 
     pub fn ai_document_panes(&self) -> impl Iterator<Item = PaneId> + '_ {
         self.panes_of::<AIDocumentPane>().map(|pane| pane.id())
+    }
+
+    /// 当前 pane group 内第一个**可见**的 commit diff pane（id + 内部视图），供"再次打开提交
+    /// 文件 diff 时复用：原地更新它的内容并聚焦，而非新开"使用。
+    ///
+    /// 必须过滤掉"已点 × 关闭但尚未真正移除"（hidden for close）的 pane：否则关闭后再次打开会
+    /// 去更新那个已关闭的 pane，导致 diff 不显示。
+    pub fn first_commit_diff_pane(
+        &self,
+        app: &AppContext,
+    ) -> Option<(PaneId, ViewHandle<CommitDiffView>)> {
+        self.panes_of::<CommitDiffPane>()
+            .find(|pane| !self.is_pane_hidden_for_close(pane.id()))
+            .map(|pane| (pane.id(), pane.diff_view(app)))
     }
 
     fn visible_ai_document_panes(&self, ctx: &AppContext) -> Vec<(PaneId, AIDocumentId)> {

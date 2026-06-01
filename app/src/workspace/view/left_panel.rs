@@ -50,6 +50,8 @@ use crate::util::openable_file_type::FileTarget;
 use crate::workspace::view::conversation_list::view::{
     ConversationListView, Event as ConversationListViewEvent,
 };
+#[cfg(not(target_family = "wasm"))]
+use crate::workspace::view::git_graph::GitGraphEvent;
 use crate::workspace::view::git_graph::GitGraphView;
 use crate::workspace::view::global_search::view::{
     Event as GlobalSearchViewEvent, GlobalSearchEntryFocus, GlobalSearchView,
@@ -97,6 +99,14 @@ pub enum LeftPanelEvent {
         conversation_id: AIConversationId,
         conversation_title: String,
         terminal_view_id: Option<warpui::EntityId>,
+    },
+    /// Git Graph 请求在主区只读 diff pane 中打开"某提交对某文件的改动"。
+    #[cfg(not(target_family = "wasm"))]
+    OpenCommitFileDiff {
+        repo_relative_path: String,
+        short_hash: String,
+        base_content: String,
+        hunks: Vec<crate::code_review::diff_state::DiffHunk>,
     },
 }
 
@@ -220,6 +230,24 @@ impl LeftPanelView {
         let warp_drive_view = ctx.add_typed_action_view(DrivePanel::new);
         let conversation_list_view = ctx.add_typed_action_view(ConversationListView::new);
         let git_graph_view = ctx.add_typed_action_view(GitGraphView::new);
+
+        // Git Graph 详情区点击变更文件 → 向上转发，由 workspace 在主区开只读 diff pane。
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_view(&git_graph_view, |_me, _, event, ctx| match event {
+            GitGraphEvent::OpenCommitFileDiff {
+                repo_relative_path,
+                short_hash,
+                base_content,
+                hunks,
+            } => {
+                ctx.emit(LeftPanelEvent::OpenCommitFileDiff {
+                    repo_relative_path: repo_relative_path.clone(),
+                    short_hash: short_hash.clone(),
+                    base_content: base_content.clone(),
+                    hunks: hunks.clone(),
+                });
+            }
+        });
 
         ctx.subscribe_to_view(&warp_drive_view, |_me, _, event, ctx| {
             ctx.emit(LeftPanelEvent::WarpDrive(event.clone()));

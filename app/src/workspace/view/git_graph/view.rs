@@ -6,7 +6,7 @@
 //! 状态直接持有在视图内（单实例、无共享），不引入单独的 Model 间接层——待后续
 //! 出现跨视图共享需求时再抽。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -20,7 +20,7 @@ use warpui::elements::shimmering_text::{
 use warpui::elements::{
     resizable_state_handle, Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle,
     ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss,
-    DragBarSide, Element, Empty, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+    DragBarSide, Element, Empty, Expanded, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
     PositionedElementOffsetBounds, Radius, Resizable, ResizableStateHandle, SavePosition,
     ScrollbarWidth, SelectableArea, SelectionHandle, Shrinkable, Stack, Text, UniformList,
@@ -90,10 +90,28 @@ pub(crate) enum GitGraphAction {
     CloseDetail,
     /// 把详情区当前选中的文本复制到剪贴板（Cmd/Ctrl+C）。
     CopySelection,
+    /// 在主区只读 diff pane 中打开详情区第 N 个变更文件的改动。
+    OpenFileDiff(usize),
 }
 
-/// 视图向外发出的事件。暂无。
-pub(crate) enum GitGraphEvent {}
+/// 视图向外发出的事件。
+pub(crate) enum GitGraphEvent {
+    /// 请求在主区只读 diff pane 中打开"某提交对某文件的改动"。由左侧 panel 向上转发，
+    /// 最终由 workspace 构造 [`CommitDiffView`] 并开成新 pane。
+    ///
+    /// [`CommitDiffView`]: crate::code::commit_diff_view::CommitDiffView
+    #[cfg(not(target_family = "wasm"))]
+    OpenCommitFileDiff {
+        /// 仓库相对路径。
+        repo_relative_path: String,
+        /// 短 commit hash（用于 pane 标题）。
+        short_hash: String,
+        /// 文件在父提交处的完整内容（diff base）。
+        base_content: String,
+        /// 该提交对此文件的 unified diff hunks。
+        hunks: Vec<crate::code_review::diff_state::DiffHunk>,
+    },
+}
 
 /// 提交图谱的加载状态。
 enum LoadState {
@@ -130,6 +148,9 @@ pub(crate) struct GitGraphView {
     branches: Arc<Vec<BranchRef>>,
     /// 当前勾选（参与图谱显示）的分支 ref 集合（存完整 ref）。
     selected_branches: HashSet<String>,
+    /// 每个仓库根 → 用户在该仓库的分支勾选（完整 ref）。切 tab / cd / 刷新触发的 re-discover
+    /// 会按此恢复对应仓库的选择，避免反复重选；仅用户主动点"刷新"按钮才把当前仓库重置回全选。
+    saved_branch_selections: HashMap<PathBuf, HashSet<String>>,
     /// 分支过滤浮层是否展开。
     branch_filter_expanded: bool,
     /// 分支过滤按钮的鼠标状态。
@@ -176,6 +197,8 @@ pub(crate) struct GitGraphView {
     detail_selection_handle: SelectionHandle,
     /// 详情区当前选中的文本，供 Cmd/Ctrl+C 复制；由 [`SelectableArea`] 的回调写入。
     detail_selected_text: Arc<RwLock<Option<String>>>,
+    /// 详情区变更文件行的鼠标状态（供悬停高亮 / 点击打开 diff），与当前 detail 的 files 等长。
+    detail_file_mouse_states: Arc<Vec<MouseStateHandle>>,
 }
 
 /// 空布局，用于未加载/出错时。
@@ -205,7 +228,8 @@ impl GitGraphView {
         // 扫描深度变化时，对当前锚点重新发现仓库（用户在设置里调深度后面板即时生效）。
         ctx.subscribe_to_model(&GitSettings::handle(ctx), |me, _, event, ctx| {
             if matches!(event, GitSettingsChangedEvent::GitGraphScanDepth { .. }) {
-                me.discover(ctx);
+                // 调扫描深度只是重新发现仓库，保持当前选中仓库不跟随锚点。
+                me.discover(false, ctx);
             }
         });
 
@@ -216,6 +240,7 @@ impl GitGraphView {
             repo_dropdown,
             branches: Arc::new(Vec::new()),
             selected_branches: HashSet::new(),
+            saved_branch_selections: HashMap::new(),
             branch_filter_expanded: false,
             branch_filter_button_mouse_state: MouseStateHandle::default(),
             branch_select_all_mouse_state: MouseStateHandle::default(),
@@ -239,6 +264,7 @@ impl GitGraphView {
             detail_close_mouse_state: MouseStateHandle::default(),
             detail_selection_handle: SelectionHandle::default(),
             detail_selected_text: Arc::new(RwLock::new(None)),
+            detail_file_mouse_states: Arc::new(Vec::new()),
         }
     }
 
@@ -252,7 +278,8 @@ impl GitGraphView {
             return;
         }
         self.scan_anchor = dir;
-        self.discover(ctx);
+        // 工作目录变化（cd / 切 tab）：跟随，选当前锚点所在的仓库。
+        self.discover(true, ctx);
     }
 
     /// 当前选中仓库的路径。
@@ -262,9 +289,13 @@ impl GitGraphView {
     }
 
     /// 扫描锚点目录、发现其中的所有 git 仓库（异步），完成后填充仓库列表并加载选中仓库。
-    /// 尽量保持原先选中的仓库（路径仍在新列表中则继续选它），否则默认选第一个。
-    fn discover(&mut self, ctx: &mut ViewContext<Self>) {
-        // 记住当前选中仓库，发现完成后尽量保持选中同一个。
+    ///
+    /// `follow_anchor` 控制选哪个仓库：
+    /// - `true`（工作目录变化 / cd / 切 tab）：跟随——优先选**包含当前锚点的仓库**（即 cd 进的那个）；
+    /// - `false`（手动刷新 / 调扫描深度）：保持原先选中的仓库。
+    /// 两种情况都退回首个仓库。
+    fn discover(&mut self, follow_anchor: bool, ctx: &mut ViewContext<Self>) {
+        // 记住当前选中仓库，发现完成后据 `follow_anchor` 决定保持还是跟随。
         let previous = self.current_repo_path();
         self.clear_selection();
 
@@ -287,17 +318,25 @@ impl GitGraphView {
                         // 锚点已切换，丢弃过期结果。
                         return;
                     }
-                    // 保持原选中仓库；找不到则默认第一个。
-                    let selected = previous
-                        .and_then(|p| repos.iter().position(|r| *r == p))
-                        .or_else(|| (!repos.is_empty()).then_some(0));
+                    let keep_previous =
+                        || previous.and_then(|p| repos.iter().position(|r| *r == p));
+                    let selected = if follow_anchor {
+                        // 跟随：选包含当前锚点的仓库（cd 进的那个）；锚点不在任何仓库内时退回保持原选。
+                        repos
+                            .iter()
+                            .position(|r| expected.starts_with(r))
+                            .or_else(keep_previous)
+                            .or_else(|| (!repos.is_empty()).then_some(0))
+                    } else {
+                        keep_previous().or_else(|| (!repos.is_empty()).then_some(0))
+                    };
                     view.set_repositories(repos, selected, ctx);
                 },
             );
         }
         #[cfg(target_family = "wasm")]
         {
-            let _ = (anchor, previous);
+            let _ = (anchor, previous, follow_anchor);
             self.set_repositories(Vec::new(), None, ctx);
         }
     }
@@ -386,6 +425,7 @@ impl GitGraphView {
         if !self.selected_branches.remove(ref_name) {
             self.selected_branches.insert(ref_name.to_string());
         }
+        self.persist_branch_selection();
         self.load_commits(ctx);
     }
 
@@ -395,6 +435,7 @@ impl GitGraphView {
             return;
         }
         self.selected_branches = self.branches.iter().map(|b| b.ref_name.clone()).collect();
+        self.persist_branch_selection();
         self.load_commits(ctx);
     }
 
@@ -404,7 +445,16 @@ impl GitGraphView {
             return;
         }
         self.selected_branches.clear();
+        self.persist_branch_selection();
         self.load_commits(ctx);
+    }
+
+    /// 把当前分支勾选回存到所属仓库（用户改动分支过滤后调用），供切 tab / cd 后按仓库恢复。
+    fn persist_branch_selection(&mut self) {
+        if let Some(repo) = self.current_repo_path() {
+            self.saved_branch_selections
+                .insert(repo, self.selected_branches.clone());
+        }
     }
 
     /// 清空选中与详情（仓库变化/重新加载时调用）。
@@ -454,10 +504,17 @@ impl GitGraphView {
                     if view.current_repo_path().as_deref() != Some(expected.as_path()) {
                         return;
                     }
-                    // 分支加载成功则默认全选；失败则置空（load_commits 退回 --all 仍能看历史）。
                     let branches = result.unwrap_or_default();
-                    view.selected_branches =
+                    let new_refs: HashSet<String> =
                         branches.iter().map(|b| b.ref_name.clone()).collect();
+                    // 恢复该仓库已保存的分支选择（与新分支列表求交，剔除已消失的分支）；从未保存过
+                    // （首次见到该仓库，或刚被"刷新"清掉）则默认全选。随后回存，作为该仓库的当前选择。
+                    view.selected_branches = match view.saved_branch_selections.get(&expected) {
+                        Some(saved) => saved.intersection(&new_refs).cloned().collect(),
+                        None => new_refs,
+                    };
+                    view.saved_branch_selections
+                        .insert(expected.clone(), view.selected_branches.clone());
                     view.branch_mouse_states = Arc::new(
                         (0..branches.len()).map(|_| MouseStateHandle::default()).collect(),
                     );
@@ -644,8 +701,19 @@ impl GitGraphView {
                         return;
                     }
                     view.detail = match result {
-                        Ok(detail) => DetailState::Loaded(detail),
-                        Err(err) => DetailState::Error(err.to_string()),
+                        Ok(detail) => {
+                            // 为每个变更文件行准备鼠标状态（悬停高亮 / 点击打开 diff）。
+                            view.detail_file_mouse_states = Arc::new(
+                                (0..detail.files.len())
+                                    .map(|_| MouseStateHandle::default())
+                                    .collect(),
+                            );
+                            DetailState::Loaded(detail)
+                        }
+                        Err(err) => {
+                            view.detail_file_mouse_states = Arc::new(Vec::new());
+                            DetailState::Error(err.to_string())
+                        }
                     };
                     ctx.notify();
                 },
@@ -658,6 +726,49 @@ impl GitGraphView {
             ctx.notify();
         }
     }
+
+    /// 点击详情区第 `file_index` 个变更文件：异步加载该提交对此文件的改动，加载完成后
+    /// 发出 [`GitGraphEvent::OpenCommitFileDiff`]，由上层在主区开成只读 diff pane。
+    #[cfg(not(target_family = "wasm"))]
+    fn open_file_diff(&mut self, file_index: usize, ctx: &mut ViewContext<Self>) {
+        let DetailState::Loaded(detail) = &self.detail else {
+            return;
+        };
+        let Some(file) = detail.files.get(file_index) else {
+            return;
+        };
+        let Some(commit) = self.selected.and_then(|i| self.commits.get(i)) else {
+            return;
+        };
+        let Some(dir) = self.current_repo_path() else {
+            return;
+        };
+        let hash = commit.hash.clone();
+        let short_hash = commit.short_hash.clone();
+        let path = file.path.clone();
+        let load_path = path.clone();
+
+        ctx.spawn(
+            async move { super::data::load_file_diff_at_commit(&dir, &hash, &load_path).await },
+            move |_view, result, ctx| match result {
+                Ok(diff) => {
+                    ctx.emit(GitGraphEvent::OpenCommitFileDiff {
+                        repo_relative_path: path,
+                        short_hash,
+                        base_content: diff.base_content,
+                        hunks: diff.hunks,
+                    });
+                }
+                Err(err) => {
+                    log::warn!("加载提交文件 diff 失败：{err}");
+                }
+            },
+        );
+    }
+
+    /// wasm 下不支持 git 取数（详情区也不会展示文件列表），点击为空操作。
+    #[cfg(target_family = "wasm")]
+    fn open_file_diff(&mut self, _file_index: usize, _ctx: &mut ViewContext<Self>) {}
 
     /// 渲染可点击的提交列表（每行 = 泳道 + 文字，包一层 [`Hoverable`] 派发选中）。
     /// 渲染提交列表。还有更多页时末尾追加一行带闪烁动画的"加载更多"指示，滚动到它即
@@ -749,6 +860,7 @@ impl GitGraphView {
                     self.detail_scroll_state.clone(),
                     self.detail_selection_handle.clone(),
                     self.detail_selected_text.clone(),
+                    &self.detail_file_mouse_states,
                     appearance,
                 )
             }
@@ -1293,6 +1405,7 @@ fn render_detail_body(
     scroll_state: ClippedScrollStateHandle,
     selection_handle: SelectionHandle,
     selected_text: Arc<RwLock<Option<String>>>,
+    file_mouse_states: &[MouseStateHandle],
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let font = appearance.ui_font_family();
@@ -1342,8 +1455,10 @@ fn render_detail_body(
         .with_cross_axis_alignment(CrossAxisAlignment::Start)
         .with_child(Container::new(selectable_meta).with_vertical_padding(6.).finish())
         .with_child(files_label);
-    for file in detail.files.iter() {
-        content = content.with_child(render_file_row(file, appearance));
+    for (index, file) in detail.files.iter().enumerate() {
+        // 鼠标状态与 files 等长；缺失时退化为不可悬停高亮的默认态（不影响点击）。
+        let mouse_state = file_mouse_states.get(index).cloned().unwrap_or_default();
+        content = content.with_child(render_file_row(index, file, mouse_state, appearance));
     }
 
     let theme = appearance.theme();
@@ -1364,35 +1479,54 @@ fn render_detail_body(
         .finish()
 }
 
-/// 渲染一个变更文件行：路径 + `+增 -删`。
-fn render_file_row(file: &ChangedFile, appearance: &Appearance) -> Box<dyn Element> {
+/// 渲染一个可点击的变更文件行：路径 + `+增 -删`。悬停高亮，点击在主区开只读 diff pane。
+fn render_file_row(
+    index: usize,
+    file: &ChangedFile,
+    mouse_state: MouseStateHandle,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
     let font = appearance.ui_font_family();
     let size = appearance.ui_font_size();
     let theme = appearance.theme();
-    Container::new(
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                Text::new_inline(file.path.clone(), font, size)
-                    .with_color(theme.foreground().into())
-                    .finish(),
-            )
-            .with_child(
-                Container::new(
-                    Text::new_inline(
-                        format!("+{} -{}", file.additions, file.deletions),
-                        font,
-                        size,
-                    )
-                    .with_color(theme.sub_text_color(theme.background()).into())
-                    .finish(),
+    let row = Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_child(
+            Text::new_inline(file.path.clone(), font, size)
+                .with_color(theme.foreground().into())
+                .finish(),
+        )
+        .with_child(
+            Container::new(
+                Text::new_inline(
+                    format!("+{} -{}", file.additions, file.deletions),
+                    font,
+                    size,
                 )
-                .with_padding_left(8.)
+                .with_color(theme.sub_text_color(theme.background()).into())
                 .finish(),
             )
+            .with_padding_left(8.)
             .finish(),
-    )
-    .with_vertical_padding(2.)
+        )
+        .finish();
+
+    // 悬停高亮：复用列表通用的 [`ItemHighlightState`]（文件行无"选中"态，仅按悬停切换底色）。
+    Hoverable::new(mouse_state, move |mouse_state| {
+        let highlight = ItemHighlightState::new(false, mouse_state);
+        let mut container = Container::new(row).with_vertical_padding(2.);
+        if let Some(bg) = highlight.background_color(appearance) {
+            container = container.with_background_color(bg.into_solid());
+        }
+        if let Some(radius) = highlight.corner_radius() {
+            container = container.with_corner_radius(radius);
+        }
+        container.finish()
+    })
+    .on_click(move |ctx, _, _| {
+        ctx.dispatch_typed_action(GitGraphAction::OpenFileDiff(index));
+    })
     .finish()
 }
 
@@ -1418,8 +1552,14 @@ impl TypedActionView for GitGraphView {
             GitGraphAction::ToggleBranch(ref_name) => self.toggle_branch(ref_name, ctx),
             GitGraphAction::SelectAllBranches => self.select_all_branches(ctx),
             GitGraphAction::DeselectAllBranches => self.deselect_all_branches(ctx),
-            // 手动刷新时重新扫描仓库（用户可能新增/删除了子仓库），再加载选中仓库。
-            GitGraphAction::Refresh => self.discover(ctx),
+            // 手动刷新：是唯一会重置分支选择的入口——清掉当前仓库已保存的勾选（reload 时即默认
+            // 全选），再重新扫描仓库（用户可能新增/删除了子仓库）并保持当前仓库。
+            GitGraphAction::Refresh => {
+                if let Some(repo) = self.current_repo_path() {
+                    self.saved_branch_selections.remove(&repo);
+                }
+                self.discover(false, ctx);
+            }
             GitGraphAction::CloseDetail => {
                 self.clear_selection();
                 ctx.notify();
@@ -1435,6 +1575,7 @@ impl TypedActionView for GitGraphView {
                     ctx.clipboard().write(ClipboardContent::plain_text(text));
                 }
             }
+            GitGraphAction::OpenFileDiff(index) => self.open_file_diff(*index, ctx),
         }
     }
 }
@@ -1487,11 +1628,13 @@ impl View for GitGraphView {
                 ))
             }
             LoadState::Loaded if self.selected.is_some() => column
-                // 列表填充上方空间；详情区高度可拖动（顶部拖条）。
-                .with_child(Shrinkable::new(1.0, self.render_commit_list()).finish())
+                // 列表用 Expanded 撑满上方剩余空间（把详情区顶到底部）；详情区高度可拖动（顶部拖条）。
+                // 用 Expanded 而非 Shrinkable：提交少时 Shrinkable 只收缩到内容高度，会让列表与详情
+                // 都挤在顶部、下方留空、详情拖动错位。
+                .with_child(Expanded::new(1.0, self.render_commit_list()).finish())
                 .with_child(self.render_resizable_detail(appearance)),
             LoadState::Loaded => {
-                column.with_child(Shrinkable::new(1.0, self.render_commit_list()).finish())
+                column.with_child(Expanded::new(1.0, self.render_commit_list()).finish())
             }
         };
 

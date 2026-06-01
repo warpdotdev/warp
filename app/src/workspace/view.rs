@@ -274,7 +274,7 @@ use crate::pane_group::pane::ActionOrigin;
 use crate::pane_group::FilePane;
 use crate::pane_group::{
     self, AIFactPane, AnyPaneContent, ChildAgentOrigin, CodeDiffPane, CodePane, CodeReviewPanelArg,
-    Direction as PaneGroupDirection, Direction, EnvironmentManagementPane,
+    CommitDiffPane, Direction as PaneGroupDirection, Direction, EnvironmentManagementPane,
     ExecutionProfileEditorPane, NetworkLogPane, NewTerminalOptions, PaneGroup, PaneId, PanesLayout,
     TabBarHoverIndex, TerminalPaneId,
 };
@@ -6019,7 +6019,67 @@ impl Workspace {
                     ctx,
                 );
             }
+            #[cfg(not(target_family = "wasm"))]
+            LeftPanelEvent::OpenCommitFileDiff {
+                repo_relative_path,
+                short_hash,
+                base_content,
+                hunks,
+            } => {
+                self.open_commit_file_diff(
+                    repo_relative_path.clone(),
+                    short_hash.clone(),
+                    base_content.clone(),
+                    hunks.clone(),
+                    ctx,
+                );
+            }
         }
+    }
+
+    /// 在**当前 tab** 内打开只读 diff pane，展示某提交对单个文件的改动（由 Git Graph 触发）。
+    ///
+    /// 行为对齐"打开文件"：不新开 tab。当前 tab 已有 commit diff pane 则**原地更新它的内容**并
+    /// 聚焦（连点多个文件复用同一 pane，且 pane 不被销毁 → header/关闭按钮保持），否则在当前
+    /// pane group 右侧分屏新建并聚焦。
+    #[cfg(not(target_family = "wasm"))]
+    fn open_commit_file_diff(
+        &mut self,
+        repo_relative_path: String,
+        short_hash: String,
+        base_content: String,
+        hunks: Vec<crate::code_review::diff_state::DiffHunk>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // 复用：原地更新已有 commit diff pane 的内容并聚焦。
+        if let Some((pane_id, view)) = self
+            .active_tab_pane_group()
+            .as_ref(ctx)
+            .first_commit_diff_pane(ctx)
+        {
+            view.update(ctx, |view, ctx| {
+                view.load(repo_relative_path, short_hash, base_content, hunks, ctx);
+            });
+            self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+                pane_group.focus_pane(pane_id, true, ctx);
+            });
+            return;
+        }
+
+        // 首次：在当前 tab 右侧分屏新建并聚焦。
+        let view = ctx.add_typed_action_view(move |ctx| {
+            crate::code::commit_diff_view::CommitDiffView::new(
+                repo_relative_path,
+                short_hash,
+                base_content,
+                hunks,
+                ctx,
+            )
+        });
+        let pane = CommitDiffPane::from_view(view, ctx);
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            pane_group.add_pane_with_direction(Direction::Right, pane, true, ctx);
+        });
     }
 
     fn handle_right_panel_event(&mut self, event: RightPanelEvent, ctx: &mut ViewContext<Self>) {
