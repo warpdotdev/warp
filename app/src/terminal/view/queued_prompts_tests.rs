@@ -24,6 +24,7 @@ use crate::server::server_api::ai::SpawnAgentRequest;
 use crate::terminal::input::Event as InputEvent;
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
+use crate::test_util::settings::initialize_settings_for_tests;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 fn user_query(text: &str) -> QueuedQuery {
@@ -100,7 +101,10 @@ fn with_singleton<F>(test: F)
 where
     F: FnOnce(App, warpui::ModelHandle<QueuedQueryModel>, AIConversationId) + 'static,
 {
-    App::test((), |app| async move {
+    App::test((), |mut app| async move {
+        // `QueuedQueryModel::new` reads and subscribes to `AISettings`, so settings
+        // must be registered before it.
+        initialize_settings_for_tests(&mut app);
         let _ = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let model = app.add_singleton_model(QueuedQueryModel::new);
         test(app, model, AIConversationId::new());
