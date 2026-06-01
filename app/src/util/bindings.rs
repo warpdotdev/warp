@@ -212,6 +212,10 @@ lazy_static! {
         // introducing multiple codepaths for handling ctrl-c, we register ctrl-c as a binding
         // on TerminalView on all platforms.
         Keystroke::parse("ctrl-c").expect("should be able to construct ctrl-c keystroke"),
+        // Orchestration conversation cycling defaults use ctrl-[ / ctrl-] on all platforms.
+        // These intentionally overlap PTY control characters and are validated here.
+        Keystroke::parse("ctrl-[").expect("should be able to construct ctrl-[ keystroke"),
+        Keystroke::parse("ctrl-]").expect("should be able to construct ctrl-] keystroke"),
         // The resume conversation binding uses cmd-shift-R on Mac and should be allowed
         Keystroke::parse("cmd-shift-R").expect("should be able to construct cmd-shift-R keystroke")
     ]);
