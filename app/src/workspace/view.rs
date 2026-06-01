@@ -6715,6 +6715,7 @@ impl Workspace {
             return;
         }
         let Some(tab) = self.tabs.get(tab_index) else {
+            log::debug!("new_tab_group_from_tab: tab_index {tab_index} out of bounds");
             return;
         };
         let previous_group_id = tab.group_id;
@@ -6747,8 +6748,10 @@ impl Workspace {
             return;
         }
         let Some(tab) = self.tabs.get(tab_index) else {
+            log::debug!("move_tab_to_group: tab_index {tab_index} out of bounds");
             return;
         };
+        // No-op when the tab already belongs to the target group.
         if tab.group_id == Some(group_id) {
             return;
         }
@@ -6796,7 +6799,7 @@ impl Workspace {
 
     /// Removes a tab group from the workspace if no tabs reference it.
     fn prune_empty_tab_group(&mut self, group_id: TabGroupId, ctx: &mut ViewContext<Self>) {
-        let has_members = self.tabs.iter().any(|t| t.group_id == Some(group_id));
+        let has_members = group_member_indices(&self.tabs, group_id).next().is_some();
         if !has_members {
             self.tab_groups.remove(&group_id);
             ctx.notify();
@@ -6807,10 +6810,15 @@ impl Workspace {
     /// The active-tab tracker follows the moved tab.
     fn move_tab_to_index(&mut self, from: usize, to: usize, ctx: &mut ViewContext<Self>) {
         if from >= self.tabs.len() {
+            log::debug!(
+                "move_tab_to_index: from {from} out of bounds (len {})",
+                self.tabs.len()
+            );
             return;
         }
         let adjusted_to = if to > from { to - 1 } else { to };
         let adjusted_to = adjusted_to.min(self.tabs.len().saturating_sub(1));
+        // No-op when the requested destination resolves to the tab's current slot.
         if from == adjusted_to {
             return;
         }
