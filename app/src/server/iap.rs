@@ -9,6 +9,8 @@ use warp_core::channel::IapConfig;
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
+#[cfg(feature = "local_tty")]
+use crate::terminal::local_shell::LocalShellState;
 use crate::view_components::DismissibleToast;
 use crate::workspace::{ToastStack, WorkspaceAction};
 
@@ -209,9 +211,22 @@ impl IapManager {
         let audiences = state.audiences().to_string();
         let service_account_email = state.service_account_email().to_string();
 
+        // Make `gcloud` findable even when Warp is launched from the macOS GUI
+        // (i.e. in environments without something like `~/.zshrc && WarpDev` happening to init cli path)
+        #[cfg(feature = "local_tty")]
+        let path_future = LocalShellState::handle(ctx).update(ctx, |shell_state, ctx| {
+            shell_state.get_interactive_path_env_var(ctx)
+        });
+        #[cfg(not(feature = "local_tty"))]
+        let path_future = futures::future::ready(None);
+
         ctx.spawn(
             async move {
-                unblock(move || fetch_iap_token(&audiences, &service_account_email)).await
+                let path_env = path_future.await;
+                unblock(move || {
+                    fetch_iap_token(&audiences, &service_account_email, path_env.as_deref())
+                })
+                .await
             },
             move |manager, result, ctx| {
                 let Some(state) = manager.state.as_ref() else {
@@ -309,7 +324,11 @@ impl SingletonEntity for IapManager {}
 /// How long to wait for `auth print-identity-token` command to respond before killing it.
 const GCLOUD_TIMEOUT: Duration = Duration::from_secs(30);
 
-fn fetch_iap_token(audiences: &str, service_account_email: &str) -> Result<CachedToken> {
+fn fetch_iap_token(
+    audiences: &str,
+    service_account_email: &str,
+    path_env: Option<&str>,
+) -> Result<CachedToken> {
     let args = [
         "auth",
         "print-identity-token",
@@ -321,12 +340,18 @@ fn fetch_iap_token(audiences: &str, service_account_email: &str) -> Result<Cache
     ];
     let cmd_display = format!("gcloud {}", args.join(" "));
 
-    let mut child = command::blocking::Command::new("gcloud")
+    let mut cmd = command::blocking::Command::new("gcloud");
+    cmd
         // Prevent gcloud from waiting for interactive input (fail fast instead of hanging)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .args(args)
+        .args(args);
+    // allows warp to resolve `gcloud` cli path
+    if let Some(path_env) = path_env {
+        cmd.env("PATH", path_env);
+    }
+    let mut child = cmd
         .spawn()
         .map_err(|err| anyhow::anyhow!("Failed to spawn `{cmd_display}`: {err}"))?;
 
