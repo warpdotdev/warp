@@ -43,6 +43,7 @@ pub use warp_server_auth::user_uid;
 use crate::base_client::BaseClient;
 use crate::graphql_helpers::send_graphql_request;
 use crate::ids::ApiKeyUid;
+use crate::public_api::get_authenticated_public_api;
 
 /// Header key used to associate unauthenticated requests with an experiment identity.
 pub const EXPERIMENT_ID_HEADER: &str = "X-Warp-Experiment-Id";
@@ -53,6 +54,11 @@ pub struct AgentIdentity {
     pub uid: String,
     pub name: String,
     pub available: bool,
+}
+/// Wrapper for the `GET /api/v1/agent/identities` response.
+#[derive(serde::Deserialize)]
+struct AgentIdentitiesResponse {
+    agents: Vec<AgentIdentity>,
 }
 
 /// User settings that are stored server-side on a per-user basis.
@@ -163,12 +169,12 @@ pub trait AuthClient: Send + Sync {
 
 /// Implements the [`AuthClient`] trait on top of a base client and auth session.
 pub struct AuthClientImpl {
-    base_client: Arc<dyn BaseClient>,
+    base_client: Arc<BaseClient>,
     auth_session: Arc<AuthSession>,
 }
 
 impl AuthClientImpl {
-    pub fn new(base_client: Arc<dyn BaseClient>, auth_session: Arc<AuthSession>) -> Self {
+    pub fn new(base_client: Arc<BaseClient>, auth_session: Arc<AuthSession>) -> Self {
         Self {
             base_client,
             auth_session,
@@ -184,7 +190,7 @@ impl AuthClientImpl {
             input,
             request_context: warp_graphql::client::get_request_context(),
         });
-        let result = send_graphql_request(self.base_client.as_ref(), operation, None)
+        let result = send_graphql_request(&self.base_client, operation, None)
             .await?
             .update_user_settings;
         Self::on_settings_updated(result, unknown_error_message)
@@ -222,8 +228,8 @@ impl AuthClient for AuthClientImpl {
         });
         let response = operation
             .send_request(
-                self.base_client.http_client(),
-                self.base_client.unauthenticated_graphql_request_options(),
+                self.base_client.owned_http_client(),
+                self.base_client.graphql_request_options_with_token(None),
             )
             .await?;
         Ok(response
@@ -269,7 +275,7 @@ impl AuthClient for AuthClientImpl {
                 request_context: warp_graphql::client::get_request_context(),
             },
         );
-        let response = send_graphql_request(self.base_client.as_ref(), operation, None).await?;
+        let response = send_graphql_request(&self.base_client, operation, None).await?;
         Ok(response.mint_custom_token)
     }
 
@@ -295,14 +301,15 @@ impl AuthClient for AuthClientImpl {
         let operation = GetUser::build(GetUserVariables {
             request_context: warp_graphql::client::get_request_context(),
         });
-        let mut options = self.base_client.unauthenticated_graphql_request_options();
-        options.auth_token = auth_token.map(ToOwned::to_owned);
+        let mut options = self
+            .base_client
+            .graphql_request_options_with_token(auth_token.map(ToOwned::to_owned));
         options.headers.insert(
             EXPERIMENT_ID_HEADER.to_string(),
             self.base_client.anonymous_id(),
         );
         let response = operation
-            .send_request(self.base_client.http_client(), options)
+            .send_request(self.base_client.owned_http_client(), options)
             .await?
             .data
             .ok_or_else(|| anyhow!("Expected valid response.data"))?;
@@ -451,7 +458,13 @@ impl AuthClient for AuthClientImpl {
     }
 
     async fn list_agent_identities(&self) -> Result<Vec<AgentIdentity>> {
-        self.base_client.list_agent_identities().await
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .context("Failed to get access token for API request")?;
+        let response: AgentIdentitiesResponse =
+            get_authenticated_public_api(&self.base_client, auth_token, "agent/identities").await?;
+        Ok(response.agents)
     }
 }
 

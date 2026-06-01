@@ -13,7 +13,7 @@ use crate::base_client::BaseClient;
 /// This function is deliberately generic so concrete endpoint operation
 /// instantiations occur in server client crates rather than in the app crate.
 pub fn send_graphql_request<'a, QF: 'a, O>(
-    base_client: &'a dyn BaseClient,
+    base_client: &'a BaseClient,
     operation: O,
     timeout: Option<Duration>,
 ) -> BoxFuture<'a, Result<QF>>
@@ -24,7 +24,7 @@ where
         let operation_name = operation.operation_name().map(Cow::into_owned);
         let options = base_client.graphql_request_options(timeout).await?;
         let response = match operation
-            .send_request(base_client.http_client(), options)
+            .send_request(base_client.owned_http_client(), options)
             .await
         {
             Ok(response) => response,

@@ -16,6 +16,7 @@ anyhow.workspace = true
 async-channel.workspace = true
 async-trait.workspace = true
 bincode.workspace = true
+bounded-vec-deque.workspace = true
 chrono.workspace = true
 cloud_object_client.workspace = true
 cloud_object_models.workspace = true
@@ -31,9 +32,12 @@ lasso.workspace = true
 log.workspace = true
 mockall = { workspace = true, optional = true }
 oauth2.workspace = true
+parking_lot.workspace = true
 pathfinder_geometry.workspace = true
+reqwest.workspace = true
 schemars = { version = "1", features = ["uuid1"] }
 serde.workspace = true
+serde_json.workspace = true
 settings_value.workspace = true
 session-sharing-protocol.workspace = true
 thiserror.workspace = true
@@ -41,6 +45,7 @@ url.workspace = true
 uuid.workspace = true
 warp_core.workspace = true
 warp_graphql.workspace = true
+warp_isolation_platform.workspace = true
 warp_server_auth.workspace = true
 warpui_core.workspace = true
 
@@ -50,4 +55,5 @@ diesel = { workspace = true, features = ["sqlite", "chrono"] }
 [dev-dependencies]
 futures.workspace = true
 mockall.workspace = true
+mockito.workspace = true
 warp_server_auth = { workspace = true, features = ["test-util"] }

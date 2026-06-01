@@ -159,7 +159,6 @@ use repo_metadata::{
     repositories::DetectedRepositories, watcher::DirectoryWatcher, RepoMetadataModel,
 };
 use server::network_log_pane_manager::NetworkLogPaneManager;
-use server::network_logging::NetworkLogModel;
 use server::telemetry::context_provider::AppTelemetryContextProvider;
 use server::voice_transcriber::ServerVoiceTranscriber;
 #[cfg(feature = "local_fs")]
@@ -226,6 +225,7 @@ pub use warp_core::{safe_debug, safe_error, safe_info, safe_warn};
 use warp_files::FileModel;
 use warp_logging::LogDestination;
 use warp_managed_secrets::ManagedSecretManager;
+use warp_server_client::network_logging::NetworkLogModel;
 use warpui::integration::TestDriver;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
 use warpui::platform::app::ApproveTerminateResult;
@@ -1183,8 +1183,7 @@ pub(crate) fn initialize_app(
     let agent_source = determine_agent_source(launch_mode);
 
     // NetworkLogModel must be registered before ServerApiProvider so that
-    // `network_logging::init` (invoked from within `ServerApiProvider::new`)
-    // can reach it via `NetworkLogModel::handle(ctx)` when forwarding items
+    // `NetworkLogModel::install_on_clients` can reach it when forwarding items
     // captured by the HTTP client hooks.
     ctx.add_singleton_model(|_ctx| NetworkLogModel::default());
 

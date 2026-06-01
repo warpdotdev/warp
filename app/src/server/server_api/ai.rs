@@ -143,9 +143,7 @@ use crate::ai_assistant::utils::TranscriptPart;
 use crate::ai_assistant::{AIGeneratedCommand, GenerateCommandsFromNaturalLanguageError};
 use crate::drive::workflows::ai_assist::{GeneratedCommandMetadata, GeneratedCommandMetadataError};
 use crate::persistence::model::ConversationUsageMetadata;
-use crate::server::graphql::{
-    default_request_options, get_request_context, get_user_facing_error_message,
-};
+use crate::server::graphql::{get_request_context, get_user_facing_error_message};
 use crate::terminal::model::block::SerializedBlock;
 #[cfg(not(feature = "agent_mode_evals"))]
 use crate::{
@@ -1731,11 +1729,9 @@ impl AIClient for ServerApi {
 
         let response = operation
             .send_request(
-                self.client.clone(),
-                warp_graphql::client::RequestOptions {
-                    auth_token,
-                    ..default_request_options()
-                },
+                self.base_client.owned_http_client(),
+                self.base_client
+                    .graphql_request_options_with_token(auth_token),
             )
             .await?
             .data
@@ -2650,7 +2646,7 @@ impl AIClient for ServerApi {
         request: GenerateCodeReviewContentRequest,
     ) -> Result<GenerateCodeReviewContentResponse, anyhow::Error> {
         let auth_token = self.get_or_refresh_access_token().await?;
-        let request_builder = self.client.post(format!(
+        let request_builder = self.base_client.http_client_ref().post(format!(
             "{}/ai/generate_code_review_content",
             ChannelState::server_root_url()
         ));
