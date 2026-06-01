@@ -1,7 +1,6 @@
-use super::*;
-
 use warpui::App;
 
+use super::*;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::auth::auth_manager::AuthManager;

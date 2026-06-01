@@ -1,6 +1,18 @@
 #[cfg(feature = "local_tty")]
 use std::sync::mpsc::SyncSender;
 
+#[cfg(not(target_family = "wasm"))]
+use warp_cli::agent::Harness;
+#[cfg(feature = "local_tty")]
+use warpui::geometry::vector::Vector2F;
+#[cfg(not(target_family = "wasm"))]
+use warpui::r#async::FutureExt;
+#[cfg(feature = "local_tty")]
+use warpui::ModelHandle;
+use warpui::ViewContext;
+#[cfg(not(target_family = "wasm"))]
+use warpui::{SingletonEntity, View, ViewHandle};
+
 use super::TerminalView;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::driver::{
@@ -28,17 +40,6 @@ use crate::terminal::local_tty::docker_sandbox::DOCKER_SANDBOX_HOME_DIR;
 use crate::terminal::remote_tty::TerminalManager as RemoteTtyTerminalManager;
 #[cfg(feature = "local_tty")]
 use crate::terminal::TerminalManager;
-#[cfg(not(target_family = "wasm"))]
-use warp_cli::agent::Harness;
-#[cfg(feature = "local_tty")]
-use warpui::geometry::vector::Vector2F;
-#[cfg(not(target_family = "wasm"))]
-use warpui::r#async::FutureExt;
-#[cfg(feature = "local_tty")]
-use warpui::ModelHandle;
-use warpui::ViewContext;
-#[cfg(not(target_family = "wasm"))]
-use warpui::{SingletonEntity, View, ViewHandle};
 
 /// Default base Docker image used for newly created sandbox shells.
 ///

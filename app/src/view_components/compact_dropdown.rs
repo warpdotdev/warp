@@ -1,5 +1,6 @@
-use pathfinder_geometry::vector::vec2f;
 use std::marker::PhantomData;
+
+use pathfinder_geometry::vector::vec2f;
 use warpui::elements::{
     Border, ChildAnchor, ConstrainedBox, CornerRadius, CrossAxisAlignment, Flex,
     Icon as WarpUiIcon, MainAxisAlignment, MouseStateHandle, OffsetPositioning, ParentElement,

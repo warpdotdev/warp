@@ -39,6 +39,7 @@ pub fn main() -> Result<()> {
             logfile_name: "warp_integration.log".into(),
             server_config: WarpServerConfig {
                 firebase_auth_api_key: "".into(),
+                iap_config: None,
                 // Use an IP in the IANA testing range, with the TCP discard port, to
                 // black-hole server traffic.
                 server_root_url: "http://192.0.2.0:9".into(),
@@ -278,6 +279,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_copy_prompt_from_block_honor_ps1_disabled);
     register_test!(test_copy_prompt_from_block_honor_ps1_enabled);
     register_test!(test_copy_prompt_from_input_honor_ps1_disabled);
+    register_test!(test_warp_prompt_unsets_zsh_rprompt);
     register_test!(test_copy_prompt_from_input_honor_ps1_enabled);
     register_test!(test_copy_rprompt_from_input_honor_ps1_enabled);
     register_test!(test_rprompt_doesnt_show_when_not_enough_space);

@@ -33,7 +33,9 @@ use crate::ai::agent::conversation::{
     AIConversation, AIConversationId, ConversationStatus, StatusColorStyle,
 };
 use crate::ai::agent_conversations_model::entry::PrincipalType;
-use crate::ai::agent_conversations_model::{AgentConversationEntry, AgentRunDisplayStatus};
+use crate::ai::agent_conversations_model::{
+    AgentConversationEntry, AgentRunDisplayStatus, TaskFetchError,
+};
 use crate::ai::agent_management::details_action_buttons::{
     ActionButtonsConfig, AgentDetailsButtonEvent, ConversationActionButtonsRow,
 };
@@ -77,6 +79,9 @@ const HARNESS_CIRCLE_SIZE: f32 = 16.0;
 const HARNESS_ICON_IN_CIRCLE: f32 = 9.0;
 const LABEL_VALUE_GAP: f32 = 4.0;
 const SECTION_HEADER_GAP: f32 = 8.0;
+const RUN_METADATA_ACCESS_DENIED_TITLE: &str = "Run metadata is not available";
+const RUN_METADATA_ACCESS_DENIED_DESCRIPTION: &str =
+    "You can view this shared session, but run metadata is only visible to users with access to this run.";
 
 /// Panel rendering mode.
 #[derive(Debug, Clone, PartialEq)]
@@ -219,8 +224,8 @@ pub struct ConversationDetailsData {
     skill_spec: Option<SkillSpec>,
     /// Execution harness for this conversation/task.
     harness: Option<Harness>,
-    /// Error message displayed when the API call to fetch run data failed.
-    fetch_error: Option<String>,
+    /// Error details displayed when the API call to fetch run data failed.
+    fetch_error: Option<TaskFetchError>,
 }
 
 impl ConversationDetailsData {
@@ -499,7 +504,10 @@ impl ConversationDetailsData {
 
     /// Minimal details data for when we only know the task id (e.g. shared sessions)
     /// but have not loaded the full `AmbientAgentTask` yet.
-    pub fn from_task_id(task_id: AmbientAgentTaskId, fetch_error: Option<String>) -> Self {
+    pub(crate) fn from_task_id(
+        task_id: AmbientAgentTaskId,
+        fetch_error: Option<TaskFetchError>,
+    ) -> Self {
         ConversationDetailsData {
             mode: PanelMode::Task {
                 task_id: Some(task_id),
@@ -1116,6 +1124,97 @@ impl ConversationDetailsPanel {
                 .with_child(value_field)
                 .finish(),
         )
+    }
+
+    fn render_fetch_error_notice(
+        &self,
+        fetch_error: &TaskFetchError,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let ui_font_size = appearance.ui_font_size();
+        if fetch_error.is_access_denied() {
+            let icon_color = blended_colors::text_sub(theme, theme.surface_1());
+            let notice_icon =
+                ConstrainedBox::new(Icon::Info.to_warpui_icon(icon_color.into()).finish())
+                    .with_width(STATUS_ICON_SIZE)
+                    .with_height(STATUS_ICON_SIZE)
+                    .finish();
+
+            let title = Text::new(
+                RUN_METADATA_ACCESS_DENIED_TITLE,
+                appearance.ui_font_family(),
+                ui_font_size,
+            )
+            .with_color(blended_colors::text_main(theme, theme.surface_1()))
+            .with_style(Properties::default().weight(Weight::Semibold))
+            .with_selectable(true)
+            .finish();
+            let description = Text::new(
+                RUN_METADATA_ACCESS_DENIED_DESCRIPTION,
+                appearance.ui_font_family(),
+                ui_font_size - 1.,
+            )
+            .with_color(icon_color)
+            .with_selectable(true)
+            .soft_wrap(true)
+            .finish();
+
+            let notice_text = Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_child(title)
+                .with_child(
+                    Container::new(description)
+                        .with_margin_top(LABEL_VALUE_GAP)
+                        .finish(),
+                )
+                .finish();
+            let notice_row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_child(Container::new(notice_icon).with_margin_right(8.).finish())
+                .with_child(Expanded::new(1., notice_text).finish())
+                .finish();
+
+            return Container::new(notice_row)
+                .with_uniform_padding(10.)
+                .with_background(coloru_with_opacity(blended_colors::neutral_2(theme), 70))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+                .finish();
+        }
+
+        let error_icon = ConstrainedBox::new(
+            Icon::Triangle
+                .to_warpui_icon(theme.ansi_fg_red().into())
+                .finish(),
+        )
+        .with_width(STATUS_ICON_SIZE)
+        .with_height(STATUS_ICON_SIZE)
+        .finish();
+        let error_text = render_copyable_text_field(
+            CopyableTextFieldConfig::new(fetch_error.message().to_string())
+                .with_font_size(ui_font_size)
+                .with_text_color(theme.ansi_fg_red())
+                .with_wrap_text(true)
+                .with_icon_size(16.)
+                .with_mouse_state(self.mouse_state_for_copy_button(CopyButtonKind::FetchError))
+                .with_last_copied_at(self.copy_feedback_times.get(&CopyButtonKind::FetchError))
+                .with_cross_axis_alignment(CrossAxisAlignment::Start),
+            |ctx| {
+                ctx.dispatch_typed_action(ConversationDetailsPanelAction::CopyFetchError);
+            },
+            app,
+        );
+        let error_row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(Container::new(error_icon).with_margin_right(4.).finish())
+            .with_child(Expanded::new(1., error_text).finish())
+            .finish();
+        Container::new(error_row)
+            .with_uniform_padding(8.)
+            .with_background(coloru_with_opacity(theme.ansi_fg_red(), 10))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+            .finish()
     }
 
     fn render_status_section(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
@@ -1769,40 +1868,8 @@ impl View for ConversationDetailsPanel {
 
         // Fetch error banner (shown when the API call to load run data failed)
         if let Some(fetch_error) = &self.data.fetch_error {
-            let error_icon = ConstrainedBox::new(
-                Icon::Triangle
-                    .to_warpui_icon(theme.ansi_fg_red().into())
-                    .finish(),
-            )
-            .with_width(STATUS_ICON_SIZE)
-            .with_height(STATUS_ICON_SIZE)
-            .finish();
-            let error_text = render_copyable_text_field(
-                CopyableTextFieldConfig::new(fetch_error.clone())
-                    .with_font_size(ui_font_size)
-                    .with_text_color(theme.ansi_fg_red())
-                    .with_wrap_text(true)
-                    .with_icon_size(16.)
-                    .with_mouse_state(self.mouse_state_for_copy_button(CopyButtonKind::FetchError))
-                    .with_last_copied_at(self.copy_feedback_times.get(&CopyButtonKind::FetchError))
-                    .with_cross_axis_alignment(CrossAxisAlignment::Start),
-                |ctx| {
-                    ctx.dispatch_typed_action(ConversationDetailsPanelAction::CopyFetchError);
-                },
-                app,
-            );
-            let error_row = Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Start)
-                .with_child(Container::new(error_icon).with_margin_right(4.).finish())
-                .with_child(Expanded::new(1., error_text).finish())
-                .finish();
-            let error_banner = Container::new(error_row)
-                .with_uniform_padding(8.)
-                .with_background(coloru_with_opacity(theme.ansi_fg_red(), 10))
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
-                .finish();
             content.add_child(
-                Container::new(error_banner)
+                Container::new(self.render_fetch_error_notice(fetch_error, appearance, app))
                     .with_margin_bottom(FIELD_SPACING)
                     .finish(),
             );
@@ -2113,7 +2180,7 @@ impl TypedActionView for ConversationDetailsPanel {
             ConversationDetailsPanelAction::CopyFetchError => {
                 if let Some(error) = &self.data.fetch_error {
                     ctx.clipboard()
-                        .write(ClipboardContent::plain_text(error.clone()));
+                        .write(ClipboardContent::plain_text(error.message().to_string()));
                     self.record_copy(CopyButtonKind::FetchError, ctx);
                 }
             }

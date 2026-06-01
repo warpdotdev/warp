@@ -1114,6 +1114,58 @@ fn test_on_session_share_ended_enables_followup_input_without_tombstone_for_owne
 }
 
 #[test]
+fn test_on_session_share_ended_shows_tombstone_for_github_action_ambient_session() {
+    let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
+    let _flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        let terminal = terminal_view_for_viewer(&mut app);
+        let mut task = create_cloud_mode_task_for_user(TEST_USER_UID);
+        task.source = Some(AgentSource::GitHubAction);
+        let task_id = task.task_id;
+
+        insert_cloud_mode_task_with_server_metadata(
+            &mut app,
+            terminal.id(),
+            task,
+            AIAgentHarness::Oz,
+            current_user_owner_permissions(),
+        );
+        let initial_block_height_items = terminal.read(&app, |view, _| {
+            view.model.lock().block_list().block_heights().items().len()
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                    task_id.to_string(),
+                )));
+            view.on_session_share_ended(ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let model = view.model.lock();
+            assert_eq!(
+                model.block_list().block_heights().items().len(),
+                initial_block_height_items + 2
+            );
+            assert!(view.conversation_ended_tombstone_view_id.is_some());
+            assert_eq!(view.pending_cloud_followup_task_id, None);
+            assert!(!view.is_input_box_visible(&model, ctx));
+            assert_eq!(
+                view.input()
+                    .as_ref(ctx)
+                    .editor()
+                    .as_ref(ctx)
+                    .interaction_state(ctx),
+                InteractionState::Selectable
+            );
+        });
+    });
+}
+
+#[test]
 fn test_on_session_share_ended_hides_input_for_no_cta_tombstone() {
     let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
     let _setup_v2_flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
@@ -1369,6 +1421,60 @@ fn test_on_ambient_agent_execution_ended_enables_followup_for_owned_task_without
                     .as_ref(ctx)
                     .interaction_state(ctx),
                 InteractionState::Editable
+            );
+        });
+    });
+}
+
+#[test]
+fn test_on_ambient_agent_execution_ended_shows_tombstone_for_github_action_ambient_session() {
+    let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
+    let _setup_v2_flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        let terminal = terminal_view_for_viewer(&mut app);
+        let mut task = create_cloud_mode_task_for_user(TEST_USER_UID);
+        task.source = Some(AgentSource::GitHubAction);
+        let task_id = task.task_id;
+
+        insert_cloud_mode_task_with_server_metadata(
+            &mut app,
+            terminal.id(),
+            task,
+            AIAgentHarness::Oz,
+            current_user_owner_permissions(),
+        );
+        let initial_block_height_items = terminal.read(&app, |view, _| {
+            view.model.lock().block_list().block_heights().items().len()
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            let mut model = view.model.lock();
+            model.set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                task_id.to_string(),
+            )));
+            model.set_shared_session_status(SharedSessionStatus::NotShared);
+            drop(model);
+
+            view.on_ambient_agent_execution_ended(ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let model = view.model.lock();
+            assert_eq!(
+                model.block_list().block_heights().items().len(),
+                initial_block_height_items + 1
+            );
+            assert!(view.conversation_ended_tombstone_view_id.is_some());
+            assert_eq!(view.pending_cloud_followup_task_id, None);
+            assert!(!view.is_input_box_visible(&model, ctx));
+            assert_eq!(
+                view.input()
+                    .as_ref(ctx)
+                    .editor()
+                    .as_ref(ctx)
+                    .interaction_state(ctx),
+                InteractionState::Selectable
             );
         });
     });
@@ -1640,6 +1746,49 @@ fn test_try_submit_pending_cloud_followup_allows_repeat_submission_for_owned_tas
                     .as_ref(ctx)
                     .pending_followup_prompt(),
                 Some("second follow up")
+            );
+        });
+    });
+}
+
+#[test]
+fn test_try_submit_pending_cloud_followup_rejects_task_source_that_blocks_followups() {
+    let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
+    let _setup_v2_flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        let terminal = cloud_mode_terminal_for_test(&mut app);
+        let mut task = create_cloud_mode_task_for_user(TEST_USER_UID);
+        task.source = Some(AgentSource::GitHubAction);
+        let task_id = task.task_id;
+
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            model.insert_task_for_test(task);
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                    task_id.to_string(),
+                )));
+
+            let ambient_agent_view_model = view
+                .ambient_agent_view_model()
+                .expect("cloud mode terminal should have ambient model")
+                .clone();
+            ambient_agent_view_model.update(ctx, |model, ctx| {
+                model.enter_viewing_existing_session(task_id, ctx);
+            });
+
+            view.enable_cloud_followup_input(task_id, ctx);
+            assert!(!view.try_submit_pending_cloud_followup("follow up".to_string(), ctx));
+            assert_eq!(view.pending_cloud_followup_task_id, None);
+            assert_eq!(
+                ambient_agent_view_model
+                    .as_ref(ctx)
+                    .pending_followup_prompt(),
+                None
             );
         });
     });

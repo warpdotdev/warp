@@ -688,6 +688,9 @@ fn test_git_status_pr_info_updates_github_pr_chip_value() {
                 Some(PrInfo {
                     number: 123,
                     url: "https://github.com/warp/warp/pull/123".to_string(),
+                    state: "OPEN".to_string(),
+                    draft: true,
+                    base_branch: "main".to_string(),
                 }),
                 ctx,
             );

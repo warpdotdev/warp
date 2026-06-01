@@ -1418,7 +1418,7 @@ impl LocalDiffStateModel {
             self.load_diffs_for_current_repo(false, false, ctx);
         }
         if let Some(metadata) = self.metadata.clone() {
-            ctx.emit(DiffStateModelEvent::MetadataRefreshed(metadata));
+            ctx.emit(DiffStateModelEvent::MetadataRefreshed(Box::new(metadata)));
         }
     }
 

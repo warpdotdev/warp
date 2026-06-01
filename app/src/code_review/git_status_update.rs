@@ -12,8 +12,8 @@ use {
     crate::terminal::session_settings::{GithubPrPromptChipDefaultValidation, SessionSettings},
     crate::throttle::throttle,
     crate::util::git::{
-        detect_current_branch_display, detect_main_branch, get_pr_for_branch, is_gh_auth_error,
-        is_gh_missing_error, PrInfo,
+        detect_current_branch_display, detect_main_branch, get_pr_for_branch, get_repository_info,
+        is_gh_auth_error, is_gh_missing_error,
     },
     async_channel::Sender,
     repo_metadata::{
@@ -30,8 +30,11 @@ use {
 
 #[cfg(feature = "local_fs")]
 use super::diff_state::{diff_metadata_against_head, DiffStats};
+use crate::util::git::{PrInfo, RepositoryInfo};
 #[cfg(feature = "local_fs")]
 const PR_INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(feature = "local_fs")]
+const REPOSITORY_INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Public metadata exposed to consumers — the subset of diff metadata
 /// that the git chip (prompt display, agent view footer) needs.
@@ -151,6 +154,8 @@ pub struct GitRepoStatusModel {
     subscriber_id: Option<SubscriberId>,
     metadata: Option<GitStatusMetadata>,
     computing_metadata_abort_handle: Option<SpawnedFutureHandle>,
+    computing_repository_info_abort_handle: Option<SpawnedFutureHandle>,
+    repository_info: Option<RepositoryInfo>,
     /// In-flight PR info fetch state. Used to make `refresh_pr_info`
     /// idempotent: while a fetch for the current branch is in flight,
     /// additional calls are no-ops.
@@ -160,6 +165,24 @@ pub struct GitRepoStatusModel {
     pr_info_consumers: HashSet<EntityId>,
     /// PR info for the current branch.
     pr_info: Option<PrInfo>,
+}
+
+#[cfg(not(feature = "local_fs"))]
+pub struct GitRepoStatusModel;
+
+#[cfg(not(feature = "local_fs"))]
+impl Entity for GitRepoStatusModel {
+    type Event = ();
+}
+
+#[cfg(not(feature = "local_fs"))]
+impl GitRepoStatusModel {
+    pub fn repository_info(&self) -> Option<&RepositoryInfo> {
+        None
+    }
+    pub fn pr_info(&self) -> Option<&PrInfo> {
+        None
+    }
 }
 
 #[cfg(feature = "local_fs")]
@@ -191,6 +214,8 @@ impl GitRepoStatusModel {
             subscriber_id: None,
             metadata: None,
             computing_metadata_abort_handle: None,
+            computing_repository_info_abort_handle: None,
+            repository_info: None,
             refreshing_pr_info: None,
             pr_info_consumers: HashSet::new(),
             pr_info: None,
@@ -284,6 +309,11 @@ impl GitRepoStatusModel {
         self.metadata.as_ref()
     }
 
+    /// Repository info returned by `gh repo view`.
+    pub fn repository_info(&self) -> Option<&RepositoryInfo> {
+        self.repository_info.as_ref()
+    }
+
     /// Whether a PR info fetch is currently in flight.
     pub fn is_refreshing_pr_info(&self) -> bool {
         self.refreshing_pr_info.is_some()
@@ -329,6 +359,7 @@ impl GitRepoStatusModel {
     /// events that may have changed git state (block completed, agent file
     /// edits, etc.).
     pub fn refresh_metadata(&mut self, ctx: &mut ModelContext<Self>) {
+        self.refresh_repository_info(ctx);
         if let Some(handle) = self.computing_metadata_abort_handle.take() {
             handle.abort();
         }
@@ -342,6 +373,51 @@ impl GitRepoStatusModel {
     }
 
     // ── internal helpers ────────────────────────────────────────────────
+
+    fn refresh_repository_info(&mut self, ctx: &mut ModelContext<Self>) {
+        if let Some(handle) = self.computing_repository_info_abort_handle.take() {
+            handle.abort();
+        }
+        let repo_path = self.repo_path.clone();
+        #[cfg(feature = "local_tty")]
+        let path_future = {
+            // Use the shell's interactive PATH so `gh` can be found when Warp
+            // was launched outside of a login shell, e.g. from the macOS GUI.
+            use crate::terminal::local_shell::LocalShellState;
+            LocalShellState::handle(ctx).update(ctx, |shell_state, ctx| {
+                shell_state.get_interactive_path_env_var(ctx)
+            })
+        };
+        #[cfg(not(feature = "local_tty"))]
+        let path_future = futures::future::ready(None);
+        self.computing_repository_info_abort_handle = Some(ctx.spawn(
+            async move {
+                let path_env = path_future.await;
+                let fetch = get_repository_info(&repo_path, path_env.as_deref());
+                let timeout = async_io::Timer::after(REPOSITORY_INFO_FETCH_TIMEOUT);
+                futures::pin_mut!(fetch);
+                match futures::future::select(fetch, timeout).await {
+                    futures::future::Either::Left((result, _)) => result,
+                    futures::future::Either::Right((_, _)) => {
+                        Err(anyhow::anyhow!("Repository info fetch timed out"))
+                    }
+                }
+            },
+            |me, result, ctx| {
+                let repository_info = match result {
+                    Ok(repository_info) => repository_info,
+                    Err(err) => {
+                        log::debug!("GitRepoStatusModel: repository info load failed: {err}");
+                        None
+                    }
+                };
+                if me.repository_info != repository_info {
+                    me.repository_info = repository_info;
+                    ctx.emit(GitRepoStatusEvent::MetadataChanged);
+                }
+            },
+        ));
+    }
 
     /// Fetch PR info. Called by the periodic timer and after `gh`/`gt`
     /// commands. Missing/auth setup failures suppress the default chip, but
@@ -562,6 +638,8 @@ impl GitRepoStatusModel {
             subscriber_id: None,
             metadata,
             computing_metadata_abort_handle: None,
+            computing_repository_info_abort_handle: None,
+            repository_info: None,
             refreshing_pr_info: None,
             pr_info_consumers: HashSet::new(),
             pr_info: None,
@@ -583,6 +661,15 @@ impl GitRepoStatusModel {
         if previous_branch != current_branch && self.pr_info.take().is_some() {
             ctx.emit(GitRepoStatusEvent::PrInfoChanged);
         }
+    }
+
+    pub(crate) fn set_repository_info_for_test(
+        &mut self,
+        repository_info: Option<RepositoryInfo>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.repository_info = repository_info;
+        ctx.emit(GitRepoStatusEvent::MetadataChanged);
     }
 
     #[cfg(test)]
@@ -607,6 +694,9 @@ impl Drop for GitRepoStatusModel {
         // not have access to `ModelContext`.  The `Repository` model will clean
         // up the subscriber when it notices the channel has been dropped.
         if let Some(handle) = self.computing_metadata_abort_handle.take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.computing_repository_info_abort_handle.take() {
             handle.abort();
         }
         if let Some(refreshing) = self.refreshing_pr_info.take() {

@@ -52,7 +52,7 @@ fn add_model(app: &mut App) -> warpui::ModelHandle<AmbientAgentViewModel> {
 
 fn retry_request(prompt: impl Into<String>) -> SpawnAgentRequest {
     SpawnAgentRequest {
-        prompt: prompt.into(),
+        prompt: Some(prompt.into()),
         mode: crate::server::server_api::ai::UserQueryMode::Normal,
         config: Some(AgentConfigSnapshot {
             environment_id: Some("env-123".to_string()),
@@ -141,7 +141,7 @@ fn github_auth_completed_retries_stored_initial_run_request() {
                 }
             ));
             let request = model.request().expect("retry should spawn a request");
-            assert_eq!(request.prompt, "retry this");
+            assert_eq!(request.prompt.as_deref(), Some("retry this"));
             assert_eq!(request.attachments.len(), 1);
             assert_eq!(request.interactive, Some(true));
             assert_eq!(request.team, Some(true));
@@ -274,7 +274,7 @@ fn queue_handoff_auto_submit_enters_waiting_state_without_consuming_launch() {
                 }
             ));
             let request = model.request().expect("request should be populated");
-            assert_eq!(request.prompt, "fix tests");
+            assert_eq!(request.prompt.as_deref(), Some("fix tests"));
             assert_eq!(
                 request.conversation_id.as_deref(),
                 Some("forked-conversation")
@@ -337,7 +337,7 @@ fn fresh_launch_queues_handoff_with_no_conversation_id() {
         assert!(queued);
         model.read(&app, |model, _| {
             let request = model.request().expect("request should be populated");
-            assert_eq!(request.prompt, "fix tests");
+            assert_eq!(request.prompt.as_deref(), Some("fix tests"));
             assert!(request.conversation_id.is_none());
             assert_eq!(request.attachments.len(), 1);
         });

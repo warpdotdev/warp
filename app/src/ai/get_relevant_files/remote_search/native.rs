@@ -1,6 +1,13 @@
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::str::FromStr;
+use std::sync::Arc;
+
+use ::ai::index::full_source_code_embedding::search_shaping::{
+    build_fragments_from_file_contents, fragments_to_context_locations,
+};
+use ::ai::index::full_source_code_embedding::store_client::StoreClient;
 use ::ai::index::full_source_code_embedding::{
-    search_shaping::{build_fragments_from_file_contents, fragments_to_context_locations},
-    store_client::StoreClient,
     ContentHash, FragmentMetadata as AiFragmentMetadata, FragmentMetadataLocation, RepoMetadata,
 };
 use ::ai::index::locations::CodeContextLocation;
@@ -8,12 +15,6 @@ use itertools::Itertools;
 use remote_server::proto::{
     file_context_proto, FragmentMetadata as ProtoFragmentMetadata, LineRange, ReadFileContextFile,
     ReadFileContextRequest, ReadFileContextResponse,
-};
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-    str::FromStr,
-    sync::Arc,
 };
 use string_offset::ByteOffset;
 use warpui::{AppContext, ModelContext, SingletonEntity};
