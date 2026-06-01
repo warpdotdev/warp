@@ -1,8 +1,9 @@
 #![allow(deprecated)]
 use std::collections::HashSet;
 
-use super::*;
 use warp_multi_agent_api as api;
+
+use super::*;
 // Helper for constructing lifecycle pending events with minimal boilerplate.
 // Tests use this to focus on queue/coalescing behavior rather than payload setup.
 
