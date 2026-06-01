@@ -78,6 +78,6 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 #[path = "utils_tests.rs"]
 mod tests;
