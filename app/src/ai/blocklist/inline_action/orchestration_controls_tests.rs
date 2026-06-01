@@ -174,25 +174,24 @@ fn resolve_from_config_sanitizes_disabled_local_harness() {
 }
 
 #[test]
-fn select_create_new_auth_secret_resets_named_to_unset() {
+fn select_create_new_auth_secret_marks_creating_new_from_named() {
     let mut state = remote_claude_state();
     state.auth_secret_selection = AuthSecretSelection::Named("my-key".to_string());
     assert_eq!(state.auth_secret_name(), Some("my-key"));
 
     state.select_create_new_auth_secret();
 
-    // `Unset` + a visible picker is what blocks Accept and shows the
-    // "New API key…" label.
+    // `CreatingNew` (distinct from `Unset`) blocks Accept and isn't re-seeded.
     assert!(matches!(
         state.auth_secret_selection,
-        AuthSecretSelection::Unset
+        AuthSecretSelection::CreatingNew
     ));
     assert_eq!(state.auth_secret_name(), None);
     assert!(should_show_auth_secret_picker(&state));
 }
 
 #[test]
-fn select_create_new_auth_secret_resets_inherit_to_unset() {
+fn select_create_new_auth_secret_marks_creating_new_from_inherit() {
     let mut state = remote_claude_state();
     state.auth_secret_selection = AuthSecretSelection::Inherit;
 
@@ -200,6 +199,6 @@ fn select_create_new_auth_secret_resets_inherit_to_unset() {
 
     assert!(matches!(
         state.auth_secret_selection,
-        AuthSecretSelection::Unset
+        AuthSecretSelection::CreatingNew
     ));
 }
