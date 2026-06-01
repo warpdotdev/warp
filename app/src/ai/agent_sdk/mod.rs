@@ -48,7 +48,7 @@ use crate::ai::agent_sdk::driver::harness::{harness_kind, HarnessKind};
 use crate::ai::agent_sdk::driver::{AgentDriverOptions, AgentRunPrompt, Task};
 use crate::ai::agent_sdk::mcp_config::build_mcp_servers_from_specs;
 use crate::ai::agent_sdk::setup_observability::{
-    SetupClientEventReporter, SetupStep, SetupTimelineEvent,
+    OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
 };
 use crate::ai::ambient_agents::task::HarnessConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -618,7 +618,7 @@ impl AgentDriverRunner {
             None => SetupClientEventReporter::noop(server_api.clone(), background),
         };
         setup_events
-            .post_timeline_event(SetupTimelineEvent::WorkerContainerReady)
+            .post_timeline_event(OzRunTimelineEvent::WorkerContainerReady)
             .await;
 
         // Ensure we've synced team state before starting the driver.

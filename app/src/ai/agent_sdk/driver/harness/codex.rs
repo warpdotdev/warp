@@ -28,7 +28,7 @@ use super::{
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::setup_observability::{
-    SetupClientEventReporter, SetupStep, SetupTimelineEvent,
+    OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
 };
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -334,7 +334,7 @@ impl HarnessRunner for CodexHarnessRunner {
             .await??
             .await?;
         setup_events
-            .post_timeline_event(SetupTimelineEvent::AgentStarted)
+            .post_timeline_event(OzRunTimelineEvent::AgentStarted)
             .await;
 
         *self.state.lock() = CodexRunnerState::Running {
