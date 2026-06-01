@@ -148,7 +148,7 @@ impl FileSearchModel {
             Some(LocalOrRemotePath::Remote(ref remote_path)) => {
                 let id = RepositoryIdentifier::Remote(remote_path.clone());
                 let repo_metadata = RepoMetadataModel::as_ref(app);
-                let Some(contents) =
+                let Ok(contents) =
                     repo_metadata.get_repo_contents(&id, GetContentsArgs::default(), app)
                 else {
                     return Vec::new();
@@ -253,7 +253,7 @@ impl FileSearchModel {
                 let Some(id) = RepositoryIdentifier::try_local(local_path) else {
                     return Vec::new();
                 };
-                let Some(contents) =
+                let Ok(contents) =
                     repo_metadata.get_repo_contents(&id, GetContentsArgs::default(), app)
                 else {
                     return Vec::new();
@@ -294,7 +294,7 @@ impl FileSearchModel {
             }
             LocalOrRemotePath::Remote(remote_path) => {
                 let id = RepositoryIdentifier::Remote(remote_path.clone());
-                let Some(contents) =
+                let Ok(contents) =
                     repo_metadata.get_repo_contents(&id, GetContentsArgs::default(), app)
                 else {
                     return Vec::new();
