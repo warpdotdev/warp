@@ -37,6 +37,15 @@ const PREFIXES_TO_REMOVE: [&str; 2] = ["a/", "b/"];
 #[cfg(feature = "local_fs")]
 const SUFFIXES_TO_REMOVE: [&str; 1] = ["@"];
 
+/// Natural-language terminal output often ends a sentence with a path followed by a period.
+/// Try this suffix before the raw token so Windows path normalization cannot validate `foo.md.`
+/// as `foo.md` while leaving the visible link range on the sentence period.
+#[cfg(all(feature = "local_fs", windows))]
+const PREFERRED_SUFFIXES_TO_REMOVE: [&str; 1] = ["."];
+
+#[cfg(all(feature = "local_fs", not(windows)))]
+const PREFERRED_SUFFIXES_TO_REMOVE: [&str; 0] = [];
+
 /// Highlighted link within a terminal model grid.
 #[derive(Debug, Clone)]
 pub enum GridHighlightedLink {
@@ -500,6 +509,28 @@ impl super::TerminalView {
         let mut link = None;
         'path_loop: for within_model_possible_path in possible_paths {
             let possible_path = within_model_possible_path.get_inner();
+            for suffix in PREFERRED_SUFFIXES_TO_REMOVE {
+                if let Some((new_possible_cleaned_path, new_range)) =
+                    Self::strip_suffix_from_possible_path(possible_path, max_columns, suffix)
+                {
+                    let absolute_path = absolute_path_if_valid(
+                        &new_possible_cleaned_path,
+                        ShellPathType::ShellNative(working_directory.to_string()),
+                        shell_launch_data.as_ref(),
+                    );
+
+                    if let Some(absolute_path) = absolute_path {
+                        link = Some(Self::create_valid_link(
+                            absolute_path,
+                            new_possible_cleaned_path.line_and_column_num,
+                            new_range,
+                            &within_model_possible_path,
+                        ));
+                        break 'path_loop;
+                    }
+                }
+            }
+
             // We want to check if the clean path result is a valid path and get the canonical
             // absolute path back.
             let absolute_path = absolute_path_if_valid(
@@ -551,11 +582,9 @@ impl super::TerminalView {
             }
 
             for suffix in SUFFIXES_TO_REMOVE {
-                if let Some(new_possible_path) = possible_path.path.path.strip_suffix(suffix) {
-                    let new_possible_cleaned_path = CleanPathResult {
-                        path: new_possible_path.into(),
-                        line_and_column_num: possible_path.path.line_and_column_num,
-                    };
+                if let Some((new_possible_cleaned_path, new_range)) =
+                    Self::strip_suffix_from_possible_path(possible_path, max_columns, suffix)
+                {
                     let absolute_path = absolute_path_if_valid(
                         &new_possible_cleaned_path,
                         ShellPathType::ShellNative(working_directory.to_string()),
@@ -564,15 +593,10 @@ impl super::TerminalView {
 
                     // check if new_possible_path is valid
                     if let Some(absolute_path) = absolute_path {
-                        let new_end_point = possible_path
-                            .range
-                            .end()
-                            .wrapping_sub(max_columns, suffix.len());
-
                         link = Some(Self::create_valid_link(
                             absolute_path,
                             new_possible_cleaned_path.line_and_column_num,
-                            *possible_path.range.start()..=new_end_point,
+                            new_range,
                             &within_model_possible_path,
                         ));
 
@@ -584,6 +608,27 @@ impl super::TerminalView {
         }
 
         link.map(GridHighlightedLink::File)
+    }
+
+    fn strip_suffix_from_possible_path(
+        possible_path: &grid_handler::PossiblePath,
+        max_columns: usize,
+        suffix: &str,
+    ) -> Option<(CleanPathResult, std::ops::RangeInclusive<Point>)> {
+        let new_possible_path = possible_path.path.path.strip_suffix(suffix)?;
+        let new_possible_cleaned_path = CleanPathResult {
+            path: new_possible_path.into(),
+            line_and_column_num: possible_path.path.line_and_column_num,
+        };
+        let new_end_point = possible_path
+            .range
+            .end()
+            .wrapping_sub(max_columns, suffix.chars().count());
+
+        Some((
+            new_possible_cleaned_path,
+            *possible_path.range.start()..=new_end_point,
+        ))
     }
 
     fn create_valid_link(
@@ -627,3 +672,7 @@ impl super::TerminalView {
         }
     }
 }
+
+#[cfg(all(test, feature = "local_fs"))]
+#[path = "link_detection_tests.rs"]
+mod tests;
