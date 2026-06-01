@@ -700,6 +700,9 @@ jobs:
             exit 1
           fi
 
+      - name: Check for inline Rust test modules
+        run: ./script/check_no_inline_test_modules
+
   wasm-lint:
     name: Formatting + Clippy (wasm)
     timeout-minutes: 20

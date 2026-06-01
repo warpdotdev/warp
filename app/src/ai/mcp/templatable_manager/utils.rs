@@ -77,3 +77,7 @@ where
         }
     }
 }
+
+#[cfg(test)]
+#[path = "utils_tests.rs"]
+mod tests;
