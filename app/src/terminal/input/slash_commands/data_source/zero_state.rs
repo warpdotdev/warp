@@ -58,6 +58,7 @@ impl SyncDataSource for ZeroStateDataSource {
             &*commands::CREATE_ENVIRONMENT,
             &*commands::EDIT,
             &commands::CONVERSATIONS,
+            &commands::HISTORY,
             &commands::PROMPTS,
             &*commands::PLAN,
             &commands::AGENT,

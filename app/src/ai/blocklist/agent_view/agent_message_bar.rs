@@ -64,6 +64,7 @@ pub struct AgentMessageBarMouseStates {
     pub fork_from_last_known_good_state: MouseStateHandle,
     pub toggle_shortcuts: MouseStateHandle,
     pub toggle_slash_commands: MouseStateHandle,
+    pub open_prompt_history: MouseStateHandle,
     pub toggle_plan: MouseStateHandle,
     pub toggle_conversation_menu: MouseStateHandle,
     pub toggle_code_review: MouseStateHandle,
@@ -579,6 +580,32 @@ impl MessageProvider<AgentMessageArgs<'_>> for ZeroStateMessageProducer {
         let is_cloud_agent =
             is_in_cloud_context(agent_view_controller.agent_view_state(), terminal_model);
         let ai_settings = AISettings::as_ref(app);
+
+        if is_cloud_agent {
+            items.push(
+                MessageItem::clickable(
+                    vec![
+                        MessageItem::Keystroke {
+                            keystroke: Keystroke {
+                                key: "up".to_owned(),
+                                ..Default::default()
+                            },
+                            color: color_override_for_shortcuts_and_commands,
+                            background_color: bg_color_override_for_shortcuts_and_commands,
+                        },
+                        MessageItem::Text {
+                            content: "for prompt history".into(),
+                            color: color_override_for_shortcuts_and_commands,
+                        },
+                    ],
+                    |ctx| {
+                        ctx.dispatch_typed_action(InputAction::OpenInlineHistoryMenu);
+                    },
+                    mouse_states.open_prompt_history.clone(),
+                )
+                .with_is_disabled(!is_buffer_empty),
+            );
+        }
 
         // Handoff to cloud only available for local agents.
         if !is_cloud_agent && ai_settings.is_ampersand_handoff_enabled(app) {

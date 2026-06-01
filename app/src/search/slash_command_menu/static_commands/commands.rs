@@ -501,6 +501,15 @@ pub const CONVERSATIONS: StaticCommand = StaticCommand {
     argument: None,
 };
 
+pub const HISTORY: StaticCommand = StaticCommand {
+    name: "/history",
+    description: "Open prompt history",
+    icon_path: "bundled/svg/conversation.svg",
+    availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
 pub static PROMPTS: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/prompts",
     description: "Search saved prompts",
@@ -631,6 +640,7 @@ fn all_commands() -> Vec<StaticCommand> {
         SET_TAB_COLOR.clone(),
         USAGE,
         CONVERSATIONS,
+        HISTORY,
         EXPORT_TO_CLIPBOARD,
         MODEL.clone(),
     ];
@@ -768,6 +778,20 @@ mod tests {
         assert!(!argument.is_optional);
         assert!(!argument.should_execute_on_selection);
         assert_eq!(argument.hint_text, Some("<tab name>"));
+    }
+
+    #[test]
+    fn history_command_alias_is_registered() {
+        let command = COMMAND_REGISTRY
+            .get_command_with_name(HISTORY.name)
+            .expect("expected /history to be registered");
+
+        assert_eq!(command.name, "/history");
+        assert_eq!(command.description, "Open prompt history");
+        assert_eq!(command.icon_path, CONVERSATIONS.icon_path);
+        assert_eq!(command.availability, Availability::AI_ENABLED);
+        assert!(!command.auto_enter_ai_mode);
+        assert!(command.argument.is_none());
     }
 
     #[cfg(not(target_family = "wasm"))]
