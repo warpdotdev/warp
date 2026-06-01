@@ -177,6 +177,8 @@ use watcher::HomeDirectoryWatcher;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::aws_credentials::AwsCredentialRefresher as _;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::grok_subscription::GrokTokenRefresher as _;
 use crate::ai::mcp::{FileBasedMCPManager, FileMCPWatcher};
 use crate::uri::web_intent_parser::maybe_rewrite_web_url_to_intent;
 pub mod workflows;
@@ -1313,6 +1315,12 @@ pub(crate) fn initialize_app(
         let mut manager = ::ai::api_keys::ApiKeyManager::new(ctx);
         #[cfg(not(target_family = "wasm"))]
         manager.subscribe_to_settings_changes(ctx);
+        // Resume proactive refresh of any Grok subscription tokens restored from
+        // secure storage so requests keep authenticating with the connection.
+        #[cfg(not(target_family = "wasm"))]
+        if FeatureFlag::GrokOauth.is_enabled() {
+            manager.ensure_grok_token_fresh(ctx);
+        }
         manager
     });
 

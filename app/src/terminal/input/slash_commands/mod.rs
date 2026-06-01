@@ -355,6 +355,88 @@ impl Input {
         }
     }
 
+    /// Kicks off the xAI (Grok) subscription OAuth flow: opens the consent
+    /// screen in the browser, runs a loopback PKCE callback server, exchanges
+    /// the resulting authorization code for OAuth tokens, and persists them via
+    /// `ApiKeyManager` (which then proactively refreshes them before expiry).
+    #[cfg(not(target_family = "wasm"))]
+    fn start_grok_oauth(&mut self, ctx: &mut ViewContext<Self>) {
+        use ai::api_keys::ApiKeyManager;
+
+        use crate::ai::grok_oauth;
+        use crate::ai::grok_subscription::GrokTokenRefresher;
+
+        // Bind the loopback callback server before opening the browser so a
+        // bind failure surfaces immediately, without a dangling browser tab.
+        let listener = match grok_oauth::bind_callback_listener() {
+            Ok(listener) => listener,
+            Err(err) => {
+                log::error!("Failed to start Grok OAuth callback server: {err:#}");
+                let window_id = ctx.window_id();
+                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(
+                        DismissibleToast::error(format!("Couldn't start Grok login: {err}")),
+                        window_id,
+                        ctx,
+                    );
+                });
+                return;
+            }
+        };
+
+        let pkce = grok_oauth::PkceParams::generate();
+        let auth_url = grok_oauth::authorize_url(&pkce);
+
+        // Open xAI's consent screen in the user's default browser.
+        ctx.open_url(&auth_url);
+
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(
+                DismissibleToast::default(
+                    "Opening your browser to connect your Grok subscription…".to_owned(),
+                ),
+                window_id,
+                ctx,
+            );
+        });
+
+        ctx.spawn(
+            async move { grok_oauth::run_oauth_flow(listener, pkce).await },
+            |_input, result, ctx| {
+                let window_id = ctx.window_id();
+                let toast = match result {
+                    Ok(tokens) => {
+                        // Log only non-sensitive metadata, never the token values themselves
+                        // (log the access token's length rather than the token itself).
+                        log::info!(
+                            "Grok OAuth succeeded (access_token_len={}, token_type={:?}, scope={:?}, expires_in={:?}, has_refresh_token={})",
+                            tokens.access_token.len(),
+                            tokens.token_type,
+                            tokens.scope,
+                            tokens.expires_in,
+                            tokens.refresh_token.is_some(),
+                        );
+                        // Persist the tokens to secure storage and kick off the
+                        // proactive refresh loop so subsequent requests can
+                        // authenticate with the connected subscription.
+                        ApiKeyManager::handle(ctx).update(ctx, move |manager, ctx| {
+                            manager.store_grok_tokens(tokens, ctx);
+                        });
+                        DismissibleToast::default("Connected your Grok subscription".to_owned())
+                    }
+                    Err(err) => {
+                        log::error!("Grok OAuth failed: {err:#}");
+                        DismissibleToast::error(format!("Grok login failed: {err}"))
+                    }
+                };
+                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+                });
+            },
+        );
+    }
+
     /// Executes the given `command` with `argument`, if any.
     ///
     /// When `is_queued_prompt` is true, this is the first send of a previously queued prompt:
@@ -1095,6 +1177,13 @@ impl Input {
                 // prefix, and special handling is done downstream as an implementation detail
                 // of handling user queries with specific slash command prefixes.
                 return false;
+            }
+            #[cfg(not(target_family = "wasm"))]
+            grok if command.name == commands::GROK.name => {
+                if !FeatureFlag::GrokOauth.is_enabled() {
+                    return false;
+                }
+                self.start_grok_oauth(ctx);
             }
             _ => {
                 debug_assert!(

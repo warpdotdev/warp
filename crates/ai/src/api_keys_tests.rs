@@ -1,11 +1,27 @@
+use std::time::{Duration, SystemTime};
+
 use super::*;
 
 fn make_manager(keys: ApiKeys) -> ApiKeyManager {
+    make_manager_with_grok(keys, None)
+}
+
+fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> ApiKeyManager {
     ApiKeyManager {
         keys,
+        grok_tokens,
         aws_credentials_state: AwsCredentialsState::Missing,
         aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
         secure_storage_write_version: 0,
+        grok_secure_storage_write_version: 0,
+    }
+}
+
+fn grok_tokens(access_token: &str, expires_in: Option<u64>) -> GrokTokens {
+    GrokTokens {
+        access_token: access_token.into(),
+        refresh_token: Some("refresh".into()),
+        expires_at: expires_in.map(|secs| SystemTime::now() + Duration::from_secs(secs)),
     }
 }
 
@@ -333,4 +349,81 @@ fn api_keys_for_request_none_for_custom_endpoints_only() {
         ..Default::default()
     });
     assert!(mgr.api_keys_for_request(true, false).is_none());
+}
+
+// ── grok oauth token ────────────────────────────────────────────
+
+#[test]
+fn grok_valid_access_token_present_without_expiry() {
+    let t = GrokTokens {
+        access_token: "tok".into(),
+        refresh_token: None,
+        expires_at: None,
+    };
+    assert_eq!(t.valid_access_token(), Some("tok"));
+}
+
+#[test]
+fn grok_valid_access_token_blank_is_none() {
+    let t = GrokTokens {
+        access_token: "   ".into(),
+        refresh_token: None,
+        expires_at: None,
+    };
+    assert_eq!(t.valid_access_token(), None);
+}
+
+#[test]
+fn grok_valid_access_token_near_expiry_is_none() {
+    // Expires now, i.e. within the skew window, so it should not be sent.
+    let t = grok_tokens("tok", Some(0));
+    assert_eq!(t.valid_access_token(), None);
+}
+
+#[test]
+fn grok_valid_access_token_far_future_is_some() {
+    let t = grok_tokens("tok", Some(3600));
+    assert_eq!(t.valid_access_token(), Some("tok"));
+}
+
+#[test]
+fn grok_needs_refresh_within_lead_time() {
+    assert!(grok_tokens("tok", Some(30)).needs_refresh(Duration::from_secs(300)));
+    assert!(!grok_tokens("tok", Some(3600)).needs_refresh(Duration::from_secs(300)));
+    // Unknown expiry never reports as needing refresh.
+    assert!(!grok_tokens("tok", None).needs_refresh(Duration::from_secs(300)));
+}
+
+#[test]
+fn api_keys_for_request_includes_grok_token() {
+    let mgr = make_manager_with_grok(
+        ApiKeys::default(),
+        Some(grok_tokens("grok-abc", Some(3600))),
+    );
+    let result = mgr.api_keys_for_request(true, false).unwrap();
+    assert_eq!(result.grok_oauth_access_token, "grok-abc");
+    assert!(result.anthropic.is_empty());
+}
+
+#[test]
+fn api_keys_for_request_omits_grok_token_when_byo_disabled() {
+    let mgr = make_manager_with_grok(
+        ApiKeys::default(),
+        Some(grok_tokens("grok-abc", Some(3600))),
+    );
+    assert!(mgr.api_keys_for_request(false, false).is_none());
+}
+
+#[test]
+fn api_keys_for_request_omits_expired_grok_token() {
+    let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("grok-abc", Some(0))));
+    assert!(mgr.api_keys_for_request(true, false).is_none());
+}
+
+#[test]
+fn grok_tokens_serde_round_trip() {
+    let tokens = grok_tokens("grok-abc", Some(3600));
+    let json = serde_json::to_string(&tokens).unwrap();
+    let deser: GrokTokens = serde_json::from_str(&json).unwrap();
+    assert_eq!(tokens, deser);
 }

@@ -879,6 +879,11 @@ pub enum FeatureFlag {
 
     /// Gates the Grouped Tabs feature.
     GroupedTabs,
+
+    /// Gates the `/grok` slash command and the xAI (Grok) subscription OAuth
+    /// proof-of-concept flow, which lets users connect a Grok subscription
+    /// instead of pasting an API key.
+    GrokOauth,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -945,6 +950,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::RemoteCodebaseIndexing,
     FeatureFlag::GroupedTabs,
     FeatureFlag::AsyncFind,
+    FeatureFlag::GrokOauth,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

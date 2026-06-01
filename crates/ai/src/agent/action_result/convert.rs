@@ -989,6 +989,14 @@ impl TryFrom<RequestComputerUseResult> for api::request::input::tool_call_result
                                     height: screenshot.height as i32,
                                 }),
                                 platform: convert_platform(platform).into(),
+                                // Default newer background-computer-use fields
+                                // (e.g. `windows`) that the local proto override
+                                // for the Grok work pulls in but this client does
+                                // not yet populate. Keeps the build working
+                                // against both the pinned and overridden proto
+                                // revs; reconcile when background computer use is
+                                // adopted client-side.
+                                ..Default::default()
                             },
                         )),
                     },
@@ -1033,6 +1041,11 @@ impl TryFrom<UseComputerResult> for api::request::input::tool_call_result::Resul
                                     height: s.height as i32,
                                 }),
                                 cursor_position: result.cursor_position.map(vec_to_coordinates),
+                                // See note above: default newer background-
+                                // computer-use fields (`captured_window`,
+                                // `windows`) introduced by the local proto
+                                // override but not yet populated by this client.
+                                ..Default::default()
                             },
                         )),
                     },

@@ -109,6 +109,13 @@ pub async fn generate_multi_agent_output(
             supports_orchestration_v2: params.orchestration_enabled
                 && FeatureFlag::OrchestrationV2.is_enabled(),
             custom_model_providers: params.custom_model_providers,
+            // The local proto override for the unpushed Grok field is based on a
+            // newer proto that adds background-computer-use settings (e.g.
+            // `supports_background_computer_use`) this client does not set yet.
+            // Default them so the build works against both the pinned and
+            // overridden proto revs; reconcile when background computer use is
+            // adopted client-side.
+            ..Default::default()
         }),
         metadata: Some(api::request::Metadata {
             logging: logging_metadata,
