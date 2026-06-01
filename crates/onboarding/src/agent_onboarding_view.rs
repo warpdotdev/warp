@@ -4,10 +4,10 @@ use ai::LLMId;
 use instant::Instant;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
-use warpui::assets::asset_cache::AssetSource;
-use warpui::image_cache::ImageType;
-use warpui::windowing::state::{ApplicationStage, StateEvent};
+use warpui::assets::asset_cache::{AssetCache, AssetSource};
+use warpui::image_cache::{ImageCache, ImageType};
 use warpui::windowing::WindowManager;
+use warpui::windowing::state::{ApplicationStage, StateEvent};
 
 use crate::model::{
     OnboardingAuthState, OnboardingStateEvent, OnboardingStateModel, OnboardingStep,
@@ -23,7 +23,7 @@ use crate::telemetry::OnboardingEvent;
 const APP_BECAME_ACTIVE_DEBOUNCE: Duration = Duration::from_secs(15);
 
 use pathfinder_geometry::vector::vec2f;
-use ui_components::{button, Component as _, Options as _};
+use ui_components::{Component as _, Options as _, button};
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::WarpTheme;
 use warpui::elements::{
@@ -361,8 +361,25 @@ impl AgentOnboardingView {
     }
 
     fn handle_onboarding_completed(&mut self, ctx: &mut ViewContext<Self>) {
+        Self::cleanup_onboarding_images(ctx);
         let settings = self.onboarding_state.as_ref(ctx).settings();
         ctx.emit(AgentOnboardingEvent::OnboardingCompleted(settings));
+    }
+
+    /// Evicts all preloaded onboarding images from the asset and image caches
+    /// so their decoded pixel data (~hundreds of MB) is freed after onboarding.
+    fn cleanup_onboarding_images(ctx: &mut ViewContext<Self>) {
+        let asset_cache = AssetCache::as_ref(ctx);
+        let image_cache = ImageCache::as_ref(ctx);
+
+        let mut all_paths: Vec<&'static str> = Vec::new();
+        all_paths.push(crate::slides::layout::ONBOARDING_BG_PATH);
+        all_paths.extend_from_slice(IntentionSlide::VISUAL_IMAGE_PATHS);
+        all_paths.extend_from_slice(CustomizeUISlide::VISUAL_IMAGE_PATHS);
+        all_paths.extend_from_slice(ThirdPartySlide::VISUAL_IMAGE_PATHS);
+        all_paths.extend_from_slice(ThemePickerSlide::VISUAL_IMAGE_PATHS);
+
+        asset_cache.evict_bundled_assets::<ImageType>(&all_paths, image_cache);
     }
 
     fn handle_theme_picker_slide_event(

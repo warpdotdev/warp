@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Error, Result};
+use anyhow::{Error, Result, anyhow};
 use async_channel::{self, Receiver, Sender};
 use bytes::Bytes;
 use derivative::Derivative;
@@ -14,8 +14,8 @@ use futures::future::BoxFuture;
 use futures::{Future, FutureExt as _};
 
 use super::AssetProvider;
-use crate::image_cache::ImageCache;
 use crate::r#async::executor;
+use crate::image_cache::ImageCache;
 use crate::{Entity, ModelContext, SingletonEntity};
 
 pub trait FetchAsset: crate::r#async::Spawnable + Future<Output = Result<Bytes>> {}
@@ -385,6 +385,26 @@ impl AssetCache {
 
         if !image_ids.is_empty() {
             ctx.emit(AssetCacheEvent::ImagesEvicted { image_ids });
+        }
+    }
+
+    /// Removes the given bundled-asset entries from the in-memory cache.
+    ///
+    /// Call this when a set of preloaded assets (e.g. onboarding images) are no
+    /// longer needed so their decoded data can be freed. The next `load_asset`
+    /// call for any of these paths will reload the asset from the bundle.
+    ///
+    /// Also evicts any rendered copies held by `ImageCache`.
+    pub fn evict_bundled_assets<T: Asset>(&self, paths: &[&'static str], image_cache: &ImageCache) {
+        let mut assets = self.inner.borrow_mut();
+        for &path in paths {
+            let source = AssetSource::Bundled { path };
+            let key = AssetHandle {
+                source: source.clone(),
+                asset_type: TypeId::of::<T>(),
+            };
+            assets.remove(&key);
+            image_cache.evict_image(&source);
         }
     }
 
