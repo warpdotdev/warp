@@ -38,8 +38,8 @@ use crate::ai::mcp::templatable_manager::oauth::{
 use crate::ai::mcp::templatable_manager::FigmaMcpStatus;
 use crate::ai::mcp::{
     logs, Author, CloudMCPServer, FileBasedMCPManager, JsonTemplate, MCPGalleryManager, MCPServer,
-    MCPServerUpdate, ParsedTemplatableMCPServerResult, StaticEnvVar, TemplatableMCPServer,
-    TemplatableMCPServerInstallation, TransportType,
+    MCPServerExt, MCPServerUpdate, ParsedTemplatableMCPServerResult, StaticEnvVar,
+    TemplatableMCPServer, TemplatableMCPServerInstallation, TransportType,
 };
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};

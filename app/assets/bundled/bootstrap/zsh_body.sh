@@ -780,7 +780,9 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       fi
     fi
 
-    if [[ "${RPROMPT:-}" != "%{"*"%}" ]]; then
+    # Do not synthesize an empty right prompt. Even without visible content, zsh reserves
+    # right-prompt layout space and may corrupt wrapped command redraws in the command grid.
+    if [[ -n "${RPROMPT:-}" && "${RPROMPT:-}" != "%{"*"%}" ]]; then
       RPROMPT="%{${RPROMPT:-}%}"
     fi
 

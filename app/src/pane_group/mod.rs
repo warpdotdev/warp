@@ -3577,7 +3577,6 @@ impl PaneGroup {
 
         self.child_agent_panes
             .insert(child_conversation_id, new_pane_id.into());
-
         // If the discarded fallback was occupying a tree slot via temporary
         // replacement, re-swap so the user lands on the new pane.
         if let Some(anchor) = fallback_was_swapped_anchor {
@@ -5156,7 +5155,6 @@ impl PaneGroup {
         let Some(child_pane_id) = owner_child_pane else {
             return false;
         };
-
         if self
             .child_agent_origin
             .as_ref()
@@ -7428,7 +7426,6 @@ impl PaneGroup {
             .map(PaneId::from);
         let from_owner_lookup = self.pane_id_for_conversation_owner(conversation_id, ctx);
         let target_pane_id = from_child_panes.or(from_visible_pane).or(from_owner_lookup);
-
         let Some(target_pane_id) = target_pane_id else {
             // No owning pane in this group (e.g. the conversation lives
             // in another tab). Fall back to workspace-level navigation.
@@ -7517,10 +7514,8 @@ impl PaneGroup {
             );
             return;
         }
-
         self.handle_pane_count_change(ctx);
         self.focus_pane_preserving_maximized_state(target_pane_id, true, ctx);
-
         // Refresh the back-button label on both swapped panes; otherwise
         // a stale label would persist until the next agent-view entry.
         for pane_id in [anchor, target_pane_id] {

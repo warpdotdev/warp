@@ -26,8 +26,6 @@ use onboarding::callout::{FinalState, OnboardingCalloutViewEvent, OnboardingQuer
 use onboarding::{OnboardingCalloutView, OnboardingKeybindings};
 
 use crate::ai::block_context::BlockContext;
-#[cfg(feature = "local_fs")]
-use crate::ai::skills::SkillOpenOrigin;
 use crate::global_resource_handles::GlobalResourceHandlesProvider;
 pub(crate) mod docker_sandbox;
 mod link_detection;
@@ -326,6 +324,8 @@ use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
 #[cfg(feature = "local_fs")]
 use crate::code_review::DiffSetScope;
 use crate::context_chips::prompt::Prompt;
+#[cfg(feature = "local_fs")]
+use crate::context_chips::prompt::PromptSelection;
 use crate::context_chips::prompt_type::PromptType;
 use crate::context_chips::ContextChipKind;
 use crate::drive::settings::WarpDriveSettings;
@@ -335,7 +335,7 @@ use crate::editor::{AutosuggestionType, CrdtOperation, EditorAction};
 use crate::env_vars::env_var_collection_block::{
     EnvVarCollectionBlock, EnvVarCollectionBlockEvent,
 };
-use crate::env_vars::{CloudEnvVarCollection, EnvVar};
+use crate::env_vars::{CloudEnvVarCollection, EnvVar, EnvVarExt};
 use crate::features::FeatureFlag;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::pane_group::focus_state::PaneFocusHandle;
@@ -432,6 +432,7 @@ use crate::terminal::links::should_directly_open_link;
 use crate::terminal::local_tty::get_shell_starter;
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_tty::shell::ShellStarter;
+#[cfg(feature = "local_tty")]
 #[cfg(all(windows, feature = "local_tty"))]
 use crate::terminal::local_tty::windows::get_user_and_system_env_variable;
 use crate::terminal::model::ansi::{ClearMode, Handler};
@@ -3971,7 +3972,6 @@ impl TerminalView {
         ctx.subscribe_to_model(&SessionSettings::handle(ctx), move |me, _, evt, ctx| {
             me.handle_session_settings_event(evt, ctx);
         });
-
         // Re-evaluate git status subscription when the prompt configuration
         // changes (e.g. chips added/removed, input type toggled).
         ctx.subscribe_to_model(&Prompt::handle(ctx), |me, _, _, ctx| {
@@ -4852,6 +4852,9 @@ impl TerminalView {
                 });
             }
         });
+        self.ai_context_model.update(ctx, |context_model, _| {
+            context_model.set_git_repo_status(None);
+        });
     }
 
     /// Fully clear the per-repo git status handle, including the input's repo
@@ -4872,26 +4875,23 @@ impl TerminalView {
             .and_then(|h| h.as_ref(ctx).metadata())
     }
 
-    /// Returns whether this terminal view should subscribe to git status updates.
-    /// We subscribe when:
-    /// 1. Agent mode is active and its chip list includes `GitDiffStats` or `GithubPullRequest`, or
-    /// 2. Terminal mode with the Warp prompt enabled and the git stats chip
-    ///    configured.
     #[cfg(feature = "local_fs")]
-    fn should_subscribe_to_git_status(&self, ctx: &AppContext) -> bool {
-        let uses_git_status = |chips: Vec<ContextChipKind>| {
-            chips.iter().any(|chip| {
-                matches!(
-                    chip,
-                    ContextChipKind::GitDiffStats | ContextChipKind::GithubPullRequest
-                )
-            })
-        };
+    fn uses_git_status_chips(chips: Vec<ContextChipKind>) -> bool {
+        chips.iter().any(|chip| {
+            matches!(
+                chip,
+                ContextChipKind::GitDiffStats | ContextChipKind::GithubPullRequest
+            )
+        })
+    }
 
+    /// Returns whether visible prompt/footer chips need git status updates.
+    #[cfg(feature = "local_fs")]
+    fn needs_git_status_for_chip_ui(&self, ctx: &AppContext) -> bool {
         // Agent view: subscribe when the configured agent footer includes
         // git stats or PR info.
         if self.agent_view_controller.as_ref(ctx).is_active() {
-            return uses_git_status(
+            return Self::uses_git_status_chips(
                 SessionSettings::as_ref(ctx)
                     .agent_footer_chip_selection
                     .all_chips(),
@@ -4900,7 +4900,7 @@ impl TerminalView {
         // CLI-agent footer: subscribe only while a CLI-agent session is active,
         // so normal terminal panes do not subscribe just because of CLI footer defaults.
         if self.has_active_cli_agent_session(ctx)
-            && uses_git_status(
+            && Self::uses_git_status_chips(
                 SessionSettings::as_ref(ctx)
                     .cli_agent_footer_chip_selection
                     .all_chips(),
@@ -4917,12 +4917,24 @@ impl TerminalView {
         if is_using_warp_prompt && Self::should_retry_default_pr_chip_validation(ctx) {
             return true;
         }
-        is_using_warp_prompt && uses_git_status(Prompt::as_ref(ctx).chip_kinds())
+        is_using_warp_prompt && Self::uses_git_status_chips(Prompt::as_ref(ctx).chip_kinds())
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn needs_git_status_for_agent_context(&self, ctx: &AppContext) -> bool {
+        self.current_local_repo_path().is_some()
+            && self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
+    }
+
+    /// Returns whether this terminal view should subscribe to git status updates.
+    #[cfg(feature = "local_fs")]
+    fn should_subscribe_to_git_status(&self, ctx: &AppContext) -> bool {
+        self.needs_git_status_for_chip_ui(ctx) || self.needs_git_status_for_agent_context(ctx)
     }
 
     /// Whether the terminal's prompt/footer chips need PR info.
     #[cfg(feature = "local_fs")]
-    fn needs_pr_info(&self, ctx: &AppContext) -> bool {
+    fn needs_pr_info_for_chip_ui(&self, ctx: &AppContext) -> bool {
         if self.agent_view_controller.as_ref(ctx).is_active() {
             return SessionSettings::as_ref(ctx)
                 .agent_footer_chip_selection
@@ -4948,14 +4960,23 @@ impl TerminalView {
     }
 
     #[cfg(feature = "local_fs")]
+    fn needs_pr_info_for_agent_context(&self, ctx: &AppContext) -> bool {
+        self.current_local_repo_path().is_some()
+            && self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
+    }
+
+    /// Whether this terminal needs PR info from the git status model.
+    #[cfg(feature = "local_fs")]
+    fn needs_pr_info(&self, ctx: &AppContext) -> bool {
+        self.needs_pr_info_for_chip_ui(ctx) || self.needs_pr_info_for_agent_context(ctx)
+    }
+
+    #[cfg(feature = "local_fs")]
     fn should_retry_default_pr_chip_validation(ctx: &AppContext) -> bool {
         let settings = SessionSettings::as_ref(ctx);
         FeatureFlag::GithubPrPromptChip.is_enabled()
             && settings.github_pr_chip_default_validation.is_suppressed()
-            && matches!(
-                *settings.saved_prompt,
-                crate::context_chips::prompt::PromptSelection::Default
-            )
+            && matches!(*settings.saved_prompt, PromptSelection::Default)
     }
 
     /// Refresh the terminal's own `pr_info_consumer` registration on the
@@ -4980,6 +5001,9 @@ impl TerminalView {
     /// registered for this terminal.
     #[cfg(feature = "local_fs")]
     fn refresh_pr_info_after_gh_or_gt_command(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self.needs_pr_info(ctx) {
+            return;
+        }
         // Ensure we have a subscription to the per-repo status model.
         // `should_subscribe_to_git_status` already returns true while
         // suppression is active so the default chip can recover, so this
@@ -5018,6 +5042,7 @@ impl TerminalView {
                             me.handle_git_repo_status_event(ctx);
                         });
                         let weak_for_prompt = handle.downgrade();
+                        let weak_for_context = handle.downgrade();
                         self.git_repo_status = Some(handle);
                         self.current_prompt.update(ctx, |prompt_type, ctx| {
                             if let PromptType::Dynamic { prompt } = prompt_type {
@@ -5026,10 +5051,13 @@ impl TerminalView {
                                 });
                             }
                         });
-                        // Register the terminal as a `pr_info` consumer if its
-                        // prompt/footer needs PR info; the per-repo model only
-                        // fetches PR info while at least one consumer is
-                        // registered.
+                        self.ai_context_model.update(ctx, |context_model, _| {
+                            context_model.set_git_repo_status(Some(weak_for_context));
+                        });
+                        // Register the terminal as a `pr_info` consumer if
+                        // either the chip UI or agent context needs PR info;
+                        // the per-repo model only fetches PR info while at
+                        // least one consumer is registered.
                         self.sync_pr_info_consumer_for_current_subscription(ctx);
                     }
                     Err(err) => {
@@ -6679,6 +6707,8 @@ impl TerminalView {
         match event {
             BlocklistAIInputEvent::InputTypeChanged { config } => {
                 self.ai_render_context.borrow_mut().is_ai_input_enabled = config.input_type.is_ai();
+                #[cfg(feature = "local_fs")]
+                self.update_git_status_subscription(ctx);
 
                 // Force re-render all AIBlocks to ensure that selected text is recolored properly
                 self.rerender_rich_content_blocks(ctx);
@@ -7631,6 +7661,9 @@ impl TerminalView {
             return false;
         }
         if self.conversation_ended_tombstone_view_id.is_some() {
+            return false;
+        }
+        if self.blocks_cloud_followups_for_ambient_agent_session_from_model(model, app) {
             return false;
         }
         if self.has_active_cli_agent_input_session(app) {
@@ -20684,6 +20717,14 @@ impl TerminalView {
         if !FeatureFlag::HandoffCloudCloud.is_enabled() {
             return false;
         }
+        let blocks_cloud_followups = {
+            let model = self.model.lock();
+            self.blocks_cloud_followups_for_ambient_agent_session_from_model(&model, ctx)
+        };
+        if blocks_cloud_followups {
+            self.pending_cloud_followup_task_id = None;
+            return false;
+        }
         let Some(task_id) = self
             .pending_cloud_followup_task_id
             .or_else(|| self.owned_ambient_agent_task_id(ctx))
@@ -26557,7 +26598,9 @@ impl TypedActionView for TerminalView {
                     warp_md_path.push(WARP_MD_PATH);
                     #[cfg(feature = "local_fs")]
                     ctx.emit(Event::OpenCodeInWarp {
-                        source: CodeSource::ProjectRules { path: warp_md_path },
+                        source: CodeSource::ProjectRules {
+                            location: LocalOrRemotePath::Local(warp_md_path),
+                        },
                         layout: *crate::util::file::external_editor::EditorSettings::as_ref(ctx)
                             .open_file_layout
                             .value(),
@@ -26593,8 +26636,8 @@ impl TypedActionView for TerminalView {
                             ctx.emit(Event::OpenCodeInWarp {
                                 source: CodeSource::Skill {
                                     reference: skill_reference.clone(),
-                                    path: path.clone(),
-                                    origin: SkillOpenOrigin::OpenSkillCommand,
+                                    location: path.clone(),
+                                    origin: crate::ai::skills::SkillOpenOrigin::OpenSkillCommand,
                                 },
                                 layout:
                                     *crate::util::file::external_editor::EditorSettings::as_ref(ctx)
@@ -26864,10 +26907,11 @@ impl View for TerminalView {
                         .with_constrain_absolute_children()
                         .with_child(column.finish())
                 } else {
-                    let output_area = if (model.shared_session_status().is_view_pending()
-                        && !self.is_ambient_agent_session(app))
-                        || model.is_loading_conversation_transcript()
-                    {
+                    let is_view_pending_clause = model.shared_session_status().is_view_pending()
+                        && !self.is_ambient_agent_session(app);
+                    let is_loading_transcript = model.is_loading_conversation_transcript();
+                    let should_show_loading = is_view_pending_clause || is_loading_transcript;
+                    let output_area = if should_show_loading {
                         self.render_viewer_loading(app)
                     } else if is_alt_screen_active {
                         did_wrap_terminal_size = true;

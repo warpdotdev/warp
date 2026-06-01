@@ -1,12 +1,9 @@
-use std::{
-    collections::{HashMap, HashSet},
-    ops::Range,
-    path::PathBuf,
-};
-
-use crate::index::locations::{CodeContextLocation, FileFragmentLocation};
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
+use std::path::PathBuf;
 
 use super::{ContentHash, Fragment, FragmentLocation, FragmentMetadata};
+use crate::index::locations::{CodeContextLocation, FileFragmentLocation};
 
 #[derive(Default)]
 pub struct ReadFragmentResult {
@@ -178,11 +175,9 @@ pub fn fragments_to_context_locations<'a>(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::{HashMap, HashSet},
-        ops::Range,
-        path::PathBuf,
-    };
+    use std::collections::{HashMap, HashSet};
+    use std::ops::Range;
+    use std::path::PathBuf;
 
     use string_offset::ByteOffset;
 

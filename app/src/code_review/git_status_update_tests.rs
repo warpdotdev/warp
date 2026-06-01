@@ -18,6 +18,9 @@ fn pr(number: u64) -> PrInfo {
     PrInfo {
         number,
         url: format!("https://github.com/warp/warp/pull/{number}"),
+        state: "OPEN".to_string(),
+        draft: false,
+        base_branch: "main".to_string(),
     }
 }
 

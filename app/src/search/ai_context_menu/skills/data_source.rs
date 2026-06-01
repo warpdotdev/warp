@@ -1,6 +1,5 @@
-use std::path::PathBuf;
-
 use fuzzy_match::FuzzyMatchResult;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, SingletonEntity};
 
 use super::search_item::SkillSearchItem;
@@ -32,23 +31,21 @@ impl SyncDataSource for SkillsDataSource {
         let query_text = &query.text;
 
         // Resolve the current working directory from the active window's session.
-        let cwd: Option<PathBuf> = {
+        let cwd: Option<LocalOrRemotePath> = {
             #[cfg(not(target_family = "wasm"))]
             {
-                app.windows()
-                    .state()
-                    .active_window
-                    .and_then(|window_id| ActiveSession::as_ref(app).path_if_local(window_id))
-                    .map(PathBuf::from)
+                app.windows().state().active_window.and_then(|window_id| {
+                    ActiveSession::as_ref(app)
+                        .working_directory(window_id)
+                        .cloned()
+                })
             }
             #[cfg(target_family = "wasm")]
             {
                 None
             }
         };
-
-        let skills =
-            SkillManager::as_ref(app).get_skills_for_working_directory(cwd.as_deref(), app);
+        let skills = SkillManager::as_ref(app).get_skills_for_working_directory(cwd.as_ref(), app);
 
         let mut results: Vec<QueryResult<Self::Action>> = if query_text.is_empty() {
             // Zero state: show all skills with a uniform high score.

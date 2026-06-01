@@ -2128,7 +2128,7 @@ fn launch_remote_child(
             Harness::Oz | Harness::OpenCode | Harness::Gemini | Harness::Unknown => None,
         });
     let spawn_request = SpawnAgentRequest {
-        prompt: request.prompt,
+        prompt: Some(request.prompt),
         mode: UserQueryMode::Normal,
         config: Some(AgentConfigSnapshot {
             name: agent_name,

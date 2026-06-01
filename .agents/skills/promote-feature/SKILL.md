@@ -81,7 +81,7 @@ pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
 ### Validate
 
 ```bash
-cargo fmt
+./script/format
 cargo clippy --workspace --all-targets --all-features --tests -- -D warnings
 ```
 

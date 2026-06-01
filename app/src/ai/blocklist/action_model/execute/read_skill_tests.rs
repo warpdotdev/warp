@@ -8,6 +8,7 @@ use repo_metadata::watcher::DirectoryWatcher;
 use repo_metadata::RepoMetadataModel;
 use tempfile::TempDir;
 use warp_core::features::FeatureFlag;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::App;
 use watcher::HomeDirectoryWatcher;
 
@@ -36,7 +37,7 @@ fn bundled_skill(name: &str) -> ParsedSkill {
     ParsedSkill {
         name: name.to_string(),
         description: format!("{name} bundled skill"),
-        path: PathBuf::from(format!("/bundled/skills/{name}/SKILL.md")),
+        path: LocalOrRemotePath::Local(PathBuf::from(format!("/bundled/skills/{name}/SKILL.md"))),
         content: format!("# {name}"),
         line_range: None,
         provider: SkillProvider::Warp,
@@ -91,7 +92,7 @@ fn test_read_skill_executor_success() {
         let action = AIAgentAction {
             id: AIAgentActionId::from("test-action-id".to_string()),
             action: AIAgentActionType::ReadSkill(ReadSkillRequest {
-                skill: SkillReference::Path(skill_path.clone()),
+                skill: SkillReference::Path(LocalOrRemotePath::Local(skill_path.clone())),
             }),
             task_id: TaskId::new("test-task-id".to_string()),
             requires_result: false,
@@ -173,7 +174,7 @@ fn test_read_skill_executor_file_not_found() {
         let action = AIAgentAction {
             id: AIAgentActionId::from("test-action-id".to_string()),
             action: AIAgentActionType::ReadSkill(ReadSkillRequest {
-                skill: SkillReference::Path(skill_path),
+                skill: SkillReference::Path(LocalOrRemotePath::Local(skill_path)),
             }),
             task_id: TaskId::new("test-task-id".to_string()),
             requires_result: false,

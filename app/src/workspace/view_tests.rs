@@ -170,6 +170,10 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(voice_input::VoiceInput::new);
     app.add_singleton_model(BlocklistAIPermissions::new);
     app.add_singleton_model(|_| GPUState::new());
+    // Register IapManager in a disabled state (no IapState). The settings
+    // page's `IapManager::as_ref(ctx).is_enabled()` check panics if the
+    // singleton isn't registered, even though it's a no-op on production.
+    app.add_singleton_model(|ctx| crate::server::iap::IapManager::new(None, ctx));
     app.add_singleton_model(|_| RestoredAgentConversations::new(vec![]));
     app.add_singleton_model(OneTimeModalModel::new);
     // Register GlobalResourceHandlesProvider before ServerExperiments which depends on it

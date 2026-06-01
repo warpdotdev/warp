@@ -14,7 +14,6 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use settings::Setting;
 use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
     Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
@@ -39,8 +38,9 @@ use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
 use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
 use crate::ai::harness_display;
 use crate::ai::llms::LLMInfo;
-use crate::ai::local_child_harnesses::{
-    local_child_harness_disabled_message, local_child_harness_is_enabled,
+use crate::ai::local_harness_setup::{
+    local_harness_is_product_enabled, local_harness_product_disabled_message,
+    local_harness_setup_state, LocalHarnessSetupState,
 };
 use crate::appearance::Appearance;
 use crate::cloud_object::CloudObjectLookup as _;
@@ -159,7 +159,7 @@ impl OrchestrationEditState {
         let Some(harness) = Harness::parse_local_child_harness(&self.harness_type) else {
             return;
         };
-        if local_child_harness_disabled_message(harness).is_some() {
+        if local_harness_product_disabled_message(harness).is_some() {
             self.harness_type = "oz".to_string();
             self.model_id.clear();
         }
@@ -240,11 +240,11 @@ impl OrchestrationEditState {
     }
 
     /// Returns `Some(reason)` if Accept / Apply must be disabled.
-    /// Hard blocks: OpenCode + Cloud, and temporarily disabled local Claude/Codex.
+    /// Hard blocks: OpenCode + Cloud, and product-disabled local harnesses.
     pub fn accept_disabled_reason(&self) -> Option<&'static str> {
         match &self.execution_mode {
             RunAgentsExecutionMode::Local => Harness::parse_local_child_harness(&self.harness_type)
-                .and_then(local_child_harness_disabled_message),
+                .and_then(local_harness_product_disabled_message),
             RunAgentsExecutionMode::Remote { .. }
                 if self.harness_type.eq_ignore_ascii_case("opencode") =>
             {
@@ -633,9 +633,12 @@ pub fn first_filtered_model_id<V: View>(
     }
 }
 
-fn should_show_harness_picker(state: &OrchestrationEditState) -> bool {
-    !matches!(state.execution_mode, RunAgentsExecutionMode::Local)
-        || FeatureFlag::LocalClaudeCodexChildHarnesses.is_enabled()
+fn should_show_harness_picker(_state: &OrchestrationEditState) -> bool {
+    true
+}
+
+fn local_harness_setup_is_ready(harness: Harness, is_local: bool) -> bool {
+    !is_local || local_harness_setup_state(harness).is_selectable()
 }
 
 pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
@@ -663,7 +666,7 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
             harness => harness,
         };
 
-        // Sort enabled harnesses before disabled ones, preserving
+        // Sort selectable harnesses before disabled ones, preserving
         // relative order within each group.
         // Filter out Gemini — it is not yet supported as a multi-agent
         // harness and causes an infinite "Spawning agents" hang.
@@ -671,10 +674,14 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
             .iter()
             .filter(|entry| {
                 let harness = resolve_entry_harness(entry.harness, &entry.display_name);
-                harness != Harness::Gemini && (!is_local || local_child_harness_is_enabled(harness))
+                harness != Harness::Gemini
+                    && (!is_local || local_harness_is_product_enabled(harness))
             })
             .collect();
-        sorted.sort_by_key(|entry| !entry.enabled);
+        sorted.sort_by_key(|entry| {
+            let harness = resolve_entry_harness(entry.harness, &entry.display_name);
+            !(entry.enabled && local_harness_setup_is_ready(harness, is_local))
+        });
 
         // Resolve the target harness so we can match by enum variant
         // even when the `initial_harness` string is "claude" but the
@@ -687,6 +694,11 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
 
         for entry in sorted {
             let harness = resolve_entry_harness(entry.harness, &entry.display_name);
+            let local_setup_state = if is_local {
+                Some(local_harness_setup_state(harness))
+            } else {
+                None
+            };
             // Use the server-provided display_name for the label so stale
             // cache entries (where harness deserializes as Unknown) still
             // show the correct name.
@@ -696,12 +708,19 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
                 fields = fields.with_override_icon_color(Fill::from(color));
             }
             let harness_str = harness.to_string();
-            if entry.enabled {
+            let selectable = entry.enabled && local_harness_setup_is_ready(harness, is_local);
+            if selectable {
                 fields = fields.with_on_select_action(DropdownAction::select_action_and_close(
                     A::harness_changed(harness_str.clone()),
                 ));
             } else {
                 fields = fields.with_disabled(true);
+                let tooltip = match local_setup_state {
+                    Some(LocalHarnessSetupState::MissingHarness { tooltip }) => tooltip,
+                    Some(LocalHarnessSetupState::ProductDisabled { message }) => message,
+                    Some(LocalHarnessSetupState::Ready) | None => "Disabled by your administrator",
+                };
+                fields = fields.with_tooltip(tooltip);
             }
             // Match by harness string first, then fall back to matching
             // the display_name against the client-side name for the target
@@ -1128,6 +1147,19 @@ pub fn accept_disabled_reason_with_auth(
 ) -> Option<String> {
     if let Some(reason) = state.accept_disabled_reason() {
         return Some(reason.to_string());
+    }
+    if matches!(state.execution_mode, RunAgentsExecutionMode::Local) {
+        if let Some(harness) = Harness::parse_local_child_harness(&state.harness_type) {
+            match local_harness_setup_state(harness) {
+                LocalHarnessSetupState::MissingHarness { tooltip } => {
+                    return Some(tooltip.to_string());
+                }
+                LocalHarnessSetupState::ProductDisabled { message } => {
+                    return Some(message.to_string());
+                }
+                LocalHarnessSetupState::Ready => {}
+            }
+        }
     }
     if auth_secret_selection_required(state, ctx) {
         return Some("Select an API key for this harness to continue.".to_string());

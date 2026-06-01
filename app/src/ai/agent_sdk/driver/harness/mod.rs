@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::Write;
 use std::path::Path;
@@ -396,6 +396,17 @@ fn task_env_vars_for_harness_name(
     }
 
     env_vars
+}
+
+pub(crate) fn remove_claude_externally_managed_listener_env_vars(
+    env_vars: &mut HashMap<OsString, OsString>,
+) {
+    for env_name in [
+        OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
+        LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
+    ] {
+        env_vars.remove(OsStr::new(env_name));
+    }
 }
 
 pub(crate) fn task_env_vars(

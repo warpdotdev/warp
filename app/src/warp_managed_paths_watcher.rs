@@ -51,6 +51,7 @@ pub(crate) fn warp_home_config_dir() -> Option<PathBuf> {
     warp_core::paths::warp_home_config_dir()
 }
 
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) fn warp_home_skills_dir() -> Option<PathBuf> {
     warp_core::paths::warp_home_skills_dir()
 }
@@ -67,6 +68,7 @@ pub(crate) struct WarpMcpConfigPath {
     pub(crate) config_path: PathBuf,
 }
 
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) fn warp_managed_skill_dirs() -> Vec<PathBuf> {
     warp_home_skills_dir().into_iter().collect()
 }

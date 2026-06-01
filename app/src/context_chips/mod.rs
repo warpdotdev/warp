@@ -91,10 +91,17 @@ impl From<String> for ChipValue {
     }
 }
 
-pub(crate) fn github_pr_number_from_url(url: &str) -> Option<&str> {
+pub(crate) fn github_pr_number_from_url(url: &str) -> Option<i32> {
     let (_, tail) = url.trim().rsplit_once("/pull/")?;
     let number = tail.split(['/', '?', '#']).next()?;
-    (!number.is_empty() && number.chars().all(|c| c.is_ascii_digit())).then_some(number)
+    parse_github_pr_number(number)
+}
+
+fn parse_github_pr_number(number: &str) -> Option<i32> {
+    if !number.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    number.parse::<i32>().ok().filter(|number| *number > 0)
 }
 
 pub(crate) fn github_pr_display_text_from_url(url: &str) -> Option<String> {

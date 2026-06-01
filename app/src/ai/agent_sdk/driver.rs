@@ -28,6 +28,7 @@ use warp_core::features::FeatureFlag;
 use warp_core::{report_error, report_if_error, safe_debug, safe_error, safe_info};
 use warp_graphql::ai::AgentTaskState;
 use warp_managed_secrets::ManagedSecretValue;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::r#async::{FutureExt, TimeoutError};
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
 
@@ -1505,7 +1506,7 @@ impl AgentDriver {
 
         let load_skills_result = foreground
             .spawn(move |_, ctx| {
-                let skills = SkillWatcher::read_skills_for_repos(&repo_paths, ctx);
+                let skills = SkillWatcher::read_local_skills_for_repos(&repo_paths, ctx);
                 if !skills.is_empty() {
                     log::info!("Loaded {} environment skill(s)", skills.len());
                 } else {
@@ -1552,7 +1553,11 @@ impl AgentDriver {
                         .iter()
                         .map(|def| repo_path.join(&def.skills_path));
                     let repo_skills = read_skills_from_directories(skill_dirs);
-                    let filtered = filter_skills_by_spec(&repo_path, repo_skills, &specs);
+                    let filtered = filter_skills_by_spec(
+                        &LocalOrRemotePath::Local(repo_path),
+                        repo_skills,
+                        &specs,
+                    );
                     all_skills.extend(filtered);
                 }
                 all_skills
@@ -2079,10 +2084,24 @@ impl AgentDriver {
         let plugin_manager: Option<Box<dyn CliAgentPluginManager>> =
             plugin_manager_for(harness.cli_agent());
         if let Some(manager) = plugin_manager {
-            if let Err(e) = manager.install().await {
-                log::warn!("Plugin installation failed (continuing): {e}");
+            let plugin_result = if manager.needs_update() {
+                manager.update().await
+            } else if !manager.is_installed() {
+                manager.install().await
+            } else {
+                Ok(())
+            };
+            if let Err(e) = plugin_result {
+                log::warn!("Plugin installation/update failed (continuing): {e}");
             }
-            if let Err(e) = manager.install_platform_plugin().await {
+            let platform_plugin_result = if manager.platform_plugin_needs_update() {
+                manager.update_platform_plugin().await
+            } else if !manager.is_platform_plugin_installed() {
+                manager.install_platform_plugin().await
+            } else {
+                Ok(())
+            };
+            if let Err(e) = platform_plugin_result {
                 log::warn!("Platform plugin installation failed (continuing): {e}");
             }
         }
@@ -2134,7 +2153,7 @@ impl AgentDriver {
                     .map(|parsed_skill| ResolvePromptAttachedSkill {
                         name: parsed_skill.name.clone(),
                         content: parsed_skill.content.clone(),
-                        path: Some(parsed_skill.path.to_string_lossy().to_string()),
+                        path: Some(parsed_skill.path.display_path()),
                     });
                 let request = ResolvePromptRequest {
                     skill,

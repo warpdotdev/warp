@@ -318,7 +318,7 @@ pub enum DiffStateModelEvent {
         diff: Option<Arc<FileDiffAndContent>>,
     },
     /// Event dispatched when diff metadata (stats, branch info) is refreshed.
-    MetadataRefreshed(DiffMetadata),
+    MetadataRefreshed(Box<DiffMetadata>),
     /// The remote connection was lost. Stale diffs should be preserved while
     /// the model waits for a new subscription.
     ConnectionLost,

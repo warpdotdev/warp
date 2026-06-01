@@ -1,6 +1,6 @@
+use cloud_objects::cloud_object::GenericStringObjectFormat;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use warp_server_client::cloud_object::GenericStringObjectFormat;
 
 use super::generic_string_model::{Serializer, StringModel};
 use crate::cloud_object::JsonObjectType;
@@ -12,6 +12,7 @@ pub trait JsonModel: StringModel + Serialize + DeserializeOwned + 'static {
     fn json_object_type() -> JsonObjectType;
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct JsonSerializer;
 

@@ -1,6 +1,7 @@
 use std::fs;
 
 use tempfile::tempdir;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 use super::*;
 
@@ -51,7 +52,7 @@ This is the second test skill.
     let skill1 = skills.iter().find(|s| s.name == "test-skill-1").unwrap();
     assert_eq!(
         skill1.path,
-        skill1_dir.join("SKILL.md").to_string_lossy().to_string()
+        LocalOrRemotePath::Local(skill1_dir.join("SKILL.md"))
     );
     assert_eq!(skill1.description, "First test skill");
     assert!(skill1.content.contains("# Test Skill 1"));
@@ -62,7 +63,7 @@ This is the second test skill.
     let skill2 = skills.iter().find(|s| s.name == "test-skill-2").unwrap();
     assert_eq!(
         skill2.path,
-        skill2_dir.join("SKILL.md").to_string_lossy().to_string()
+        LocalOrRemotePath::Local(skill2_dir.join("SKILL.md"))
     );
     assert_eq!(skill2.description, "Second test skill");
     assert!(skill2.content.contains("# Test Skill 2"));
