@@ -583,8 +583,6 @@ impl BlocklistAIController {
 
         // Subscribe to the orchestration event service to inject events
         // (e.g. MessagesReceivedFromAgents) into conversations that receive inter-agent messages.
-        // TODO(QUALITY-733): Rename OrchestrationEventService around its injector role so
-        // active event injection is not described as a legacy service path.
         let svc = OrchestrationEventService::handle(ctx);
         ctx.subscribe_to_model(&svc, move |me, event, ctx| {
             let OrchestrationEventServiceEvent::EventsReady { conversation_id } = event;
@@ -1518,8 +1516,6 @@ impl BlocklistAIController {
         // subagent is or will be active — events will be delivered via the idle
         // path once the subagent session ends.
         let mut has_piggybacked_events = false;
-        // TODO(QUALITY-733): Rename OrchestrationEventService around its injector role so
-        // this active low-latency injection path is not described as legacy piggybacking.
         if will_trigger_server_subagent || has_active_subagent {
             log::debug!(
                 "Skipping event piggyback for conversation {conversation_id:?}: \
