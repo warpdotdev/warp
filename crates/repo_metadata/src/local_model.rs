@@ -1152,7 +1152,9 @@ pub(crate) fn collect_contents_recursive<'a>(
             if args.filter.as_ref().is_none_or(|f| f(&content)) {
                 // Check limit before adding
                 if contents.len() >= MAX_REPO_CONTENTS_RESULTS {
-                    return Err(RepoMetadataError::ExceededMaxResultSize(MAX_REPO_CONTENTS_RESULTS));
+                    return Err(RepoMetadataError::ExceededMaxResultSize(
+                        MAX_REPO_CONTENTS_RESULTS,
+                    ));
                 }
                 contents.push(content);
             }
@@ -1163,7 +1165,9 @@ pub(crate) fn collect_contents_recursive<'a>(
                 if args.filter.as_ref().is_none_or(|f| f(&content)) {
                     // Check limit before adding
                     if contents.len() >= MAX_REPO_CONTENTS_RESULTS {
-                        return Err(RepoMetadataError::ExceededMaxResultSize(MAX_REPO_CONTENTS_RESULTS));
+                        return Err(RepoMetadataError::ExceededMaxResultSize(
+                            MAX_REPO_CONTENTS_RESULTS,
+                        ));
                     }
                     contents.push(content);
                 }
