@@ -7,11 +7,14 @@ use crate::app_state::{CodePaneSnapShot, CodePaneTabSnapshot, LeafContents};
 use crate::code::commit_diff_view::CommitDiffView;
 use crate::pane_group::{BackingView, PaneGroup};
 
-/// 主区里承载 [`CommitDiffView`] 的 pane：只读地展示某个提交对单个文件的改动。
+/// Main-area pane hosting a [`CommitDiffView`]: read-only view of what a commit changed
+/// in a single file.
 ///
-/// 由 Git Graph 提交详情里点击变更文件创建，是临时查看用途——不持久化恢复：[`Self::snapshot`]
-/// 复用 [`LeafContents::Code`] 但 `source: None`，恢复路径会因"非可恢复源"被跳过（与
-/// `CodeDiffPane` 同款做法），从而无需新增 `LeafContents` 变体。
+/// Created by clicking a changed file in the Git Graph commit detail; it's for temporary
+/// viewing and is not persisted across restores: [`Self::snapshot`] reuses
+/// [`LeafContents::Code`] but with `source: None`, so the restore path skips it as a
+/// non-restorable source (the same approach as `CodeDiffPane`), avoiding the need for a
+/// new `LeafContents` variant.
 pub struct CommitDiffPane {
     view: ViewHandle<PaneView<CommitDiffView>>,
     pane_configuration: ModelHandle<PaneConfiguration>,
@@ -33,7 +36,7 @@ impl CommitDiffPane {
         }
     }
 
-    /// 内部承载的 [`CommitDiffView`]，供复用时原地更新其展示的文件 diff。
+    /// The hosted [`CommitDiffView`], used to update its displayed file diff in place on reuse.
     pub fn diff_view(&self, ctx: &AppContext) -> ViewHandle<CommitDiffView> {
         self.view.as_ref(ctx).child(ctx)
     }
@@ -76,7 +79,8 @@ impl PaneContent for CommitDiffPane {
     }
 
     fn snapshot(&self, _app: &AppContext) -> LeafContents {
-        // 临时 diff pane，不可恢复：复用 Code 快照但 source = None，恢复时会被优雅跳过。
+        // Temporary diff pane, not restorable: reuse the Code snapshot but with source = None,
+        // so it's gracefully skipped on restore.
         LeafContents::Code(CodePaneSnapShot::Local {
             tabs: vec![CodePaneTabSnapshot { path: None }],
             active_tab_index: 0,

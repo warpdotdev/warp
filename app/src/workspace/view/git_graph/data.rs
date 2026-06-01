@@ -1,8 +1,11 @@
-//! Git Graph 的数据层：提交数据类型、`git log` 输出解析（纯函数）与异步取数。
+//! Data layer for the Git Graph: commit data types, parsing of `git log`
+//! output (pure functions), and async data loading.
 //!
-//! 取数统一走 [`warp_util::git::run_git_command`]（shell 出 `git`），不依赖
-//! `git2`/`gix`。解析逻辑与 IO 分离：`parse_*` 是纯函数，可独立单测；
-//! `load_*` 只做"组装命令 + 调用解析"的薄封装。
+//! All fetching goes through [`warp_util::git::run_git_command`] (which shells
+//! out to `git`); there is no dependency on `git2`/`gix`. Parsing is kept
+//! separate from IO: the `parse_*` functions are pure and unit-testable in
+//! isolation, while `load_*` are thin wrappers that just assemble the command
+//! and invoke the parser.
 
 #[cfg(not(target_family = "wasm"))]
 use std::path::{Path, PathBuf};
@@ -10,61 +13,64 @@ use std::path::{Path, PathBuf};
 #[cfg(not(target_family = "wasm"))]
 use anyhow::Result;
 
-/// `git log --pretty=format` 中字段之间的分隔符（ASCII Unit Separator）。
-/// 用控制字符而非可打印字符，避免 subject / ref 名里的普通字符破坏解析。
+/// Field separator within a `git log --pretty=format` record (ASCII Unit
+/// Separator). A control character is used instead of a printable one so that
+/// ordinary characters in subject / ref names cannot corrupt parsing.
 const UNIT_SEP: char = '\u{1f}';
-/// 提交记录之间的分隔符（ASCII Record Separator）。
+/// Separator between commit records (ASCII Record Separator).
 const RECORD_SEP: char = '\u{1e}';
 
-/// 传给 `git log` 的格式串。字段顺序与 [`parse_commit_record`] 严格对应：
-/// hash / parents / author name / author email / author time / decorate / subject。
-/// `%x1f` `%x1e` 是 git 对上面两个分隔符字节的转义写法。
+/// Format string passed to `git log`. The field order matches
+/// [`parse_commit_record`] exactly:
+/// hash / parents / author name / author email / author time / decorate / subject.
+/// `%x1f` and `%x1e` are git's escape notation for the two separator bytes above.
 #[cfg(not(target_family = "wasm"))]
 const LOG_FORMAT: &str = "--pretty=format:%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s%x1e";
 
-/// 一个提交节点，承载图谱一行所需的全部数据。
+/// A single commit node, carrying everything needed to render one graph row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CommitNode {
-    /// 完整 commit hash。
+    /// Full commit hash.
     pub hash: String,
-    /// 用于展示的短 hash（前 7 位）。
+    /// Short hash for display (first 7 characters).
     pub short_hash: String,
-    /// 父提交完整 hash 列表：0 个为根，2 个及以上为合并。
+    /// Full hashes of the parent commits: 0 means a root, 2 or more a merge.
     pub parents: Vec<String>,
     pub author_name: String,
     pub author_email: String,
-    /// 作者时间（Unix 秒）。
+    /// Author time (Unix seconds).
     pub author_time: i64,
-    /// 提交信息首行。
+    /// First line of the commit message.
     pub subject: String,
-    /// 指向本提交的引用标签（分支 / 远程分支 / tag / HEAD）。
+    /// Ref labels pointing at this commit (branch / remote branch / tag / HEAD).
     pub refs: Vec<RefLabel>,
 }
 
-/// 引用标签的种类，决定渲染样式。
+/// Kind of ref label; determines the rendering style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RefKind {
-    /// 当前检出的位置（`HEAD`）。
+    /// The currently checked-out position (`HEAD`).
     Head,
     LocalBranch,
     RemoteBranch,
     Tag,
 }
 
-/// 指向某个提交的一个引用标签。
+/// A single ref label pointing at a commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RefLabel {
     pub kind: RefKind,
-    /// 展示名（已去除 `refs/heads/` 等前缀）。
+    /// Display name (with prefixes like `refs/heads/` stripped).
     pub name: String,
 }
 
-/// 把 `git log`（[`LOG_FORMAT`] 格式）的整段输出解析为提交列表。
+/// Parse the entire output of `git log` (in [`LOG_FORMAT`]) into a commit list.
 pub(crate) fn parse_commit_log(stdout: &str) -> Vec<CommitNode> {
     stdout
         .split(RECORD_SEP)
         .filter_map(|record| {
-            // 记录之间 git 会以换行连接，去掉前后空白/换行后再解析。
+            // git joins records with newlines, so trim leading/trailing
+            // whitespace and newlines before parsing.
             let record = record.trim_matches(|c: char| c == '\n' || c == '\r');
             if record.is_empty() {
                 return None;
@@ -74,9 +80,11 @@ pub(crate) fn parse_commit_log(stdout: &str) -> Vec<CommitNode> {
         .collect()
 }
 
-/// 解析单条提交记录。字段不足时返回 `None`（跳过该条而非 panic）。
+/// Parse a single commit record. Returns `None` when fields are missing
+/// (skipping the record rather than panicking).
 fn parse_commit_record(record: &str) -> Option<CommitNode> {
-    // 用 splitn(7) 保证最后的 subject 段即使含分隔符也完整保留。
+    // splitn(7) ensures the final subject field is kept intact even if it
+    // contains the separator.
     let mut fields = record.splitn(7, UNIT_SEP);
     let hash = fields.next()?.to_string();
     let parents_raw = fields.next()?;
@@ -105,11 +113,12 @@ fn parse_commit_record(record: &str) -> Option<CommitNode> {
     })
 }
 
-/// 解析 `%D`（`--decorate=full` 模式）的 decorate 串为引用标签列表。
+/// Parse the `%D` decorate string (from `--decorate=full`) into a list of ref labels.
 ///
-/// 输入形如 `HEAD -> refs/heads/main, refs/remotes/origin/main, refs/tags/v1`。
-/// 用 full 模式是为了可靠区分本地分支 / 远程分支 / tag（短模式无法区分
-/// 本地的 `feature/x` 与远程的 `origin/x`）。
+/// Input looks like `HEAD -> refs/heads/main, refs/remotes/origin/main, refs/tags/v1`.
+/// Full mode is used so local branches / remote branches / tags can be told
+/// apart reliably (short mode cannot distinguish a local `feature/x` from a
+/// remote `origin/x`).
 pub(crate) fn parse_decorate(decorate: &str) -> Vec<RefLabel> {
     let decorate = decorate.trim();
     if decorate.is_empty() {
@@ -122,7 +131,7 @@ pub(crate) fn parse_decorate(decorate: &str) -> Vec<RefLabel> {
             if token.is_empty() {
                 return None;
             }
-            // "HEAD -> refs/heads/main"：HEAD 当前所在分支。
+            // "HEAD -> refs/heads/main": the branch HEAD currently points at.
             if let Some(branch) = token.strip_prefix("HEAD -> ") {
                 let name = branch.strip_prefix("refs/heads/").unwrap_or(branch);
                 return Some(RefLabel {
@@ -130,7 +139,7 @@ pub(crate) fn parse_decorate(decorate: &str) -> Vec<RefLabel> {
                     name: name.to_string(),
                 });
             }
-            // 游离 HEAD（detached）。
+            // Detached HEAD.
             if token == "HEAD" {
                 return Some(RefLabel {
                     kind: RefKind::Head,
@@ -144,7 +153,8 @@ pub(crate) fn parse_decorate(decorate: &str) -> Vec<RefLabel> {
                 });
             }
             if let Some(remote) = token.strip_prefix("refs/remotes/") {
-                // 隐藏远程的符号 HEAD（如 origin/HEAD），它对历史浏览无意义。
+                // Hide a remote's symbolic HEAD (e.g. origin/HEAD); it is
+                // meaningless for browsing history.
                 if remote.ends_with("/HEAD") {
                     return None;
                 }
@@ -159,18 +169,20 @@ pub(crate) fn parse_decorate(decorate: &str) -> Vec<RefLabel> {
                     name: local.to_string(),
                 });
             }
-            // 其它未知装饰（如 grafted / replaced）忽略。
+            // Ignore other unknown decorations (e.g. grafted / replaced).
             None
         })
         .collect()
 }
 
-/// 加载某仓库的提交图谱。
+/// Load the commit graph for a repository.
 ///
-/// `branch_refs` 控制图谱覆盖范围：`None` 用 `--all`（所有引用）；`Some(refs)` 只覆盖给定
-/// 的分支 ref（如 `refs/heads/main`、`refs/remotes/origin/dev`），空切片表示用户取消了全部
-/// 分支，返回空图谱。`limit`/`skip` 用于分页。`--date-order` 保证布局稳定、`--decorate=full`
-/// 让 `%D` 可被 [`parse_decorate`] 可靠区分类别。
+/// `branch_refs` controls the graph's coverage: `None` uses `--all` (every
+/// ref); `Some(refs)` covers only the given branch refs (e.g. `refs/heads/main`,
+/// `refs/remotes/origin/dev`), and an empty slice means the user deselected all
+/// branches, so an empty graph is returned. `limit`/`skip` drive pagination.
+/// `--date-order` keeps the layout stable, and `--decorate=full` lets
+/// [`parse_decorate`] classify `%D` reliably.
 #[cfg(not(target_family = "wasm"))]
 pub(crate) async fn load_commit_graph(
     repo_root: &Path,
@@ -191,7 +203,8 @@ pub(crate) async fn load_commit_graph(
         &skip_s,
         LOG_FORMAT,
     ];
-    // 选定的分支 ref 作为 revision 跟在 options 之后；None 时退回 --all。
+    // The selected branch refs follow the options as revisions; fall back to
+    // --all when None.
     match branch_refs {
         None => args.push("--all"),
         Some(refs) => {
@@ -205,18 +218,18 @@ pub(crate) async fn load_commit_graph(
     Ok(parse_commit_log(&stdout))
 }
 
-/// 一个可用于过滤图谱的分支引用。
+/// A branch ref usable for filtering the graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BranchRef {
-    /// 展示名（去掉 `refs/heads/` 或 `refs/remotes/` 前缀）。
+    /// Display name (with the `refs/heads/` or `refs/remotes/` prefix stripped).
     pub display_name: String,
-    /// 传给 `git log` 的完整 ref（如 `refs/heads/main`、`refs/remotes/origin/main`）。
+    /// Full ref passed to `git log` (e.g. `refs/heads/main`, `refs/remotes/origin/main`).
     pub ref_name: String,
-    /// 本地分支还是远程分支（决定展示分组/样式）。
+    /// Whether this is a local or remote branch (drives grouping/styling).
     pub kind: RefKind,
 }
 
-/// 加载某仓库的本地 + 远程分支列表（供分支过滤下拉使用）。
+/// Load a repository's local + remote branch list (for the branch-filter dropdown).
 #[cfg(not(target_family = "wasm"))]
 pub(crate) async fn load_branches(repo_root: &Path) -> Result<Vec<BranchRef>> {
     let args = [
@@ -229,10 +242,11 @@ pub(crate) async fn load_branches(repo_root: &Path) -> Result<Vec<BranchRef>> {
     Ok(parse_branch_refs(&stdout))
 }
 
-/// 解析 `git for-each-ref --format=%(refname)` 的输出为分支列表。
+/// Parse the output of `git for-each-ref --format=%(refname)` into a branch list.
 ///
-/// 每行是一个完整 ref。过滤掉远程符号 HEAD（`refs/remotes/*/HEAD`，对浏览无意义）。
-/// 本地分支在前、远程分支在后，各自按名排序，保证下拉顺序稳定。
+/// Each line is a full ref. Remote symbolic HEADs (`refs/remotes/*/HEAD`, which
+/// are meaningless for browsing) are filtered out. Local branches come first,
+/// then remote branches, each sorted by name to keep the dropdown order stable.
 pub(crate) fn parse_branch_refs(stdout: &str) -> Vec<BranchRef> {
     let mut locals = Vec::new();
     let mut remotes = Vec::new();
@@ -261,18 +275,25 @@ pub(crate) fn parse_branch_refs(stdout: &str) -> Vec<BranchRef> {
     locals
 }
 
-/// 发现 `anchor` 相关的所有 git 仓库根，按展示顺序返回（去重）：
-/// 1. 锚点自身所属仓库：用 `git rev-parse --show-toplevel` 向上探——锚点可能是某仓库的
-///    子目录（如终端 `cd` 进了 `repo/crates`），这一步保留"在子目录里也能看父仓库历史"的行为，
-///    且作为列表第一项（最贴近用户当前所在位置）。
-/// 2. 第 1..=`depth` 层子目录里的仓库：见 [`scan_subdir_repos`]。
+/// Discover all git repository roots related to `anchor`, returned in display
+/// order (deduplicated):
+/// 1. The repository the anchor itself belongs to: probed upward with
+///    `git rev-parse --show-toplevel`. The anchor may be a subdirectory of a
+///    repository (e.g. the terminal has `cd`'d into `repo/crates`); this step
+///    preserves the behavior of "viewing the parent repo's history even from a
+///    subdirectory" and places it first in the list (closest to where the user
+///    currently is).
+/// 2. Repositories in subdirectories at levels 1..=`depth`: see
+///    [`scan_subdir_repos`].
 ///
-/// 用于"一个目录下挂着多个独立 git 项目"的场景（如把 `~/Projects` 作为工作目录）。
+/// Used for the case of "several independent git projects sitting under one
+/// directory" (e.g. using `~/Projects` as the working directory).
 #[cfg(not(target_family = "wasm"))]
 pub(crate) async fn discover_repositories(anchor: &Path, depth: usize) -> Vec<PathBuf> {
     let mut repos: Vec<PathBuf> = Vec::new();
 
-    // 锚点自身所属仓库（向上探）。失败（不在任何仓库内）则跳过，不报错。
+    // The anchor's own repository (probed upward). On failure (not inside any
+    // repository) skip silently rather than erroring.
     if let Ok(stdout) =
         warp_util::git::run_git_command(anchor, &["rev-parse", "--show-toplevel"]).await
     {
@@ -282,7 +303,8 @@ pub(crate) async fn discover_repositories(anchor: &Path, depth: usize) -> Vec<Pa
         }
     }
 
-    // 子目录里的独立仓库（与锚点所属仓库去重）。
+    // Independent repositories in subdirectories (deduplicated against the
+    // anchor's own repository).
     for repo in scan_subdir_repos(anchor, depth) {
         if !repos.contains(&repo) {
             repos.push(repo);
@@ -292,21 +314,24 @@ pub(crate) async fn discover_repositories(anchor: &Path, depth: usize) -> Vec<Pa
     repos
 }
 
-/// 扫描 `anchor` 的第 1..=`depth` 层子目录，返回其中带 `.git` 标记（仓库根）的目录，按路径排序。
+/// Scan the subdirectories of `anchor` at levels 1..=`depth`, returning those
+/// that carry a `.git` marker (repository roots), sorted by path.
 ///
-/// 语义：`anchor` 自身是第 0 层，其直接子目录是第 1 层。`depth==0` 时不扫描任何子目录。
-/// 命中一个仓库根后**不再深入其内部**——避免把它的 submodule / 嵌套仓库当作并列的独立项目。
+/// Semantics: `anchor` itself is level 0 and its direct children are level 1.
+/// When `depth==0` no subdirectories are scanned. Once a repository root is hit,
+/// its interior is **not** descended into — this avoids treating its submodules /
+/// nested repositories as sibling independent projects.
 #[cfg(not(target_family = "wasm"))]
 fn scan_subdir_repos(anchor: &Path, depth: usize) -> Vec<PathBuf> {
     use std::collections::VecDeque;
 
     let mut found: Vec<PathBuf> = Vec::new();
-    // BFS 队列：(目录, 该目录所处层级)。
+    // BFS queue: (directory, the directory's level).
     let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::new();
     queue.push_back((anchor.to_path_buf(), 0));
 
     while let Some((dir, level)) = queue.pop_front() {
-        // 已到达深度上限：该层目录不再展开其子目录。
+        // Depth limit reached: do not expand this level's children any further.
         if level >= depth {
             continue;
         }
@@ -314,27 +339,30 @@ fn scan_subdir_repos(anchor: &Path, depth: usize) -> Vec<PathBuf> {
             continue;
         };
         for entry in entries.flatten() {
-            // 只看目录（忽略普通文件；`.git` 既可能是目录也可能是文件，用 exists 判定）。
+            // Only look at directories (ignore plain files; `.git` may be either
+            // a directory or a file, so it is detected via `exists`).
             if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 continue;
             }
             let path = entry.path();
             if path.join(".git").exists() {
-                // 命中仓库根：收录，且不入队其子目录（不深入仓库内部）。
+                // A repository root: record it and do not enqueue its children
+                // (do not descend into the repository).
                 found.push(path);
             } else {
-                // 普通目录：继续向下一层扫描。
+                // A plain directory: keep scanning into the next level.
                 queue.push_back((path, level + 1));
             }
         }
     }
 
-    // read_dir 顺序依赖文件系统，排序保证列表稳定（UI 下拉顺序、测试可复现）。
+    // read_dir order is filesystem-dependent; sorting keeps the list stable
+    // (deterministic UI dropdown order, reproducible tests).
     found.sort();
     found
 }
 
-/// 一个提交涉及的单个变更文件及其增删行数。
+/// A single changed file in a commit, with its insertion/deletion counts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ChangedFile {
     pub path: String,
@@ -342,20 +370,21 @@ pub(crate) struct ChangedFile {
     pub deletions: u32,
 }
 
-/// 选中提交的详情：committer 信息、完整提交信息、变更文件列表。
+/// Details of the selected commit: committer info, full commit message, and the
+/// list of changed files.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CommitDetail {
     pub committer_name: String,
     pub committer_time: i64,
-    /// 完整提交信息（`%B`，含标题与正文）。
+    /// Full commit message (`%B`, including subject and body).
     pub message: String,
     pub files: Vec<ChangedFile>,
 }
 
-/// 加载单个提交的详情。
+/// Load the details of a single commit.
 #[cfg(not(target_family = "wasm"))]
 pub(crate) async fn load_commit_detail(repo_root: &Path, hash: &str) -> Result<CommitDetail> {
-    // 用 `%x1e` 把 format 头部与随后的 `--numstat` 行分隔开。
+    // `%x1e` separates the format header from the `--numstat` lines that follow.
     let args = [
         "show",
         "--numstat",
@@ -367,7 +396,7 @@ pub(crate) async fn load_commit_detail(repo_root: &Path, hash: &str) -> Result<C
     Ok(parse_commit_detail(&stdout))
 }
 
-/// 解析 `git show --numstat --format=%cn%x1f%ct%x1f%B%x1e` 的输出。
+/// Parse the output of `git show --numstat --format=%cn%x1f%ct%x1f%B%x1e`.
 pub(crate) fn parse_commit_detail(stdout: &str) -> CommitDetail {
     let (header, numstat) = stdout.split_once(RECORD_SEP).unwrap_or((stdout, ""));
     let mut fields = header.splitn(3, UNIT_SEP);
@@ -386,7 +415,8 @@ pub(crate) fn parse_commit_detail(stdout: &str) -> CommitDetail {
     }
 }
 
-/// 解析 `--numstat` 输出（每行 `additions\tdeletions\tpath`；二进制文件为 `-`）。
+/// Parse `--numstat` output (each line is `additions\tdeletions\tpath`; binary
+/// files use `-`).
 fn parse_numstat(stdout: &str) -> Vec<ChangedFile> {
     stdout
         .lines()
@@ -401,7 +431,7 @@ fn parse_numstat(stdout: &str) -> Vec<ChangedFile> {
             let path = parts.next()?.to_string();
             Some(ChangedFile {
                 path,
-                // 二进制文件的列为 "-"，按 0 处理。
+                // Binary files report "-" in these columns; treat as 0.
                 additions: additions.parse::<u32>().unwrap_or(0),
                 deletions: deletions.parse::<u32>().unwrap_or(0),
             })
@@ -409,25 +439,33 @@ fn parse_numstat(stdout: &str) -> Vec<ChangedFile> {
         .collect()
 }
 
-/// 选中提交对某个文件的改动（`commit~1..commit`，即"该提交自身改了什么"）：
-/// 父版本的完整文件内容（作为 diff base）+ 解析好的 unified diff hunks。
-/// 供"点击提交详情里的变更文件 → 主区只读 diff pane"使用。
+/// The change a selected commit made to one file (`commit~1..commit`, i.e. "what
+/// this commit itself changed"): the full file content at the parent version (as
+/// the diff base) plus the parsed unified diff hunks.
+/// Used for "click a changed file in the commit detail -> open a read-only diff
+/// pane in the main area".
 #[cfg(not(target_family = "wasm"))]
 #[derive(Debug, Clone)]
 pub(crate) struct CommitFileDiff {
-    /// 文件在父提交处的完整内容；新增文件或根提交无父版本时为空串（此时 diff 全为新增行）。
+    /// Full content of the file at the parent commit; an empty string for an
+    /// added file or a root commit with no parent version (in which case the
+    /// diff is entirely added lines).
     pub base_content: String,
-    /// 该提交对此文件的 unified diff hunks（复用 code review 的解析器与类型）。
+    /// The commit's unified diff hunks for this file (reusing the code review
+    /// parser and types).
     pub hunks: Vec<crate::code_review::diff_state::DiffHunk>,
 }
 
-/// 加载某提交对单个文件的改动。`path` 为仓库相对路径。
+/// Load a commit's change to a single file. `path` is a repository-relative path.
 ///
-/// 取数策略兼顾 普通 / 新增 / 删除 / 根 / 合并 提交：
-/// - base 内容：`git show <hash>~1:<path>`；取不到（新增文件或根提交无父版本）按空串处理。
-/// - diff：优先 `git diff <hash>~1 <hash> -- <path>`（对合并提交也能拿到"对比第一父"的常规 hunks，
-///   避免 `git show` 合并提交输出的 combined diff `@@@` 无法解析）；`<hash>~1` 不存在（根提交）时
-///   退回 `git show <hash> --format= -- <path>`（整文件按新增展示）。
+/// The fetch strategy handles plain / added / deleted / root / merge commits:
+/// - base content: `git show <hash>~1:<path>`; if unavailable (an added file or
+///   a root commit with no parent version) it is treated as an empty string.
+/// - diff: prefer `git diff <hash>~1 <hash> -- <path>` (this yields the normal
+///   "compared against the first parent" hunks even for merge commits, avoiding
+///   the unparseable combined-diff `@@@` that `git show` emits for merges); when
+///   `<hash>~1` does not exist (a root commit), fall back to
+///   `git show <hash> --format= -- <path>` (showing the whole file as added).
 #[cfg(not(target_family = "wasm"))]
 pub(crate) async fn load_file_diff_at_commit(
     repo_root: &Path,
@@ -438,13 +476,16 @@ pub(crate) async fn load_file_diff_at_commit(
 
     let parent = format!("{hash}~1");
 
-    // base：父版本完整内容；新增文件 / 根提交无父版本 → git 出错，按空串处理。
+    // base: full content of the parent version; for an added file / a root
+    // commit with no parent version git errors out, so treat it as empty.
     let base_spec = format!("{parent}:{path}");
     let base_content = warp_util::git::run_git_command(repo_root, &["show", base_spec.as_str()])
         .await
         .unwrap_or_default();
 
-    // diff：先按"对比第一父"取常规两路 diff；根提交无父则退回整文件新增。
+    // diff: first take the normal two-way diff "compared against the first
+    // parent"; for a root commit with no parent, fall back to the whole file as
+    // added.
     let diff_output = match warp_util::git::run_git_command(
         repo_root,
         &["diff", "--no-color", parent.as_str(), hash, "--", path],

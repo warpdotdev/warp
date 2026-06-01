@@ -1,12 +1,15 @@
-//! Git Graph 面板：只读的 commit DAG 可视化（见 specs/git-graph）。
+//! Git Graph panel: a read-only commit-DAG visualization (see specs/git-graph).
 //!
-//! 模块分层：
-//! - [`data`]       提交数据类型 + `git log` 输出解析（纯函数）+ 异步取数。
-//! - [`layout`]     把提交序列编排成逐行的泳道布局（纯函数，核心算法）。
-//! - [`row_canvas`] 单行泳道的自定义绘制元素（竖线/圆点/正交折线）。
-//! - [`view`]       左侧 panel 的 Git Graph 视图。
+//! Module layering:
+//! - [`data`]       commit data types + parsing of `git log` output (pure
+//!   functions) + async data loading.
+//! - [`layout`]     arranges a commit sequence into a per-row lane layout (pure
+//!   functions, the core algorithm).
+//! - [`row_canvas`] custom drawing element for a single row of lanes (vertical
+//!   lines / dots / orthogonal polylines).
+//! - [`view`]       the Git Graph view in the left panel.
 //!
-//! 后续阶段会补充提交详情与分页懒加载。
+//! Later phases will add commit details and paginated lazy loading.
 
 pub(crate) mod data;
 pub(crate) mod layout;

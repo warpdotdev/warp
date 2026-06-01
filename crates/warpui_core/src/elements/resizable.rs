@@ -30,7 +30,8 @@ pub struct Resizable {
     resize_handler: Option<Handler>,
     start_resize_handler: Option<Handler>,
     end_resize_handler: Option<Handler>,
-    /// 鼠标悬停拖条或正在拖动时绘制的颜色；`None` 时始终用 `dragbar.color`（默认行为）。
+    /// The color drawn when the mouse hovers over the drag handle or while dragging; when `None`,
+    /// `dragbar.color` is always used (the default behavior).
     dragbar_hover_color: Option<Fill>,
     direction: ResizeDirection,
     origin_delta: Vector2F,
@@ -51,9 +52,11 @@ pub struct ResizableState {
     size: f32,
     bounds: Option<(f32, f32)>,
     mode: ResizableMode,
-    /// 鼠标是否悬停在拖条上。存于此共享状态（而非 `Resizable` 本地字段）以便跨重渲染保留：
-    /// hover 翻转会 `notify` 触发重渲染，重渲染会重建 `Resizable`，本地字段随之丢失、
-    /// hover 高亮立刻消失；而拖动态（`mode`）本就在此，所以拖动高亮一直正常。
+    /// Whether the mouse is hovering over the drag handle. Kept in this shared state (rather than a
+    /// local field of `Resizable`) so it survives re-renders: flipping hover calls `notify`, which
+    /// triggers a re-render that rebuilds `Resizable`; a local field would be lost in the process and
+    /// the hover highlight would vanish immediately. The drag mode (`mode`) already lives here, which
+    /// is why the drag highlight has always worked correctly.
     hovering_dragbar: bool,
 }
 
@@ -273,7 +276,7 @@ impl Resizable {
         self
     }
 
-    /// 设置鼠标悬停拖条或正在拖动时的高亮颜色，让原本不可见 / 无反馈的拖条变明显。
+    /// Sets the highlight color used when the mouse hovers over the drag handle or while dragging, making an otherwise invisible / unresponsive drag handle stand out.
     pub fn with_dragbar_hover_color(mut self, color: Fill) -> Self {
         self.dragbar_hover_color = Some(color);
         self
@@ -408,7 +411,7 @@ impl Element for Resizable {
             ),
         };
 
-        // 悬停拖条或正在拖动时用高亮色（若设置），否则用常规拖条色。
+        // Use the highlight color (if set) when hovering the drag handle or dragging, otherwise the regular drag handle color.
         let is_active = {
             let s = self.state();
             s.hovering_dragbar || s.is_resizing()
@@ -500,7 +503,7 @@ impl Element for Resizable {
                     ctx.reset_cursor();
                 }
 
-                // 悬停状态翻转且设置了高亮色时，通知重绘以即时切换拖条颜色。
+                // When the hover state flips and a highlight color is set, notify a redraw to switch the drag handle color immediately.
                 if hovering_dragbar != was_already_hovering && self.dragbar_hover_color.is_some() {
                     ctx.notify();
                 }

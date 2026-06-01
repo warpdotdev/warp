@@ -1,8 +1,9 @@
-//! [`super`]（数据层）解析纯函数的单元测试。
+//! Unit tests for the pure parsing functions in [`super`] (the data layer).
 
 use super::*;
 
-/// 按 [`LOG_FORMAT`] 的字段顺序拼出一条提交记录（含尾部记录分隔符）。
+/// Build a commit record following [`LOG_FORMAT`]'s field order (including the
+/// trailing record separator).
 fn rec(
     hash: &str,
     parents: &str,
@@ -46,7 +47,7 @@ fn parse_commit_log_parses_single_linear_commit() {
 
 #[test]
 fn parse_commit_log_handles_multiple_records_joined_by_newline() {
-    // git 在记录之间用换行连接；解析需容忍前导换行。
+    // git joins records with newlines; parsing must tolerate a leading newline.
     let input = format!(
         "{}\n{}",
         rec("h1", "h2", "A", "a@x", "100", "", "second"),
@@ -57,7 +58,7 @@ fn parse_commit_log_handles_multiple_records_joined_by_newline() {
     assert_eq!(commits.len(), 2);
     assert_eq!(commits[0].hash, "h1");
     assert_eq!(commits[1].hash, "h2");
-    // 根提交无父。
+    // A root commit has no parents.
     assert!(commits[1].parents.is_empty());
 }
 
@@ -142,7 +143,8 @@ fn parse_decorate_local_branch_with_slash() {
 
 #[test]
 fn parse_decorate_hides_remote_symbolic_head() {
-    // origin/HEAD 这类符号引用对历史浏览无意义，应被过滤。
+    // Symbolic refs like origin/HEAD are meaningless for browsing history and
+    // should be filtered out.
     let refs = parse_decorate("refs/remotes/origin/HEAD, refs/remotes/origin/main");
     assert_eq!(refs.len(), 1);
     assert_eq!(refs[0].name, "origin/main");
@@ -167,7 +169,7 @@ fn parse_commit_detail_extracts_header_and_files() {
 
     assert_eq!(detail.committer_name, "Bob Committer");
     assert_eq!(detail.committer_time, 1_700_000_050);
-    // 完整信息保留标题 + 正文。
+    // The full message retains both subject and body.
     assert_eq!(detail.message, "Subject line\n\nBody paragraph.");
     assert_eq!(detail.files.len(), 3);
     assert_eq!(
@@ -178,7 +180,7 @@ fn parse_commit_detail_extracts_header_and_files() {
             deletions: 1,
         }
     );
-    // 二进制文件（"-"）按 0 增删处理。
+    // Binary files ("-") are treated as 0 insertions/deletions.
     assert_eq!(
         detail.files[2],
         ChangedFile {
@@ -198,16 +200,17 @@ fn parse_commit_detail_handles_empty_numstat() {
     assert!(detail.files.is_empty());
 }
 
-// ===== scan_subdir_repos：子目录仓库发现（纯文件系统逻辑，用临时目录构造，无需真实 git）=====
+// ===== scan_subdir_repos: subdirectory repository discovery (pure filesystem logic, built with temp directories, no real git needed) =====
 
-/// 在 `root` 下创建目录 `rel`，并给它放一个 `.git` 标记目录（模拟仓库根）。
+/// Create directory `rel` under `root` and give it a `.git` marker directory
+/// (simulating a repository root).
 #[cfg(not(target_family = "wasm"))]
 fn make_repo(root: &std::path::Path, rel: &str) {
     let dir = root.join(rel);
     std::fs::create_dir_all(dir.join(".git")).unwrap();
 }
 
-/// 在 `root` 下创建普通目录 `rel`（无 `.git`）。
+/// Create a plain directory `rel` under `root` (without `.git`).
 #[cfg(not(target_family = "wasm"))]
 fn make_plain_dir(root: &std::path::Path, rel: &str) {
     std::fs::create_dir_all(root.join(rel)).unwrap();
@@ -218,10 +221,10 @@ fn make_plain_dir(root: &std::path::Path, rel: &str) {
 fn scan_subdir_repos_depth_one_finds_direct_children_only() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
-    make_repo(root, "alpha"); // 第 1 层仓库
-    make_repo(root, "beta"); // 第 1 层仓库
-    make_plain_dir(root, "plain"); // 第 1 层普通目录
-    make_repo(root, "plain/nested"); // 第 2 层仓库（depth=1 不应发现）
+    make_repo(root, "alpha"); // level 1 repository
+    make_repo(root, "beta"); // level 1 repository
+    make_plain_dir(root, "plain"); // level 1 plain directory
+    make_repo(root, "plain/nested"); // level 2 repository (should not be found at depth=1)
 
     let found = scan_subdir_repos(root, 1);
 
@@ -244,7 +247,7 @@ fn scan_subdir_repos_depth_two_finds_nested_under_plain_dir() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     make_plain_dir(root, "group");
-    make_repo(root, "group/inner"); // 第 2 层仓库
+    make_repo(root, "group/inner"); // level 2 repository
 
     let found = scan_subdir_repos(root, 2);
 
@@ -253,7 +256,8 @@ fn scan_subdir_repos_depth_two_finds_nested_under_plain_dir() {
 
 #[test]
 fn parse_branch_refs_splits_local_and_remote_sorted() {
-    // 故意打乱顺序、混入远程符号 HEAD（应被过滤）。
+    // Deliberately out of order, with a remote symbolic HEAD mixed in (should be
+    // filtered out).
     let input = "refs/heads/main\n\
                  refs/remotes/origin/dev\n\
                  refs/heads/feature/login\n\
@@ -261,7 +265,8 @@ fn parse_branch_refs_splits_local_and_remote_sorted() {
                  refs/remotes/origin/main\n";
     let branches = parse_branch_refs(input);
 
-    // 本地在前（按名排序），远程在后（按名排序）；origin/HEAD 被过滤。
+    // Locals first (sorted by name), remotes after (sorted by name); origin/HEAD
+    // is filtered out.
     let got: Vec<(&str, RefKind)> = branches
         .iter()
         .map(|b| (b.display_name.as_str(), b.kind))
@@ -275,7 +280,7 @@ fn parse_branch_refs_splits_local_and_remote_sorted() {
             ("origin/main", RefKind::RemoteBranch),
         ]
     );
-    // ref_name 保留完整 ref，供 git log 使用。
+    // ref_name keeps the full ref, for use with git log.
     assert_eq!(branches[0].ref_name, "refs/heads/feature/login");
     assert_eq!(branches[2].ref_name, "refs/remotes/origin/dev");
 }
@@ -291,8 +296,8 @@ fn parse_branch_refs_handles_empty() {
 fn scan_subdir_repos_does_not_descend_into_found_repo() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
-    make_repo(root, "outer"); // 第 1 层仓库
-    make_repo(root, "outer/sub"); // 仓库内的嵌套仓库（submodule 样），不应被并列收录
+    make_repo(root, "outer"); // level 1 repository
+    make_repo(root, "outer/sub"); // a nested repository inside it (submodule-like); should not be collected as a sibling
 
     let found = scan_subdir_repos(root, 3);
 

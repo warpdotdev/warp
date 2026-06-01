@@ -100,7 +100,7 @@ pub enum LeftPanelEvent {
         conversation_title: String,
         terminal_view_id: Option<warpui::EntityId>,
     },
-    /// Git Graph 请求在主区只读 diff pane 中打开"某提交对某文件的改动"。
+    /// The Git Graph requests opening a commit's changes to a file in a read-only diff pane in the main area.
     #[cfg(not(target_family = "wasm"))]
     OpenCommitFileDiff {
         repo_relative_path: String,
@@ -231,7 +231,7 @@ impl LeftPanelView {
         let conversation_list_view = ctx.add_typed_action_view(ConversationListView::new);
         let git_graph_view = ctx.add_typed_action_view(GitGraphView::new);
 
-        // Git Graph 详情区点击变更文件 → 向上转发，由 workspace 在主区开只读 diff pane。
+        // Clicking a changed file in the Git Graph detail area is forwarded upward so the workspace opens a read-only diff pane in the main area.
         #[cfg(not(target_family = "wasm"))]
         ctx.subscribe_to_view(&git_graph_view, |_me, _, event, ctx| match event {
             GitGraphEvent::OpenCommitFileDiff {
@@ -333,7 +333,7 @@ impl LeftPanelView {
                     view.set_root_directories(local_paths.clone(), view_ctx);
                 });
 
-                // Git Graph 跟随最近一个本地工作目录（git 可从仓库任意子目录读取历史）。
+                // The Git Graph follows the most recent local working directory (git can read history from any subdirectory of a repository).
                 let git_graph_dir = local_paths.first().cloned();
 
                 // Directories are already in display order (most recent first) from the model
@@ -692,8 +692,9 @@ impl LeftPanelView {
             view.set_root_directories(local_paths.clone(), view_ctx);
         });
 
-        // Git Graph 跟随最近一个本地工作目录；切换活跃 pane group 时也要刷新，否则会停留在
-        // 上一个目录的状态（与 DirectoriesChanged 处理保持一致）。
+        // The Git Graph follows the most recent local working directory; it must also be refreshed
+        // when switching the active pane group, otherwise it stays on the previous directory's state
+        // (kept consistent with the DirectoriesChanged handling).
         let git_graph_dir = local_paths.first().cloned();
         let git_graph_view = self.git_graph_view.clone();
         git_graph_view.update(ctx, |view, ctx| {

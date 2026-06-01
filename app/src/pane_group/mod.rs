@@ -2240,11 +2240,13 @@ impl PaneGroup {
         self.panes_of::<AIDocumentPane>().map(|pane| pane.id())
     }
 
-    /// 当前 pane group 内第一个**可见**的 commit diff pane（id + 内部视图），供"再次打开提交
-    /// 文件 diff 时复用：原地更新它的内容并聚焦，而非新开"使用。
+    /// The first visible commit diff pane in the current pane group (id + inner view), used
+    /// to reuse it when reopening a commit file diff: update its content in place and focus
+    /// it, rather than opening a new pane.
     ///
-    /// 必须过滤掉"已点 × 关闭但尚未真正移除"（hidden for close）的 pane：否则关闭后再次打开会
-    /// 去更新那个已关闭的 pane，导致 diff 不显示。
+    /// Must filter out panes that have been closed via × but not yet actually removed (hidden
+    /// for close): otherwise, reopening after closing would update that closed pane and the
+    /// diff wouldn't show.
     pub fn first_commit_diff_pane(
         &self,
         app: &AppContext,

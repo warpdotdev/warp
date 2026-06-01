@@ -105,10 +105,13 @@ impl TerminalView {
     }
 
     pub fn refresh_pane_header(&mut self, ctx: &mut ViewContext<Self>) {
-        // 仅当本终端既是活跃会话、又是当前聚焦的 pane 时才显示左上角活跃三角。
-        // 焦点切到分屏中的非终端 pane（如只读 diff pane）时，active_session 仍指向本终端
-        // （供新建终端继承 cwd 等用途，不应清空），若只看 is_active_session 会出现"终端与
-        // 被聚焦 pane 同时亮三角"。纯终端场景下被聚焦的终端恒为 active_session，故行为不变。
+        // Show the top-left active-pane indicator only when this terminal is both the active
+        // session and the currently focused pane. When focus moves to a non-terminal pane in
+        // the split (e.g. a read-only diff pane), active_session still points at this terminal
+        // (which is intended, so a new terminal can inherit its cwd, etc. — it must not be
+        // cleared); looking only at is_active_session would light the indicator on both the
+        // terminal and the focused pane. In pure-terminal scenarios the focused terminal is
+        // always the active_session, so behavior is unchanged.
         let show_active_pane_indicator = self.is_active_session(ctx) && self.is_pane_focused(ctx);
         self.pane_configuration
             .update(ctx, move |pane_config, ctx| {

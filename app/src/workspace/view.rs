@@ -6037,11 +6037,14 @@ impl Workspace {
         }
     }
 
-    /// 在**当前 tab** 内打开只读 diff pane，展示某提交对单个文件的改动（由 Git Graph 触发）。
+    /// Opens a read-only diff pane in the **current tab**, showing a single file's changes for a
+    /// commit (triggered by the Git Graph).
     ///
-    /// 行为对齐"打开文件"：不新开 tab。当前 tab 已有 commit diff pane 则**原地更新它的内容**并
-    /// 聚焦（连点多个文件复用同一 pane，且 pane 不被销毁 → header/关闭按钮保持），否则在当前
-    /// pane group 右侧分屏新建并聚焦。
+    /// Mirrors the behavior of "open file": it does not open a new tab. If the current tab already
+    /// has a commit diff pane, **its content is updated in place** and focused (clicking several
+    /// files in a row reuses the same pane, and since the pane is not destroyed the header/close
+    /// button persist); otherwise a new pane is split off to the right of the current pane group
+    /// and focused.
     #[cfg(not(target_family = "wasm"))]
     fn open_commit_file_diff(
         &mut self,
@@ -6051,7 +6054,7 @@ impl Workspace {
         hunks: Vec<crate::code_review::diff_state::DiffHunk>,
         ctx: &mut ViewContext<Self>,
     ) {
-        // 复用：原地更新已有 commit diff pane 的内容并聚焦。
+        // Reuse: update the existing commit diff pane's content in place and focus it.
         if let Some((pane_id, view)) = self
             .active_tab_pane_group()
             .as_ref(ctx)
@@ -6066,7 +6069,7 @@ impl Workspace {
             return;
         }
 
-        // 首次：在当前 tab 右侧分屏新建并聚焦。
+        // First time: split off a new pane to the right of the current tab and focus it.
         let view = ctx.add_typed_action_view(move |ctx| {
             crate::code::commit_diff_view::CommitDiffView::new(
                 repo_relative_path,

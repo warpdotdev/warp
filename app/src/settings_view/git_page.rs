@@ -1,5 +1,6 @@
-//! "Git" 设置分页。包含 Git Graph 面板显隐开关与仓库扫描深度；后续 git 相关参数（分支
-//! 过滤、连线样式等）作为新的 [`SettingsWidget`] 追加到 `widgets` 即可，页面结构无需再动。
+//! The "Git" settings tab. Contains the Git Graph panel visibility toggle and the repository scan
+//! depth; future git-related options (branch filtering, connector style, etc.) can simply be added
+//! to `widgets` as a new [`SettingsWidget`], with no change to the page structure.
 
 use settings::{Setting as _, ToggleableSetting as _};
 use warpui::elements::{Element, Flex};
@@ -17,8 +18,9 @@ use crate::report_if_error;
 use crate::settings::{GitSettings, GitSettingsChangedEvent};
 use crate::view_components::{Dropdown, DropdownItem};
 
-/// 仓库扫描深度的可选项（值 + 展示文案）。深度语义见 [`crate::settings::GitSettings`]。
-/// 只提供 0–3 这几档常用值；更深的需求极少，手改 toml 仍可生效。
+/// The selectable repository scan depth options (value + display label). See
+/// [`crate::settings::GitSettings`] for the meaning of each depth. Only the common values 0–3 are
+/// offered; deeper scans are rarely needed and can still be set by editing the toml directly.
 const SCAN_DEPTH_OPTIONS: &[(u32, &str)] = &[
     (0, "Current folder only"),
     (1, "1 level (direct subfolders)"),
@@ -26,18 +28,19 @@ const SCAN_DEPTH_OPTIONS: &[(u32, &str)] = &[
     (3, "3 levels"),
 ];
 
-/// 本页的 action。`PartialEq` 用于满足扫描深度下拉的 [`crate::view_components::dropdown::DropdownItemAction`] 约束。
+/// This page's action. `PartialEq` is required to satisfy the scan depth dropdown's
+/// [`crate::view_components::dropdown::DropdownItemAction`] bound.
 #[derive(Clone, Debug, PartialEq)]
 pub enum GitSettingsPageAction {
-    /// 切换 Git Graph 面板显隐。
+    /// Toggle the visibility of the Git Graph panel.
     ToggleShowGitGraph,
-    /// 设置仓库扫描深度。
+    /// Set the repository scan depth.
     SetScanDepth(u32),
 }
 
 pub struct GitSettingsPageView {
     page: PageType<Self>,
-    /// 仓库扫描深度下拉（子视图，派发 [`GitSettingsPageAction::SetScanDepth`]）。
+    /// The repository scan depth dropdown (a subview that dispatches [`GitSettingsPageAction::SetScanDepth`]).
     scan_depth_dropdown: ViewHandle<Dropdown<GitSettingsPageAction>>,
 }
 
@@ -46,7 +49,7 @@ impl GitSettingsPageView {
         let scan_depth_dropdown = ctx.add_typed_action_view(Dropdown::new);
         Self::update_scan_depth_dropdown(scan_depth_dropdown.clone(), ctx);
 
-        // 深度在别处变化（云同步 / 重置 / 本页修改）时刷新下拉选中态。
+        // Refresh the dropdown selection when the depth changes elsewhere (cloud sync / reset / edits on this page).
         ctx.subscribe_to_model(&GitSettings::handle(ctx), |me, _, event, ctx| {
             if matches!(event, GitSettingsChangedEvent::GitGraphScanDepth { .. }) {
                 Self::update_scan_depth_dropdown(me.scan_depth_dropdown.clone(), ctx);
@@ -64,7 +67,7 @@ impl GitSettingsPageView {
         }
     }
 
-    /// 用当前设置值刷新扫描深度下拉的菜单项与选中态。
+    /// Refresh the scan depth dropdown's menu items and selection from the current setting value.
     fn update_scan_depth_dropdown(
         dropdown: ViewHandle<Dropdown<GitSettingsPageAction>>,
         ctx: &mut ViewContext<Self>,
@@ -155,7 +158,7 @@ impl From<ViewHandle<GitSettingsPageView>> for SettingsPageViewHandle {
     }
 }
 
-/// "Git Graph" 面板显隐开关。
+/// The Git Graph panel visibility toggle.
 #[derive(Default)]
 struct ShowGitGraphToggleWidget {
     switch_state: SwitchStateHandle,
@@ -196,7 +199,7 @@ impl SettingsWidget for ShowGitGraphToggleWidget {
     }
 }
 
-/// Git Graph 仓库扫描深度下拉。
+/// The Git Graph repository scan depth dropdown.
 #[derive(Default)]
 struct ScanDepthWidget {}
 

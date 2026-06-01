@@ -1,10 +1,13 @@
-//! 主区只读 diff pane 的视图：展示某个提交对单个文件的改动（`commit~1..commit`，即
-//! "这一个提交自身改了什么"）。由 Git Graph 提交详情里点击变更文件触发。
+//! View for the main-area read-only diff pane: shows what a single commit changed
+//! in a single file (`commit~1..commit`, i.e. what this one commit itself changed).
+//! Triggered by clicking a changed file in the Git Graph commit detail.
 //!
-//! 复用编辑器的 diff 叠加机制：先把文件在**父提交处**的完整内容灌进编辑器作为 diff base，
-//! 再叠加该提交对此文件的 deltas（由 unified diff hunks 转换而来）。**不注册 FileModel**
-//! （不调用 [`InlineDiffView::register_file`]）→ 编辑器没有文件后端，保持只读、不可保存，
-//! 避免把"历史版本"误存回工作区文件。
+//! Reuses the editor's diff overlay mechanism: first feeds the file's full content
+//! at its parent commit into the editor as the diff base, then overlays this commit's
+//! deltas for the file (converted from unified diff hunks). It does NOT register a
+//! FileModel (does not call [`InlineDiffView::register_file`]) → the editor has no
+//! file backend, staying read-only and unsavable, which avoids accidentally writing
+//! a historical revision back to the working-tree file.
 
 use std::path::Path;
 
@@ -28,27 +31,27 @@ use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view::{self, HeaderContent, StandardHeader, StandardHeaderOptions};
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 
-/// commit diff pane 头部 overflow 菜单的 action。
+/// Action for the commit diff pane's header overflow menu.
 #[derive(Debug, Clone)]
 pub enum CommitDiffMenuAction {
-    /// 最大化 / 还原本 pane。
+    /// Maximize / restore this pane.
     ToggleMaximized,
 }
 
-/// 只读地展示单个提交对单个文件的改动。
+/// Read-only view of what a single commit changed in a single file.
 pub struct CommitDiffView {
     pane_configuration: ModelHandle<PaneConfiguration>,
     focus_handle: Option<PaneFocusHandle>,
-    /// 实际承载 diff 渲染的内联 diff 视图（编辑器 + 叠加的 deltas）。
+    /// The inline diff view that actually renders the diff (editor + overlaid deltas).
     diff_view: ViewHandle<InlineDiffView>,
-    /// 头部 / 标签标题：`文件名 @ 短 hash`。
+    /// Header / tab title: `file_name @ short_hash`.
     header_title: String,
 }
 
 impl CommitDiffView {
-    /// `repo_relative_path` 仓库相对路径；`short_hash` 短 commit hash（仅用于标题）；
-    /// `base_content` 文件在父提交处的完整内容（新增文件 / 根提交为空串）；
-    /// `hunks` 该提交对此文件的 unified diff hunks。
+    /// `repo_relative_path` repo-relative path; `short_hash` short commit hash (title only);
+    /// `base_content` the file's full content at the parent commit (empty string for an
+    /// added file / the root commit); `hunks` this commit's unified diff hunks for the file.
     pub fn new(
         repo_relative_path: String,
         short_hash: String,
@@ -60,7 +63,8 @@ impl CommitDiffView {
 
         let pane_configuration = ctx.add_model({
             let title = header_title.clone();
-            // 标题用 set_title 设定（而非 ::new 传入）以保证标签立即渲染，参照 CodeDiffPane。
+            // Set the title via set_title (rather than passing it to ::new) so the tab
+            // renders immediately, following CodeDiffPane.
             move |ctx| {
                 let mut cfg = PaneConfiguration::new("");
                 cfg.set_title(title, ctx);
@@ -78,8 +82,9 @@ impl CommitDiffView {
         }
     }
 
-    /// 复用同一个 pane 打开另一个文件的 diff：替换内容、更新标题，**保持 pane 不被销毁**
-    /// （header / 关闭按钮 / 焦点状态都不变）。供"连点多个文件复用同一 diff pane"使用。
+    /// Reuse the same pane to open another file's diff: replace the content and update
+    /// the title while keeping the pane alive (header / close button / focus state all
+    /// unchanged). Used for clicking through multiple files into the same diff pane.
     pub fn load(
         &mut self,
         repo_relative_path: String,
@@ -101,7 +106,7 @@ impl CommitDiffView {
         self.pane_configuration.clone()
     }
 
-    /// 头部 / 标签标题：`文件名 @ 短 hash`。
+    /// Header / tab title: `file_name @ short_hash`.
     fn compute_title(repo_relative_path: &str, short_hash: &str) -> String {
         let file_name = Path::new(repo_relative_path)
             .file_name()
@@ -110,8 +115,9 @@ impl CommitDiffView {
         format!("{file_name} @ {short_hash}")
     }
 
-    /// 构建只读 diff 视图：编辑器灌入父版本完整内容作 base，叠加该提交的 deltas；
-    /// 不注册 FileModel（无文件后端 → 不可保存），并强制 Selectable（FullPane 默认可编辑）。
+    /// Build the read-only diff view: feed the parent revision's full content into the
+    /// editor as the base, overlay this commit's deltas; do not register a FileModel
+    /// (no file backend → unsavable), and force Selectable (FullPane is editable by default).
     fn build_diff_view(
         repo_relative_path: &str,
         base_content: &str,
@@ -119,7 +125,8 @@ impl CommitDiffView {
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<InlineDiffView> {
         let editor = ctx.add_typed_action_view(|ctx| {
-            // 关掉 hover/active 时 change bar 加宽（3→8px），让所有 hunk 标记恒为 3px、宽度统一。
+            // Disable the change bar widening on hover/active (3→8px) so every hunk marker
+            // stays a uniform 3px wide.
             CodeEditorView::new(
                 None,
                 None,
@@ -151,8 +158,10 @@ impl CommitDiffView {
             });
         });
 
-        // 点击编辑器内容获得焦点时，把焦点上抛为 PaneEvent::FocusSelf，让 pane group 激活本 pane
-        // （否则点击 diff 内容区不激活、左上角无活跃标记——点击被编辑器选区消费、不会冒泡到 pane）。
+        // When clicking the editor content takes focus, bubble it up as PaneEvent::FocusSelf
+        // so the pane group activates this pane (otherwise clicking the diff content area
+        // doesn't activate it and there's no active-pane indicator in the top-left — the
+        // click is consumed by the editor selection and never propagates to the pane).
         let editor = diff_view.as_ref(ctx).editor().clone();
         ctx.subscribe_to_view(&editor, |_me, _editor, event, ctx| {
             if matches!(event, CodeEditorEvent::Focused) {
@@ -163,10 +172,12 @@ impl CommitDiffView {
         diff_view
     }
 
-    /// 根据当前焦点状态刷新左上角"活跃 pane"三角标记（`show_active_pane_indicator`）：
-    /// 仅当本 pane 处于分屏且是焦点 pane 时显示。终端 pane 通过 `is_active_session` 自行驱动
-    /// 该标志，非终端 pane 默认无人驱动，故这里显式按 `is_focused_pane` 同步——否则聚焦本
-    /// 只读 diff pane 时左上角不会出现活跃三角。
+    /// Refresh the top-left active-pane indicator (`show_active_pane_indicator`) based on
+    /// the current focus state: shown only when this pane is in a split and is the focused
+    /// pane. Terminal panes drive this flag themselves via `is_active_session`; non-terminal
+    /// panes have no such driver by default, so we sync it explicitly off `is_focused_pane`
+    /// here — otherwise the active-pane indicator never appears when this read-only diff pane
+    /// is focused.
     fn refresh_active_pane_indicator(&mut self, ctx: &mut ViewContext<Self>) {
         let is_focused_pane = self
             .focus_handle
@@ -249,7 +260,8 @@ impl BackingView for CommitDiffView {
             left_of_title: None,
             right_of_title: None,
             left_of_overflow: None,
-            // 关闭按钮与 overflow 菜单常显（不依赖悬停），便于关闭/最大化只读 diff pane。
+            // Always show the close button and overflow menu (not just on hover), making it
+            // easy to close/maximize the read-only diff pane.
             options: StandardHeaderOptions {
                 always_show_icons: true,
                 ..StandardHeaderOptions::default()
@@ -258,8 +270,8 @@ impl BackingView for CommitDiffView {
     }
 
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, ctx: &mut ViewContext<Self>) {
-        // 订阅 pane group 焦点变化：本 pane 成为 / 不再是分屏中的焦点 pane 时，同步左上角
-        // 活跃三角标记。
+        // Subscribe to pane group focus changes: sync the top-left active-pane indicator
+        // whenever this pane becomes / stops being the focused pane in the split.
         ctx.subscribe_to_model(focus_handle.focus_state_handle(), |me, _, event, ctx| {
             let affected = me
                 .focus_handle

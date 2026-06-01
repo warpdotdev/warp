@@ -1,69 +1,84 @@
-//! 泳道布局算法：把提交序列（新→旧）编排成逐行的图谱绘制数据。
+//! Lane layout algorithm: arranges a commit sequence (newest -> oldest) into
+//! per-row graph drawing data.
 //!
-//! 设计要点（详见 specs/git-graph/TECH.md）：
-//! - 自顶向下扫描，维护 `lanes`：每条 lane 记录"下一行期望落到的提交 hash"。
-//! - **不做 lane 压缩**：一条 lane 分配到某列后，存活期间列号不变，收束后该列
-//!   留空、可被新 lane 复用。这样相邻行的同一条 lane 列号天然对齐，渲染只需逐行
-//!   独立绘制，无需全局滚动偏移运算；代价是图里可能出现空列（可接受）。
-//! - **第一父接续本列**：合并提交的被合并分支会自然地"汇回"主线，得到标准的
-//!   git-graph 菱形观感。
+//! Design notes (see specs/git-graph/TECH.md for details):
+//! - Scan top-down, maintaining `lanes`: each lane records "the commit hash the
+//!   next row is expected to land on".
+//! - **No lane compaction**: once a lane is assigned a column, its column number
+//!   stays fixed for its lifetime; after it ends the column is left empty and may
+//!   be reused by a new lane. This way the same lane in adjacent rows is
+//!   naturally column-aligned, so rendering only needs to draw each row
+//!   independently with no global scroll-offset math; the cost is that empty
+//!   columns may appear in the graph (acceptable).
+//! - **First parent continues the current column**: a merge commit's merged-in
+//!   branch naturally "merges back" into the mainline, producing the standard
+//!   git-graph diamond look.
 //!
-//! 输出的 `color_idx` 是 lane 的创建序号（0,1,2,...，单调递增、不取模），由渲染层
-//! 自行 `% 调色板长度` 取色，以便测试断言确定值。
+//! The emitted `color_idx` is the lane's creation index (0, 1, 2, ...,
+//! monotonically increasing, not taken modulo); the rendering layer applies
+//! `% palette length` itself to pick a color, so tests can assert deterministic
+//! values.
 
 use super::data::CommitNode;
 
-/// 一条竖直穿过某行、且不接触本行提交节点的延续泳道。
+/// A continuing lane that passes vertically through a row without touching that
+/// row's commit node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PassingLane {
     pub col: usize,
     pub color_idx: usize,
 }
 
-/// 一端连接到本行提交节点的折线端点。
+/// One endpoint of a polyline that connects to this row's commit node.
 ///
-/// 在 [`GraphRow::from_children`] 中 `col` 是来源列（上半段：子→本节点）；
-/// 在 [`GraphRow::to_parents`] 中 `col` 是目标列（下半段：本节点→父）。
+/// In [`GraphRow::from_children`], `col` is the source column (upper half:
+/// child -> this node); in [`GraphRow::to_parents`], `col` is the target column
+/// (lower half: this node -> parent).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Connection {
     pub col: usize,
     pub color_idx: usize,
 }
 
-/// 一行的图谱绘制数据。
+/// Graph drawing data for a single row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GraphRow {
-    /// 本行提交节点（圆点）所在列。
+    /// Column of this row's commit node (the dot).
     pub node_col: usize,
-    /// 节点所在 lane 的颜色序号。
+    /// Color index of the lane the node sits in.
     pub node_color: usize,
-    /// 节点是否由上一行延续而来（即由已存在的 lane 抵达，而非分支 tip）。
-    /// 决定渲染时是否在 `node_col` 画一段从行顶到节点的竖线。
+    /// Whether the node continues from the previous row (i.e. it is reached by an
+    /// existing lane rather than being a branch tip). Determines whether a
+    /// vertical line from the top of the row down to the node is drawn at
+    /// `node_col`.
     pub node_continues_up: bool,
-    /// 竖直穿过本行的其它延续泳道。
+    /// Other continuing lanes that pass vertically through this row.
     pub passing: Vec<PassingLane>,
-    /// 本节点向下连到各父所在列（下半段）。第一父通常等于 `node_col`。
+    /// Columns this node connects down to each parent (lower half). The first
+    /// parent is usually equal to `node_col`.
     pub to_parents: Vec<Connection>,
-    /// 各子提交从上方汇入本节点（上半段）；本节点作为合并点时非空。
+    /// Child commits merging into this node from above (upper half); non-empty
+    /// when this node acts as a merge point.
     pub from_children: Vec<Connection>,
 }
 
-/// 整张图的逐行布局结果。
+/// The per-row layout result for the whole graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GraphLayout {
     pub rows: Vec<GraphRow>,
-    /// 渲染所需的最大列数（用于决定泳道区宽度）。
+    /// Maximum number of columns needed for rendering (used to size the lane area).
     pub max_lanes: usize,
 }
 
-/// 一条活跃 lane 的内部状态。
+/// Internal state of one active lane.
 struct Lane {
-    /// 该 lane 下一行期望落到的提交 hash。
+    /// The commit hash this lane expects the next row to land on.
     expected: String,
     color_idx: usize,
 }
 
-/// 把提交序列（git log 顺序：新→旧，子在父之前）编排为逐行泳道布局。
+/// Arrange a commit sequence (git log order: newest -> oldest, children before
+/// parents) into a per-row lane layout.
 pub(crate) fn assign_lanes(commits: &[CommitNode]) -> GraphLayout {
     let mut lanes: Vec<Option<Lane>> = Vec::new();
     let mut next_color: usize = 0;
@@ -71,7 +86,8 @@ pub(crate) fn assign_lanes(commits: &[CommitNode]) -> GraphLayout {
     let mut max_lanes = 0;
 
     for commit in commits {
-        // 1. 找出所有期望落到本提交的列（多列 = 多个子提交汇入本节点）。
+        // 1. Find all columns expecting this commit (multiple columns = multiple
+        //    child commits merging into this node).
         let incoming: Vec<usize> = lanes
             .iter()
             .enumerate()
@@ -81,14 +97,15 @@ pub(crate) fn assign_lanes(commits: &[CommitNode]) -> GraphLayout {
             })
             .collect();
 
-        // 节点是否由已存在的 lane 抵达（非分支 tip）。
+        // Whether the node is reached by an existing lane (not a branch tip).
         let node_continues_up = !incoming.is_empty();
 
-        // 2. 确定节点列与节点颜色。
+        // 2. Determine the node's column and color.
         let (node_col, node_color) = match incoming.first() {
-            // 已有 lane 指向本提交：落在最左的那条。
+            // An existing lane points at this commit: land on the leftmost one.
             Some(&first) => (first, lanes[first].as_ref().unwrap().color_idx),
-            // 无 lane 指向：这是一条分支 tip，新开最左空列。
+            // No lane points at it: this is a branch tip, open the leftmost empty
+            // column.
             None => {
                 let col = first_empty(&lanes);
                 ensure_len(&mut lanes, col);
@@ -98,7 +115,8 @@ pub(crate) fn assign_lanes(commits: &[CommitNode]) -> GraphLayout {
             }
         };
 
-        // 3. 其余汇入列（非 node_col）记为 from_children，并在本行收束。
+        // 3. The remaining incoming columns (other than node_col) are recorded as
+        //    from_children and end on this row.
         let from_children: Vec<Connection> = incoming
             .iter()
             .filter(|&&j| j != node_col)
@@ -113,7 +131,8 @@ pub(crate) fn assign_lanes(commits: &[CommitNode]) -> GraphLayout {
             }
         }
 
-        // 4. 其它存活列竖直穿过本行（incoming 的非 node_col 列已收束，不会在此出现）。
+        // 4. Other surviving columns pass vertically through this row (incoming
+        //    columns other than node_col have already ended and won't appear here).
         let passing: Vec<PassingLane> = lanes
             .iter()
             .enumerate()
@@ -128,10 +147,11 @@ pub(crate) fn assign_lanes(commits: &[CommitNode]) -> GraphLayout {
             })
             .collect();
 
-        // 5. 处理父提交，生成 to_parents 并更新 lanes。
+        // 5. Process the parent commits, building to_parents and updating lanes.
         let mut to_parents: Vec<Connection> = Vec::new();
         if let Some((first_parent, extra_parents)) = commit.parents.split_first() {
-            // 第一父接续 node_col 列，沿用节点颜色（主线连续）。
+            // The first parent continues the node_col column, keeping the node's
+            // color (the mainline stays continuous).
             lanes[node_col] = Some(Lane {
                 expected: first_parent.clone(),
                 color_idx: node_color,
@@ -141,7 +161,8 @@ pub(crate) fn assign_lanes(commits: &[CommitNode]) -> GraphLayout {
                 color_idx: node_color,
             });
 
-            // 额外父：已有列指向它则复用，否则新开一列。
+            // Extra parents: reuse an existing column that points at the parent,
+            // otherwise open a new column.
             for parent in extra_parents {
                 if let Some(existing) = find_lane(&lanes, parent) {
                     to_parents.push(Connection {
@@ -161,11 +182,12 @@ pub(crate) fn assign_lanes(commits: &[CommitNode]) -> GraphLayout {
                 }
             }
         } else {
-            // 根提交：本 lane 到此为止。
+            // Root commit: this lane ends here.
             lanes[node_col] = None;
         }
 
-        // 在裁剪尾部空列之前统计宽度（裁剪只影响后续行的空洞复用，不影响最大宽度）。
+        // Measure the width before trimming trailing empty columns (trimming only
+        // affects gap reuse on later rows, not the maximum width).
         max_lanes = max_lanes.max(lanes.len());
         trim_trailing_none(&mut lanes);
 
@@ -182,7 +204,8 @@ pub(crate) fn assign_lanes(commits: &[CommitNode]) -> GraphLayout {
     GraphLayout { rows, max_lanes }
 }
 
-/// 返回第一个空列的索引；若全满则返回末尾（= 长度，调用方需 [`ensure_len`]）。
+/// Return the index of the first empty column; if all are full, return the end
+/// (= length, so the caller must call [`ensure_len`]).
 fn first_empty(lanes: &[Option<Lane>]) -> usize {
     lanes
         .iter()
@@ -190,21 +213,21 @@ fn first_empty(lanes: &[Option<Lane>]) -> usize {
         .unwrap_or(lanes.len())
 }
 
-/// 确保 `lanes` 至少有 `col + 1` 个槽位（用 `None` 填充）。
+/// Ensure `lanes` has at least `col + 1` slots (padding with `None`).
 fn ensure_len(lanes: &mut Vec<Option<Lane>>, col: usize) {
     if col >= lanes.len() {
         lanes.resize_with(col + 1, || None);
     }
 }
 
-/// 查找期望落到 `hash` 的现存 lane 列。
+/// Find the existing lane column that expects `hash`.
 fn find_lane(lanes: &[Option<Lane>], hash: &str) -> Option<usize> {
     lanes
         .iter()
         .position(|lane| matches!(lane, Some(l) if l.expected == hash))
 }
 
-/// 去掉尾部连续的空列，避免无限增长。
+/// Drop trailing consecutive empty columns to avoid unbounded growth.
 fn trim_trailing_none(lanes: &mut Vec<Option<Lane>>) {
     while matches!(lanes.last(), Some(None)) {
         lanes.pop();

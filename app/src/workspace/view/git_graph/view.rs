@@ -1,10 +1,12 @@
-//! Git Graph 视图。
+//! Git Graph view.
 //!
-//! 渲染：左侧 panel 的提交图谱列表（泳道图 + 短 hash + 引用标签 + subject），
-//! 点击某行加载并展示该提交详情（完整信息 + 变更文件）。
+//! Renders the commit graph list in the left panel (lane graph + short hash +
+//! ref labels + subject); clicking a row loads and shows that commit's detail
+//! (full info + changed files).
 //!
-//! 状态直接持有在视图内（单实例、无共享），不引入单独的 Model 间接层——待后续
-//! 出现跨视图共享需求时再抽。
+//! State is held directly in the view (single instance, not shared); we don't
+//! introduce a separate Model indirection layer — that can be extracted later
+//! if cross-view sharing is ever needed.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -55,14 +57,16 @@ use crate::ui_components::buttons::icon_button;
 use crate::ui_components::item_highlight::ItemHighlightState;
 use crate::view_components::dropdown::{Dropdown, DropdownAction};
 
-/// 每页加载的提交数。
+/// Number of commits loaded per page.
 const COMMIT_PAGE_SIZE: usize = 200;
 
-/// 距离列表末尾还剩这么多行时就预取下一页（无限滚动的提前量，避免滚到底才触发）。
+/// Prefetch the next page once the viewport gets within this many rows of the
+/// list end (infinite-scroll lead so we don't wait until the very bottom).
 const LOAD_MORE_PREFETCH: usize = 10;
 
-/// 注册视图级键绑定：聚焦 Git Graph 面板时 Cmd/Ctrl+C 复制详情区选中的文本。
-/// 作用域限定到本视图，不会影响终端等其它上下文的复制。
+/// Registers the view-level key binding: while the Git Graph panel is focused,
+/// Cmd/Ctrl+C copies the text selected in the detail area. Scoped to this view,
+/// so it doesn't interfere with copy in the terminal or other contexts.
 pub(crate) fn init(app: &mut AppContext) {
     app.register_fixed_bindings([FixedBinding::new(
         "cmdorctrl-c",
@@ -71,71 +75,81 @@ pub(crate) fn init(app: &mut AppContext) {
     )]);
 }
 
-/// 视图自身的 action。
-/// 实现 `PartialEq` 以满足仓库下拉的 [`DropdownItemAction`] 约束。
+/// The view's own actions.
+/// Implements `PartialEq` to satisfy the [`DropdownItemAction`] bound on the
+/// repository dropdown.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum GitGraphAction {
-    /// 选中列表中第 N 行提交并加载其详情。
+    /// Select the Nth commit row in the list and load its detail.
     SelectCommit(usize),
-    /// 切换到发现列表中第 N 个仓库（多仓库时由顶部下拉派发）。
+    /// Switch to the Nth repository in the discovered list (dispatched by the
+    /// top dropdown when there are multiple repos).
     SelectRepository(usize),
-    /// 展开/收起分支过滤浮层。
+    /// Expand/collapse the branch filter overlay.
     ToggleBranchFilter,
-    /// 关闭分支过滤浮层（点击浮层外部时）。
+    /// Close the branch filter overlay (when clicking outside it).
     CloseBranchFilter,
-    /// 切换某个分支 ref 的显隐（值为完整 ref，如 `refs/heads/main`）。
+    /// Toggle visibility of a branch ref (the value is the full ref, e.g.
+    /// `refs/heads/main`).
     ToggleBranch(String),
-    /// 勾选全部分支。
+    /// Select all branches.
     SelectAllBranches,
-    /// 取消勾选全部分支。
+    /// Deselect all branches.
     DeselectAllBranches,
-    /// 手动重新扫描工作目录并重新加载图谱。
+    /// Manually rescan the working directory and reload the graph.
     Refresh,
-    /// 关闭详情区（取消选中）。
+    /// Close the detail area (clear selection).
     CloseDetail,
-    /// 把详情区当前选中的文本复制到剪贴板（Cmd/Ctrl+C）。
+    /// Copy the text currently selected in the detail area to the clipboard
+    /// (Cmd/Ctrl+C).
     CopySelection,
-    /// 把键盘焦点收到本视图（详情区开始框选时派发）。框选靠命中测试、不改焦点，若焦点此前
-    /// 已离开（如粘贴到编辑器、点了别处），不重新聚焦会使后续 Cmd/Ctrl+C 派发不到本视图。
+    /// Pull keyboard focus into this view (dispatched when the detail area
+    /// starts a drag-selection). Selection relies on hit-testing and doesn't
+    /// move focus, so if focus has since left (e.g. pasting into an editor,
+    /// clicking elsewhere), not refocusing would keep later Cmd/Ctrl+C from
+    /// reaching this view.
     FocusPanel,
-    /// 在主区只读 diff pane 中打开详情区第 N 个变更文件的改动。
+    /// Open the Nth changed file's diff from the detail area in a read-only
+    /// diff pane in the main area.
     OpenFileDiff(usize),
 }
 
-/// 视图向外发出的事件。
+/// Events the view emits outward.
 pub(crate) enum GitGraphEvent {
-    /// 请求在主区只读 diff pane 中打开"某提交对某文件的改动"。由左侧 panel 向上转发，
-    /// 最终由 workspace 构造 [`CommitDiffView`] 并开成新 pane。
+    /// Request to open "a commit's changes to a given file" in a read-only diff
+    /// pane in the main area. Forwarded up by the left panel; the workspace
+    /// ultimately builds a [`CommitDiffView`] and opens it as a new pane.
     ///
     /// [`CommitDiffView`]: crate::code::commit_diff_view::CommitDiffView
     #[cfg(not(target_family = "wasm"))]
     OpenCommitFileDiff {
-        /// 仓库相对路径。
+        /// Repo-relative path.
         repo_relative_path: String,
-        /// 短 commit hash（用于 pane 标题）。
+        /// Short commit hash (for the pane title).
         short_hash: String,
-        /// 文件在父提交处的完整内容（diff base）。
+        /// The file's full content at the parent commit (the diff base).
         base_content: String,
-        /// 该提交对此文件的 unified diff hunks。
+        /// The commit's unified diff hunks for this file.
         hunks: Vec<crate::code_review::diff_state::DiffHunk>,
     },
 }
 
-/// 提交图谱的加载状态。
+/// Load state of the commit graph.
 enum LoadState {
-    /// 当前工作目录不在任何 git 仓库内，或尚未指定目录。
+    /// The working directory isn't inside any git repository, or no directory
+    /// has been specified yet.
     NoRepo,
-    /// 正在加载。
+    /// Loading in progress.
     Loading,
-    /// 已加载（`commits` 有效；可能为空 = 仓库无提交）。
+    /// Loaded (`commits` is valid; may be empty = repo has no commits).
     Loaded,
-    /// 加载失败，附带错误文案。
+    /// Load failed, with the error message.
     Error(String),
 }
 
-/// 选中提交详情的加载状态。
+/// Load state of the selected commit's detail.
 enum DetailState {
-    /// 未选中任何提交。
+    /// No commit selected.
     None,
     Loading,
     Loaded(CommitDetail),
@@ -143,77 +157,100 @@ enum DetailState {
 }
 
 pub(crate) struct GitGraphView {
-    /// 仓库发现的锚点目录（由左侧 panel 在活跃目录变化时推入）：在它自身所属仓库
-    /// 之外，还会按 [`GitSettings::git_graph_scan_depth`] 向下扫描子目录里的独立仓库。
+    /// Anchor directory for repository discovery (pushed in by the left panel
+    /// when the active directory changes): besides the repo it belongs to, we
+    /// also scan subdirectories for standalone repos down to
+    /// [`GitSettings::git_graph_scan_depth`].
     scan_anchor: Option<PathBuf>,
-    /// 发现到的仓库根列表（锚点所属仓库在最前）。多于 1 个时顶部展示仓库下拉。
+    /// List of discovered repository roots (the anchor's own repo comes first).
+    /// When there's more than one, a repository dropdown is shown at the top.
     repositories: Arc<Vec<PathBuf>>,
-    /// 当前选中（正在展示历史）的仓库在 `repositories` 中的下标。
+    /// Index into `repositories` of the currently selected repo (the one whose
+    /// history is being shown).
     selected_repo: Option<usize>,
-    /// 多仓库时顶部的仓库选择下拉（子视图，派发 [`GitGraphAction::SelectRepository`]）。
+    /// Repository picker dropdown at the top when there are multiple repos
+    /// (child view, dispatches [`GitGraphAction::SelectRepository`]).
     repo_dropdown: ViewHandle<Dropdown<GitGraphAction>>,
-    /// 当前仓库的分支列表（本地 + 远程），供分支过滤浮层展示。
+    /// The current repo's branch list (local + remote), shown by the branch
+    /// filter overlay.
     branches: Arc<Vec<BranchRef>>,
-    /// 当前勾选（参与图谱显示）的分支 ref 集合（存完整 ref）。
+    /// Set of currently checked branch refs (those shown in the graph), stored
+    /// as full refs.
     selected_branches: HashSet<String>,
-    /// 每个仓库根 → 用户在该仓库的分支勾选（完整 ref）。切 tab / cd / 刷新触发的 re-discover
-    /// 会按此恢复对应仓库的选择，避免反复重选；仅用户主动点"刷新"按钮才把当前仓库重置回全选。
+    /// Per repo root → the user's branch selection in that repo (full refs). A
+    /// re-discover triggered by switching tab / cd / refresh restores each
+    /// repo's selection from this, avoiding repeated reselection; only clicking
+    /// the "refresh" button resets the current repo back to all-selected.
     saved_branch_selections: HashMap<PathBuf, HashSet<String>>,
-    /// 分支过滤浮层是否展开。
+    /// Whether the branch filter overlay is expanded.
     branch_filter_expanded: bool,
-    /// 分支过滤按钮的鼠标状态。
+    /// Mouse state of the branch filter button.
     branch_filter_button_mouse_state: MouseStateHandle,
-    /// 分支浮层"全选"按钮的鼠标状态。
+    /// Mouse state of the branch overlay's "select all" button.
     branch_select_all_mouse_state: MouseStateHandle,
-    /// 分支浮层"全不选"按钮的鼠标状态。
+    /// Mouse state of the branch overlay's "deselect all" button.
     branch_deselect_all_mouse_state: MouseStateHandle,
-    /// 分支浮层内每行的鼠标状态（供悬停高亮），与 `branches` 等长。
+    /// Per-row mouse state inside the branch overlay (for hover highlight),
+    /// same length as `branches`.
     branch_mouse_states: Arc<Vec<MouseStateHandle>>,
-    /// 分支浮层列表的滚动状态（分支多时可滚动）。
+    /// Scroll state of the branch overlay list (scrollable when there are many
+    /// branches).
     branch_scroll_state: ClippedScrollStateHandle,
-    /// 已加载的提交（用 `Arc` 便于零拷贝移动进 [`UniformList`] 的构建闭包）。
+    /// Loaded commits (wrapped in `Arc` for zero-copy move into the
+    /// [`UniformList`] build closure).
     commits: Arc<Vec<CommitNode>>,
-    /// 由 [`assign_lanes`] 算出的逐行泳道布局，与 `commits` 一一对应。
+    /// Per-row lane layout computed by [`assign_lanes`], one-to-one with
+    /// `commits`.
     layout: Arc<GraphLayout>,
     state: LoadState,
-    /// 每行的鼠标状态句柄（供 [`Hoverable`] 点击/悬停使用），与 `commits` 等长。
+    /// Per-row mouse state handles (used by [`Hoverable`] for click/hover),
+    /// same length as `commits`.
     row_mouse_states: Arc<Vec<MouseStateHandle>>,
-    /// 当前选中行下标。
+    /// Index of the currently selected row.
     selected: Option<usize>,
-    /// 选中提交的详情。
+    /// Detail of the selected commit.
     detail: DetailState,
-    /// 提交列表滚动状态。
+    /// Scroll state of the commit list.
     list_state: UniformListState,
-    /// 详情区整体（提交信息 + 变更文件列表）的滚动状态：信息与文件统一在一个
-    /// 可滚动区域内，长提交信息也能滚动查看完整内容。
+    /// Scroll state of the detail area as a whole (commit info + changed file
+    /// list): info and files share one scrollable region, so long commit
+    /// messages can be scrolled to view in full.
     detail_scroll_state: ClippedScrollStateHandle,
-    /// 刷新按钮的鼠标状态。
+    /// Mouse state of the refresh button.
     refresh_mouse_state: MouseStateHandle,
-    /// 是否可能还有更多提交可加载（上一页取满即认为有）。
+    /// Whether more commits might be loadable (assumed true if the last page
+    /// came back full).
     has_more: bool,
-    /// 是否正在加载下一页（防重入）。
+    /// Whether the next page is currently loading (reentrancy guard).
     loading_more: bool,
-    /// 列表可见行区间的发送端：[`UniformList`] 上报可见区间，驱动滚动到底自动加载。
+    /// Sender for the list's visible row range: [`UniformList`] reports the
+    /// visible range, driving auto-load on scroll to bottom.
     visible_range_sender: Sender<Range<usize>>,
-    /// 底部"加载更多"指示行的闪烁动画状态。
+    /// Pulse animation state of the bottom "load more" indicator row.
     loading_shimmer: ShimmeringTextStateHandle,
-    /// 详情区高度的可拖动状态。初始像素值仅为占位，首帧 layout 时由
-    /// [`Self::render_resizable_detail`] 的 bounds 回调按窗口高度覆盖为 1/3。
+    /// Draggable state for the detail area's height. The initial pixel value is
+    /// just a placeholder; on the first frame's layout the bounds callback in
+    /// [`Self::render_resizable_detail`] overrides it to 1/3 of the window
+    /// height.
     detail_resizable_state: ResizableStateHandle,
-    /// 详情区高度是否已做过"首次打开默认 1/3"初始化：仅初始化一次，
-    /// 之后保持用户拖动出的高度。
+    /// Whether the detail area's height has had its "default to 1/3 on first
+    /// open" initialization: this runs only once; afterwards we keep the height
+    /// the user dragged to.
     detail_height_initialized: Arc<AtomicBool>,
-    /// 详情区关闭按钮的鼠标状态。
+    /// Mouse state of the detail area's close button.
     detail_close_mouse_state: MouseStateHandle,
-    /// 详情区文本选区状态（拖拽框选），跨重渲染保持。
+    /// Text selection state of the detail area (drag-selection), preserved
+    /// across re-renders.
     detail_selection_handle: SelectionHandle,
-    /// 详情区当前选中的文本，供 Cmd/Ctrl+C 复制；由 [`SelectableArea`] 的回调写入。
+    /// Text currently selected in the detail area, for Cmd/Ctrl+C copy; written
+    /// by the [`SelectableArea`] callback.
     detail_selected_text: Arc<RwLock<Option<String>>>,
-    /// 详情区变更文件行的鼠标状态（供悬停高亮 / 点击打开 diff），与当前 detail 的 files 等长。
+    /// Mouse state of the detail area's changed-file rows (for hover highlight /
+    /// click to open diff), same length as the current detail's files.
     detail_file_mouse_states: Arc<Vec<MouseStateHandle>>,
 }
 
-/// 空布局，用于未加载/出错时。
+/// Empty layout, used when not loaded / on error.
 fn empty_layout() -> GraphLayout {
     GraphLayout {
         rows: Vec::new(),
@@ -223,7 +260,8 @@ fn empty_layout() -> GraphLayout {
 
 impl GitGraphView {
     pub(crate) fn new(ctx: &mut ViewContext<Self>) -> Self {
-        // UniformList 通过此 channel 上报当前可见行区间，触发滚动到底的自动加载。
+        // UniformList reports its current visible row range over this channel,
+        // triggering auto-load when scrolled to the bottom.
         let (visible_range_sender, visible_range_receiver) = async_channel::unbounded();
         let _ = ctx.spawn_stream_local(
             visible_range_receiver,
@@ -232,15 +270,20 @@ impl GitGraphView {
         );
 
         let repo_dropdown = ctx.add_typed_action_view(Dropdown::new);
-        // 收缩到仓库名宽度，放进顶部条左侧时才不会撑满、把右侧刷新按钮挤出去。
+        // Shrink to the repo name's width so that, when placed at the left of
+        // the top bar, it doesn't stretch out and push the refresh button off
+        // the right edge.
         repo_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_main_axis_size(MainAxisSize::Min, ctx);
         });
 
-        // 扫描深度变化时，对当前锚点重新发现仓库（用户在设置里调深度后面板即时生效）。
+        // When the scan depth changes, re-discover repositories for the current
+        // anchor (so the panel reflects a depth change made in settings
+        // immediately).
         ctx.subscribe_to_model(&GitSettings::handle(ctx), |me, _, event, ctx| {
             if matches!(event, GitSettingsChangedEvent::GitGraphScanDepth { .. }) {
-                // 调扫描深度只是重新发现仓库，保持当前选中仓库不跟随锚点。
+                // Changing the scan depth only re-discovers repos; keep the
+                // currently selected repo instead of following the anchor.
                 me.discover(false, ctx);
             }
         });
@@ -281,7 +324,8 @@ impl GitGraphView {
         }
     }
 
-    /// 设置仓库发现的锚点目录；变化时触发重新发现仓库。
+    /// Sets the anchor directory for repository discovery; a change triggers
+    /// re-discovery of repositories.
     pub(crate) fn set_working_directory(
         &mut self,
         dir: Option<PathBuf>,
@@ -291,24 +335,30 @@ impl GitGraphView {
             return;
         }
         self.scan_anchor = dir;
-        // 工作目录变化（cd / 切 tab）：跟随，选当前锚点所在的仓库。
+        // Working directory changed (cd / switch tab): follow, selecting the
+        // repo that the current anchor belongs to.
         self.discover(true, ctx);
     }
 
-    /// 当前选中仓库的路径。
+    /// Path of the currently selected repository.
     fn current_repo_path(&self) -> Option<PathBuf> {
         self.selected_repo
             .and_then(|i| self.repositories.get(i).cloned())
     }
 
-    /// 扫描锚点目录、发现其中的所有 git 仓库（异步），完成后填充仓库列表并加载选中仓库。
+    /// Scans the anchor directory and discovers all git repositories within it
+    /// (asynchronously); on completion, populates the repository list and loads
+    /// the selected repo.
     ///
-    /// `follow_anchor` 控制选哪个仓库：
-    /// - `true`（工作目录变化 / cd / 切 tab）：跟随——优先选**包含当前锚点的仓库**（即 cd 进的那个）；
-    /// - `false`（手动刷新 / 调扫描深度）：保持原先选中的仓库。
-    /// 两种情况都退回首个仓库。
+    /// `follow_anchor` controls which repo is selected:
+    /// - `true` (working directory changed / cd / switch tab): follow — prefer
+    ///   the **repo containing the current anchor** (i.e. the one cd'd into);
+    /// - `false` (manual refresh / scan depth change): keep the previously
+    ///   selected repo.
+    /// Both cases fall back to the first repo.
     fn discover(&mut self, follow_anchor: bool, ctx: &mut ViewContext<Self>) {
-        // 记住当前选中仓库，发现完成后据 `follow_anchor` 决定保持还是跟随。
+        // Remember the currently selected repo; once discovery completes,
+        // `follow_anchor` decides whether to keep it or follow the anchor.
         let previous = self.current_repo_path();
         self.clear_selection();
 
@@ -328,13 +378,15 @@ impl GitGraphView {
                 async move { super::data::discover_repositories(&anchor, depth).await },
                 move |view, repos, ctx| {
                     if view.scan_anchor.as_deref() != Some(expected.as_path()) {
-                        // 锚点已切换，丢弃过期结果。
+                        // Anchor has changed; discard the stale result.
                         return;
                     }
                     let keep_previous =
                         || previous.and_then(|p| repos.iter().position(|r| *r == p));
                     let selected = if follow_anchor {
-                        // 跟随：选包含当前锚点的仓库（cd 进的那个）；锚点不在任何仓库内时退回保持原选。
+                        // Follow: select the repo containing the current anchor
+                        // (the one cd'd into); if the anchor isn't in any repo,
+                        // fall back to keeping the previous selection.
                         repos
                             .iter()
                             .position(|r| expected.starts_with(r))
@@ -354,7 +406,9 @@ impl GitGraphView {
         }
     }
 
-    /// 应用一次仓库发现的结果：更新列表与下拉，再加载选中仓库（无选中则进入 NoRepo 占位）。
+    /// Applies the result of a repository discovery: updates the list and
+    /// dropdown, then loads the selected repo (entering the NoRepo placeholder
+    /// if none is selected).
     fn set_repositories(
         &mut self,
         repos: Vec<PathBuf>,
@@ -376,12 +430,17 @@ impl GitGraphView {
         }
     }
 
-    /// 用当前仓库列表与选中项刷新顶部仓库下拉的菜单项与选中态。
+    /// Refreshes the top repository dropdown's menu items and selection from the
+    /// current repository list and selected index.
     ///
-    /// 用 rich items 给**当前选中的仓库行**单独设一个区分背景色（中性高亮 `fg_overlay_4`），
-    /// 与其它行悬停时的 `accent_button_color`（accent 粉）明显不同——共享 [`Menu`] 默认把
-    /// "选中"与"悬停"都用 accent 系，二者几乎同色而分不清当前仓库；这里仅对该项覆盖、不动全局。
-    /// 长仓库名用省略号裁剪，避免菜单过宽看不全。
+    /// Uses rich items to give the **currently selected repo row** its own
+    /// distinct background color (neutral highlight `fg_overlay_4`), clearly
+    /// different from other rows' hover `accent_button_color` (accent pink) —
+    /// the shared [`Menu`] uses the accent family for both "selected" and
+    /// "hovered" by default, which makes the two nearly the same color and the
+    /// current repo hard to tell apart; here we override just that item without
+    /// touching the global behavior. Long repo names are clipped with an
+    /// ellipsis to keep the menu from getting too wide to read.
     fn update_repo_dropdown(&self, ctx: &mut ViewContext<Self>) {
         let repos = self.repositories.clone();
         let selected = self.selected_repo;
@@ -391,7 +450,8 @@ impl GitGraphView {
                 .iter()
                 .enumerate()
                 .map(|(i, path)| {
-                    // 展示目录名，悬停 tooltip 给出完整路径（同名仓库可借此区分）。
+                    // Show the directory name; the hover tooltip gives the full
+                    // path (so repos with the same name can be told apart).
                     let mut item = MenuItemFields::new(repo_display_name(path))
                         .with_on_select_action(DropdownAction::select_action_and_close(
                             GitGraphAction::SelectRepository(i),
@@ -408,7 +468,8 @@ impl GitGraphView {
             if let Some(sel) = selected {
                 dropdown.set_selected_by_index(sel, ctx);
             }
-            // 只有一个仓库时无可切换项，置灰不可点（仅用于一致地展示当前仓库名）。
+            // With a single repo there's nothing to switch to, so disable it
+            // (it's only there to consistently show the current repo name).
             if repos.len() <= 1 {
                 dropdown.set_disabled(ctx);
             } else {
@@ -417,12 +478,16 @@ impl GitGraphView {
         });
     }
 
-    /// 切换当前展示的仓库。
+    /// Switches the currently displayed repository.
     ///
-    /// 不在此同步调用 [`Self::update_repo_dropdown`]：本方法由下拉项点击经 `dispatch_typed_action`
-    /// **同步**冒泡而来，此刻 [`Dropdown`] 视图正被其自身 `handle_action` 可变借用，再 `.update()`
-    /// 它会重入借用而崩溃。表头选中态由 [`Dropdown`] 收到 `ItemSelected` 时自更新，无需我们干预；
-    /// 列表/选中的权威重建只在异步的 [`Self::set_repositories`] 里做（不存在重入）。
+    /// We don't call [`Self::update_repo_dropdown`] synchronously here: this
+    /// method bubbles up **synchronously** from a dropdown item click via
+    /// `dispatch_typed_action`, at which point the [`Dropdown`] view is already
+    /// mutably borrowed by its own `handle_action`, so calling `.update()` on it
+    /// would reentrantly borrow and crash. The header's selected state updates
+    /// itself when the [`Dropdown`] receives `ItemSelected`, so we don't need to
+    /// intervene; the authoritative rebuild of the list/selection happens only
+    /// in the async [`Self::set_repositories`] (where there's no reentrancy).
     fn select_repository(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
         if self.selected_repo == Some(index) || index >= self.repositories.len() {
             return;
@@ -431,9 +496,11 @@ impl GitGraphView {
         self.reload(ctx);
     }
 
-    /// 切换某分支的显隐并重载图谱。浮层保持打开：本方法只改 `self` 状态再 `ctx.notify()`
-    /// 重渲染浮层（勾选标记随之更新），不调用任何子视图的 `update()`，故不存在
-    /// [`Self::select_repository`] 注释里那种重入借用崩溃。
+    /// Toggles a branch's visibility and reloads the graph. The overlay stays
+    /// open: this method only mutates `self` state and calls `ctx.notify()` to
+    /// re-render the overlay (so the check marks update along with it); it calls
+    /// no child view's `update()`, so there's no reentrant-borrow crash like the
+    /// one described in [`Self::select_repository`]'s comment.
     fn toggle_branch(&mut self, ref_name: &str, ctx: &mut ViewContext<Self>) {
         if !self.selected_branches.remove(ref_name) {
             self.selected_branches.insert(ref_name.to_string());
@@ -442,7 +509,8 @@ impl GitGraphView {
         self.load_commits(ctx);
     }
 
-    /// 勾选全部分支（已全选则跳过，避免无谓重载）。
+    /// Selects all branches (skips if already all selected, to avoid a needless
+    /// reload).
     fn select_all_branches(&mut self, ctx: &mut ViewContext<Self>) {
         if self.branches.is_empty() || self.selected_branches.len() == self.branches.len() {
             return;
@@ -452,7 +520,7 @@ impl GitGraphView {
         self.load_commits(ctx);
     }
 
-    /// 取消勾选全部分支（已全不选则跳过）。
+    /// Deselects all branches (skips if already none selected).
     fn deselect_all_branches(&mut self, ctx: &mut ViewContext<Self>) {
         if self.selected_branches.is_empty() {
             return;
@@ -462,7 +530,9 @@ impl GitGraphView {
         self.load_commits(ctx);
     }
 
-    /// 把当前分支勾选回存到所属仓库（用户改动分支过滤后调用），供切 tab / cd 后按仓库恢复。
+    /// Persists the current branch selection back to its repo (called after the
+    /// user changes the branch filter), so it can be restored per repo after
+    /// switching tab / cd.
     fn persist_branch_selection(&mut self) {
         if let Some(repo) = self.current_repo_path() {
             self.saved_branch_selections
@@ -470,14 +540,15 @@ impl GitGraphView {
         }
     }
 
-    /// 清空选中与详情（仓库变化/重新加载时调用）。
+    /// Clears the selection and detail (called on repo change / reload).
     fn clear_selection(&mut self) {
         self.selected = None;
         self.detail = DetailState::None;
         self.clear_detail_text_selection();
     }
 
-    /// 清空详情区的文本框选状态（切换提交/关闭详情时调用，避免旧选区坐标残留）。
+    /// Clears the detail area's text selection state (called when switching
+    /// commits / closing the detail, to avoid stale selection coordinates).
     fn clear_detail_text_selection(&mut self) {
         self.detail_selection_handle.clear();
         if let Ok(mut guard) = self.detail_selected_text.write() {
@@ -485,8 +556,10 @@ impl GitGraphView {
         }
     }
 
-    /// 重新加载当前选中仓库：先取分支列表（默认全选），再按选中分支加载提交图谱。
-    /// 切仓库会重置分支过滤（不同仓库分支不同）并收起浮层。
+    /// Reloads the currently selected repo: first fetch the branch list (all
+    /// selected by default), then load the commit graph for the selected
+    /// branches. Switching repos resets the branch filter (different repos have
+    /// different branches) and collapses the overlay.
     fn reload(&mut self, ctx: &mut ViewContext<Self>) {
         self.branch_filter_expanded = false;
 
@@ -509,7 +582,8 @@ impl GitGraphView {
 
         #[cfg(not(target_family = "wasm"))]
         {
-            // 用于在结果返回时判断仓库是否已被切走（任务是 detach 的，无需句柄）。
+            // Used when the result returns to check whether the repo has been
+            // switched away (the task is detached, no handle needed).
             let expected = dir.clone();
             ctx.spawn(
                 async move { super::data::load_branches(&dir).await },
@@ -520,8 +594,12 @@ impl GitGraphView {
                     let branches = result.unwrap_or_default();
                     let new_refs: HashSet<String> =
                         branches.iter().map(|b| b.ref_name.clone()).collect();
-                    // 恢复该仓库已保存的分支选择（与新分支列表求交，剔除已消失的分支）；从未保存过
-                    // （首次见到该仓库，或刚被"刷新"清掉）则默认全选。随后回存，作为该仓库的当前选择。
+                    // Restore the repo's saved branch selection (intersected
+                    // with the new branch list, dropping branches that have
+                    // vanished); if it was never saved (first time seeing this
+                    // repo, or it was just cleared by "refresh"), default to all
+                    // selected. Then persist it back as the repo's current
+                    // selection.
                     view.selected_branches = match view.saved_branch_selections.get(&expected) {
                         Some(saved) => saved.intersection(&new_refs).cloned().collect(),
                         None => new_refs,
@@ -544,8 +622,10 @@ impl GitGraphView {
         }
     }
 
-    /// 当前分支过滤：分支列表为空（未知/加载失败）时返回 `None`（退回 `--all`，避免空图谱）；
-    /// 否则返回选中的分支 ref（可能为空 = 用户取消了全部分支 = 空图谱）。
+    /// The current branch filter: returns `None` when the branch list is empty
+    /// (unknown / failed to load) — which falls back to `--all` to avoid an
+    /// empty graph; otherwise returns the selected branch refs (which may be
+    /// empty = the user deselected all branches = empty graph).
     fn branch_filter(&self) -> Option<Vec<String>> {
         if self.branches.is_empty() {
             None
@@ -554,12 +634,15 @@ impl GitGraphView {
         }
     }
 
-    /// 按当前仓库 + 当前分支过滤加载第一页提交图谱（分支勾选变化、或分支加载完成后调用）。
+    /// Loads the first page of the commit graph for the current repo + current
+    /// branch filter (called when the branch selection changes, or after the
+    /// branch list finishes loading).
     fn load_commits(&mut self, ctx: &mut ViewContext<Self>) {
         self.clear_selection();
         self.has_more = false;
         self.loading_more = false;
-        // 重新加载把提交重置回第一页，滚动位置回到顶部（顶部即最新提交）。
+        // Reloading resets commits back to the first page and the scroll
+        // position back to the top (the top being the newest commit).
         self.list_state.scroll_to(0);
 
         let Some(dir) = self.current_repo_path() else {
@@ -585,7 +668,7 @@ impl GitGraphView {
                 },
                 move |view, result, ctx| {
                     if view.current_repo_path().as_deref() != Some(expected.as_path()) {
-                        // 仓库已切换，丢弃过期结果。
+                        // Repo has switched; discard the stale result.
                         return;
                     }
                     match result {
@@ -603,8 +686,11 @@ impl GitGraphView {
                             view.row_mouse_states = Arc::new(Vec::new());
                             view.has_more = false;
                             let raw = err.to_string();
-                            // 目录不在任何 git 仓库内时 `git log` 会报 "not a git repository"，
-                            // 这不是错误，归一到 NoRepo 占位（而非展示吓人的原始报错）。
+                            // When the directory isn't inside any git repo,
+                            // `git log` reports "not a git repository"; this
+                            // isn't an error, so normalize it to the NoRepo
+                            // placeholder (rather than showing the scary raw
+                            // error).
                             view.state = if raw.contains("not a git repository") {
                                 LoadState::NoRepo
                             } else {
@@ -624,7 +710,7 @@ impl GitGraphView {
         }
     }
 
-    /// 加载下一页提交并追加到列表末尾。
+    /// Loads the next page of commits and appends it to the end of the list.
     fn load_more(&mut self, ctx: &mut ViewContext<Self>) {
         if self.loading_more || !self.has_more {
             return;
@@ -647,7 +733,8 @@ impl GitGraphView {
                 },
                 move |view, result, ctx| {
                     view.loading_more = false;
-                    // 仓库已切换、或起始位置已变（被 reload 打断），丢弃过期结果。
+                    // Discard the stale result if the repo has switched or the
+                    // start offset has changed (interrupted by a reload).
                     if view.current_repo_path().as_deref() != Some(expected.as_path())
                         || view.commits.len() != skip
                     {
@@ -680,20 +767,27 @@ impl GitGraphView {
         }
     }
 
-    /// [`UniformList`] 上报的当前可见行区间回调。可见区间逼近列表末尾且还有更多页时，
-    /// 自动加载下一页（无限滚动）。`load_more` 自身做了防重入与"无更多页"的保护。
+    /// Callback for the current visible row range reported by [`UniformList`].
+    /// When the visible range approaches the list end and there are more pages,
+    /// auto-loads the next page (infinite scroll). `load_more` itself guards
+    /// against reentrancy and the "no more pages" case.
     fn on_visible_range(&mut self, range: Range<usize>, ctx: &mut ViewContext<Self>) {
         if range.end + LOAD_MORE_PREFETCH >= self.commits.len() {
             self.load_more(ctx);
         }
     }
 
-    /// 选中某行并异步加载其详情。
+    /// Selects a row and asynchronously loads its detail.
     fn select_commit(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
-        // 把键盘焦点收到本视图，使其进入责任链——这是详情区 `cmdorctrl-c` →
-        // [`GitGraphAction::CopySelection`] 绑定生效的前提（键盘绑定只对焦点链上的视图触发，
-        // 而鼠标框选靠命中测试、不依赖焦点，故"能选中却复制不了"）。选中提交是查看 / 复制
-        // 详情的必经入口，在此自举焦点即可覆盖框选复制流程；点回终端时焦点自然交还。
+        // Pull keyboard focus into this view so it enters the responder chain —
+        // a prerequisite for the detail area's `cmdorctrl-c` →
+        // [`GitGraphAction::CopySelection`] binding to fire (key bindings only
+        // trigger on views in the focus chain, whereas mouse drag-selection
+        // relies on hit-testing and doesn't depend on focus, hence "can select
+        // but can't copy"). Selecting a commit is the necessary entry point for
+        // viewing / copying detail, so bootstrapping focus here covers the
+        // drag-select copy flow; focus is naturally handed back when clicking
+        // into the terminal.
         ctx.focus_self();
         let Some(commit) = self.commits.get(index) else {
             return;
@@ -702,7 +796,9 @@ impl GitGraphView {
         self.selected = Some(index);
         self.detail = DetailState::Loading;
         self.clear_detail_text_selection();
-        // 切换提交后详情内容整体替换，滚动位置回到顶部（否则会停在上一个提交的偏移处）。
+        // After switching commits the detail content is replaced wholesale, so
+        // reset the scroll position to the top (otherwise it would stay at the
+        // previous commit's offset).
         self.detail_scroll_state.scroll_to(Pixels::zero());
         ctx.notify();
 
@@ -715,12 +811,13 @@ impl GitGraphView {
                 async move { super::data::load_commit_detail(&dir, &hash).await },
                 move |view, result, ctx| {
                     if view.selected != Some(index) {
-                        // 选中已变化，丢弃过期结果。
+                        // Selection has changed; discard the stale result.
                         return;
                     }
                     view.detail = match result {
                         Ok(detail) => {
-                            // 为每个变更文件行准备鼠标状态（悬停高亮 / 点击打开 diff）。
+                            // Prepare mouse state for each changed-file row
+                            // (hover highlight / click to open diff).
                             view.detail_file_mouse_states = Arc::new(
                                 (0..detail.files.len())
                                     .map(|_| MouseStateHandle::default())
@@ -745,8 +842,10 @@ impl GitGraphView {
         }
     }
 
-    /// 点击详情区第 `file_index` 个变更文件：异步加载该提交对此文件的改动，加载完成后
-    /// 发出 [`GitGraphEvent::OpenCommitFileDiff`]，由上层在主区开成只读 diff pane。
+    /// Handles clicking the `file_index`th changed file in the detail area:
+    /// asynchronously loads that commit's changes to the file, and on
+    /// completion emits [`GitGraphEvent::OpenCommitFileDiff`], which the upper
+    /// layer opens as a read-only diff pane in the main area.
     #[cfg(not(target_family = "wasm"))]
     fn open_file_diff(&mut self, file_index: usize, ctx: &mut ViewContext<Self>) {
         let DetailState::Loaded(detail) = &self.detail else {
@@ -778,19 +877,21 @@ impl GitGraphView {
                     });
                 }
                 Err(err) => {
-                    log::warn!("加载提交文件 diff 失败：{err}");
+                    log::warn!("Failed to load commit file diff: {err}");
                 }
             },
         );
     }
 
-    /// wasm 下不支持 git 取数（详情区也不会展示文件列表），点击为空操作。
+    /// On wasm, git data fetching isn't supported (the detail area doesn't show
+    /// the file list either), so a click is a no-op.
     #[cfg(target_family = "wasm")]
     fn open_file_diff(&mut self, _file_index: usize, _ctx: &mut ViewContext<Self>) {}
 
-    /// 渲染可点击的提交列表（每行 = 泳道 + 文字，包一层 [`Hoverable`] 派发选中）。
-    /// 渲染提交列表。还有更多页时末尾追加一行带闪烁动画的"加载更多"指示，滚动到它即
-    /// 自动加载下一页（无限滚动）。
+    /// Renders the clickable commit list (each row = lane + text, wrapped in a
+    /// [`Hoverable`] that dispatches the selection). When there are more pages, a
+    /// "load more" indicator row with a pulse animation is appended at the end;
+    /// scrolling to it auto-loads the next page (infinite scroll).
     fn render_commit_list(&self) -> Box<dyn Element> {
         let commits = self.commits.clone();
         let layout = self.layout.clone();
@@ -813,8 +914,11 @@ impl GitGraphView {
                         let state = mouse_states.get(i).cloned().unwrap_or_default();
                         let is_selected = selected == Some(i);
                         Some(
-                            // 悬停/选中时套一层高亮背景（复用左侧面板列表通用的 [`ItemHighlightState`]：
-                            // 悬停淡、选中略深，随鼠标进出即时切换）。
+                            // Wrap a highlight background on hover/selection
+                            // (reusing the left panel list's common
+                            // [`ItemHighlightState`]: faint on hover, slightly
+                            // deeper when selected, switching instantly as the
+                            // mouse enters/leaves).
                             Hoverable::new(state, move |mouse_state| {
                                 let highlight = ItemHighlightState::new(is_selected, mouse_state);
                                 let mut container = Container::new(element);
@@ -832,22 +936,27 @@ impl GitGraphView {
                             .finish(),
                         )
                     } else {
-                        // 末行：加载更多指示（闪烁动画，滚动到此自动触发加载）。
+                        // Last row: load-more indicator (pulse animation;
+                        // scrolling here auto-triggers loading).
                         Some(render_loading_more_row(appearance, shimmer.clone()))
                     }
                 })
                 .collect();
             rows.into_iter()
         })
-        // 上报可见行区间，逼近末尾时由 on_visible_range 触发自动加载。
+        // Report the visible row range; as it approaches the end,
+        // on_visible_range triggers the auto-load.
         .notify_visible_items(self.visible_range_sender.clone());
         list.finish()
     }
 
-    /// 把详情区包进可拖动高度的 [`Resizable`]（顶部拖条上下拉），列表占其余空间。
+    /// Wraps the detail area in a height-draggable [`Resizable`] (drag the top
+    /// bar up/down); the list takes the remaining space.
     fn render_resizable_detail(&self, appearance: &Appearance) -> Box<dyn Element> {
-        // 顶部 5px 拖条本身透明，hover / 拖动时用中性叠加色高亮，提示此处可上下拖动。
-        // internal_colors 返回的是 theme::Fill，需转成 warpui elements::Fill。
+        // The top 5px drag bar is itself transparent; on hover / drag it's
+        // highlighted with a neutral overlay color to hint that it can be
+        // dragged up/down. internal_colors returns a theme::Fill, which needs
+        // converting to a warpui elements::Fill.
         let dragbar_hover_color: Fill = internal_colors::fg_overlay_5(appearance.theme()).into();
         let state = self.detail_resizable_state.clone();
         let initialized = self.detail_height_initialized.clone();
@@ -863,8 +972,10 @@ impl GitGraphView {
         .with_bounds_callback(Box::new(move |window_size| {
             let min = 100.0;
             let max = (window_size.y() * 0.7).max(min);
-            // 详情区第一次出现时默认占窗口高度的 1/3（首帧 layout 即生效，无闪烁）；
-            // 之后保持用户拖动出的高度，不再覆盖。
+            // The first time the detail area appears, default it to 1/3 of the
+            // window height (taking effect on the first frame's layout, with no
+            // flicker); afterwards keep the height the user dragged to and don't
+            // override it again.
             if !initialized.swap(true, Ordering::Relaxed) {
                 if let Ok(mut s) = state.lock() {
                     s.set_size((window_size.y() / 3.0).clamp(min, max));
@@ -875,7 +986,8 @@ impl GitGraphView {
         .finish()
     }
 
-    /// 渲染选中提交的详情区（顶部带关闭按钮）。
+    /// Renders the selected commit's detail area (with a close button at the
+    /// top).
     fn render_detail(&self, appearance: &Appearance) -> Box<dyn Element> {
         let body: Box<dyn Element> = match &self.detail {
             DetailState::None => Empty::new().finish(),
@@ -930,9 +1042,12 @@ impl GitGraphView {
             .finish()
     }
 
-    /// 顶部条：左侧为仓库下拉 + 分支过滤下拉，右侧为刷新按钮。
+    /// Top bar: repository dropdown + branch filter dropdown on the left, refresh
+    /// button on the right.
     fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
-        // 左侧控件组：有仓库显示仓库下拉（单仓库置灰仅展示当前仓库名），有分支显示分支过滤。
+        // Left control group: show the repository dropdown when there are repos
+        // (disabled and just showing the current repo name for a single repo),
+        // and the branch filter when there are branches.
         let mut left = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
         if !self.repositories.is_empty() {
             left = left.with_child(ChildView::new(&self.repo_dropdown).finish());
@@ -971,9 +1086,11 @@ impl GitGraphView {
         .finish()
     }
 
-    /// 分支过滤控件：一个按钮 + 展开时锚定在按钮下方的浮层（[`Stack`] 叠加 [`OffsetPositioning`]）。
+    /// Branch filter control: a button plus, when expanded, an overlay anchored
+    /// below the button ([`Stack`] layered with [`OffsetPositioning`]).
     fn render_branch_filter(&self, appearance: &Appearance) -> Box<dyn Element> {
-        // 浮层锚点标签：用 [`SavePosition`] 记录按钮位置，浮层据此定位到按钮正下方。
+        // Overlay anchor label: use [`SavePosition`] to record the button's
+        // position, from which the overlay is placed directly below the button.
         let save_label = "git_graph_branch_filter".to_string();
         let button =
             SavePosition::new(self.render_branch_filter_button(appearance), &save_label).finish();
@@ -991,7 +1108,8 @@ impl GitGraphView {
         stack.finish()
     }
 
-    /// 分支过滤按钮（展示当前勾选概况 + 下拉箭头）。
+    /// Branch filter button (shows a summary of the current selection + a
+    /// dropdown chevron).
     fn render_branch_filter_button(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         let label = self.branch_filter_summary();
@@ -1009,7 +1127,9 @@ impl GitGraphView {
             let row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(
-                    // 限定最大宽度 + 末尾省略，超长分支名截断而非把按钮（及右侧刷新）撑出去。
+                    // Cap the max width + ellipsis so an over-long branch name
+                    // is truncated rather than stretching the button (and the
+                    // refresh button to its right) out.
                     ConstrainedBox::new(
                         Text::new_inline(
                             label,
@@ -1025,7 +1145,8 @@ impl GitGraphView {
                 )
                 .with_child(Container::new(chevron).with_padding_left(4.).finish())
                 .finish();
-            // 展开时按选中态高亮，否则仅悬停高亮（复用左侧面板通用高亮）。
+            // When expanded, highlight as selected; otherwise only on hover
+            // (reusing the left panel's common highlight).
             let highlight = ItemHighlightState::new(expanded, mouse_state);
             let mut container = Container::new(row)
                 .with_horizontal_padding(8.)
@@ -1042,7 +1163,8 @@ impl GitGraphView {
         .finish()
     }
 
-    /// 分支过滤浮层：可滚动的分支勾选列表，外包 [`Dismiss`] 实现点击外部关闭。
+    /// Branch filter overlay: a scrollable list of branch checkboxes, wrapped in
+    /// a [`Dismiss`] to close on clicking outside.
     fn render_branch_popup(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         let mut col = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Start);
@@ -1061,7 +1183,9 @@ impl GitGraphView {
         .with_overlayed_scrollbar()
         .finish();
 
-        // "全选 / 全不选"操作行固定在顶部（不随分支列表滚动），分支多时也能一键批量。
+        // The "select all / deselect all" action row is pinned at the top (it
+        // doesn't scroll with the branch list), so batch toggling is one click
+        // even with many branches.
         let body = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_child(self.render_branch_filter_actions(appearance))
@@ -1084,7 +1208,9 @@ impl GitGraphView {
             .finish()
     }
 
-    /// 浮层内一行分支：勾选标记（选中显示 ✓，未选留同尺寸空位对齐）+ 分支名，整行可点切换。
+    /// A single branch row in the overlay: a check mark (✓ when selected, an
+    /// equally-sized blank placeholder for alignment when not) + the branch
+    /// name; the whole row is clickable to toggle.
     fn render_branch_row(
         &self,
         index: usize,
@@ -1109,14 +1235,18 @@ impl GitGraphView {
                     .with_height(14.)
                     .finish()
             };
-            // 远程分支用次要色，和本地分支区分。
+            // Remote branches use the secondary color to distinguish them from
+            // local branches.
             let name_color = if is_remote {
                 theme.sub_text_color(theme.background())
             } else {
                 theme.foreground()
             };
-            // 行撑满浮层宽度，使整行（含右侧空白）都成为点击热区，而非只有文字可点。
-            // 名字用 Shrinkable 占据剩余宽度 + 末尾省略，超长分支名截断而非溢出到提交列表。
+            // The row fills the overlay width so the entire row (including the
+            // blank space on the right) is a click target, not just the text.
+            // The name uses Shrinkable to take the remaining width + ellipsis,
+            // so an over-long branch name is truncated rather than overflowing
+            // into the commit list.
             let row = Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -1151,7 +1281,7 @@ impl GitGraphView {
         .finish()
     }
 
-    /// 浮层顶部的"全选 / 全不选"操作行。
+    /// The "select all / deselect all" action row at the top of the overlay.
     fn render_branch_filter_actions(&self, appearance: &Appearance) -> Box<dyn Element> {
         let select_all = self.render_branch_action_button(
             "Select all",
@@ -1177,7 +1307,7 @@ impl GitGraphView {
         .finish()
     }
 
-    /// 一个浮层操作小按钮（accent 色文字 + 悬停高亮）。
+    /// A small overlay action button (accent-colored text + hover highlight).
     fn render_branch_action_button(
         &self,
         label: &'static str,
@@ -1207,7 +1337,9 @@ impl GitGraphView {
         .finish()
     }
 
-    /// 分支过滤按钮上的概况文案：全选 / 全不选 / 仅一个时直接显示分支名 / 其余显示数量。
+    /// Summary text on the branch filter button: all selected / none selected /
+    /// the branch name directly when exactly one is selected / a count
+    /// otherwise.
     fn branch_filter_summary(&self) -> String {
         let total = self.branches.len();
         let selected = self.selected_branches.len().min(total);
@@ -1216,7 +1348,8 @@ impl GitGraphView {
         } else if selected == 0 {
             "No branches".to_string()
         } else if selected == 1 {
-            // 只选一个分支时直接显示其名字，比 "1/N branches" 更直观。
+            // When only one branch is selected, show its name directly — more
+            // intuitive than "1/N branches".
             self.branches
                 .iter()
                 .find(|b| self.selected_branches.contains(&b.ref_name))
@@ -1228,14 +1361,15 @@ impl GitGraphView {
     }
 }
 
-/// 仓库下拉里展示的名字：取目录名（完整路径由 tooltip 给出）。
+/// The name shown in the repository dropdown: the directory name (the full path
+/// is provided by the tooltip).
 fn repo_display_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| path.to_string_lossy().to_string())
 }
 
-/// 一行普通文字（单行、不换行）。
+/// A line of plain text (single line, no wrapping).
 fn text_line(text: String, appearance: &Appearance, dim: bool) -> Box<dyn Element> {
     let theme = appearance.theme();
     let color = if dim {
@@ -1248,8 +1382,10 @@ fn text_line(text: String, appearance: &Appearance, dim: bool) -> Box<dyn Elemen
         .finish()
 }
 
-/// 渲染列表底部的"加载更多"指示行：闪烁文字动画（[`ShimmeringTextElement`] 在 paint
-/// 内自驱重绘，约 30fps），仅在还有更多页时出现，滚动到它即触发自动加载。
+/// Renders the "load more" indicator row at the bottom of the list: a pulsing
+/// text animation ([`ShimmeringTextElement`] self-drives its repaint within
+/// paint, around 30fps); appears only when there are more pages, and scrolling
+/// to it triggers the auto-load.
 fn render_loading_more_row(
     appearance: &Appearance,
     shimmer: ShimmeringTextStateHandle,
@@ -1274,8 +1410,10 @@ fn render_loading_more_row(
         .finish()
 }
 
-/// 把 `run_git_command` 的原始报错（形如 `Git command failed: <stderr>, <stdout>`）压成
-/// 一行简洁文案：去掉前缀、只取首行、去掉尾部多余的逗号/空白。
+/// Condenses `run_git_command`'s raw error (of the form
+/// `Git command failed: <stderr>, <stdout>`) into a single concise line: strips
+/// the prefix, keeps only the first line, and trims trailing stray
+/// commas/whitespace.
 fn clean_git_error(raw: &str) -> String {
     raw.strip_prefix("Git command failed: ")
         .unwrap_or(raw)
@@ -1288,7 +1426,8 @@ fn clean_git_error(raw: &str) -> String {
         .to_string()
 }
 
-/// 渲染详情区内的小提示文案（左对齐单行，用于详情加载中 / 出错）。
+/// Renders a small hint message inside the detail area (left-aligned, single
+/// line; used while detail is loading / on error).
 fn render_message(text: String, appearance: &Appearance) -> Box<dyn Element> {
     Container::new(text_line(text, appearance, true))
         .with_horizontal_padding(12.)
@@ -1296,8 +1435,11 @@ fn render_message(text: String, appearance: &Appearance) -> Box<dyn Element> {
         .finish()
 }
 
-/// 渲染整块面板的占位状态：在剩余空间内垂直 + 水平居中，可选一个装饰图标、必有标题、
-/// 可选副标题。用于 NoRepo / Loading / Error / 空仓库等"整屏"状态，避免文字挤在左上角。
+/// Renders a placeholder state for the whole panel: vertically + horizontally
+/// centered within the remaining space, with an optional decorative icon, a
+/// required title, and an optional subtitle. Used for the NoRepo / Loading /
+/// Error / empty-repo "full screen" states, to keep text from cramming into the
+/// top-left corner.
 fn render_centered_placeholder(
     icon: Option<Icon>,
     title: String,
@@ -1305,7 +1447,9 @@ fn render_centered_placeholder(
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
-    // 内容块：图标/标题/副标题竖向堆叠、彼此水平居中（默认 MainAxisSize::Min，按内容收缩）。
+    // Content block: icon/title/subtitle stacked vertically, horizontally
+    // centered relative to each other (default MainAxisSize::Min, shrinks to
+    // content).
     let mut content = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Center);
 
     if let Some(icon) = icon {
@@ -1338,12 +1482,15 @@ fn render_centered_placeholder(
         );
     }
 
-    // Shrinkable 占满剩余空间（外层是 MainAxisSize::Max column），Align 在该空间内把内容块
-    // 两轴居中——这才有可居中的宽度，单靠 Flex 的 CrossAxisAlignment 会因列宽只裹文字而无效。
+    // Shrinkable fills the remaining space (the outer is a MainAxisSize::Max
+    // column), and Align centers the content block on both axes within it —
+    // which is what gives a width to center against; Flex's CrossAxisAlignment
+    // alone would be ineffective since the column width only wraps the text.
     Shrinkable::new(1.0, Align::new(content.finish()).finish()).finish()
 }
 
-/// 渲染一行图谱：左侧泳道绘制 + 右侧提交文字。
+/// Renders a single graph row: the lane drawing on the left + the commit text on
+/// the right.
 fn render_graph_row(
     row: &GraphRow,
     lane_count: usize,
@@ -1357,7 +1504,7 @@ fn render_graph_row(
         .finish()
 }
 
-/// 渲染提交文字列：短 hash + 引用标签 + subject。
+/// Renders the commit text column: short hash + ref labels + subject.
 fn render_commit_text(commit: &CommitNode, appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     let font = appearance.ui_font_family();
@@ -1393,17 +1540,18 @@ fn render_commit_text(commit: &CommitNode, appearance: &Appearance) -> Box<dyn E
         .finish()
 }
 
-/// 引用标签的徽标配色（按种类）。
+/// Badge color for a ref label (by kind).
 fn ref_badge_color(kind: RefKind) -> ColorU {
     match kind {
-        RefKind::Head => ColorU { r: 0x4e, g: 0xc9, b: 0x7a, a: 0xff }, // 绿
-        RefKind::LocalBranch => ColorU { r: 0x4f, g: 0xc1, b: 0xff, a: 0xff }, // 蓝
-        RefKind::RemoteBranch => ColorU { r: 0xd6, g: 0x7c, b: 0xff, a: 0xff }, // 紫
-        RefKind::Tag => ColorU { r: 0xe6, g: 0xd2, b: 0x4f, a: 0xff }, // 黄
+        RefKind::Head => ColorU { r: 0x4e, g: 0xc9, b: 0x7a, a: 0xff }, // green
+        RefKind::LocalBranch => ColorU { r: 0x4f, g: 0xc1, b: 0xff, a: 0xff }, // blue
+        RefKind::RemoteBranch => ColorU { r: 0xd6, g: 0x7c, b: 0xff, a: 0xff }, // purple
+        RefKind::Tag => ColorU { r: 0xe6, g: 0xd2, b: 0x4f, a: 0xff }, // yellow
     }
 }
 
-/// 渲染一个引用标签徽标：圆角半透明底 + 同色文字，右侧留间距。
+/// Renders a single ref label badge: a rounded, semi-transparent background +
+/// same-colored text, with spacing on the right.
 fn render_ref_badge(label: &RefLabel, appearance: &Appearance) -> Box<dyn Element> {
     let color = ref_badge_color(label.kind);
     let bg = ColorU { a: 0x33, ..color };
@@ -1425,8 +1573,10 @@ fn render_ref_badge(label: &RefLabel, appearance: &Appearance) -> Box<dyn Elemen
     Container::new(badge).with_padding_right(4.).finish()
 }
 
-/// 把 Unix 秒时间戳转成中文相对时间（刚刚 / N 分钟前 / N 小时前 / N 天前 / N 个月前 / N 年前）。
-/// 用系统当前时间计算；时钟回拨等导致的负差值兜底为"刚刚"。
+/// Converts a Unix-seconds timestamp into a relative-time string (just now /
+/// N minutes ago / N hours ago / N days ago / N months ago / N years ago).
+/// Computed against the system's current time; a negative diff (e.g. from a
+/// clock that's been set back) falls back to "just now".
 fn relative_time(unix_secs: i64) -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1434,17 +1584,34 @@ fn relative_time(unix_secs: i64) -> String {
         .unwrap_or(unix_secs);
     let diff = now - unix_secs;
     match diff {
-        i64::MIN..=59 => "刚刚".to_string(),
-        60..=3_599 => format!("{} 分钟前", diff / 60),
-        3_600..=86_399 => format!("{} 小时前", diff / 3_600),
-        86_400..=2_591_999 => format!("{} 天前", diff / 86_400),
-        2_592_000..=31_103_999 => format!("{} 个月前", diff / 2_592_000),
-        _ => format!("{} 年前", diff / 31_536_000),
+        i64::MIN..=59 => "just now".to_string(),
+        60..=3_599 => {
+            let n = diff / 60;
+            format!("{n} minute{} ago", if n == 1 { "" } else { "s" })
+        }
+        3_600..=86_399 => {
+            let n = diff / 3_600;
+            format!("{n} hour{} ago", if n == 1 { "" } else { "s" })
+        }
+        86_400..=2_591_999 => {
+            let n = diff / 86_400;
+            format!("{n} day{} ago", if n == 1 { "" } else { "s" })
+        }
+        2_592_000..=31_103_999 => {
+            let n = diff / 2_592_000;
+            format!("{n} month{} ago", if n == 1 { "" } else { "s" })
+        }
+        _ => {
+            let n = diff / 31_536_000;
+            format!("{n} year{} ago", if n == 1 { "" } else { "s" })
+        }
     }
 }
 
-/// 取提交完整信息（`%B`）去掉首行（已作为标题展示）后的正文：首行后通常跟一个空行，
-/// 一并去除，再去尾空白。无正文时返回空串。
+/// Takes the body of the commit's full message (`%B`) with the first line (shown
+/// as the title) removed: the first line is usually followed by a blank line,
+/// which is removed too, then trailing whitespace is trimmed. Returns an empty
+/// string when there's no body.
 fn detail_message_body(message: &str) -> String {
     match message.trim_end().split_once('\n') {
         Some((_subject, rest)) => rest.trim_start_matches('\n').trim_end().to_string(),
@@ -1452,9 +1619,12 @@ fn detail_message_body(message: &str) -> String {
     }
 }
 
-/// 渲染一组红绿增删计数：`+N` 用增色、`-N` 用删色（与点击打开的 diff 编辑器同源配色）。
-/// `add_width` / `del_width` 是数字按最大位数右对齐的字符宽度——文件行传入本提交的全局最大位数，
-/// 配合 monospace 字体让各行的 `+`、`-` 跨行对齐成列；单行场景（如汇总）传各自位数即可。
+/// Renders a pair of red/green add/delete counts: `+N` in the addition color,
+/// `-N` in the deletion color (the same colors as the diff editor opened on
+/// click). `add_width` / `del_width` are the character widths to right-align the
+/// numbers by digit count — file rows pass this commit's global max digit count,
+/// which, with the monospace font, aligns every row's `+` and `-` into columns;
+/// single-row cases (e.g. the summary) can just pass their own digit counts.
 fn render_diff_counts(
     additions: u32,
     deletions: u32,
@@ -1483,12 +1653,17 @@ fn render_diff_counts(
         .finish()
 }
 
-/// 渲染详情区主体：分层的提交元信息（标题 / 作者·时间 /（提交者）/ 短 hash / 正文）
-/// + 引用徽标 + 变更文件区。
+/// Renders the body of the detail area: the layered commit metadata (subject /
+/// author · time / (committer) / short hash / body) + ref badges + changed-file
+/// area.
 ///
-/// 元信息各段拆成独立 [`Text`] 以建立视觉层级（标题加粗、作者与 hash 弱色），整列包进
-/// 同一个 [`SelectableArea`]——它支持跨元素框选，故拖拽仍能选中多段，选中文本写入
-/// `selected_text` 由 Cmd/Ctrl+C 复制。引用徽标与文件区在 SelectableArea 之外，不参与框选。
+/// The metadata segments build a visual hierarchy (bold subject, dimmed author
+/// and hash) but are carried in a single [`Text`] (using char-range highlights
+/// for the levels) wrapped in one [`SelectableArea`] — a single Text is what
+/// makes its drag-select copy work reliably; splitting into multiple Texts would
+/// break cross-segment selection so a drag-select couldn't be copied. The ref
+/// badges and file area sit outside the SelectableArea and aren't part of the
+/// selection.
 fn render_detail_body(
     commit: Option<&CommitNode>,
     detail: &CommitDetail,
@@ -1504,22 +1679,26 @@ fn render_detail_body(
     let fg: ColorU = theme.foreground().into();
     let dim: ColorU = theme.sub_text_color(theme.background()).into();
 
-    // ---- 可框选的元信息：标题（加粗）/ 作者·时间 /（提交者）/ 完整 hash / 正文 ----
-    // 合并成单个 [`Text`] 承载，靠 char-range 高亮做层级。单 Text 是 [`SelectableArea`] 框选
-    // 复制可靠工作的前提——拆成多个 Text 会断开跨段选择，导致拖选后复制不到内容。
+    // ---- Selectable metadata: subject (bold) / author · time / (committer) /
+    // full hash / body ----
+    // Carried in a single [`Text`], using char-range highlights for the levels.
+    // A single Text is the prerequisite for [`SelectableArea`]'s drag-select
+    // copy to work reliably — splitting into multiple Texts would break
+    // cross-segment selection, so a drag-select couldn't be copied.
     let subject = commit
         .map(|c| c.subject.clone())
         .unwrap_or_else(|| detail.message.lines().next().unwrap_or_default().to_string());
     let mut meta_text = subject;
     let subject_chars = meta_text.chars().count();
 
-    // 弱色段：作者·时间 /（提交者·时间）/ 完整 hash。
+    // Dimmed segment: author · time / (committer · time) / full hash.
     let mut dim_range: Option<Range<usize>> = None;
     if let Some(c) = commit {
         meta_text.push_str("\n\n");
         let start = meta_text.chars().count();
         meta_text.push_str(&format!("{} · {}", c.author_name, relative_time(c.author_time)));
-        // 提交者与作者不同（cherry-pick / rebase / amend 等）才补一行。
+        // Add a line only when the committer differs from the author
+        // (cherry-pick / rebase / amend, etc.).
         if detail.committer_name != c.author_name {
             meta_text.push_str(&format!(
                 "\ncommitted by {} · {}",
@@ -1532,7 +1711,8 @@ fn render_detail_body(
         dim_range = Some(start..meta_text.chars().count());
     }
 
-    // 正文：完整信息去掉已作标题的首行；为空则不追加。
+    // Body: the full message with the first line (used as the subject) removed;
+    // if empty, append nothing.
     let body = detail_message_body(&detail.message);
     if !body.is_empty() {
         meta_text.push_str("\n\n");
@@ -1555,9 +1735,12 @@ fn render_detail_body(
     let selectable_meta = SelectableArea::new(
         selection_handle,
         move |args, ctx, _| {
-            // 框选从"无"变"有"时把焦点收回本视图：框选靠命中测试、不改焦点，若此前焦点
-            // 已离开（如把上次复制内容粘贴到编辑器、点了别处），不重新聚焦会导致后续
-            // Cmd/Ctrl+C 派发不到 CopySelection（表现为"第一次能复制、之后不能"）。
+            // When the selection goes from "none" to "some", pull focus back
+            // into this view: selection relies on hit-testing and doesn't move
+            // focus, so if focus has since left (e.g. pasting the last copied
+            // content into an editor, clicking elsewhere), not refocusing would
+            // keep later Cmd/Ctrl+C from reaching CopySelection (showing up as
+            // "the first copy works, later ones don't").
             let was_empty = selected_text.read().map(|g| g.is_none()).unwrap_or(true);
             if was_empty && args.selection.is_some() {
                 ctx.dispatch_typed_action(GitGraphAction::FocusPanel);
@@ -1570,10 +1753,13 @@ fn render_detail_body(
     )
     .finish();
 
-    // ---- 文件区：顶部分隔线 + 汇总（N files changed / 总增删）+ 文件行 ----
+    // ---- File area: top divider line + summary (N files changed / total
+    // additions and deletions) + file rows ----
     let total_add: u32 = detail.files.iter().map(|f| f.additions).sum();
     let total_del: u32 = detail.files.iter().map(|f| f.deletions).sum();
-    // 各文件行 +/- 按本提交内的最大位数右对齐，跨行成列；汇总行单独一行按总数自身位数即可。
+    // File rows' +/- are right-aligned to the max digit count within this
+    // commit, forming columns across rows; the summary is its own row and can
+    // just use the totals' own digit counts.
     let add_width = detail
         .files
         .iter()
@@ -1604,13 +1790,15 @@ fn render_detail_body(
         ))
         .finish();
 
-    // 不虚拟化文件列表：单个提交的文件数有限，且把信息与文件放进同一个滚动区域，
-    // 长提交信息才能和文件一起滚动查看完整内容。
+    // Don't virtualize the file list: a single commit has a limited number of
+    // files, and putting the info and files in the same scroll region is what
+    // lets a long commit message be scrolled through together with the files.
     let mut files_col = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Start)
         .with_child(Container::new(summary).with_vertical_padding(4.).finish());
     for (index, file) in detail.files.iter().enumerate() {
-        // 鼠标状态与 files 等长；缺失时退化为不可悬停高亮的默认态（不影响点击）。
+        // Mouse states are the same length as files; if missing, fall back to a
+        // default with no hover highlight (clicking still works).
         let mouse_state = file_mouse_states.get(index).cloned().unwrap_or_default();
         files_col = files_col.with_child(render_file_row(
             index, file, mouse_state, add_width, del_width, appearance,
@@ -1625,7 +1813,9 @@ fn render_detail_body(
     let mut content = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_child(Container::new(selectable_meta).with_vertical_padding(6.).finish());
-    // 引用徽标（分支 / tag / HEAD 指向本提交时）：窄面板下独占一行，置于元信息与文件区之间。
+    // Ref badges (when a branch / tag / HEAD points at this commit): in the
+    // narrow panel they take their own row, placed between the metadata and the
+    // file area.
     if let Some(c) = commit {
         if !c.refs.is_empty() {
             let mut chips = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
@@ -1638,8 +1828,10 @@ fn render_detail_body(
     }
     content = content.with_child(files_section);
 
-    // overlay 滚动条铺在内容右缘 8px 上，给内容留出「滚动条宽度 + 呼吸间隙」的右内边距，
-    // 否则会遮住文件行右对齐的 `-N` 删除数，或让数字紧贴滚动条。
+    // The overlay scrollbar sits 8px in from the content's right edge, so leave
+    // a right padding of "scrollbar width + breathing room" for the content;
+    // otherwise it would cover the file rows' right-aligned `-N` deletion counts
+    // or leave the numbers pressed up against the scrollbar.
     let content = Container::new(content.finish())
         .with_padding_right(ScrollbarWidth::Auto.as_f32() + 6.)
         .finish();
@@ -1660,8 +1852,9 @@ fn render_detail_body(
         .finish()
 }
 
-/// 渲染一个可点击的变更文件行：路径（目录弱色、文件名提亮）+ 右侧红绿 `+增 -删`。
-/// 悬停高亮，点击在主区开只读 diff pane。
+/// Renders a clickable changed-file row: the path (directory dimmed, file name
+/// brightened) + red/green `+adds -dels` on the right. Highlights on hover; a
+/// click opens a read-only diff pane in the main area.
 fn render_file_row(
     index: usize,
     file: &ChangedFile,
@@ -1676,8 +1869,10 @@ fn render_file_row(
     let fg: ColorU = theme.foreground().into();
     let dim: ColorU = theme.sub_text_color(theme.background()).into();
 
-    // 路径整体弱色，仅把文件名（最后一段）提亮为前景色，建立"目录 / 文件名"层级；
-    // 过窄时从左侧裁切（保留更有信息量的文件名），与文件搜索行一致。
+    // The whole path is dimmed, with only the file name (the last segment)
+    // brightened to the foreground color, establishing a "directory / file name"
+    // hierarchy; when too narrow, clip from the left (keeping the more
+    // informative file name), consistent with the file search row.
     let path = file.path.clone();
     let basename_byte = path.rfind('/').map(|i| i + 1).unwrap_or(0);
     let basename_char_start = path[..basename_byte].chars().count();
@@ -1711,7 +1906,8 @@ fn render_file_row(
         )
         .finish();
 
-    // 悬停高亮：复用列表通用的 [`ItemHighlightState`]（文件行无"选中"态，仅按悬停切换底色）。
+    // Hover highlight: reuse the list's common [`ItemHighlightState`] (file rows
+    // have no "selected" state, only a hover-based background switch).
     Hoverable::new(mouse_state, move |mouse_state| {
         let highlight = ItemHighlightState::new(false, mouse_state);
         let mut container = Container::new(row).with_vertical_padding(2.);
@@ -1751,8 +1947,10 @@ impl TypedActionView for GitGraphView {
             GitGraphAction::ToggleBranch(ref_name) => self.toggle_branch(ref_name, ctx),
             GitGraphAction::SelectAllBranches => self.select_all_branches(ctx),
             GitGraphAction::DeselectAllBranches => self.deselect_all_branches(ctx),
-            // 手动刷新：是唯一会重置分支选择的入口——清掉当前仓库已保存的勾选（reload 时即默认
-            // 全选），再重新扫描仓库（用户可能新增/删除了子仓库）并保持当前仓库。
+            // Manual refresh: the only entry point that resets the branch
+            // selection — clear the current repo's saved selection (so reload
+            // defaults to all selected), then rescan repos (the user may have
+            // added/removed subrepos) while keeping the current repo.
             GitGraphAction::Refresh => {
                 if let Some(repo) = self.current_repo_path() {
                     self.saved_branch_selections.remove(&repo);
@@ -1788,14 +1986,17 @@ impl View for GitGraphView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
 
-        // 单层纵向 column 直接承接 panel 的有界高度；用 Shrinkable 因子在列表与详情之间
-        // 分配空间（嵌套两层 MainAxisSize::Max 会导致内层收到无限约束而 panic）。
+        // A single vertical column directly takes the panel's bounded height; a
+        // Shrinkable factor distributes space between the list and the detail
+        // (nesting two MainAxisSize::Max layers would feed the inner one an
+        // unbounded constraint and panic).
         let mut column = Flex::column()
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::Start)
             .with_cross_axis_alignment(CrossAxisAlignment::Start);
 
-        // 有锚点目录时显示顶部条（仓库下拉 + 刷新按钮）。
+        // Show the top bar (repository dropdown + refresh button) when there's
+        // an anchor directory.
         if self.scan_anchor.is_some() {
             column = column.with_child(self.render_header(appearance));
         }
@@ -1828,9 +2029,12 @@ impl View for GitGraphView {
                 ))
             }
             LoadState::Loaded if self.selected.is_some() => column
-                // 列表用 Expanded 撑满上方剩余空间（把详情区顶到底部）；详情区高度可拖动（顶部拖条）。
-                // 用 Expanded 而非 Shrinkable：提交少时 Shrinkable 只收缩到内容高度，会让列表与详情
-                // 都挤在顶部、下方留空、详情拖动错位。
+                // The list uses Expanded to fill the remaining space above
+                // (pushing the detail area to the bottom); the detail area's
+                // height is draggable (top drag bar). Expanded rather than
+                // Shrinkable: with few commits, Shrinkable would only shrink to
+                // the content height, leaving the list and detail crammed at the
+                // top with empty space below and the detail's drag misaligned.
                 .with_child(Expanded::new(1.0, self.render_commit_list()).finish())
                 .with_child(self.render_resizable_detail(appearance)),
             LoadState::Loaded => {
