@@ -15,6 +15,7 @@ use crate::terminal::shared_session::tests::terminal_model_for_viewer;
 use crate::terminal::shared_session::viewer::event_loop::{
     EventLoop, SharedSessionInitialLoadMode,
 };
+use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::TerminalView;
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
@@ -627,6 +628,10 @@ fn test_cloud_mode_setup_phase_ended_clears_setup_state() {
         // event loop's mutations are observable through both the model and
         // the view's `ambient_agent_view_model()`.
         let model = terminal_view.read(&app, |view, _| view.model.clone());
+        // Mark as a viewer so the event loop's scrollback load invariant holds.
+        model
+            .lock()
+            .set_shared_session_status(SharedSessionStatus::ViewPending);
         let channel_event_proxy = ChannelEventListener::new_for_test();
 
         let event_loop = app.add_model(|ctx| {
@@ -710,6 +715,10 @@ fn test_cloud_mode_setup_phase_ended_when_flag_already_false() {
     App::test((), |mut app| async move {
         let terminal_view = cloud_mode_terminal_view(&mut app);
         let model = terminal_view.read(&app, |view, _| view.model.clone());
+        // Mark as a viewer so the event loop's scrollback load invariant holds.
+        model
+            .lock()
+            .set_shared_session_status(SharedSessionStatus::ViewPending);
         let channel_event_proxy = ChannelEventListener::new_for_test();
 
         let event_loop = app.add_model(|ctx| {
@@ -777,6 +786,10 @@ fn test_cloud_mode_setup_phase_ended_is_idempotent() {
     App::test((), |mut app| async move {
         let terminal_view = cloud_mode_terminal_view(&mut app);
         let model = terminal_view.read(&app, |view, _| view.model.clone());
+        // Mark as a viewer so the event loop's scrollback load invariant holds.
+        model
+            .lock()
+            .set_shared_session_status(SharedSessionStatus::ViewPending);
         let channel_event_proxy = ChannelEventListener::new_for_test();
 
         let event_loop = app.add_model(|ctx| {

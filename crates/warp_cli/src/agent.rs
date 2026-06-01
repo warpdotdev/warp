@@ -391,7 +391,8 @@ pub struct RunAgentArgs {
     #[arg(
         long = "skip-initial-turn",
         hide = true,
-        requires_all = ["task_id", "idle_on_complete"]
+        requires_all = ["task_id", "idle_on_complete"],
+        conflicts_with_all = ["prompt", "saved_prompt", "file"]
     )]
     pub skip_initial_turn: bool,
 }

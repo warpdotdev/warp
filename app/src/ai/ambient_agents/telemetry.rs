@@ -38,6 +38,7 @@ pub enum HandoffEntryPoint {
 /// Describes which synthetic-input path drives an empty-prompt handoff.
 /// Captured at handoff initiation so telemetry reflects the intended path
 /// regardless of whether the snapshot derivation later produces content.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 #[derive(Clone, Copy, Debug, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HandoffInjectionPath {
