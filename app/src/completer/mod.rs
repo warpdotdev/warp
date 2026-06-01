@@ -46,7 +46,11 @@ pub struct SessionContext {
     #[cfg(feature = "completions_v2")]
     js_ctx: Option<js::SessionJsExecutionContext>,
 
-    cached_directory_entries: dashmap::DashMap<TypedPathBuf, Arc<Vec<EngineDirEntry>>>,
+    /// Wrapped in `Arc` so that cloning `SessionContext` is O(1) instead of
+    /// deep-copying every cached directory listing.  The `DashMap` is already
+    /// internally synchronized, so shared ownership through `Arc` is safe and
+    /// all clones see the same (and most up-to-date) cache.
+    cached_directory_entries: Arc<dashmap::DashMap<TypedPathBuf, Arc<Vec<EngineDirEntry>>>>,
 
     /// Snapshot of all Warp workflow aliases.
     workflow_aliases: HashMap<String, String>,
