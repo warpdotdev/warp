@@ -121,16 +121,21 @@ fn parse_decorate_detached_head() {
 
 #[test]
 fn parse_decorate_mixed_kinds() {
-    let refs = parse_decorate(
-        "HEAD -> refs/heads/main, refs/remotes/origin/main, refs/tags/v1.0.0",
-    );
+    let refs =
+        parse_decorate("HEAD -> refs/heads/main, refs/remotes/origin/main, refs/tags/v1.0.0");
     assert_eq!(refs.len(), 3);
-    assert_eq!((refs[0].kind, refs[0].name.as_str()), (RefKind::Head, "main"));
+    assert_eq!(
+        (refs[0].kind, refs[0].name.as_str()),
+        (RefKind::Head, "main")
+    );
     assert_eq!(
         (refs[1].kind, refs[1].name.as_str()),
         (RefKind::RemoteBranch, "origin/main")
     );
-    assert_eq!((refs[2].kind, refs[2].name.as_str()), (RefKind::Tag, "v1.0.0"));
+    assert_eq!(
+        (refs[2].kind, refs[2].name.as_str()),
+        (RefKind::Tag, "v1.0.0")
+    );
 }
 
 #[test]

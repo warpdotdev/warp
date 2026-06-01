@@ -324,9 +324,8 @@ use crate::settings::{
     AccessibilitySettings, AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings,
     ChangelogSettings, CodeSettings, CodeSettingsChangedEvent, CtrlTabBehavior, CursorBlink,
     DebugSettings, DefaultSessionMode, FontSettings, GPUSettings, GitSettings,
-    GitSettingsChangedEvent, InputModeSettings, InputSettings,
-    MonospaceFontSize, PaneSettings, PrivacySettings, SelectionSettings, Settings, SshSettings,
-    ThemeSettings,
+    GitSettingsChangedEvent, InputModeSettings, InputSettings, MonospaceFontSize, PaneSettings,
+    PrivacySettings, SelectionSettings, Settings, SshSettings, ThemeSettings,
 };
 use crate::settings_view::environments_page::EnvironmentsPage;
 use crate::settings_view::handoff_environment_creation_modal::{

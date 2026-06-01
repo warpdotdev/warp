@@ -25,22 +25,19 @@ use warpui::elements::{
     resizable_state_handle, Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle,
     ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss,
     DragBarSide, Element, Empty, Expanded, Fill, Flex, Highlight, Hoverable, MainAxisAlignment,
-    MainAxisSize,
-    MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
+    MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
     PositionedElementOffsetBounds, Radius, Resizable, ResizableStateHandle, SavePosition,
     ScrollbarWidth, SelectableArea, SelectionHandle, Shrinkable, Stack, Text, UniformList,
     UniformListState,
 };
+use warpui::fonts::{Properties, Weight};
 use warpui::geometry::vector::vec2f;
 use warpui::keymap::macros::id;
 use warpui::keymap::FixedBinding;
 use warpui::scene::DropShadow;
-use warpui::fonts::{Properties, Weight};
 use warpui::text_layout::{ClipConfig, ClipDirection, ClipStyle};
 use warpui::units::Pixels;
-use warpui::{
-    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
-};
+use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
@@ -263,11 +260,7 @@ impl GitGraphView {
         // UniformList reports its current visible row range over this channel,
         // triggering auto-load when scrolled to the bottom.
         let (visible_range_sender, visible_range_receiver) = async_channel::unbounded();
-        let _ = ctx.spawn_stream_local(
-            visible_range_receiver,
-            Self::on_visible_range,
-            |_, _| {},
-        );
+        let _ = ctx.spawn_stream_local(visible_range_receiver, Self::on_visible_range, |_, _| {});
 
         let repo_dropdown = ctx.add_typed_action_view(Dropdown::new);
         // Shrink to the repo name's width so that, when placed at the left of
@@ -618,7 +611,9 @@ impl GitGraphView {
                     view.saved_branch_selections
                         .insert(expected.clone(), view.selected_branches.clone());
                     view.branch_mouse_states = Arc::new(
-                        (0..branches.len()).map(|_| MouseStateHandle::default()).collect(),
+                        (0..branches.len())
+                            .map(|_| MouseStateHandle::default())
+                            .collect(),
                     );
                     view.branches = Arc::new(branches);
                     view.load_commits(ctx);
@@ -686,8 +681,11 @@ impl GitGraphView {
                         Ok(commits) => {
                             view.has_more = commits.len() == COMMIT_PAGE_SIZE;
                             view.layout = Arc::new(assign_lanes(&commits));
-                            view.row_mouse_states =
-                                Arc::new((0..commits.len()).map(|_| MouseStateHandle::default()).collect());
+                            view.row_mouse_states = Arc::new(
+                                (0..commits.len())
+                                    .map(|_| MouseStateHandle::default())
+                                    .collect(),
+                            );
                             view.commits = Arc::new(commits);
                             view.state = LoadState::Loaded;
                         }
@@ -759,7 +757,9 @@ impl GitGraphView {
                             combined.extend(batch);
                             view.layout = Arc::new(assign_lanes(&combined));
                             view.row_mouse_states = Arc::new(
-                                (0..combined.len()).map(|_| MouseStateHandle::default()).collect(),
+                                (0..combined.len())
+                                    .map(|_| MouseStateHandle::default())
+                                    .collect(),
                             );
                             view.commits = Arc::new(combined);
                         }
@@ -1002,7 +1002,9 @@ impl GitGraphView {
     fn render_detail(&self, appearance: &Appearance) -> Box<dyn Element> {
         let body: Box<dyn Element> = match &self.detail {
             DetailState::None => Empty::new().finish(),
-            DetailState::Loading => render_message("Loading commit details…".to_string(), appearance),
+            DetailState::Loading => {
+                render_message("Loading commit details…".to_string(), appearance)
+            }
             DetailState::Error(err) => {
                 render_message(format!("Failed to load details: {err}"), appearance)
             }
@@ -1200,16 +1202,20 @@ impl GitGraphView {
         let body = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_child(self.render_branch_filter_actions(appearance))
-            .with_child(ConstrainedBox::new(scrollable).with_max_height(280.).finish())
+            .with_child(
+                ConstrainedBox::new(scrollable)
+                    .with_max_height(280.)
+                    .finish(),
+            )
             .finish();
 
         let panel = Container::new(ConstrainedBox::new(body).with_width(220.).finish())
             .with_background_color(theme.background().into_solid())
-        .with_border(Border::all(1.).with_border_fill(theme.outline()))
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
-        .with_drop_shadow(DropShadow::default())
-        .with_vertical_padding(4.)
-        .finish();
+            .with_border(Border::all(1.).with_border_fill(theme.outline()))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+            .with_drop_shadow(DropShadow::default())
+            .with_vertical_padding(4.)
+            .finish();
 
         Dismiss::new(panel)
             .on_dismiss(|ctx, _| {
@@ -1233,7 +1239,11 @@ impl GitGraphView {
         let is_remote = branch.kind == RefKind::RemoteBranch;
         let display = branch.display_name.clone();
         let ref_name = branch.ref_name.clone();
-        let state = self.branch_mouse_states.get(index).cloned().unwrap_or_default();
+        let state = self
+            .branch_mouse_states
+            .get(index)
+            .cloned()
+            .unwrap_or_default();
         Hoverable::new(state, move |mouse_state| {
             let check: Box<dyn Element> = if selected {
                 ConstrainedBox::new(Icon::Check.to_warpui_icon(theme.foreground()).finish())
@@ -1329,9 +1339,13 @@ impl GitGraphView {
         let theme = appearance.theme();
         Hoverable::new(state, move |mouse_state| {
             let mut container = Container::new(
-                Text::new_inline(label, appearance.ui_font_family(), appearance.ui_font_size())
-                    .with_color(theme.accent().into())
-                    .finish(),
+                Text::new_inline(
+                    label,
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(theme.accent().into())
+                .finish(),
             )
             .with_horizontal_padding(6.)
             .with_vertical_padding(3.)
@@ -1475,17 +1489,25 @@ fn render_centered_placeholder(
     }
 
     content = content.with_child(
-        Text::new_inline(title, appearance.ui_font_family(), appearance.ui_font_size())
-            .with_color(theme.foreground().into())
-            .finish(),
+        Text::new_inline(
+            title,
+            appearance.ui_font_family(),
+            appearance.ui_font_size(),
+        )
+        .with_color(theme.foreground().into())
+        .finish(),
     );
 
     if let Some(subtitle) = subtitle {
         content = content.with_child(
             Container::new(
-                Text::new(subtitle, appearance.ui_font_family(), appearance.ui_font_size())
-                    .with_color(theme.sub_text_color(theme.background()).into())
-                    .finish(),
+                Text::new(
+                    subtitle,
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(theme.sub_text_color(theme.background()).into())
+                .finish(),
             )
             .with_vertical_padding(4.)
             .with_horizontal_padding(24.)
@@ -1554,10 +1576,30 @@ fn render_commit_text(commit: &CommitNode, appearance: &Appearance) -> Box<dyn E
 /// Badge color for a ref label (by kind).
 fn ref_badge_color(kind: RefKind) -> ColorU {
     match kind {
-        RefKind::Head => ColorU { r: 0x4e, g: 0xc9, b: 0x7a, a: 0xff }, // green
-        RefKind::LocalBranch => ColorU { r: 0x4f, g: 0xc1, b: 0xff, a: 0xff }, // blue
-        RefKind::RemoteBranch => ColorU { r: 0xd6, g: 0x7c, b: 0xff, a: 0xff }, // purple
-        RefKind::Tag => ColorU { r: 0xe6, g: 0xd2, b: 0x4f, a: 0xff }, // yellow
+        RefKind::Head => ColorU {
+            r: 0x4e,
+            g: 0xc9,
+            b: 0x7a,
+            a: 0xff,
+        }, // green
+        RefKind::LocalBranch => ColorU {
+            r: 0x4f,
+            g: 0xc1,
+            b: 0xff,
+            a: 0xff,
+        }, // blue
+        RefKind::RemoteBranch => ColorU {
+            r: 0xd6,
+            g: 0x7c,
+            b: 0xff,
+            a: 0xff,
+        }, // purple
+        RefKind::Tag => ColorU {
+            r: 0xe6,
+            g: 0xd2,
+            b: 0x4f,
+            a: 0xff,
+        }, // yellow
     }
 }
 
@@ -1696,9 +1738,14 @@ fn render_detail_body(
     // A single Text is the prerequisite for [`SelectableArea`]'s drag-select
     // copy to work reliably — splitting into multiple Texts would break
     // cross-segment selection, so a drag-select couldn't be copied.
-    let subject = commit
-        .map(|c| c.subject.clone())
-        .unwrap_or_else(|| detail.message.lines().next().unwrap_or_default().to_string());
+    let subject = commit.map(|c| c.subject.clone()).unwrap_or_else(|| {
+        detail
+            .message
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_string()
+    });
     let mut meta_text = subject;
     let subject_chars = meta_text.chars().count();
 
@@ -1707,7 +1754,11 @@ fn render_detail_body(
     if let Some(c) = commit {
         meta_text.push_str("\n\n");
         let start = meta_text.chars().count();
-        meta_text.push_str(&format!("{} · {}", c.author_name, relative_time(c.author_time)));
+        meta_text.push_str(&format!(
+            "{} · {}",
+            c.author_name,
+            relative_time(c.author_time)
+        ));
         // Add a line only when the committer differs from the author
         // (cherry-pick / rebase / amend, etc.).
         if detail.committer_name != c.author_name {
@@ -1738,10 +1789,8 @@ fn render_detail_body(
             (0..subject_chars).collect(),
         );
     if let Some(range) = dim_range {
-        meta = meta.with_single_highlight(
-            Highlight::new().with_foreground_color(dim),
-            range.collect(),
-        );
+        meta = meta
+            .with_single_highlight(Highlight::new().with_foreground_color(dim), range.collect());
     }
     let selectable_meta = SelectableArea::new(
         selection_handle,
@@ -1812,7 +1861,12 @@ fn render_detail_body(
         // default with no hover highlight (clicking still works).
         let mouse_state = file_mouse_states.get(index).cloned().unwrap_or_default();
         files_col = files_col.with_child(render_file_row(
-            index, file, mouse_state, add_width, del_width, appearance,
+            index,
+            file,
+            mouse_state,
+            add_width,
+            del_width,
+            appearance,
         ));
     }
     let files_section = Container::new(files_col.finish())
@@ -1823,7 +1877,11 @@ fn render_detail_body(
 
     let mut content = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-        .with_child(Container::new(selectable_meta).with_vertical_padding(6.).finish());
+        .with_child(
+            Container::new(selectable_meta)
+                .with_vertical_padding(6.)
+                .finish(),
+        );
     // Ref badges (when a branch / tag / HEAD points at this commit): in the
     // narrow panel they take their own row, placed between the metadata and the
     // file area.
@@ -1833,8 +1891,11 @@ fn render_detail_body(
             for ref_label in &c.refs {
                 chips = chips.with_child(render_ref_badge(ref_label, appearance));
             }
-            content =
-                content.with_child(Container::new(chips.finish()).with_padding_bottom(4.).finish());
+            content = content.with_child(
+                Container::new(chips.finish())
+                    .with_padding_bottom(4.)
+                    .finish(),
+            );
         }
     }
     content = content.with_child(files_section);
@@ -2031,14 +2092,9 @@ impl View for GitGraphView {
                 Some(err.clone()),
                 appearance,
             )),
-            LoadState::Loaded if self.commits.is_empty() => {
-                column.with_child(render_centered_placeholder(
-                    None,
-                    "No commits yet".to_string(),
-                    None,
-                    appearance,
-                ))
-            }
+            LoadState::Loaded if self.commits.is_empty() => column.with_child(
+                render_centered_placeholder(None, "No commits yet".to_string(), None, appearance),
+            ),
             LoadState::Loaded if self.selected.is_some() => column
                 // The list uses Expanded to fill the remaining space above
                 // (pushing the detail area to the bottom); the detail area's

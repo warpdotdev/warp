@@ -178,7 +178,10 @@ pub(crate) fn assign_lanes(commits: &[CommitNode]) -> GraphLayout {
                         expected: parent.clone(),
                         color_idx: color,
                     });
-                    to_parents.push(Connection { col, color_idx: color });
+                    to_parents.push(Connection {
+                        col,
+                        color_idx: color,
+                    });
                 }
             }
         } else {

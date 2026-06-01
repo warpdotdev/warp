@@ -82,11 +82,7 @@ fn fork_places_second_child_in_new_lane_and_merges_at_parent() {
 fn merge_commit_opens_lane_for_second_parent() {
     // M is a merge commit with parents [A (mainline), B (merged-in)]; B's parent
     // is A; order M, B, A.
-    let commits = [
-        node("M", &["A", "B"]),
-        node("B", &["A"]),
-        node("A", &[]),
-    ];
+    let commits = [node("M", &["A", "B"]), node("B", &["A"]), node("A", &[])];
     let layout = assign_lanes(&commits);
 
     assert_eq!(layout.max_lanes, 2);

@@ -110,7 +110,9 @@ pub struct DiffHunk {
 /// diff pane so both render diffs through the same editor machinery.
 ///
 /// [`DiffDelta`]: ai::diff_validation::DiffDelta
-pub(crate) fn convert_hunks_to_diff_deltas(hunks: &[DiffHunk]) -> Vec<ai::diff_validation::DiffDelta> {
+pub(crate) fn convert_hunks_to_diff_deltas(
+    hunks: &[DiffHunk],
+) -> Vec<ai::diff_validation::DiffDelta> {
     let mut diff_deltas = Vec::new();
 
     for hunk in hunks {

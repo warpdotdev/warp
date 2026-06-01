@@ -13,9 +13,9 @@ use super::native_preference::NativePreferenceSettings;
 use super::{
     AISettings, AccessibilitySettings, AliasExpansionSettings, AppEditorSettings,
     BlockVisibilitySettings, ChangelogSettings, CodeSettings, DebugSettings, EmacsBindingsSettings,
-    FontSettings, FontSettingsChangedEvent, GPUSettings, GitSettings, InputBoxType, InputModeSettings,
-    InputSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings, SelectionSettings,
-    SshSettings, ThemeSettings, VimBannerSettings, WarpDrivePrivacySettings,
+    FontSettings, FontSettingsChangedEvent, GPUSettings, GitSettings, InputBoxType,
+    InputModeSettings, InputSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings,
+    SelectionSettings, SshSettings, ThemeSettings, VimBannerSettings, WarpDrivePrivacySettings,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::banner::BannerState;

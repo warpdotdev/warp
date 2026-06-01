@@ -30,13 +30,48 @@ const DOT_DIAMETER: f32 = 8.0;
 /// Built with struct literals (`ColorU::new` is not a const fn and can't be used
 /// in a const array).
 const PALETTE: [ColorU; 7] = [
-    ColorU { r: 0x4f, g: 0xc1, b: 0xff, a: 0xff }, // blue
-    ColorU { r: 0x4e, g: 0xc9, b: 0x7a, a: 0xff }, // green
-    ColorU { r: 0xff, g: 0xb0, b: 0x4f, a: 0xff }, // orange
-    ColorU { r: 0xd6, g: 0x7c, b: 0xff, a: 0xff }, // purple
-    ColorU { r: 0xff, g: 0x6e, b: 0x6e, a: 0xff }, // red
-    ColorU { r: 0x4f, g: 0xe0, b: 0xd6, a: 0xff }, // cyan
-    ColorU { r: 0xe6, g: 0xd2, b: 0x4f, a: 0xff }, // yellow
+    ColorU {
+        r: 0x4f,
+        g: 0xc1,
+        b: 0xff,
+        a: 0xff,
+    }, // blue
+    ColorU {
+        r: 0x4e,
+        g: 0xc9,
+        b: 0x7a,
+        a: 0xff,
+    }, // green
+    ColorU {
+        r: 0xff,
+        g: 0xb0,
+        b: 0x4f,
+        a: 0xff,
+    }, // orange
+    ColorU {
+        r: 0xd6,
+        g: 0x7c,
+        b: 0xff,
+        a: 0xff,
+    }, // purple
+    ColorU {
+        r: 0xff,
+        g: 0x6e,
+        b: 0x6e,
+        a: 0xff,
+    }, // red
+    ColorU {
+        r: 0x4f,
+        g: 0xe0,
+        b: 0xd6,
+        a: 0xff,
+    }, // cyan
+    ColorU {
+        r: 0xe6,
+        g: 0xd2,
+        b: 0x4f,
+        a: 0xff,
+    }, // yellow
 ];
 
 fn lane_color(idx: usize) -> ColorU {

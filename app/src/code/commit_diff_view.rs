@@ -130,7 +130,8 @@ impl CommitDiffView {
             CodeEditorView::new(
                 None,
                 None,
-                CodeEditorRenderOptions::new(VerticalExpansionBehavior::FillMaxHeight).lazy_layout(),
+                CodeEditorRenderOptions::new(VerticalExpansionBehavior::FillMaxHeight)
+                    .lazy_layout(),
                 ctx,
             )
             .disable_diff_indicator_expansion_on_hover()
