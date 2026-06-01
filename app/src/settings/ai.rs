@@ -434,6 +434,7 @@ settings::macros::implement_setting_for_enum!(
     private: false,
     toml_path: "agents.warp_agent.other.default_prompt_submission_mode",
     description: "Default behavior when submitting a new prompt while the agent is still responding.",
+    feature_flag: FeatureFlag::QueueSlashCommand,
 );
 
 impl PromptSubmissionMode {
