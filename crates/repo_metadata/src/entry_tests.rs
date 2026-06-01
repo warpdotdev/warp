@@ -12,7 +12,7 @@ mod watch_filter {
     use ignore::gitignore::Gitignore;
 
     use crate::entry::{
-        gitignores_for_directory, should_watch_directory, should_emit_event_for_path,
+        gitignores_for_directory, should_emit_event_for_path, should_watch_directory,
     };
 
     /// Sets up a temp directory with a `.gitignore` containing `patterns`.

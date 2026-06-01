@@ -715,7 +715,7 @@ pub(crate) fn should_watch_directory(path: &Path, gitignores: &[Gitignore]) -> b
     // so the gitignore check below applies only to working-tree paths.
     if is_git_internal_path(path) {
         return should_watch_directory_in_git_path(path);
-    }   
+    }
     // Skip gitignored directories so we never register watches inside them.
     // Directories are always passed `is_dir=true` here because the watcher only invokes this predicate for directories
     // it is about to descend into.
