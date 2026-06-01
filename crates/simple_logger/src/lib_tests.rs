@@ -8,11 +8,9 @@
 //! require an executor — keeping the unit tests fast and avoiding the
 //! flakiness that comes with background-task synchronization.
 
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{path_with_suffix, perform_rotation, RotationConfig};
 
