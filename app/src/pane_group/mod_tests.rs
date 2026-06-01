@@ -1046,19 +1046,14 @@ fn test_restored_remote_hidden_child_pane_fallback_when_task_data_unavailable() 
 
             // Fix B: pending hydration is recorded so the subscription handler
             // can re-run hydration when task data lands. The named struct
-            // captures the placeholder local AIConversationId plus the
-            // hidden pane id; the placeholder id must match the conversation
-            // we just restored.
+            // captures the placeholder local AIConversationId; the placeholder
+            // id must match the conversation we just restored.
             let pending_entry = panes.pending_remote_child_hydrations.get(&task_id).expect(
                 "task-data-unavailable hydration must register a pending entry keyed by task id",
             );
             assert_eq!(
                 pending_entry.placeholder_conversation_id, child_conversation_id,
                 "pending hydration must record the placeholder's local AIConversationId",
-            );
-            assert_eq!(
-                pending_entry.hidden_pane_id, child_pane_id,
-                "pending hydration must record the hidden child pane id",
             );
         });
     });

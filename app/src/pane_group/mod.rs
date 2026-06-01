@@ -1076,7 +1076,6 @@ enum AmbientRestoreKind {
 struct PendingRemoteChildHydration {
     /// Stays the canonical `child_agent_panes` key across hydration.
     placeholder_conversation_id: AIConversationId,
-    hidden_pane_id: PaneId,
 }
 
 /// How to hydrate a restored hidden remote-child pane given its
@@ -3936,7 +3935,6 @@ impl PaneGroup {
                 task_id,
                 PendingRemoteChildHydration {
                     placeholder_conversation_id: child_id,
-                    hidden_pane_id: new_pane_id.into(),
                 },
             );
             self.ensure_pending_ambient_restoration_subscription(ctx);
