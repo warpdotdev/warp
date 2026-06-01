@@ -35,30 +35,48 @@ pub enum ReportErrorLogMode {
 /// upon.)
 #[macro_export]
 macro_rules! report_error {
-    ($err:expr) => {{
-        $crate::report_error!($err, $crate::errors::ReportErrorLogMode::EveryTime);
+    (@log $err:expr) => {{
+        #[allow(unused_imports)]
+        use $crate::errors::{AnyhowErrorExt as _, ErrorExt as _, LOG_TARGET};
+        let err = $err;
+        let log_level = if err.is_actionable() {
+            err.report_error();
+            log::Level::Error
+        } else {
+            log::Level::Warn
+        };
+        log::log!(target: LOG_TARGET, log_level, "{:#}", err);
     }};
-    ($err:expr, $log_mode:expr) => {{
+    (@once_per_run $err:expr) => {{
         static HAS_LOGGED_REPORT_ERROR: ::std::sync::atomic::AtomicBool =
             ::std::sync::atomic::AtomicBool::new(false);
-
-        let should_log = match $log_mode {
-            $crate::errors::ReportErrorLogMode::EveryTime => true,
-            $crate::errors::ReportErrorLogMode::OncePerRun => !HAS_LOGGED_REPORT_ERROR
-                .swap(true, ::std::sync::atomic::Ordering::Relaxed),
-        };
-
-        if should_log {
-            #[allow(unused_imports)]
-            use $crate::errors::{AnyhowErrorExt as _, ErrorExt as _, LOG_TARGET};
-            let err = $err;
-            let log_level = if err.is_actionable() {
-                err.report_error();
-                log::Level::Error
-            } else {
-                log::Level::Warn
-            };
-            log::log!(target: LOG_TARGET, log_level, "{:#}", err);
+        if !HAS_LOGGED_REPORT_ERROR.swap(true, ::std::sync::atomic::Ordering::Relaxed) {
+            $crate::report_error!(@log $err);
+        }
+    }};
+    ($err:expr) => {{
+        $crate::report_error!(@log $err);
+    }};
+    ($err:expr, $crate::errors::ReportErrorLogMode::EveryTime) => {{
+        $crate::report_error!(@log $err);
+    }};
+    ($err:expr, ReportErrorLogMode::EveryTime) => {{
+        $crate::report_error!(@log $err);
+    }};
+    ($err:expr, $crate::errors::ReportErrorLogMode::OncePerRun) => {{
+        $crate::report_error!(@once_per_run $err);
+    }};
+    ($err:expr, ReportErrorLogMode::OncePerRun) => {{
+        $crate::report_error!(@once_per_run $err);
+    }};
+    ($err:expr, $log_mode:expr) => {{
+        match $log_mode {
+            $crate::errors::ReportErrorLogMode::EveryTime => {
+                $crate::report_error!(@log $err);
+            }
+            $crate::errors::ReportErrorLogMode::OncePerRun => {
+                $crate::report_error!(@once_per_run $err);
+            }
         }
     }};
 }
