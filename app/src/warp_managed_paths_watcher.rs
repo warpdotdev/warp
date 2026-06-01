@@ -46,6 +46,38 @@ pub(crate) fn ensure_warp_watch_roots_exist() {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
+fn symlinked_child_directories(path: &Path, excluded_names: &[&str]) -> Vec<PathBuf> {
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(err) => {
+            log::warn!(
+                "Failed to read Warp managed path {} for symlink targets: {err}",
+                path.display()
+            );
+            return Vec::new();
+        }
+    };
+
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            if excluded_names.contains(&name.to_string_lossy().as_ref()) {
+                return None;
+            }
+
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path).ok()?;
+            if !metadata.file_type().is_symlink() {
+                return None;
+            }
+
+            let target = fs::canonicalize(path).ok()?;
+            target.is_dir().then_some(target)
+        })
+        .collect()
+}
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) fn warp_home_config_dir() -> Option<PathBuf> {
     warp_core::paths::warp_home_config_dir()
@@ -260,6 +292,16 @@ impl WarpManagedPathsWatcher {
                 RecursiveMode::Recursive,
                 "Warp data directory",
             );
+            for symlink_target in symlinked_child_directories(&data_dir, &["worktrees"]) {
+                Self::register_path(
+                    ctx,
+                    &watcher,
+                    symlink_target,
+                    WatchFilter::accept_all(),
+                    RecursiveMode::Recursive,
+                    "Warp data directory symlink target",
+                );
+            }
             if should_register_config_local_dir {
                 Self::register_path(
                     ctx,
@@ -269,6 +311,16 @@ impl WarpManagedPathsWatcher {
                     RecursiveMode::Recursive,
                     "Warp config directory",
                 );
+                for symlink_target in symlinked_child_directories(&config_local_dir, &[]) {
+                    Self::register_path(
+                        ctx,
+                        &watcher,
+                        symlink_target,
+                        WatchFilter::accept_all(),
+                        RecursiveMode::Recursive,
+                        "Warp config directory symlink target",
+                    );
+                }
             }
             if let Some(warp_home_skills_dir) = warp_home_skills_dir() {
                 if warp_home_skills_dir.exists()
@@ -368,14 +420,17 @@ impl SingletonEntity for WarpManagedPathsWatcher {}
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
+    use std::fs;
+    use std::os::unix::fs::symlink;
     use std::path::PathBuf;
 
     use dirs::home_dir;
     use repo_metadata::{RepositoryUpdate, TargetFile};
 
     use super::{
-        filter_repository_update_by_prefix, warp_home_mcp_config_file_path, warp_home_skills_dir,
-        warp_managed_mcp_config_path, warp_managed_skill_dirs,
+        filter_repository_update_by_prefix, symlinked_child_directories,
+        warp_home_mcp_config_file_path, warp_home_skills_dir, warp_managed_mcp_config_path,
+        warp_managed_skill_dirs,
     };
 
     #[test]
@@ -455,5 +510,43 @@ mod tests {
         assert!(filtered.contains_added_or_modified(&TargetFile::new(skill_file, false)));
         assert!(filtered.moved.is_empty());
         assert!(filtered.deleted.is_empty());
+    }
+
+    #[test]
+    fn symlinked_child_directories_returns_directory_targets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join(".warp-preview");
+        let stable_dir = tmp.path().join(".warp");
+        let tab_configs_target = stable_dir.join("tab_configs");
+
+        fs::create_dir(&data_dir).unwrap();
+        fs::create_dir(&stable_dir).unwrap();
+        fs::create_dir(&tab_configs_target).unwrap();
+        fs::write(stable_dir.join("keybindings.yaml"), "bindings").unwrap();
+        symlink(&tab_configs_target, data_dir.join("tab_configs")).unwrap();
+        symlink(
+            stable_dir.join("keybindings.yaml"),
+            data_dir.join("keybindings.yaml"),
+        )
+        .unwrap();
+
+        let targets = symlinked_child_directories(&data_dir, &[]);
+
+        assert_eq!(targets, vec![tab_configs_target.canonicalize().unwrap()]);
+    }
+
+    #[test]
+    fn symlinked_child_directories_skips_excluded_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join(".warp-preview");
+        let stable_dir = tmp.path().join(".warp");
+        let worktrees_target = stable_dir.join("worktrees");
+
+        fs::create_dir(&data_dir).unwrap();
+        fs::create_dir(&stable_dir).unwrap();
+        fs::create_dir(&worktrees_target).unwrap();
+        symlink(&worktrees_target, data_dir.join("worktrees")).unwrap();
+
+        assert!(symlinked_child_directories(&data_dir, &["worktrees"]).is_empty());
     }
 }
