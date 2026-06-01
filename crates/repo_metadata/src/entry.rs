@@ -710,12 +710,14 @@ fn descend_allowlist_matches(suffix: &[Component<'_>]) -> bool {
 /// with a gitignore check so gitignored directories are pruned from the watch tree.
 #[cfg(feature = "local_fs")]
 pub(crate) fn should_descend_into_directory(path: &Path, gitignores: &[Gitignore]) -> bool {
-    if !should_watch_directory_in_git_path(path) {
-        return false;
-    }
+    // The `.git/` allowlist is authoritative for git-internal paths: gitignore
+    // patterns must never prune the allowlisted `.git/` subtrees this watcher relies on,
+    // so the gitignore check below applies only to working-tree paths.
+    if is_git_internal_path(path) {
+        return should_watch_directory_in_git_path(path);
+    }   
     // Skip gitignored directories so we never register watches inside them.
-    // Directories are always passed `is_dir=true` here
-    // because the watcher only invokes this predicate for directories
+    // Directories are always passed `is_dir=true` here because the watcher only invokes this predicate for directories
     // it is about to descend into.
     !matches_gitignores(
         path, true, /* is_dir */
@@ -730,8 +732,11 @@ pub(crate) fn should_descend_into_directory(path: &Path, gitignores: &[Gitignore
 /// [`should_ignore_git_path`]) and events for gitignored files.
 #[cfg(feature = "local_fs")]
 pub(crate) fn should_emit_event_for_path(path: &Path, gitignores: &[Gitignore]) -> bool {
-    if should_ignore_git_path(path) {
-        return false;
+    // The `.git/` allowlist is authoritative for git-internal paths: gitignore
+    // patterns must never prune the allowlisted `.git/` subtrees this watcher relies on,
+    // so the gitignore check below applies only to working-tree paths.
+    if is_git_internal_path(path) {
+        return !should_ignore_git_path(path);
     }
     !matches_gitignores(
         path,

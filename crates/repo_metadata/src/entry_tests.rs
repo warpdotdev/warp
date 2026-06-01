@@ -105,6 +105,48 @@ mod watch_filter {
     }
 
     #[test]
+    fn emit_preserves_index_lock_when_lock_pattern_gitignored() {
+        // `*.lock` is a common ignore pattern that matches `.git/index.lock`.
+        // The allowlist must win so the in-progress-git-operation signal still emits.
+        let (_tmp, root, gitignores) = setup_repo("*.lock\n");
+        let lock = root.join(".git").join("index.lock");
+        assert!(
+            should_emit_event_for_path(&lock, &gitignores),
+            ".git/index.lock must still emit even when *.lock is gitignored"
+        );
+    }
+
+    #[test]
+    fn descend_preserves_refs_heads_when_refs_pattern_gitignored() {
+        // A `refs/` ignore pattern matches `.git/refs/heads`; the allowlist must
+        // still let the recursive watcher descend so branch changes are observed.
+        let (_tmp, root, gitignores) = setup_repo("refs/\n");
+        let heads = root.join(".git").join("refs").join("heads");
+        assert!(
+            should_descend_into_directory(&heads, &gitignores),
+            ".git/refs/heads must still descend even when refs/ is gitignored"
+        );
+    }
+
+    #[test]
+    fn git_allowlist_survives_dot_git_gitignore_pattern() {
+        // A `.git/` pattern (plausible in a global gitignore) matches the `.git`
+        // ancestor of every git-internal path. Without the allowlist guard this
+        // would suppress/prune all git-internal watching.
+        let (_tmp, root, gitignores) = setup_repo(".git/\n");
+        let head = root.join(".git").join("HEAD");
+        let heads = root.join(".git").join("refs").join("heads");
+        assert!(
+            should_emit_event_for_path(&head, &gitignores),
+            ".git/HEAD must still emit even when .git/ is gitignored"
+        );
+        assert!(
+            should_descend_into_directory(&heads, &gitignores),
+            ".git/refs/heads must still descend even when .git/ is gitignored"
+        );
+    }
+
+    #[test]
     fn empty_gitignore_preserves_pre_fix_behavior() {
         // Without any gitignore patterns the new filter must behave exactly
         // like the old single-predicate filter: only `.git/` allowlisting
