@@ -2577,14 +2577,12 @@ fn render_grouped_tabs_header(
     // Single-click toggles collapse; double-click opens the inline rename editor.
     // No-op `on_right_click` keeps right-clicks from bubbling up to the panel's
     // new-session menu handler.
-    if !is_being_renamed {
-        hoverable = hoverable.on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(WorkspaceAction::ToggleTabGroupCollapsed(group_id));
-        });
-        hoverable = hoverable.on_double_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(WorkspaceAction::RenameTabGroup(group_id));
-        });
-    }
+    hoverable = hoverable.on_click(move |ctx, _, _| {
+        ctx.dispatch_typed_action(WorkspaceAction::ToggleTabGroupCollapsed(group_id));
+    });
+    hoverable = hoverable.on_double_click(move |ctx, _, _| {
+        ctx.dispatch_typed_action(WorkspaceAction::RenameTabGroup(group_id));
+    });
     hoverable = hoverable.on_right_click(|_, _, _| {});
     hoverable.finish()
 }
