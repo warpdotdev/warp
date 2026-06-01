@@ -18,8 +18,8 @@ use crate::r#async::Timer;
 #[path = "transfer_view_tests.rs"]
 mod transfer_view_tests;
 
-#[path = "ref_count_bounce_tests.rs"]
-mod ref_count_bounce_tests;
+#[path = "ref_count_tests.rs"]
+mod ref_count_tests;
 
 #[test]
 fn test_subscribe_and_emit_from_model() {
