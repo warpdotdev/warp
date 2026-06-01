@@ -211,6 +211,11 @@ fn toolbelt_tooltip_keybinding(binding_names: &[&'static str], app: &AppContext)
 }
 
 impl LeftPanelView {
+    /// The Git Graph view handle. Exposed for integration tests.
+    pub(crate) fn git_graph_view(&self) -> ViewHandle<GitGraphView> {
+        self.git_graph_view.clone()
+    }
+
     pub fn new(
         working_directories_model: ModelHandle<WorkingDirectoriesModel>,
         views: Vec<ToolPanelView>,

@@ -21273,6 +21273,16 @@ impl Workspace {
         }
     }
 
+    /// The left panel view handle. Exposed for integration tests.
+    pub(crate) fn left_panel_view(&self) -> ViewHandle<LeftPanelView> {
+        self.left_panel_view.clone()
+    }
+
+    /// Opens the Git Graph in the left panel. Exposed for integration tests.
+    pub(crate) fn open_git_graph_panel(&mut self, ctx: &mut ViewContext<Self>) {
+        self.open_left_panel_view(&LeftPanelAction::GitGraph, ctx);
+    }
+
     fn toggle_left_panel_view(
         &mut self,
         action: &LeftPanelAction,

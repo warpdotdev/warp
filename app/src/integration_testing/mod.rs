@@ -14,6 +14,7 @@ pub mod command_palette;
 pub mod command_search;
 pub mod context_chips;
 pub mod find;
+pub mod git_graph;
 pub mod goto_line;
 pub mod input;
 pub mod keybindings;

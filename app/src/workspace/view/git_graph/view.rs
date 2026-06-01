@@ -346,6 +346,17 @@ impl GitGraphView {
             .and_then(|i| self.repositories.get(i).cloned())
     }
 
+    /// Whether the commit graph has finished loading. Exposed for integration
+    /// tests (see `crates/integration`), since `LoadState` is private.
+    pub(crate) fn is_loaded(&self) -> bool {
+        matches!(self.state, LoadState::Loaded)
+    }
+
+    /// Number of currently loaded commits. Exposed for integration tests.
+    pub(crate) fn loaded_commit_count(&self) -> usize {
+        self.commits.len()
+    }
+
     /// Scans the anchor directory and discovers all git repositories within it
     /// (asynchronously); on completion, populates the repository list and loads
     /// the selected repo.

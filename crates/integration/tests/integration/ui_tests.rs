@@ -153,6 +153,7 @@ integration_tests! {
     test_code_review_scroll_preserved_header_range,
     #[ignore = "Flaking on CI - KC looking into 3/31/26"]
     test_code_review_scroll_preserved_footer_range,
+    test_git_graph_loads_commits,
     test_pane_group_state_single_pane,
     test_pane_group_state_multi_pane,
     test_pane_group_state_close_pane,
