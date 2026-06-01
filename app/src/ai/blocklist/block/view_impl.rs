@@ -752,7 +752,11 @@ where
             .with_margin_right(8.)
             .finish(),
         )
-        .with_child(warpui::elements::ChildView::new(dropdown).finish())
+        .with_child(
+            Container::new(warpui::elements::ChildView::new(dropdown).finish())
+                .with_margin_right(16.)
+                .finish(),
+        )
         .with_child(
             Expanded::new(
                 1.,
