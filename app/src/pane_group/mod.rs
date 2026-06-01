@@ -909,10 +909,12 @@ pub struct PaneGroup {
     /// Entries are removed as each task's data arrives and the pane is replaced.
     pending_ambient_agent_conversation_restorations: HashMap<AmbientAgentTaskId, PaneId>,
 
-    /// Hidden remote-child placeholders waiting on task data. Kept separate
-    /// from `pending_ambient_agent_conversation_restorations` so the
+    /// Hidden remote-child placeholders waiting on task data, keyed by
+    /// task id; the value is the placeholder's canonical
+    /// `child_agent_panes` key. Kept separate from
+    /// `pending_ambient_agent_conversation_restorations` so the
     /// visible-tree `replace_pane` flow doesn't swap a hidden child pane.
-    pending_remote_child_hydrations: HashMap<AmbientAgentTaskId, PendingRemoteChildHydration>,
+    pending_remote_child_hydrations: HashMap<AmbientAgentTaskId, AIConversationId>,
 
     /// Whether `ensure_pending_ambient_restoration_subscription` has been
     /// called; the subscription is shared by both pending maps.
@@ -1069,13 +1071,6 @@ enum AmbientRestoreKind {
     /// If there's no task ID to restore, we open a fresh cloud mode pane
     /// (this is a valid state from when a user quits with an empty cloud mode pane).
     NewCloudConversation,
-}
-
-/// Entry in [`PaneGroup::pending_remote_child_hydrations`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PendingRemoteChildHydration {
-    /// Stays the canonical `child_agent_panes` key across hydration.
-    placeholder_conversation_id: AIConversationId,
 }
 
 /// How to hydrate a restored hidden remote-child pane given its
@@ -3846,10 +3841,12 @@ impl PaneGroup {
             .collect();
 
         for task_id in ready_tasks {
-            let Some(entry) = self.pending_remote_child_hydrations.remove(&task_id) else {
+            let Some(placeholder_conversation_id) =
+                self.pending_remote_child_hydrations.remove(&task_id)
+            else {
                 continue;
             };
-            self.attempt_remote_child_hydration(entry.placeholder_conversation_id, task_id, ctx);
+            self.attempt_remote_child_hydration(placeholder_conversation_id, task_id, ctx);
         }
     }
 
@@ -3931,12 +3928,8 @@ impl PaneGroup {
             // Task data not yet cached: queue a pending hydration and
             // attempt a live-attach in the meantime so streaming runs are
             // not stalled while waiting on the fetch.
-            self.pending_remote_child_hydrations.insert(
-                task_id,
-                PendingRemoteChildHydration {
-                    placeholder_conversation_id: child_id,
-                },
-            );
+            self.pending_remote_child_hydrations
+                .insert(task_id, child_id);
             self.ensure_pending_ambient_restoration_subscription(ctx);
             self.apply_existing_ambient_task_to_pane(new_pane_id.into(), child_id, task_id, ctx);
             return;
