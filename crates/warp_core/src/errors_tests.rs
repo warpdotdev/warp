@@ -60,6 +60,24 @@ fn report_once_per_run_error() {
     );
 }
 
+fn report_first_callsite_once_per_run_error() {
+    crate::report_error!(
+        anyhow::anyhow!("separate once per run"),
+        ReportErrorLogMode::OncePerRun
+    );
+}
+
+fn report_second_callsite_once_per_run_error() {
+    crate::report_error!(
+        anyhow::anyhow!("separate once per run"),
+        ReportErrorLogMode::OncePerRun
+    );
+}
+
+fn report_if_error_once_per_run(result: Result<(), anyhow::Error>) {
+    crate::report_if_error!(result, ReportErrorLogMode::OncePerRun);
+}
+
 #[test]
 fn report_error_log_mode_controls_log_frequency() {
     init_logger();
@@ -82,4 +100,17 @@ fn report_error_log_mode_controls_log_frequency() {
     report_once_per_run_error();
     report_once_per_run_error();
     assert_eq!(logged_report_count("once per run"), 1);
+
+    logs().lock().unwrap().clear();
+    for _ in 0..2 {
+        report_first_callsite_once_per_run_error();
+        report_second_callsite_once_per_run_error();
+    }
+    assert_eq!(logged_report_count("separate once per run"), 2);
+
+    logs().lock().unwrap().clear();
+    for _ in 0..2 {
+        report_if_error_once_per_run(Err(anyhow::anyhow!("result once per run")));
+    }
+    assert_eq!(logged_report_count("result once per run"), 1);
 }
