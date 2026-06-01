@@ -385,6 +385,16 @@ impl AgentNotificationsModel {
                     ctx,
                 );
             }
+            // QUALITY-780 placeholder owned by `client-sync-notif`. A yielded
+            // conversation is still active (it just isn't streaming this
+            // instant), so we intentionally do not emit a `Complete` or
+            // `Request` toast here — that would tell the user the run is
+            // done when it actually isn't. `client-sync-notif` will replace
+            // this with the final notification-suppression behavior from
+            // §6 of the client TECH spec.
+            ConversationStatus::WaitingForEvents => {
+                // TODO(client-sync-notif)
+            }
         }
     }
 

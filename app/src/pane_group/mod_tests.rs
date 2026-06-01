@@ -379,6 +379,7 @@ fn persisted_remote_child_conversation(
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                waiting_for_events: false,
             })
             .expect("conversation data should serialize"),
             last_modified_at: Utc::now().naive_utc(),

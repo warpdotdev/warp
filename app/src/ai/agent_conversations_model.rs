@@ -367,6 +367,14 @@ impl AgentRunDisplayStatus {
             ConversationStatus::Blocked { blocked_action } => Self::ConversationBlocked {
                 blocked_action: blocked_action.clone(),
             },
+            // QUALITY-780 placeholder: treat a yielded conversation as
+            // still in progress for the conversation-list display. This
+            // mirrors the `LocalAgentTaskSyncModel::map_conversation_status`
+            // mapping (§5 in the client TECH spec) so the agent-run list
+            // view doesn't flip yielded runs to a terminal status.
+            // `client-sync-notif` may refine this if a distinct display
+            // variant is needed.
+            ConversationStatus::WaitingForEvents => Self::ConversationInProgress,
         }
     }
 

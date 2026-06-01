@@ -78,6 +78,18 @@ pub fn yellow_stop_icon(appearance: &Appearance) -> warpui::elements::Icon {
     )
 }
 
+/// Agent is yielded via wait_for_events and is listening for inbound input.
+/// Quiescent but not terminal; distinct from `gray_clock_icon` (waiting for the
+/// human) and `in_progress_icon` (actively streaming).
+// TODO(design): final visual deferred to design. The blue ClockSnooze icon is
+// a working placeholder distinct from the existing status palette.
+pub fn blue_listening_icon(appearance: &Appearance) -> warpui::elements::Icon {
+    warpui::elements::Icon::new(
+        Icon::ClockSnooze.into(),
+        AnsiColorIdentifier::Blue.to_ansi_color(&appearance.theme().terminal_colors().normal),
+    )
+}
+
 /// To be used for actions (like running commands/reading files) that are long-running and executing.
 pub fn yellow_running_icon(appearance: &Appearance) -> warpui::elements::Icon {
     warpui::elements::Icon::new(

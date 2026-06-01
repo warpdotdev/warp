@@ -1337,6 +1337,9 @@ impl BlocklistAIHistoryModel {
             autoexecute_override: Some(source_conversation.autoexecute_override().into()),
             last_event_sequence: None,
             pinned: false,
+            // Forks never inherit the waiting-for-events state from the source
+            // conversation: the new conversation starts a fresh run.
+            waiting_for_events: false,
         };
         let forked_conversation_id = AIConversationId::new();
         if let Err(e) = sqlite_sender.send(ModelEvent::UpdateMultiAgentConversation {
@@ -1496,6 +1499,9 @@ impl BlocklistAIHistoryModel {
             autoexecute_override: Some(conversation.autoexecute_override().into()),
             last_event_sequence: None,
             pinned: false,
+            // Forks never inherit the waiting-for-events state from the source
+            // conversation: the new conversation starts a fresh run.
+            waiting_for_events: false,
         };
 
         let forked_conversation_id = AIConversationId::new();

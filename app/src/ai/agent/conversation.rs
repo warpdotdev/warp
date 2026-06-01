@@ -42,7 +42,8 @@ use crate::ai::agent::api::convert_conversation::{
 };
 use crate::ai::agent::comment::CodeReview;
 use crate::ai::agent::icons::{
-    failed_icon, gray_stop_icon, in_progress_icon, succeeded_icon, yellow_stop_icon,
+    blue_listening_icon, failed_icon, gray_stop_icon, in_progress_icon, succeeded_icon,
+    yellow_stop_icon,
 };
 use crate::ai::agent::linearization::compute_task_depths;
 use crate::ai::agent::todos::AIAgentTodoList;
@@ -405,6 +406,16 @@ impl AIConversation {
         tasks: Vec<api::Task>,
         conversation_data: Option<AgentConversationData>,
     ) -> Result<Self, RestoreConversationError> {
+        // QUALITY-780 §3: a persisted `waiting_for_events = true` always wins
+        // over the status derived from the last exchange — the run was
+        // yielded via `wait_for_events` when it was serialized, and the
+        // driver/task-sync/notifications/pill-bar all need to re-enter the
+        // waiting state on restore.
+        let waiting_for_events_persisted = conversation_data
+            .as_ref()
+            .map(|data| data.waiting_for_events)
+            .unwrap_or(false);
+
         let (task_store, todo_lists, status) = if tasks.is_empty() {
             // Bypass `derive_status_from_root_task`: it would return `Success`
             // for a root with no exchanges, silently misclassifying a restored
@@ -493,6 +504,16 @@ impl AIConversation {
 
             let task_store = TaskStore::from_tasks(tasks_by_id, root_task_id);
             (task_store, todo_lists, status)
+        };
+
+        // Override the status with `WaitingForEvents` when the persisted
+        // marker is set. We rebind `status` here rather than in each branch
+        // above so the override applies to both the empty-tasks and
+        // populated-tasks paths.
+        let status = if waiting_for_events_persisted {
+            ConversationStatus::WaitingForEvents
+        } else {
+            status
         };
 
         let (
@@ -3180,6 +3201,7 @@ impl AIConversation {
                 autoexecute_override: Some(self.autoexecute_override.into()),
                 last_event_sequence: self.last_event_sequence,
                 pinned: self.pinned,
+                waiting_for_events: matches!(self.status, ConversationStatus::WaitingForEvents),
             },
         };
         ctx.spawn(
@@ -4145,6 +4167,14 @@ pub enum ConversationStatus {
 
     /// The last turn of the agent resulted in an action whose execution is blocked by the user.
     Blocked { blocked_action: String },
+
+    /// The agent yielded via `wait_for_events` and is listening for inbound
+    /// input (new user input, an inbound message, or a lifecycle event from
+    /// another agent). The run is quiescent but **not** terminal: the driver
+    /// stays alive, no "task completed" toast fires, and the conversation
+    /// resumes to `InProgress` when the unresolved `WaitForEvents` tool call
+    /// is closed out. See `specs/QUALITY-780/TECH.md`.
+    WaitingForEvents,
 }
 
 impl std::fmt::Display for ConversationStatus {
@@ -4155,6 +4185,8 @@ impl std::fmt::Display for ConversationStatus {
             ConversationStatus::Error => write!(f, "Error"),
             ConversationStatus::Cancelled => write!(f, "Cancelled"),
             ConversationStatus::Blocked { .. } => write!(f, "Blocked"),
+            // TODO(design): final user-facing label deferred to design.
+            ConversationStatus::WaitingForEvents => write!(f, "Waiting for events"),
         }
     }
 }
@@ -4167,6 +4199,7 @@ impl ConversationStatus {
             ConversationStatus::Blocked { .. } => yellow_stop_icon(appearance),
             ConversationStatus::Error => failed_icon(appearance),
             ConversationStatus::Cancelled => gray_stop_icon(appearance),
+            ConversationStatus::WaitingForEvents => blue_listening_icon(appearance),
         }
     }
 
@@ -4205,6 +4238,14 @@ impl ConversationStatus {
                     StatusColorStyle::Cloud => theme.ansi_bg_yellow(),
                 },
             ),
+            // TODO(design): final visual deferred to design.
+            ConversationStatus::WaitingForEvents => (
+                Icon::ClockSnooze,
+                match color_style {
+                    StatusColorStyle::Standard => theme.ansi_fg_blue(),
+                    StatusColorStyle::Cloud => theme.ansi_bg_blue(),
+                },
+            ),
         }
     }
 
@@ -4220,11 +4261,41 @@ impl ConversationStatus {
         matches!(self, ConversationStatus::Cancelled)
     }
 
-    pub fn is_done(&self) -> bool {
+    // NOTE: `is_done` was removed in favor of the split [`Self::is_terminal`]
+    // and [`Self::is_quiescent`] predicates. The split is intentional: the
+    // former "done" predicate had two callers asking different questions
+    // ("finished forever" vs "not actively streaming"), and the compiler
+    // cannot enforce that distinction when both share a single predicate.
+    // Reintroducing `is_done` would silently lump `WaitingForEvents` and
+    // `Blocked` in with terminal statuses again. See `specs/QUALITY-780/TECH.md`
+    // §2.
+
+    /// True iff the run is finished and cannot resume on its own.
+    ///
+    /// Replaces the former `is_done()` predicate, which mixed "finished" and
+    /// "not actively streaming" semantics. Callers that ask "is the agent
+    /// quiescent right now" should use [`Self::is_quiescent`] instead.
+    pub fn is_terminal(&self) -> bool {
         matches!(
             self,
             ConversationStatus::Success | ConversationStatus::Error | ConversationStatus::Cancelled
         )
+    }
+
+    /// True iff the agent is not currently streaming output.
+    ///
+    /// Quiescent statuses include all terminal statuses plus `Blocked` and
+    /// `WaitingForEvents`. The latter two are quiescent but **not** terminal:
+    /// they can resume on their own (waiting for an inbound event or for the
+    /// user to unblock).
+    pub fn is_quiescent(&self) -> bool {
+        !matches!(self, ConversationStatus::InProgress)
+    }
+
+    /// True iff the agent has yielded via `wait_for_events` and is listening
+    /// for inbound input.
+    pub fn is_waiting_for_events(&self) -> bool {
+        matches!(self, ConversationStatus::WaitingForEvents)
     }
 
     pub fn is_error(&self) -> bool {

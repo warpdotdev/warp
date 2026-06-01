@@ -415,7 +415,11 @@ impl PassiveSuggestionsModel {
         let latest_exchange_id = latest_exchange.id;
 
         let status = conversation.status();
-        if status.is_done() {
+        // Passive suggestions fire only on truly terminal conversations (the
+        // run has finished and won't produce more output). `WaitingForEvents`
+        // is intentionally excluded: yielded runs are still in flight and will
+        // resume on the next event, so suggesting a prompt would be premature.
+        if status.is_terminal() {
             self.send_request(
                 Some(conversation_id),
                 PassiveSuggestionTrigger::AgentResponseCompleted {

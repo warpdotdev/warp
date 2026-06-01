@@ -1071,6 +1071,13 @@ pub struct AgentConversationData {
     /// pill bar. Orchestrator conversations always serialize as `false`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub pinned: bool,
+    /// True when the conversation was last serialized while yielded via
+    /// `wait_for_events` (status was `WaitingForEvents`). On restore this
+    /// flag wins over the status derived from the last exchange so the
+    /// driver, task sync, notifications, and pill bar all re-enter the
+    /// waiting state. See `warp/specs/QUALITY-780/TECH.md` §3.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub waiting_for_events: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1514,6 +1521,7 @@ mod tests {
             autoexecute_override: None,
             last_event_sequence: Some(42),
             pinned: false,
+            waiting_for_events: false,
         };
         let json = serde_json::to_string(&data).expect("serialize");
         let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
@@ -1551,6 +1559,7 @@ mod tests {
             autoexecute_override: None,
             last_event_sequence: None,
             pinned: false,
+            waiting_for_events: false,
         };
         let json = serde_json::to_string(&data).expect("serialize");
         let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
@@ -1575,6 +1584,7 @@ mod tests {
             autoexecute_override: None,
             last_event_sequence: None,
             pinned: false,
+            waiting_for_events: false,
         };
         let json = serde_json::to_string(&data).expect("serialize");
         let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
@@ -1611,6 +1621,7 @@ mod tests {
             autoexecute_override: None,
             last_event_sequence: None,
             pinned: false,
+            waiting_for_events: false,
         };
         let json = serde_json::to_string(&data).expect("serialize");
         assert!(
@@ -1637,6 +1648,7 @@ mod tests {
             autoexecute_override: None,
             last_event_sequence: None,
             pinned: true,
+            waiting_for_events: false,
         };
         let json = serde_json::to_string(&data).expect("serialize");
         let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
@@ -1661,6 +1673,7 @@ mod tests {
             autoexecute_override: None,
             last_event_sequence: None,
             pinned: false,
+            waiting_for_events: false,
         };
         let json = serde_json::to_string(&data).expect("serialize");
         assert!(

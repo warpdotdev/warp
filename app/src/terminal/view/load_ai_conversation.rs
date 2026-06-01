@@ -938,6 +938,7 @@ impl TerminalView {
             autoexecute_override: None,
             last_event_sequence: None,
             pinned: false,
+            waiting_for_events: false,
         };
 
         // We already early-return for empty `tasks` above, so the strict

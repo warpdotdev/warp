@@ -140,6 +140,11 @@ impl ToolExt for api::message::tool_call::Tool {
             Tool::SendMessageToAgent(_) => "send_message_to_agent",
             Tool::TransferShellCommandControlToUser(_) => "transfer_shell_command_control",
             Tool::RunAgents(_) => "orchestrate",
+            // QUALITY-780: stable name used by telemetry, history, and UI
+            // classification for the new first-class `wait_for_events`
+            // tool variant. Matches the legacy server-handled name so
+            // analytics aggregations don't double-count the rollout.
+            Tool::WaitForEvents(_) => "wait_for_events",
         }
     }
 }

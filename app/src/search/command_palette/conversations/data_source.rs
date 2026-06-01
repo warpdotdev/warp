@@ -205,8 +205,10 @@ impl SyncDataSource for DataSource {
             result.map(|mut results| {
                 if !cfg!(target_family = "wasm") {
                     if let Some(conversation) = selected_conversation_in_focused_pane(app) {
-                        // Only surface the fork option if the selected conversation is done.
-                        if conversation.status().is_done() {
+                        // Only surface the fork option if the selected conversation is
+                        // terminally finished. `WaitingForEvents` and `Blocked` are
+                        // quiescent but not terminal, so the agent may still resume.
+                        if conversation.status().is_terminal() {
                             results.push(
                                 ConversationSearchItem::new(ConversationAction::Fork {
                                     conversation_id: conversation.id(),

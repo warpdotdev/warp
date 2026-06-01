@@ -532,7 +532,10 @@ fn write_tool_call_args(out: &mut String, tool: &Tool) {
         | Tool::InitProject(_)
         | Tool::Server(_)
         | Tool::Subagent(_)
-        | Tool::TransferShellCommandControlToUser(_) => {}
+        | Tool::TransferShellCommandControlToUser(_)
+        // QUALITY-780: `wait_for_events` has no payload to serialize
+        // (yield reason / timeout live in the request, not the call).
+        | Tool::WaitForEvents(_) => {}
     }
 }
 
@@ -599,6 +602,12 @@ fn write_tool_call_result_content(out: &mut String, result: &ToolCallResultType)
             }
             None => {}
         },
+        // QUALITY-780: `wait_for_events` tool-call results carry no
+        // user-facing payload worth serializing into the YAML transcript.
+        // The interesting detail (which events resumed the run) shows up
+        // as the subsequent `events_from_agents` message, so we keep this
+        // arm intentionally empty.
+        ToolCallResultType::WaitForEvents(_) => {}
         ToolCallResultType::RunShellCommand(r) => {
             if let Some(res) = &r.result {
                 use api::run_shell_command_result::Result;

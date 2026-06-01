@@ -76,9 +76,17 @@ pub fn aggregated_orchestrator_status(
     let mut any_in_progress = false;
     let mut any_error = false;
     let mut any_cancelled = false;
+    // TODO(client-pill-bar): track an `any_waiting` accumulator and
+    // promote `WaitingForEvents` ahead of `Error`/`Cancelled` per
+    // QUALITY-780 client TECH §7 precedence
+    // (`InProgress > Blocked > WaitingForEvents > Error > Cancelled > Success`).
+    // For now we co-bucket `WaitingForEvents` with `InProgress` so the
+    // aggregator still reflects an active orchestration tree.
     for status in statuses {
         match status {
-            ConversationStatus::InProgress => any_in_progress = true,
+            ConversationStatus::InProgress | ConversationStatus::WaitingForEvents => {
+                any_in_progress = true
+            }
             ConversationStatus::Blocked { .. } => {
                 if first_blocked.is_none() {
                     first_blocked = Some(status);

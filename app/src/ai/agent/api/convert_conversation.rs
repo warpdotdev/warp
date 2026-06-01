@@ -89,6 +89,7 @@ pub fn convert_conversation_data_to_ai_conversation(
             autoexecute_override: None,
             last_event_sequence: None,
             pinned: false,
+            waiting_for_events: false,
         },
         RestorationMode::Continue => AgentConversationData {
             server_conversation_token: Some(
@@ -110,6 +111,7 @@ pub fn convert_conversation_data_to_ai_conversation(
             autoexecute_override: None,
             last_event_sequence: None,
             pinned: false,
+            waiting_for_events: false,
         },
     };
 
@@ -1648,6 +1650,16 @@ pub(crate) fn convert_tool_call_result_to_input(
             log::warn!("No result present for tool call ID: {tool_call_id}");
             None
         }
+        // QUALITY-780 placeholder owned by `client-detection`. The
+        // `WaitForEvents` tool-call result is consumed by
+        // `apply_client_actions` (per client TECH §8.3) and does not
+        // surface as a restorable exchange input. Return `None` so the
+        // restore path skips it. `client-detection` will replace this if
+        // the variant needs to be rendered in restored transcripts.
+        Some(ToolCallResultType::WaitForEvents(_)) => {
+            // TODO(client-detection)
+            None
+        }
     }
 }
 
@@ -1780,6 +1792,15 @@ fn create_cancelled_result_for_tool_call(
         }
         // These tools are deprecated.
         ToolType::SuggestCreatePlan(_) | ToolType::SuggestPlan(_) => return None,
+        // QUALITY-780 placeholder owned by `client-detection`. A cancelled
+        // `WaitForEvents` tool call doesn't surface as a restorable action
+        // result — the resume signal arrives as a separate tool-call
+        // result (`Cancel` or `WaitForEvents`) per client TECH §8.3.
+        // `client-detection` will replace this with the final behavior.
+        ToolType::WaitForEvents(_) => {
+            // TODO(client-detection)
+            return None;
+        }
     };
 
     Some(AIAgentInput::ActionResult {

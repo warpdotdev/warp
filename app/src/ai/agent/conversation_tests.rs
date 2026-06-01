@@ -648,3 +648,209 @@ fn fork_artifacts_adds_file_artifacts_to_conversation() {
         })
     );
 }
+
+// ---------------------------------------------------------------------------
+// QUALITY-780: WaitingForEvents variant + predicates + persistence
+//
+// These tests pin down the contract for the new `WaitingForEvents` status
+// variant and the `is_terminal` / `is_quiescent` / `is_waiting_for_events`
+// predicate split (see `specs/QUALITY-780/TECH.md` §1–§3).
+// ---------------------------------------------------------------------------
+
+/// `Display` text for the new variant is the placeholder design label.
+/// Locked in by a test so a Wave 2 "polish" change can't silently drift
+/// the label without updating expectations.
+#[test]
+fn waiting_for_events_display_label_is_waiting_for_events() {
+    assert_eq!(
+        format!("{}", ConversationStatus::WaitingForEvents),
+        "Waiting for events"
+    );
+}
+
+/// `is_terminal` returns true only for `Success | Error | Cancelled`.
+/// `WaitingForEvents` and `Blocked` are explicitly non-terminal because
+/// the run can still resume on its own (an inbound event or a user
+/// unblock decision).
+#[test]
+fn is_terminal_only_includes_success_error_cancelled() {
+    assert!(ConversationStatus::Success.is_terminal());
+    assert!(ConversationStatus::Error.is_terminal());
+    assert!(ConversationStatus::Cancelled.is_terminal());
+
+    assert!(!ConversationStatus::InProgress.is_terminal());
+    assert!(!ConversationStatus::Blocked {
+        blocked_action: "approve".to_string()
+    }
+    .is_terminal());
+    assert!(!ConversationStatus::WaitingForEvents.is_terminal());
+}
+
+/// `is_quiescent` returns true for everything except `InProgress` — i.e.
+/// it's the negation of "actively streaming". Terminal statuses, `Blocked`,
+/// and `WaitingForEvents` are all quiescent.
+#[test]
+fn is_quiescent_includes_terminal_blocked_and_waiting_for_events() {
+    assert!(!ConversationStatus::InProgress.is_quiescent());
+
+    assert!(ConversationStatus::Success.is_quiescent());
+    assert!(ConversationStatus::Error.is_quiescent());
+    assert!(ConversationStatus::Cancelled.is_quiescent());
+    assert!(ConversationStatus::Blocked {
+        blocked_action: "approve".to_string()
+    }
+    .is_quiescent());
+    assert!(ConversationStatus::WaitingForEvents.is_quiescent());
+}
+
+/// `is_waiting_for_events` is the dedicated probe; it's true only for the
+/// new variant.
+#[test]
+fn is_waiting_for_events_returns_true_only_for_waiting_for_events_variant() {
+    assert!(ConversationStatus::WaitingForEvents.is_waiting_for_events());
+
+    assert!(!ConversationStatus::InProgress.is_waiting_for_events());
+    assert!(!ConversationStatus::Success.is_waiting_for_events());
+    assert!(!ConversationStatus::Error.is_waiting_for_events());
+    assert!(!ConversationStatus::Cancelled.is_waiting_for_events());
+    assert!(!ConversationStatus::Blocked {
+        blocked_action: "approve".to_string()
+    }
+    .is_waiting_for_events());
+}
+
+/// `is_in_progress` must not return true for `WaitingForEvents` — the
+/// driver/notifications/sync paths read `is_in_progress` to decide whether
+/// a run is actively streaming, and a yielded run is explicitly not
+/// streaming until the events arrive.
+#[test]
+fn is_in_progress_returns_false_for_waiting_for_events() {
+    assert!(ConversationStatus::InProgress.is_in_progress());
+    assert!(!ConversationStatus::WaitingForEvents.is_in_progress());
+}
+
+/// Restoring a conversation persisted with `waiting_for_events = true`
+/// must re-enter the `WaitingForEvents` status. This is the round-trip
+/// guarantee that the driver / task-sync / notifications / pill-bar all
+/// rely on so a yielded run picked up on the next app start doesn't get
+/// silently reclassified as `Success` by `derive_status_from_root_task`.
+#[test]
+fn restored_conversation_uses_persisted_waiting_for_events_marker() {
+    let conversation_data: AgentConversationData =
+        serde_json::from_str(r#"{"server_conversation_token":null,"waiting_for_events":true}"#)
+            .unwrap();
+
+    let conversation = restored_conversation(Some(conversation_data));
+
+    assert_eq!(conversation.status(), &ConversationStatus::WaitingForEvents,);
+}
+
+/// The persisted `waiting_for_events` marker also wins for the empty-task
+/// restore path, so a child conversation persisted while yielded — before
+/// any server response landed — still re-enters the `WaitingForEvents`
+/// state on restore (instead of falling through to the
+/// `synthesize-optimistic-root` `InProgress` default).
+#[test]
+fn restored_conversation_with_empty_task_list_honors_waiting_for_events_marker() {
+    let conversation_data: AgentConversationData =
+        serde_json::from_str(r#"{"server_conversation_token":null,"waiting_for_events":true}"#)
+            .unwrap();
+
+    let conversation = AIConversation::new_restored_synthesizing_on_empty(
+        AIConversationId::new(),
+        vec![],
+        Some(conversation_data),
+    )
+    .expect("empty task list with waiting marker must synthesize an optimistic root");
+
+    assert_eq!(conversation.status(), &ConversationStatus::WaitingForEvents,);
+}
+
+/// Absence of the field on disk (the common case for non-yielding runs)
+/// must restore as the status derived from the task tree — i.e. the
+/// marker defaults to `false` and does not override anything.
+#[test]
+fn restored_conversation_without_waiting_for_events_marker_uses_derived_status() {
+    let conversation_data: AgentConversationData =
+        serde_json::from_str(r#"{"server_conversation_token":null}"#).unwrap();
+
+    let conversation = restored_conversation(Some(conversation_data));
+
+    // The fixture task list has no exchanges, so the derived status is
+    // `Success` per `derive_status_from_root_task`. The absence of the
+    // `waiting_for_events` marker must not override that.
+    assert_eq!(conversation.status(), &ConversationStatus::Success);
+}
+
+/// `waiting_for_events: false` (the default) must serialize away — it
+/// shares the `skip_serializing_if = "is_false"` treatment with `pinned`
+/// and `is_remote_child` so legacy reads stay clean and disk usage
+/// doesn't grow for the common non-yielding case.
+#[test]
+fn agent_conversation_data_skips_serializing_waiting_for_events_when_false() {
+    let data = AgentConversationData {
+        server_conversation_token: None,
+        conversation_usage_metadata: None,
+        reverted_action_ids: None,
+        forked_from_server_conversation_token: None,
+        artifacts_json: None,
+        parent_agent_id: None,
+        agent_name: None,
+        orchestration_harness_type: None,
+        parent_conversation_id: None,
+        is_remote_child: false,
+        root_task_is_optimistic: None,
+        run_id: None,
+        autoexecute_override: None,
+        last_event_sequence: None,
+        pinned: false,
+        waiting_for_events: false,
+    };
+    let json = serde_json::to_string(&data).expect("serialize");
+    assert!(
+        !json.contains("waiting_for_events"),
+        "default waiting_for_events=false should be skipped: {json}"
+    );
+}
+
+/// `waiting_for_events: true` must round-trip through JSON. This is the
+/// on-disk contract that `write_updated_conversation_state` produces and
+/// `new_restored_synthesizing_on_empty` consumes.
+#[test]
+fn agent_conversation_data_roundtrips_waiting_for_events_true() {
+    let data = AgentConversationData {
+        server_conversation_token: None,
+        conversation_usage_metadata: None,
+        reverted_action_ids: None,
+        forked_from_server_conversation_token: None,
+        artifacts_json: None,
+        parent_agent_id: None,
+        agent_name: None,
+        orchestration_harness_type: None,
+        parent_conversation_id: None,
+        is_remote_child: false,
+        root_task_is_optimistic: None,
+        run_id: None,
+        autoexecute_override: None,
+        last_event_sequence: None,
+        pinned: false,
+        waiting_for_events: true,
+    };
+    let json = serde_json::to_string(&data).expect("serialize");
+    assert!(
+        json.contains("\"waiting_for_events\":true"),
+        "true value should serialize: {json}"
+    );
+    let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
+    assert!(roundtripped.waiting_for_events);
+}
+
+/// Legacy rows persisted before this feature landed omit the field
+/// entirely. `#[serde(default)]` must accept them as `false`.
+#[test]
+fn agent_conversation_data_legacy_rows_default_waiting_for_events_to_false() {
+    let legacy_json = r#"{"server_conversation_token":null}"#;
+    let data: AgentConversationData =
+        serde_json::from_str(legacy_json).expect("legacy rows must deserialize");
+    assert!(!data.waiting_for_events);
+}

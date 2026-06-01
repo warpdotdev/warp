@@ -394,6 +394,10 @@ impl WarpTheme {
         self.ansi_fg(AnsiColorIdentifier::Blue.to_ansi_color(&self.terminal_colors().normal))
     }
 
+    pub fn ansi_bg_blue(&self) -> ColorU {
+        self.ansi_bg(AnsiColorIdentifier::Blue.to_ansi_color(&self.terminal_colors().normal))
+    }
+
     pub fn ansi_fg_green(&self) -> ColorU {
         self.ansi_fg(AnsiColorIdentifier::Green.to_ansi_color(&self.terminal_colors().normal))
     }

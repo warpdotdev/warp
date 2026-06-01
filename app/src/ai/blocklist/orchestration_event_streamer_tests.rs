@@ -160,6 +160,7 @@ fn ai_conversation_new_restored_preserves_last_event_sequence() {
         autoexecute_override: None,
         last_event_sequence: Some(42),
         pinned: false,
+        waiting_for_events: false,
     };
     let conversation =
         AIConversation::new_restored(AIConversationId::new(), vec![task], Some(data))

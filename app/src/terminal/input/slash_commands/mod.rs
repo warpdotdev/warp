@@ -889,7 +889,10 @@ impl Input {
                         "Cannot show conversation cost: conversation is empty".to_owned(),
                         ctx,
                     );
-                } else if conversation.is_some_and(|c| !c.status().is_done()) {
+                } else if conversation.is_some_and(|c| !c.status().is_terminal()) {
+                    // `/cost` refuses to compute while the conversation is still in flight
+                    // (`InProgress`/`Blocked`) or yielded for events (`WaitingForEvents`)
+                    // because the cost is not final yet.
                     show_error_toast(
                         "Cannot show conversation cost: conversation is in progress".to_owned(),
                         ctx,

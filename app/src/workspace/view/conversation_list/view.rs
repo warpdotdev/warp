@@ -872,9 +872,12 @@ impl TypedActionView for ConversationListView {
                 terminal_view_id,
             } => {
                 let window_id = ctx.window_id();
+                // A conversation can only be deleted once it's terminally finished.
+                // `WaitingForEvents` is quiescent but not terminal, so it must not be
+                // deletable from the list.
                 let conversation_is_done = BlocklistAIHistoryModel::as_ref(ctx)
                     .conversation(conversation_id)
-                    .is_none_or(|c| c.status().is_done());
+                    .is_none_or(|c| c.status().is_terminal());
                 if !conversation_is_done {
                     ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                         toast_stack.add_ephemeral_toast(
@@ -1036,7 +1039,9 @@ impl TypedActionView for ConversationListView {
                     BlocklistAIHistoryModel::as_ref(ctx).conversation(&ai_conversation_id);
 
                 if let Some(conversation) = conversation {
-                    if !conversation.status().is_done() && !conversation.is_empty() {
+                    // Same gate as the deletion path above: only terminal conversations
+                    // can be deleted.
+                    if !conversation.status().is_terminal() && !conversation.is_empty() {
                         let window_id = ctx.window_id();
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             toast_stack.add_ephemeral_toast(

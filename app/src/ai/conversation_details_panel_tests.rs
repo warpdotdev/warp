@@ -138,6 +138,7 @@ fn test_from_task_includes_linked_directory_when_run_id_matches() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                waiting_for_events: false,
             },
         );
 
@@ -281,6 +282,7 @@ fn test_from_conversation_populates_local_conversation_fields() {
                 is_remote_child: false,
                 root_task_is_optimistic: None,
                 pinned: false,
+                waiting_for_events: false,
             },
         );
 
@@ -352,6 +354,7 @@ fn test_from_task_includes_linked_directory_when_server_token_matches() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                waiting_for_events: false,
             },
         );
 
