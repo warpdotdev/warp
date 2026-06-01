@@ -2256,7 +2256,7 @@ fn render_tab_group_internal(
     let is_sole_group_member = in_tab_group
         && tab
             .group_id
-            .is_some_and(|gid| workspace.tabs.iter().filter(|t| t.group_id == Some(gid)).count() == 1);
+            .is_some_and(|gid| super::group_member_indices(&workspace.tabs, gid).count() == 1);
 
     let draggable: Box<dyn Element> = if is_parent_group_dragging || is_sole_group_member {
         group_element

@@ -26279,9 +26279,7 @@ impl Workspace {
                 // groups consecutive tabs, so leaving `current_index` outside
                 // the block would split the group across the panel.
                 if let Some(target_gid) = expanded_target {
-                    if let Some((first, last)) =
-                        group_member_index_range(&self.tabs, target_gid)
-                    {
+                    if let Some((first, last)) = group_member_index_range(&self.tabs, target_gid) {
                         let insert_at = if current_index < first { first } else { last };
                         if insert_at != current_index {
                             self.hop_tab_to_index(current_index, insert_at, ctx);
@@ -26479,17 +26477,12 @@ impl Workspace {
     /// Returns the group whose saved container rect contains `cursor_y`, if any.
     /// A small edge margin at each end of the rect is treated as "between groups"
     /// so the cursor can land in the ungrouped zone between adjacent groups.
-    fn target_group_at_y(
-        &self,
-        cursor_y: f32,
-        ctx: &mut ViewContext<Self>,
-    ) -> Option<TabGroupId> {
+    fn target_group_at_y(&self, cursor_y: f32, ctx: &mut ViewContext<Self>) -> Option<TabGroupId> {
         const EDGE_MARGIN: f32 = 6.0;
         self.tab_groups.keys().copied().find(|group_id| {
             ctx.element_position_by_id(vtab_group_position_id(*group_id))
                 .is_some_and(|rect| {
-                    rect.min_y() + EDGE_MARGIN <= cursor_y
-                        && cursor_y <= rect.max_y() - EDGE_MARGIN
+                    rect.min_y() + EDGE_MARGIN <= cursor_y && cursor_y <= rect.max_y() - EDGE_MARGIN
                 })
         })
     }
@@ -26511,9 +26504,7 @@ impl Workspace {
             .is_some_and(|g| g.collapsed);
 
         if neighbor_in_collapsed_group {
-            return ctx.element_position_by_id(vtab_group_position_id(
-                neighbor_group_id.unwrap(),
-            ));
+            return ctx.element_position_by_id(vtab_group_position_id(neighbor_group_id.unwrap()));
         }
 
         ctx.element_position_by_id(tab_position_id(neighbor_index))
