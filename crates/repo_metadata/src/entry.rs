@@ -709,7 +709,7 @@ fn descend_allowlist_matches(suffix: &[Component<'_>]) -> bool {
 /// Combines the `.git/` allowlist (see [`should_watch_directory_in_git_path`])
 /// with a gitignore check so gitignored directories are pruned from the watch tree.
 #[cfg(feature = "local_fs")]
-pub(crate) fn should_descend_into_directory(path: &Path, gitignores: &[Gitignore]) -> bool {
+pub(crate) fn should_watch_directory(path: &Path, gitignores: &[Gitignore]) -> bool {
     // The `.git/` allowlist is authoritative for git-internal paths: gitignore
     // patterns must never prune the allowlisted `.git/` subtrees this watcher relies on,
     // so the gitignore check below applies only to working-tree paths.
@@ -764,7 +764,7 @@ pub(crate) fn should_emit_event_for_path(path: &Path, gitignores: &[Gitignore]) 
 pub fn repo_watch_filter(gitignores: Arc<Vec<Gitignore>>) -> WatchFilter {
     let gitignores_for_descend = gitignores.clone();
     let descend =
-        Arc::new(move |path: &Path| should_descend_into_directory(path, &gitignores_for_descend));
+        Arc::new(move |path: &Path| should_watch_directory(path, &gitignores_for_descend));
     let emit = Arc::new(move |path: &Path| should_emit_event_for_path(path, &gitignores));
     WatchFilter::with_filter(descend, emit)
 }

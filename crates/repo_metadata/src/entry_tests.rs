@@ -12,7 +12,7 @@ mod watch_filter {
     use ignore::gitignore::Gitignore;
 
     use crate::entry::{
-        gitignores_for_directory, should_descend_into_directory, should_emit_event_for_path,
+        gitignores_for_directory, should_watch_directory, should_emit_event_for_path,
     };
 
     /// Sets up a temp directory with a `.gitignore` containing `patterns`.
@@ -32,11 +32,11 @@ mod watch_filter {
         let node_modules = root.join("node_modules");
         let nested = node_modules.join(".pnpm").join("@some/pkg");
         assert!(
-            !should_descend_into_directory(&node_modules, &gitignores),
+            !should_watch_directory(&node_modules, &gitignores),
             "descend should reject the gitignored node_modules root"
         );
         assert!(
-            !should_descend_into_directory(&nested, &gitignores),
+            !should_watch_directory(&nested, &gitignores),
             "descend should reject any path under a gitignored directory"
         );
     }
@@ -46,8 +46,8 @@ mod watch_filter {
         let (_tmp, root, gitignores) = setup_repo("node_modules/\n");
         let src = root.join("src");
         let nested = src.join("deeply").join("nested");
-        assert!(should_descend_into_directory(&src, &gitignores));
-        assert!(should_descend_into_directory(&nested, &gitignores));
+        assert!(should_watch_directory(&src, &gitignores));
+        assert!(should_watch_directory(&nested, &gitignores));
     }
 
     #[test]
@@ -55,10 +55,10 @@ mod watch_filter {
         let (_tmp, root, gitignores) = setup_repo("node_modules/\n");
         // `.git/objects/` is pruned regardless of gitignore contents.
         let objects = root.join(".git").join("objects");
-        assert!(!should_descend_into_directory(&objects, &gitignores));
+        assert!(!should_watch_directory(&objects, &gitignores));
         // Allowlisted `.git/refs/heads/` still descends through.
         let heads = root.join(".git").join("refs").join("heads");
-        assert!(should_descend_into_directory(&heads, &gitignores));
+        assert!(should_watch_directory(&heads, &gitignores));
     }
 
     #[test]
@@ -123,7 +123,7 @@ mod watch_filter {
         let (_tmp, root, gitignores) = setup_repo("refs/\n");
         let heads = root.join(".git").join("refs").join("heads");
         assert!(
-            should_descend_into_directory(&heads, &gitignores),
+            should_watch_directory(&heads, &gitignores),
             ".git/refs/heads must still descend even when refs/ is gitignored"
         );
     }
@@ -141,7 +141,7 @@ mod watch_filter {
             ".git/HEAD must still emit even when .git/ is gitignored"
         );
         assert!(
-            should_descend_into_directory(&heads, &gitignores),
+            should_watch_directory(&heads, &gitignores),
             ".git/refs/heads must still descend even when .git/ is gitignored"
         );
     }
@@ -156,9 +156,9 @@ mod watch_filter {
         let node_modules = Path::new("/home/user/repo/node_modules/foo");
         let src_dir = Path::new("/home/user/repo/src");
 
-        assert!(should_descend_into_directory(src_dir, &empty));
+        assert!(should_watch_directory(src_dir, &empty));
         // node_modules has no special handling without gitignore patterns.
-        assert!(should_descend_into_directory(node_modules, &empty));
+        assert!(should_watch_directory(node_modules, &empty));
         assert!(should_emit_event_for_path(src_main, &empty));
         assert!(should_emit_event_for_path(node_modules, &empty));
     }
