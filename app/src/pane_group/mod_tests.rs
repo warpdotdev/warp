@@ -11,6 +11,7 @@ use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
+use session_sharing_protocol::common::SessionId;
 use shared_session::permissions_manager::SessionPermissionsManager;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
@@ -1385,6 +1386,72 @@ fn test_ambient_transcript_restore_uses_generic_viewer_when_handoff_disabled() {
             assert_eq!(
                 model.conversation_transcript_viewer_status(),
                 Some(&ConversationTranscriptViewerStatus::ViewingAmbientConversation(task_id))
+            );
+        });
+    });
+}
+
+/// Pins the contract that cloud-mode shared-session viewers (the local pane
+/// of a remote orchestration parent) get an `ambient_agent_view_model` so
+/// the snapshot path in `TerminalPane::snapshot` can emit
+/// `LeafContents::AmbientAgent` with the task id preserved. Without this,
+/// the snapshot falls through to an empty `LeafContents::Terminal` and the
+/// pane restores as a stray local terminal on the next launch.
+#[test]
+fn create_shared_session_viewer_with_cloud_mode_populates_ambient_agent_view_model() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let resources = TerminalViewResources {
+                tips_completed: panes.tips_completed.clone(),
+                server_api: panes.server_api.clone(),
+                model_event_sender: panes.model_event_sender.clone(),
+            };
+            let (terminal_view, _terminal_manager) = PaneGroup::create_shared_session_viewer(
+                SessionId::new(),
+                resources,
+                Vector2F::new(800., 600.),
+                /* enable_orchestration_polling */ false,
+                /* is_cloud_mode */ true,
+                ctx,
+            );
+            assert!(
+                terminal_view.as_ref(ctx).ambient_agent_view_model().is_some(),
+                "cloud-mode shared-session viewer must construct an ambient_agent_view_model so the snapshot path emits LeafContents::AmbientAgent on restart",
+            );
+        });
+    });
+}
+
+/// Pins the existing behavior of the non-cloud-mode branch so callers that
+/// rely on it (e.g. `new_for_shared_session_viewer`, the per-child viewer
+/// path) keep getting a `TerminalView` without an `ambient_agent_view_model`.
+/// Future changes that would flip this default are loud.
+#[test]
+fn create_shared_session_viewer_without_cloud_mode_does_not_populate_ambient_agent_view_model() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let resources = TerminalViewResources {
+                tips_completed: panes.tips_completed.clone(),
+                server_api: panes.server_api.clone(),
+                model_event_sender: panes.model_event_sender.clone(),
+            };
+            let (terminal_view, _terminal_manager) = PaneGroup::create_shared_session_viewer(
+                SessionId::new(),
+                resources,
+                Vector2F::new(800., 600.),
+                /* enable_orchestration_polling */ false,
+                /* is_cloud_mode */ false,
+                ctx,
+            );
+            assert!(
+                terminal_view.as_ref(ctx).ambient_agent_view_model().is_none(),
+                "non-cloud-mode shared-session viewer must not construct an ambient_agent_view_model; existing callers depend on this",
             );
         });
     });

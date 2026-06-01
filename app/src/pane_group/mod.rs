@@ -1947,7 +1947,10 @@ impl PaneGroup {
                 let (terminal_view, terminal_manager) = match restore_kind {
                     AmbientRestoreKind::SharedSession { session_id } => {
                         Self::create_shared_session_viewer(
-                            session_id, resources, view_size, true, ctx,
+                            session_id, resources, view_size,
+                            true, // enable_orchestration_polling
+                            true, // is_cloud_mode
+                            ctx,
                         )
                     }
                     AmbientRestoreKind::PendingRestoration { task_id } => {
@@ -3549,12 +3552,15 @@ impl PaneGroup {
             model_event_sender: self.model_event_sender.clone(),
         };
         let view_size = Self::estimated_view_bounds(ctx).size();
+        // Per-child viewer: parent's model already discovers descendants, and
+        // hidden child viewers aren't snapshotted, so `is_cloud_mode` stays
+        // `false` (no `ambient_agent_view_model` needed for snapshot round-trip).
         let (new_terminal_view, terminal_manager) = Self::create_shared_session_viewer(
             child_session_id,
             resources,
             view_size,
-            // Per-child viewer: parent's model already discovers descendants.
-            false,
+            false, // enable_orchestration_polling
+            false, // is_cloud_mode
             ctx,
         );
 
@@ -3786,7 +3792,8 @@ impl PaneGroup {
                         session_id,
                         resources.clone(),
                         view_size,
-                        true, // root orchestrator viewer
+                        true, // enable_orchestration_polling
+                        true, // is_cloud_mode
                         ctx,
                     );
                     let new_pane = TerminalPane::new(
@@ -4429,11 +4436,15 @@ impl PaneGroup {
                                    pane_history: &mut Vec<PaneId>,
                                    view_bounds: RectF,
                                    ctx: &mut ViewContext<Self>| {
+            // Separate navigation entry point; preserving the previous
+            // non-cloud-mode behavior is outside the scope of the
+            // orchestration-restore fix.
             let (view, terminal_manager) = PaneGroup::create_shared_session_viewer(
                 session_id,
                 resources,
                 view_bounds.size(),
-                true, // root orchestrator viewer
+                true,  // enable_orchestration_polling
+                false, // is_cloud_mode
                 ctx,
             );
 
@@ -6902,12 +6913,20 @@ impl PaneGroup {
         (terminal_view, terminal_manager)
     }
 
+    /// `is_cloud_mode` controls whether the resulting [`TerminalView`] is
+    /// constructed with an `ambient_agent_view_model`. Pass `true` when the
+    /// viewer pane represents the local pane of a cloud orchestration parent
+    /// agent — otherwise the snapshot path in
+    /// `TerminalPane::snapshot` falls through to an empty
+    /// `LeafContents::Terminal` for shared-session viewers and the pane
+    /// restores as a stray local terminal on the next launch.
     #[allow(clippy::too_many_arguments)]
     fn create_shared_session_viewer(
         session_id: SessionId,
         resources: TerminalViewResources,
         initial_size: Vector2F,
         enable_orchestration_polling: bool,
+        is_cloud_mode: bool,
         ctx: &mut ViewContext<Self>,
     ) -> (
         ViewHandle<TerminalView>,
@@ -6922,6 +6941,7 @@ impl PaneGroup {
                     initial_size,
                     window_id,
                     enable_orchestration_polling,
+                    is_cloud_mode,
                     ctx,
                 ));
             terminal_manager
