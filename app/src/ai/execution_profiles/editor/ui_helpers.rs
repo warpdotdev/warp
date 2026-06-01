@@ -14,7 +14,8 @@ use warpui::{AppContext, Element, SingletonEntity, ViewHandle};
 use super::{ExecutionProfileEditorView, ExecutionProfileEditorViewAction};
 use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::execution_profiles::{
-    AIExecutionProfile, AIExecutionProfileAppExt as _, ActionPermission,
+    long_context_pricing_warning_title, AIExecutionProfile, AIExecutionProfileAppExt as _,
+    ActionPermission,
     LONG_CONTEXT_PRICING_WARNING_TEXT,
 };
 use crate::editor::EditorView;
@@ -204,7 +205,8 @@ fn render_info_section(
 }
 fn render_long_context_pricing_warning(appearance: &Appearance) -> Box<dyn Element> {
     render_warning_box(
-        WarningBoxConfig::new(LONG_CONTEXT_PRICING_WARNING_TEXT),
+        WarningBoxConfig::new(LONG_CONTEXT_PRICING_WARNING_TEXT)
+            .with_formatted_title(long_context_pricing_warning_title()),
         appearance,
     )
 }

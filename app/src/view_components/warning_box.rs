@@ -1,10 +1,12 @@
 //! A reusable warning callout component with optional action button.
+use markdown_parser::{FormattedText, FormattedTextInline, FormattedTextLine};
 
 use warp_core::ui::color::blend::Blend;
 use warpui::color::ColorU;
 use warpui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Expanded, Flex,
-    Hoverable, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
+    FormattedTextElement, Hoverable, HyperlinkLens, MainAxisSize, MouseStateHandle, ParentElement,
+    Radius, Text,
 };
 use warpui::platform::Cursor;
 use warpui::EventContext;
@@ -36,6 +38,7 @@ impl WarningBoxButtonConfig {
 pub struct WarningBoxConfig {
     pub icon: Icon,
     pub title: String,
+    pub formatted_title: Option<FormattedTextInline>,
     pub description: Option<String>,
 
     /// Optional max width. If provided, the WarningBox will not exceed this width,
@@ -52,6 +55,7 @@ impl WarningBoxConfig {
         Self {
             icon: Icon::AlertTriangle,
             title: title.into(),
+            formatted_title: None,
             description: None,
             width: None,
             margin_top: 8.,
@@ -78,8 +82,12 @@ impl WarningBoxConfig {
         self.button = Some(button);
         self
     }
-}
 
+    pub fn with_formatted_title(mut self, formatted_title: FormattedTextInline) -> Self {
+        self.formatted_title = Some(formatted_title);
+        self
+    }
+}
 pub fn render_warning_box(config: WarningBoxConfig, appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     let icon_size = appearance.ui_font_size() * 1.1;
@@ -96,19 +104,37 @@ pub fn render_warning_box(config: WarningBoxConfig, appearance: &Appearance) -> 
 
     let background = theme.surface_2().blend(&warning_fill.with_opacity(15));
 
+    let title = if let Some(formatted_title) = config.formatted_title {
+        FormattedTextElement::new(
+            FormattedText::new([FormattedTextLine::Line(formatted_title)]),
+            appearance.ui_font_size(),
+            appearance.ui_font_family(),
+            appearance.ui_font_family(),
+            text_color,
+            Default::default(),
+        )
+        .with_hyperlink_font_color(theme.accent().into())
+        .register_default_click_handlers_with_action_support(|hyperlink, _event, app| {
+            if let HyperlinkLens::Url(url) = hyperlink {
+                app.open_url(url);
+            }
+        })
+        .finish()
+    } else {
+        Text::new(
+            config.title,
+            appearance.ui_font_family(),
+            appearance.ui_font_size(),
+        )
+        .with_color(text_color)
+        .soft_wrap(true)
+        .finish()
+    };
+
     let mut text_col = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Start)
         .with_spacing(2.)
-        .with_child(
-            Text::new(
-                config.title,
-                appearance.ui_font_family(),
-                appearance.ui_font_size(),
-            )
-            .with_color(text_color)
-            .soft_wrap(true)
-            .finish(),
-        );
+        .with_child(title);
 
     if let Some(description) = config.description {
         text_col.add_child(
