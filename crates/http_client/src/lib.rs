@@ -387,12 +387,6 @@ impl Client {
     }
 }
 
-/// Returns `true` if `url` targets one of the Warp server-family origins that
-/// sit behind the staging IAP: the main server pool
-/// ([`ChannelState::server_root_url`]) or the RTC server
-/// ([`ChannelState::rtc_http_url`]). Used to scope the IAP
-/// `Proxy-Authorization` header to Warp's own backends so it is never leaked to
-/// a third-party host.
 fn is_warp_server_origin(url: &reqwest::Url) -> bool {
     [
         ChannelState::server_root_url(),

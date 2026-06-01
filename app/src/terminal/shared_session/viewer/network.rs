@@ -315,7 +315,6 @@ impl Network {
             bail!("This channel does not support session-sharing.");
         };
         let user_id = Self::get_user_id(auth_client, &auth_state).await?;
-        // Attach the IAP handshake header (staging only) so the upgrade can transit the proxy.
         let socket =
             websocket::WebSocket::connect_with_headers(&join_endpoint, None::<&str>, iap_headers)
                 .await?;

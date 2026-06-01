@@ -626,7 +626,6 @@ impl Network {
     ) {
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let anonymous_id = AuthStateProvider::as_ref(ctx).get().anonymous_id();
-        // IAP handshake header (staging only) so the upgrade can transit the proxy.
         let iap_headers: Vec<(&str, String)> = ServerApiProvider::as_ref(ctx)
             .get()
             .iap_handshake_header()

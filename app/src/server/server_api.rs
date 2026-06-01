@@ -610,23 +610,20 @@ impl ServerApi {
         }
     }
 
-    /// Returns the cached IAP token (staging only), or `None` when IAP is not
-    /// enabled for this build or no token has been fetched yet.
-    pub fn iap_cached_token(&self) -> Option<String> {
-        self.iap_state.as_ref().and_then(|state| state.get_cached())
-    }
-
     /// Returns the IAP `Proxy-Authorization` header (name + value) to attach to
-    /// a Warp-server websocket handshake, or `None` when IAP is not active. The
-    /// handshake is the only place this can ride, since IAP validates the HTTP
-    /// upgrade itself rather than any post-upgrade payload.
+    /// a Warp-server websocket handshake, or `None` when IAP is not active
+    /// (staging only, and a token has been fetched). The handshake is the only
+    /// place this can ride, since IAP validates the HTTP upgrade itself rather
+    /// than any post-upgrade payload.
     pub fn iap_handshake_header(&self) -> Option<(&'static str, String)> {
-        self.iap_cached_token().map(|token| {
-            (
-                http_client::iap::IAP_PROXY_AUTH_HEADER,
-                format!("Bearer {token}"),
-            )
-        })
+        let token = self
+            .iap_state
+            .as_ref()
+            .and_then(|state| state.get_cached())?;
+        Some((
+            http_client::iap::IAP_PROXY_AUTH_HEADER,
+            format!("Bearer {token}"),
+        ))
     }
 
     /// Inspects a websocket *handshake* connect error for an IAP challenge and
