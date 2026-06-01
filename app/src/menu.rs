@@ -2,13 +2,6 @@ use std::cell::OnceCell;
 use std::sync::Arc;
 use std::{fmt, vec};
 
-use crate::safe_triangle::SafeTriangle;
-use crate::themes::theme::Fill;
-use crate::util::time_format::format_approx_duration_from_now_sentence_case;
-use crate::{
-    appearance::Appearance,
-    ui_components::{buttons::icon_button_with_color, icons},
-};
 use chrono::{DateTime, Local};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
@@ -33,6 +26,13 @@ use warpui::ui_components::components::UiComponent;
 use warpui::{
     Action, AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, WindowId,
 };
+
+use crate::appearance::Appearance;
+use crate::safe_triangle::SafeTriangle;
+use crate::themes::theme::Fill;
+use crate::ui_components::buttons::icon_button_with_color;
+use crate::ui_components::icons;
+use crate::util::time_format::format_approx_duration_from_now_sentence_case;
 
 pub const CHEVRON_RIGHT_ALIGN_SVG_PATH: &str = "bundled/svg/chevron-right-align.svg";
 

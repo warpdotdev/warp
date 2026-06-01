@@ -2,8 +2,8 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
-use warp_core::errors::{AnyhowErrorExt as _, ErrorExt};
 
+use warp_core::errors::{AnyhowErrorExt as _, ErrorExt};
 use warp_core::sync_queue::{IsTransientError, SyncQueueTaskTrait};
 
 use super::diff_state::{DiffMode, FileDiffAndContent, LocalDiffStateModel};

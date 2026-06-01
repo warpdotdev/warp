@@ -25,7 +25,6 @@ tokio = { workspace = true, features = ["rt", "macros"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 command.workspace = true
-core-foundation.workspace = true
 dispatch2 = "0.3.0"
 image.workspace = true
 instant.workspace = true

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -12,9 +12,10 @@ use warp_graphql::ai::AgentTaskState;
 use super::super::claude_transcript::{
     claude_config_dir, write_envelope, write_session_index_entry, ClaudeTranscriptEnvelope,
 };
-use super::super::task_env_vars;
+use super::super::{remove_claude_externally_managed_listener_env_vars, task_env_vars};
 use super::parent_bridge::{
-    ensure_parent_bridge_state_dir, parent_bridge_root, prime_parent_bridge_for_wake,
+    ensure_parent_bridge_state_dir, parent_bridge_root,
+    prime_parent_bridge_staged_for_self_managed_wake,
 };
 use super::{claude_command, prepare_claude_environment_config, ClaudeHarness};
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
@@ -25,12 +26,9 @@ use crate::server::server_api::harness_support::ResolvePromptRequest;
 use crate::server::server_api::ServerApi;
 use crate::terminal::CLIAgent;
 
-const CLAUDE_WAKE_PROMPT: &str = "New lead-agent messages are available. Read the latest lead-agent updates and continue the task accordingly.";
+const CLAUDE_WAKE_PROMPT: &str =
+    "A lead agent mailbox message is available for this child run. Review the mailbox context and continue the task.";
 pub(super) const CLAUDE_WAKE_PROMPT_FILE_NAME: &str = "wake-turn-prompt.txt";
-const CLAUDE_WAKE_EXTERNALLY_MANAGED_LISTENER_ENV_VARS: &[&str] = &[
-    "OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY",
-    "OZ_PARENT_LISTENER_MANAGED_EXTERNALLY",
-];
 
 #[derive(Debug)]
 pub(super) struct ClaudeWakeRemoteContext {
@@ -209,7 +207,12 @@ impl ClaudeHarness {
         let state_dir = parent_bridge_root()?.join(remote.session_id.to_string());
         ensure_parent_bridge_state_dir(&state_dir)?;
         let hydrator = MessageHydrator::for_task(server_api, task_id);
-        prime_parent_bridge_for_wake(&hydrator, &state_dir, wake_message.as_ref()).await?;
+        prime_parent_bridge_staged_for_self_managed_wake(
+            &hydrator,
+            &state_dir,
+            wake_message.as_ref(),
+        )
+        .await?;
         let prompt_path = state_dir.join(CLAUDE_WAKE_PROMPT_FILE_NAME);
         std::fs::write(&prompt_path, remote.wake_prompt.as_bytes())
             .with_context(|| format!("Failed to write {}", prompt_path.display()))?;
@@ -239,9 +242,7 @@ fn local_wake_task_env_vars(
     // the Claude plugin's self-managed mode; otherwise the hook waits for
     // state files that no managed bridge is producing and the wake message is
     // never surfaced to Claude.
-    for env_name in CLAUDE_WAKE_EXTERNALLY_MANAGED_LISTENER_ENV_VARS {
-        env_vars.remove(OsStr::new(env_name));
-    }
+    remove_claude_externally_managed_listener_env_vars(&mut env_vars);
     env_vars
 }
 

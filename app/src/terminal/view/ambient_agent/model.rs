@@ -18,7 +18,7 @@ use crate::ai::ambient_agents::spawn::{spawn_task, submit_run_followup, AmbientA
 use crate::ai::ambient_agents::task::{HarnessAuthSecretsConfig, HarnessConfig};
 use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
 use crate::ai::ambient_agents::{
-    github_auth_url, AmbientAgentTaskId, OUT_OF_CREDITS_TASK_FAILURE_MESSAGE,
+    github_auth_url, AgentSource, AmbientAgentTaskId, OUT_OF_CREDITS_TASK_FAILURE_MESSAGE,
     SERVER_OVERLOADED_TASK_FAILURE_MESSAGE,
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
@@ -27,7 +27,9 @@ use crate::ai::blocklist::handoff::touched_repos::TouchedWorkspace;
 use crate::ai::blocklist::handoff::PendingCloudLaunch;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
-use crate::ai::execution_profiles::{CloudAgentComputerUseState, ComputerUsePermission};
+use crate::ai::execution_profiles::{
+    resolve_cloud_agent_computer_use_state, CloudAgentComputerUseState,
+};
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
@@ -217,6 +219,9 @@ pub struct AmbientAgentViewModel {
     /// The task ID for the current cloud agent task, if one has been spawned.
     task_id: Option<AmbientAgentTaskId>,
 
+    /// Source of the current cloud agent task, once known.
+    source: Option<AgentSource>,
+
     /// The local conversation associated with this cloud agent run, if any.
     /// Set for remote child agents spawned via `start_agent` so the `run_id`
     /// from the server response can be wired back to the conversation.
@@ -305,6 +310,7 @@ impl AmbientAgentViewModel {
             ui_state,
             setup_commands_state: Default::default(),
             task_id: None,
+            source: None,
             conversation_id: None,
             harness,
             worker_host: None,
@@ -630,7 +636,7 @@ impl AmbientAgentViewModel {
         let config = Some(self.build_default_spawn_config(ctx));
         let (prompt, mode) = extract_user_query_mode(prompt);
         SpawnAgentRequest {
-            prompt,
+            prompt: Some(prompt),
             mode,
             config,
             title: self.pending_handoff.as_ref().and_then(|h| h.title.clone()),
@@ -762,6 +768,12 @@ impl AmbientAgentViewModel {
         self.task_id
     }
 
+    pub(in crate::terminal::view) fn blocks_cloud_followups(&self) -> bool {
+        self.source
+            .as_ref()
+            .is_some_and(AgentSource::blocks_cloud_followups)
+    }
+
     /// Whether or not this terminal session is in the setup state (first-time environment creation).
     pub fn is_in_setup(&self) -> bool {
         matches!(self.status, Status::Setup)
@@ -870,6 +882,7 @@ impl AmbientAgentViewModel {
 
         // Store the task ID for later use
         self.task_id = Some(task_id);
+        self.source = None;
 
         self.status = Status::AgentRunning;
         ctx.emit(AmbientAgentViewModelEvent::RunLifecycleChanged);
@@ -881,6 +894,7 @@ impl AmbientAgentViewModel {
             async move { ai_client.get_ambient_agent_task(&task_id).await },
             |me, result, ctx| match result {
                 Ok(task) => {
+                    me.source = task.source.clone();
                     me.apply_viewed_task_config_snapshot(task.agent_config_snapshot.as_ref(), ctx);
                     ctx.emit(AmbientAgentViewModelEvent::ViewerHarnessResolved);
                 }
@@ -1034,6 +1048,7 @@ impl AmbientAgentViewModel {
         self.environment_id = None;
         self.environment_id_from_viewed_task = false;
         self.task_id = None;
+        self.source = None;
         self.conversation_id = None;
         self.harness_model_id = None;
         self.harness_reasoning_level = None;
@@ -1063,7 +1078,7 @@ impl AmbientAgentViewModel {
         let computer_use_enabled = if selected_harness == Harness::Oz {
             // If the harness is Oz, determine computer use based on workspace AI autonomy settings.
             let CloudAgentComputerUseState { enabled, .. } =
-                ComputerUsePermission::resolve_cloud_agent_state(ctx);
+                resolve_cloud_agent_computer_use_state(ctx);
             Some(enabled)
         } else {
             None
@@ -1118,7 +1133,7 @@ impl AmbientAgentViewModel {
 
         let (prompt, mode) = extract_user_query_mode(prompt);
         let request = SpawnAgentRequest {
-            prompt,
+            prompt: Some(prompt),
             mode,
             config,
             title: None,
@@ -1177,6 +1192,7 @@ impl AmbientAgentViewModel {
         request.interactive = Some(true);
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         self.request = Some(request.clone());
+        self.source = None;
         let stream = spawn_task(request, ai_client, None);
 
         ctx.spawn_stream_local(

@@ -1,29 +1,26 @@
+#[cfg(not(target_family = "wasm"))]
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[cfg(not(target_family = "wasm"))]
-use chrono::DateTime;
-#[cfg(not(target_family = "wasm"))]
 use diesel::{QueryDsl, RunQueryDsl, SqliteConnection};
-use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon;
 
-use crate::cloud_object::model::generic_string_model::{
-    GenericStringModel, GenericStringObjectId, StringModel,
-};
-use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
+use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::cloud_object::model::json_model::JsonModel;
 use crate::cloud_object::{
-    CloudObjectUuid, GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-    JsonObjectType, Revision,
+    CloudObjectUuid, GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType,
+    Revision,
 };
 use crate::drive::items::mcp_server::WarpDriveMCPServer;
 use crate::drive::items::WarpDriveItem;
 use crate::drive::CloudObjectTypeAndId;
 #[cfg(not(target_family = "wasm"))]
 use crate::persistence::model::MCPEnvironmentVariables;
+#[cfg(not(target_family = "wasm"))]
 #[cfg(not(target_family = "wasm"))]
 use crate::server::datetime_ext::DateTimeExt;
 use crate::server::ids::SyncId;
@@ -56,6 +53,13 @@ cfg_if::cfg_if! {
 pub mod gallery;
 pub use gallery::MCPGalleryManager;
 pub mod templatable;
+#[cfg(not(target_family = "wasm"))]
+pub use cloud_object_models::{
+    CLIServer, JSONMCPServer, JSONTransportType, ServerSentEvents, StaticEnvVar, StaticHeader,
+};
+pub use cloud_object_models::{
+    CloudMCPServer, CloudMCPServerModel, MCPServer, MCPServerState, TransportType,
+};
 pub use templatable::{JsonTemplate, TemplatableMCPServer, TemplateVariable};
 pub mod logs;
 pub mod templatable_installation;
@@ -63,102 +67,12 @@ pub use templatable_installation::TemplatableMCPServerInstallation;
 #[cfg(not(target_family = "wasm"))]
 pub use templatable_installation::{VariableType, VariableValue};
 pub mod parsing;
+#[cfg(not(target_family = "wasm"))]
 pub use parsing::ParsedTemplatableMCPServerResult;
 #[cfg(not(target_family = "wasm"))]
 pub mod http_client;
 #[cfg(not(target_family = "wasm"))]
 pub mod reconnecting_peer;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(target_family = "wasm", expect(dead_code))]
-pub struct JSONMCPServer {
-    #[serde(flatten)]
-    pub transport_type: JSONTransportType,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum JSONTransportType {
-    CLIServer {
-        command: String,
-        #[serde(default)]
-        args: Vec<String>,
-        #[serde(default)]
-        env: HashMap<String, String>,
-        #[serde(default)]
-        working_directory: Option<String>,
-    },
-    SSEServer {
-        #[serde(alias = "serverUrl")]
-        url: String,
-        #[serde(default)]
-        headers: HashMap<String, String>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MCPServer {
-    pub transport_type: TransportType,
-    pub name: String,
-    #[serde(default)]
-    pub uuid: uuid::Uuid,
-}
-
-#[derive(Debug, Clone, Copy)]
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
-pub enum MCPServerState {
-    NotRunning,
-    Starting,
-    Authenticating,
-    Running,
-    ShuttingDown,
-    FailedToStart,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TransportType {
-    CLIServer(CLIServer),
-    ServerSentEvents(ServerSentEvents),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CLIServer {
-    pub command: String,
-    #[serde(default)]
-    pub args: Vec<String>,
-    pub cwd_parameter: Option<String>,
-    /// Static env vars added via editor inputs.
-    pub static_env_vars: Vec<StaticEnvVar>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StaticEnvVar {
-    pub name: String,
-    /// To avoid leaking environment variables, we ensure that values are not
-    /// serialized before being sent to our servers
-    #[serde(skip_serializing, default)]
-    pub value: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StaticHeader {
-    pub name: String,
-    /// To avoid leaking header values (which may contain secrets), we ensure that values are not
-    /// serialized before being sent to our servers
-    #[serde(skip_serializing, default)]
-    pub value: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ServerSentEvents {
-    pub url: String,
-    /// Static headers added via editor inputs.
-    #[serde(default)]
-    pub headers: Vec<StaticHeader>,
-}
-
-pub type CloudMCPServer = GenericCloudObject<GenericStringObjectId, CloudMCPServerModel>;
-pub type CloudMCPServerModel = GenericStringModel<MCPServer, JsonSerializer>;
 
 impl CloudObjectUuid for MCPServer {
     fn uuid(&self) -> uuid::Uuid {
@@ -289,6 +203,7 @@ fn items_from_hashmap<T: NameValuePair>(map: &HashMap<String, String>) -> Vec<T>
 
 /// Converts a slice of name/value pair items to a HashMap.
 #[cfg(not(target_family = "wasm"))]
+#[allow(dead_code)]
 fn items_to_hashmap<T: NameValuePair>(items: &[T]) -> HashMap<String, String> {
     items
         .iter()
@@ -344,53 +259,64 @@ fn apply_values<T: NameValuePair>(items: &mut [T], values: &HashMap<String, Stri
 }
 
 #[cfg(not(target_family = "wasm"))]
-impl MCPServer {
-    fn find_server_map(
-        config: serde_json::Value,
-    ) -> serde_json::Result<HashMap<String, JSONMCPServer>> {
-        // We want to be quite permissive in parsing user input. They may specify more than one
-        // server. They might paste things in Claude Desktop style or VSCode style. All are
-        // accepted here.
-        //
-        // VSCode:
-        // {
-        //   "mcp": {
-        //     "servers": {
-        //          [map of mcp servers]
-        //     }
-        //   }
-        // }
-        //   ---  OR  ---
-        // {
-        //   "servers": {
-        //     [map of mcp servers]
-        //   }
-        // }
-        //
-        // Claude Desktop:
-        // {
-        //   "mcpServers": {
-        //     [map of mcp servers]
-        //   }
-        // }
-        // Also allowed:
-        // {
-        //   [map of mcp servers]
-        // }
+fn find_server_map(
+    config: serde_json::Value,
+) -> serde_json::Result<HashMap<String, JSONMCPServer>> {
+    // We want to be quite permissive in parsing user input. They may specify more than one
+    // server. They might paste things in Claude Desktop style or VSCode style. All are
+    // accepted here.
+    //
+    // VSCode:
+    // {
+    //   "mcp": {
+    //     "servers": {
+    //          [map of mcp servers]
+    //     }
+    //   }
+    // }
+    //   ---  OR  ---
+    // {
+    //   "servers": {
+    //     [map of mcp servers]
+    //   }
+    // }
+    //
+    // Claude Desktop:
+    // {
+    //   "mcpServers": {
+    //     [map of mcp servers]
+    //   }
+    // }
+    // Also allowed:
+    // {
+    //   [map of mcp servers]
+    // }
 
-        let pointers = ["/mcp/servers", "/servers", "/mcpServers"];
-        for pointer in pointers.into_iter() {
-            if let Some(value) = config.pointer(pointer) {
-                if let Ok(servers) =
-                    serde_json::from_value::<HashMap<String, JSONMCPServer>>(value.clone())
-                {
-                    return Ok(servers);
-                }
+    let pointers = ["/mcp/servers", "/servers", "/mcpServers"];
+    for pointer in pointers.into_iter() {
+        if let Some(value) = config.pointer(pointer) {
+            if let Ok(servers) =
+                serde_json::from_value::<HashMap<String, JSONMCPServer>>(value.clone())
+            {
+                return Ok(servers);
             }
         }
-        serde_json::from_value::<HashMap<String, JSONMCPServer>>(config)
     }
-    pub fn from_user_json(json: &str) -> serde_json::Result<Vec<MCPServer>> {
+    serde_json::from_value::<HashMap<String, JSONMCPServer>>(config)
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub trait MCPServerExt {
+    fn from_user_json(json: &str) -> serde_json::Result<Vec<MCPServer>>;
+    #[cfg(test)]
+    fn to_user_json(&self) -> String;
+    fn to_parsed_templatable_mcp_server_result(&self) -> ParsedTemplatableMCPServerResult;
+    fn fill_environment_variables(&mut self, conn: &mut SqliteConnection);
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl MCPServerExt for MCPServer {
+    fn from_user_json(json: &str) -> serde_json::Result<Vec<MCPServer>> {
         // Some docs don't show curly braces around the json object, so add them if necessary.
         let json = json.trim();
         let json = if json.starts_with("{") {
@@ -401,7 +327,7 @@ impl MCPServer {
 
         let config: serde_json::Value = serde_json::from_str(&json)?;
 
-        let servers = Self::find_server_map(config)?;
+        let servers = find_server_map(config)?;
         Ok(servers
             .iter()
             .map(|(name, server)| {
@@ -435,7 +361,8 @@ impl MCPServer {
 
     /// Includes the environment variable values, should only be shown to users,
     /// not sent to our servers.
-    pub fn to_user_json(&self) -> String {
+    #[cfg(test)]
+    fn to_user_json(&self) -> String {
         let transport_type = match &self.transport_type {
             TransportType::CLIServer(cli_server) => JSONTransportType::CLIServer {
                 command: cli_server.command.clone(),
@@ -460,7 +387,7 @@ impl MCPServer {
         })
     }
 
-    pub fn to_parsed_templatable_mcp_server_result(&self) -> ParsedTemplatableMCPServerResult {
+    fn to_parsed_templatable_mcp_server_result(&self) -> ParsedTemplatableMCPServerResult {
         let (transport_type, variables, variable_values) = match &self.transport_type {
             TransportType::CLIServer(cli_server) => {
                 let (env, vars, vals) = extract_template_variables(&cli_server.static_env_vars);
@@ -504,7 +431,7 @@ impl MCPServer {
             name: self.name.clone(),
             description: None,
             template: JsonTemplate { json, variables },
-            version: DateTime::now().timestamp(),
+            version: chrono::DateTime::now().timestamp(),
             gallery_data: None,
         };
         let templatable_mcp_server_installation: Option<TemplatableMCPServerInstallation> =
@@ -520,7 +447,7 @@ impl MCPServer {
         }
     }
 
-    pub fn fill_environment_variables(&mut self, conn: &mut SqliteConnection) {
+    fn fill_environment_variables(&mut self, conn: &mut SqliteConnection) {
         if let TransportType::CLIServer(ref mut cli_server) = self.transport_type {
             let uuid = self.uuid.as_bytes().to_vec();
             match crate::persistence::schema::mcp_environment_variables::dsl::mcp_environment_variables
@@ -536,24 +463,6 @@ impl MCPServer {
                     log::error!("Could not read MCP server environment variables from sqlite: {error:?}");
                 }
             }
-        }
-    }
-}
-
-#[cfg(target_family = "wasm")]
-impl MCPServer {
-    pub fn from_user_json(_json: &str) -> serde_json::Result<Vec<MCPServer>> {
-        Ok(Vec::new())
-    }
-
-    pub fn to_user_json(&self) -> String {
-        Default::default()
-    }
-
-    pub fn to_parsed_templatable_mcp_server_result(&self) -> ParsedTemplatableMCPServerResult {
-        ParsedTemplatableMCPServerResult {
-            templatable_mcp_server: TemplatableMCPServer::default(),
-            templatable_mcp_server_installation: None,
         }
     }
 }

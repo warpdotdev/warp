@@ -174,8 +174,9 @@ pub(crate) fn wrap_for_rotation(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Read;
+
+    use super::*;
 
     fn read(path: &Path) -> String {
         let mut s = String::new();

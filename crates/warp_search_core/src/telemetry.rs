@@ -2,10 +2,8 @@ use std::collections::HashSet;
 
 use serde_json::{Value, json};
 use strum_macros::{EnumDiscriminants, EnumIter};
-use warp_core::{
-    register_telemetry_event,
-    telemetry::{EnablementState, TelemetryEventDesc},
-};
+use warp_core::register_telemetry_event;
+use warp_core::telemetry::{EnablementState, TelemetryEventDesc};
 
 #[derive(Clone, EnumDiscriminants)]
 #[strum_discriminants(derive(EnumIter))]

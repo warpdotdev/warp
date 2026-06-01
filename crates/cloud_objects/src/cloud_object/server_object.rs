@@ -1,13 +1,10 @@
-use std::{
-    any::Any,
-    fmt::{self, Debug},
-    marker::PhantomData,
-    sync::Arc,
-};
-
-use crate::ids::SyncId;
+use std::any::Any;
+use std::fmt::{self, Debug};
+use std::marker::PhantomData;
+use std::sync::Arc;
 
 use super::{ObjectType, ServerMetadata, ServerPermissions};
+use crate::ids::SyncId;
 
 #[derive(Clone, Debug, Default)]
 pub enum ConflictStatus<T> {

@@ -2,6 +2,9 @@
 
 mod cloud_objects;
 
+use ::cloud_objects::cloud_object::{
+    CloudObjectMetadata, CloudObjectPermissions, ObjectIdType, ObjectType, Owner,
+};
 pub use cloud_objects::{decode_guests, decode_link_sharing, encode_guests, encode_link_sharing};
 use diesel::SqliteConnection;
 use diesel::result::Error;
@@ -9,9 +12,6 @@ use persistence::model::{NewObjectMetadata, NewObjectPermissions, ObjectMetadata
 use persistence::schema;
 use warp_core::features::FeatureFlag;
 
-use crate::cloud_object::{
-    CloudObjectMetadata, CloudObjectPermissions, ObjectIdType, ObjectType, Owner,
-};
 use crate::ids::SyncId;
 
 /// The sqlite id of a cloud object.
