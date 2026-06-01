@@ -7119,9 +7119,9 @@ impl Workspace {
         ctx.notify();
     }
 
-    /// Flips `tab_index`'s group membership during a drag. The drag's swap
-    /// logic handles repositioning, so this only mutates
-    /// `group_id` and prunes the old group when empty.
+    /// Flips `tab_index`'s group membership. Callers are responsible for
+    /// positioning the tab so groups remain contiguous; this method only
+    /// mutates `group_id` and prunes the old group when empty.
     pub fn assign_tab_to_group(
         &mut self,
         tab_index: usize,
@@ -26274,6 +26274,20 @@ impl Workspace {
                 hovered_group.filter(|gid| !self.tab_groups.get(gid).is_some_and(|g| g.collapsed));
             if expanded_target != source_group {
                 self.assign_tab_to_group(current_index, expanded_target, ctx);
+                // Hop into the target group's contiguous block so the group
+                // stays one rendered container. Vertical tab rendering only
+                // groups consecutive tabs, so leaving `current_index` outside
+                // the block would split the group across the panel.
+                if let Some(target_gid) = expanded_target {
+                    if let Some((first, last)) =
+                        group_member_index_range(&self.tabs, target_gid)
+                    {
+                        let insert_at = if current_index < first { first } else { last };
+                        if insert_at != current_index {
+                            self.hop_tab_to_index(current_index, insert_at, ctx);
+                        }
+                    }
+                }
                 return;
             }
         }
