@@ -8994,7 +8994,9 @@ impl Workspace {
         };
         let current_group_id = tab.group_id;
 
-        let mut groups_with_first_index: Vec<(TabGroupId, usize)> = self
+        // Other groups paired with their first member's tab index, sorted so the menu
+        // matches panel order.
+        let sorted_other_groups = self
             .tab_groups
             .keys()
             .copied()
@@ -9004,11 +9006,9 @@ impl Workspace {
                     .next()
                     .map(|idx| (gid, idx))
             })
-            .collect();
-        groups_with_first_index.sort_by_key(|(_, idx)| *idx);
+            .sorted_by_key(|(_, idx)| *idx);
 
-        groups_with_first_index
-            .into_iter()
+        sorted_other_groups
             .map(|(group_id, _)| {
                 let label = self
                     .tab_groups
