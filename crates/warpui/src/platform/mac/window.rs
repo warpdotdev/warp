@@ -1073,6 +1073,9 @@ impl WindowState {
     }
 
     fn set_window_buttons(&self, show_window_buttons: bool) {
+        if self.has_window_buttons() == show_window_buttons {
+            return;
+        }
         let hide_buttons = !show_window_buttons as BOOL;
         unsafe {
             let close_button = NSWindow::standardWindowButton_(
