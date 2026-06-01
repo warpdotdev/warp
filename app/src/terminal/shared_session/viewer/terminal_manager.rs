@@ -175,8 +175,8 @@ impl TerminalManager {
         resources: TerminalViewResources,
         initial_size: Vector2F,
         window_id: WindowId,
-        is_cloud_mode: bool,
         enable_orchestration_polling: bool,
+        is_cloud_mode: bool,
         ctx: &mut AppContext,
     ) -> Self {
         // Create all the necessary channels we need for communication.
@@ -318,8 +318,8 @@ impl TerminalManager {
             resources,
             initial_size,
             window_id,
-            is_cloud_mode,
             enable_orchestration_polling,
+            is_cloud_mode,
             ctx,
         );
 
@@ -346,8 +346,8 @@ impl TerminalManager {
             resources,
             initial_size,
             window_id,
-            true,
             enable_orchestration_polling,
+            true, // is_cloud_mode
             ctx,
         )
     }

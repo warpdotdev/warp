@@ -4436,14 +4436,11 @@ impl PaneGroup {
                                    pane_history: &mut Vec<PaneId>,
                                    view_bounds: RectF,
                                    ctx: &mut ViewContext<Self>| {
-            // Separate navigation entry point; preserving the previous
-            // non-cloud-mode behavior is outside the scope of the
-            // orchestration-restore fix.
             let (view, terminal_manager) = PaneGroup::create_shared_session_viewer(
                 session_id,
                 resources,
                 view_bounds.size(),
-                true,  // enable_orchestration_polling
+                true,  // enable_orchestration_polling (root orchestrator viewer)
                 false, // is_cloud_mode
                 ctx,
             );

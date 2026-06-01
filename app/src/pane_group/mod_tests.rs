@@ -1413,8 +1413,8 @@ fn create_shared_session_viewer_with_cloud_mode_populates_ambient_agent_view_mod
                 SessionId::new(),
                 resources,
                 Vector2F::new(800., 600.),
-                /* enable_orchestration_polling */ false,
-                /* is_cloud_mode */ true,
+                false, // enable_orchestration_polling
+                true,  // is_cloud_mode
                 ctx,
             );
             assert!(
@@ -1445,8 +1445,8 @@ fn create_shared_session_viewer_without_cloud_mode_does_not_populate_ambient_age
                 SessionId::new(),
                 resources,
                 Vector2F::new(800., 600.),
-                /* enable_orchestration_polling */ false,
-                /* is_cloud_mode */ false,
+                false, // enable_orchestration_polling
+                false, // is_cloud_mode
                 ctx,
             );
             assert!(
