@@ -41,8 +41,11 @@ fn main() -> warpui_core::platform::app::TerminationResult {
         .install_default()
         .expect("must be able to initialize crypto provider for TLS support");
 
-    let app_builder =
-        platform::AppBuilder::new(platform::AppCallbacks::default(), Box::new(ASSETS), None);
+    let app_builder = warpui::platform::AppBuilder::new(
+        platform::AppCallbacks::default(),
+        Box::new(ASSETS),
+        None,
+    );
     app_builder.run(move |ctx| {
         let font_name = if cfg!(target_os = "macos") {
             ".AppleSystemUIFont".to_string()

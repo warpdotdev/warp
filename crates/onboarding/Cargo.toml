@@ -30,5 +30,6 @@ strum.workspace = true
 strum_macros.workspace = true
 uuid.workspace = true
 warp_core = { workspace = true }
+warpui.workspace = true
 warpui_core.workspace = true
 warp_logging.workspace = true

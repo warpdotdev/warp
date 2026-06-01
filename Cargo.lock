@@ -9133,6 +9133,7 @@ dependencies = [
  "uuid",
  "warp_core",
  "warp_logging",
+ "warpui",
  "warpui_core",
 ]
 
@@ -13891,6 +13892,7 @@ dependencies = [
  "rust-embed 8.7.2",
  "rustls",
  "warp_core",
+ "warpui",
  "warpui_core",
 ]
 

@@ -30,8 +30,11 @@ impl AssetProvider for Assets {
 }
 
 fn main() -> platform::app::TerminationResult {
-    let app_builder =
-        platform::AppBuilder::new(platform::AppCallbacks::default(), Box::new(ASSETS), None);
+    let app_builder = warpui::platform::AppBuilder::new(
+        platform::AppCallbacks::default(),
+        Box::new(ASSETS),
+        None,
+    );
 
     app_builder.run(move |ctx| {
         let font_name = if cfg!(target_os = "macos") {

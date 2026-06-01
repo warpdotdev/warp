@@ -94,8 +94,7 @@ fn test_end_to_end() {
     };
 
     App::test((), |mut app| async move {
-        let mut font_cache =
-            FontCache::new(Box::new(warpui_core::platform::current::FontDB::new()));
+        let mut font_cache = FontCache::new(Box::new(warpui::platform::current::FontDB::new()));
         let layout_cache = LayoutCache::new();
         let paragraph_styles = ParagraphStyles {
             font_family: font_cache

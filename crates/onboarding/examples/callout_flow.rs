@@ -179,8 +179,11 @@ fn main() -> Result<()> {
         ..Default::default()
     })?;
 
-    let app_builder =
-        platform::AppBuilder::new(platform::AppCallbacks::default(), Box::new(ASSETS), None);
+    let app_builder = warpui::platform::AppBuilder::new(
+        platform::AppCallbacks::default(),
+        Box::new(ASSETS),
+        None,
+    );
     let _ = app_builder.run(move |ctx| {
         // Register Appearance singleton so views can access Appearance::handle(ctx).
         ctx.add_singleton_model(|ctx| build_appearance(adeberry(), ctx));
