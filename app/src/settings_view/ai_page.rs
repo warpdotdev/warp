@@ -61,7 +61,8 @@ use crate::ai::execution_profiles::profiles::{
     AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId,
 };
 use crate::ai::execution_profiles::{
-    AIExecutionProfile, ActionPermission, WriteToPtyPermission, LONG_CONTEXT_PRICING_WARNING_TEXT,
+    long_context_pricing_warning_title, AIExecutionProfile, ActionPermission, WriteToPtyPermission,
+    LONG_CONTEXT_PRICING_WARNING_TEXT,
 };
 use crate::ai::llms::{LLMContextWindow, LLMId, LLMPreferences, LLMPreferencesEvent};
 use crate::ai::mcp::TemplatableMCPServerManager;
@@ -4861,7 +4862,8 @@ impl AgentsWidget {
             .should_show_long_context_pricing_warning(app)
         {
             column.add_child(render_warning_box(
-                WarningBoxConfig::new(LONG_CONTEXT_PRICING_WARNING_TEXT),
+                WarningBoxConfig::new(LONG_CONTEXT_PRICING_WARNING_TEXT)
+                    .with_formatted_title(long_context_pricing_warning_title()),
                 appearance,
             ));
         }

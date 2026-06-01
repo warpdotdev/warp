@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use markdown_parser::{FormattedTextFragment, FormattedTextInline};
 use serde::{Deserialize, Serialize};
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
@@ -24,7 +25,17 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 pub const PROFILE_NAME_MAX_LENGTH: usize = 50;
 pub const LONG_CONTEXT_WARNING_THRESHOLD: u32 = 272_000;
 pub(crate) const LONG_CONTEXT_PRICING_WARNING_TEXT: &str =
-    "OpenAI automatically applies long-context pricing when actual input exceeds 272,000 tokens.";
+    "OpenAI automatically applies long-context pricing when context exceeds 272,000 tokens. Learn more";
+pub(crate) const LONG_CONTEXT_PRICING_WARNING_URL: &str =
+    "https://developers.openai.com/api/docs/pricing";
+pub(crate) fn long_context_pricing_warning_title() -> FormattedTextInline {
+    vec![
+        FormattedTextFragment::plain_text(
+            "OpenAI automatically applies long-context pricing when context exceeds 272,000 tokens. ",
+        ),
+        FormattedTextFragment::hyperlink("Learn more", LONG_CONTEXT_PRICING_WARNING_URL),
+    ]
+}
 
 pub mod editor;
 pub mod model_menu_items;
