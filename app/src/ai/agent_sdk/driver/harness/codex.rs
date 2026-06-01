@@ -27,7 +27,9 @@ use super::{
     write_temp_file, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness,
 };
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
+use crate::ai::agent_sdk::setup_observability::{
+    SetupClientEventReporter, SetupStep, SetupTimelineEvent,
+};
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::mcp::JSONTransportType;
@@ -331,6 +333,9 @@ impl HarnessRunner for CodexHarnessRunner {
             })
             .await??
             .await?;
+        setup_events
+            .post_timeline_event(SetupTimelineEvent::AgentStarted)
+            .await;
 
         *self.state.lock() = CodexRunnerState::Running {
             conversation_id,

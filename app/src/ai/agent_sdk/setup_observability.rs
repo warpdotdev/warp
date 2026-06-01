@@ -141,14 +141,33 @@ impl SetupClientEventReporter {
 
 #[derive(Clone, Copy)]
 pub(crate) enum SetupTimelineEvent {
+    AgentStarted,
     WorkerContainerReady,
 }
 
 impl SetupTimelineEvent {
     fn as_event_name(self) -> &'static str {
         match self {
+            Self::AgentStarted => "agent_started",
             Self::WorkerContainerReady => "worker_container_ready",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SetupTimelineEvent;
+
+    #[test]
+    fn setup_timeline_event_names_match_server_contract() {
+        assert_eq!(
+            SetupTimelineEvent::AgentStarted.as_event_name(),
+            "agent_started"
+        );
+        assert_eq!(
+            SetupTimelineEvent::WorkerContainerReady.as_event_name(),
+            "worker_container_ready"
+        );
     }
 }
 

@@ -21,7 +21,9 @@ use super::{
     SavePoint, ThirdPartyHarness,
 };
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
+use crate::ai::agent_sdk::setup_observability::{
+    SetupClientEventReporter, SetupStep, SetupTimelineEvent,
+};
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::harness_support::HarnessSupportClient;
@@ -179,6 +181,9 @@ impl HarnessRunner for GeminiHarnessRunner {
             })
             .await??
             .await?;
+        setup_events
+            .post_timeline_event(SetupTimelineEvent::AgentStarted)
+            .await;
 
         // Only store conversation info once the CLI command has started.
         *self.state.lock() = GeminiRunnerState::Running {
