@@ -129,8 +129,8 @@ fn vtab_pane_row_position_id(pane_group_id: EntityId, pane_id: PaneId) -> String
 }
 
 /// Save-position id for a tab group header's kebab button; anchors the group menu.
-pub(crate) fn vtab_group_kebab_position_id(group_id: TabGroupId) -> String {
-    format!("vertical_tabs:group_kebab:{group_id:?}")
+pub(crate) fn vtab_group_kebab_position_id(tab_group_id: TabGroupId) -> String {
+    format!("vertical_tabs:group_kebab:{tab_group_id:?}")
 }
 
 fn terminal_title_fallback_font(agent_text: &TerminalAgentText) -> TerminalPrimaryLineFont {
