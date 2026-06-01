@@ -43,7 +43,7 @@ fn add_window_with_cloud_mode_terminal(app: &mut App) -> ViewHandle<TerminalView
 
 fn cloud_spawn_request(prompt: &str) -> SpawnAgentRequest {
     SpawnAgentRequest {
-        prompt: prompt.to_owned(),
+        prompt: Some(prompt.to_owned()),
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
@@ -58,6 +58,7 @@ fn cloud_spawn_request(prompt: &str) -> SpawnAgentRequest {
         conversation_id: None,
         initial_snapshot_token: None,
         snapshot_disabled: None,
+        orchestration_handoff: None,
     }
 }
 
