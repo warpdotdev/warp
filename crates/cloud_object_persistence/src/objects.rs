@@ -1,24 +1,19 @@
 use std::collections::HashMap;
 
-use cloud_objects::{
-    UserUid,
-    cloud_object::{
-        CloudObjectMetadata, CloudObjectPermissions, CloudObjectStatuses, CloudObjectSyncStatus,
-        GENERIC_STRING_OBJECT_PREFIX, GenericStringObjectFormat, NumInFlightRequests, ObjectIdType,
-        ObjectType, Owner, Revision, RevisionAndLastEditor, ServerCreationInfo,
-    },
-    ids::{ClientId, FolderId, HashableId, SyncId, ToServerId},
+use cloud_objects::UserUid;
+use cloud_objects::cloud_object::{
+    CloudObjectMetadata, CloudObjectPermissions, CloudObjectStatuses, CloudObjectSyncStatus,
+    GENERIC_STRING_OBJECT_PREFIX, GenericStringObjectFormat, NumInFlightRequests, ObjectIdType,
+    ObjectType, Owner, Revision, RevisionAndLastEditor, ServerCreationInfo,
 };
-use diesel::{
-    Connection, ExpressionMethods, QueryDsl, RunQueryDsl, SqliteConnection, result::Error,
+use cloud_objects::ids::{ClientId, FolderId, HashableId, SyncId, ToServerId};
+use diesel::result::Error;
+use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl, SqliteConnection};
+use persistence::model::{
+    GenericStringObject as PersistedGenericStringObject, NewGenericStringObject, NewObjectMetadata,
+    NewObjectPermissions, ObjectMetadata, ObjectPermissions,
 };
-use persistence::{
-    model::{
-        GenericStringObject as PersistedGenericStringObject, NewGenericStringObject,
-        NewObjectMetadata, NewObjectPermissions, ObjectMetadata, ObjectPermissions,
-    },
-    schema,
-};
+use persistence::schema;
 use warp_core::features::FeatureFlag;
 use warp_graphql::scalars::time::ServerTimestamp;
 

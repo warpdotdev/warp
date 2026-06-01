@@ -1,12 +1,11 @@
 //! Supporting helpers for persisting cloud-object permissions to SQLite.
 
 use anyhow::anyhow;
-use cloud_objects::cloud_object::{CloudLinkSharing, CloudObjectGuest, ServerObjectContainer};
-use serde::{Deserialize, Serialize};
-
 use cloud_objects::auth::UserUid;
+use cloud_objects::cloud_object::{CloudLinkSharing, CloudObjectGuest, ServerObjectContainer};
 use cloud_objects::drive::sharing::{SharingAccessLevel, Subject, TeamKind, UserKind};
 use cloud_objects::ids::ServerId;
+use serde::{Deserialize, Serialize};
 
 /// Decode a link-sharing setting.
 pub fn decode_link_sharing(

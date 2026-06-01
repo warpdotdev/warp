@@ -1,6 +1,8 @@
 use chrono::{DateTime, NaiveDateTime, Utc};
-use diesel::{Connection, QueryDsl, RunQueryDsl, SqliteConnection, result::Error};
-use persistence::{model::NewCloudObjectsRefresh, schema};
+use diesel::result::Error;
+use diesel::{Connection, QueryDsl, RunQueryDsl, SqliteConnection};
+use persistence::model::NewCloudObjectsRefresh;
+use persistence::schema;
 
 pub fn record_time_of_next_refresh(
     conn: &mut SqliteConnection,

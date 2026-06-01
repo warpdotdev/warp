@@ -2,14 +2,13 @@ use cloud_object_persistence::{
     CloudObjectReadContext, id_from_metadata, read_generic_string_object_rows,
     to_cloud_object_metadata,
 };
-use cloud_objects::{
-    cloud_object::{
-        GENERIC_STRING_OBJECT_PREFIX, GenericStringObjectFormat, JSON_OBJECT_PREFIX,
-        JsonObjectType, ObjectType,
-    },
-    ids::GenericStringObjectId,
+use cloud_objects::cloud_object::{
+    GENERIC_STRING_OBJECT_PREFIX, GenericStringObjectFormat, JSON_OBJECT_PREFIX, JsonObjectType,
+    ObjectType,
 };
-use diesel::{SqliteConnection, result::Error};
+use cloud_objects::ids::GenericStringObjectId;
+use diesel::SqliteConnection;
+use diesel::result::Error;
 
 use crate::{
     CloudAIExecutionProfile, CloudAIExecutionProfileModel, CloudAIFact, CloudAIFactModel,

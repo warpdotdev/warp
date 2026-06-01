@@ -3,13 +3,10 @@ use cloud_object_persistence::{
     CloudObjectReadContext, id_from_metadata, to_cloud_object_metadata, upsert_cloud_object,
 };
 use cloud_objects::cloud_object::ObjectType;
-use diesel::{
-    Connection, ExpressionMethods, QueryDsl, RunQueryDsl, SqliteConnection, result::Error,
-};
-use persistence::{
-    model::{NewNotebook, Notebook},
-    schema,
-};
+use diesel::result::Error;
+use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl, SqliteConnection};
+use persistence::model::{NewNotebook, Notebook};
+use persistence::schema;
 
 use super::{CloudNotebook, CloudNotebookModel, NotebookId};
 

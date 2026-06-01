@@ -1,14 +1,12 @@
 use cloud_object_persistence::{
     CloudObjectReadContext, id_from_metadata, to_cloud_object_metadata, upsert_cloud_object,
 };
-use cloud_objects::{cloud_object::ObjectType, ids::FolderId};
-use diesel::{
-    Connection, ExpressionMethods, QueryDsl, RunQueryDsl, SqliteConnection, result::Error,
-};
-use persistence::{
-    model::{Folder, NewFolder},
-    schema,
-};
+use cloud_objects::cloud_object::ObjectType;
+use cloud_objects::ids::FolderId;
+use diesel::result::Error;
+use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl, SqliteConnection};
+use persistence::model::{Folder, NewFolder};
+use persistence::schema;
 
 use super::{CloudFolder, CloudFolderModel};
 
