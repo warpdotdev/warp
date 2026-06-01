@@ -4027,9 +4027,10 @@ impl PaneGroup {
         });
     }
 
-    /// Fetches the cloud transcript identified by `server_token`, merges it
-    /// onto the placeholder via `merge_cloud_tasks_into_existing_conversation`,
-    /// and re-restores the merged conversation into the pane.
+    /// Fetches the cloud transcript identified by `server_token`, hydrates
+    /// the placeholder via
+    /// `hydrate_remote_child_placeholder_with_cloud_transcript`, and
+    /// re-restores the merged conversation into the pane.
     /// `task_is_terminal` gates the conversation-ended tombstone in
     /// `attach_ambient_session_and_maybe_tombstone` so an
     /// `ActiveUnattachable` run isn't visually marked as ended.
@@ -4074,7 +4075,7 @@ impl PaneGroup {
                     let cloud_conversation = *cloud;
                     let merge_result =
                         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
-                            history.merge_cloud_tasks_into_existing_conversation(
+                            history.hydrate_remote_child_placeholder_with_cloud_transcript(
                                 child_id,
                                 tasks,
                                 cloud_conversation,
@@ -4097,7 +4098,7 @@ impl PaneGroup {
                         }
                         Err(err) => {
                             log::warn!(
-                                "merge_cloud_tasks_into_existing_conversation failed for {child_id:?}: {err:#}"
+                                "hydrate_remote_child_placeholder_with_cloud_transcript failed for {child_id:?}: {err:#}"
                             );
                         }
                     }

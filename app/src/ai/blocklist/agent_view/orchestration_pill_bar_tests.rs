@@ -4,15 +4,15 @@ use super::*;
 // `app/src/ai/blocklist/orchestration_topology_tests.rs`. These tests stay
 // focused on the pill bar's own dispatch behavior.
 
-/// Fix C: the data layer that `OrchestrationPillBar::pill_specs` reads must
+/// The data layer that `OrchestrationPillBar::pill_specs` reads must
 /// surface restored orchestration children before any pane has been created.
 ///
 /// `pill_specs` (defined privately on `OrchestrationPillBar`) walks
 /// `descendant_conversation_ids_in_spawn_order(history, orchestrator_id)` and
-/// then `filter_map(|id| history.conversation(&id))`. Before Fix C, the
-/// `history.conversation(&id)` lookup returned `None` for restored children
-/// until the parent's hidden pane materialized, so the pill bar rendered
-/// nothing. This test asserts both layers work after
+/// then `filter_map(|id| history.conversation(&id))`. The
+/// `history.conversation(&id)` lookup must return `Some` for restored
+/// children even before the parent's hidden pane materializes, or the pill
+/// bar renders nothing. This test asserts both layers work after
 /// `BlocklistAIHistoryModel::new` runs, before any `restore_conversations` /
 /// pane materialization.
 #[test]
@@ -142,8 +142,8 @@ fn pill_bar_data_layer_finds_restored_children_before_pane_creation() {
 
         history_model.read(&app, |model, _| {
             // pill_specs walks `descendant_conversation_ids_in_spawn_order`
-            // first. With Fix C in place this index is populated for restored
-            // children at app startup, before any pane materializes.
+            // first. This index must be populated for restored children at
+            // app startup, before any pane materializes.
             let descendants = descendant_conversation_ids_in_spawn_order(model, parent_id);
             assert_eq!(
                 descendants,
@@ -153,11 +153,11 @@ fn pill_bar_data_layer_finds_restored_children_before_pane_creation() {
 
             // pill_specs then collects pill specs via
             // `descendants.into_iter().filter_map(|id| history.conversation(&id))`.
-            // Before Fix C this filter_map would drop the child (because
-            // `conversation(&child_id)` returned `None`) and `pill_specs`
-            // would return `None` from the `children.is_empty()` early-exit.
-            // After Fix C the child is hydrated eagerly so this lookup
-            // succeeds and the pill bar renders.
+            // The child must be hydrated eagerly so this lookup succeeds and
+            // the pill bar renders; otherwise the filter_map would drop the
+            // child (because `conversation(&child_id)` returned `None`) and
+            // `pill_specs` would return `None` from the
+            // `children.is_empty()` early-exit.
             let resolved_children: Vec<&AIConversation> = descendants
                 .iter()
                 .filter_map(|id| model.conversation(id))

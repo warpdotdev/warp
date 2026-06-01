@@ -2361,13 +2361,17 @@ impl BlocklistAIHistoryModel {
         Ok(conversation)
     }
 
-    /// Rebuilds the local placeholder identified by `local_placeholder_id`
-    /// from the cloud `tasks` + `cloud_conversation`, keeping the
-    /// placeholder's local id and orchestration linkage (parent ids,
-    /// agent_name, run_id, is_remote_child, pinned) authoritative. Returns
+    /// Rebuilds a remote-child placeholder conversation identified by
+    /// `local_placeholder_id` from the cloud `tasks` + `cloud_conversation`,
+    /// keeping the placeholder's local id and orchestration linkage
+    /// (parent ids, agent_name, run_id, is_remote_child, pinned)
+    /// authoritative. Cloud supplies the transcript and server-side metadata.
+    ///
+    /// Narrowly scoped to the remote-child placeholder hydration path
+    /// (`pane_group::hydrate_remote_child_transcript_in_place`). Returns
     /// `Err` when the placeholder isn't loaded so the caller can fall back
     /// instead of silently producing a detached conversation.
-    pub fn merge_cloud_tasks_into_existing_conversation(
+    pub fn hydrate_remote_child_placeholder_with_cloud_transcript(
         &mut self,
         local_placeholder_id: AIConversationId,
         tasks: Vec<warp_multi_agent_api::Task>,
@@ -2379,59 +2383,19 @@ impl BlocklistAIHistoryModel {
             .cloned()
             .ok_or_else(|| {
                 anyhow!(
-                    "merge_cloud_tasks_into_existing_conversation: \
+                    "hydrate_remote_child_placeholder_with_cloud_transcript: \
                      local placeholder {local_placeholder_id} not found in conversations_by_id; \
                      refusing to construct a detached merged conversation"
                 )
             })?;
 
-        // Placeholder owns orchestration linkage; cloud supplies
-        // tasks/title/server metadata.
-        let cloud_conversation_data = AgentConversationData {
-            server_conversation_token: cloud_conversation
-                .server_conversation_token()
-                .map(|t| t.as_str().to_string()),
-            conversation_usage_metadata: Some(cloud_conversation.usage_metadata()),
-            reverted_action_ids: None,
-            forked_from_server_conversation_token: cloud_conversation
-                .forked_from_server_conversation_token()
-                .map(|t| t.as_str().to_string()),
-            artifacts_json: serde_json::to_string(cloud_conversation.artifacts()).ok(),
-            parent_agent_id: placeholder
-                .parent_agent_id()
-                .map(ToString::to_string)
-                .or_else(|| {
-                    cloud_conversation
-                        .parent_agent_id()
-                        .map(ToString::to_string)
-                }),
-            agent_name: placeholder
-                .agent_name()
-                .map(ToString::to_string)
-                .or_else(|| cloud_conversation.agent_name().map(ToString::to_string)),
-            orchestration_harness_type: placeholder
-                .orchestration_harness_type()
-                .map(ToString::to_string)
-                .or_else(|| {
-                    cloud_conversation
-                        .orchestration_harness_type()
-                        .map(ToString::to_string)
-                }),
-            parent_conversation_id: placeholder
-                .parent_conversation_id()
-                .map(|id| id.to_string()),
-            is_remote_child: placeholder.is_remote_child(),
-            root_task_is_optimistic: None,
-            run_id: placeholder.run_id().or_else(|| cloud_conversation.run_id()),
-            autoexecute_override: None,
-            last_event_sequence: cloud_conversation.last_event_sequence(),
-            pinned: placeholder.is_pinned(),
-        };
+        let merged_conversation_data =
+            merged_remote_child_placeholder_conversation_data(&placeholder, &cloud_conversation);
 
         let mut merged = AIConversation::new_restored(
             local_placeholder_id,
             tasks,
-            Some(cloud_conversation_data),
+            Some(merged_conversation_data),
         )?;
         merged.reassign_exchange_ids();
 
@@ -2469,6 +2433,79 @@ impl BlocklistAIHistoryModel {
         self.agent_id_to_conversation_id.clear();
         self.server_token_to_conversation_id.clear();
         self.children_by_parent.clear();
+    }
+}
+
+/// Builds the `AgentConversationData` for a remote-child placeholder
+/// hydrated from a cloud transcript.
+///
+/// **Placeholder authoritative** (local orchestration linkage that the cloud
+/// transcript cannot reconstruct):
+/// - `parent_conversation_id`, `is_remote_child`, `pinned`
+///
+/// **Placeholder-preferred, cloud fallback** (local value wins when present,
+/// cloud's value is used otherwise so we don't lose data on a stale
+/// placeholder):
+/// - `parent_agent_id`, `agent_name`, `orchestration_harness_type`, `run_id`
+///
+/// **Cloud authoritative** (server-side state the placeholder doesn't know):
+/// - `server_conversation_token`, `conversation_usage_metadata`,
+///   `forked_from_server_conversation_token`, `artifacts_json`,
+///   `last_event_sequence`
+///
+/// **Reset on merge** (rebuild-from-cloud invariants):
+/// - `reverted_action_ids = None`, `root_task_is_optimistic = None`,
+///   `autoexecute_override = None`
+fn merged_remote_child_placeholder_conversation_data(
+    placeholder: &AIConversation,
+    cloud_conversation: &AIConversation,
+) -> AgentConversationData {
+    AgentConversationData {
+        // Cloud authoritative.
+        server_conversation_token: cloud_conversation
+            .server_conversation_token()
+            .map(|t| t.as_str().to_string()),
+        conversation_usage_metadata: Some(cloud_conversation.usage_metadata()),
+        forked_from_server_conversation_token: cloud_conversation
+            .forked_from_server_conversation_token()
+            .map(|t| t.as_str().to_string()),
+        artifacts_json: serde_json::to_string(cloud_conversation.artifacts()).ok(),
+        last_event_sequence: cloud_conversation.last_event_sequence(),
+
+        // Placeholder-preferred, cloud fallback.
+        parent_agent_id: placeholder
+            .parent_agent_id()
+            .map(ToString::to_string)
+            .or_else(|| {
+                cloud_conversation
+                    .parent_agent_id()
+                    .map(ToString::to_string)
+            }),
+        agent_name: placeholder
+            .agent_name()
+            .map(ToString::to_string)
+            .or_else(|| cloud_conversation.agent_name().map(ToString::to_string)),
+        orchestration_harness_type: placeholder
+            .orchestration_harness_type()
+            .map(ToString::to_string)
+            .or_else(|| {
+                cloud_conversation
+                    .orchestration_harness_type()
+                    .map(ToString::to_string)
+            }),
+        run_id: placeholder.run_id().or_else(|| cloud_conversation.run_id()),
+
+        // Placeholder authoritative.
+        parent_conversation_id: placeholder
+            .parent_conversation_id()
+            .map(|id| id.to_string()),
+        is_remote_child: placeholder.is_remote_child(),
+        pinned: placeholder.is_pinned(),
+
+        // Reset on merge.
+        reverted_action_ids: None,
+        root_task_is_optimistic: None,
+        autoexecute_override: None,
     }
 }
 

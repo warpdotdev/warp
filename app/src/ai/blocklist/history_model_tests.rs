@@ -3177,8 +3177,9 @@ fn test_fork_conversation_title_override_replaces_prefix() {
 /// Simulates the smaller seam that
 /// `pane_group::hydrate_remote_child_transcript_in_place` reaches after a
 /// successful `load_conversation_by_server_token` fetch: it hands the
-/// fetched cloud transcript to `merge_cloud_tasks_into_existing_conversation`
-/// on the local placeholder. Asserts the merged record:
+/// fetched cloud transcript to
+/// `hydrate_remote_child_placeholder_with_cloud_transcript` on the local
+/// placeholder. Asserts the merged record:
 ///   1. retains the placeholder's local `AIConversationId` (so it remains the
 ///      canonical `child_agent_panes` key on the pane-group side),
 ///   2. carries the placeholder's orchestration linkage forward
@@ -3190,7 +3191,7 @@ fn test_fork_conversation_title_override_replaces_prefix() {
 /// unknown placeholder returns `Err` so the caller's tombstone fallback
 /// runs instead of silently constructing a detached conversation.
 #[test]
-fn merge_cloud_tasks_into_existing_conversation_preserves_placeholder_identity() {
+fn hydrate_remote_child_placeholder_with_cloud_transcript_preserves_placeholder_identity() {
     use crate::ai::agent::conversation::AIConversation;
     use crate::ai::ambient_agents::AmbientAgentTaskId;
     use crate::persistence::model::AgentConversationData;
@@ -3286,12 +3287,12 @@ fn merge_cloud_tasks_into_existing_conversation_preserves_placeholder_identity()
 
         let merged = history_model.update(&mut app, |model, _| {
             model
-                .merge_cloud_tasks_into_existing_conversation(
+                .hydrate_remote_child_placeholder_with_cloud_transcript(
                     placeholder_id,
                     cloud_tasks,
                     cloud_conversation,
                 )
-                .expect("merge must succeed when placeholder is loaded")
+                .expect("hydration must succeed when placeholder is loaded")
         });
 
         assert_eq!(
@@ -3364,12 +3365,12 @@ fn merge_cloud_tasks_into_existing_conversation_preserves_placeholder_identity()
         .expect("second cloud conversation should build");
         let err = history_model.update(&mut app, |model, _| {
             model
-                .merge_cloud_tasks_into_existing_conversation(
+                .hydrate_remote_child_placeholder_with_cloud_transcript(
                     unknown_placeholder,
                     vec![cloud_root_again],
                     cloud_again,
                 )
-                .expect_err("merge must error when placeholder is not loaded")
+                .expect_err("hydration must error when placeholder is not loaded")
         });
         assert!(
             format!("{err:#}").contains("not found in conversations_by_id"),

@@ -252,10 +252,10 @@ fn participant_for_agent_id_uses_pill_style_child_agent_avatar() {
     });
 }
 
-/// Fix C: a restored child run id (persisted via run_id in the SQLite
+/// A restored child run id (persisted via run_id in the SQLite
 /// `agent_conversations` row) must resolve to the child's display name
 /// after `BlocklistAIHistoryModel::new` eagerly hydrates the orchestration
-/// child into `conversations_by_id`. Without Fix C, this falls back to
+/// child into `conversations_by_id`. Otherwise this falls back to
 /// "Unknown agent" because the child conversation is not loaded into memory
 /// until its hidden pane materializes lazily.
 #[test]
