@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use futures::future::{self, BoxFuture, FutureExt as _};
 use warp_core::HostId;
-use warpui::ModelContext;
+use warpui_core::ModelContext;
 
 use super::local_model::collect_contents_recursive;
 use crate::file_tree_store::{FileTreeEntry, FileTreeState};
@@ -213,7 +213,7 @@ impl RemoteRepoMetadataModel {
     }
 }
 
-impl warpui::Entity for RemoteRepoMetadataModel {
+impl warpui_core::Entity for RemoteRepoMetadataModel {
     type Event = RemoteRepositoryMetadataEvent;
 }
 

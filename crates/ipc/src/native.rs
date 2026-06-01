@@ -46,7 +46,7 @@ pub(crate) mod server {
 
     impl ConnectionListenerImpl {
         pub fn new(connection_address: ConnectionAddress) -> Result<Self> {
-            let listener = warpui::r#async::block_on(
+            let listener = warpui_core::r#async::block_on(
                 async move { LocalSocketListener::bind(connection_address.to_string()) }.compat(),
             )
             .map_err(|e| ServerError::Initialization(InitializationError::Io(e)))?;

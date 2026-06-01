@@ -4,7 +4,7 @@ use std::sync::{Arc, Weak};
 use async_channel::Sender;
 use async_fs::OpenOptions;
 use futures::AsyncWriteExt as _;
-use warpui::r#async::executor::{Background, BackgroundTask};
+use warpui_core::r#async::executor::{Background, BackgroundTask};
 
 pub mod manager;
 

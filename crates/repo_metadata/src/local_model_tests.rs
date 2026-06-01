@@ -12,8 +12,8 @@ use futures::executor::block_on;
 use ignore::gitignore::Gitignore;
 use virtual_fs::{Stub, VirtualFS};
 use warp_util::standardized_path::StandardizedPath;
-use warpui::r#async::FutureExt as _;
-use warpui::App;
+use warpui_core::r#async::FutureExt as _;
+use warpui_core::App;
 
 use crate::entry::{DirectoryEntry, Entry, FileMetadata};
 use crate::file_tree_store::{FileTreeEntry, FileTreeEntryState, FileTreeState};

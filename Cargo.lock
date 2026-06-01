@@ -372,7 +372,7 @@ dependencies = [
  "warp_multi_agent_api",
  "warp_terminal",
  "warp_util",
- "warpui",
+ "warpui_core",
  "warpui_extras",
  "watcher",
 ]
@@ -3160,7 +3160,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "url",
- "warpui",
+ "warpui_core",
  "windows 0.62.2",
  "x11rb",
  "zbus",
@@ -6312,7 +6312,7 @@ dependencies = [
  "tower",
  "tower-http",
  "warp_core",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -6831,6 +6831,7 @@ dependencies = [
  "warp_core",
  "warp_multi_agent_api",
  "warpui",
+ "warpui_core",
  "warpui_extras",
  "whoami",
 ]
@@ -6905,7 +6906,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.17",
  "uuid",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -7218,7 +7219,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -7676,7 +7677,7 @@ dependencies = [
  "url",
  "warp_core",
  "warp_util",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -9132,7 +9133,7 @@ dependencies = [
  "uuid",
  "warp_core",
  "warp_logging",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -10836,7 +10837,7 @@ dependencies = [
  "uuid",
  "warp_core",
  "warp_util",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -10882,6 +10883,7 @@ dependencies = [
  "warp_core",
  "warp_util",
  "warpui",
+ "warpui_core",
  "watcher",
 ]
 
@@ -12232,7 +12234,7 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "warp_core",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -12697,6 +12699,7 @@ dependencies = [
  "warp_editor",
  "warp_util",
  "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -13888,7 +13891,7 @@ dependencies = [
  "rust-embed 8.7.2",
  "rustls",
  "warp_core",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -14282,7 +14285,7 @@ dependencies = [
  "string-offset",
  "unindent 0.2.4",
  "warp_core",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -14310,7 +14313,7 @@ dependencies = [
  "parking_lot",
  "rubato",
  "thiserror 2.0.17",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -14653,6 +14656,7 @@ dependencies = [
  "warp_util",
  "warp_web_event_bus",
  "warpui",
+ "warpui_core",
  "warpui_extras",
  "wasm-bindgen",
  "watcher",
@@ -14787,7 +14791,7 @@ dependencies = [
  "warp_core",
  "warp_js",
  "warp_util",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -14893,6 +14897,7 @@ dependencies = [
  "warp_core",
  "warp_util",
  "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -14918,7 +14923,7 @@ dependencies = [
  "thiserror 2.0.17",
  "warp_core",
  "warp_util",
- "warpui",
+ "warpui_core",
  "watcher",
 ]
 
@@ -15030,7 +15035,7 @@ dependencies = [
  "warp_core",
  "warp_graphql",
  "warp_isolation_platform",
- "warpui",
+ "warpui_core",
  "zeroize",
 ]
 
@@ -15175,7 +15180,7 @@ dependencies = [
  "warp_completer",
  "warp_core",
  "warp_util",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -15203,7 +15208,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.17",
  "typed-path 0.10.0",
- "warpui",
+ "warpui_core",
  "windows 0.62.2",
 ]
 
@@ -15560,7 +15565,7 @@ dependencies = [
  "futures",
  "log",
  "notify-debouncer-full",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]

@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
 use thiserror::Error;
-use warpui::r#async::executor::Background;
-use warpui::{Entity, SingletonEntity};
+use warpui_core::r#async::executor::Background;
+use warpui_core::{Entity, SingletonEntity};
 
 use crate::{LogFileWriter, SimpleLogger};
 

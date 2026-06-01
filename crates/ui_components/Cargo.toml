@@ -8,7 +8,7 @@ license.workspace = true
 [dependencies]
 pathfinder_color.workspace = true
 pathfinder_geometry.workspace = true
-warpui.workspace = true
+warpui_core.workspace = true
 warp_core.workspace = true
 
 [dev-dependencies]

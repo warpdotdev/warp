@@ -7,7 +7,7 @@ use std::time::Duration;
 use dashmap::DashMap;
 use futures::channel::oneshot;
 use futures::io::{AsyncRead, AsyncWrite};
-use warpui::r#async::{executor, FutureExt as _};
+use warpui_core::r#async::{executor, FutureExt as _};
 
 use crate::codebase_index_proto::{
     proto_to_codebase_index_status_updated, proto_to_codebase_index_statuses_snapshot,
@@ -34,7 +34,7 @@ mod remote_server_log;
 pub use remote_server_log::RemoteServerLog;
 use warp_core::{safe_error, safe_warn, SessionId};
 use warp_util::standardized_path::StandardizedPath;
-use warpui::r#async::TransportStream;
+use warpui_core::r#async::TransportStream;
 
 use crate::protocol::{self, ProtocolError, RequestId};
 

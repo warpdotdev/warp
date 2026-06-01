@@ -10,7 +10,7 @@ use std::path::Path;
 
 use warp_core::HostId;
 use warp_util::standardized_path::StandardizedPath;
-use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity};
+use warpui_core::{AppContext, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::file_tree_store::FileTreeState;
 use crate::file_tree_update::RepoMetadataUpdate;
@@ -395,7 +395,7 @@ impl RepoMetadataModel {
     }
 }
 
-impl warpui::Entity for RepoMetadataModel {
+impl warpui_core::Entity for RepoMetadataModel {
     type Event = RepoMetadataEvent;
 }
 

@@ -3,7 +3,7 @@ use warp_terminal::shell::ShellLaunchData;
 use warp_util::path::{
     convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
 };
-use warpui::platform::OperatingSystem;
+use warpui_core::platform::OperatingSystem;
 
 fn use_unix_paths(shell: Option<&ShellLaunchData>) -> bool {
     OperatingSystem::get().is_linux()
