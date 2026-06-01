@@ -212,16 +212,34 @@ impl PromptAlertView {
         does_alert_block_ai_requests(&Self::determine_state(app))
     }
 
-    fn primary_text(
+    fn alert_text_fragments(
         &self,
         state: &PromptAlertState,
-        text_fragments: &mut Vec<FormattedTextFragment>,
-    ) {
+        app: &AppContext,
+    ) -> Vec<FormattedTextFragment> {
+        let auth_state = AuthStateProvider::as_ref(app).get();
+        let current_team = UserWorkspaces::as_ref(app).current_team();
+        let has_admin_permissions = current_team.is_some_and(|team| {
+            team.has_admin_permissions(&auth_state.user_email().unwrap_or_default())
+        });
+        let can_purchase_addon_credits = current_team
+            .and_then(|team| team.billing_metadata.tier.purchase_add_on_credits_policy)
+            .is_some_and(|policy| policy.enabled);
+        let suggest_buy_credits = can_purchase_addon_credits
+            && has_admin_permissions
+            && matches!(
+                state,
+                PromptAlertState::RequestLimitReached
+                    | PromptAlertState::OveragesToggleableButNotEnabled
+                    | PromptAlertState::MonthlyOveragesSpendLimitReached
+            );
+
         // Add leading space to separate text from icon.
         //
         // Use this instead of hardcoded margin so it scales with font size and is consistent
         // with the space between this primary fragment and the option hyperlink fragment.
-        text_fragments.push(FormattedTextFragment::plain_text("  "));
+        let mut text_fragments = vec![FormattedTextFragment::plain_text("  ")];
+
         match state {
             PromptAlertState::NoConnection => {
                 text_fragments.push(FormattedTextFragment::plain_text(
@@ -229,93 +247,66 @@ impl PromptAlertView {
                 ));
             }
             PromptAlertState::TelemetryDisabledOnFreeTier => {
-                text_fragments.push(FormattedTextFragment::plain_text(
-                    TELEMETRY_DISABLED_PRIMARY_TEXT,
-                ));
-            }
-            PromptAlertState::AnonymousUserRequestLimitSoftGate => {
-                text_fragments.push(FormattedTextFragment::plain_text(
-                    ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_PRIMARY_TEXT,
-                ));
-            }
-            PromptAlertState::AnonymousUserRequestLimitHardGate => {
-                text_fragments.push(FormattedTextFragment::plain_text(
-                    ANONYMOUS_USER_REQUEST_LIMIT_HARD_GATE_PRIMARY_TEXT,
-                ));
-            }
-            PromptAlertState::DelinquentDueToPaymentIssue => {
-                text_fragments.push(FormattedTextFragment::plain_text(
-                    DELINQUENT_DUE_TO_PAYMENT_ISSUE_PRIMARY_TEXT,
-                ));
-            }
-            PromptAlertState::OveragesToggleableButNotEnabled
-            | PromptAlertState::MonthlyOveragesSpendLimitReached
-            | PromptAlertState::RequestLimitReached => {
-                text_fragments.push(FormattedTextFragment::plain_text(
-                    OUT_OF_REQUESTS_PRIMARY_TEXT,
-                ));
-            }
-            PromptAlertState::NoAlert => {}
-        }
-    }
-
-    fn action_hyperlink(
-        &self,
-        state: &PromptAlertState,
-        text_fragments: &mut Vec<FormattedTextFragment>,
-        app: &AppContext,
-    ) {
-        let auth_state = AuthStateProvider::as_ref(app).get();
-        let current_team = UserWorkspaces::as_ref(app).current_team();
-        let has_admin_permissions = current_team.is_some_and(|team| {
-            team.has_admin_permissions(&auth_state.user_email().unwrap_or_default())
-        });
-
-        match state {
-            PromptAlertState::NoConnection => {}
-            PromptAlertState::TelemetryDisabledOnFreeTier => {
-                // Show "enable analytics" action link
-                text_fragments.push(FormattedTextFragment::plain_text("  "));
-                text_fragments.push(FormattedTextFragment::hyperlink_action(
-                    ENABLE_ANALYTICS_ACTION_TEXT,
-                    PromptAlertAction::OpenPrivacySettingsClicked,
-                ));
-
-                // Show "or upgrade to Build" link
-                text_fragments.push(FormattedTextFragment::plain_text(" or "));
                 let upgrade_url = if let Some(team) = UserWorkspaces::as_ref(app).current_team() {
                     UserWorkspaces::upgrade_link_for_team(team.uid)
                 } else {
                     let user_id = auth_state.user_id().unwrap_or_default();
                     UserWorkspaces::upgrade_link(user_id)
                 };
-                text_fragments.push(FormattedTextFragment::hyperlink(
-                    UPGRADE_TO_BUILD_ACTION_TEXT,
-                    upgrade_url,
-                ));
-                text_fragments.push(FormattedTextFragment::plain_text("."));
+                text_fragments.extend([
+                    FormattedTextFragment::plain_text(TELEMETRY_DISABLED_PRIMARY_TEXT),
+                    FormattedTextFragment::plain_text("  "),
+                    FormattedTextFragment::hyperlink_action(
+                        ENABLE_ANALYTICS_ACTION_TEXT,
+                        PromptAlertAction::OpenPrivacySettingsClicked,
+                    ),
+                    FormattedTextFragment::plain_text(" or "),
+                    FormattedTextFragment::hyperlink(UPGRADE_TO_BUILD_ACTION_TEXT, upgrade_url),
+                    FormattedTextFragment::plain_text("."),
+                ]);
             }
-            PromptAlertState::AnonymousUserRequestLimitSoftGate
-            | PromptAlertState::AnonymousUserRequestLimitHardGate => {
-                text_fragments.push(FormattedTextFragment::plain_text("  "));
-                text_fragments.push(FormattedTextFragment::hyperlink_action(
-                    ANONYMOUS_USER_REQUEST_LIMIT_ACTION_TEXT,
-                    PromptAlertAction::SignUpClickedForAnonymousUser,
-                ));
+            PromptAlertState::AnonymousUserRequestLimitSoftGate => {
+                text_fragments.extend([
+                    FormattedTextFragment::plain_text(
+                        ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_PRIMARY_TEXT,
+                    ),
+                    FormattedTextFragment::plain_text("  "),
+                    FormattedTextFragment::hyperlink_action(
+                        ANONYMOUS_USER_REQUEST_LIMIT_ACTION_TEXT,
+                        PromptAlertAction::SignUpClickedForAnonymousUser,
+                    ),
+                ]);
+            }
+            PromptAlertState::AnonymousUserRequestLimitHardGate => {
+                text_fragments.extend([
+                    FormattedTextFragment::plain_text(
+                        ANONYMOUS_USER_REQUEST_LIMIT_HARD_GATE_PRIMARY_TEXT,
+                    ),
+                    FormattedTextFragment::plain_text("  "),
+                    FormattedTextFragment::hyperlink_action(
+                        ANONYMOUS_USER_REQUEST_LIMIT_ACTION_TEXT,
+                        PromptAlertAction::SignUpClickedForAnonymousUser,
+                    ),
+                ]);
             }
             PromptAlertState::DelinquentDueToPaymentIssue => {
+                text_fragments.push(FormattedTextFragment::plain_text(
+                    DELINQUENT_DUE_TO_PAYMENT_ISSUE_PRIMARY_TEXT,
+                ));
                 // Check if user is team admin with billing history
                 let has_billing_history = current_team
                     .map(|team| team.has_billing_history)
                     .unwrap_or_default();
                 if has_admin_permissions && has_billing_history {
-                    text_fragments.push(FormattedTextFragment::plain_text("  "));
-                    text_fragments.push(FormattedTextFragment::hyperlink_action(
-                        DELINQUENT_DUE_TO_PAYMENT_ISSUE_ACTION_TEXT,
-                        PromptAlertAction::ManageBillingClicked {
-                            team_uid: current_team.map(|team| team.uid).unwrap_or_default(),
-                        },
-                    ));
+                    text_fragments.extend([
+                        FormattedTextFragment::plain_text("  "),
+                        FormattedTextFragment::hyperlink_action(
+                            DELINQUENT_DUE_TO_PAYMENT_ISSUE_ACTION_TEXT,
+                            PromptAlertAction::ManageBillingClicked {
+                                team_uid: current_team.map(|team| team.uid).unwrap_or_default(),
+                            },
+                        ),
+                    ]);
                 } else {
                     text_fragments.push(FormattedTextFragment::plain_text(
                         NON_ADMIN_CONTACT_ADMIN_TEXT,
@@ -323,12 +314,25 @@ impl PromptAlertView {
                 }
             }
             PromptAlertState::OveragesToggleableButNotEnabled => {
-                if has_admin_permissions {
-                    text_fragments.push(FormattedTextFragment::plain_text("  "));
-                    text_fragments.push(FormattedTextFragment::hyperlink_action(
-                        OVERAGES_TOGGLEABLE_BUT_NOT_ENABLED_ACTION_TEXT,
-                        PromptAlertAction::OpenSettingsClicked,
-                    ));
+                text_fragments.push(FormattedTextFragment::plain_text(
+                    OUT_OF_REQUESTS_PRIMARY_TEXT,
+                ));
+                if suggest_buy_credits {
+                    text_fragments.extend([
+                        FormattedTextFragment::plain_text("  "),
+                        FormattedTextFragment::hyperlink_action(
+                            "Add credits",
+                            WorkspaceAction::ShowSettingsPage(SettingsSection::BillingAndUsage),
+                        ),
+                    ]);
+                } else if has_admin_permissions {
+                    text_fragments.extend([
+                        FormattedTextFragment::plain_text("  "),
+                        FormattedTextFragment::hyperlink_action(
+                            OVERAGES_TOGGLEABLE_BUT_NOT_ENABLED_ACTION_TEXT,
+                            PromptAlertAction::OpenSettingsClicked,
+                        ),
+                    ]);
                 } else {
                     text_fragments.push(FormattedTextFragment::plain_text(
                         NON_ADMIN_ASK_ADMIN_TO_ENABLE_OVERAGES_TEXT,
@@ -336,12 +340,25 @@ impl PromptAlertView {
                 }
             }
             PromptAlertState::MonthlyOveragesSpendLimitReached => {
-                if has_admin_permissions {
-                    text_fragments.push(FormattedTextFragment::plain_text("  "));
-                    text_fragments.push(FormattedTextFragment::hyperlink_action(
-                        MONTHLY_OVERAGES_SPEND_LIMIT_REACHED_ACTION_TEXT,
-                        PromptAlertAction::OpenSettingsClicked,
-                    ));
+                text_fragments.push(FormattedTextFragment::plain_text(
+                    OUT_OF_REQUESTS_PRIMARY_TEXT,
+                ));
+                if suggest_buy_credits {
+                    text_fragments.extend([
+                        FormattedTextFragment::plain_text("  "),
+                        FormattedTextFragment::hyperlink_action(
+                            "Add credits",
+                            WorkspaceAction::ShowSettingsPage(SettingsSection::BillingAndUsage),
+                        ),
+                    ]);
+                } else if has_admin_permissions {
+                    text_fragments.extend([
+                        FormattedTextFragment::plain_text("  "),
+                        FormattedTextFragment::hyperlink_action(
+                            MONTHLY_OVERAGES_SPEND_LIMIT_REACHED_ACTION_TEXT,
+                            PromptAlertAction::OpenSettingsClicked,
+                        ),
+                    ]);
                 } else {
                     text_fragments.push(FormattedTextFragment::plain_text(
                         NON_ADMIN_ASK_ADMIN_TO_INCREASE_OVERAGES_TEXT,
@@ -349,21 +366,35 @@ impl PromptAlertView {
                 }
             }
             PromptAlertState::RequestLimitReached => {
+                text_fragments.push(FormattedTextFragment::plain_text(
+                    OUT_OF_REQUESTS_PRIMARY_TEXT,
+                ));
                 let is_enterprise_workspace = UserWorkspaces::as_ref(app)
                     .current_workspace()
                     .is_some_and(|workspace| workspace.billing_metadata.is_enterprise_plan());
                 if is_enterprise_workspace {
-                    text_fragments.push(FormattedTextFragment::plain_text(". "));
                     if has_admin_permissions {
-                        text_fragments.push(FormattedTextFragment::plain_text(
-                            CONTACT_ACCOUNT_EXECUTIVE_TEXT,
-                        ));
+                        text_fragments.extend([
+                            FormattedTextFragment::plain_text(". "),
+                            FormattedTextFragment::plain_text(CONTACT_ACCOUNT_EXECUTIVE_TEXT),
+                        ]);
                     } else {
-                        text_fragments.push(FormattedTextFragment::hyperlink_action(
-                            CONTACT_TEAM_ADMIN_TEXT,
-                            WorkspaceAction::ShowSettingsPage(SettingsSection::Teams),
-                        ));
+                        text_fragments.extend([
+                            FormattedTextFragment::plain_text(". "),
+                            FormattedTextFragment::hyperlink_action(
+                                CONTACT_TEAM_ADMIN_TEXT,
+                                WorkspaceAction::ShowSettingsPage(SettingsSection::Teams),
+                            ),
+                        ]);
                     }
+                } else if suggest_buy_credits {
+                    text_fragments.extend([
+                        FormattedTextFragment::plain_text("  "),
+                        FormattedTextFragment::hyperlink_action(
+                            "Add credits",
+                            WorkspaceAction::ShowSettingsPage(SettingsSection::BillingAndUsage),
+                        ),
+                    ]);
                 } else if let Some(team) = current_team {
                     text_fragments.push(FormattedTextFragment::plain_text("  "));
                     if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
@@ -403,18 +434,22 @@ impl PromptAlertView {
                 if !is_enterprise_workspace
                     && UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app)
                 {
-                    text_fragments.push(FormattedTextFragment::plain_text(" or "));
-                    text_fragments.push(FormattedTextFragment::hyperlink_action(
-                        "use your own API keys",
-                        WorkspaceAction::ShowSettingsPageWithSearch {
-                            search_query: "api".to_string(),
-                            section: Some(SettingsSection::WarpAgent),
-                        },
-                    ));
+                    text_fragments.extend([
+                        FormattedTextFragment::plain_text(" or "),
+                        FormattedTextFragment::hyperlink_action(
+                            "use your own API keys",
+                            WorkspaceAction::ShowSettingsPageWithSearch {
+                                search_query: "api".to_string(),
+                                section: Some(SettingsSection::WarpAgent),
+                            },
+                        ),
+                    ]);
                 }
             }
             PromptAlertState::NoAlert => {}
         }
+
+        text_fragments
     }
 }
 
@@ -443,39 +478,7 @@ impl View for PromptAlertView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let state = Self::determine_state(app);
-        let mut text_fragments = vec![];
-
-        self.primary_text(&state, &mut text_fragments);
-
-        let auth_state = AuthStateProvider::as_ref(app).get();
-        let current_team = UserWorkspaces::as_ref(app).current_team();
-        let has_admin_permissions = auth_state
-            .user_email()
-            .zip(current_team)
-            .is_some_and(|(email, team)| team.has_admin_permissions(&email));
-
-        let can_purchase_addon_credits = current_team
-            .and_then(|team| team.billing_metadata.tier.purchase_add_on_credits_policy)
-            .is_some_and(|policy| policy.enabled);
-
-        let suggest_buy_credits = can_purchase_addon_credits
-            && has_admin_permissions
-            && matches!(
-                state,
-                PromptAlertState::RequestLimitReached
-                    | PromptAlertState::OveragesToggleableButNotEnabled
-                    | PromptAlertState::MonthlyOveragesSpendLimitReached
-            );
-
-        if suggest_buy_credits {
-            text_fragments.push(FormattedTextFragment::plain_text("  "));
-            text_fragments.push(FormattedTextFragment::hyperlink_action(
-                "Add credits",
-                WorkspaceAction::ShowSettingsPage(SettingsSection::BillingAndUsage),
-            ));
-        } else {
-            self.action_hyperlink(&state, &mut text_fragments, app);
-        }
+        let text_fragments = self.alert_text_fragments(&state, app);
 
         let formatted_text_element = FormattedTextElement::new(
             FormattedText::new([FormattedTextLine::Line(text_fragments)]),
@@ -512,7 +515,7 @@ impl View for PromptAlertView {
             .with_main_axis_alignment(MainAxisAlignment::End)
             .with_main_axis_size(MainAxisSize::Max)
             .with_cross_axis_alignment(CrossAxisAlignment::End);
-        if does_alert_block_ai_requests(&self.state) {
+        if does_alert_block_ai_requests(&state) {
             chip_row.add_child(
                 ConstrainedBox::new(
                     Icon::AlertTriangle
