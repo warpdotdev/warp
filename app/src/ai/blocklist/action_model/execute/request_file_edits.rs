@@ -29,8 +29,8 @@ use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessA
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
-    AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, RequestFileEditsResult,
-    UpdatedFileContext,
+    AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, AnyFileContent, FileContext,
+    FileLocations, RequestFileEditsResult, UpdatedFileContext,
 };
 use crate::ai::blocklist::inline_action::code_diff_view::{
     CodeDiffView, CodeDiffViewEvent, DiffSessionType, FileDiff,
@@ -40,6 +40,7 @@ use crate::ai::paths::host_native_absolute_path;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::SessionType;
 use crate::{safe_warn, BlocklistAIHistoryModel};
+const APPLY_DIFF_RESULT_CONTEXT_LINES: usize = 10;
 
 pub struct RequestFileEditsExecutor {
     active_session: ModelHandle<ActiveSession>,
@@ -224,35 +225,12 @@ impl RequestFileEditsExecutor {
                 // This avoids re-reading files from disk or the remote server.
                 let content_map: HashMap<String, String> = file_contents.iter().cloned().collect();
 
-                let mut file_edited_map = HashMap::new();
-                for (file_location, was_edited) in updated_files.iter() {
-                    file_edited_map.insert(file_location.name.clone(), *was_edited);
-                }
-
                 let _ = result_tx.send(RequestFileEditsResult::Success {
                     diff: diff.unified_diff.clone(),
-                    updated_files: updated_files
-                        .iter()
-                        .map(|(file_location, was_edited)| {
-                            let content = content_map
-                                .get(&file_location.name)
-                                .cloned()
-                                .unwrap_or_default();
-                            let line_count = content.lines().count();
-                            UpdatedFileContext {
-                                was_edited_by_user: *was_edited,
-                                file_context: crate::ai::agent::FileContext {
-                                    file_name: file_location.name.clone(),
-                                    content: crate::ai::agent::AnyFileContent::StringContent(
-                                        content,
-                                    ),
-                                    line_range: None,
-                                    last_modified: None,
-                                    line_count,
-                                },
-                            }
-                        })
-                        .collect(),
+                    updated_files: updated_file_contexts_from_editor_buffers(
+                        updated_files,
+                        &content_map,
+                    ),
                     deleted_files: deleted_files.clone(),
                     lines_added: diff.lines_added,
                     lines_removed: diff.lines_removed,
@@ -433,6 +411,131 @@ impl RequestFileEditsExecutor {
     }
 }
 
+fn updated_file_contexts_from_editor_buffers(
+    updated_files: &[(FileLocations, bool)],
+    content_map: &HashMap<String, String>,
+) -> Vec<UpdatedFileContext> {
+    updated_files
+        .iter()
+        .flat_map(|(file_location, was_edited)| {
+            let content = content_map
+                .get(&file_location.name)
+                .cloned()
+                .unwrap_or_default();
+            let line_count = content.lines().count();
+
+            let mut file_location = file_location.clone();
+            file_location.expand_surrounding_context(APPLY_DIFF_RESULT_CONTEXT_LINES);
+
+            if file_location.lines.is_empty() {
+                return vec![UpdatedFileContext {
+                    was_edited_by_user: *was_edited,
+                    file_context: FileContext {
+                        file_name: file_location.name,
+                        content: AnyFileContent::StringContent(content),
+                        line_range: None,
+                        last_modified: None,
+                        line_count,
+                    },
+                }];
+            }
+
+            let lines = content.lines().collect_vec();
+            file_location
+                .lines
+                .into_iter()
+                .map(|range| {
+                    let start = range.start.saturating_sub(1).min(lines.len());
+                    let end = range.end.saturating_sub(1).min(lines.len());
+                    let fragment = if start >= end {
+                        String::new()
+                    } else {
+                        lines[start..end].join("\n")
+                    };
+
+                    UpdatedFileContext {
+                        was_edited_by_user: *was_edited,
+                        file_context: FileContext {
+                            file_name: file_location.name.clone(),
+                            content: AnyFileContent::StringContent(fragment),
+                            line_range: Some(range),
+                            last_modified: None,
+                            line_count,
+                        },
+                    }
+                })
+                .collect_vec()
+        })
+        .collect()
+}
+
 impl Entity for RequestFileEditsExecutor {
     type Event = ();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use ai::agent::action_result::AnyFileContent;
+    use ai::agent::FileLocations;
+
+    use super::updated_file_contexts_from_editor_buffers;
+
+    #[test]
+    fn updated_file_contexts_from_editor_buffers_returns_changed_lines_with_context() {
+        let updated_files = vec![(
+            FileLocations {
+                name: "src/main.rs".to_string(),
+                lines: std::iter::once(12..13).collect(),
+            },
+            true,
+        )];
+        let content = (1..=30)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let content_map = HashMap::from([("src/main.rs".to_string(), content)]);
+
+        let contexts = updated_file_contexts_from_editor_buffers(&updated_files, &content_map);
+
+        assert_eq!(contexts.len(), 1);
+        assert!(contexts[0].was_edited_by_user);
+        assert_eq!(contexts[0].file_context.file_name, "src/main.rs");
+        assert_eq!(contexts[0].file_context.line_range, Some(2..23));
+        assert_eq!(contexts[0].file_context.line_count, 30);
+        assert_eq!(
+            contexts[0].file_context.content,
+            AnyFileContent::StringContent(
+                (2..=22)
+                    .map(|line| format!("line {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        );
+    }
+
+    #[test]
+    fn updated_file_contexts_from_editor_buffers_preserves_full_file_when_no_ranges() {
+        let updated_files = vec![(
+            FileLocations {
+                name: "src/main.rs".to_string(),
+                lines: vec![],
+            },
+            false,
+        )];
+        let content = "line 1\nline 2\n".to_string();
+        let content_map = HashMap::from([("src/main.rs".to_string(), content.clone())]);
+
+        let contexts = updated_file_contexts_from_editor_buffers(&updated_files, &content_map);
+
+        assert_eq!(contexts.len(), 1);
+        assert!(!contexts[0].was_edited_by_user);
+        assert_eq!(contexts[0].file_context.line_range, None);
+        assert_eq!(contexts[0].file_context.line_count, 2);
+        assert_eq!(
+            contexts[0].file_context.content,
+            AnyFileContent::StringContent(content)
+        );
+    }
 }
