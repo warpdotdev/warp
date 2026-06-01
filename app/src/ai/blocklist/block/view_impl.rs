@@ -754,7 +754,7 @@ where
         )
         .with_child(
             Container::new(warpui::elements::ChildView::new(dropdown).finish())
-                .with_margin_right(16.)
+                .with_margin_right(8.)
                 .finish(),
         )
         .with_child(
