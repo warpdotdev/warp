@@ -23,7 +23,7 @@ The Antigravity CLI agent (`agy`) is an autonomous developer tool that performs 
 - Auto-install and auto-update: provide inline terminal chips that automatically configure or update the `agy-warp` plugin.
 - Fallback instructions: offer a split pane with manual setup commands if auto-installation fails.
 - Notification streams: process and display structured notifications (e.g. blocked, success, permission requests) in the agent inbox.
-- Feature gating: The `agy` plugin chip and notification flows are gated by the `AntigravityNotifications` feature flag (consistent with existing agents like `GeminiNotifications`, `CodexNotifications`). Command detection and Agent Mode entry are unconditional, matching the established pattern for all CLI agents.
+- Feature gating: The `agy` plugin chip installation and update flows are gated by the `AntigravityNotifications` feature flag (consistent with existing agents like `GeminiNotifications`, `CodexNotifications`). Command detection, Agent Mode entry, and notification listener wiring are unconditional, matching the established pattern for all CLI agents.
 
 ## Non-Goals
 
@@ -88,7 +88,7 @@ Consistent with other agents (Claude Code, Gemini CLI):
 
 ## Security
 
-The install and update flows follow the same trust model as the existing Gemini CLI and Claude Code plugin managers:
+Warp intentionally trusts the latest extension code published to the official `warpdotdev/agy-warp` repository, consistent with the trust model used by all existing agent plugin managers (Gemini CLI, Claude Code, etc.):
 
 1. **Trusted source**: Only the official `warpdotdev` GitHub organization URL is hardcoded in `EXTENSION_REPO`. Users cannot redirect the install to an arbitrary repository.
 2. **HTTPS transport**: All downloads use HTTPS, relying on GitHub's TLS integrity.
