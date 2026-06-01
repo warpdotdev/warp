@@ -622,17 +622,8 @@ fn restored_conversations_initialize_v2_streaming_state() {
 }
 
 #[test]
-fn build_pending_events_preserves_message_sequence_and_timestamp() {
-    let occurred_at = "2026-01-02T03:04:05Z";
+fn build_pending_events_preserves_message_payload() {
     let pending = build_pending_events(
-        &[AgentRunEvent {
-            event_type: "new_message".to_string(),
-            run_id: "sender-run".to_string(),
-            ref_id: Some("message-123".to_string()),
-            execution_id: None,
-            occurred_at: occurred_at.to_string(),
-            sequence: 77,
-        }],
         vec![ReceivedMessageInput {
             message_id: "message-123".to_string(),
             sender_agent_id: "sender-agent".to_string(),
@@ -645,18 +636,10 @@ fn build_pending_events_preserves_message_sequence_and_timestamp() {
 
     assert_eq!(pending.len(), 1);
     let detail = &pending[0].detail;
-    let PendingEventDetail::Message {
-        sequence,
-        message_id,
-        occurred_at: event_occurred_at,
-        ..
-    } = detail
-    else {
+    let PendingEventDetail::Message { message_id, .. } = detail else {
         panic!("expected pending message event");
     };
-    assert_eq!(*sequence, 77);
     assert_eq!(message_id, "message-123");
-    assert_eq!(event_occurred_at, occurred_at);
 }
 
 #[tokio::test]

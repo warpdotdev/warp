@@ -1948,7 +1948,7 @@ impl OrchestrationEventStreamer {
             return;
         }
 
-        let pending = build_pending_events(&events, messages, lifecycle_events);
+        let pending = build_pending_events(messages, lifecycle_events);
         OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
             svc.enqueue_event_batch(conversation_id, pending, ctx);
         });
@@ -2141,32 +2141,20 @@ fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<
 }
 
 fn build_pending_events(
-    events: &[AgentRunEvent],
     messages: Vec<ReceivedMessageInput>,
     lifecycle_events: Vec<api::AgentEvent>,
 ) -> Vec<PendingEvent> {
     let mut pending = Vec::with_capacity(messages.len() + lifecycle_events.len());
     for msg in &messages {
-        let metadata = events
-            .iter()
-            .find(|event| {
-                event.event_type == "new_message"
-                    && event.ref_id.as_deref() == Some(msg.message_id.as_str())
-            })
-            .map(|event| (event.sequence, event.occurred_at.clone()));
-        let (sequence, occurred_at) =
-            metadata.unwrap_or_else(|| (0, chrono::Utc::now().to_rfc3339()));
         pending.push(PendingEvent {
             event_id: msg.message_id.clone(),
             source_agent_id: msg.sender_agent_id.clone(),
             attempt_count: 0,
             detail: PendingEventDetail::Message {
-                sequence,
                 message_id: msg.message_id.clone(),
                 addresses: msg.addresses.clone(),
                 subject: msg.subject.clone(),
                 message_body: msg.message_body.clone(),
-                occurred_at,
             },
         });
     }
