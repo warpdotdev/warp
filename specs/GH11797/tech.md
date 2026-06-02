@@ -116,7 +116,8 @@ Self::GitDiffStats | Self::SvnDirtyItems | Self::JjDirtyItems => Some(Icon::File
 
 ```rust
 (ContextChipKind::SvnBranch, Some(ContextChipKind::SvnDirtyItems))
-| (ContextChipKind::JjBookmark, Some(ContextChipKind::JjDirtyItems)) => (),
+| (ContextChipKind::JjBookmark, Some(ContextChipKind::JjDirtyItems))
+| (ContextChipKind::JjDirtyItems, Some(ContextChipKind::JjBookmark)) => (),
 ```
 
 ### 2. `app/src/context_chips/builtins.rs` — Add generator functions
