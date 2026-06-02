@@ -13423,6 +13423,9 @@ impl Input {
                 ambient_agent_model.is_ambient_agent()
                     && !ambient_agent_model.is_configuring_ambient_agent()
                     && !ambient_agent_model.is_agent_running()
+                    // Third-party (non-Oz) harnesses don't support prompt queueing, so leave the
+                    // input alone; the submission then falls through to being blocked during setup.
+                    && !ambient_agent_model.is_third_party_harness()
             });
         if !should_queue {
             return false;
