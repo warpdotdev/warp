@@ -16,6 +16,9 @@ pub(super) struct FileTreeMapStore {
 
 impl From<Entry> for FileTreeMapStore {
     fn from(value: Entry) -> Self {
+        // Pre-count nodes so we can allocate HashMaps with the right capacity
+        // upfront, avoiding repeated rehashing for large directory trees.
+        let capacity = value.count_nodes();
         match value {
             Entry::File(file) => Self::new_for_entry(FileTreeEntryState::File(file.into())),
             Entry::Directory(dir) => {
@@ -26,7 +29,7 @@ impl From<Entry> for FileTreeMapStore {
                     loaded: dir.loaded,
                 });
 
-                let mut file_tree_map = Self::new_for_entry(entry);
+                let mut file_tree_map = Self::with_capacity_for_entry(entry, capacity);
                 for child in dir.children {
                     file_tree_map.append_entry(dir_path.clone(), child);
                 }
@@ -58,6 +61,20 @@ impl FileTreeMapStore {
         Self {
             state_map,
             parent_to_child_map: Default::default(),
+        }
+    }
+
+    /// Creates a new `FileTreeMapStore` with pre-allocated capacity.
+    ///
+    /// This avoids repeated HashMap rehashing when building large directory
+    /// trees, reducing transient memory spikes from capacity-doubling.
+    fn with_capacity_for_entry(entry: FileTreeEntryState, capacity: usize) -> Self {
+        let mut state_map = HashMap::with_capacity(capacity);
+        state_map.insert(entry.path_arc(), entry);
+
+        Self {
+            state_map,
+            parent_to_child_map: HashMap::with_capacity(capacity / 4),
         }
     }
 
@@ -203,6 +220,12 @@ impl FileTreeMapStore {
 
     pub fn insert_entry_at_path(&mut self, path: Arc<StandardizedPath>, entry: Entry) {
         let child_entry_map = FileTreeEntry::from(entry);
+        // Reserve capacity upfront to avoid intermediate rehashes when merging
+        // a large subtree into the existing map.
+        self.state_map
+            .reserve(child_entry_map.state_map.state_map.len());
+        self.parent_to_child_map
+            .reserve(child_entry_map.state_map.parent_to_child_map.len());
         self.state_map.extend(child_entry_map.state_map.state_map);
         self.parent_to_child_map
             .extend(child_entry_map.state_map.parent_to_child_map);

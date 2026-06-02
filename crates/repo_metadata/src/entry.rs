@@ -2,9 +2,9 @@
 
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(feature = "local_fs")]
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ignore::gitignore::Gitignore;
 #[cfg(feature = "local_fs")]
@@ -88,6 +88,18 @@ impl Entry {
         match self {
             Self::File(file) => &file.path,
             Self::Directory(directory) => &directory.path,
+        }
+    }
+
+    /// Returns the total number of nodes (files + directories) in this entry
+    /// tree, including the root.
+    ///
+    /// Used to pre-allocate HashMap capacity in `FileTreeMapStore` and avoid
+    /// repeated rehashing when converting large directory trees.
+    pub fn count_nodes(&self) -> usize {
+        match self {
+            Self::File(_) => 1,
+            Self::Directory(dir) => 1 + dir.children.iter().map(|c| c.count_nodes()).sum::<usize>(),
         }
     }
 
@@ -282,7 +294,7 @@ impl Entry {
                             ) {
                                 Ok(entry) => Some(entry),
                                 Err(BuildTreeError::ExceededMaxFileLimit) => {
-                                    return Err(BuildTreeError::ExceededMaxFileLimit)
+                                    return Err(BuildTreeError::ExceededMaxFileLimit);
                                 }
                                 Err(_) => None,
                             }
