@@ -94,6 +94,7 @@ impl RemoteRepoMetadataModel {
     /// Returns repository contents for the specified remote repository.
     ///
     /// Returns an error if the number of results exceeds MAX_REPO_CONTENTS_RESULTS.
+    /// Returns an error if the repository is not indexed, indexing is pending, or indexing failed.
     pub fn get_repo_contents(
         &self,
         id: &RemoteRepositoryIdentifier,
@@ -101,8 +102,14 @@ impl RemoteRepoMetadataModel {
     ) -> Result<Vec<RepoContent<'_>>, RepoMetadataError> {
         let state = match self.repositories.get(id) {
             Some(IndexedRepoState::Indexed(state)) => state,
-            Some(IndexedRepoState::Pending(_)) | Some(IndexedRepoState::Failed(_)) | None => {
-                return Ok(Vec::new());
+            Some(IndexedRepoState::Pending(_)) => {
+                return Err(RepoMetadataError::RepositoryIndexingPending);
+            }
+            Some(IndexedRepoState::Failed(_)) => {
+                return Err(RepoMetadataError::RepositoryIndexingFailed);
+            }
+            None => {
+                return Err(RepoMetadataError::RepositoryNotIndexed);
             }
         };
         let mut contents = Vec::new();
