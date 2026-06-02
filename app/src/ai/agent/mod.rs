@@ -1042,7 +1042,10 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                 }
             },
             AIAgentActionResultType::ReadFiles(result) => match result {
-                ReadFilesResult::Success { files } => {
+                ReadFilesResult::Success {
+                    files,
+                    failed_files,
+                } => {
                     write!(f, "\n\n**Files Read:**\n\n")?;
                     for file in files {
                         writeln!(f, "**{}**", file.file_name)?;
@@ -1051,6 +1054,12 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                             if !text.trim().is_empty() {
                                 writeln!(f, "```\n{text}\n```\n")?;
                             }
+                        }
+                    }
+                    if !failed_files.is_empty() {
+                        write!(f, "\n**Files Failed:**\n\n")?;
+                        for failed_file in failed_files {
+                            writeln!(f, "- **{}**: {}", failed_file.path, failed_file.message)?;
                         }
                     }
                     Ok(())

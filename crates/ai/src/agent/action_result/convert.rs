@@ -163,18 +163,28 @@ impl TryFrom<ReadFilesResult> for api::request::input::tool_call_result::Result 
 
     fn try_from(result: ReadFilesResult) -> Result<Self, Self::Error> {
         match result {
-            ReadFilesResult::Success { files } => Ok(
-                api::request::input::tool_call_result::Result::ReadFiles(api::ReadFilesResult {
+            ReadFilesResult::Success {
+                files,
+                failed_files,
+            } => Ok(api::request::input::tool_call_result::Result::ReadFiles(
+                api::ReadFilesResult {
                     result: Some(api::read_files_result::Result::AnyFilesSuccess(
                         api::read_files_result::AnyFilesSuccess {
                             files: files
                                 .into_iter()
                                 .flat_map(Into::<Vec<api::AnyFileContent>>::into)
                                 .collect(),
+                            failed_files: failed_files
+                                .into_iter()
+                                .map(|failed_file| api::read_files_result::FailedFile {
+                                    path: failed_file.path,
+                                    message: failed_file.message,
+                                })
+                                .collect(),
                         },
                     )),
-                }),
-            ),
+                },
+            )),
             ReadFilesResult::Error(error) => Ok(
                 api::request::input::tool_call_result::Result::ReadFiles(api::ReadFilesResult {
                     result: Some(api::read_files_result::Result::Error(
@@ -989,6 +999,7 @@ impl TryFrom<RequestComputerUseResult> for api::request::input::tool_call_result
                                     height: screenshot.height as i32,
                                 }),
                                 platform: convert_platform(platform).into(),
+                                windows: Vec::new(),
                             },
                         )),
                     },
@@ -1033,6 +1044,8 @@ impl TryFrom<UseComputerResult> for api::request::input::tool_call_result::Resul
                                     height: s.height as i32,
                                 }),
                                 cursor_position: result.cursor_position.map(vec_to_coordinates),
+                                captured_window: None,
+                                windows: Vec::new(),
                             },
                         )),
                     },

@@ -88,8 +88,12 @@ impl SearchCodebaseExecutor {
                             .await
                             {
                                 Ok(result) => {
-                                    if !result.missing_files.is_empty() {
-                                        let missing_files = result.missing_files.join(", ");
+                                    if !result.failed_files.is_empty() {
+                                        let missing_files = result
+                                            .failed_files
+                                            .into_iter()
+                                            .map(|f| f.path)
+                                            .join(", ");
                                         SearchCodebaseResult::Failed {
                                             message: format!(
                                                 "These files do not exist: {missing_files}"

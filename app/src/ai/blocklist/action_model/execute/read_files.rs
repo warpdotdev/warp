@@ -9,7 +9,8 @@ use super::{
     PreprocessActionInput,
 };
 use crate::ai::agent::{
-    AIAgentAction, AIAgentActionResultType, AIAgentActionType, ReadFilesRequest, ReadFilesResult,
+    AIAgentAction, AIAgentActionResultType, AIAgentActionType, ReadFilesFailedFile,
+    ReadFilesRequest, ReadFilesResult,
 };
 use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::paths::host_native_absolute_path;
@@ -168,18 +169,21 @@ impl ReadFilesExecutor {
                         .await
                         .map_err(|e| anyhow::anyhow!("Remote read failed: {e}"))?;
 
-                    if !response.failed_files.is_empty() && response.file_contexts.is_empty() {
-                        let failed = response
-                            .failed_files
+                    let failed_files = response
+                        .failed_files
+                        .into_iter()
+                        .map(|f| ReadFilesFailedFile {
+                            path: f.path,
+                            message: f.error.map(|e| e.message).unwrap_or_else(|| {
+                                "File not found or could not be read".to_string()
+                            }),
+                        })
+                        .collect::<Vec<_>>();
+
+                    if !failed_files.is_empty() && response.file_contexts.is_empty() {
+                        let failed = failed_files
                             .iter()
-                            .map(|f| {
-                                let reason = f
-                                    .error
-                                    .as_ref()
-                                    .map(|e| e.message.as_str())
-                                    .unwrap_or("unknown error");
-                                format!("{}: {reason}", f.path)
-                            })
+                            .map(|f| format!("{}: {}", f.path, f.message))
                             .collect::<Vec<_>>()
                             .join(", ");
                         return Ok(ReadFilesResult::Error(format!(
@@ -218,6 +222,7 @@ impl ReadFilesExecutor {
 
                     Ok(ReadFilesResult::Success {
                         files: file_contexts,
+                        failed_files,
                     })
                 }),
                 on_complete: Box::new(|res: Result<ReadFilesResult, anyhow::Error>, _ctx| {
@@ -239,15 +244,26 @@ impl ReadFilesExecutor {
                     None,
                 )
                 .await?;
-                if result.missing_files.is_empty() {
+                if result.failed_files.is_empty() {
                     Ok(ReadFilesResult::Success {
                         files: result.file_contexts,
+                        failed_files: Vec::new(),
                     })
-                } else {
-                    let missing_files = result.missing_files.join(", ");
+                } else if result.file_contexts.is_empty() {
+                    let failed_files = result
+                        .failed_files
+                        .iter()
+                        .map(|f| format!("{}: {}", f.path, f.message))
+                        .collect::<Vec<_>>()
+                        .join(", ");
                     Ok(ReadFilesResult::Error(format!(
-                        "These files do not exist: {missing_files}"
+                        "Failed to read files: {failed_files}"
                     )))
+                } else {
+                    Ok(ReadFilesResult::Success {
+                        files: result.file_contexts,
+                        failed_files: result.failed_files,
+                    })
                 }
             }),
             on_complete: Box::new(|res: Result<ReadFilesResult, anyhow::Error>, _ctx| {

@@ -106,6 +106,7 @@ pub async fn generate_multi_agent_output(
                 FeatureFlag::SummarizationViaMessageReplacement.is_enabled(),
             supports_bundled_skills: FeatureFlag::BundledSkills.is_enabled(),
             supports_research_agent: params.research_agent_enabled,
+            supports_background_computer_use: false,
             supports_orchestration_v2: params.orchestration_enabled
                 && FeatureFlag::OrchestrationV2.is_enabled(),
             custom_model_providers: params.custom_model_providers,

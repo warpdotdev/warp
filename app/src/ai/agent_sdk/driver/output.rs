@@ -861,7 +861,7 @@ pub mod json {
                     RequestFileEditsResult::Cancelled => Some(JsonMessage::ToolCanceled),
                 },
                 AIAgentActionResultType::ReadFiles(result) => match result {
-                    ReadFilesResult::Success { files } => Some(JsonMessage::ToolResult(
+                    ReadFilesResult::Success { files, .. } => Some(JsonMessage::ToolResult(
                         JsonToolResult::ReadFiles(JsonFileCollectionResult {
                             files: JsonFile::from_file_contexts(files),
                         }),

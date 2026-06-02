@@ -134,13 +134,19 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                         }
                     }
                     AIAgentActionResultType::ReadFiles(read_files_result) => {
-                        if let crate::ai::agent::ReadFilesResult::Success { files } =
-                            read_files_result
+                        if let crate::ai::agent::ReadFilesResult::Success {
+                            files,
+                            failed_files,
+                        } = read_files_result
                         {
                             for file in files {
                                 if let AnyFileContent::StringContent(content) = &mut file.content {
                                     redact_secrets(content);
                                 }
+                            }
+                            for failed_file in failed_files {
+                                redact_secrets(&mut failed_file.path);
+                                redact_secrets(&mut failed_file.message);
                             }
                         }
                     }

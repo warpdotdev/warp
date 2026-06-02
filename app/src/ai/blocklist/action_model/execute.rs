@@ -82,7 +82,7 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentActionTypeDiscriminants, CancellationReason, FileContext,
-    FileLocations, ServerOutputId,
+    FileLocations, ReadFilesFailedFile, ServerOutputId,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
@@ -972,15 +972,15 @@ const MAX_FILE_READ_BYTES: usize = 1_000_000;
 pub struct ReadFileContextResult {
     /// [`FileContext`] data for all files that could be read.
     pub file_contexts: Vec<FileContext>,
-
     /// Expected absolute paths of requested files that did not exist or could
-    /// not be read (e.g. binary files that exceed the size limit).
-    pub missing_files: Vec<String>,
+    /// not be read (e.g. binary files that exceed the size limit), along with
+    /// per-file failure messages.
+    pub failed_files: Vec<ReadFilesFailedFile>,
 }
 
 /// Reads the content of the given files at the given `FileLocations`.
 ///
-/// If any files do not exist, they are included in the `missing_files` field of the result.
+/// If any files do not exist, they are included in the `failed_files` field of the result.
 ///
 /// Binary files larger than the per-file byte limit are skipped and reported as oversized.
 /// Text files are truncated at the per-file limit via line streaming.
@@ -1005,7 +1005,7 @@ pub async fn read_local_file_context(
     {
         let mut result = ReadFileContextResult {
             file_contexts: Vec::new(),
-            missing_files: Vec::new(),
+            failed_files: Vec::new(),
         };
 
         let mut batch_bytes_remaining = max_batch_bytes;
@@ -1020,9 +1020,10 @@ pub async fn read_local_file_context(
             let metadata = match async_fs::metadata(&absolute_file_path).await {
                 Ok(m) => m,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    result
-                        .missing_files
-                        .push(absolute_file_path.to_string_lossy().to_string());
+                    result.failed_files.push(ReadFilesFailedFile {
+                        path: absolute_file_path.to_string_lossy().to_string(),
+                        message: "File not found or could not be read".to_string(),
+                    });
                     continue;
                 }
                 Err(e) => return Err(anyhow::anyhow!(e)),
@@ -1096,7 +1097,10 @@ pub async fn read_local_file_context(
                     }
                     result.file_contexts.push(file_context);
                 }
-                BinaryFileReadResult::Missing => result.missing_files.push(path_str),
+                BinaryFileReadResult::Missing => result.failed_files.push(ReadFilesFailedFile {
+                    path: path_str,
+                    message: "File not found or could not be read".to_string(),
+                }),
             }
         }
 
