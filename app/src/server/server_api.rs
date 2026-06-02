@@ -628,12 +628,6 @@ impl ServerApi {
     #[cfg(target_family = "wasm")]
     fn report_ws_iap_challenge(&self, _err: &anyhow::Error) {}
 
-    pub fn iap_proxy_auth_header(&self) -> Option<(&'static str, String)> {
-        self.iap_state
-            .as_ref()
-            .and_then(|state| state.proxy_auth_header())
-    }
-
     /// Returns ambient agent headers to attach to requests.
     async fn ambient_agent_headers(&self) -> Result<Vec<(&'static str, String)>> {
         let workload_token = self
