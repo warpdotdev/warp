@@ -16,7 +16,7 @@ use parking_lot::FairMutex;
 use sum_tree::SeekBias;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{EntityId, ModelContext};
-use work_queue::FindWorkQueue;
+use work_queue::{FindWorkQueue, FindWorkItem};
 
 use super::rich_content::{FindableRichContentHandle, RichContentMatchId};
 use super::FindOptions;
