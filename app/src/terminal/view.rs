@@ -2519,6 +2519,12 @@ pub struct TerminalView {
     /// but also the input.
     resize_tx: Sender<Vector2F>,
 
+    /// Exchange that `jump_to_latest_agent_message` wants to scroll to once the
+    /// agent view's blocks have mounted. Set when entering the agent view from the
+    /// terminal (where the target block doesn't exist yet on the current frame) and
+    /// consumed in `after_terminal_view_layout`, after layout has mounted it.
+    pending_agent_scroll_target: Option<AIAgentExchangeId>,
+
     find_link_tx: Sender<FindLinkArg>,
 
     /// Highlighted link (could be url or file path) on the screen.
@@ -4191,6 +4197,7 @@ impl TerminalView {
             auth_state: AuthStateProvider::as_ref(ctx).get().clone(),
             find_bar,
             resize_tx,
+            pending_agent_scroll_target: None,
             find_link_tx,
             highlighted_link: HighlightedLinkOption::default(),
             last_hover_fragment_boundary: None,
@@ -15872,6 +15879,15 @@ impl TerminalView {
     /// size of the entire terminal (block_list + input OR alt-grid OR shared session viewer loading) as its
     /// argument.
     fn after_terminal_view_layout(&mut self, size: Vector2F, ctx: &mut ViewContext<Self>) {
+        // A pending `jump_to_latest_agent_message` enters the agent view, which
+        // mounts the target block over this layout. Now that layout is done the
+        // block exists, so scroll to it — once. Doing it here (after layout, after
+        // the agent view's own entry scroll) means a single shot lands without any
+        // retry loop. Each agent turn is one block, so this lands on its top.
+        if let Some(exchange_id) = self.pending_agent_scroll_target.take() {
+            self.scroll_to_exchange(exchange_id, ctx);
+        }
+
         let size_update = SizeUpdateBuilder::after_layout(*self.size_info, size).build(self, ctx);
         self.resize_internal(size_update, ctx);
 
@@ -21860,9 +21876,11 @@ impl TerminalView {
         // Resolve the target exchange from the conversation model rather than from
         // the currently-mounted blocks: when entering from the terminal the blocks
         // mount over later frames, so the latest block may not exist yet this tick.
+        // Use the latest *visible* exchange so we land on a block that actually
+        // renders (skipping passive/hidden exchanges).
         let Some(exchange_id) = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
-            .and_then(|conversation| conversation.latest_exchange())
+            .and_then(|conversation| conversation.latest_visible_exchange())
             .map(|exchange| exchange.id)
         else {
             return;
@@ -21885,13 +21903,12 @@ impl TerminalView {
                 conversation_id,
                 ctx,
             );
-            // Entering scrolls the agent view to the bottom on the next render, so
-            // scrolling synchronously here would be overridden by that. Defer to a
-            // later tick — after entry's own scroll and after the blocks mount —
-            // then scroll to the target exchange (retrying while blocks mount).
-            ctx.spawn(futures::future::ready(()), move |me, _, ctx| {
-                me.scroll_to_exchange_when_mounted(exchange_id, 0, ctx);
-            });
+            // The target block doesn't exist on this frame — entering the agent view
+            // mounts it over the following layout. Record it and let
+            // `after_terminal_view_layout` scroll once the block is mounted, which
+            // also runs after the agent view's own entry scroll so it isn't
+            // overridden.
+            self.pending_agent_scroll_target = Some(exchange_id);
         }
         send_telemetry_from_ctx!(TelemetryEvent::JumpToLatestAgentMessage, ctx);
     }
@@ -22106,34 +22123,6 @@ impl TerminalView {
             ScrollPositionUpdate::ScrollToTopOfRichContent { index },
             ctx,
         );
-    }
-
-    /// Retries scrolling to `exchange_id` while the agent view's blocks finish
-    /// mounting after entry from the terminal. Each agent turn renders as a single
-    /// block, so this lands on the top of the latest turn's block. Gives up after a
-    /// bounded number of frames so a missing exchange can't loop forever.
-    fn scroll_to_exchange_when_mounted(
-        &mut self,
-        exchange_id: AIAgentExchangeId,
-        attempt: u32,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        const MAX_ATTEMPTS: u32 = 15;
-        let mounted = self.rich_content_views.iter().any(|rc| {
-            rc.ai_block_metadata()
-                .is_some_and(|meta| meta.exchange_id == exchange_id)
-        });
-        if mounted {
-            self.scroll_to_exchange(exchange_id, ctx);
-        }
-        // Re-assert each frame across a short window: entering the agent view kicks
-        // off its own scroll on a later, unpredictable tick that would otherwise
-        // override ours, so keep re-applying the scroll until that settles.
-        if attempt < MAX_ATTEMPTS {
-            ctx.spawn(futures::future::ready(()), move |me, _, ctx| {
-                me.scroll_to_exchange_when_mounted(exchange_id, attempt + 1, ctx);
-            });
-        }
     }
 
     #[cfg(any(test, feature = "integration_tests"))]

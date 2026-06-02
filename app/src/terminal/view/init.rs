@@ -443,15 +443,14 @@ pub fn init(app: &mut AppContext) {
             TerminalAction::JumpToLatestAgentMessage,
         )
         // Available from the terminal (enters the latest conversation's agent view)
-        // and from within an active agent view, where the rich input — not the
+        // and from within the agent view it opens, where the rich input — not the
         // terminal — holds focus, so its context lacks `Terminal` but carries
-        // `Input` plus the active-agent-view flag. Without the `Input` clause the
-        // command is unreachable from the command palette while in the agent view.
+        // `Input` plus the active-agent-view flag. The command always opens the
+        // full-screen agent view (`ACTIVE_AGENT_VIEW`), so the inline flag isn't
+        // needed here. Without the `Input` clause the command is unreachable from
+        // the command palette while in the agent view.
         .with_context_predicate(
-            (id!("Terminal")
-                | (id!("Input")
-                    & (id!(flags::ACTIVE_AGENT_VIEW) | id!(flags::ACTIVE_INLINE_AGENT_VIEW))))
-                & !id!("IMEOpen"),
+            (id!("Terminal") | (id!("Input") & id!(flags::ACTIVE_AGENT_VIEW))) & !id!("IMEOpen"),
         ),
         EditableBinding::new(
             "terminal:open_block_list_context_menu_via_keybinding",
