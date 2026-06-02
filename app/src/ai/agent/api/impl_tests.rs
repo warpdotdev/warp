@@ -4,6 +4,7 @@ use warp_multi_agent_api as api;
 
 use super::{
     api_keys_with_warp_credit_fallback_setting, get_supported_cli_agent_tools, get_supported_tools,
+    supports_reasoning_messages,
 };
 use crate::ai::agent::api::RequestParams;
 use crate::ai::blocklist::SessionContext;
@@ -163,4 +164,54 @@ fn remote_supported_tools_omit_search_codebase_when_remote_is_not_connected() {
 
     assert!(!supported_tools.contains(&api::ToolType::SearchCodebase));
     assert!(!supported_cli_agent_tools.contains(&api::ToolType::SearchCodebase));
+}
+
+fn custom_model_providers(config_key: &str) -> api::request::settings::CustomModelProviders {
+    api::request::settings::CustomModelProviders {
+        providers: vec![
+            api::request::settings::custom_model_providers::CustomModelProvider {
+                base_url: "https://custom.example/v1".to_string(),
+                api_key: "custom-key".to_string(),
+                models: vec![
+                    api::request::settings::custom_model_providers::CustomModel {
+                        slug: "deepseek/deepseek-chat-v3.1:thinking".to_string(),
+                        config_key: config_key.to_string(),
+                    },
+                ],
+            },
+        ],
+    }
+}
+
+#[test]
+fn supports_reasoning_messages_by_default() {
+    let params = request_params_with_ask_user_question_enabled(false);
+
+    assert!(supports_reasoning_messages(&params));
+}
+
+#[test]
+fn supports_reasoning_messages_for_non_selected_custom_providers() {
+    let mut params = request_params_with_ask_user_question_enabled(false);
+    params.custom_model_providers = Some(custom_model_providers("custom-model-config"));
+
+    assert!(supports_reasoning_messages(&params));
+}
+
+#[test]
+fn omits_reasoning_messages_for_selected_custom_endpoint_base_model() {
+    let mut params = request_params_with_ask_user_question_enabled(false);
+    params.model = LLMId::from("custom-model-config");
+    params.custom_model_providers = Some(custom_model_providers("custom-model-config"));
+
+    assert!(!supports_reasoning_messages(&params));
+}
+
+#[test]
+fn omits_reasoning_messages_for_selected_custom_endpoint_companion_model() {
+    let mut params = request_params_with_ask_user_question_enabled(false);
+    params.cli_agent_model = LLMId::from("custom-model-config");
+    params.custom_model_providers = Some(custom_model_providers("custom-model-config"));
+
+    assert!(!supports_reasoning_messages(&params));
 }

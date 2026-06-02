@@ -16,6 +16,7 @@ pub async fn generate_multi_agent_output(
     mut params: RequestParams,
     cancellation_rx: futures::channel::oneshot::Receiver<()>,
 ) -> Result<ResponseStream, ConvertToAPITypeError> {
+    let supports_reasoning_message = supports_reasoning_messages(&params);
     let supported_tools = params
         .supported_tools_override
         .take()
@@ -92,7 +93,7 @@ pub async fn generate_multi_agent_output(
             supports_started_child_task_message: true,
             supports_suggest_prompt: true,
             supports_read_image_files: FeatureFlag::ReadImageFiles.is_enabled(),
-            supports_reasoning_message: true,
+            supports_reasoning_message,
             api_keys,
             autonomy_level: params.autonomy_level.into(),
             isolation_level: params.isolation_level.into(),
@@ -152,6 +153,30 @@ pub async fn generate_multi_agent_output(
             Ok(Box::pin(rx))
         }
     }
+}
+
+fn supports_reasoning_messages(params: &RequestParams) -> bool {
+    let Some(custom_model_providers) = params.custom_model_providers.as_ref() else {
+        return true;
+    };
+
+    let uses_custom_endpoint_model = [
+        &params.model,
+        &params.coding_model,
+        &params.cli_agent_model,
+        &params.computer_use_model,
+    ]
+    .into_iter()
+    .any(|model_id| {
+        custom_model_providers.providers.iter().any(|provider| {
+            provider
+                .models
+                .iter()
+                .any(|custom_model| custom_model.config_key == model_id.as_str())
+        })
+    });
+
+    !uses_custom_endpoint_model
 }
 
 fn api_keys_with_warp_credit_fallback_setting(
