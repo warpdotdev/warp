@@ -430,7 +430,7 @@ impl Network {
                     );
                     ServerApiProvider::as_ref(ctx)
                         .get()
-                        .report_ws_iap_challenge(&e);
+                        .check_ws_connect_for_iap_challenge(&e);
                     ctx.emit(NetworkEvent::FailedToJoin {
                         reason: FailedToJoinReason::FailedToConnectToServer,
                     });

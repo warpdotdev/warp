@@ -542,31 +542,34 @@ impl ServerApi {
         *self.ambient_agent_task_id.write() = task_id;
     }
 
-    /// Inspects a response for the IAP challenge header and emits an
-    /// `IapChallengeReceived` event if detected. Returns `true` if the
-    /// response was an IAP challenge.
-    ///
-    /// TODO(isaiah): implement retries on IAP challenge failures so the
-    /// triggering request transparently succeeds after the refresh
-    /// completes instead of bubbling up a one-off error to the caller.
-    fn check_for_iap_challenge(&self, response: &http_client::Response) -> bool {
-        if self.iap_state.is_none() {
-            return false;
-        }
-        if http_client::iap::is_iap_challenge(response.status(), response.headers()) {
-            log::warn!(
-                "Received IAP challenge (status {}); notifying IapManager",
-                response.status()
-            );
+    /// Checks `status` + `headers` for an IAP challenge signature and, if
+    /// detected, logs a warning and enqueues an `IapChallengeReceived` event so
+    /// the `IapManager` can refresh. This is the shared core used by all three
+    /// challenge-detection paths (HTTP response, SSE, websocket handshake).
+    fn notify_iap_challenge_if_detected(
+        &self,
+        status: http::StatusCode,
+        headers: &http::HeaderMap,
+    ) {
+        if http_client::iap::is_iap_challenge(status, headers) {
+            log::warn!("Received IAP challenge (status {status}); notifying IapManager");
             if let Err(err) = self
                 .event_sender
                 .try_send(ServerApiEvent::IapChallengeReceived)
             {
-                log::warn!("Failed to enqueue IapChallengeReceived event: {err}");
+                log::warn!("Failed to enqueue IapChallengeReceived: {err}");
             }
-            true
-        } else {
-            false
+        }
+    }
+
+    /// Inspects an HTTP response for an IAP challenge.
+    ///
+    /// TODO(isaiah): implement retries on IAP challenge failures so the
+    /// triggering request transparently succeeds after the refresh
+    /// completes instead of bubbling up a one-off error to the caller.
+    fn check_for_iap_challenge(&self, response: &http_client::Response) {
+        if self.iap_state.is_some() {
+            self.notify_iap_challenge_if_detected(response.status(), response.headers());
         }
     }
 
@@ -610,11 +613,22 @@ impl ServerApi {
         }
     }
 
-    /// Returns the IAP `Proxy-Authorization` header (name + value) to attach to
-    /// a Warp-server websocket handshake, or `None` when IAP is not active
-    /// (staging only, and a token has been fetched). The handshake is the only
-    /// place this can ride, since IAP validates the HTTP upgrade itself rather
-    /// than any post-upgrade payload.
+    /// Inspects a websocket handshake connect error for an IAP challenge and
+    /// emits an `IapChallengeReceived` event if detected
+    #[cfg(not(target_family = "wasm"))]
+    pub fn check_ws_connect_for_iap_challenge(&self, err: &anyhow::Error) {
+        if self.iap_state.is_none() {
+            return;
+        }
+        let Some(response) = websocket::connect_error_http_response(err) else {
+            return;
+        };
+        self.notify_iap_challenge_if_detected(response.status(), response.headers());
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub fn check_ws_connect_for_iap_challenge(&self, _err: &anyhow::Error) {}
+
     pub fn iap_handshake_header(&self) -> Option<(&'static str, String)> {
         let token = self
             .iap_state
@@ -624,37 +638,6 @@ impl ServerApi {
             http_client::iap::IAP_PROXY_AUTH_HEADER,
             format!("Bearer {token}"),
         ))
-    }
-
-    /// Inspects a websocket *handshake* connect error for an IAP challenge and
-    /// emits an `IapChallengeReceived` event if detected, so the `IapManager`
-    /// can refresh credentials before the caller's retry loop reconnects.
-    /// Returns `true` if the error was an IAP challenge.
-    #[cfg(not(target_family = "wasm"))]
-    pub fn report_ws_iap_challenge(&self, err: &anyhow::Error) -> bool {
-        if self.iap_state.is_none() {
-            return false;
-        }
-        let Some(response) = websocket::connect_error_http_response(err) else {
-            return false;
-        };
-        if http_client::iap::is_iap_challenge(response.status(), response.headers()) {
-            log::warn!("Received IAP challenge on websocket handshake; notifying IapManager");
-            if let Err(err) = self
-                .event_sender
-                .try_send(ServerApiEvent::IapChallengeReceived)
-            {
-                log::warn!("Failed to enqueue IapChallengeReceived from websocket: {err}");
-            }
-            true
-        } else {
-            false
-        }
-    }
-
-    #[cfg(target_family = "wasm")]
-    pub fn report_ws_iap_challenge(&self, _err: &anyhow::Error) -> bool {
-        false
     }
 
     /// Returns ambient agent headers to attach to requests.
@@ -876,9 +859,6 @@ impl ServerApi {
             Ok(response)
         } else {
             self.check_for_iap_challenge(&response);
-            // Put `HttpStatusError` in the error chain so shared retry classifiers
-            // (`is_transient_http_error`) can distinguish transient 5xx / 408 / 429
-            // from permanent 4xx without string-matching the Display output.
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             let status_err = HttpStatusError {

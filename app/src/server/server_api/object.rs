@@ -688,10 +688,7 @@ impl ObjectClient for ServerApi {
 
         let subscription = GetWarpDriveUpdates::build(());
 
-        // Attach the IAP handshake header (staging only) so the websocket
-        // upgrade can transit the proxy. The bearer token in `init_payload` is
-        // only seen by warp-server *after* the upgrade completes, so it can't
-        // satisfy IAP, which validates the handshake itself.
+        // IAP handshake header (to access staging envs only)
         let handshake_headers: Vec<(&str, String)> =
             self.iap_handshake_header().into_iter().collect();
 
@@ -711,10 +708,8 @@ impl ObjectClient for ServerApi {
         )
         .await;
 
-        // If the handshake was rejected by IAP, notify the IapManager so it can
-        // refresh; the listener's retry loop then reconnects with a fresh token.
         if let Err(err) = &result {
-            self.report_ws_iap_challenge(err);
+            self.check_ws_connect_for_iap_challenge(err);
         }
         result
     }
