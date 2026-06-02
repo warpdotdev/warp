@@ -21,7 +21,7 @@ use crate::ai::agent::{ImageContext, UserQueryMode};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::{
     AutofireAction, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
-    PendingAttachment, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin,
+    PendingAttachment, QueuedQuery, QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin,
 };
 use crate::features::FeatureFlag;
 use crate::server::server_api::ai::SpawnAgentRequest;
@@ -1017,9 +1017,10 @@ fn drain_is_isolated_per_conversation() {
 }
 
 #[test]
-fn send_now_action_removes_row_and_emits_send_now_event() {
-    // Clicking "send now" on a queued row removes exactly that row and asks the host to submit its
-    // text immediately. The locked initial cloud-mode row is rejected by the model (covered by
+fn send_now_action_emits_event_and_leaves_row_for_host_to_fire() {
+    // Clicking "send now" emits a SendNow event identifying the row, but leaves the row in the
+    // queue so the host can read its attachments by id when it fires; the host removes the fired
+    // row afterward. The locked initial cloud-mode row is rejected by the model (covered by
     // `initial_cloud_mode_head_rejects_user_mutations_and_autofire`) and has its button disabled
     // in the panel, so it needs no separate panel test.
     App::test((), |mut app| async move {
@@ -1056,14 +1057,23 @@ fn send_now_action_removes_row_and_emits_send_now_event() {
             model.append(conversation_id, user_query("send me now"), ctx)
         });
 
-        let send_now_events = Rc::new(RefCell::new(Vec::<String>::new()));
+        let send_now_events = Rc::new(RefCell::new(
+            Vec::<(AIConversationId, QueuedQueryId, String)>::new(),
+        ));
         let send_now_events_for_subscription = send_now_events.clone();
         app.update(|ctx| {
             ctx.subscribe_to_view(&panel, move |_, event: &QueuedPromptsPanelEvent, _| {
-                if let QueuedPromptsPanelEvent::SendNow { text } = event {
-                    send_now_events_for_subscription
-                        .borrow_mut()
-                        .push(text.clone());
+                if let QueuedPromptsPanelEvent::SendNow {
+                    conversation_id,
+                    query_id,
+                    text,
+                } = event
+                {
+                    send_now_events_for_subscription.borrow_mut().push((
+                        *conversation_id,
+                        *query_id,
+                        text.clone(),
+                    ));
                 }
             });
         });
@@ -1072,9 +1082,13 @@ fn send_now_action_removes_row_and_emits_send_now_event() {
             panel.handle_action(&QueuedPromptsPanelAction::SendNow(query_id), ctx);
         });
 
-        assert_eq!(send_now_events.borrow().as_slice(), ["send me now"]);
+        assert_eq!(
+            send_now_events.borrow().as_slice(),
+            [(conversation_id, query_id, "send me now".to_owned())]
+        );
+        // The panel leaves the row in place; the host removes it after firing.
         QueuedQueryModel::handle(&app).read(&app, |model, _| {
-            assert!(model.queue(conversation_id).is_empty());
+            assert_eq!(model.queue(conversation_id).len(), 1);
         });
     });
 }

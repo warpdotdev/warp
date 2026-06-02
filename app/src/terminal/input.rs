@@ -3714,11 +3714,26 @@ impl Input {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            QueuedPromptsPanelEvent::SendNow { text } => {
-                self.submit_queued_prompt_for_active_pane(text.clone(), ctx);
+            QueuedPromptsPanelEvent::SendNow {
+                conversation_id,
+                query_id,
+                text,
+            } => {
+                self.submit_queued_prompt_for_active_pane(
+                    text.clone(),
+                    *conversation_id,
+                    *query_id,
+                    ctx,
+                );
+                QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.remove_fired_row(*conversation_id, *query_id, ctx);
+                });
                 self.focus_input_box(ctx);
             }
-            QueuedPromptsPanelEvent::RowDeleted => {
+            QueuedPromptsPanelEvent::RowDeleted { text } => {
+                if self.buffer_text(ctx).is_empty() {
+                    self.replace_buffer_content(text, ctx);
+                }
                 self.focus_input_box(ctx);
             }
             QueuedPromptsPanelEvent::EditEnded => {
