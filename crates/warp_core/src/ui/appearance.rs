@@ -1,5 +1,5 @@
-use warpui::fonts::{FamilyId, Weight};
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warpui_core::fonts::{FamilyId, Weight};
+use warpui_core::{Entity, ModelContext, SingletonEntity};
 
 use super::builder::UiBuilder;
 use super::theme::WarpTheme;
@@ -100,7 +100,7 @@ impl Appearance {
 
     #[cfg(feature = "test-util")]
     pub fn mock() -> Self {
-        use warpui::color::ColorU;
+        use warpui_core::color::ColorU;
 
         use crate::ui::theme::{mock_terminal_colors, Details, Fill};
 

@@ -1,12 +1,12 @@
 use pathfinder_geometry::vector::{vec2f, Vector2F};
-use warpui::assets::asset_cache::AssetSource;
-use warpui::elements::{
+use warpui_core::assets::asset_cache::AssetSource;
+use warpui_core::elements::{
     Align, CacheOption, Clipped, ConstrainedBox, Container, CrossAxisAlignment, Empty, Expanded,
     Flex, Image, MainAxisSize, ParentElement, Point, Shrinkable, SizeConstraintCondition,
     SizeConstraintSwitch, Stack,
 };
-use warpui::event::DispatchedEvent;
-use warpui::{
+use warpui_core::event::DispatchedEvent;
+use warpui_core::{
     AfterLayoutContext, AppContext, Element, EventContext, LayoutContext, PaintContext,
     SizeConstraint,
 };

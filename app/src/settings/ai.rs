@@ -395,6 +395,67 @@ impl ThinkingDisplayMode {
     }
 }
 
+/// Controls what happens when a user submits a new prompt while the agent is
+/// still responding to an earlier prompt.
+///
+/// This is the *default* used when a conversation has no explicit auto-queue
+/// override. Per-conversation overrides live on `QueuedQueryModel` and take
+/// precedence over this setting.
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Copy,
+    Clone,
+    EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "Default behavior when submitting a new prompt while the agent is still responding.",
+    rename_all = "snake_case"
+)]
+pub enum PromptSubmissionMode {
+    /// Cancel the in-flight response and submit the new prompt immediately
+    /// (default).
+    #[default]
+    Interrupt,
+    /// Hold the new prompt until the in-flight response finishes, then submit.
+    Queue,
+}
+
+settings::macros::implement_setting_for_enum!(
+    PromptSubmissionMode,
+    AISettings,
+    SupportedPlatforms::ALL,
+    SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+    private: false,
+    toml_path: "agents.warp_agent.other.default_prompt_submission_mode",
+    description: "Default behavior when submitting a new prompt while the agent is still responding.",
+    feature_flag: FeatureFlag::QueueSlashCommand,
+);
+
+impl PromptSubmissionMode {
+    /// Display name for the settings dropdown.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            PromptSubmissionMode::Interrupt => "Interrupt response",
+            PromptSubmissionMode::Queue => "Queue until response finishes",
+        }
+    }
+
+    pub fn command_palette_description(&self) -> &'static str {
+        match self {
+            PromptSubmissionMode::Interrupt => "Set default prompt submission: interrupt response",
+            PromptSubmissionMode::Queue => {
+                "Set default prompt submission: queue until response finishes"
+            }
+        }
+    }
+}
+
 /// Tracks the state of the quota reset banner
 #[derive(
     Debug,
@@ -1248,6 +1309,11 @@ define_settings_group!(AISettings, settings: [
 
     // Controls how agent thinking/reasoning traces are displayed.
     thinking_display_mode: ThinkingDisplayMode,
+
+    // Default behavior when the user submits a new prompt while the agent is still
+    // responding. Per-conversation overrides live on `QueuedQueryModel`; this
+    // setting is the fallback used when a conversation has no explicit override.
+    default_prompt_submission_mode: PromptSubmissionMode,
 
     // Whether agent-executed shell commands should be included in command history
     // (up-arrow, Ctrl-R search, inline history menu).

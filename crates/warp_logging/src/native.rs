@@ -491,7 +491,7 @@ fn sentry_log_filter(md: &log::Metadata) -> sentry_log::LogFilter {
         }
 
         // Filter out the "redraw_frame" logging from breadcrumbs.
-        "warpui::core::redraw_frame" => sentry_log::LogFilter::Ignore,
+        "warpui_core::core::redraw_frame" => sentry_log::LogFilter::Ignore,
 
         // Filter out logs from the crash-reporting implementation, in case it logs
         // anything in the process of forwarding logs to Sentry.

@@ -1,11 +1,11 @@
-use warpui::elements::Icon as WarpUiIcon;
+use warpui_core::elements::Icon as WarpUiIcon;
 
 use crate::ui::theme::Fill;
 
 /// Default icon dimensions that apply to all icons used within the ui system.
 pub const ICON_DIMENSIONS: f32 = 24.;
 
-/// Icon enum to be used within the app in place of the warpui::elements::Icon directly. It
+/// Icon enum to be used within the app in place of the warpui_core::elements::Icon directly. It
 /// abstracts things like svg paths out and provides a utility method to convert into the actual Icon.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Icon {

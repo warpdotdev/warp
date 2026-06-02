@@ -10,8 +10,8 @@ use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::{RemoteNavigationResult, RemotePath};
 use warp_util::standardized_path::StandardizedPath;
 #[cfg(test)]
-use warpui::r#async::FutureId;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+use warpui_core::r#async::FutureId;
+use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::{DirectoryWatcher, Repository};
 
