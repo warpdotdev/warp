@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use cocoa::base::{id, nil, BOOL, NO, YES};
-use objc2::runtime::AnyClass;
 use objc2::{msg_send, MainThreadMarker};
 use objc2_app_kit::{NSApplication, NSCursor, NSRequestUserAttentionType};
-use objc2_foundation::{NSString, NSUInteger};
+use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio};
+use objc2_foundation::NSUInteger;
 use warpui_core::accessibility::AccessibilityContent;
 use warpui_core::clipboard::InMemoryClipboard;
 use warpui_core::keymap::Keystroke;
@@ -425,26 +425,19 @@ impl platform::Delegate for AppDelegate {
     }
 
     fn microphone_access_state(&self) -> MicrophoneAccessState {
-        // "soun" is not a typo, it's the correct constant name.
-        let media_type_audio = NSString::from_str("soun");
-
-        // AVAuthorizationStatus constants:
-        // 0 = AVAuthorizationStatusNotDetermined - User has not yet made a choice
-        // 1 = AVAuthorizationStatusRestricted - Restricted by system settings/parental controls
-        // 2 = AVAuthorizationStatusDenied - User explicitly denied access
-        // 3 = AVAuthorizationStatusAuthorized - User granted access
-        // SAFETY: `AVCaptureDevice` is provided by AVFoundation at runtime, and
-        // `authorizationStatusForMediaType:` returns an `AVAuthorizationStatus` (an `i32`).
-        let status: i32 = unsafe {
-            let cls =
-                AnyClass::get(c"AVCaptureDevice").expect("AVCaptureDevice class is available");
-            msg_send![cls, authorizationStatusForMediaType: &*media_type_audio]
+        // SAFETY: this is a global static variable, but simply reading it should be safe.
+        let media_type = unsafe { AVMediaTypeAudio };
+        let Some(media_type) = media_type else {
+            return MicrophoneAccessState::NotDetermined;
         };
+
+        // SAFETY: this can raise an exception if you pass an invalid media type, but we're only
+        // ever passing AVMediaTypeAudio here.
+        let status = unsafe { AVCaptureDevice::authorizationStatusForMediaType(media_type) };
         match status {
-            0 => MicrophoneAccessState::NotDetermined,
-            1 => MicrophoneAccessState::Restricted,
-            2 => MicrophoneAccessState::Denied,
-            3 => MicrophoneAccessState::Authorized,
+            AVAuthorizationStatus::Restricted => MicrophoneAccessState::Restricted,
+            AVAuthorizationStatus::Denied => MicrophoneAccessState::Denied,
+            AVAuthorizationStatus::Authorized => MicrophoneAccessState::Authorized,
             _ => MicrophoneAccessState::NotDetermined, // fallback
         }
     }

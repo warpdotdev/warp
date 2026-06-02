@@ -93,6 +93,7 @@ objc2-app-kit = { workspace = true, features = [
     "NSWindow",
     "objc2-quartz-core",
 ] }
+objc2-av-foundation = { workspace = true, features = ["AVCaptureDevice", "AVMediaFormat"] }
 objc2-foundation = { workspace = true, features = [
     "NSArray",
     "NSData",
