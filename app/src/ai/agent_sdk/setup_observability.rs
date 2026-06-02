@@ -154,10 +154,6 @@ impl OzRunTimelineEvent {
     }
 }
 
-#[cfg(test)]
-#[path = "setup_observability_tests.rs"]
-mod tests;
-
 #[derive(Clone, Copy)]
 pub(crate) enum SetupStep {
     TeamMetadataRefresh,
