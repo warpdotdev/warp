@@ -617,7 +617,18 @@ impl SyncQueue {
     fn update_items_with_new_revision(&mut self, server_id: &str, new_revision: Revision) {
         for (_item_id, item) in &mut self.queue {
             match item {
-                QueueItem::UpdateNotebook { revision, id, .. } => {
+                QueueItem::UpdateNotebook { id, revision, .. }
+                | QueueItem::UpdateWorkflow { id, revision, .. }
+                | QueueItem::UpdateCloudPreferences { id, revision, .. }
+                | QueueItem::UpdateEnvVarCollection { id, revision, .. }
+                | QueueItem::UpdateWorkflowEnum { id, revision, .. }
+                | QueueItem::UpdateAIFact { id, revision, .. }
+                | QueueItem::UpdateMCPServer { id, revision, .. }
+                | QueueItem::UpdateAIExecutionProfile { id, revision, .. }
+                | QueueItem::UpdateTemplatableMCPServer { id, revision, .. }
+                | QueueItem::UpdateCloudEnvironment { id, revision, .. }
+                | QueueItem::UpdateScheduledAmbientAgent { id, revision, .. }
+                | QueueItem::UpdateCloudAgentConfig { id, revision, .. } => {
                     Self::maybe_update_queue_item_with_new_revision(
                         &self.client_id_to_server,
                         id,
@@ -626,17 +637,11 @@ impl SyncQueue {
                         &new_revision,
                     );
                 }
-                QueueItem::UpdateWorkflow { id, revision, .. } => {
-                    Self::maybe_update_queue_item_with_new_revision(
-                        &self.client_id_to_server,
-                        id,
-                        server_id,
-                        revision,
-                        &new_revision,
-                    );
-                }
-                // TODO: should we support this for generic string objects?
-                _ => {}
+                QueueItem::CreateObject { .. }
+                | QueueItem::CreateWorkflow { .. }
+                | QueueItem::BulkCreateGenericStringObjects { .. }
+                | QueueItem::UpdateFolder { .. }
+                | QueueItem::RecordObjectAction { .. } => {}
             };
         }
     }

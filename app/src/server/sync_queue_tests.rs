@@ -1305,6 +1305,7 @@ fn test_sync_queue_generic_string_object_update_depends_on_pending_create() {
     let client_id = ClientId::new();
     let server_id = SyncId::ServerId(GenericStringObjectId::from(123).into());
     let revision_after_create = Revision::from(DateTime::<Utc>::default());
+    let revision_after_update = Revision::from(DateTime::<Utc>::default() + Duration::minutes(1));
 
     App::test((), |mut app| async move {
         let cloud_objects_client_mock = MockObjectClient::new();
@@ -1403,6 +1404,35 @@ fn test_sync_queue_generic_string_object_update_depends_on_pending_create() {
                 sync_queue.queue_dependencies().get(&update_id_2).unwrap(),
                 &HashSet::<QueueItemId>::from([update_id])
             );
+
+            sync_queue.remove_id_from_queue(&update_id);
+            sync_queue.queue_dependencies.remove(&update_id);
+            sync_queue.handle_success_response(
+                &server_id.uid(),
+                super::ResponseType::Update {
+                    update_result: super::UpdateResponseType::Success {
+                        revision_and_editor: super::RevisionAndLastEditor {
+                            revision: revision_after_update.clone(),
+                            last_editor_uid: None,
+                        },
+                    },
+                },
+                update_id,
+                InitiatedBy::User,
+                ctx,
+            );
+
+            assert_eq!(
+                sync_queue.queue_dependencies().get(&update_id_2).unwrap(),
+                &HashSet::<QueueItemId>::new()
+            );
+            let queued_revision = sync_queue.queue().iter().find_map(|(_, item)| match item {
+                QueueItem::UpdateAIFact { id, revision, .. } if *id == server_id => {
+                    Some(revision.clone())
+                }
+                _ => None,
+            });
+            assert_eq!(queued_revision, Some(Some(revision_after_update)));
         });
     });
 }
