@@ -134,12 +134,9 @@ pub fn adjacent_orchestration_child_conversation_id(
         .chain(descendant_ids)
         .collect::<Vec<_>>();
 
-    let Some(active_index) = conversation_ids
+    let active_index = conversation_ids
         .iter()
-        .position(|child_id| *child_id == active_conversation_id)
-    else {
-        return None;
-    };
+        .position(|child_id| *child_id == active_conversation_id)?;
 
     let target_index = match direction {
         OrchestrationNavigationDirection::Previous => active_index
