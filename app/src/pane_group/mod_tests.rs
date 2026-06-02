@@ -21,6 +21,9 @@ use warpui::windowing::WindowManager;
 use warpui::{App, ModelHandle};
 use watcher::HomeDirectoryWatcher;
 
+use super::child_agent::hydration::{
+    decide_remote_child_hydration_action, RemoteChildHydrationAction,
+};
 use super::child_agent::{
     create_hidden_child_agent_conversation, HiddenChildAgentConversationRequest,
     HiddenChildAgentTaskContext,
@@ -35,7 +38,8 @@ use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::ai::ambient_agents::task::TaskPrincipalInfo;
 use crate::ai::ambient_agents::{
-    AgentSource, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
+    AgentSource, AmbientAgentLiveSessionState, AmbientAgentTask, AmbientAgentTaskId,
+    AmbientAgentTaskState,
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::CloudConversationData;
