@@ -333,14 +333,15 @@ impl HarnessRunner for CodexHarnessRunner {
             })
             .await??
             .await?;
-        setup_events
-            .post_timeline_event(OzRunTimelineEvent::AgentStarted)
-            .await;
 
         *self.state.lock() = CodexRunnerState::Running {
             conversation_id,
             block_id: command_handle.block_id().clone(),
         };
+
+        setup_events
+            .post_timeline_event(OzRunTimelineEvent::AgentStarted)
+            .await;
 
         Ok(command_handle)
     }

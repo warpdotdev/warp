@@ -502,15 +502,16 @@ impl HarnessRunner for ClaudeHarnessRunner {
                 return Err(err);
             }
         };
-        setup_events
-            .post_timeline_event(OzRunTimelineEvent::AgentStarted)
-            .await;
 
         // Only store conversation info once the CLI command has started.
         *self.state.lock() = ClaudeRunnerState::Running {
             conversation_id,
             block_id: command_handle.block_id().clone(),
         };
+
+        setup_events
+            .post_timeline_event(OzRunTimelineEvent::AgentStarted)
+            .await;
 
         Ok(command_handle)
     }
