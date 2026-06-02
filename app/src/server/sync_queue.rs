@@ -489,8 +489,10 @@ impl SyncQueue {
                 dependencies
             }
 
-            // Other queue item types don't have dependencies supported right now
-            _ => HashSet::new(),
+            // These queue item types do not have inferred dependencies.
+            QueueItem::CreateObject { .. }
+            | QueueItem::BulkCreateGenericStringObjects { .. }
+            | QueueItem::RecordObjectAction { .. } => HashSet::new(),
         };
 
         // We never want an object to be dependent on itself, which is possible when we infer dependencies on startup from SQLite
