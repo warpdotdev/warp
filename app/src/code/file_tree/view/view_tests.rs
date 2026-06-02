@@ -22,6 +22,8 @@ use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::ToastStack;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
+use super::RootDirectory;
+
 fn std_path(path: &std::path::Path) -> warp_util::standardized_path::StandardizedPath {
     warp_util::standardized_path::StandardizedPath::try_from_local(path).unwrap()
 }
@@ -111,6 +113,98 @@ fn build_repo_state_with_unloaded_directory(repo_root: &std::path::Path) -> File
         loaded: true,
     });
     FileTreeState::new(root, vec![], None)
+}
+
+fn install_remote_root(view: &mut FileTreeView, repo_root: &std::path::Path) {
+    let repo_root = std_path(repo_root);
+    let expanded_folders = [
+        repo_root.clone(),
+        repo_root.join("packages"),
+        repo_root.join("packages/app"),
+        repo_root.join("packages/app/src"),
+    ]
+    .into_iter()
+    .collect();
+    view.displayed_directories = vec![repo_root.clone()];
+    view.root_directories.insert(
+        repo_root.clone(),
+        RootDirectory {
+            entry: build_repo_state(&repo_root.to_local_path_lossy()).entry,
+            expanded_folders,
+            items: Vec::new(),
+            item_states: Default::default(),
+            remote_host_id: Some(warp_core::HostId::new("test-host".to_string())),
+        },
+    );
+    view.rebuild_flattened_items();
+}
+
+#[test]
+fn remote_upload_target_uses_directory_or_file_parent() {
+    VirtualFS::test("file_tree_remote_upload_targets", |dirs, mut vfs| {
+        vfs.mkdir("repo/packages/app/src")
+            .with_files(vec![Stub::FileWithContent(
+                "repo/packages/app/src/main.rs",
+                "fn main() {}\n",
+            )]);
+
+        let repo_root = dirs.tests().join("repo");
+        let src_dir = std_path(&repo_root.join("packages/app/src"));
+        let file_path = std_path(&repo_root.join("packages/app/src/main.rs"));
+
+        App::test((), |mut app| async move {
+            let _ = initialize_app(&mut app);
+            let (_, file_tree_view) = app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
+
+            file_tree_view.update(&mut app, |view, _ctx| {
+                install_remote_root(view, &repo_root);
+            });
+
+            file_tree_view.read(&app, |view, _ctx| {
+                let root = std_path(&repo_root);
+                let src_id = view.find_item_id_by_path(&root, &src_dir).unwrap();
+                let file_id = view.find_item_id_by_path(&root, &file_path).unwrap();
+
+                assert_eq!(
+                    view.remote_upload_target_directory_for_id(&src_id),
+                    Some(src_dir.clone())
+                );
+                assert_eq!(
+                    view.remote_upload_target_directory_for_id(&file_id),
+                    Some(src_dir)
+                );
+            });
+        });
+    });
+}
+
+#[test]
+fn local_roots_are_not_remote_upload_targets() {
+    VirtualFS::test("file_tree_local_upload_target_rejected", |dirs, mut vfs| {
+        vfs.mkdir("repo/packages/app/src")
+            .with_files(vec![Stub::FileWithContent(
+                "repo/packages/app/src/main.rs",
+                "fn main() {}\n",
+            )]);
+
+        let repo_root = dirs.tests().join("repo");
+
+        App::test((), |mut app| async move {
+            let _ = initialize_app(&mut app);
+            let (_, file_tree_view) = app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
+
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.set_is_active(true, ctx);
+                view.set_root_directories(vec![repo_root.clone()], ctx);
+            });
+
+            file_tree_view.read(&app, |view, _ctx| {
+                let root = std_path(&repo_root);
+                let root_id = super::FileTreeIdentifier { root, index: 0 };
+                assert_eq!(view.remote_upload_target_directory_for_id(&root_id), None);
+            });
+        });
+    });
 }
 
 #[test]

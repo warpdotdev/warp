@@ -118,6 +118,7 @@ pub enum RemoteServerOperation {
     OpenBuffer,
     SaveBuffer,
     WriteFile,
+    RemoteUpload,
     ReadFileContext,
     DeleteFile,
     RunCommand,

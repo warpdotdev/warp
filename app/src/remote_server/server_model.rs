@@ -10,6 +10,7 @@ use ::ai::index::full_source_code_embedding::manager::{
 use ::ai::index::full_source_code_embedding::{
     ContentHash, FragmentMetadata as LocalFragmentMetadata, NodeHash,
 };
+use futures::AsyncWriteExt as _;
 use remote_server::proto::OpenBufferSuccess;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
@@ -33,25 +34,30 @@ use super::diff_state_tracker::{
     DiffModelKey, DiffStateUpdate, RemoteDiffStateManager, SubscribeOutcome,
 };
 use super::proto::{
-    client_message, delete_file_response, discard_files_response, get_diff_state_response,
-    get_fragment_metadata_from_hash_response, resolve_conflict_response, run_command_response,
-    save_buffer_response, server_message, write_file_response, Abort, Authenticate, BranchInfo,
-    BufferEdit, BufferUpdatedPush, ClientMessage, CloseBuffer, CodebaseIndexLimits,
-    CodebaseIndexStatus, CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot,
-    CodebaseResyncMode, DeleteFile, DeleteFileResponse, DeleteFileSuccess, DiscardFilesError,
-    DiscardFilesResponse, DiscardFilesSuccess, DropCodebaseIndex, ErrorCode, ErrorResponse,
-    FailedFileRead, FileContextProto, FileOperationError,
-    FragmentMetadata as ProtoFragmentMetadata,
+    begin_remote_upload_response, client_message, complete_remote_upload_response,
+    delete_file_response, discard_files_response, get_diff_state_response,
+    get_fragment_metadata_from_hash_response, preflight_remote_upload_response,
+    resolve_conflict_response, run_command_response, save_buffer_response, server_message,
+    upload_remote_file_chunk_response, write_file_response, Abort, Authenticate, BeginRemoteUpload,
+    BeginRemoteUploadResponse, BeginRemoteUploadSuccess, BranchInfo, BufferEdit, BufferUpdatedPush,
+    ClientMessage, CloseBuffer, CodebaseIndexLimits, CodebaseIndexStatus,
+    CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot, CodebaseResyncMode,
+    CompleteRemoteUpload, CompleteRemoteUploadResponse, CompleteRemoteUploadSuccess, DeleteFile,
+    DeleteFileResponse, DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse,
+    DiscardFilesSuccess, DropCodebaseIndex, ErrorCode, ErrorResponse, FailedFileRead,
+    FileContextProto, FileOperationError, FragmentMetadata as ProtoFragmentMetadata,
     FragmentMetadataLookupError as ProtoFragmentMetadataLookupError,
     FragmentMetadataLookupErrorCode, GetBranchesError, GetBranchesResponse, GetBranchesSuccess,
     GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashResponse,
     GetFragmentMetadataFromHashSuccess, IndexCodebase, Initialize, InitializeResponse,
     MissingFragmentMetadata, NavigatedToDirectory, NavigatedToDirectoryResponse, OpenBuffer,
-    OpenBufferResponse, ReadFileContextResponse, ResolveConflict, ResolveConflictResponse,
-    ResolveConflictSuccess, ResyncCodebase, RunCommandError, RunCommandErrorCode,
-    RunCommandRequest, RunCommandResponse, RunCommandSuccess, SaveBuffer, SaveBufferResponse,
-    SaveBufferSuccess, ServerMessage, SessionBootstrapped, TextEdit, UploadHandoffSnapshot,
-    WriteFile, WriteFileResponse, WriteFileSuccess,
+    OpenBufferResponse, PreflightRemoteUpload, PreflightRemoteUploadResponse,
+    PreflightRemoteUploadSuccess, ReadFileContextResponse, RemoteUploadManifestEntry,
+    ResolveConflict, ResolveConflictResponse, ResolveConflictSuccess, ResyncCodebase,
+    RunCommandError, RunCommandErrorCode, RunCommandRequest, RunCommandResponse, RunCommandSuccess,
+    SaveBuffer, SaveBufferResponse, SaveBufferSuccess, ServerMessage, SessionBootstrapped,
+    TextEdit, UploadHandoffSnapshot, UploadRemoteFileChunk, UploadRemoteFileChunkResponse,
+    UploadRemoteFileChunkSuccess, WriteFile, WriteFileResponse, WriteFileSuccess,
 };
 use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
 use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent};
@@ -189,6 +195,37 @@ impl PendingFileOps {
     }
 }
 
+#[derive(Clone)]
+struct RemoteUploadSession {
+    temp_dir: PathBuf,
+    entries: HashMap<String, RemoteUploadSessionEntry>,
+    overwrite: bool,
+}
+
+#[derive(Clone)]
+struct RemoteUploadSessionEntry {
+    final_path: PathBuf,
+    temp_path: Option<PathBuf>,
+    is_directory: bool,
+    size: u64,
+    unix_mode: Option<u32>,
+}
+
+#[derive(Debug)]
+struct RemoteUploadPreflightResult {
+    conflicts: Vec<String>,
+    file_count: u64,
+    directory_count: u64,
+    total_bytes: u64,
+}
+
+struct RemoteUploadCompleteResult {
+    written_paths: Vec<String>,
+    file_count: u64,
+    directory_count: u64,
+    total_bytes: u64,
+}
+
 /// The top-level server-side orchestrator model.
 ///
 /// Receives `ClientMessage`s from connected proxy sessions and routes
@@ -223,6 +260,8 @@ pub struct ServerModel {
     executors: HashMap<SessionId, Arc<LocalCommandExecutor>>,
     /// Tracks in-flight file write/delete operations and handles cleanup.
     pending_file_ops: PendingFileOps,
+    /// Tracks in-flight binary remote uploads staged under a target directory.
+    remote_upload_sessions: HashMap<String, RemoteUploadSession>,
     /// Daemon-wide auth credentials and user identity.
     auth_state: Arc<AuthState>,
     /// Tracks open buffers, per-buffer connection sets, and pending async
@@ -254,6 +293,7 @@ impl ServerModel {
             host_id,
             executors: HashMap::new(),
             pending_file_ops: PendingFileOps::new(),
+            remote_upload_sessions: HashMap::new(),
             auth_state: AuthStateProvider::as_ref(ctx).get().clone(),
             buffers: ServerBufferTracker::new(),
             diff_states: ctx.add_model(|_| RemoteDiffStateManager::new()),
@@ -699,6 +739,18 @@ impl ServerModel {
             }
             Some(client_message::Message::WriteFile(msg)) => {
                 self.handle_write_file(msg, &request_id, conn_id, ctx)
+            }
+            Some(client_message::Message::PreflightRemoteUpload(msg)) => {
+                self.handle_preflight_remote_upload(msg, &request_id)
+            }
+            Some(client_message::Message::BeginRemoteUpload(msg)) => {
+                self.handle_begin_remote_upload(msg, &request_id, conn_id, ctx)
+            }
+            Some(client_message::Message::UploadRemoteFileChunk(msg)) => {
+                self.handle_upload_remote_file_chunk(msg, &request_id, conn_id, ctx)
+            }
+            Some(client_message::Message::CompleteRemoteUpload(msg)) => {
+                self.handle_complete_remote_upload(msg, &request_id, conn_id, ctx)
             }
             Some(client_message::Message::DeleteFile(msg)) => {
                 self.handle_delete_file(msg, &request_id, conn_id, ctx)
@@ -1890,6 +1942,189 @@ impl ServerModel {
         HandlerOutcome::Async(None)
     }
 
+    fn handle_preflight_remote_upload(
+        &self,
+        msg: PreflightRemoteUpload,
+        request_id: &RequestId,
+    ) -> HandlerOutcome {
+        log::info!(
+            "Handling PreflightRemoteUpload entries={} (request_id={request_id})",
+            msg.entries.len()
+        );
+
+        match remote_upload_preflight(&msg.repo_path, &msg.target_dir, &msg.entries) {
+            Ok(result) => {
+                HandlerOutcome::Sync(server_message::Message::PreflightRemoteUploadResponse(
+                    PreflightRemoteUploadResponse {
+                        result: Some(preflight_remote_upload_response::Result::Success(
+                            PreflightRemoteUploadSuccess {
+                                conflicts: result.conflicts,
+                                file_count: result.file_count,
+                                directory_count: result.directory_count,
+                                total_bytes: result.total_bytes,
+                            },
+                        )),
+                    },
+                ))
+            }
+            Err(message) => {
+                HandlerOutcome::Sync(server_message::Message::PreflightRemoteUploadResponse(
+                    PreflightRemoteUploadResponse {
+                        result: Some(preflight_remote_upload_response::Result::Error(
+                            FileOperationError { message },
+                        )),
+                    },
+                ))
+            }
+        }
+    }
+
+    fn handle_begin_remote_upload(
+        &mut self,
+        msg: BeginRemoteUpload,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        log::info!(
+            "Handling BeginRemoteUpload entries={} overwrite={} (request_id={request_id})",
+            msg.entries.len(),
+            msg.overwrite
+        );
+
+        let request_id_for_response = request_id.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move { build_remote_upload_session(msg).await },
+            move |me, result, _ctx| {
+                let response = match result {
+                    Ok((upload_id, session)) => {
+                        me.remote_upload_sessions.insert(upload_id, session);
+                        BeginRemoteUploadResponse {
+                            result: Some(begin_remote_upload_response::Result::Success(
+                                BeginRemoteUploadSuccess {},
+                            )),
+                        }
+                    }
+                    Err(message) => BeginRemoteUploadResponse {
+                        result: Some(begin_remote_upload_response::Result::Error(
+                            FileOperationError { message },
+                        )),
+                    },
+                };
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::BeginRemoteUploadResponse(response),
+                );
+            },
+            ctx,
+        );
+
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    fn handle_upload_remote_file_chunk(
+        &mut self,
+        msg: UploadRemoteFileChunk,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let Some(session) = self.remote_upload_sessions.get(&msg.upload_id).cloned() else {
+            return HandlerOutcome::Sync(server_message::Message::UploadRemoteFileChunkResponse(
+                UploadRemoteFileChunkResponse {
+                    result: Some(upload_remote_file_chunk_response::Result::Error(
+                        FileOperationError {
+                            message: "Upload session not found".to_string(),
+                        },
+                    )),
+                },
+            ));
+        };
+
+        let request_id_for_response = request_id.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move { append_remote_upload_chunk(session, msg).await },
+            move |me, result, _ctx| {
+                let response = match result {
+                    Ok(()) => UploadRemoteFileChunkResponse {
+                        result: Some(upload_remote_file_chunk_response::Result::Success(
+                            UploadRemoteFileChunkSuccess {},
+                        )),
+                    },
+                    Err(message) => UploadRemoteFileChunkResponse {
+                        result: Some(upload_remote_file_chunk_response::Result::Error(
+                            FileOperationError { message },
+                        )),
+                    },
+                };
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::UploadRemoteFileChunkResponse(response),
+                );
+            },
+            ctx,
+        );
+
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    fn handle_complete_remote_upload(
+        &mut self,
+        msg: CompleteRemoteUpload,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let Some(session) = self.remote_upload_sessions.remove(&msg.upload_id) else {
+            return HandlerOutcome::Sync(server_message::Message::CompleteRemoteUploadResponse(
+                CompleteRemoteUploadResponse {
+                    result: Some(complete_remote_upload_response::Result::Error(
+                        FileOperationError {
+                            message: "Upload session not found".to_string(),
+                        },
+                    )),
+                },
+            ));
+        };
+
+        let request_id_for_response = request_id.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move { complete_remote_upload_session(session).await },
+            move |me, result, _ctx| {
+                let response = match result {
+                    Ok(result) => CompleteRemoteUploadResponse {
+                        result: Some(complete_remote_upload_response::Result::Success(
+                            CompleteRemoteUploadSuccess {
+                                written_paths: result.written_paths,
+                                file_count: result.file_count,
+                                directory_count: result.directory_count,
+                                total_bytes: result.total_bytes,
+                            },
+                        )),
+                    },
+                    Err(message) => CompleteRemoteUploadResponse {
+                        result: Some(complete_remote_upload_response::Result::Error(
+                            FileOperationError { message },
+                        )),
+                    },
+                };
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::CompleteRemoteUploadResponse(response),
+                );
+            },
+            ctx,
+        );
+
+        HandlerOutcome::Async(Some(handle))
+    }
+
     /// Handles `DeleteFile` by registering the path and triggering an async
     /// delete via `FileModel`. On a successful dispatch, returns
     /// `HandlerOutcome::Async(None)` — the response is sent later by the
@@ -2774,6 +3009,404 @@ fn fragment_metadata_to_proto(
         byte_start: metadata.location.byte_range.start.as_usize() as u64,
         byte_end: metadata.location.byte_range.end.as_usize() as u64,
     }
+}
+
+fn validate_upload_id(upload_id: &str) -> Result<(), String> {
+    if upload_id.is_empty()
+        || upload_id.contains('/')
+        || upload_id.contains('\\')
+        || upload_id.contains("..")
+    {
+        return Err("Invalid upload_id".to_string());
+    }
+    Ok(())
+}
+
+fn validate_upload_roots(
+    repo_path: &str,
+    target_dir: &str,
+) -> Result<(StandardizedPath, StandardizedPath), String> {
+    let repo_path = StandardizedPath::from_local_canonicalized(Path::new(repo_path))
+        .map_err(|e| format!("Invalid repo_path: {e}"))?;
+    let target_dir = StandardizedPath::from_local_canonicalized(Path::new(target_dir))
+        .map_err(|e| format!("Invalid target_dir: {e}"))?;
+
+    if !target_dir.starts_with(&repo_path) {
+        return Err(format!(
+            "target_dir {target_dir} is not a descendant of repo_path {repo_path}"
+        ));
+    }
+
+    Ok((repo_path, target_dir))
+}
+
+fn validate_relative_upload_path(relative_path: &str) -> Result<(), String> {
+    if relative_path.is_empty() {
+        return Err("Upload entry has an empty relative_path".to_string());
+    }
+
+    let path = Path::new(relative_path);
+    if path.is_absolute() {
+        return Err(format!(
+            "Upload entry must be relative, got {relative_path}"
+        ));
+    }
+
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(_) => {}
+            std::path::Component::CurDir => {
+                return Err(format!(
+                    "Upload entry must be normalized without current-directory segments: {relative_path}"
+                ));
+            }
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => {
+                return Err(format!(
+                    "Upload entry cannot escape the target directory: {relative_path}"
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn resolve_upload_destination(
+    target_dir: &StandardizedPath,
+    entry: &RemoteUploadManifestEntry,
+) -> Result<StandardizedPath, String> {
+    validate_relative_upload_path(&entry.relative_path)?;
+    let path = target_dir.join(&entry.relative_path);
+    if !path.starts_with(target_dir) {
+        return Err(format!(
+            "Upload entry cannot escape the target directory: {}",
+            entry.relative_path
+        ));
+    }
+    Ok(path)
+}
+
+fn remote_upload_preflight(
+    repo_path: &str,
+    target_dir: &str,
+    entries: &[RemoteUploadManifestEntry],
+) -> Result<RemoteUploadPreflightResult, String> {
+    if entries.is_empty() {
+        return Err("No files were provided for upload".to_string());
+    }
+
+    let (_repo_path, target_dir) = validate_upload_roots(repo_path, target_dir)?;
+    let mut seen = HashSet::new();
+    let mut conflicts = Vec::new();
+    let mut file_count = 0;
+    let mut directory_count = 0;
+    let mut total_bytes = 0;
+
+    for entry in entries {
+        if !seen.insert(entry.relative_path.clone()) {
+            let relative_path = &entry.relative_path;
+            return Err(format!("Duplicate upload entry: {relative_path}"));
+        }
+
+        let destination = resolve_upload_destination(&target_dir, entry)?;
+        let destination_path = PathBuf::from(destination.as_str());
+        if entry.is_directory {
+            directory_count += 1;
+            if destination_path.is_file() {
+                conflicts.push(entry.relative_path.clone());
+            }
+        } else {
+            file_count += 1;
+            total_bytes += entry.size;
+            if destination_path.is_dir() {
+                return Err(format!(
+                    "Cannot replace remote directory with a local file: {}",
+                    entry.relative_path
+                ));
+            }
+            if destination_path.exists() {
+                conflicts.push(entry.relative_path.clone());
+            }
+        }
+    }
+
+    Ok(RemoteUploadPreflightResult {
+        conflicts,
+        file_count,
+        directory_count,
+        total_bytes,
+    })
+}
+
+async fn build_remote_upload_session(
+    msg: BeginRemoteUpload,
+) -> Result<(String, RemoteUploadSession), String> {
+    validate_upload_id(&msg.upload_id)?;
+    let (_repo_path, target_dir) = validate_upload_roots(&msg.repo_path, &msg.target_dir)?;
+    let preflight = remote_upload_preflight(&msg.repo_path, &msg.target_dir, &msg.entries)?;
+    if !msg.overwrite && !preflight.conflicts.is_empty() {
+        return Err(format!(
+            "{} remote path(s) already exist",
+            preflight.conflicts.len()
+        ));
+    }
+
+    let upload_id = &msg.upload_id;
+    let temp_dir = PathBuf::from(
+        target_dir
+            .join(&format!(".warp-upload-{upload_id}"))
+            .as_str(),
+    );
+    if temp_dir.exists() {
+        let _ = async_fs::remove_dir_all(&temp_dir).await;
+    }
+    async_fs::create_dir_all(&temp_dir)
+        .await
+        .map_err(|e| format!("Failed to create upload staging directory: {e}"))?;
+
+    let entries = match build_remote_upload_session_entries(&target_dir, &temp_dir, msg.entries) {
+        Ok(entries) => entries,
+        Err(message) => {
+            let _ = async_fs::remove_dir_all(&temp_dir).await;
+            return Err(message);
+        }
+    };
+    if let Err(message) = create_empty_upload_staging_files(&entries).await {
+        let _ = async_fs::remove_dir_all(&temp_dir).await;
+        return Err(message);
+    }
+
+    Ok((
+        msg.upload_id,
+        RemoteUploadSession {
+            temp_dir,
+            entries,
+            overwrite: msg.overwrite,
+        },
+    ))
+}
+
+fn build_remote_upload_session_entries(
+    target_dir: &StandardizedPath,
+    temp_dir: &Path,
+    entries: Vec<RemoteUploadManifestEntry>,
+) -> Result<HashMap<String, RemoteUploadSessionEntry>, String> {
+    let mut session_entries = HashMap::new();
+    for entry in entries {
+        let final_std = resolve_upload_destination(target_dir, &entry)?;
+        let final_path = PathBuf::from(final_std.as_str());
+        let temp_path = if entry.is_directory {
+            None
+        } else {
+            Some(temp_dir.join(Path::new(&entry.relative_path)))
+        };
+
+        session_entries.insert(
+            entry.relative_path,
+            RemoteUploadSessionEntry {
+                final_path,
+                temp_path,
+                is_directory: entry.is_directory,
+                size: entry.size,
+                unix_mode: entry.unix_mode,
+            },
+        );
+    }
+    Ok(session_entries)
+}
+
+async fn create_empty_upload_staging_files(
+    entries: &HashMap<String, RemoteUploadSessionEntry>,
+) -> Result<(), String> {
+    for entry in entries
+        .values()
+        .filter(|entry| !entry.is_directory && entry.size == 0)
+    {
+        let Some(temp_path) = entry.temp_path.as_ref() else {
+            continue;
+        };
+        if let Some(parent) = temp_path.parent() {
+            async_fs::create_dir_all(parent)
+                .await
+                .map_err(|e| format!("Failed to create upload staging parent: {e}"))?;
+        }
+        async_fs::File::create(temp_path)
+            .await
+            .map_err(|e| format!("Failed to create upload staging file: {e}"))?;
+    }
+    Ok(())
+}
+
+async fn append_remote_upload_chunk(
+    session: RemoteUploadSession,
+    msg: UploadRemoteFileChunk,
+) -> Result<(), String> {
+    let Some(entry) = session.entries.get(&msg.relative_path) else {
+        let relative_path = &msg.relative_path;
+        return Err(format!("Upload entry not found: {relative_path}"));
+    };
+    if entry.is_directory {
+        return Err(format!(
+            "Cannot upload file bytes for directory entry: {}",
+            msg.relative_path
+        ));
+    }
+    let Some(temp_path) = entry.temp_path.as_ref() else {
+        return Err(format!(
+            "Upload entry has no staging file: {}",
+            msg.relative_path
+        ));
+    };
+    if let Some(parent) = temp_path.parent() {
+        async_fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("Failed to create upload staging parent: {e}"))?;
+    }
+
+    let current_len = match async_fs::metadata(temp_path).await {
+        Ok(metadata) => metadata.len(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(e) => return Err(format!("Failed to inspect upload staging file: {e}")),
+    };
+    if current_len != msg.offset {
+        return Err(format!(
+            "Upload chunk offset mismatch for {}: expected {current_len}, got {}",
+            msg.relative_path, msg.offset
+        ));
+    }
+    if msg.offset + msg.data.len() as u64 > entry.size {
+        return Err(format!(
+            "Upload chunk exceeds expected file size for {}",
+            msg.relative_path
+        ));
+    }
+
+    let mut file = async_fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(temp_path)
+        .await
+        .map_err(|e| format!("Failed to open upload staging file: {e}"))?;
+    file.write_all(&msg.data)
+        .await
+        .map_err(|e| format!("Failed to write upload chunk: {e}"))?;
+    file.flush()
+        .await
+        .map_err(|e| format!("Failed to flush upload chunk: {e}"))?;
+    Ok(())
+}
+
+async fn complete_remote_upload_session(
+    session: RemoteUploadSession,
+) -> Result<RemoteUploadCompleteResult, String> {
+    let result = commit_remote_upload_session(&session).await;
+    let cleanup_result = async_fs::remove_dir_all(&session.temp_dir).await;
+    if let Err(error) = cleanup_result {
+        log::warn!("Failed to clean upload staging directory: {error}");
+    }
+    result
+}
+
+async fn commit_remote_upload_session(
+    session: &RemoteUploadSession,
+) -> Result<RemoteUploadCompleteResult, String> {
+    let mut written_paths = Vec::new();
+    let mut file_count = 0;
+    let mut directory_count = 0;
+    let mut total_bytes = 0;
+
+    let mut directory_entries = session
+        .entries
+        .iter()
+        .filter(|(_, entry)| entry.is_directory)
+        .collect::<Vec<_>>();
+    directory_entries.sort_by_key(|(relative_path, _)| relative_path.len());
+    for (relative_path, entry) in directory_entries {
+        if entry.final_path.is_file() {
+            if session.overwrite {
+                async_fs::remove_file(&entry.final_path)
+                    .await
+                    .map_err(|e| format!("Failed to replace remote file: {e}"))?;
+            } else {
+                return Err(format!("Remote file already exists: {relative_path}"));
+            }
+        }
+        async_fs::create_dir_all(&entry.final_path)
+            .await
+            .map_err(|e| format!("Failed to create remote directory: {e}"))?;
+        directory_count += 1;
+        written_paths.push(entry.final_path.to_string_lossy().to_string());
+    }
+
+    let mut file_entries = session
+        .entries
+        .iter()
+        .filter(|(_, entry)| !entry.is_directory)
+        .collect::<Vec<_>>();
+    file_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (relative_path, entry) in file_entries {
+        let Some(temp_path) = entry.temp_path.as_ref() else {
+            return Err(format!("Upload entry has no staging file: {relative_path}"));
+        };
+        let staged_len = async_fs::metadata(temp_path)
+            .await
+            .map_err(|e| format!("Failed to inspect staged upload file: {e}"))?
+            .len();
+        if staged_len != entry.size {
+            return Err(format!(
+                "Upload size mismatch for {relative_path}: expected {}, got {staged_len}",
+                entry.size
+            ));
+        }
+        if entry.final_path.exists() {
+            if entry.final_path.is_dir() {
+                return Err(format!(
+                    "Cannot replace remote directory with uploaded file: {relative_path}"
+                ));
+            }
+            if session.overwrite {
+                async_fs::remove_file(&entry.final_path)
+                    .await
+                    .map_err(|e| format!("Failed to replace remote file: {e}"))?;
+            } else {
+                return Err(format!("Remote file already exists: {relative_path}"));
+            }
+        }
+        if let Some(parent) = entry.final_path.parent() {
+            async_fs::create_dir_all(parent)
+                .await
+                .map_err(|e| format!("Failed to create remote parent directory: {e}"))?;
+        }
+        async_fs::rename(temp_path, &entry.final_path)
+            .await
+            .map_err(|e| format!("Failed to commit uploaded file: {e}"))?;
+
+        #[cfg(unix)]
+        if let Some(mode) = entry.unix_mode {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut permissions = async_fs::metadata(&entry.final_path)
+                .await
+                .map_err(|e| format!("Failed to inspect uploaded file permissions: {e}"))?
+                .permissions();
+            permissions.set_mode((permissions.mode() & !0o111) | (mode & 0o111));
+            async_fs::set_permissions(&entry.final_path, permissions)
+                .await
+                .map_err(|e| format!("Failed to set uploaded file permissions: {e}"))?;
+        }
+
+        file_count += 1;
+        total_bytes += entry.size;
+        written_paths.push(entry.final_path.to_string_lossy().to_string());
+    }
+
+    Ok(RemoteUploadCompleteResult {
+        written_paths,
+        file_count,
+        directory_count,
+        total_bytes,
+    })
 }
 
 /// Converts a [`ReadFileContextResult`] into its protobuf equivalent.

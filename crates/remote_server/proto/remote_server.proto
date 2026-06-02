@@ -40,6 +40,10 @@ message ClientMessage {
     GetBranches get_branches = 24;
     ResyncCodebase resync_codebase = 25;
     UploadHandoffSnapshot upload_handoff_snapshot = 26;
+    PreflightRemoteUpload preflight_remote_upload = 27;
+    BeginRemoteUpload begin_remote_upload = 28;
+    UploadRemoteFileChunk upload_remote_file_chunk = 29;
+    CompleteRemoteUpload complete_remote_upload = 30;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -73,6 +77,10 @@ message ServerMessage {
     GetFragmentMetadataFromHashResponse get_fragment_metadata_from_hash_response = 24;
     GetBranchesResponse get_branches_response = 25;
     UploadHandoffSnapshotResponse upload_handoff_snapshot_response = 26;
+    PreflightRemoteUploadResponse preflight_remote_upload_response = 27;
+    BeginRemoteUploadResponse begin_remote_upload_response = 28;
+    UploadRemoteFileChunkResponse upload_remote_file_chunk_response = 29;
+    CompleteRemoteUploadResponse complete_remote_upload_response = 30;
   }
 }
 
@@ -281,6 +289,92 @@ message WriteFileResponse {
 }
 
 message WriteFileSuccess {}
+
+// A local file or directory entry the client intends to upload under a target
+// remote directory. `relative_path` is always relative to that target.
+message RemoteUploadManifestEntry {
+  string relative_path = 1;
+  bool is_directory = 2;
+  uint64 size = 3;
+  optional uint32 unix_mode = 4;
+}
+
+// Client → server: validate the upload destination and report paths that would
+// be replaced or merged before transferring file contents.
+message PreflightRemoteUpload {
+  string repo_path = 1;
+  string target_dir = 2;
+  repeated RemoteUploadManifestEntry entries = 3;
+}
+
+message PreflightRemoteUploadSuccess {
+  repeated string conflicts = 1;
+  uint64 file_count = 2;
+  uint64 directory_count = 3;
+  uint64 total_bytes = 4;
+}
+
+message PreflightRemoteUploadResponse {
+  oneof result {
+    PreflightRemoteUploadSuccess success = 1;
+    FileOperationError error = 2;
+  }
+}
+
+// Client → server: start a binary-safe upload session. File contents follow in
+// `UploadRemoteFileChunk` requests, then are committed by `CompleteRemoteUpload`.
+message BeginRemoteUpload {
+  string upload_id = 1;
+  string repo_path = 2;
+  string target_dir = 3;
+  repeated RemoteUploadManifestEntry entries = 4;
+  bool overwrite = 5;
+}
+
+message BeginRemoteUploadResponse {
+  oneof result {
+    BeginRemoteUploadSuccess success = 1;
+    FileOperationError error = 2;
+  }
+}
+
+message BeginRemoteUploadSuccess {}
+
+// Client → server: append one bounded byte chunk to a file in the active upload.
+message UploadRemoteFileChunk {
+  string upload_id = 1;
+  string relative_path = 2;
+  uint64 offset = 3;
+  bytes data = 4;
+}
+
+message UploadRemoteFileChunkResponse {
+  oneof result {
+    UploadRemoteFileChunkSuccess success = 1;
+    FileOperationError error = 2;
+  }
+}
+
+message UploadRemoteFileChunkSuccess {}
+
+// Client → server: atomically commit uploaded temp files into their final paths.
+message CompleteRemoteUpload {
+  string upload_id = 1;
+}
+
+message CompleteRemoteUploadSuccess {
+  repeated string written_paths = 1;
+  uint64 file_count = 2;
+  uint64 directory_count = 3;
+  uint64 total_bytes = 4;
+}
+
+message CompleteRemoteUploadResponse {
+  oneof result {
+    CompleteRemoteUploadSuccess success = 1;
+    FileOperationError error = 2;
+  }
+}
 
 // Client → server: delete a file.
 message DeleteFile {
@@ -577,4 +671,3 @@ message ResolveConflictSuccess {}
 message BufferConflictDetected {
   string path = 1;
 }
-
