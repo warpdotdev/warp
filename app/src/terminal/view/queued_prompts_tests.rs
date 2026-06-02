@@ -772,9 +772,16 @@ fn send_now_action_removes_row_and_emits_send_now_event() {
             let input = terminal.read(&app, |view, _| view.input.clone());
             input.read(&app, |input, _| input.suggestions_mode_model().clone())
         };
+        let cli_subagent_controller =
+            terminal.read(&app, |view, _| view.cli_subagent_controller.clone());
         let panel = terminal.update(&mut app, |_, ctx| {
             ctx.add_view(move |ctx| {
-                QueuedPromptsPanelView::new(terminal_view_id, suggestions_mode_model, ctx)
+                QueuedPromptsPanelView::new(
+                    terminal_view_id,
+                    suggestions_mode_model,
+                    cli_subagent_controller,
+                    ctx,
+                )
             })
         });
 
@@ -826,9 +833,16 @@ fn send_now_disabled_for_all_rows_while_initial_cloud_mode_row_is_present() {
             let input = terminal.read(&app, |view, _| view.input.clone());
             input.read(&app, |input, _| input.suggestions_mode_model().clone())
         };
+        let cli_subagent_controller =
+            terminal.read(&app, |view, _| view.cli_subagent_controller.clone());
         let panel = terminal.update(&mut app, |_, ctx| {
             ctx.add_view(move |ctx| {
-                QueuedPromptsPanelView::new(terminal_view_id, suggestions_mode_model, ctx)
+                QueuedPromptsPanelView::new(
+                    terminal_view_id,
+                    suggestions_mode_model,
+                    cli_subagent_controller,
+                    ctx,
+                )
             })
         });
 

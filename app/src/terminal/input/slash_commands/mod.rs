@@ -1063,9 +1063,12 @@ impl Input {
                 let history = BlocklistAIHistoryModel::handle(ctx);
                 // An empty conversation defaults to `InProgress` even though nothing is
                 // running, so exclude it here to auto-send rather than queue.
-                let should_queue = history.as_ref(ctx).conversation(&conversation_id).is_some_and(
-                    |c| !c.is_empty() && (c.status().is_in_progress() || c.status().is_blocked()),
-                );
+                let should_queue = history
+                    .as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .is_some_and(|c| {
+                        !c.is_empty() && (c.status().is_in_progress() || c.status().is_blocked())
+                    });
 
                 if should_queue {
                     QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
