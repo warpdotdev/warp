@@ -1,3 +1,6 @@
+use std::path::{Path, PathBuf};
+
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 mod telemetry;
 pub use telemetry::{SkillOpenOrigin, SkillTelemetryEvent};
 
@@ -21,8 +24,29 @@ pub use listed_skill::SkillDescriptor;
 mod skill_utils;
 pub use skill_utils::{
     icon_override_for_skill_name, list_skills_if_changed, render_skill_button,
-    skill_path_from_file_path,
+    skill_path_from_location,
 };
+pub trait SkillPathQuery {
+    fn to_skill_location(&self) -> LocalOrRemotePath;
+}
+
+impl SkillPathQuery for LocalOrRemotePath {
+    fn to_skill_location(&self) -> LocalOrRemotePath {
+        self.clone()
+    }
+}
+
+impl SkillPathQuery for Path {
+    fn to_skill_location(&self) -> LocalOrRemotePath {
+        LocalOrRemotePath::Local(self.to_path_buf())
+    }
+}
+
+impl SkillPathQuery for PathBuf {
+    fn to_skill_location(&self) -> LocalOrRemotePath {
+        LocalOrRemotePath::Local(self.clone())
+    }
+}
 
 #[cfg(not(target_family = "wasm"))]
 mod resolve_skill_spec;

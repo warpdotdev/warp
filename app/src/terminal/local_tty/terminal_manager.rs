@@ -2344,6 +2344,13 @@ impl TerminalManager {
             TerminalViewEvent::StopSharingCurrentSession { reason } => {
                 Self::end_shared_session(&view, session_sharer.clone(), *reason, model.clone(), ctx)
             }
+            TerminalViewEvent::ExtendSessionRetention { reason } => {
+                if let Some(network) = session_sharer.borrow().as_ref() {
+                    network.update(ctx, |network, _| {
+                        network.extend_session_retention(*reason);
+                    });
+                }
+            }
             TerminalViewEvent::SelectedBlocksChanged | TerminalViewEvent::SelectedTextChanged => {
                 if let Some(network) = session_sharer.borrow().as_ref() {
                     let selection = view.read(ctx, |view, ctx| {

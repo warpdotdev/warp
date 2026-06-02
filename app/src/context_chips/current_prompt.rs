@@ -689,7 +689,6 @@ impl CurrentPrompt {
                 }
             }
         }
-
         match generator {
             PromptGenerator::ShellCommand(cmd) => {
                 let Some(exec_ctx) = self.prepare_shell_command_context(cmd, ctx) else {
@@ -790,7 +789,8 @@ impl CurrentPrompt {
                                 }
                             }
                         }
-                        me.update_chip_value(&chip_kind, output.map(ChipValue::Text));
+                        let chip_value = output.map(ChipValue::Text);
+                        me.update_chip_value(&chip_kind, chip_value);
                         me.set_chip_update_status(&chip_kind, status);
                     },
                 );

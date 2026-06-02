@@ -217,7 +217,11 @@ impl BlocklistAIStatusBar {
             }
         });
         ctx.subscribe_to_model(&QueuedQueryModel::handle(ctx), |_, _, event, ctx| {
-            if matches!(event, QueuedQueryEvent::QueueNextPromptToggled { .. }) {
+            if matches!(
+                event,
+                QueuedQueryEvent::QueueNextPromptToggled { .. }
+                    | QueuedQueryEvent::DefaultModeChanged
+            ) {
                 ctx.notify();
             }
         });

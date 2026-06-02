@@ -109,7 +109,9 @@ impl TerminalView {
         // Tear down the Cloud Mode pending prompt on terminal / transition events that replace it.
         // Legacy `Failed`, `NeedsGithubAuth`, and `Cancelled` hand off to the existing error /
         // auth / cancelled UI; `HarnessCommandStarted` hands off to the live harness CLI block.
-        let should_remove_pending_user_query = match event {
+        // The V2 queue-row removal shares this gate so the locked initial row disappears on the
+        // same lifecycle events that retire the legacy block — no V2/non-V2 divergence.
+        let should_clean_up_pending_cloud_query = match event {
             AmbientAgentViewModelEvent::Failed { .. } => {
                 !FeatureFlag::CloudModeSetupV2.is_enabled()
             }
@@ -119,8 +121,9 @@ impl TerminalView {
             | AmbientAgentViewModelEvent::HandoffSnapshotUploadFailed { .. } => true,
             _ => false,
         };
-        if should_remove_pending_user_query {
+        if should_clean_up_pending_cloud_query {
             self.remove_pending_user_query_block(ctx);
+            self.remove_cloud_mode_queue_row(ctx);
         }
 
         match event {
@@ -159,10 +162,21 @@ impl TerminalView {
                     let prompt = ambient_agent_view_model
                         .as_ref(ctx)
                         .request()
-                        .map(|request| display_user_query_with_mode(request.mode, &request.prompt))
+                        .and_then(|request| {
+                            request
+                                .prompt
+                                .as_deref()
+                                .map(|prompt| display_user_query_with_mode(request.mode, prompt))
+                        })
                         .unwrap_or_default();
                     if !prompt.is_empty() {
-                        self.insert_cloud_mode_queued_user_query_block(prompt, ctx);
+                        let queued_prompt_id = FeatureFlag::QueuedPromptsV2
+                            .is_enabled()
+                            .then(|| self.enqueue_initial_cloud_mode_prompt(prompt.clone(), ctx))
+                            .flatten();
+                        if queued_prompt_id.is_none() {
+                            self.insert_cloud_mode_queued_user_query_block(prompt, ctx);
+                        }
                     }
                 } else {
                     // Reset tip cooldown so the first tip shows for 60 seconds
@@ -195,7 +209,13 @@ impl TerminalView {
                     .pending_followup_prompt()
                     .map(str::to_owned);
                 if let Some(prompt) = pending_prompt {
-                    self.insert_cloud_mode_queued_user_query_block(prompt, ctx);
+                    let queued_prompt_id = FeatureFlag::QueuedPromptsV2
+                        .is_enabled()
+                        .then(|| self.enqueue_initial_cloud_mode_prompt(prompt.clone(), ctx))
+                        .flatten();
+                    if queued_prompt_id.is_none() {
+                        self.insert_cloud_mode_queued_user_query_block(prompt, ctx);
+                    }
                 }
                 ctx.notify();
             }
@@ -956,7 +976,7 @@ impl TerminalView {
                     let fetch_error = conversations_handle
                         .as_ref(ctx)
                         .task_fetch_error(&task_id)
-                        .map(str::to_owned);
+                        .cloned();
                     ConversationDetailsData::from_task_id(task_id, fetch_error)
                 });
             self.conversation_details_panel.update(ctx, |panel, ctx| {

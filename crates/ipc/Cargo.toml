@@ -18,7 +18,7 @@ rand.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
-warpui.workspace = true
+warpui_core.workspace = true
 
 [dev-dependencies]
 parking_lot.workspace = true

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use command::r#async::Command;
-use warpui::r#async::FutureExt as _;
+use warpui_core::r#async::FutureExt as _;
 
 /// Transport-level error from [`run_ssh_command`] or [`run_ssh_script`].
 ///

@@ -45,7 +45,7 @@ use parent_bridge::{
     parent_bridge_char_count, parent_bridge_event_cursor_file, parent_bridge_hook_output_ack_file,
     parent_bridge_hook_output_file, parent_bridge_root, parent_bridge_staged_message_path,
     parent_bridge_surfaced_message_path, prepare_parent_bridge_hook_output,
-    prime_parent_bridge_for_wake, read_parent_bridge_event_cursor,
+    prime_parent_bridge_staged_for_self_managed_wake, read_parent_bridge_event_cursor,
     render_parent_bridge_message_block, stage_parent_bridge_message,
     write_parent_bridge_event_cursor, MessageBridgeHookOutput, MessageBridgeMessageRecord,
     MESSAGE_BRIDGE_CONTEXT_PREAMBLE,

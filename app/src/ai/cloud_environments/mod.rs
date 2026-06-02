@@ -1,27 +1,21 @@
 // Some of these re-exported types aren't used in the wasm build, so we suppress this
 // warning.
 #[cfg_attr(target_family = "wasm", expect(unused_imports))]
-pub use warp_server_client::cloud_object::models::{
-    AmbientAgentEnvironment, AwsProviderConfig, BaseImage, GcpProviderConfig, GithubRepo,
-    ProvidersConfig,
+pub use cloud_object_models::{
+    AmbientAgentEnvironment, AwsProviderConfig, BaseImage, CloudAmbientAgentEnvironment,
+    CloudAmbientAgentEnvironmentModel, GcpProviderConfig, GithubRepo, ProvidersConfig,
 };
-use warp_server_client::cloud_object::{
-    GenericCloudObject, GenericStringModel, GenericStringObjectFormat,
-    GenericStringObjectUniqueKey, JsonObjectType, Owner, Revision,
-};
-use warp_server_client::ids::GenericStringObjectId;
+use cloud_objects::cloud_object::Owner;
 use warpui::{AppContext, SingletonEntity as _};
 
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::generic_string_model::StringModel;
-use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
+use crate::cloud_object::model::json_model::JsonModel;
+use crate::cloud_object::{
+    GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType, Revision,
+};
 use crate::server::sync_queue::QueueItem;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-
-pub type CloudAmbientAgentEnvironment =
-    GenericCloudObject<GenericStringObjectId, CloudAmbientAgentEnvironmentModel>;
-pub type CloudAmbientAgentEnvironmentModel =
-    GenericStringModel<AmbientAgentEnvironment, JsonSerializer>;
 
 impl StringModel for AmbientAgentEnvironment {
     type CloudObjectType = CloudAmbientAgentEnvironment;
@@ -95,7 +89,3 @@ pub fn owner_for_new_personal_environment(ctx: &AppContext) -> Option<Owner> {
     let user_id = AuthStateProvider::as_ref(ctx).get().user_id()?;
     Some(Owner::User { user_uid: user_id })
 }
-
-#[cfg(test)]
-#[path = "mod_tests.rs"]
-mod tests;

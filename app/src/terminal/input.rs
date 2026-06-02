@@ -221,6 +221,7 @@ use crate::editor::{
     PropagateAndNoOpNavigationKeys, PropagateHorizontalNavigationKeys, ReplicaId, TextColors,
     TextRun, MAX_IMAGES_PER_CONVERSATION,
 };
+use crate::env_vars::EnvVarCollectionExt;
 use crate::features::FeatureFlag;
 use crate::input_suggestions::{
     Event as InputSuggestionsEvent, HistoryInputSuggestion, InputSuggestions,
@@ -338,6 +339,7 @@ use crate::workspace::{
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 #[allow(unused_imports)]
 use crate::ASSETS;
+#[allow(unused_imports)]
 use crate::{
     cmd_or_ctrl_shift, report_if_error, send_telemetry_from_ctx, AgentModeEntrypoint,
     ServerApiProvider,
@@ -3503,8 +3505,9 @@ impl Input {
         });
 
         let queued_prompts_panel = FeatureFlag::QueueSlashCommand.is_enabled().then(|| {
-            let panel =
-                ctx.add_typed_action_view(|ctx| QueuedPromptsPanelView::new(terminal_view_id, ctx));
+            let panel = ctx.add_typed_action_view(|ctx| {
+                QueuedPromptsPanelView::new(terminal_view_id, suggestions_mode_model.clone(), ctx)
+            });
             ctx.subscribe_to_view(&panel, |me, _, event, ctx| {
                 me.handle_queued_prompts_panel_event(event, ctx);
             });
@@ -3673,14 +3676,16 @@ impl Input {
         &self.agent_status_view
     }
 
-    /// Handles events from the queued-prompts panel: places deleted-row text into an empty editor,
-    /// and refocuses the input editor when an inline edit finishes.
     fn handle_queued_prompts_panel_event(
         &mut self,
         event: &QueuedPromptsPanelEvent,
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
+            QueuedPromptsPanelEvent::SendNow { text } => {
+                self.submit_queued_prompt_for_active_pane(text.clone(), ctx);
+                self.focus_input_box(ctx);
+            }
             QueuedPromptsPanelEvent::RowDeleted { text } => {
                 if self.buffer_text(ctx).is_empty() {
                     self.replace_buffer_content(text, ctx);
@@ -3931,8 +3936,7 @@ impl Input {
             )
         };
         *edit_origin == EditOrigin::UserTyped
-            && AISettings::as_ref(ctx)
-                .is_ampersand_handoff_enabled_for_terminal_view(self.terminal_view_id, ctx)
+            && AISettings::as_ref(ctx).is_ampersand_handoff_enabled(ctx)
             && !is_powershell_with_nld_enabled
             && FeatureFlag::AgentView.is_enabled()
             && self.agent_view_controller.as_ref(ctx).is_fullscreen()
@@ -6703,12 +6707,26 @@ impl Input {
 
     /// Freeze the editor and put it in a loading state.
     pub fn freeze_input_in_loading_state(&mut self, ctx: &mut ViewContext<Self>) -> String {
+        let buffer_text = self.editor.as_ref(ctx).buffer_text(ctx);
+        self.freeze_input_in_loading_state_with_text(&buffer_text, ctx);
+        buffer_text
+    }
+
+    /// Freeze the editor and render `"{display_text} ◌"` as the loading indicator.
+    /// Shared between the user-initiated viewer submission path (which passes the
+    /// editor's current buffer text) and the queued-prompt drain path (which passes
+    /// the popped prompt text without ever reading from / writing to the user's
+    /// in-progress buffer).
+    fn freeze_input_in_loading_state_with_text(
+        &mut self,
+        buffer_text: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
         self.editor.update(ctx, |editor, ctx| {
             // Use an ephemeral edit to show the loading state
             // and disallow edits.
             // TODO: the ◌ treatment is a stop-gap to rendering an svg
             // to the right of the buffer text.
-            let buffer_text = editor.buffer_text(ctx);
             editor.set_buffer_text_ignoring_undo(&format!("{buffer_text} ◌"), ctx);
             editor.set_interaction_state(InteractionState::Selectable, ctx);
 
@@ -6717,9 +6735,7 @@ impl Input {
             // but that disallows text selection.
             let appearance = Appearance::as_ref(ctx);
             editor.set_text_colors(TextColors::all_hint_color(appearance), ctx);
-
-            buffer_text
-        })
+        });
     }
 
     pub fn try_execute_command(&mut self, command: &str, ctx: &mut ViewContext<Self>) -> bool {
@@ -12681,6 +12697,7 @@ impl Input {
             return;
         } else if self.maybe_launch_cloud_handoff_request(ctx)
             || self.maybe_queue_input_for_in_progress_conversation(ctx)
+            || self.maybe_queue_input_during_cloud_setup(ctx)
             || self.maybe_handle_enter_for_slash_command(ctx)
         {
             return;
@@ -13231,9 +13248,76 @@ impl Input {
         ctx.emit(Event::ExecuteAIQuery);
     }
 
+    /// Routes a popped queued prompt to the correct submission path for the active pane,
+    /// without touching the editor buffer or freezing the input. Queue draining must not
+    /// borrow the user-initiated submission UI (loading indicator, buffer replace), because
+    /// the queue panel itself is already the "this prompt is in flight" affordance and the
+    /// user may be typing a different prompt locally.
+    pub(crate) fn submit_queued_prompt_for_active_pane(
+        &mut self,
+        prompt: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // Cloud follow-up path: the cloud run has ended an execution and the next queued
+        // prompt should start a new one. Wins over the viewer path because the old shared
+        // session is no longer live to receive a SendAgentPrompt.
+        let is_ready_for_cloud_followup =
+            self.ambient_agent_view_model()
+                .is_some_and(|ambient_agent_model| {
+                    ambient_agent_model
+                        .as_ref(ctx)
+                        .is_ready_for_cloud_followup_prompt()
+                });
+        if is_ready_for_cloud_followup {
+            ctx.emit(Event::SubmitCloudFollowup { prompt });
+            return;
+        }
+
+        // Shared-session viewer path (covers an in-flight cloud run from the owner's client).
+        // Send the prompt straight to the sharer via Event::SendAgentPrompt — no buffer
+        // replace, no pending-attachment piggyback. When the user's editor is empty we
+        // also surface the standard `"<prompt> ◌"` loading affordance so the queued
+        // submission has visible feedback while the sharer ack flight is in flight; the
+        // `NetworkEvent::AgentPromptRequestInFlight` -> `unfreeze_and_clear_agent_input`
+        // hop will clear it once the sharer acknowledges receipt. If the user has typed
+        // something locally, we leave the buffer alone so their in-progress prompt is
+        // not clobbered.
+        if self.model.lock().shared_session_status().is_viewer() {
+            let server_conversation_token = self
+                .ai_context_model
+                .as_ref(ctx)
+                .selected_conversation_id(ctx)
+                .and_then(|id| {
+                    BlocklistAIHistoryModel::as_ref(ctx)
+                        .conversation(&id)
+                        .and_then(|conv| conv.server_conversation_token().cloned())
+                })
+                .and_then(|token| {
+                    token
+                        .as_str()
+                        .parse()
+                        .ok()
+                        .map(ServerConversationToken::from_uuid)
+                });
+            if self.editor.as_ref(ctx).buffer_text(ctx).is_empty() {
+                self.freeze_input_in_loading_state_with_text(&prompt, ctx);
+            }
+            ctx.emit(Event::SendAgentPrompt {
+                server_conversation_token,
+                prompt,
+                attachments: vec![],
+            });
+            return;
+        }
+
+        // Local Agent Mode path.
+        self.submit_queued_prompt(prompt, ctx);
+    }
+
     /// Checks whether the current input should be queued instead of executed.
-    /// Returns true (and queues the prompt) when the queue-next-prompt toggle is
-    /// on and the active conversation is still in progress.
+    /// Returns true (and queues the prompt) when the active conversation is in progress
+    /// (or blocked) AND either the queue-next-prompt toggle is on or (under
+    /// `QueuedPromptsV2`) the conversation is summarizing.
     /// Only queues when AI input is active — if the user is in shell mode the
     /// input is not queued (so e.g. `ls` still runs in the terminal).
     fn maybe_queue_input_for_in_progress_conversation(
@@ -13256,7 +13340,15 @@ impl Input {
             return false;
         };
 
-        if !QueuedQueryModel::as_ref(ctx).is_queue_next_prompt_enabled(conversation_id) {
+        let is_summarizing = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .is_some_and(|c| c.is_summarizing());
+        // Summarization only routes a prompt into the queued-prompts panel under QueuedPromptsV2;
+        // with the flag off, only the auto-queue toggle queues (pre-V2 behavior).
+        let queue_for_summarize = is_summarizing && FeatureFlag::QueuedPromptsV2.is_enabled();
+        if !QueuedQueryModel::as_ref(ctx).is_queue_next_prompt_enabled(conversation_id)
+            && !queue_for_summarize
+        {
             return false;
         }
 
@@ -13304,6 +13396,58 @@ impl Input {
             editor.clear_buffer(ctx);
         });
 
+        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new(prompt, QueuedQueryOrigin::AutoQueueToggle),
+                ctx,
+            );
+        });
+
+        true
+    }
+
+    /// Queues the current input on cloud-mode panes that are provisioned but not
+    /// currently running (e.g. between cloud executions). Returns true and clears the
+    /// editor when the input is captured so the caller skips the normal submission
+    /// path. Only active when `QueuedPromptsV2` is enabled.
+    fn maybe_queue_input_during_cloud_setup(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        if !FeatureFlag::QueuedPromptsV2.is_enabled() {
+            return false;
+        }
+
+        let should_queue = self
+            .ambient_agent_view_model()
+            .is_some_and(|ambient_agent_model| {
+                let ambient_agent_model = ambient_agent_model.as_ref(ctx);
+                ambient_agent_model.is_ambient_agent()
+                    && !ambient_agent_model.is_configuring_ambient_agent()
+                    && !ambient_agent_model.is_agent_running()
+            });
+        if !should_queue {
+            return false;
+        }
+
+        let Some(conversation_id) = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        else {
+            return false;
+        };
+
+        let prompt = self.editor.as_ref(ctx).buffer_text(ctx);
+        let prompt = prompt.trim().to_owned();
+        if prompt.is_empty() {
+            return false;
+        }
+
+        self.editor.update(ctx, |editor, ctx| {
+            editor.clear_buffer(ctx);
+        });
+        self.ai_context_model.update(ctx, |context_model, ctx| {
+            context_model.clear_pending_attachments(ctx);
+        });
         QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
             model.append(
                 conversation_id,

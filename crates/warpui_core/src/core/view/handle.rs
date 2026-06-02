@@ -257,6 +257,7 @@ impl<T: View> WeakViewHandle<T> {
             .get(&window_id)
             .and_then(|w| w.views.get(&self.view_id))
             .is_some()
+            && !app.ref_counts.lock().is_view_dropped(self.view_id)
         {
             Some(ViewHandle::new(window_id, self.view_id, &app.ref_counts))
         } else {

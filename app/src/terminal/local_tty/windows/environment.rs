@@ -297,6 +297,15 @@ fn add_user_env(env: &mut BTreeMap<OsString, EnvEntry>) {
 }
 
 fn reg_value_to_string(value: &RegValue, key: &str) -> anyhow::Result<OsString> {
+    // Only REG_SZ and REG_EXPAND_SZ are valid for environment variables.
+    // https://github.com/microsoft/terminal/blob/1ba28b298f677d838c3a2e457a8a1f569bff6299/src/inc/til/env.h#L247-L259
+    if value.vtype != RegType::REG_SZ && value.vtype != RegType::REG_EXPAND_SZ {
+        anyhow::bail!(
+            "Unsupported registry type {:?} for env var {key:?}",
+            value.vtype
+        );
+    }
+
     let key_lower = key.to_ascii_lowercase();
     // RegType::REG_EXPAND_SZ requires expansion of nested env vars, e.g. %USERPROFILE%\AppData to
     // C:\Users\andy\AppData
@@ -329,7 +338,13 @@ fn reg_value_to_string(value: &RegValue, key: &str) -> anyhow::Result<OsString> 
     };
 
     // These are null-terminated, but we don't want the terminator here. We add it back later.
-    os_str.map(|v| v.to_string_lossy().trim_end_matches('\0').into())
+    os_str.map(|v| {
+        let s = v.to_string_lossy();
+        match s.find('\0') {
+            Some(pos) => s[..pos].into(),
+            None => v,
+        }
+    })
 }
 
 /// Best-effort lowercase transformation of an OsString.
@@ -366,52 +381,5 @@ fn environment_block(env: impl Iterator<Item = (OsString, EnvEntry)>) -> Vec<u16
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn wsl_env_allowlist_includes_client_version_without_notifications_flag() {
-        let _guard = FeatureFlag::HOANotifications.override_enabled(false);
-
-        let wslenv = wsl_env_allowlist(false).to_string_lossy().into_owned();
-
-        assert_eq!(
-            wslenv.split(':').collect::<Vec<_>>(),
-            vec![
-                format!("{HONOR_PS1_NAME}/u"),
-                format!("{USE_SSH_WRAPPER_NAME}/u"),
-                format!("{SHELL_DEBUG_MODE_NAME}/u"),
-                format!("{TERM_PROGRAM_NAME}/u"),
-                format!("{IS_LOCAL_SESSION_NAME}/u"),
-                format!("{SSH_SOCKET_DIR}/u"),
-                format!("{CLIENT_VERSION_NAME}/u"),
-                format!("{TERMINAL_SESSION_UUID_ENV}/u"),
-                format!("{FOCUS_URL_ENV}/u"),
-            ],
-        );
-    }
-
-    #[test]
-    fn wsl_env_allowlist_includes_cli_agent_protocol_when_notifications_flag_is_enabled() {
-        let _guard = FeatureFlag::HOANotifications.override_enabled(true);
-
-        let wslenv = wsl_env_allowlist(true).to_string_lossy().into_owned();
-
-        assert_eq!(
-            wslenv.split(':').collect::<Vec<_>>(),
-            vec![
-                format!("{HONOR_PS1_NAME}/u"),
-                format!("{USE_SSH_WRAPPER_NAME}/u"),
-                format!("{SHELL_DEBUG_MODE_NAME}/u"),
-                format!("{TERM_PROGRAM_NAME}/u"),
-                format!("{IS_LOCAL_SESSION_NAME}/u"),
-                format!("{SSH_SOCKET_DIR}/u"),
-                format!("{CLIENT_VERSION_NAME}/u"),
-                format!("{TERMINAL_SESSION_UUID_ENV}/u"),
-                format!("{FOCUS_URL_ENV}/u"),
-                format!("{CLI_AGENT_PROTOCOL_VERSION_NAME}/u"),
-                format!("{INITIAL_WORKING_DIR_NAME}/pu"),
-            ],
-        );
-    }
-}
+#[path = "environment_tests.rs"]
+mod tests;

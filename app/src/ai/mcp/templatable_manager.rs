@@ -9,9 +9,6 @@ mod utils;
 #[cfg(target_family = "wasm")]
 mod wasm;
 
-#[cfg(all(test, not(target_family = "wasm")))]
-mod utils_tests;
-
 use std::collections::{HashMap, HashSet};
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;

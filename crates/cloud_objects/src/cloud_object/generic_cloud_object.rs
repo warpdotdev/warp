@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
-use crate::ids::{ClientId, SyncId};
-
 use super::{
     CloudObjectMetadata, CloudObjectPermissions, CloudObjectStatuses, CloudObjectSyncStatus,
     ConflictStatus, GenericServerObject, NumInFlightRequests, ObjectType, Owner,
 };
+use crate::ids::{ClientId, SyncId};
 
 /// A portable payload for persisting or otherwise upserting a cloud object without app-local event types.
 #[derive(Clone, Debug)]

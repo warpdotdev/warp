@@ -45,6 +45,10 @@ pub enum GraphQLError {
     /// Not authorized to talk to the staging server.
     #[error("not authorized for staging")]
     StagingAccessBlocked,
+    /// The request was blocked by GCP Identity-Aware Proxy, indicating that
+    /// the IAP bearer token is stale or missing.
+    #[error("blocked by IAP challenge")]
+    IapChallengeBlocked,
     #[error("received non-OK response code {status}")]
     HttpError { status: StatusCode, body: String },
     #[error("Failed to deserialize GraphQL response: {0:?}")]
@@ -132,6 +136,11 @@ where
             log::debug!("{operation_name} request to /graphql/v2 succeeded.");
         }
         status_code => {
+            // Check for IAP challenge first — IAP rejects with 302/401/403 and its own
+            // `x-goog-iap-generated-response` header.
+            if http_client::iap::is_iap_challenge(status_code, response.headers()) {
+                return Err(GraphQLError::IapChallengeBlocked);
+            }
             if status_code == StatusCode::FORBIDDEN && ChannelState::uses_staging_server() {
                 // Both our server and Cloud Armor can send back HTTP 403 errors.
                 // Since Cloud Armor sends back an HTML error page, check for that to determine

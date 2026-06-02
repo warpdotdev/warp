@@ -1,19 +1,15 @@
-pub mod anonymous_id;
 pub mod auth_manager;
 mod auth_override_warning_body;
 pub mod auth_override_warning_modal;
-pub mod auth_state;
 mod auth_view_body;
 pub mod auth_view_modal;
 mod auth_view_shared_helpers;
-pub mod credentials;
 mod login_error_modal;
 mod login_failure_notification;
 pub mod login_slide;
 pub mod needs_sso_link_view;
 pub mod paste_auth_token_modal;
-pub mod user;
-pub mod user_uid;
+pub use warp_server_auth::{auth_state, credentials, user, user_uid};
 #[cfg(target_family = "wasm")]
 pub mod web_handoff;
 
@@ -55,10 +51,6 @@ use crate::{
     focus_running_window_and_show_native_modal, persistence, report_if_error,
     send_telemetry_sync_from_app_ctx, GlobalResourceHandlesProvider,
 };
-
-/// Prefix for API keys used in authentication
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
-pub const API_KEY_PREFIX: &str = "wk-";
 
 pub fn init(app: &mut AppContext) {
     auth_view_modal::init(app);
