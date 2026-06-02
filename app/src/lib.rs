@@ -278,7 +278,6 @@ use crate::root_view::{
 use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::experiments::ServerExperiments;
-#[cfg(not(target_family = "wasm"))]
 use crate::server::iap::IapManager;
 use crate::server::sync_queue::{QueueItem, SyncQueue};
 pub use crate::server::telemetry::{
@@ -1882,7 +1881,12 @@ pub(crate) fn initialize_app(
     // `IapManager` drives gcloud-based IAP token refresh for staging builds.
     // Register it after `LocalShellState`: the Manager needs to know where the gcloud
     // cli lives & thus needs PATH config set by ~/.zshrc et al.
-    #[cfg(not(target_family = "wasm"))]
+    //
+    // Registered on all targets (including wasm) so consumers such as the
+    // shared-session viewer network — which compiles and runs on wasm — can
+    // read the singleton without panicking. On wasm `iap_state` is always
+    // `None`, making this an inert no-op: `IapManager::new` early-returns from
+    // its refresh loop and `iap_state()` yields no proxy-auth header.
     ctx.add_singleton_model(move |ctx| IapManager::new(iap_state, ctx));
 
     // Add a singleton model that holds the current prompt configuration.

@@ -6,7 +6,7 @@ use base64::Engine;
 use blocking::unblock;
 use instant::Instant;
 use warp_core::channel::IapConfig;
-use warpui::r#async::Timer;
+use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{Entity, ModelContext, SingletonEntity};
 #[cfg(not(target_family = "wasm"))]
 use websocket::connect_error_http_response;
@@ -238,11 +238,31 @@ impl IapManager {
             shell_state.get_interactive_path_env_var(ctx)
         });
         #[cfg(not(feature = "local_tty"))]
-        let path_future = futures::future::ready(None);
+        let path_future = futures::future::ready(None::<String>);
 
         ctx.spawn(
             async move {
-                let path_env = path_future.await;
+                // Bound the interactive PATH capture. It spawns an interactive
+                // login shell (sourcing rc files), which can hang indefinitely
+                // on a misbehaving startup script. Without this bound the
+                // spawned task would never reach the `GCLOUD_TIMEOUT`-guarded
+                // fetch, stranding the state machine in `Refreshing` and
+                // silently disabling every future refresh and IAP challenge
+                // (both early-return while `Refreshing`). On timeout, fall back
+                // to the ambient PATH so the fetch still runs and the state
+                // machine can make progress (succeed or fail).
+                const PATH_CAPTURE_TIMEOUT: Duration = Duration::from_secs(10);
+                let path_env = match path_future.with_timeout(PATH_CAPTURE_TIMEOUT).await {
+                    Ok(path_env) => path_env,
+                    Err(_) => {
+                        log::warn!(
+                            "Interactive PATH capture timed out after {}s; \
+                             falling back to ambient PATH for IAP token fetch",
+                            PATH_CAPTURE_TIMEOUT.as_secs()
+                        );
+                        None
+                    }
+                };
                 unblock(move || {
                     fetch_iap_token(&audiences, &service_account_email, path_env.as_deref())
                 })
