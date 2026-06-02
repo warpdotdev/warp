@@ -613,32 +613,31 @@ impl ServerApi {
         }
     }
 
-    /// Inspects a websocket handshake connect error for an IAP challenge and
-    /// emits an `IapChallengeReceived` event if detected
+    /// Inspects a websocket *handshake* connect error for an IAP challenge and
+    /// enqueues an `IapChallengeReceived` event if detected.
     #[cfg(not(target_family = "wasm"))]
-    pub fn check_ws_connect_for_iap_challenge(&self, err: &anyhow::Error) {
+    fn report_ws_iap_challenge(&self, err: &anyhow::Error) {
         if self.iap_state.is_none() {
             return;
         }
-        let Some(response) = websocket::connect_error_http_response(err) else {
-            return;
-        };
-        self.notify_iap_challenge_if_detected(response.status(), response.headers());
+        if super::iap::ws_connect_is_iap_challenge(err) {
+            log::warn!("Received IAP challenge on websocket handshake; notifying IapManager");
+            if let Err(err) = self
+                .event_sender
+                .try_send(ServerApiEvent::IapChallengeReceived)
+            {
+                log::warn!("Failed to enqueue IapChallengeReceived: {err}");
+            }
+        }
     }
 
     #[cfg(target_family = "wasm")]
-    pub fn check_ws_connect_for_iap_challenge(&self, _err: &anyhow::Error) {}
+    fn report_ws_iap_challenge(&self, _err: &anyhow::Error) {}
 
-    // IAP handshake header (to access staging envs only)
-    pub fn iap_handshake_header(&self) -> Option<(&'static str, String)> {
-        let token = self
-            .iap_state
+    pub fn iap_proxy_auth_header(&self) -> Option<(&'static str, String)> {
+        self.iap_state
             .as_ref()
-            .and_then(|state| state.get_cached())?;
-        Some((
-            http_client::iap::IAP_PROXY_AUTH_HEADER,
-            format!("Bearer {token}"),
-        ))
+            .and_then(|state| state.proxy_auth_header())
     }
 
     /// Returns ambient agent headers to attach to requests.

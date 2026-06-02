@@ -700,12 +700,12 @@ impl ObjectClient for ServerApi {
             },
             message_sender,
             stream_ready_sender,
-            self.iap_handshake_header().into_iter().collect(),
+            self.iap_proxy_auth_header().into_iter().collect(),
         )
         .await;
 
         if let Err(err) = &result {
-            self.check_ws_connect_for_iap_challenge(err);
+            self.report_ws_iap_challenge(err);
         }
         result
     }

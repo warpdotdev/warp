@@ -128,10 +128,7 @@ impl WebSocket {
     }
 
     /// Connect to `url`, attaching the provided extra request headers to the
-    /// HTTP upgrade handshake. This is the only place auth that must be present
-    /// on the handshake itself (e.g. the IAP `Proxy-Authorization` token) can
-    /// be attached, since the graphql-ws `connection_init` payload and any
-    /// app-level messages are sent only *after* the upgrade completes.
+    /// HTTP upgrade handshake.
     ///
     /// Custom handshake headers are not supported on wasm websockets, so
     /// `headers` is ignored there.

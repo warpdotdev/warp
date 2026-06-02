@@ -23,7 +23,7 @@ use warp_core::channel::{Channel, ChannelState};
 use warp_core::operating_system_info::OperatingSystemInfo;
 use warp_core::{execution_mode, report_error};
 
-use crate::iap::{IAP_PROXY_AUTH_HEADER, IapTokenProvider};
+use crate::iap::{IapTokenProvider, proxy_auth_header};
 
 pub mod headers {
     /// Custom Warp header indicating the version of the Warp app.
@@ -199,7 +199,8 @@ impl Client {
         }
 
         if let Some(token) = iap_token {
-            builder = builder.header(IAP_PROXY_AUTH_HEADER, format!("Bearer {token}"));
+            let (name, value) = proxy_auth_header(&token);
+            builder = builder.header(name, value);
         }
 
         builder
@@ -236,9 +237,7 @@ impl Client {
     }
 
     /// Returns the IAP bearer token to attach to a request targeting
-    /// `url`, scoped to the Warp server-family origins (the main server
-    /// pool and the RTC server). Returns `None` for any other origin so the
-    /// token never leaks to third parties.
+    /// `url`, scoped to the Warp server's origin.
     fn iap_token_for<U: IntoUrl>(&self, url: U) -> Option<String> {
         let provider = self.iap_token_provider.as_ref()?;
         let url = url.into_url().ok()?;
