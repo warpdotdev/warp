@@ -16,16 +16,15 @@ use crate::codebase_index_proto::{
 use crate::proto::{
     get_branches_response, get_fragment_metadata_from_hash_response, host_scoped_request,
     notification, server_message, session_scoped_request, Abort, Authenticate, BranchInfo,
-    BufferEdit, ClientMessage, CloseBuffer, CodebaseIndexLimits, CodebaseResyncMode, DeleteFile,
-    DiffMode, DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot, DiscardFilesRequest,
-    DropCodebaseIndex, ErrorCode, FileStatusInfo, FragmentMetadataLookupErrorCode, GetBranches,
-    GetDiffState, GetDiffStateResponse, GetFragmentMetadataFromHash,
-    GetFragmentMetadataFromHashSuccess, IndexCodebase, Initialize, InitializeResponse,
-    LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse, OpenBuffer,
-    OpenBufferResponse, ReadFileContextRequest, ReadFileContextResponse, ResyncCodebase,
-    RunCommandRequest, RunCommandResponse, SaveBuffer, ServerMessage, SessionBootstrapped,
-    TextEdit, UnsubscribeDiffState, UploadHandoffSnapshot, UploadHandoffSnapshotResponse,
-    WriteFile,
+    BufferEdit, ClientMessage, CloseBuffer, CodebaseIndexLimits, DeleteFile, DiffMode,
+    DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot, DiscardFilesRequest, ErrorCode,
+    FileStatusInfo, FragmentMetadataLookupErrorCode, GetBranches, GetDiffState,
+    GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashSuccess,
+    Initialize, InitializeResponse, LoadRepoMetadataDirectoryResponse,
+    NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, ReadFileContextRequest,
+    ReadFileContextResponse, RunCommandRequest, RunCommandResponse, SaveBuffer, ServerMessage,
+    SessionBootstrapped, TextEdit, UnsubscribeDiffState, UploadHandoffSnapshot,
+    UploadHandoffSnapshotResponse, WriteFile,
 };
 use crate::repo_metadata_proto::{proto_snapshot_to_update, proto_to_repo_metadata_update};
 
@@ -198,6 +197,12 @@ pub struct RemoteServerClient {
     /// (the daemon re-routed a response from a dead connection to this one).
     /// The `RemoteServerManager` drains this channel to match against its
     /// `pending_host_requests`.
+    ///
+    /// Never read directly: the `reader_task` holds its own clone and is the
+    /// only writer, so this copy exists only to keep a sender for the channel
+    /// reachable from the client itself. `expect` (rather than `allow`) so we
+    /// get nudged to drop the attribute if the field ever starts being read.
+    #[expect(dead_code)]
     host_response_tx: async_channel::Sender<ServerMessage>,
 }
 
@@ -1069,6 +1074,16 @@ impl RemoteServerClient {
         self.send_notification(msg);
     }
 
+    /// Sends an `Abort` notification for a host-scoped request.
+    ///
+    /// Used by the `RemoteServerManager` when a host-scoped request times out:
+    /// the manager owns the lifecycle of host-scoped requests, so it (not the
+    /// client) decides when to abort one. Fire-and-forget, like all
+    /// notifications.
+    pub fn abort_request(&self, request_id_to_abort: &RequestId) {
+        self.send_abort(request_id_to_abort);
+    }
+
     /// Sends a message without registering a pending request (fire-and-forget).
     fn send_notification(&self, msg: ClientMessage) {
         // Use try_send to avoid blocking; if the channel is full or closed,
@@ -1085,10 +1100,16 @@ impl RemoteServerClient {
     /// response on a different connection if this one disconnects. The
     /// `reader_task` forwards unmatched responses to `host_response_tx`
     /// so the manager can match them.
-    pub fn send_host_scoped(&self, msg: ClientMessage) {
-        if let Err(e) = self.outbound_tx.try_send(msg) {
-            log::warn!("Failed to send host-scoped request: {e}");
-        }
+    ///
+    /// Returns `Err(ClientError::Disconnected)` if the outbound channel is
+    /// closed (the writer task has exited after a fatal connection error).
+    /// The manager relies on this to fail the caller and avoid leaking a
+    /// pending request that could never be matched. Logging is left to the
+    /// manager, which has the host and request-id context.
+    pub fn send_host_scoped(&self, msg: ClientMessage) -> Result<(), ClientError> {
+        self.outbound_tx
+            .try_send(msg)
+            .map_err(|_| ClientError::Disconnected)
     }
 
     /// Background task that writes `ClientMessage`s to the underlying stream.

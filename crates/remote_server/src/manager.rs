@@ -48,6 +48,13 @@ pub const MAX_RECONNECT_ATTEMPTS: u32 = 2;
 /// Delay between reconnection attempts.
 #[cfg(not(target_family = "wasm"))]
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
+/// Timeout for host-scoped requests. Matches the client's prior
+/// `REQUEST_TIMEOUT` (these requests used it before host-scoped lifecycle
+/// moved to the manager). If the daemon accepts a request but never responds,
+/// the manager fails the caller and aborts the request after this elapses so
+/// `pending_host_requests` doesn't leak.
+#[cfg(not(target_family = "wasm"))]
+const HOST_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// Brief timeout for awaiting a child process's exit status after a
 /// connection failure. Gives the SSH subprocess time to report its exit
 /// code and signal status before we give up and report `None`.
@@ -653,6 +660,24 @@ struct PendingHostRequest {
     /// Oneshot sender to resolve the caller's future with the raw
     /// `ServerMessage`. The caller parses the response variant.
     result_tx: oneshot::Sender<Result<crate::proto::ServerMessage, HostRequestError>>,
+    /// Aborts this request's timeout timer. `Some` when a timeout was armed
+    /// (always off-wasm), `None` on wasm. Cancelling it when the request
+    /// resolves early stops the timer task immediately, so the number of live
+    /// timer tasks tracks *in-flight* requests rather than growing with every
+    /// request ever sent (a burst of requests doesn't accumulate timers that
+    /// each linger until the full timeout elapses).
+    timeout_abort: Option<futures::future::AbortHandle>,
+}
+
+impl PendingHostRequest {
+    /// Cancels this request's timeout timer, if one was armed. Called when the
+    /// request resolves before the timeout fires (response arrived or all
+    /// sessions disconnected).
+    fn cancel_timeout(&self) {
+        if let Some(abort) = &self.timeout_abort {
+            abort.abort();
+        }
+    }
 }
 
 /// Handle for dispatching host-scoped requests from async contexts.
@@ -760,6 +785,11 @@ pub struct RemoteServerManager {
     /// `host_response_rx`, or failed when all sessions for the host
     /// disconnect.
     pending_host_requests: HashMap<crate::protocol::RequestId, PendingHostRequest>,
+    /// Background executor used to schedule host-scoped request timeouts.
+    /// Only used off-wasm (timers and detached tasks aren't available on
+    /// wasm), so the field is allowed to be dead there.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    executor: Arc<warpui_core::r#async::executor::Background>,
 }
 
 impl Entity for RemoteServerManager {
@@ -781,6 +811,7 @@ impl RemoteServerManager {
             session_platforms: HashMap::new(),
             codebase_index_limits: None,
             pending_host_requests: HashMap::new(),
+            executor: ctx.background_executor().clone(),
         }
     }
 
@@ -823,19 +854,28 @@ impl RemoteServerManager {
     /// Sends a host-scoped request to any connected session for the given host.
     ///
     /// The caller constructs the `ClientMessage` (already wrapped in
-    /// `HostScopedRequest`). The manager registers the request in
-    /// `pending_host_requests` and sends it via `client.send_host_scoped()`.
-    /// The response arrives asynchronously on the `host_response_rx` channel
-    /// and is matched by `request_id`.
+    /// `HostScopedRequest`). The manager dispatches it via
+    /// `client.send_host_scoped()` and, on success, registers the request in
+    /// `pending_host_requests`. The response arrives asynchronously on the
+    /// `host_response_rx` channel and is matched by `request_id`.
     ///
     /// Returns a `oneshot::Receiver` that resolves with the raw `ServerMessage`
     /// on success, or `HostRequestError` on failure (all sessions disconnected,
     /// timeout, or server error).
+    ///
+    /// If dispatch fails immediately (the chosen client's outbound channel is
+    /// closed because its writer task already exited), the returned receiver
+    /// resolves with `HostRequestError::AllSessionsDisconnected` and no entry
+    /// is registered in `pending_host_requests`.
     pub fn send_host_request(
         &mut self,
         host_id: &HostId,
         msg: crate::proto::ClientMessage,
     ) -> oneshot::Receiver<Result<crate::proto::ServerMessage, HostRequestError>> {
+        // A oneshot stores the sent value in its shared state, so resolving
+        // `result_tx` before `result_rx` is awaited is fine: the caller's
+        // `.await` sees the value immediately. This lets the early-return
+        // failure paths below resolve the receiver and hand it back.
         let (result_tx, result_rx) = oneshot::channel();
 
         let Some(client) = self.client_for_host(host_id).cloned() else {
@@ -844,16 +884,116 @@ impl RemoteServerManager {
         };
 
         let request_id = crate::protocol::RequestId::from(msg.request_id.clone());
+
+        // Dispatch before registering the pending entry. If the outbound
+        // channel is already closed (the writer task exited after the
+        // connection dropped), fail the caller now instead of registering a
+        // request that can never be matched — which would otherwise leak in
+        // `pending_host_requests` and hang the caller forever.
+        //
+        // This is race-free: host responses are drained on the main thread by
+        // the `spawn_stream_local` handler in `mark_session_connected`, which
+        // cannot run until this synchronous `&mut self` method returns. So the
+        // insert below always happens before any matching response is matched.
+        if client.send_host_scoped(msg).is_err() {
+            log::warn!(
+                "Host-scoped request dispatch failed (outbound channel closed): \
+                 host={host_id} request_id={request_id}"
+            );
+            let _ = result_tx.send(Err(HostRequestError::AllSessionsDisconnected));
+            return result_rx;
+        }
+
+        // Arm a timeout so a request the daemon accepts but never answers
+        // doesn't hang the caller forever (and leak the pending entry). The
+        // returned handle is stored on the pending entry so we can cancel the
+        // timer the instant the request resolves, rather than letting every
+        // request's timer task linger until the full timeout elapses.
+        let timeout_abort = self.schedule_host_request_timeout(request_id.clone(), host_id.clone());
+
         self.pending_host_requests.insert(
             request_id,
             PendingHostRequest {
                 host_id: host_id.clone(),
                 result_tx,
+                timeout_abort,
             },
         );
 
-        client.send_host_scoped(msg);
         result_rx
+    }
+
+    /// Schedules a delayed [`Self::timeout_host_request`] for a pending
+    /// host-scoped request. After [`HOST_REQUEST_TIMEOUT`] elapses the manager
+    /// fails the request if it is still pending.
+    ///
+    /// Unlike the client's `send_request_internal`, which owns its `.await`
+    /// and can wrap it in `FutureExt::with_timeout`, the manager only
+    /// *registers* the request and hands the `oneshot::Receiver` back to the
+    /// caller (often awaited on another thread via [`HostRequestHandle`]), so
+    /// there's no manager-owned await to wrap. The timeout also has to do
+    /// manager-side cleanup that `with_timeout` on the caller can't: remove the
+    /// `pending_host_requests` entry and send an `Abort`. A dropped receiver
+    /// alone would leak the entry until disconnect and never notify the daemon.
+    ///
+    /// Returns an [`AbortHandle`](futures::future::AbortHandle) the caller
+    /// stores on the pending entry and aborts when the request resolves, so
+    /// the timer task is cancelled immediately instead of sleeping out the
+    /// full timeout. (A detached `BackgroundTask` can't be cancelled by
+    /// dropping it — tokio detaches rather than aborts — so we drive
+    /// cancellation through the abort handle.)
+    #[cfg(not(target_family = "wasm"))]
+    fn schedule_host_request_timeout(
+        &self,
+        request_id: crate::protocol::RequestId,
+        host_id: HostId,
+    ) -> Option<futures::future::AbortHandle> {
+        let spawner = self.spawner.clone();
+        let (task, abort_handle) = self.executor.spawn_abortable(async move {
+            async_io::Timer::after(HOST_REQUEST_TIMEOUT).await;
+            let _ = spawner
+                .spawn(move |me, _ctx| me.timeout_host_request(request_id, host_id))
+                .await;
+        });
+        task.detach();
+        Some(abort_handle)
+    }
+
+    /// No-op on wasm: timers and detached background tasks aren't available,
+    /// and the SSH-backed remote server isn't used there.
+    #[cfg(target_family = "wasm")]
+    fn schedule_host_request_timeout(
+        &self,
+        _request_id: crate::protocol::RequestId,
+        _host_id: HostId,
+    ) -> Option<futures::future::AbortHandle> {
+        None
+    }
+
+    /// Fails a host-scoped request that is still pending after
+    /// [`HOST_REQUEST_TIMEOUT`]. If the request already completed (response
+    /// arrived, or it was failed by a disconnect), this is a no-op. Otherwise
+    /// it removes the pending entry, sends an `Abort` to the host so the daemon
+    /// can stop work, and resolves the caller with `HostRequestError::Timeout`.
+    ///
+    /// Only reachable off-wasm, where [`Self::schedule_host_request_timeout`]
+    /// arms the timer.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    fn timeout_host_request(&mut self, request_id: crate::protocol::RequestId, host_id: HostId) {
+        let Some(pending) = self.pending_host_requests.remove(&request_id) else {
+            // Already resolved by a response or a disconnect.
+            return;
+        };
+        log::warn!(
+            "Host-scoped request timed out after {HOST_REQUEST_TIMEOUT:?}: \
+             host={host_id} request_id={request_id}"
+        );
+        // Best-effort abort so the daemon can stop work. The connection may
+        // already be gone, in which case this is a no-op.
+        if let Some(client) = self.client_for_host(&host_id) {
+            client.abort_request(&request_id);
+        }
+        let _ = pending.result_tx.send(Err(HostRequestError::Timeout));
     }
 
     /// Convenience wrapper: constructs a `ClientMessage::host_scoped` from
@@ -892,6 +1032,7 @@ impl RemoteServerManager {
             .collect();
         for rid in orphaned {
             if let Some(pending) = self.pending_host_requests.remove(&rid) {
+                pending.cancel_timeout();
                 log::info!(
                     "Failing pending host request {rid} — no sessions remain \
                      for host={}",
@@ -2237,20 +2378,26 @@ impl RemoteServerManager {
         let result_rx = self.send_host_request(&host_id, msg);
         let host_id_for_log = host_id;
 
-        ctx.spawn(
-            async move { result_rx.await },
-            move |_me, result, _ctx| match result {
-                Ok(Ok(_)) => {
+        ctx.spawn(async move { result_rx.await }, move |_me, result, _ctx| {
+            // A non-transport response can still carry a discard-specific
+            // error nested in the DiscardFilesResponse; parse it before
+            // treating the discard as successful.
+            let discard_result = match result {
+                Ok(Ok(msg)) => crate::host_response::discard_files_result(&msg),
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(_) => return, // oneshot cancelled
+            };
+            match discard_result {
+                Ok(()) => {
                     log::info!("Remote server discard_files succeeded");
                 }
-                Ok(Err(e)) => {
+                Err(e) => {
                     log::warn!(
                         "Remote server discard_files failed: host={host_id_for_log} error={e}"
                     );
                 }
-                Err(_) => {} // oneshot cancelled
-            },
-        );
+            }
+        });
     }
 
     /// Sends a `LoadRepoMetadataDirectory` request to the remote server for
@@ -2516,6 +2663,7 @@ impl RemoteServerManager {
             move |me, msg, _ctx| {
                 let request_id = crate::protocol::RequestId::from(msg.request_id.clone());
                 if let Some(pending) = me.pending_host_requests.remove(&request_id) {
+                    pending.cancel_timeout();
                     // Check for server-reported ErrorResponse.
                     if let Some(crate::proto::server_message::Message::Error(ref e)) = msg.message {
                         let _ = pending.result_tx.send(Err(HostRequestError::ServerError {

@@ -837,26 +837,29 @@ impl GlobalBufferModel {
                         ),
                     )
                 });
-                ctx.spawn(
-                    async move { rx.await },
-                    move |_me, result, ctx| match result {
-                        Ok(Ok(_)) => {
+                ctx.spawn(async move { rx.await }, move |_me, result, ctx| {
+                    // Map the layered result into a single Result<(), String>:
+                    // transport failure (HostRequestError), request
+                    // cancellation, or an operation-specific error nested
+                    // in the SaveBufferResponse.
+                    let save_result = match result {
+                        Ok(Ok(msg)) => remote_server::host_response::save_buffer_result(&msg),
+                        Ok(Err(e)) => Err(e.to_string()),
+                        Err(_) => Err("request cancelled".to_string()),
+                    };
+                    match save_result {
+                        Ok(()) => {
                             ctx.emit(GlobalBufferModelEvent::FileSaved { file_id });
                         }
-                        _ => {
-                            let error = match &result {
-                                Ok(Err(e)) => e.to_string(),
-                                Err(_) => "request cancelled".to_string(),
-                                _ => unreachable!(),
-                            };
+                        Err(error) => {
                             log::warn!("Remote save failed: {error}");
                             ctx.emit(GlobalBufferModelEvent::FailedToSave {
                                 file_id,
                                 error: Rc::new(FileSaveError::RemoteError(error)),
                             });
                         }
-                    },
-                );
+                    }
+                });
                 return Ok(());
             }
         }

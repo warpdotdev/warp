@@ -15,7 +15,6 @@ use async_channel::Sender;
 use futures::io::{AsyncBufReadExt, BufReader};
 use futures::StreamExt;
 use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
-use remote_server::client::RemoteServerClient;
 use remote_server::manager::RemoteServerManager;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::repository::{RepositorySubscriber, SubscriberId};
@@ -25,7 +24,7 @@ use warp_util::content_version::ContentVersion;
 use warp_util::file::{FileId, FileLoadError, FileSaveError};
 use warp_util::standardized_path::StandardizedPath;
 use warpui_core::r#async::SpawnedFutureHandle;
-use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+use warpui_core::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
 
 pub mod text_file_reader;
@@ -83,7 +82,7 @@ enum WatcherType {
 }
 
 /// Per-file backing store.
-/// Remote files dispatch through [`RemoteServerClient`] via [`RemoteServerManager`].
+/// Remote files dispatch through `RemoteServerClient` via [`RemoteServerManager`].
 enum FileBackend {
     Local(LocalFile),
     Remote {
@@ -337,7 +336,7 @@ impl FileModel {
     /// Register a remote file path and return a `FileId`.
     ///
     /// The returned `FileId` can be used with `save()` and `delete()` which
-    /// will dispatch to the remote backend via [`RemoteServerClient`].
+    /// will dispatch to the remote backend via `RemoteServerClient`.
     pub fn register_remote_file(&mut self, host_id: HostId, path: StandardizedPath) -> FileId {
         let file_id = FileId::new();
         self.file_state.insert_remote(file_id, host_id, path);
@@ -742,22 +741,28 @@ impl FileModel {
                     )
                 });
                 ctx.spawn(async move { rx.await }, move |me, result, ctx| {
-                    let err_msg = match &result {
-                        Ok(Ok(_)) => None,
-                        Ok(Err(e)) => Some(e.to_string()),
-                        Err(_) => Some("request cancelled".to_string()),
+                    // A non-transport response can still carry a file-operation
+                    // error nested in the WriteFileResponse; parse it before
+                    // treating the save as successful.
+                    let write_result = match result {
+                        Ok(Ok(msg)) => remote_server::host_response::write_file_result(&msg),
+                        Ok(Err(e)) => Err(e.to_string()),
+                        Err(_) => Err("request cancelled".to_string()),
                     };
-                    if let Some(msg) = err_msg {
-                        ctx.emit(FileModelEvent::FailedToSave {
-                            id: file_id,
-                            error: Rc::new(FileSaveError::RemoteError(msg)),
-                        });
-                    } else {
-                        me.set_version(file_id, version);
-                        ctx.emit(FileModelEvent::FileSaved {
-                            id: file_id,
-                            version,
-                        });
+                    match write_result {
+                        Err(msg) => {
+                            ctx.emit(FileModelEvent::FailedToSave {
+                                id: file_id,
+                                error: Rc::new(FileSaveError::RemoteError(msg)),
+                            });
+                        }
+                        Ok(()) => {
+                            me.set_version(file_id, version);
+                            ctx.emit(FileModelEvent::FileSaved {
+                                id: file_id,
+                                version,
+                            });
+                        }
                     }
                 });
             }
@@ -896,41 +901,34 @@ impl FileModel {
                     )
                 });
                 ctx.spawn(async move { rx.await }, move |me, result, ctx| {
-                    let err_msg = match &result {
-                        Ok(Ok(_)) => None,
-                        Ok(Err(e)) => Some(e.to_string()),
-                        Err(_) => Some("request cancelled".to_string()),
+                    // A non-transport response can still carry a file-operation
+                    // error nested in the DeleteFileResponse; parse it before
+                    // treating the delete as successful.
+                    let delete_result = match result {
+                        Ok(Ok(msg)) => remote_server::host_response::delete_file_result(&msg),
+                        Ok(Err(e)) => Err(e.to_string()),
+                        Err(_) => Err("request cancelled".to_string()),
                     };
-                    if let Some(msg) = err_msg {
-                        ctx.emit(FileModelEvent::FailedToSave {
-                            id: file_id,
-                            error: Rc::new(FileSaveError::RemoteError(msg)),
-                        });
-                    } else {
-                        me.set_version(file_id, version);
-                        ctx.emit(FileModelEvent::FileSaved {
-                            id: file_id,
-                            version,
-                        });
+                    match delete_result {
+                        Err(msg) => {
+                            ctx.emit(FileModelEvent::FailedToSave {
+                                id: file_id,
+                                error: Rc::new(FileSaveError::RemoteError(msg)),
+                            });
+                        }
+                        Ok(()) => {
+                            me.set_version(file_id, version);
+                            ctx.emit(FileModelEvent::FileSaved {
+                                id: file_id,
+                                version,
+                            });
+                        }
                     }
                 });
             }
         }
 
         Ok(())
-    }
-
-    /// Look up the `RemoteServerClient` for a given host at call time.
-    fn resolve_remote_client(
-        host_id: &HostId,
-        ctx: &AppContext,
-    ) -> Result<std::sync::Arc<RemoteServerClient>, FileSaveError> {
-        RemoteServerManager::as_ref(ctx)
-            .client_for_host(host_id)
-            .cloned()
-            .ok_or_else(|| {
-                FileSaveError::RemoteError(format!("Remote host {host_id} is not connected"))
-            })
     }
 
     pub fn set_version(&mut self, file_id: FileId, version: ContentVersion) {

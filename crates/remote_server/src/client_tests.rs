@@ -10,9 +10,8 @@ use crate::proto::{
     CodebaseIndexStatus, CodebaseIndexStatusState, CodebaseIndexStatusUpdated,
     CodebaseIndexStatusesSnapshot, ErrorCode, FileOperationError, FragmentMetadata,
     FragmentMetadataLookupError, FragmentMetadataLookupErrorCode,
-    GetFragmentMetadataFromHashResponse, GetFragmentMetadataFromHashSuccess, Initialize,
-    InitializeResponse, MissingFragmentMetadata, RunCommandResponse, RunCommandSuccess,
-    ServerMessage,
+    GetFragmentMetadataFromHashResponse, GetFragmentMetadataFromHashSuccess, InitializeResponse,
+    MissingFragmentMetadata, RunCommandResponse, RunCommandSuccess, ServerMessage,
 };
 use crate::protocol;
 
@@ -368,6 +367,38 @@ async fn authenticate_sends_fire_and_forget_message() {
         panic!("Expected Authenticate");
     };
     assert_eq!(auth.auth_token, "rotated-secret");
+}
+
+#[tokio::test]
+async fn send_host_scoped_returns_ok_when_connected() {
+    let (client_stream, server_stream) = tokio::io::duplex(4096);
+    let (server_read, _server_write) = tokio::io::split(server_stream);
+    let (client_read, client_write) = tokio::io::split(client_stream);
+    let executor = executor::Background::default();
+    let (client, _event_rx, _failure_rx, _host_rx) =
+        RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
+
+    let msg = ClientMessage::host_scoped(
+        "req-host-1".to_string(),
+        host_scoped_request::Message::WriteFile(WriteFile {
+            path: "/tmp/foo.txt".to_string(),
+            content: "hello".to_string(),
+        }),
+    );
+
+    // On a healthy connection, dispatch succeeds (the message is queued).
+    assert!(client.send_host_scoped(msg).is_ok());
+
+    // The queued message is written to the server with the host-scoped envelope.
+    let received = protocol::read_client_message(&mut server_read.compat())
+        .await
+        .unwrap();
+    assert_eq!(received.request_id, "req-host-1");
+    let host_scoped_request::Message::WriteFile(write) = unwrap_host_scoped(&received) else {
+        panic!("Expected WriteFile host-scoped request");
+    };
+    assert_eq!(write.path, "/tmp/foo.txt");
+    assert_eq!(write.content, "hello");
 }
 
 #[tokio::test]
