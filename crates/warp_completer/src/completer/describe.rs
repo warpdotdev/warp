@@ -1,6 +1,6 @@
 use itertools::Itertools;
 use string_offset::ByteOffset;
-use warpui::platform::OperatingSystem;
+use warpui_core::platform::OperatingSystem;
 
 use super::context::CompletionContext;
 use super::suggest::{suggestions, CompleterOptions, CompletionsFallbackStrategy, SuggestionType};

@@ -5,7 +5,7 @@ use warp::integration_testing::terminal::{
     wait_until_bootstrapped_single_pane_for_tab,
 };
 use warp::integration_testing::view_getters::ai_assistant_panel_view;
-use warpui::async_assert;
+use warpui_core::async_assert;
 
 use super::new_builder;
 use crate::Builder;

@@ -12,7 +12,6 @@ use crate::app_state::get_app_state;
 use crate::network::NetworkStatus;
 use crate::persistence::ModelEvent;
 use crate::root_view::OpenPath;
-use crate::server::server_api::auth::AuthClient;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
 use crate::terminal::general_settings::GeneralSettings;
@@ -174,9 +173,10 @@ fn toggle_debug_network_status(_: &(), ctx: &mut AppContext) {
 fn create_anonymous_user(_: &(), ctx: &mut AppContext) {
     log::info!("Creating anonymous user");
     let anonymous_user_type = AnonymousUserType::NativeClientAnonymousUser;
-    let server_api = ServerApiProvider::handle(ctx).read(ctx, |provider, _ctx| provider.get());
+    let auth_client =
+        ServerApiProvider::handle(ctx).read(ctx, |provider, _ctx| provider.get_auth_client());
     let result =
-        warpui::r#async::block_on(server_api.create_anonymous_user(None, anonymous_user_type));
+        warpui::r#async::block_on(auth_client.create_anonymous_user(None, anonymous_user_type));
     match result {
         Ok(user) => log::info!("Successfully created anonymous user {user:?}"),
         Err(err) => log::error!("Failed to create anonymous user: {err:?}"),

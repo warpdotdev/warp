@@ -28,7 +28,7 @@ impl FakeAgentEventSource {
 impl AgentEventSource for FakeAgentEventSource {
     async fn open_stream(
         &self,
-        _run_ids: &[String],
+        _filter: &AgentEventFilter,
         _since_sequence: i64,
     ) -> anyhow::Result<BoxStream<'static, anyhow::Result<AgentEventSourceItem>>> {
         let response = self
@@ -136,7 +136,7 @@ async fn driver_skips_duplicate_sequences_and_persists_new_cursor() {
     };
 
     let config = AgentEventDriverConfig {
-        run_ids: vec!["child-run".to_string()],
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
         since_sequence: 2,
         reconnect_backoff_steps: DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS,
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
@@ -182,7 +182,7 @@ async fn driver_resets_failures_after_successful_event_delivery() {
     };
 
     let config = AgentEventDriverConfig {
-        run_ids: vec!["child-run".to_string()],
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
         since_sequence: 0,
         reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
@@ -227,7 +227,7 @@ async fn driver_ignores_persist_cursor_errors() {
     };
 
     let config = AgentEventDriverConfig {
-        run_ids: vec!["child-run".to_string()],
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
         since_sequence: 0,
         reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
@@ -261,7 +261,7 @@ async fn driver_ignores_driver_state_errors() {
     };
 
     let config = AgentEventDriverConfig {
-        run_ids: vec!["child-run".to_string()],
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
         since_sequence: 0,
         reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
@@ -297,7 +297,7 @@ async fn driver_retries_initial_connection_until_stream_opens() {
     };
 
     let config = AgentEventDriverConfig {
-        run_ids: vec!["child-run".to_string()],
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
         since_sequence: 0,
         reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
@@ -393,7 +393,7 @@ async fn driver_uses_slow_backoff_on_permanent_http_error() {
     // permanent=0s (instant). Proving backoff is 0s confirms the
     // permanent schedule was selected.
     let config = AgentEventDriverConfig {
-        run_ids: vec!["child-run".to_string()],
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
         since_sequence: 0,
         reconnect_backoff_steps: &[9999],
         permanent_error_backoff_steps: ZERO_BACKOFF_STEPS,
@@ -444,7 +444,7 @@ async fn driver_uses_fast_backoff_on_transient_http_error() {
 
     // Set permanent backoff to something large so we can verify it was NOT used.
     let config = AgentEventDriverConfig {
-        run_ids: vec!["child-run".to_string()],
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
         since_sequence: 0,
         reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
         permanent_error_backoff_steps: &[9999],

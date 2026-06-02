@@ -108,8 +108,10 @@ impl UsageHistoryEntry {
             ))
             .finish();
 
+        let total_credits =
+            entry.usage_metadata.credits_spent + entry.usage_metadata.platform_credits_spent;
         let credits_spent = Text::new_inline(
-            format_credits(entry.usage_metadata.credits_spent as f32),
+            format_credits(total_credits as f32),
             appearance.ui_font_family(),
             14.,
         )

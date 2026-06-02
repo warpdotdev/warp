@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use ai::workspace::WorkspaceMetadata;
 use chrono::Utc;
+use cloud_object_persistence::to_cloud_object_permissions;
 use diesel::connection::SimpleConnection;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
@@ -544,7 +545,7 @@ fn test_deserialize_corrupted_guests() {
     };
 
     // The overall permissions should successfully convert, minus the object guests.
-    let cloud_permissions = super::to_cloud_object_permissions(&db_permissions, None);
+    let cloud_permissions = to_cloud_object_permissions(&db_permissions, None);
     assert_eq!(
         cloud_permissions,
         Some(CloudObjectPermissions {

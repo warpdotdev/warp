@@ -6,6 +6,7 @@ use ai::agent::action_result::{
     RunAgentsResult,
 };
 use ai::skills::SkillReference;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 use super::RunAgentsEditState;
 use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationEditState;
@@ -137,7 +138,7 @@ fn cloud_with_opencode_disables_accept() {
 
 #[test]
 fn local_with_any_harness_does_not_disable_accept() {
-    for harness in ["oz", "gemini", "opencode"] {
+    for harness in ["oz", "claude", "gemini", "opencode"] {
         let state =
             RunAgentsEditState::from_request(&make_request(harness, RunAgentsExecutionMode::Local));
         assert!(
@@ -148,20 +149,12 @@ fn local_with_any_harness_does_not_disable_accept() {
 }
 
 #[test]
-fn local_with_disabled_claude_or_codex_disables_accept() {
-    for (harness, expected) in [
-        (
-            "claude",
-            "Local Claude Code child agents are temporarily disabled.",
-        ),
-        (
-            "codex",
-            "Local Codex child agents are temporarily disabled.",
-        ),
-    ] {
-        let state = make_edit_state_with_orch_fields(harness, RunAgentsExecutionMode::Local);
-        assert_eq!(state.orch.accept_disabled_reason(), Some(expected));
-    }
+fn local_with_disabled_codex_disables_accept() {
+    let state = make_edit_state_with_orch_fields("codex", RunAgentsExecutionMode::Local);
+    assert_eq!(
+        state.orch.accept_disabled_reason(),
+        Some("Local Codex child agents are temporarily disabled.")
+    );
 }
 
 #[test]
@@ -231,7 +224,9 @@ fn to_request_round_trips_request_fields() {
         },
         vec![
             SkillReference::BundledSkillId("writing-pr-descriptions".to_string()),
-            SkillReference::Path(PathBuf::from("/tmp/skill/SKILL.md")),
+            SkillReference::Path(LocalOrRemotePath::Local(PathBuf::from(
+                "/tmp/skill/SKILL.md",
+            ))),
         ],
     );
     req.plan_id = "plan-1".to_string();
@@ -501,10 +496,10 @@ mod override_from_approved_config_tests {
             RunAgentsEditState::from_request(&make_request("oz", RunAgentsExecutionMode::Local));
         state
             .orch
-            .override_from_approved_config(&local_config("auto", "claude"));
+            .override_from_approved_config(&local_config("auto", "codex"));
         assert_eq!(
             state.orch.accept_disabled_reason(),
-            Some("Local Claude Code child agents are temporarily disabled.")
+            Some("Local Codex child agents are temporarily disabled.")
         );
     }
 }

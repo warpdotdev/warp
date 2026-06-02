@@ -22,7 +22,7 @@ RUN set -eux; \
     ca-certificates \
     xvfb
 
-# Install rustup. It will download the pinned version in our rust-toolchain.toml as needed.
+# Install rustup. The pinned Rust toolchain is installed below from rust-toolchain.toml.
 RUN set -eux; \
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal; \
   chmod -R a+w $RUSTUP_HOME $CARGO_HOME; \
@@ -70,7 +70,10 @@ RUN set -eux; \
 
 # Ensure the correct Rust toolchain is installed
 COPY ./rust-toolchain.toml ./setup/rust-toolchain.toml
-RUN cd ./setup && rustup toolchain install
+RUN set -eux; \
+  cd ./setup; \
+  rustup toolchain install; \
+  rustup default "$(rustup show active-toolchain | cut -d' ' -f1)"
 
 # Install all dependencies needed to build, run, and test Warp
 COPY ./script ./setup/script

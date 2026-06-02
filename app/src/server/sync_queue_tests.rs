@@ -4,9 +4,10 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Duration, Utc};
+use cloud_object_client::MockObjectClient;
+use cloud_objects::cloud_object::ServerPermissions;
 use firebase::FirebaseError;
 use itertools::Itertools;
-use warp_server_client::cloud_object::ServerPermissions;
 use warpui::r#async::Timer;
 use warpui::{App, Entity, ModelHandle, SingletonEntity};
 
@@ -24,8 +25,6 @@ use crate::notebooks::{CloudNotebookModel, NotebookId};
 use crate::server::cloud_objects::update_manager::InitiatedBy;
 use crate::server::ids::{ClientId, HashableId, ServerId, ServerIdAndType, SyncId};
 use crate::server::server_api::auth::UserAuthenticationError;
-#[cfg(test)]
-use crate::server::server_api::object::MockObjectClient;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::{CreationFailureReason, QueueItemId, SyncQueueEvent};
 use crate::system::SystemStats;

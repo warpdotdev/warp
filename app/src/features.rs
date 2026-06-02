@@ -221,8 +221,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ProfilesDesignRevamp,
         #[cfg(feature = "search_codebase_ui")]
         FeatureFlag::SearchCodebaseUI,
-        #[cfg(feature = "changed_lines_only_apply_diff_result")]
-        FeatureFlag::ChangedLinesOnlyApplyDiffResult,
         #[cfg(feature = "linked_code_blocks")]
         FeatureFlag::LinkedCodeBlocks,
         #[cfg(feature = "tabbed_editor_view")]
@@ -423,12 +421,16 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::OrchestrationPillBar,
         #[cfg(feature = "orchestration_viewer_pill_bar")]
         FeatureFlag::OrchestrationViewerPillBar,
+        #[cfg(feature = "orchestration_viewer_streamer")]
+        FeatureFlag::OrchestrationViewerStreamer,
         #[cfg(feature = "run_agents_tool")]
         FeatureFlag::RunAgentsTool,
         #[cfg(feature = "pending_user_query_indicator")]
         FeatureFlag::PendingUserQueryIndicator,
         #[cfg(feature = "queue_slash_command")]
         FeatureFlag::QueueSlashCommand,
+        #[cfg(feature = "queued_prompts_v2")]
+        FeatureFlag::QueuedPromptsV2,
         #[cfg(feature = "kitty_keyboard_protocol")]
         FeatureFlag::KittyKeyboardProtocol,
         #[cfg(feature = "inline_menu_headers")]

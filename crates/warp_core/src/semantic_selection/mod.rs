@@ -6,9 +6,9 @@ use regex::Regex;
 use settings::macros::define_settings_group;
 use settings::{Setting, SupportedPlatforms, SyncToCloud};
 use string_offset::ByteOffset;
-use warpui::elements::SmartSelectFn;
-use warpui::text::word_boundaries::WordBoundariesPolicy;
-use warpui::text::words::{is_default_word_boundary, DEFAULT_WORD_BOUNDARY_CHARS};
+use warpui_core::elements::SmartSelectFn;
+use warpui_core::text::word_boundaries::WordBoundariesPolicy;
+use warpui_core::text::words::{is_default_word_boundary, DEFAULT_WORD_BOUNDARY_CHARS};
 
 /// Upper limit for how many characters in either direction we'll search for patterns. Need to
 /// limit this to avoid running regex on absurdly long words

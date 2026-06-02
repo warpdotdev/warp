@@ -129,6 +129,9 @@ fn test_metadata(branch: &str) -> DiffMetadata {
         pr_info: Some(PrInfo {
             number: 42,
             url: "https://github.com/test/repo/pull/42".to_string(),
+            state: String::new(),
+            draft: false,
+            base_branch: String::new(),
         }),
     }
 }

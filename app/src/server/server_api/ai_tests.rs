@@ -1,7 +1,7 @@
 use chrono::{TimeZone, Utc};
 use futures::executor::block_on;
 
-use super::super::auth::CLOUD_AGENT_ID_HEADER;
+use super::super::base_client::CLOUD_AGENT_ID_HEADER;
 use super::super::ServerApi;
 use super::{
     build_fork_conversation_url, build_list_agent_runs_url, build_run_followup_url,
@@ -52,6 +52,7 @@ fn spawn_agent_request_serializes_agent_uid_as_agent_identity_uid() {
         conversation_id: None,
         initial_snapshot_token: None,
         snapshot_disabled: None,
+        orchestration_handoff: None,
     };
 
     let value = serde_json::to_value(&request).unwrap();
@@ -129,6 +130,7 @@ fn spawn_agent_request_omits_prompt_when_none() {
         conversation_id: None,
         initial_snapshot_token: None,
         snapshot_disabled: None,
+        orchestration_handoff: None,
     };
 
     let value = serde_json::to_value(&request).unwrap();

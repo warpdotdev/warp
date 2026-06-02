@@ -1,10 +1,11 @@
 use std::collections::HashSet;
 
+use ai::skills::SkillPathOrigin;
 use chrono::Local;
 use prost_types::FieldMask;
 use warp_multi_agent_api as api;
 
-use super::{ExtractMessagesError, Task};
+use super::{ExtractMessagesError, Task, TaskMessageContext};
 use crate::ai::agent::{
     AIAgentActionType, AIAgentExchange, AIAgentOutput, AIAgentOutputMessageType,
     AIAgentOutputStatus, MessageId, Shared,
@@ -113,8 +114,11 @@ fn test_upsert_message_adds_start_agent_prompt_to_output() {
             "run tests",
         ),
         exchange_id,
-        None,
-        None,
+        TaskMessageContext {
+            current_todo_list: None,
+            active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
+        },
         FieldMask {
             paths: vec!["message.tool_call".to_string()],
         },

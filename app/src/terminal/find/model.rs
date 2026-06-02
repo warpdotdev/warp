@@ -557,6 +557,23 @@ impl TerminalFindModel {
         ctx.emit(FindEvent::UpdatedFocusedMatch);
     }
 
+    /// Notifies every registered rich-content child view (e.g. AI blocks) to
+    /// drop its cached find state and repaint, **without** touching the active
+    /// find run's options/config.
+    ///
+    /// Callers that just need stale highlights to disappear (e.g.
+    /// `close_find_bar`) must use this rather than [`Self::clear_matches`].
+    /// On the async path, `clear_matches` routes through
+    /// `AsyncFindController::clear_results`, which also drops
+    /// `current_find_options` — losing the query that `open_find_bar` later
+    /// reads back via [`Self::active_find_options`] to restore the previous
+    /// search.
+    pub fn clear_rich_content_matches(&self, ctx: &mut ModelContext<Self>) {
+        for view in self.rich_content_views.values() {
+            view.clear_matches(ctx);
+        }
+    }
+
     /// Clears matches in the active find run, if any.
     pub fn clear_matches(&mut self, ctx: &mut ModelContext<Self>) {
         if self.terminal_model.lock().is_alt_screen_active() {

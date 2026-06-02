@@ -14,7 +14,6 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use settings::Setting;
 use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
     Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
@@ -39,8 +38,9 @@ use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
 use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
 use crate::ai::harness_display;
 use crate::ai::llms::LLMInfo;
-use crate::ai::local_child_harnesses::{
-    local_child_harness_disabled_message, local_child_harness_is_enabled,
+use crate::ai::local_harness_setup::{
+    local_harness_is_product_enabled, local_harness_product_disabled_message,
+    local_harness_setup_state, LocalHarnessSetupState,
 };
 use crate::appearance::Appearance;
 use crate::cloud_object::CloudObjectLookup as _;
@@ -100,15 +100,18 @@ pub trait OrchestrationControlAction: DropdownItemAction + Clone {
 // ── Shared edit state ───────────────────────────────────────────────
 
 /// The user's current selection in the auth secret picker. Only `Named(_)`
-/// is persisted across sessions; `Inherit` and `Unset` are per-session.
+/// is persisted across sessions; the other variants are per-session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthSecretSelection {
-    /// No choice yet. Picker shows "+ New API key…" and Accept is blocked.
+    /// No choice yet; re-seeded from persisted settings. Blocks Accept.
     Unset,
     /// User explicitly chose to inherit credentials from the worker env.
     Inherit,
     /// User picked a managed secret by name.
     Named(String),
+    /// Creating a key (modal open). Blocks Accept and, unlike `Unset`, is
+    /// not re-seeded from persisted settings.
+    CreatingNew,
 }
 
 impl AuthSecretSelection {
@@ -149,8 +152,16 @@ impl OrchestrationEditState {
         }
         match &self.auth_secret_selection {
             AuthSecretSelection::Named(name) => Some(name.as_str()),
-            AuthSecretSelection::Inherit | AuthSecretSelection::Unset => None,
+            AuthSecretSelection::Inherit
+            | AuthSecretSelection::Unset
+            | AuthSecretSelection::CreatingNew => None,
         }
+    }
+
+    /// User picked "New API key…"; mark `CreatingNew` to block Accept until a
+    /// key is created or another option is chosen.
+    pub fn select_create_new_auth_secret(&mut self) {
+        self.auth_secret_selection = AuthSecretSelection::CreatingNew;
     }
 }
 
@@ -159,7 +170,7 @@ impl OrchestrationEditState {
         let Some(harness) = Harness::parse_local_child_harness(&self.harness_type) else {
             return;
         };
-        if local_child_harness_disabled_message(harness).is_some() {
+        if local_harness_product_disabled_message(harness).is_some() {
             self.harness_type = "oz".to_string();
             self.model_id.clear();
         }
@@ -240,11 +251,11 @@ impl OrchestrationEditState {
     }
 
     /// Returns `Some(reason)` if Accept / Apply must be disabled.
-    /// Hard blocks: OpenCode + Cloud, and temporarily disabled local Claude/Codex.
+    /// Hard blocks: OpenCode + Cloud, and product-disabled local harnesses.
     pub fn accept_disabled_reason(&self) -> Option<&'static str> {
         match &self.execution_mode {
             RunAgentsExecutionMode::Local => Harness::parse_local_child_harness(&self.harness_type)
-                .and_then(local_child_harness_disabled_message),
+                .and_then(local_harness_product_disabled_message),
             RunAgentsExecutionMode::Remote { .. }
                 if self.harness_type.eq_ignore_ascii_case("opencode") =>
             {
@@ -633,9 +644,12 @@ pub fn first_filtered_model_id<V: View>(
     }
 }
 
-fn should_show_harness_picker(state: &OrchestrationEditState) -> bool {
-    !matches!(state.execution_mode, RunAgentsExecutionMode::Local)
-        || FeatureFlag::LocalClaudeCodexChildHarnesses.is_enabled()
+fn should_show_harness_picker(_state: &OrchestrationEditState) -> bool {
+    true
+}
+
+fn local_harness_setup_is_ready(harness: Harness, is_local: bool) -> bool {
+    !is_local || local_harness_setup_state(harness).is_selectable()
 }
 
 pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
@@ -663,7 +677,7 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
             harness => harness,
         };
 
-        // Sort enabled harnesses before disabled ones, preserving
+        // Sort selectable harnesses before disabled ones, preserving
         // relative order within each group.
         // Filter out Gemini — it is not yet supported as a multi-agent
         // harness and causes an infinite "Spawning agents" hang.
@@ -671,10 +685,14 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
             .iter()
             .filter(|entry| {
                 let harness = resolve_entry_harness(entry.harness, &entry.display_name);
-                harness != Harness::Gemini && (!is_local || local_child_harness_is_enabled(harness))
+                harness != Harness::Gemini
+                    && (!is_local || local_harness_is_product_enabled(harness))
             })
             .collect();
-        sorted.sort_by_key(|entry| !entry.enabled);
+        sorted.sort_by_key(|entry| {
+            let harness = resolve_entry_harness(entry.harness, &entry.display_name);
+            !(entry.enabled && local_harness_setup_is_ready(harness, is_local))
+        });
 
         // Resolve the target harness so we can match by enum variant
         // even when the `initial_harness` string is "claude" but the
@@ -687,6 +705,11 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
 
         for entry in sorted {
             let harness = resolve_entry_harness(entry.harness, &entry.display_name);
+            let local_setup_state = if is_local {
+                Some(local_harness_setup_state(harness))
+            } else {
+                None
+            };
             // Use the server-provided display_name for the label so stale
             // cache entries (where harness deserializes as Unknown) still
             // show the correct name.
@@ -696,12 +719,19 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
                 fields = fields.with_override_icon_color(Fill::from(color));
             }
             let harness_str = harness.to_string();
-            if entry.enabled {
+            let selectable = entry.enabled && local_harness_setup_is_ready(harness, is_local);
+            if selectable {
                 fields = fields.with_on_select_action(DropdownAction::select_action_and_close(
                     A::harness_changed(harness_str.clone()),
                 ));
             } else {
                 fields = fields.with_disabled(true);
+                let tooltip = match local_setup_state {
+                    Some(LocalHarnessSetupState::MissingHarness { tooltip }) => tooltip,
+                    Some(LocalHarnessSetupState::ProductDisabled { message }) => message,
+                    Some(LocalHarnessSetupState::Ready) | None => "Disabled by your administrator",
+                };
+                fields = fields.with_tooltip(tooltip);
             }
             // Match by harness string first, then fall back to matching
             // the display_name against the client-side name for the target
@@ -1108,7 +1138,10 @@ pub fn auth_secret_selection_required(state: &OrchestrationEditState, _ctx: &App
     if !should_show_auth_secret_picker(state) {
         return false;
     }
-    if !matches!(state.auth_secret_selection, AuthSecretSelection::Unset) {
+    if !matches!(
+        state.auth_secret_selection,
+        AuthSecretSelection::Unset | AuthSecretSelection::CreatingNew
+    ) {
         return false;
     }
     let Some(harness) = Harness::parse_orchestration_harness(&state.harness_type) else {
@@ -1128,6 +1161,19 @@ pub fn accept_disabled_reason_with_auth(
 ) -> Option<String> {
     if let Some(reason) = state.accept_disabled_reason() {
         return Some(reason.to_string());
+    }
+    if matches!(state.execution_mode, RunAgentsExecutionMode::Local) {
+        if let Some(harness) = Harness::parse_local_child_harness(&state.harness_type) {
+            match local_harness_setup_state(harness) {
+                LocalHarnessSetupState::MissingHarness { tooltip } => {
+                    return Some(tooltip.to_string());
+                }
+                LocalHarnessSetupState::ProductDisabled { message } => {
+                    return Some(message.to_string());
+                }
+                LocalHarnessSetupState::Ready => {}
+            }
+        }
     }
     if auth_secret_selection_required(state, ctx) {
         return Some("Select an API key for this harness to continue.".to_string());
@@ -1216,6 +1262,7 @@ pub fn populate_auth_secret_picker_for_harness<A: OrchestrationControlAction, V:
         let final_selection = match &selection {
             AuthSecretSelection::Named(name) => name.clone(),
             AuthSecretSelection::Inherit => AUTH_SECRET_INHERIT_LABEL.to_string(),
+            AuthSecretSelection::CreatingNew => AUTH_SECRET_CREATE_NEW_LABEL.to_string(),
             AuthSecretSelection::Unset if supports_create_new => {
                 AUTH_SECRET_CREATE_NEW_LABEL.to_string()
             }
@@ -1250,18 +1297,13 @@ pub fn apply_auth_secret_change<A: OrchestrationControlAction, V: View>(
     persist_auth_secret_selection(&state.harness_type, &state.auth_secret_selection, ctx);
 }
 
-/// No-op on `state` — the prior selection is preserved so cancelling the
-/// modal restores the user to a working configuration. Successful creation
-/// updates the selection via the `AuthSecretCreated` subscription's call
-/// to [`apply_created_auth_secret_if_matches`].
-///
-/// Kept as a named function so both card views call through the same
-/// path; a future revision can hook snapshot-and-restore behavior here
-/// without touching call sites.
+/// Marks `CreatingNew` (not re-seeded from settings, so a background refresh
+/// can't restore a stale selection mid-create). Used by both card views.
 pub fn apply_create_new_auth_secret_requested<V: View>(
-    _state: &mut OrchestrationEditState,
+    state: &mut OrchestrationEditState,
     _ctx: &mut ViewContext<V>,
 ) {
+    state.select_create_new_auth_secret();
 }
 
 /// Adopts a freshly-created secret as the active selection when its
@@ -1289,7 +1331,8 @@ pub fn apply_created_auth_secret_if_matches<V: View>(
 /// Persists the user's auth-secret choice for the active harness.
 /// `Named` writes to `last_selected_auth_secret` and clears any prior
 /// `Inherit` flag. `Inherit` clears the named entry and sets the inherit
-/// flag. `Unset` clears both (no recorded choice). No-op for Oz / unknown.
+/// flag. `Unset`/`CreatingNew` clear both (no recorded choice). No-op for
+/// Oz / unknown.
 fn persist_auth_secret_selection<V: View>(
     harness_type: &str,
     selection: &AuthSecretSelection,
@@ -1314,7 +1357,7 @@ fn persist_auth_secret_selection<V: View>(
                 named_map.remove(&key);
                 inherit_map.insert(key, true);
             }
-            AuthSecretSelection::Unset => {
+            AuthSecretSelection::Unset | AuthSecretSelection::CreatingNew => {
                 named_map.remove(&key);
                 inherit_map.remove(&key);
             }
@@ -1610,6 +1653,7 @@ pub fn sync_picker_selections<A: OrchestrationControlAction, V: View>(
             let label = match &selection {
                 AuthSecretSelection::Named(name) => name.clone(),
                 AuthSecretSelection::Inherit => AUTH_SECRET_INHERIT_LABEL.to_string(),
+                AuthSecretSelection::CreatingNew => AUTH_SECRET_CREATE_NEW_LABEL.to_string(),
                 AuthSecretSelection::Unset if supports_create_new => {
                     AUTH_SECRET_CREATE_NEW_LABEL.to_string()
                 }
