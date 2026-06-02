@@ -23,6 +23,7 @@ use warpui::elements::{
 };
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::platform::Cursor;
+use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::UiComponent;
 use warpui::{
     AppContext, BlurContext, Element, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity,
@@ -676,6 +677,7 @@ impl View for QueuedPromptsPanelView {
             .with_child(header);
 
         if !collapsed {
+            let show_drag_handle = queue.len() > 1;
             let mut body = Flex::column();
 
             for (index, query) in queue.iter().enumerate() {
@@ -686,20 +688,23 @@ impl View for QueuedPromptsPanelView {
                     .clone();
                 let is_in_edit_mode = editing_row_id == Some(query.id());
                 let is_being_dragged = self.dragging_query_id == Some(query.id());
-                let row = render_row(RenderRowProps {
-                    query_id: query.id(),
-                    panel_view_id,
-                    index,
-                    text: query.text().to_owned(),
-                    origin: query.origin(),
-                    is_in_edit_mode,
-                    is_being_dragged,
-                    edit_editor: &self.edit_editor,
-                    edit_editor_is_single_logical_line: self.edit_editor_is_single_logical_line,
-                    edit_editor_scroll_state: &self.edit_editor_scroll_state,
-                    row_state,
-                    appearance,
-                });
+                let row = render_row(
+                    RenderRowProps {
+                        query_id: query.id(),
+                        panel_view_id,
+                        index,
+                        text: query.text().to_owned(),
+                        origin: query.origin(),
+                        is_in_edit_mode,
+                        is_being_dragged,
+                        show_drag_handle,
+                        edit_editor: &self.edit_editor,
+                        edit_editor_is_single_logical_line: self.edit_editor_is_single_logical_line,
+                        edit_editor_scroll_state: &self.edit_editor_scroll_state,
+                        row_state,
+                    },
+                    app,
+                );
                 body.add_child(row);
             }
 
@@ -833,14 +838,14 @@ struct RenderRowProps<'a> {
     origin: QueuedQueryOrigin,
     is_in_edit_mode: bool,
     is_being_dragged: bool,
+    show_drag_handle: bool,
     edit_editor: &'a ViewHandle<EditorView>,
     edit_editor_is_single_logical_line: bool,
     edit_editor_scroll_state: &'a ClippedScrollStateHandle,
     row_state: QueuedPromptRowState,
-    appearance: &'a Appearance,
 }
 
-fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
+fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
     let RenderRowProps {
         query_id,
         panel_view_id,
@@ -849,22 +854,19 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
         origin,
         is_in_edit_mode,
         is_being_dragged,
+        show_drag_handle,
         edit_editor,
         edit_editor_is_single_logical_line,
         edit_editor_scroll_state,
         row_state,
-        appearance,
     } = props;
 
+    let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
-    let dimmed_color: ColorU = theme.sub_text_color(theme.surface_1()).into();
-    let foreground_color: ColorU = theme.foreground().into();
-    let row_hover_background: Fill = theme.surface_overlay_1().into();
-    let ui_font_family = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
-    let editor_line_height = ui_font_size * DEFAULT_UI_LINE_HEIGHT_RATIO;
-    let max_prompt_height = editor_line_height * MAX_PROMPT_LINES;
-    let preview_text = truncate_from_end(&text, 200);
+
+    let row_action_button_size = ButtonSize::XSmall.button_height(appearance, app);
+    let preview_text = truncate_from_end(&text.lines().collect::<Vec<_>>().join(" "), 500);
     let editor_handle = edit_editor.clone();
     let editor_scroll_state = edit_editor_scroll_state.clone();
 
@@ -905,30 +907,39 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
                     .with_horizontal_padding(4.)
                     .finish(),
             )
-            .with_max_height(max_prompt_height)
+            .with_max_height(ui_font_size * DEFAULT_UI_LINE_HEIGHT_RATIO * MAX_PROMPT_LINES)
             .finish()
         } else {
-            ConstrainedBox::new(
-                Text::new(preview_text.clone(), ui_font_family, ui_font_size)
-                    .with_color(foreground_color)
-                    .with_selectable(false)
-                    .finish(),
+            // Single-line preview that truncates by width with a trailing ellipsis.
+            Text::new(
+                preview_text.clone(),
+                appearance.ui_font_family(),
+                ui_font_size,
             )
-            .with_max_height(max_prompt_height)
+            .with_color(theme.foreground().into())
+            .with_selectable(false)
+            .soft_wrap(false)
+            .with_clip(ClipConfig::ellipsis())
             .finish()
         };
 
-        let drag_handle: Box<dyn Element> = if origin == QueuedQueryOrigin::InitialCloudMode {
+        let drag_handle: Box<dyn Element> = if !show_drag_handle {
+            // Reserve the handle's footprint without drawing it (single-row queue).
+            ConstrainedBox::new(Empty::new().finish())
+                .with_height(20.)
+                .with_width(20.)
+                .finish()
+        } else if origin == QueuedQueryOrigin::InitialCloudMode {
             let ui_builder = appearance.ui_builder().clone();
             let disabled_color = internal_colors::text_disabled(theme, theme.surface_1());
             Hoverable::new(drag_handle_tooltip_state.clone(), move |drag_state| {
                 let icon = ConstrainedBox::new(
-                    TerminalIcon::DragIndicator
+                    TerminalIcon::DragIndicatorVertical
                         .to_warpui_icon(disabled_color.into())
                         .finish(),
                 )
-                .with_height(24.)
-                .with_width(24.)
+                .with_height(20.)
+                .with_width(20.)
                 .finish();
                 let mut stack = Stack::new().with_child(icon);
                 if drag_state.is_hovered() {
@@ -950,12 +961,12 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
             .finish()
         } else {
             ConstrainedBox::new(
-                TerminalIcon::DragIndicator
-                    .to_warpui_icon(dimmed_color.into())
+                TerminalIcon::DragIndicatorVertical
+                    .to_warpui_icon(theme.sub_text_color(theme.surface_1()))
                     .finish(),
             )
-            .with_height(24.)
-            .with_width(24.)
+            .with_height(20.)
+            .with_width(20.)
             .finish()
         };
 
@@ -965,17 +976,27 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
             .with_child(drag_handle)
             .with_child(Expanded::new(1., prompt_text_or_editor).finish());
 
-        if state.is_hovered() && !is_being_dragged {
+        // Trailing actions reveal on hover. When hidden, reserve their exact footprint so the
+        // prompt text never reflows. send-now and delete always show; edit only outside edit mode.
+        let show_actions = state.is_hovered() && !is_being_dragged;
+        let action_spacing = 4.;
+        let actions: Box<dyn Element> = if show_actions {
             let mut buttons = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_spacing(4.);
+                .with_spacing(action_spacing);
             buttons.add_child(ChildView::new(&send_now_button).finish());
             if !is_in_edit_mode {
                 buttons.add_child(ChildView::new(&edit_button).finish());
             }
             buttons.add_child(ChildView::new(&delete_button).finish());
-            row.add_child(buttons.finish());
-        }
+            buttons.finish()
+        } else {
+            let count = if is_in_edit_mode { 2. } else { 3. };
+            ConstrainedBox::new(Empty::new().finish())
+                .with_width(count * row_action_button_size + (count - 1.) * action_spacing)
+                .finish()
+        };
+        row.add_child(actions);
 
         let row_content = ConstrainedBox::new(row.finish())
             .with_min_height(32.)
@@ -985,7 +1006,7 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
             .with_vertical_padding(4.)
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
         if is_being_dragged || state.is_hovered() {
-            container = container.with_background(row_hover_background);
+            container = container.with_background(theme.surface_overlay_1());
         }
         container.finish()
     })
@@ -993,7 +1014,7 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
 
     let position_id = queue_row_position_id(panel_view_id, index);
 
-    if is_in_edit_mode || origin == QueuedQueryOrigin::InitialCloudMode {
+    if is_in_edit_mode || origin == QueuedQueryOrigin::InitialCloudMode || !show_drag_handle {
         return SavePosition::new(row_inner, &position_id).finish();
     }
 
