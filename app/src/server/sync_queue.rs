@@ -426,14 +426,18 @@ impl SyncQueue {
     ) {
         let mut dependencies = match item {
             // Update requests will depend on any existing create/updates to the same object
-            QueueItem::UpdateNotebook { id, .. } => self.get_update_dependencies(id),
-            QueueItem::UpdateFolder { id, .. } => self.get_update_dependencies(id),
-            QueueItem::UpdateCloudPreferences { id, .. } => self.get_update_dependencies(id),
-            QueueItem::UpdateEnvVarCollection { id, .. } => self.get_update_dependencies(id),
-            QueueItem::UpdateWorkflowEnum { id, .. } => self.get_update_dependencies(id),
-            QueueItem::UpdateCloudEnvironment { id, .. } => self.get_update_dependencies(id),
-            QueueItem::UpdateScheduledAmbientAgent { id, .. } => self.get_update_dependencies(id),
-            QueueItem::UpdateCloudAgentConfig { id, .. } => self.get_update_dependencies(id),
+            QueueItem::UpdateNotebook { id, .. }
+            | QueueItem::UpdateFolder { id, .. }
+            | QueueItem::UpdateCloudPreferences { id, .. }
+            | QueueItem::UpdateEnvVarCollection { id, .. }
+            | QueueItem::UpdateWorkflowEnum { id, .. }
+            | QueueItem::UpdateAIFact { id, .. }
+            | QueueItem::UpdateMCPServer { id, .. }
+            | QueueItem::UpdateAIExecutionProfile { id, .. }
+            | QueueItem::UpdateTemplatableMCPServer { id, .. }
+            | QueueItem::UpdateCloudEnvironment { id, .. }
+            | QueueItem::UpdateScheduledAmbientAgent { id, .. }
+            | QueueItem::UpdateCloudAgentConfig { id, .. } => self.get_update_dependencies(id),
 
             // Update workflow requests should depend on existing requests to that object, as well as
             // any enums or env vars they reference.
