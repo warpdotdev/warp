@@ -891,6 +891,13 @@ pub enum FeatureFlag {
     /// Within channels where it is enabled, the user setting `GitSettings.show_git_graph`
     /// controls whether the panel is actually shown.
     GitGraph,
+
+    /// Gates the write operations (right-click context-menu actions: checkout,
+    /// branch/tag create/delete, merge, rebase, reset, cherry-pick, revert,
+    /// push/pull, archive, …) layered on top of the read-only [`GitGraph`] panel.
+    /// Kept separate so the read-only base can ship independently of the
+    /// mutating layer.
+    GitGraphWrite,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -958,6 +965,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GroupedTabs,
     FeatureFlag::AsyncFind,
     FeatureFlag::GitGraph,
+    FeatureFlag::GitGraphWrite,
     FeatureFlag::OrchestrationViewerStreamer,
 ];
 
@@ -1057,6 +1065,7 @@ impl FeatureFlag {
             MarkdownTables => Some("Enables rendering and interaction support for markdown tables in notebooks."),
             SettingsFile => Some("Enables configuring Warp via a user-editable `settings.toml` file, with hot reload and error reporting for invalid values."),
             GitOperationsInCodeReview => Some("Enables commit, push, and create-PR actions directly from the code review panel."),
+            GitGraphWrite => Some("Enables write operations (checkout, branch/tag management, merge, rebase, reset, cherry-pick, revert, push/pull, archive) from the Git Graph right-click menus."),
             OrchestrationV2 => Some("Enables orchestration of teams of agents with dedicated UI, lifecycle events and inter-agent messaging."),
             _ => None,
         }

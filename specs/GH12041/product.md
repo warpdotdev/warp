@@ -1,13 +1,18 @@
-# Git Graph Panel (read-only commit DAG visualization)
+# Git Graph Panel (commit DAG visualization + right-click git operations)
 
 ## Summary
-A read-only "Git Graph" tab in the left tools panel that renders the active
-repository's commit history as a colored directed acyclic graph (DAG) — branch
-lanes, commit nodes, merge/fork connectors, and HEAD / local-branch /
-remote-branch / tag badges. Selecting a commit shows its details and changed
-files; clicking a changed file opens a read-only diff in the main area. Inspired
-by [vscode-git-graph](https://github.com/mhutchie/vscode-git-graph). Strictly
-read-only — no operation mutates repository state.
+A "Git Graph" tab in the left tools panel that renders the active repository's
+commit history as a colored directed acyclic graph (DAG) — branch lanes, commit
+nodes, merge/fork connectors, and HEAD / local-branch / remote-branch / tag
+badges. Selecting a commit shows its details and changed files; clicking a
+changed file opens a read-only diff in the main area. Inspired by
+[vscode-git-graph](https://github.com/mhutchie/vscode-git-graph).
+
+The browsing surface is read-only. A separate, flag-gated layer
+(`FeatureFlag::GitGraphWrite`) adds **right-click context-menu operations**
+(checkout, branch/tag create/delete, merge, rebase, reset, cherry-pick, revert,
+push/pull, archive). The read-only base and the write layer are gated
+independently so the base can ship without the mutating layer.
 
 ## Problem
 Warp is a terminal, so users can run `git log --graph`, but:
@@ -69,12 +74,54 @@ Warp is a terminal, so users can run `git log --graph`, but:
 16. A `git` command fails: show an error message; the header refresh button lets
     the user retry. Never crash and never affect other panels.
 17. Repository has no commits: show "No commits yet."
-18. Strictly read-only: no checkout / branch / merge / rebase / etc. — the panel
-    never mutates repository state under any interaction.
+18. With `FeatureFlag::GitGraphWrite` off, the panel is strictly read-only: no
+    operation mutates repository state under any interaction. With it on, only
+    the explicit operations in "Write operations" below mutate state — each
+    behind a confirmation or an input/save dialog; browsing never does.
+
+### Write operations (right-click context menus, gated by `FeatureFlag::GitGraphWrite`)
+19. Right-clicking a commit row, or a tag / local-branch / remote-branch badge,
+    opens a context menu matching the target kind:
+    - **Commit**: Add Tag…, Create Branch…, Checkout…, Cherry Pick…, Revert…,
+      Drop…, Merge into current branch…, Rebase current branch on this Commit…,
+      Reset current branch to this Commit…, Copy Commit Hash, Copy Commit Subject.
+    - **Tag**: View Details, Delete Tag…, Push Tag…, Create Archive, Copy Tag Name.
+    - **Remote branch**: Checkout Branch…, Delete Remote Branch…, Merge into
+      current branch…, Pull into current branch…, Create Archive, Unselect in
+      Branches Dropdown, Copy Branch Name.
+    - **Local branch**: Checkout Branch…, Rename Branch…, Delete Branch…, Merge
+      into current branch…, Rebase current branch on Branch…, Push Branch…,
+      Create Archive, Unselect in Branches Dropdown, Copy Branch Name. The HEAD
+      badge opens this menu for the **current** branch and omits the operations
+      that don't apply to itself (checkout / delete / merge-into-current /
+      rebase-onto), leaving Rename, Push, Create Archive, Unselect, Copy.
+20. The read-only items (Copy *, View Details, Unselect in Branches Dropdown) are
+    always present; the mutating items appear only when `GitGraphWrite` is on.
+    "Unselect in Branches Dropdown" reuses the branch filter (deselects the ref);
+    "View Details" selects the tagged commit.
+21. Every mutating operation is gated by explicit input before it runs:
+    - name prompts (Add Tag / Create Branch / Rename Branch) — a text dialog;
+    - Reset — a soft / mixed / hard mode dialog (hard is labelled as discarding
+      uncommitted changes);
+    - Create Archive — the OS save dialog (the chosen extension picks zip vs
+      tar.gz);
+    - everything else — a yes/no confirmation stating what will happen
+      (history-rewriting and remote-mutating actions say so explicitly).
+22. Operations phrased "…current branch" (merge / rebase / reset / pull /
+    cherry-pick / revert / drop) are always offered when writing is enabled; on a
+    detached HEAD git applies them to the detached HEAD or fails (surfaced in the
+    error banner) rather than the menu silently hiding them.
+23. A running operation blocks a second one and dims the panel with a centered
+    "Working…" overlay; on success the graph reloads (a remote-branch deletion
+    additionally fetches `--prune` so the pruned ref disappears); on failure a
+    dismissable banner shows the git error and the repository is left as git left
+    it (e.g. a conflicted cherry-pick/merge stops with its own message).
 
 ## Non-goals (deferred)
-- **Write operations**: checkout / create branch / merge / rebase / cherry-pick /
-  revert / reset / stash / tag / push / pull / context-menu actions.
+- **Stash operations**, and resolving in-app the **conflicts** a merge / rebase /
+  cherry-pick may leave (the user finishes those in the terminal).
+- **Per-branch push remote / upstream resolution**: Push Branch / Push Tag use
+  `origin`; pushing to another remote is a terminal task.
 - **Auto-refresh** on repository changes (new commit, branch switch): manual
   refresh covers this; auto-refresh needs repo-watcher plumbing + debounce.
 - **Rounded (bezier) connectors**: the render layer has only rectangle

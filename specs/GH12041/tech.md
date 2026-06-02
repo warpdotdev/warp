@@ -2,12 +2,13 @@
 
 ## Context
 
-A read-only commit DAG visualization tab (`ToolPanelView::GitGraph`) in the left
-tools panel. It follows the git repository of the currently active pane, renders
-the commit graph, shows a commit's detail on click, opens a read-only file diff
-in the main area, supports a repository picker, branch filtering, manual refresh,
-and "load more" pagination. No write operations. Gated by `FeatureFlag::GitGraph`
-plus the `show_git_graph` user setting.
+A commit DAG visualization tab (`ToolPanelView::GitGraph`) in the left tools
+panel. It follows the git repository of the currently active pane, renders the
+commit graph, shows a commit's detail on click, opens a read-only file diff in
+the main area, supports a repository picker, branch filtering, manual refresh,
+and "load more" pagination. Browsing is read-only; a separately flag-gated layer
+(`FeatureFlag::GitGraphWrite`) adds right-click context-menu write operations.
+Gated by `FeatureFlag::GitGraph` plus the `show_git_graph` user setting.
 
 ### Key technical constraints
 1. **The render layer only has rectangle-family primitives.** `Scene` in
@@ -31,10 +32,12 @@ plus the `show_git_graph` user setting.
 app/src/workspace/view/git_graph/
   mod.rs          declares submodules; re-exports GitGraphView
   data.rs         data types + git log/show/branch/diff parsing (pure) + async fetch
+  ops.rs          write-op layer: GitWriteOp + pure arg-builders + async runners
+  menu.rs         pure right-click context-menu builders (MenuKind / PromptKind)
   layout.rs       pure lane-layout algorithm (assign_lanes)
   row_canvas.rs   GitGraphRowCanvas: custom Element painting one row's lanes
   view.rs         GitGraphView + GitGraphAction + GitGraphEvent
-  data_tests.rs / layout_tests.rs   unit tests
+  data_tests.rs / layout_tests.rs / ops_tests.rs / menu_tests.rs   unit tests
 app/src/code/commit_diff_view.rs           read-only commit-file diff view
 app/src/pane_group/pane/commit_diff_pane.rs host pane for the diff view
 app/src/settings/git.rs                    GitSettings (show_git_graph, scan depth)
@@ -91,7 +94,8 @@ branch-filter overlay state, `commits` + `layout` + `state`
 (NoRepo/Loading/Loaded/Error), `selected` + `detail`, list/detail scroll states,
 a draggable detail-area height (`ResizableState`), and `has_more`/`loading_more`.
 `GitGraphAction` = `SelectCommit` | `SelectRepository` | `Refresh` | `LoadMore` |
-branch-filter toggles | `OpenFileDiff(idx)`. Layout: header (commit count +
+branch-filter toggles | `OpenFileDiff(idx)` | the write/menu actions listed in
+"Write operations" above. Layout: header (commit count +
 repository picker when >1 repo + branch-filter button + refresh) over a single
 column with `Shrinkable` factors (graph list alone, or list + detail when a
 commit is selected). The detail area (message + author/committer + full hash +
@@ -116,6 +120,50 @@ content in place) instead of opening a new one. The pane is non-restorable
 (`source: None`) so a historical revision is never written back to the working
 tree.
 
+### Write operations (ops.rs / menu.rs / view dialogs)
+Gated at the UI layer by `FeatureFlag::GitGraphWrite`; the git layer is the same
+`warp_util::git::run_git_command` shell-out used by the read-only fetches (no git
+library), so write operations add no new IO mechanism.
+
+- **`ops.rs`** — `GitWriteOp` enumerates every ready-to-run mutating action
+  (AddTag / CreateBranch / CheckoutCommit / CherryPick / Revert / DropCommit /
+  Merge / Rebase / Reset{mode} / CheckoutBranch / DeleteRemoteBranch / Pull /
+  RenameBranch / PushBranch / DeleteTag / PushTag / Archive). `GitWriteOp::args`
+  (the exact `git` argv) and `confirm_message` are **pure** (unit-tested);
+  `run_write_op` is a thin async wrapper. Helpers:
+  `split_remote_ref` (`origin/x` → remote+branch), `archive_format_from_path`
+  (extension → zip/tar.gz). Notable argv: Drop = `rebase --onto <h>^ <h>`,
+  DeleteRemoteBranch = `push <remote> --delete <branch>`.
+- **`menu.rs`** — pure builders turning a `MenuKind` (Commit / Tag / RemoteBranch
+  / LocalBranch, each carrying the anchor row index; LocalBranch also carries
+  `is_current`, set from the HEAD vs LocalBranch badge, to drop self-only ops on
+  the current branch) + the anchor commit + `write_enabled` into
+  `Vec<MenuItem<GitGraphAction>>`, grouped to match the
+  screenshots (groups joined by separators, empty groups dropped). Read-only
+  items (copy / view-details / unselect) are unconditional; mutating items are
+  added only when `write_enabled` (the "…current branch" items are always offered
+  when writing — git handles a detached HEAD, the menu does not special-case it).
+  `PromptKind` (AddTag / CreateBranch / RenameBranch) carries the dialog title +
+  initial text and `into_op(text)` builds the final `GitWriteOp`.
+- **view.rs wiring** — `GitGraphView` holds a shared `Menu<GitGraphAction>` child
+  view (`context_menu`, with `prevent_interaction_with_other_elements` like the
+  Project Explorer, so a click/right-click outside the open menu dismisses it
+  rather than switching; `open_menu` is cleared on the menu's `Close` event), the
+  open target (`open_menu` + `menu_offset`), a `DialogState` (None / Input /
+  Confirm / ResetMode) with a single-line `EditorView` (`dialog_input`), and
+  `op_running` / `op_error`. Right-click is wired on the commit row (→
+  `MenuKind::Commit`) and on each ref badge (→ Tag / RemoteBranch / LocalBranch;
+  the badge handler sits above the row so it takes precedence); both compute the
+  offset relative to the panel's `SavePosition` id. New
+  `GitGraphAction`s: `OpenMenu` / `CopyToClipboard` / `PromptInput` / `SubmitInput`
+  / `PromptResetMode` / `BeginWriteOp` (confirm-then-run) / `RunOp` (run now) /
+  `BeginArchive` (OS save dialog) / `CancelDialog` / `DismissOpError`. `run_op`
+  guards re-entrancy, spawns `run_write_op`, and on completion reloads — push
+  included, since it updates the local remote-tracking ref — (or `refresh`es with
+  `fetch --prune` for a remote-branch deletion; nothing only for an archive,
+  which writes a file and changes no ref) or fills the error banner via
+  `clean_git_error`.
+
 ### Settings (`Settings → Git`)
 `GitSettings` (`app/src/settings/git.rs`, via `define_settings_group!`):
 - `show_git_graph: bool` (default true; toml `git.show_graph_panel`) — gates the
@@ -132,9 +180,12 @@ The "Git" settings page (`app/src/settings_view/git_page.rs`) surfaces both.
   `cfg!(feature="local_fs") && FeatureFlag::GitGraph.is_enabled()`; builds the
   `CommitDiffView` on the forwarded event.
 - `app_state.rs`: `LeftPanelDisplayedTab::GitGraph` snapshot mapping.
-- Feature flag: cargo feature `git_graph` (`app/Cargo.toml`, not default);
-  `FeatureFlag::GitGraph` (`crates/warp_features/src/lib.rs` + `DOGFOOD_FLAGS`);
-  compile→runtime bridge in `app/src/features.rs`.
+- Feature flags: cargo feature `git_graph` (`app/Cargo.toml`, not default);
+  `FeatureFlag::GitGraph` (the panel) and `FeatureFlag::GitGraphWrite` (the
+  right-click write layer) — both in `crates/warp_features/src/lib.rs` +
+  `DOGFOOD_FLAGS`, both bridged from the `git_graph` cargo feature in
+  `app/src/features.rs`. Keeping the write flag separate lets the read-only base
+  ship without the mutating layer.
 - `crates/warpui_core/src/elements/resizable.rs`: `dragbar_hover_color` support
   used by the draggable detail-area splitter.
 
@@ -143,17 +194,24 @@ The "Git" settings page (`app/src/settings_view/git_page.rs`) surfaces both.
   shapes (invariants 4–5); `parse_commit_log` / `parse_decorate` /
   `parse_commit_detail` / `parse_numstat` / repo discovery edge cases
   (invariants 6, 8, 10).
-- **Integration test** (`crates/integration/src/test/git_graph.rs`,
-  `test_git_graph_loads_commits`): builds a real repo, opens the panel, asserts
-  the graph loads with commits — end-to-end coverage of invariants 1–4
-  (entry point → working-dir follow → render). Drives the panel via `pub(crate)`
-  test accessors on `GitGraphView` / `LeftPanelView` / `WorkspaceView` and a
-  helper in `app/src/integration_testing/git_graph.rs`.
+- **Write-layer unit tests** (`ops_tests.rs` / `menu_tests.rs`): every
+  `GitWriteOp::args` argv (reset modes, `push --delete`, archive format/path,
+  rename, annotated vs lightweight tag), `confirm_message` presence, the path/ref
+  helpers, and each menu's item set + order across write-on / read-only /
+  detached-HEAD (invariants 19–22).
+- **Integration tests** (`crates/integration/src/test/git_graph.rs`):
+  `test_git_graph_loads_commits` (read path: real repo → panel → graph loads,
+  invariants 1–4) and `test_git_graph_create_branch` (write path: runs the
+  "Create Branch" op at the top commit, then asserts the branch appears after the
+  reload, invariants 19/23). Drive the panel via `pub(crate)` test accessors on
+  `GitGraphView` / `LeftPanelView` / `WorkspaceView` and helpers in
+  `app/src/integration_testing/git_graph.rs`.
 - Manual verification under `--features local_fs,git_graph`.
 
 ## Non-goals (deferred)
-- Write operations (checkout / branch / merge / rebase / cherry-pick / revert /
-  reset / stash / tag / push / pull).
+- Stash operations; in-app resolution of merge/rebase/cherry-pick conflicts
+  (finished in the terminal); per-branch push-remote resolution (push uses
+  `origin`).
 - Auto-refresh on repo change — needs repo-watcher plumbing + debounce; manual
   refresh covers it.
 - Rounded (bezier) connectors — render-layer limitation; orthogonal corners today.

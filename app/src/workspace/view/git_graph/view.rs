@@ -27,11 +27,11 @@ use warpui::elements::{
     DragBarSide, Element, Empty, Expanded, Fill, Flex, Highlight, Hoverable, MainAxisAlignment,
     MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
     PositionedElementOffsetBounds, Radius, Resizable, ResizableStateHandle, SavePosition,
-    ScrollbarWidth, SelectableArea, SelectionHandle, Shrinkable, Stack, Text, UniformList,
-    UniformListState,
+    Scrollable, ScrollableElement, ScrollStateHandle, ScrollbarWidth, SelectableArea,
+    SelectionHandle, Shrinkable, Stack, Text, UniformList, UniformListState,
 };
 use warpui::fonts::{Properties, Weight};
-use warpui::geometry::vector::vec2f;
+use warpui::geometry::vector::{vec2f, Vector2F};
 use warpui::keymap::macros::id;
 use warpui::keymap::FixedBinding;
 use warpui::scene::DropShadow;
@@ -42,14 +42,19 @@ use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewCon
 use warp_core::ui::color::pick_foreground_color;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
-use warpui::ui_components::components::UiComponent;
+use warpui::platform::SaveFilePickerConfiguration;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 
 use super::data::{BranchRef, ChangedFile, CommitDetail, CommitNode, RefKind, RefLabel};
 use super::layout::{assign_lanes, GraphLayout, GraphRow};
+use super::menu::{build_menu, MenuKind, PromptKind};
+use super::ops::{archive_format_from_path, GitWriteOp, ResetMode};
 use super::row_canvas::GitGraphRowCanvas;
 use crate::appearance::Appearance;
 use crate::code::editor::{add_color, remove_color};
-use crate::menu::{MenuItem, MenuItemFields};
+use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions};
+use crate::features::FeatureFlag;
+use crate::menu::{Menu, MenuItem, MenuItemFields};
 use crate::settings::{GitSettings, GitSettingsChangedEvent};
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::item_highlight::ItemHighlightState;
@@ -110,6 +115,34 @@ pub(crate) enum GitGraphAction {
     /// Open the Nth changed file's diff from the detail area in a read-only
     /// diff pane in the main area.
     OpenFileDiff(usize),
+
+    // --- Right-click context menu & write operations (gated at build time by
+    // [`FeatureFlag::GitGraphWrite`] for the mutating items). ---
+    /// Open the context menu for a right-click target at the given offset
+    /// (relative to the panel root). `x`/`y` are carried as scalars because
+    /// `Vector2F` is not `PartialEq` (required by this enum).
+    OpenMenu { kind: MenuKind, x: f32, y: f32 },
+    /// Write `text` to the clipboard (commit hash / subject / ref name).
+    CopyToClipboard(String),
+    /// Open the text-input dialog to collect a name (tag / branch / rename).
+    PromptInput(PromptKind),
+    /// Submit the text-input dialog: build the op from the entered text and run.
+    SubmitInput,
+    /// Open the reset-mode dialog (soft / mixed / hard) for the commit.
+    PromptResetMode { hash: String },
+    /// Run a write op, first showing a confirmation dialog when the op requires
+    /// one ([`GitWriteOp::confirm_message`]).
+    BeginWriteOp(GitWriteOp),
+    /// Run a write op now (dispatched by the confirm dialog's "Confirm" button,
+    /// the reset-mode dialog's buttons, and the archive save callback).
+    RunOp(GitWriteOp),
+    /// Open the OS save dialog for "Create Archive"; the chosen path drives the
+    /// archive format and the actual run.
+    BeginArchive { rev: String, suggested_name: String },
+    /// Cancel any open dialog (input / confirm / reset-mode).
+    CancelDialog,
+    /// Dismiss the operation-error banner.
+    DismissOpError,
 }
 
 /// Events the view emits outward.
@@ -153,6 +186,25 @@ enum DetailState {
     Loaded(CommitDetail),
     Error(String),
 }
+
+/// The modal dialog currently shown over the panel (mutually exclusive with the
+/// context menu). Gates each mutating operation behind explicit user input.
+enum DialogState {
+    /// No dialog open.
+    None,
+    /// A single-line text prompt (tag / branch name, rename) — the entered text
+    /// is read from `dialog_input` on submit.
+    Input(PromptKind),
+    /// A yes/no confirmation for a (typically destructive) op.
+    Confirm { op: GitWriteOp, message: String },
+    /// The reset-mode picker for "Reset current branch to this Commit".
+    ResetMode { hash: String },
+}
+
+/// Width of the right-click context menu.
+const CONTEXT_MENU_WIDTH: f32 = 260.;
+/// Width of the modal dialogs (input / confirm / reset-mode).
+const DIALOG_WIDTH: f32 = 360.;
 
 pub(crate) struct GitGraphView {
     /// Anchor directory for repository discovery (pushed in by the left panel
@@ -208,8 +260,11 @@ pub(crate) struct GitGraphView {
     selected: Option<usize>,
     /// Detail of the selected commit.
     detail: DetailState,
-    /// Scroll state of the commit list.
+    /// Scroll state of the commit list (virtualization / row range).
     list_state: UniformListState,
+    /// Scroll state driving the commit list's overlay scrollbar (paired with
+    /// `list_state` the way the file tree pairs its two scroll states).
+    commit_scroll_state: ScrollStateHandle,
     /// Scroll state of the detail area as a whole (commit info + changed file
     /// list): info and files share one scrollable region, so long commit
     /// messages can be scrolled to view in full.
@@ -226,6 +281,9 @@ pub(crate) struct GitGraphView {
     visible_range_sender: Sender<Range<usize>>,
     /// Pulse animation state of the bottom "load more" indicator row.
     loading_shimmer: ShimmeringTextStateHandle,
+    /// Shimmer animation state of the "Working…" overlay shown while a write op
+    /// runs (separate from `loading_shimmer` so the two never share phase).
+    op_shimmer: ShimmeringTextStateHandle,
     /// Draggable state for the detail area's height. The initial pixel value is
     /// just a placeholder; on the first frame's layout the bounds callback in
     /// [`Self::render_resizable_detail`] overrides it to 1/3 of the window
@@ -246,6 +304,31 @@ pub(crate) struct GitGraphView {
     /// Mouse state of the detail area's changed-file rows (for hover highlight /
     /// click to open diff), same length as the current detail's files.
     detail_file_mouse_states: Arc<Vec<MouseStateHandle>>,
+
+    // --- Right-click context menu & write operations ---
+    /// Stable position id for the panel root, so a right-click can compute the
+    /// menu offset relative to the panel.
+    position_id: String,
+    /// The shared context-menu child view; its items dispatch `GitGraphAction`s.
+    context_menu: ViewHandle<Menu<GitGraphAction>>,
+    /// The right-click target whose menu is open (`None` = menu closed).
+    open_menu: Option<MenuKind>,
+    /// Offset (relative to the panel root) at which the open menu is anchored.
+    menu_offset: Vector2F,
+    /// The modal dialog currently shown (input / confirm / reset-mode).
+    dialog: DialogState,
+    /// Single-line editor backing the text-input dialog (reused across prompts).
+    dialog_input: ViewHandle<EditorView>,
+    /// Per-button mouse state for the dialog buttons (hover highlight); indexed
+    /// 0..N by button position within the current dialog.
+    dialog_button_mouse_states: Vec<MouseStateHandle>,
+    /// True while a write op is running (reentrancy guard: blocks a second op and
+    /// dims the panel).
+    op_running: bool,
+    /// Last write-op error, shown in a dismissable banner at the top of the panel.
+    op_error: Option<String>,
+    /// Mouse state of the op-error banner's dismiss button.
+    op_error_dismiss_mouse_state: MouseStateHandle,
 }
 
 /// Empty layout, used when not loaded / on error.
@@ -282,6 +365,35 @@ impl GitGraphView {
             }
         });
 
+        // Right-click context menu (shared across all targets); its items
+        // dispatch `GitGraphAction`s, and we clear `open_menu` when it closes.
+        // Matches the Project Explorer (file tree): with
+        // `prevent_interaction_with_other_elements`, a click/right-click outside
+        // the open menu dismisses it (rather than immediately acting on, or
+        // switching to, the element under the cursor).
+        let context_menu = ctx.add_typed_action_view(|_| {
+            Menu::new()
+                .with_width(CONTEXT_MENU_WIDTH)
+                .prevent_interaction_with_other_elements()
+                .with_drop_shadow()
+        });
+        ctx.subscribe_to_view(&context_menu, |me, _, event, ctx| {
+            if let crate::menu::Event::Close { .. } = event {
+                me.open_menu = None;
+                ctx.notify();
+            }
+        });
+
+        // Single-line editor backing the text-input dialog. Enter submits,
+        // Escape cancels.
+        let dialog_input =
+            ctx.add_view(|ctx| EditorView::single_line(SingleLineEditorOptions::default(), ctx));
+        ctx.subscribe_to_view(&dialog_input, |me, _, event, ctx| match event {
+            EditorEvent::Enter => me.submit_input(ctx),
+            EditorEvent::Escape => me.cancel_dialog(ctx),
+            _ => {}
+        });
+
         Self {
             scan_anchor: None,
             repositories: Arc::new(Vec::new()),
@@ -303,18 +415,30 @@ impl GitGraphView {
             selected: None,
             detail: DetailState::None,
             list_state: UniformListState::new(),
+            commit_scroll_state: ScrollStateHandle::default(),
             detail_scroll_state: ClippedScrollStateHandle::new(),
             refresh_mouse_state: MouseStateHandle::default(),
             has_more: false,
             loading_more: false,
             visible_range_sender,
             loading_shimmer: ShimmeringTextStateHandle::new(),
+            op_shimmer: ShimmeringTextStateHandle::new(),
             detail_resizable_state: resizable_state_handle(220.0),
             detail_height_initialized: Arc::new(AtomicBool::new(false)),
             detail_close_mouse_state: MouseStateHandle::default(),
             detail_selection_handle: SelectionHandle::default(),
             detail_selected_text: Arc::new(RwLock::new(None)),
             detail_file_mouse_states: Arc::new(Vec::new()),
+            position_id: format!("git_graph_{}", ctx.view_id()),
+            context_menu,
+            open_menu: None,
+            menu_offset: Vector2F::zero(),
+            dialog: DialogState::None,
+            dialog_input,
+            dialog_button_mouse_states: (0..4).map(|_| MouseStateHandle::default()).collect(),
+            op_running: false,
+            op_error: None,
+            op_error_dismiss_mouse_state: MouseStateHandle::default(),
         }
     }
 
@@ -349,6 +473,27 @@ impl GitGraphView {
     /// Number of currently loaded commits. Exposed for integration tests.
     pub(crate) fn loaded_commit_count(&self) -> usize {
         self.commits.len()
+    }
+
+    /// Hash of the first (newest) loaded commit, if any. Exposed for integration
+    /// tests to drive a write op against a real commit.
+    pub(crate) fn first_commit_hash_for_test(&self) -> Option<String> {
+        self.commits.first().map(|c| c.hash.clone())
+    }
+
+    /// Whether a local branch named `name` is currently known (used by
+    /// integration tests to assert a branch write op took effect after reload).
+    pub(crate) fn has_local_branch_for_test(&self, name: &str) -> bool {
+        self.branches
+            .iter()
+            .any(|b| b.kind == RefKind::LocalBranch && b.display_name == name)
+    }
+
+    /// Whether the op-error banner is showing. Exposed for the integration test
+    /// that drives a failing write op and asserts the banner surfaces *and*
+    /// renders without panicking.
+    pub(crate) fn has_op_error_for_test(&self) -> bool {
+        self.op_error.is_some()
     }
 
     /// Scans the anchor directory and discovers all git repositories within it
@@ -932,7 +1077,7 @@ impl GitGraphView {
     /// [`Hoverable`] that dispatches the selection). When there are more pages, a
     /// "load more" indicator row with a pulse animation is appended at the end;
     /// scrolling to it auto-loads the next page (infinite scroll).
-    fn render_commit_list(&self) -> Box<dyn Element> {
+    fn render_commit_list(&self, appearance: &Appearance) -> Box<dyn Element> {
         let commits = self.commits.clone();
         let layout = self.layout.clone();
         let mouse_states = self.row_mouse_states.clone();
@@ -941,6 +1086,7 @@ impl GitGraphView {
         let selected = self.selected;
         let commit_count = commits.len();
         let total = commit_count + usize::from(has_more);
+        let position_id = self.position_id.clone();
 
         let list = UniformList::new(self.list_state.clone(), total, move |range, app| {
             let appearance = Appearance::as_ref(app);
@@ -950,9 +1096,11 @@ impl GitGraphView {
                     if i < commit_count {
                         let commit = commits.get(i)?;
                         let row = layout.rows.get(i)?;
-                        let element = render_graph_row(row, lane_count, commit, appearance);
+                        let element =
+                            render_graph_row(row, lane_count, commit, i, &position_id, appearance);
                         let state = mouse_states.get(i).cloned().unwrap_or_default();
                         let is_selected = selected == Some(i);
+                        let row_position_id = position_id.clone();
                         Some(
                             // Wrap a highlight background on hover/selection
                             // (reusing the left panel list's common
@@ -973,6 +1121,20 @@ impl GitGraphView {
                             .on_click(move |ctx, _, _| {
                                 ctx.dispatch_typed_action(GitGraphAction::SelectCommit(i));
                             })
+                            // Right-click the row (off any ref badge) opens the
+                            // commit context menu.
+                            .on_right_click(move |ctx, _, position| {
+                                let Some(bounds) = ctx.element_position_by_id(&row_position_id)
+                                else {
+                                    return;
+                                };
+                                let offset = position - bounds.origin();
+                                ctx.dispatch_typed_action(GitGraphAction::OpenMenu {
+                                    kind: MenuKind::Commit { index: i },
+                                    x: offset.x(),
+                                    y: offset.y(),
+                                });
+                            })
                             .finish(),
                         )
                     } else {
@@ -986,8 +1148,25 @@ impl GitGraphView {
         })
         // Report the visible row range; as it approaches the end,
         // on_visible_range triggers the auto-load.
-        .notify_visible_items(self.visible_range_sender.clone());
-        list.finish()
+        .notify_visible_items(self.visible_range_sender.clone())
+        .finish_scrollable();
+
+        // Wrap in a vertical scrollable with an overlay scrollbar, matching the
+        // Project Explorer (file tree) list. The scrollbar floats over the right
+        // edge; commit rows reserve that width on the right (see
+        // `render_commit_text`) so the subject text clips before it rather than
+        // under it.
+        let theme = appearance.theme();
+        Scrollable::vertical(
+            self.commit_scroll_state.clone(),
+            list,
+            ScrollbarWidth::Auto,
+            theme.nonactive_ui_detail().into(),
+            theme.active_ui_detail().into(),
+            Fill::None,
+        )
+        .with_overlayed_scrollbar()
+        .finish()
     }
 
     /// Wraps the detail area in a height-draggable [`Resizable`] (drag the top
@@ -1413,6 +1592,468 @@ impl GitGraphView {
             format!("{selected}/{total} branches")
         }
     }
+
+    /// Opens the context menu for `kind` at `offset` (relative to the panel
+    /// root). Items are built fresh from the current commit / branch state and
+    /// the [`FeatureFlag::GitGraphWrite`] flag; a stale anchor index no-ops.
+    fn open_context_menu(&mut self, kind: MenuKind, offset: Vector2F, ctx: &mut ViewContext<Self>) {
+        let Some(commit) = self.commits.get(kind.index()).cloned() else {
+            return;
+        };
+        let write_enabled = FeatureFlag::GitGraphWrite.is_enabled();
+        let items = build_menu(&kind, &commit, write_enabled);
+        self.context_menu.update(ctx, move |menu, ctx| {
+            menu.set_items(items, ctx);
+            ctx.notify();
+        });
+        self.open_menu = Some(kind);
+        self.menu_offset = offset;
+        self.dialog = DialogState::None;
+        ctx.focus(&self.context_menu);
+        ctx.notify();
+    }
+
+    /// Begins a write op: shows a confirmation dialog when the op requires one
+    /// ([`GitWriteOp::confirm_message`]), otherwise runs it immediately.
+    fn begin_write_op(&mut self, op: GitWriteOp, ctx: &mut ViewContext<Self>) {
+        self.open_menu = None;
+        match op.confirm_message() {
+            Some(message) => {
+                self.dialog = DialogState::Confirm { op, message };
+                ctx.notify();
+            }
+            None => self.run_op(op, ctx),
+        }
+    }
+
+    /// Opens the text-input dialog for `kind`, pre-filling and focusing the
+    /// shared editor.
+    fn open_input_dialog(&mut self, kind: PromptKind, ctx: &mut ViewContext<Self>) {
+        self.open_menu = None;
+        let initial = kind.initial_text();
+        self.dialog_input.update(ctx, |editor, ctx| {
+            editor.set_buffer_text(&initial, ctx);
+        });
+        self.dialog = DialogState::Input(kind);
+        ctx.focus(&self.dialog_input);
+        ctx.notify();
+    }
+
+    /// Submits the text-input dialog: builds the op from the trimmed text (a
+    /// blank entry keeps the dialog open) and runs it.
+    fn submit_input(&mut self, ctx: &mut ViewContext<Self>) {
+        let DialogState::Input(kind) = &self.dialog else {
+            return;
+        };
+        let text = self
+            .dialog_input
+            .as_ref(ctx)
+            .buffer_text(ctx)
+            .trim()
+            .to_string();
+        if text.is_empty() {
+            return;
+        }
+        let op = kind.clone().into_op(text);
+        self.dialog = DialogState::None;
+        // Pull focus off the now-hidden input editor back to the panel so the
+        // view's key bindings (e.g. Cmd/Ctrl+C) keep working.
+        ctx.focus_self();
+        self.run_op(op, ctx);
+    }
+
+    /// Cancels any open dialog and returns focus to the panel.
+    fn cancel_dialog(&mut self, ctx: &mut ViewContext<Self>) {
+        self.dialog = DialogState::None;
+        ctx.focus_self();
+        ctx.notify();
+    }
+
+    /// Opens the OS save dialog for an archive of `rev`; the chosen path's
+    /// extension selects the format, and the archive runs on confirm.
+    fn begin_archive(&mut self, rev: String, suggested_name: String, ctx: &mut ViewContext<Self>) {
+        self.open_menu = None;
+        ctx.notify();
+        let config = SaveFilePickerConfiguration::new().with_default_filename(suggested_name);
+        ctx.open_save_file_picker(
+            move |path_opt, view, ctx| {
+                let Some(path) = path_opt else {
+                    return;
+                };
+                let output = PathBuf::from(path);
+                let format = archive_format_from_path(&output);
+                view.run_op(
+                    GitWriteOp::Archive {
+                        rev: rev.clone(),
+                        output,
+                        format,
+                    },
+                    ctx,
+                );
+            },
+            config,
+        );
+    }
+
+    /// Runs a write op in the current repo. Guards against re-entrancy, closes
+    /// any open menu/dialog, and on completion updates the view: a `git fetch
+    /// --prune` reload for a remote-branch deletion (so the pruned ref
+    /// disappears), a plain reload for everything else — including push, which
+    /// updates the local remote-tracking ref (and may create a new one), so the
+    /// graph must redraw to show it — except an archive, which only writes a file
+    /// and changes nothing in the graph; failures surface in the error banner.
+    fn run_op(&mut self, op: GitWriteOp, ctx: &mut ViewContext<Self>) {
+        self.open_menu = None;
+        self.dialog = DialogState::None;
+        if self.op_running {
+            return;
+        }
+        let Some(repo) = self.current_repo_path() else {
+            return;
+        };
+
+        #[cfg(not(target_family = "wasm"))]
+        {
+            self.op_running = true;
+            self.op_error = None;
+            ctx.notify();
+            let expected = repo.clone();
+            ctx.spawn(
+                async move { super::ops::run_write_op(&repo, &op).await.map(|()| op) },
+                move |view, result, ctx| {
+                    view.op_running = false;
+                    // Drop the result if the user switched repos mid-flight.
+                    if view.current_repo_path().as_deref() != Some(expected.as_path()) {
+                        ctx.notify();
+                        return;
+                    }
+                    match result {
+                        // An archive just writes a file; nothing in the graph changed.
+                        Ok(GitWriteOp::Archive { .. }) => ctx.notify(),
+                        // Deleting a remote branch: fetch --prune so the dropped
+                        // remote-tracking ref disappears from the graph.
+                        Ok(GitWriteOp::DeleteRemoteBranch { .. }) => view.refresh(ctx),
+                        // Everything else — including push, which updates (or
+                        // creates) the local remote-tracking ref — reloads so the
+                        // graph reflects the new ref positions.
+                        Ok(_) => view.reload(ctx),
+                        Err(err) => {
+                            view.op_error = Some(clean_git_error(&err.to_string()));
+                            ctx.notify();
+                        }
+                    }
+                },
+            );
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = (op, repo);
+        }
+    }
+
+    /// Dismissable banner under the header showing the last write-op error.
+    /// `None` when there's no error. (A running op is shown by the centered
+    /// [`Self::render_working_overlay`] scrim instead.)
+    fn render_op_banner(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
+        let theme = appearance.theme();
+        let font = appearance.ui_font_family();
+        let size = appearance.ui_font_size();
+
+        let error = self.op_error.as_ref()?;
+        let icon_color = theme.sub_text_color(theme.background());
+        let message = Expanded::new(
+            1.0,
+            Text::new(error.clone(), font, size)
+                .with_color(remove_color(appearance))
+                .finish(),
+        )
+        .finish();
+        let dismiss = Hoverable::new(self.op_error_dismiss_mouse_state.clone(), move |_| {
+            // The icon must be size-constrained: an unsized `to_warpui_icon`
+            // element has no intrinsic bounds and produces an infinite layout
+            // rect, which trips a paint-time assertion (and aborts, since the
+            // panic can't unwind out of the paint callback).
+            Container::new(
+                ConstrainedBox::new(Icon::X.to_warpui_icon(icon_color).finish())
+                    .with_width(14.)
+                    .with_height(14.)
+                    .finish(),
+            )
+            .with_padding_left(8.)
+            .finish()
+        })
+        .on_click(|ctx, _, _| ctx.dispatch_typed_action(GitGraphAction::DismissOpError))
+        .finish();
+
+        Some(
+            Container::new(
+                Flex::row()
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_child(message)
+                    .with_child(dismiss)
+                    .finish(),
+            )
+            .with_horizontal_padding(12.)
+            .with_vertical_padding(6.)
+            .with_background_color(internal_colors::fg_overlay_4(theme).into_solid())
+            .finish(),
+        )
+    }
+
+    /// Full-panel scrim shown while a write op runs: dims the graph and centers a
+    /// rounded "Working…" pill with the same shimmer animation the panel uses for
+    /// "Loading more commits…". (The render layer has no rotation, so this is a
+    /// shimmer sweep rather than a spinning ring.) The dim also reads as "busy /
+    /// don't touch"; re-entrancy is already guarded in `run_op`.
+    fn render_working_overlay(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let base_color = theme.sub_text_color(theme.background()).into_solid();
+        let shimmer_color = theme.foreground().into_solid();
+        let label = ShimmeringTextElement::new(
+            "Working…",
+            appearance.ui_font_family(),
+            appearance.ui_font_size(),
+            base_color,
+            shimmer_color,
+            ShimmerConfig::default(),
+            self.op_shimmer.clone(),
+        )
+        .finish();
+        let pill = Container::new(label)
+            .with_horizontal_padding(16.)
+            .with_vertical_padding(10.)
+            .with_background(theme.surface_2())
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+            .with_border(Border::all(1.0).with_border_fill(theme.outline()))
+            .finish();
+
+        // Dim scrim: the panel background at high (but not full) opacity, filling
+        // the panel (Align stretches to the overlay bounds) with the pill centered.
+        let mut scrim_bg = theme.background().into_solid();
+        scrim_bg.a = 0xB8;
+        Container::new(Align::new(pill).finish())
+            .with_background_color(scrim_bg)
+            .finish()
+    }
+
+    /// A pill button for a dialog. `primary` gives it the accent background;
+    /// others get the list hover treatment.
+    fn dialog_button(
+        &self,
+        label: String,
+        action: GitGraphAction,
+        state: MouseStateHandle,
+        primary: bool,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let accent: ColorU = theme.accent().into();
+        Hoverable::new(state, move |mouse_state| {
+            let text_color: ColorU = if primary {
+                pick_foreground_color(accent)
+            } else {
+                theme.foreground().into()
+            };
+            let mut container = Container::new(
+                Text::new_inline(
+                    label.clone(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(text_color.into())
+                .finish(),
+            )
+            .with_horizontal_padding(12.)
+            .with_vertical_padding(5.)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(5.)));
+            if primary {
+                container = container.with_background_color(accent);
+            } else if let Some(bg) =
+                ItemHighlightState::new(false, mouse_state).background_color(appearance)
+            {
+                container = container.with_background_color(bg.into_solid());
+            }
+            container.finish()
+        })
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(action.clone());
+        })
+        .finish()
+    }
+
+    /// Renders the modal dialog card for the current [`DialogState`] (caller only
+    /// invokes this when a dialog is open).
+    fn render_dialog(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let font = appearance.ui_font_family();
+        let size = appearance.ui_font_size();
+
+        // Button mouse states (indexed; the reset dialog uses all four).
+        let st = |i: usize| {
+            self.dialog_button_mouse_states
+                .get(i)
+                .cloned()
+                .unwrap_or_default()
+        };
+
+        let (title, body, buttons): (String, Box<dyn Element>, Vec<Box<dyn Element>>) =
+            match &self.dialog {
+                DialogState::None => (String::new(), Empty::new().finish(), vec![]),
+                DialogState::Input(kind) => {
+                    // Pad the editor (rather than fixing a height) so the text is
+                    // vertically centered and not clipped by a too-short box.
+                    let input = appearance
+                        .ui_builder()
+                        .text_input(self.dialog_input.clone())
+                        .with_style(UiComponentStyles {
+                            border_width: Some(1.),
+                            border_color: Some(theme.outline().into()),
+                            border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.))),
+                            padding: Some(Coords {
+                                top: 7.,
+                                bottom: 7.,
+                                left: 8.,
+                                right: 8.,
+                            }),
+                            ..Default::default()
+                        })
+                        .build()
+                        .finish();
+                    (
+                        kind.title().to_string(),
+                        input,
+                        vec![
+                            self.dialog_button(
+                                "Cancel".to_string(),
+                                GitGraphAction::CancelDialog,
+                                st(0),
+                                false,
+                                appearance,
+                            ),
+                            self.dialog_button(
+                                kind.title().to_string(),
+                                GitGraphAction::SubmitInput,
+                                st(1),
+                                true,
+                                appearance,
+                            ),
+                        ],
+                    )
+                }
+                DialogState::Confirm { op, message } => (
+                    "Confirm".to_string(),
+                    dialog_message(message.clone(), appearance),
+                    vec![
+                        self.dialog_button(
+                            "Cancel".to_string(),
+                            GitGraphAction::CancelDialog,
+                            st(0),
+                            false,
+                            appearance,
+                        ),
+                        self.dialog_button(
+                            "Confirm".to_string(),
+                            GitGraphAction::RunOp(op.clone()),
+                            st(1),
+                            true,
+                            appearance,
+                        ),
+                    ],
+                ),
+                DialogState::ResetMode { hash } => (
+                    "Reset current branch".to_string(),
+                    dialog_message(
+                        "Move the current branch to this commit. Soft keeps your changes \
+                         staged, Mixed keeps them unstaged, Hard discards all uncommitted \
+                         changes."
+                            .to_string(),
+                        appearance,
+                    ),
+                    vec![
+                        self.dialog_button(
+                            "Cancel".to_string(),
+                            GitGraphAction::CancelDialog,
+                            st(0),
+                            false,
+                            appearance,
+                        ),
+                        self.dialog_button(
+                            "Soft".to_string(),
+                            GitGraphAction::RunOp(GitWriteOp::Reset {
+                                hash: hash.clone(),
+                                mode: ResetMode::Soft,
+                            }),
+                            st(1),
+                            false,
+                            appearance,
+                        ),
+                        self.dialog_button(
+                            "Mixed".to_string(),
+                            GitGraphAction::RunOp(GitWriteOp::Reset {
+                                hash: hash.clone(),
+                                mode: ResetMode::Mixed,
+                            }),
+                            st(2),
+                            false,
+                            appearance,
+                        ),
+                        self.dialog_button(
+                            "Hard".to_string(),
+                            GitGraphAction::RunOp(GitWriteOp::Reset {
+                                hash: hash.clone(),
+                                mode: ResetMode::Hard,
+                            }),
+                            st(3),
+                            true,
+                            appearance,
+                        ),
+                    ],
+                ),
+            };
+
+        let mut button_row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::End)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center);
+        for (i, button) in buttons.into_iter().enumerate() {
+            if i > 0 {
+                button_row = button_row
+                    .with_child(Container::new(button).with_padding_left(8.).finish());
+            } else {
+                button_row = button_row.with_child(button);
+            }
+        }
+
+        let title_chars = title.chars().count();
+        let title_el = Text::new_inline(title, font, size)
+            .with_color(theme.foreground().into())
+            .with_single_highlight(
+                Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
+                (0..title_chars).collect(),
+            )
+            .finish();
+
+        let card = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(Container::new(title_el).with_margin_bottom(10.).finish())
+            .with_child(Container::new(body).with_margin_bottom(12.).finish())
+            .with_child(button_row.finish());
+
+        ConstrainedBox::new(
+            Container::new(card.finish())
+                .with_padding_left(16.)
+                .with_padding_right(16.)
+                .with_padding_top(14.)
+                .with_padding_bottom(14.)
+                .with_background(theme.surface_2())
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+                .with_border(Border::all(1.0).with_border_fill(theme.outline()))
+                .finish(),
+        )
+        .with_width(DIALOG_WIDTH)
+        .finish()
+    }
 }
 
 /// The name shown in the repository dropdown: the directory name (the full path
@@ -1489,6 +2130,16 @@ fn render_message(text: String, appearance: &Appearance) -> Box<dyn Element> {
         .finish()
 }
 
+/// A dimmed, **wrapping** message for the modal dialogs (unlike [`render_message`]
+/// which is single-line); used so a long confirmation / reset explanation wraps
+/// inside the dialog instead of being clipped.
+fn dialog_message(text: String, appearance: &Appearance) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    Text::new(text, appearance.ui_font_family(), appearance.ui_font_size())
+        .with_color(theme.sub_text_color(theme.background()).into())
+        .finish()
+}
+
 /// Renders a placeholder state for the whole panel: vertically + horizontally
 /// centered within the remaining space, with an optional decorative icon, a
 /// required title, and an optional subtitle. Used for the NoRepo / Loading /
@@ -1552,22 +2203,32 @@ fn render_centered_placeholder(
 }
 
 /// Renders a single graph row: the lane drawing on the left + the commit text on
-/// the right.
+/// the right. `index` and `position_id` let the ref badges open their context
+/// menu.
 fn render_graph_row(
     row: &GraphRow,
     lane_count: usize,
     commit: &CommitNode,
+    index: usize,
+    position_id: &str,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_child(GitGraphRowCanvas::new(row.clone(), lane_count).finish())
-        .with_child(render_commit_text(commit, appearance))
+        .with_child(Expanded::new(1.0, render_commit_text(commit, index, position_id, appearance)).finish())
         .finish()
 }
 
-/// Renders the commit text column: short hash + ref labels + subject.
-fn render_commit_text(commit: &CommitNode, appearance: &Appearance) -> Box<dyn Element> {
+/// Renders the commit text column: short hash + ref labels + subject. `index` /
+/// `position_id` thread through to the ref badges' right-click menus.
+fn render_commit_text(
+    commit: &CommitNode,
+    index: usize,
+    position_id: &str,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
     let font = appearance.ui_font_family();
     let size = appearance.ui_font_size();
@@ -1575,6 +2236,7 @@ fn render_commit_text(commit: &CommitNode, appearance: &Appearance) -> Box<dyn E
     let fg = theme.foreground();
 
     let mut row = Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_child(
             Container::new(
@@ -1587,18 +2249,31 @@ fn render_commit_text(commit: &CommitNode, appearance: &Appearance) -> Box<dyn E
         );
 
     for ref_label in &commit.refs {
-        row = row.with_child(render_ref_badge(ref_label, appearance));
+        row = row.with_child(render_ref_badge(
+            ref_label,
+            Some((index, position_id)),
+            appearance,
+        ));
     }
 
+    // The subject takes the remaining width and ellipsis-clips, so a long
+    // message ends with "…" rather than overflowing under the overlay scrollbar.
     row = row.with_child(
-        Text::new_inline(commit.subject.clone(), font, size)
-            .with_color(fg.into())
-            .finish(),
+        Expanded::new(
+            1.0,
+            Text::new_inline(commit.subject.clone(), font, size)
+                .with_color(fg.into())
+                .with_clip(ClipConfig::ellipsis())
+                .finish(),
+        )
+        .finish(),
     );
 
+    // Reserve the overlay scrollbar's width on the right (it floats over the
+    // content) so the clipped subject stays clear of it.
     Container::new(row.finish())
         .with_padding_left(6.)
-        .with_padding_right(12.)
+        .with_padding_right(ScrollbarWidth::Auto.as_f32() + 6.)
         .finish()
 }
 
@@ -1632,11 +2307,40 @@ fn ref_badge_color(kind: RefKind) -> ColorU {
     }
 }
 
+/// Maps a ref label to the context menu it opens. The HEAD badge stands in for
+/// the branch it points at — it gets the local-branch menu flagged as the
+/// current branch (so self-only operations like delete / merge-into-current are
+/// omitted).
+fn ref_menu_kind(kind: RefKind, name: String, index: usize) -> MenuKind {
+    match kind {
+        RefKind::Tag => MenuKind::Tag { index, name },
+        RefKind::RemoteBranch => MenuKind::RemoteBranch { index, name },
+        RefKind::LocalBranch => MenuKind::LocalBranch {
+            index,
+            name,
+            is_current: false,
+        },
+        RefKind::Head => MenuKind::LocalBranch {
+            index,
+            name,
+            is_current: true,
+        },
+    }
+}
+
 /// Renders a single ref label badge. Most refs use a "ghost pill" (rounded,
 /// semi-transparent background + same-colored text). The current branch (HEAD)
 /// instead uses a "filled pill" — a solid background with contrasting text — so
 /// it stands out from every other ref at a glance.
-fn render_ref_badge(label: &RefLabel, appearance: &Appearance) -> Box<dyn Element> {
+///
+/// When `menu_target` is `Some((row_index, panel_position_id))` the badge is
+/// right-clickable, opening the tag/branch context menu for that ref; the detail
+/// area passes `None` (its badges are display-only).
+fn render_ref_badge(
+    label: &RefLabel,
+    menu_target: Option<(usize, &str)>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
     let color = ref_badge_color(label.kind);
     let is_current = label.kind == RefKind::Head;
     let (bg, text_color) = if is_current {
@@ -1659,7 +2363,28 @@ fn render_ref_badge(label: &RefLabel, appearance: &Appearance) -> Box<dyn Elemen
     .with_vertical_padding(1.)
     .finish();
 
-    Container::new(badge).with_padding_right(4.).finish()
+    let inner = Container::new(badge).with_padding_right(4.).finish();
+
+    match menu_target {
+        Some((index, position_id)) => {
+            let position_id = position_id.to_string();
+            let menu_kind = ref_menu_kind(label.kind, label.name.clone(), index);
+            Hoverable::new(MouseStateHandle::default(), move |_| inner)
+                .on_right_click(move |ctx, _app, position| {
+                    let Some(bounds) = ctx.element_position_by_id(&position_id) else {
+                        return;
+                    };
+                    let offset = position - bounds.origin();
+                    ctx.dispatch_typed_action(GitGraphAction::OpenMenu {
+                        kind: menu_kind.clone(),
+                        x: offset.x(),
+                        y: offset.y(),
+                    });
+                })
+                .finish()
+        }
+        None => inner,
+    }
 }
 
 /// Converts a Unix-seconds timestamp into a relative-time string (just now /
@@ -1925,7 +2650,7 @@ fn render_detail_body(
         if !c.refs.is_empty() {
             let mut chips = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
             for ref_label in &c.refs {
-                chips = chips.with_child(render_ref_badge(ref_label, appearance));
+                chips = chips.with_child(render_ref_badge(ref_label, None, appearance));
             }
             content = content.with_child(
                 Container::new(chips.finish())
@@ -2082,6 +2807,30 @@ impl TypedActionView for GitGraphView {
             }
             GitGraphAction::FocusPanel => ctx.focus_self(),
             GitGraphAction::OpenFileDiff(index) => self.open_file_diff(*index, ctx),
+            GitGraphAction::OpenMenu { kind, x, y } => {
+                self.open_context_menu(kind.clone(), vec2f(*x, *y), ctx)
+            }
+            GitGraphAction::CopyToClipboard(text) => {
+                ctx.clipboard().write(ClipboardContent::plain_text(text.clone()));
+            }
+            GitGraphAction::PromptInput(kind) => self.open_input_dialog(kind.clone(), ctx),
+            GitGraphAction::SubmitInput => self.submit_input(ctx),
+            GitGraphAction::PromptResetMode { hash } => {
+                self.open_menu = None;
+                self.dialog = DialogState::ResetMode { hash: hash.clone() };
+                ctx.notify();
+            }
+            GitGraphAction::BeginWriteOp(op) => self.begin_write_op(op.clone(), ctx),
+            GitGraphAction::RunOp(op) => self.run_op(op.clone(), ctx),
+            GitGraphAction::BeginArchive {
+                rev,
+                suggested_name,
+            } => self.begin_archive(rev.clone(), suggested_name.clone(), ctx),
+            GitGraphAction::CancelDialog => self.cancel_dialog(ctx),
+            GitGraphAction::DismissOpError => {
+                self.op_error = None;
+                ctx.notify();
+            }
         }
     }
 }
@@ -2107,6 +2856,12 @@ impl View for GitGraphView {
         // an anchor directory.
         if self.scan_anchor.is_some() {
             column = column.with_child(self.render_header(appearance));
+        }
+
+        // A write op in progress / its error surfaces in a banner under the
+        // header, leaving the graph itself intact.
+        if let Some(banner) = self.render_op_banner(appearance) {
+            column = column.with_child(banner);
         }
 
         column = match &self.state {
@@ -2138,13 +2893,60 @@ impl View for GitGraphView {
                 // Shrinkable: with few commits, Shrinkable would only shrink to
                 // the content height, leaving the list and detail crammed at the
                 // top with empty space below and the detail's drag misaligned.
-                .with_child(Expanded::new(1.0, self.render_commit_list()).finish())
+                .with_child(Expanded::new(1.0, self.render_commit_list(appearance)).finish())
                 .with_child(self.render_resizable_detail(appearance)),
             LoadState::Loaded => {
-                column.with_child(Expanded::new(1.0, self.render_commit_list()).finish())
+                column.with_child(Expanded::new(1.0, self.render_commit_list(appearance)).finish())
             }
         };
 
-        column.finish()
+        // The panel root carries a stable position id so right-clicks can place
+        // the context menu relative to it.
+        let content = SavePosition::new(column.finish(), &self.position_id).finish();
+        let mut stack = Stack::new();
+        stack.add_child(content);
+
+        // Context menu, anchored at the click offset (relative to the panel).
+        if self.open_menu.is_some() {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.context_menu).finish(),
+                OffsetPositioning::offset_from_save_position_element(
+                    self.position_id.clone(),
+                    self.menu_offset,
+                    PositionedElementOffsetBounds::ParentByPosition,
+                    PositionedElementAnchor::TopLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
+        }
+
+        // Modal dialog (input / confirm / reset-mode), centered over the panel,
+        // with a click-outside scrim that cancels.
+        if !matches!(self.dialog, DialogState::None) {
+            stack.add_positioned_overlay_child(
+                Dismiss::new(Align::new(self.render_dialog(appearance)).finish())
+                    .on_dismiss(|ctx, _app| {
+                        ctx.dispatch_typed_action(GitGraphAction::CancelDialog)
+                    })
+                    .finish(),
+                OffsetPositioning::offset_from_save_position_element(
+                    self.position_id.clone(),
+                    vec2f(0., 0.),
+                    PositionedElementOffsetBounds::ParentByPosition,
+                    PositionedElementAnchor::Center,
+                    ChildAnchor::Center,
+                ),
+            );
+        }
+
+        // While a write op runs, dim the panel with a centered "Working…" scrim.
+        // Added as a non-positioned child so it's constrained to the Stack (i.e.
+        // the panel) size and fills only the panel — a positioned overlay child
+        // would instead be sized to the whole window and dim the entire app.
+        if self.op_running {
+            stack.add_child(self.render_working_overlay(appearance));
+        }
+
+        stack.finish()
     }
 }
