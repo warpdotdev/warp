@@ -764,6 +764,8 @@ pub struct TabComponent<'a> {
     ///     flicker), and
     ///   * does not act as its own draggable / drop target.
     for_drag_ghost: bool,
+    /// Set when rendered as a member of a horizontal tab group.
+    grouped_member: bool,
 }
 
 /// Structure that holds TabComponent styles.
@@ -924,6 +926,7 @@ impl<'a> TabComponent<'a> {
             is_drag_target,
             background_opacity,
             for_drag_ghost: false,
+            grouped_member: false,
         }
     }
 
@@ -931,6 +934,13 @@ impl<'a> TabComponent<'a> {
     /// cross-window tab drag overlay. See [`TabComponent::for_drag_ghost`].
     pub fn for_drag_ghost(mut self) -> Self {
         self.for_drag_ghost = true;
+        self
+    }
+
+    /// Marks this tab as a member of a horizontal tab group. See the
+    /// [`TabComponent`] `grouped_member` field for the rendering differences.
+    pub fn for_grouped_member(mut self) -> Self {
+        self.grouped_member = true;
         self
     }
 
@@ -1452,9 +1462,13 @@ impl<'a> TabComponent<'a> {
                 )
                 .finish(),
             );
-            Container::new(flex_row.finish())
-                .with_horizontal_padding(8.)
-                .finish()
+            let mut container = Container::new(flex_row.finish()).with_horizontal_padding(8.);
+            // Pad inside the Stack so the close-button overlay (anchored to
+            // the Stack) stays vertically centered within the visible pill.
+            if self.grouped_member {
+                container = container.with_vertical_padding(5.);
+            }
+            container.finish()
         };
 
         let compact_icon = {
@@ -1591,6 +1605,19 @@ impl<'a> TabComponent<'a> {
         )
         .finish();
 
+        // Grouped member: inset rounded highlight, no side dividers, no
+        // drop target (members can't be dragged currently).
+        if self.grouped_member {
+            let highlight = Container::new(stack)
+                .with_background(background_color)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.0)))
+                .finish();
+            return Container::new(highlight)
+                .with_vertical_padding(3.)
+                .with_horizontal_padding(3.)
+                .finish();
+        }
+
         let mut tab = Container::new(stack)
             .with_vertical_padding(2.)
             .with_background(background_color);
@@ -1657,6 +1684,7 @@ impl UiComponent for TabComponent<'_> {
         let mouse_close_state = self.tab.close_mouse_state.clone();
         // Capture before `self` is moved into the Hoverable closure below.
         let for_drag_ghost = self.for_drag_ghost;
+        let grouped_member = self.grouped_member;
 
         // Extract values before moving self into closure
         let tooltip_text = self.tooltip_message.clone();
@@ -1849,6 +1877,10 @@ impl UiComponent for TabComponent<'_> {
         // position cache, breaking `tab_insertion_index_for_cursor`.
         let full_tab: Box<dyn Element> = if for_drag_ghost {
             constrained_tab
+        } else if grouped_member {
+            // Skipping dragging within a group for now.
+            // TODO(johnturcoo) support dragging tabs within a group.
+            SavePosition::new(constrained_tab, &tab_position_id(tab_index)).finish()
         } else {
             let draggable = Draggable::new(draggable_state, constrained_tab)
                 .on_drag_start(|ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::StartTabDrag))
