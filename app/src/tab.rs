@@ -766,6 +766,8 @@ pub struct TabComponent<'a> {
     for_drag_ghost: bool,
     /// Set when rendered as a member of a horizontal tab group.
     grouped_member: bool,
+    /// Set when this member is the sole tab in its group.
+    sole_grouped_member: bool,
 }
 
 /// Structure that holds TabComponent styles.
@@ -927,6 +929,7 @@ impl<'a> TabComponent<'a> {
             background_opacity,
             for_drag_ghost: false,
             grouped_member: false,
+            sole_grouped_member: false,
         }
     }
 
@@ -939,8 +942,11 @@ impl<'a> TabComponent<'a> {
 
     /// Marks this tab as a member of a horizontal tab group. See the
     /// [`TabComponent`] `grouped_member` field for the rendering differences.
-    pub fn for_grouped_member(mut self) -> Self {
+    /// Pass `is_sole_member = true` when this is the only tab in its group so
+    /// the per-tab `Draggable` is suppressed and the parent group drag fires.
+    pub fn for_grouped_member(mut self, is_sole_member: bool) -> Self {
         self.grouped_member = true;
+        self.sole_grouped_member = is_sole_member;
         self
     }
 
@@ -1684,7 +1690,7 @@ impl UiComponent for TabComponent<'_> {
         let mouse_close_state = self.tab.close_mouse_state.clone();
         // Capture before `self` is moved into the Hoverable closure below.
         let for_drag_ghost = self.for_drag_ghost;
-        let grouped_member = self.grouped_member;
+        let sole_grouped_member = self.sole_grouped_member;
 
         // Extract values before moving self into closure
         let tooltip_text = self.tooltip_message.clone();
@@ -1877,11 +1883,17 @@ impl UiComponent for TabComponent<'_> {
         // position cache, breaking `tab_insertion_index_for_cursor`.
         let full_tab: Box<dyn Element> = if for_drag_ghost {
             constrained_tab
-        } else if grouped_member {
-            // Skipping dragging within a group for now.
-            // TODO(johnturcoo) support dragging tabs within a group.
+        } else if sole_grouped_member {
+            // Sole member of a group: skip the per-tab `Draggable` so the
+            // parent group's `Draggable` picks up the drag instead. Dragging
+            // the only member of a group drags the entire group, preventing
+            // accidental orphaning. Keep `SavePosition` so hit-testing /
+            // neighbor-rect math still works.
             SavePosition::new(constrained_tab, &tab_position_id(tab_index)).finish()
         } else {
+            // Grouped members use the same `Draggable` wrapper as regular tabs
+            // so dragging fires `DragTab`; the workspace's `on_tab_drag`
+            // handles cross-group reassignment.
             let draggable = Draggable::new(draggable_state, constrained_tab)
                 .on_drag_start(|ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::StartTabDrag))
                 .on_drag(move |ctx, _, rect, _| {
@@ -1899,7 +1911,6 @@ impl UiComponent for TabComponent<'_> {
             let tab_with_drag: Box<dyn Element> = draggable.finish();
             SavePosition::new(tab_with_drag, &tab_position_id(tab_index)).finish()
         };
-
         if FeatureFlag::NewTabStyling.is_enabled() {
             Shrinkable::new(1.0, full_tab)
         } else {

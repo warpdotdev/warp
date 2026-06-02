@@ -138,6 +138,13 @@ pub(crate) fn vtab_group_position_id(group_id: TabGroupId) -> String {
     format!("vertical_tabs:group:{group_id:?}")
 }
 
+/// Save-position id for a horizontal tab group's container rect, used for
+/// drop hit-testing and as the collapsed-group fallback in horizontal-axis
+/// drag math.
+pub(crate) fn htab_group_position_id(group_id: TabGroupId) -> String {
+    format!("horizontal_tabs:group:{group_id:?}")
+}
+
 fn terminal_title_fallback_font(agent_text: &TerminalAgentText) -> TerminalPrimaryLineFont {
     if agent_text.cli_agent.is_some() {
         TerminalPrimaryLineFont::Ui
@@ -2235,7 +2242,7 @@ fn render_tab_group_internal(
     let is_sole_group_member = in_tab_group
         && tab
             .group_id
-            .is_some_and(|gid| super::group_member_indices(&workspace.tabs, gid).count() == 1);
+            .is_some_and(|gid| super::group_has_single_member(&workspace.tabs, gid));
 
     let draggable: Box<dyn Element> = if is_parent_group_dragging || is_sole_group_member {
         group_element
