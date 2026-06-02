@@ -119,8 +119,11 @@ pub trait AIExecutionProfileAppExt {
 
     fn context_window_display_value(&self, app: &AppContext) -> Option<u32>;
     fn context_window_limit_for_request(&self, app: &AppContext) -> Option<u32>;
-
-    fn should_show_long_context_pricing_warning(&self, app: &AppContext) -> bool;
+    fn should_show_long_context_pricing_warning(
+        &self,
+        context_window_limit: Option<u32>,
+        app: &AppContext,
+    ) -> bool;
 }
 
 impl AIExecutionProfileAppExt for AIExecutionProfile {
@@ -149,12 +152,17 @@ impl AIExecutionProfileAppExt for AIExecutionProfile {
         )
     }
 
-    fn should_show_long_context_pricing_warning(&self, app: &AppContext) -> bool {
+    fn should_show_long_context_pricing_warning(
+        &self,
+        context_window_limit: Option<u32>,
+        app: &AppContext,
+    ) -> bool {
         let llm = effective_base_model(self, app);
         should_show_long_context_pricing_warning(
             llm,
             Some(
-                self.context_window_limit
+                context_window_limit
+                    .or(self.context_window_limit)
                     .unwrap_or(llm.context_window.default_max),
             ),
             FeatureFlag::GPTConfigurableContextWindow.is_enabled(),

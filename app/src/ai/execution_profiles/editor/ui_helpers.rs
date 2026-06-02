@@ -429,7 +429,7 @@ fn render_context_window_row(
         .with_child(slider_row);
     if BlocklistAIPermissions::as_ref(app)
         .permissions_profile_for_id(app, view.profile_id())
-        .should_show_long_context_pricing_warning(app)
+        .should_show_long_context_pricing_warning(view.dragged_context_window_value, app)
     {
         column.add_child(render_long_context_pricing_warning(appearance));
     }
