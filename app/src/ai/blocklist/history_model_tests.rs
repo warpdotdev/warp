@@ -187,13 +187,16 @@ fn start_new_child_conversation_persists_harness_metadata() {
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
 
+        // Pick a non-nil UUID for the parent run_id so the orchestration
+        // capability gate (which now reads run_id() exclusively) sees a valid
+        // agent identifier when seeding the child's parent_agent_id.
+        const PARENT_RUN_ID: &str = "00000000-0000-0000-0000-000000000001";
         let (child_a, child_b, child_ids) = history_model.update(&mut app, |history_model, ctx| {
             let parent_conversation_id =
                 history_model.start_new_conversation(terminal_view_id, false, false, false, ctx);
-            history_model.set_server_conversation_token_for_conversation(
-                parent_conversation_id,
-                "parent-agent-id".to_string(),
-            );
+            if let Some(parent) = history_model.conversation_mut(&parent_conversation_id) {
+                parent.set_run_id(PARENT_RUN_ID.to_string());
+            }
             let child_a = history_model.start_new_child_conversation(
                 terminal_view_id,
                 "Agent 1".to_string(),
@@ -241,14 +244,8 @@ fn start_new_child_conversation_persists_harness_metadata() {
                 child_b_conversation.orchestration_harness(),
                 Some(Harness::Codex)
             );
-            assert_eq!(
-                child_a_conversation.parent_agent_id(),
-                Some("parent-agent-id")
-            );
-            assert_eq!(
-                child_b_conversation.parent_agent_id(),
-                Some("parent-agent-id")
-            );
+            assert_eq!(child_a_conversation.parent_agent_id(), Some(PARENT_RUN_ID));
+            assert_eq!(child_b_conversation.parent_agent_id(), Some(PARENT_RUN_ID));
         });
     });
 }
