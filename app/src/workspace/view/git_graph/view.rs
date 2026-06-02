@@ -229,9 +229,16 @@ pub(crate) struct GitGraphView {
     selected_branches: HashSet<String>,
     /// Per repo root → the user's branch selection in that repo (full refs). A
     /// re-discover triggered by switching tab / cd / refresh restores each
-    /// repo's selection from this, avoiding repeated reselection; only clicking
-    /// the "refresh" button resets the current repo back to all-selected.
+    /// repo's selection from this, so the branch filter survives all of them
+    /// (refresh included), only dropping branches that no longer exist.
     saved_branch_selections: HashMap<PathBuf, HashSet<String>>,
+    /// Per anchor (the tab's working directory) → the repo root the user last
+    /// manually picked for that anchor. Lets each tab restore its own repo
+    /// choice after switching away and back, instead of snapping to the repo
+    /// the anchor lives in. Mirrors `saved_branch_selections`, but keyed by
+    /// anchor because "which repo" is a per-tab choice while "which branches"
+    /// is a per-repo one.
+    saved_repo_selections: HashMap<PathBuf, PathBuf>,
     /// Whether the branch filter overlay is expanded.
     branch_filter_expanded: bool,
     /// Mouse state of the branch filter button.
@@ -339,6 +346,38 @@ fn empty_layout() -> GraphLayout {
     }
 }
 
+/// Decides which repo index to select once a discovery completes.
+///
+/// When following the anchor (cd / switch tab), priority is:
+/// 1. the repo the user last manually picked for this anchor (if still present)
+///    — this is what lets a tab keep its own repo choice across tab switches;
+/// 2. the repo the anchor itself lives in (the directory cd'd into);
+/// 3. the previously selected repo (if still present);
+/// 4. the first repo.
+///
+/// When not following (manual refresh / scan-depth change), only the previous
+/// selection (3) and the first-repo fallback (4) apply.
+#[cfg(not(target_family = "wasm"))]
+fn pick_selected_repo(
+    repos: &[PathBuf],
+    anchor: &Path,
+    follow_anchor: bool,
+    previous: Option<&Path>,
+    saved_for_anchor: Option<&PathBuf>,
+) -> Option<usize> {
+    let keep_previous = || previous.and_then(|p| repos.iter().position(|r| r == p));
+    let first = || (!repos.is_empty()).then_some(0);
+    if follow_anchor {
+        saved_for_anchor
+            .and_then(|saved| repos.iter().position(|r| r == saved))
+            .or_else(|| repos.iter().position(|r| anchor.starts_with(r)))
+            .or_else(keep_previous)
+            .or_else(first)
+    } else {
+        keep_previous().or_else(first)
+    }
+}
+
 impl GitGraphView {
     pub(crate) fn new(ctx: &mut ViewContext<Self>) -> Self {
         // UniformList reports its current visible row range over this channel,
@@ -402,6 +441,7 @@ impl GitGraphView {
             branches: Arc::new(Vec::new()),
             selected_branches: HashSet::new(),
             saved_branch_selections: HashMap::new(),
+            saved_repo_selections: HashMap::new(),
             branch_filter_expanded: false,
             branch_filter_button_mouse_state: MouseStateHandle::default(),
             branch_select_all_mouse_state: MouseStateHandle::default(),
@@ -559,20 +599,13 @@ impl GitGraphView {
                         // Anchor has changed; discard the stale result.
                         return;
                     }
-                    let keep_previous =
-                        || previous.and_then(|p| repos.iter().position(|r| *r == p));
-                    let selected = if follow_anchor {
-                        // Follow: select the repo containing the current anchor
-                        // (the one cd'd into); if the anchor isn't in any repo,
-                        // fall back to keeping the previous selection.
-                        repos
-                            .iter()
-                            .position(|r| expected.starts_with(r))
-                            .or_else(keep_previous)
-                            .or_else(|| (!repos.is_empty()).then_some(0))
-                    } else {
-                        keep_previous().or_else(|| (!repos.is_empty()).then_some(0))
-                    };
+                    let selected = pick_selected_repo(
+                        &repos,
+                        &expected,
+                        follow_anchor,
+                        previous.as_deref(),
+                        view.saved_repo_selections.get(&expected),
+                    );
                     view.set_repositories(repos, selected, ctx);
                 },
             );
@@ -671,6 +704,7 @@ impl GitGraphView {
             return;
         }
         self.selected_repo = Some(index);
+        self.persist_repo_selection();
         self.reload(ctx);
     }
 
@@ -715,6 +749,15 @@ impl GitGraphView {
         if let Some(repo) = self.current_repo_path() {
             self.saved_branch_selections
                 .insert(repo, self.selected_branches.clone());
+        }
+    }
+
+    /// Persists the current repo selection keyed by the anchor (the tab's
+    /// working directory), so the tab restores its own choice after switching
+    /// away and back instead of snapping to the repo the anchor lives in.
+    fn persist_repo_selection(&mut self) {
+        if let (Some(anchor), Some(repo)) = (self.scan_anchor.clone(), self.current_repo_path()) {
+            self.saved_repo_selections.insert(anchor, repo);
         }
     }
 
@@ -775,9 +818,8 @@ impl GitGraphView {
                     // Restore the repo's saved branch selection (intersected
                     // with the new branch list, dropping branches that have
                     // vanished); if it was never saved (first time seeing this
-                    // repo, or it was just cleared by "refresh"), default to all
-                    // selected. Then persist it back as the repo's current
-                    // selection.
+                    // repo), default to all selected. Then persist it back as
+                    // the repo's current selection.
                     view.selected_branches = match view.saved_branch_selections.get(&expected) {
                         Some(saved) => saved.intersection(&new_refs).cloned().collect(),
                         None => new_refs,
@@ -2800,16 +2842,11 @@ impl TypedActionView for GitGraphView {
             GitGraphAction::ToggleBranch(ref_name) => self.toggle_branch(ref_name, ctx),
             GitGraphAction::SelectAllBranches => self.select_all_branches(ctx),
             GitGraphAction::DeselectAllBranches => self.deselect_all_branches(ctx),
-            // Manual refresh: the only entry point that resets the branch
-            // selection — clear the current repo's saved selection (so reload
-            // defaults to all selected), then rescan repos (the user may have
-            // added/removed subrepos) while keeping the current repo.
-            GitGraphAction::Refresh => {
-                if let Some(repo) = self.current_repo_path() {
-                    self.saved_branch_selections.remove(&repo);
-                }
-                self.refresh(ctx);
-            }
+            // Manual refresh: fetch + rescan repos (the user may have
+            // added/removed subrepos) while keeping the current repo *and* its
+            // branch selection — reload restores the saved selection, only
+            // dropping branches that no longer exist after the fetch.
+            GitGraphAction::Refresh => self.refresh(ctx),
             GitGraphAction::CloseDetail => {
                 self.clear_selection();
                 ctx.notify();
@@ -2970,3 +3007,7 @@ impl View for GitGraphView {
         stack.finish()
     }
 }
+
+#[cfg(test)]
+#[path = "view_tests.rs"]
+mod tests;
