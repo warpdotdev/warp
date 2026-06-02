@@ -21841,8 +21841,8 @@ impl TerminalView {
     fn jump_to_latest_agent_message(&mut self, ctx: &mut ViewContext<Self>) {
         // Agent messages only render inside the agent view; in the terminal they
         // collapse to a hidden, zero-height block. So "jump to latest agent
-        // message" re-enters the agent view for the most recent conversation,
-        // which lands on its latest message.
+        // message" makes sure we're in the agent view for the most recent
+        // conversation and then scrolls to its latest exchange.
         if !FeatureFlag::AgentView.is_enabled() {
             return;
         }
@@ -21857,12 +21857,42 @@ impl TerminalView {
         else {
             return;
         };
-        self.enter_agent_view_for_conversation(
-            None,
-            AgentViewEntryOrigin::JumpToLatestAgentMessage,
-            conversation_id,
-            ctx,
-        );
+        // Resolve the target exchange from the conversation model rather than from
+        // the currently-mounted blocks: when entering from the terminal the blocks
+        // mount over later frames, so the latest block may not exist yet this tick.
+        let Some(exchange_id) = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .and_then(|conversation| conversation.latest_exchange())
+            .map(|exchange| exchange.id)
+        else {
+            return;
+        };
+        // Only re-enter the agent view when we're not already in this
+        // conversation's view; re-entering when already there is needless churn.
+        let already_in_view = self
+            .agent_view_controller
+            .as_ref(ctx)
+            .agent_view_state()
+            .active_conversation_id()
+            == Some(conversation_id);
+        if already_in_view {
+            // Blocks are already mounted, so the exchange resolves immediately.
+            self.scroll_to_exchange(exchange_id, ctx);
+        } else {
+            self.enter_agent_view_for_conversation(
+                None,
+                AgentViewEntryOrigin::JumpToLatestAgentMessage,
+                conversation_id,
+                ctx,
+            );
+            // Entering scrolls the agent view to the bottom on the next render, so
+            // scrolling synchronously here would be overridden by that. Defer to a
+            // later tick — after entry's own scroll and after the blocks mount —
+            // then scroll to the target exchange (retrying while blocks mount).
+            ctx.spawn(futures::future::ready(()), move |me, _, ctx| {
+                me.scroll_to_exchange_when_mounted(exchange_id, 0, ctx);
+            });
+        }
         send_telemetry_from_ctx!(TelemetryEvent::JumpToLatestAgentMessage, ctx);
     }
 
@@ -22076,6 +22106,34 @@ impl TerminalView {
             ScrollPositionUpdate::ScrollToTopOfRichContent { index },
             ctx,
         );
+    }
+
+    /// Retries scrolling to `exchange_id` while the agent view's blocks finish
+    /// mounting after entry from the terminal. Each agent turn renders as a single
+    /// block, so this lands on the top of the latest turn's block. Gives up after a
+    /// bounded number of frames so a missing exchange can't loop forever.
+    fn scroll_to_exchange_when_mounted(
+        &mut self,
+        exchange_id: AIAgentExchangeId,
+        attempt: u32,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        const MAX_ATTEMPTS: u32 = 15;
+        let mounted = self.rich_content_views.iter().any(|rc| {
+            rc.ai_block_metadata()
+                .is_some_and(|meta| meta.exchange_id == exchange_id)
+        });
+        if mounted {
+            self.scroll_to_exchange(exchange_id, ctx);
+        }
+        // Re-assert each frame across a short window: entering the agent view kicks
+        // off its own scroll on a later, unpredictable tick that would otherwise
+        // override ours, so keep re-applying the scroll until that settles.
+        if attempt < MAX_ATTEMPTS {
+            ctx.spawn(futures::future::ready(()), move |me, _, ctx| {
+                me.scroll_to_exchange_when_mounted(exchange_id, attempt + 1, ctx);
+            });
+        }
     }
 
     #[cfg(any(test, feature = "integration_tests"))]
