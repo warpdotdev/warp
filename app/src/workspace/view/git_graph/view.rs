@@ -39,6 +39,7 @@ use warpui::text_layout::{ClipConfig, ClipDirection, ClipStyle};
 use warpui::units::Pixels;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
+use warp_core::ui::color::pick_foreground_color;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
 use warpui::ui_components::components::UiComponent;
@@ -1631,18 +1632,25 @@ fn ref_badge_color(kind: RefKind) -> ColorU {
     }
 }
 
-/// Renders a single ref label badge: a rounded, semi-transparent background +
-/// same-colored text, with spacing on the right.
+/// Renders a single ref label badge. Most refs use a "ghost pill" (rounded,
+/// semi-transparent background + same-colored text). The current branch (HEAD)
+/// instead uses a "filled pill" — a solid background with contrasting text — so
+/// it stands out from every other ref at a glance.
 fn render_ref_badge(label: &RefLabel, appearance: &Appearance) -> Box<dyn Element> {
     let color = ref_badge_color(label.kind);
-    let bg = ColorU { a: 0x33, ..color };
+    let is_current = label.kind == RefKind::Head;
+    let (bg, text_color) = if is_current {
+        (color, pick_foreground_color(color))
+    } else {
+        (ColorU { a: 0x33, ..color }, color)
+    };
     let badge = Container::new(
         Text::new_inline(
             label.name.clone(),
             appearance.ui_font_family(),
             appearance.ui_font_size(),
         )
-        .with_color(color.into())
+        .with_color(text_color.into())
         .finish(),
     )
     .with_background_color(bg)
