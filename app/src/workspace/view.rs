@@ -110,8 +110,8 @@ use warpui::{
 use self::vertical_tabs::telemetry::{VerticalTabsDisplayOption, VerticalTabsTelemetryEvent};
 use self::vertical_tabs::{
     pane_summary_kind, render_detail_sidecar, render_settings_popup,
-    render_summary_pane_kind_icon_circle, render_summary_pane_kind_icons,
-    vtab_group_position_id, SummaryPaneKind, SummaryPaneKindIcons, VerticalTabsPanelState,
+    render_summary_pane_kind_icon_circle, render_summary_pane_kind_icons, vtab_group_position_id,
+    SummaryPaneKind, SummaryPaneKindIcons, VerticalTabsPanelState,
     VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
@@ -18921,7 +18921,7 @@ impl Workspace {
         header = header.on_double_click(move |ctx, _, _| {
             ctx.dispatch_typed_action(WorkspaceAction::RenameTabGroup(group_id));
         });
-    
+
         header = header.on_right_click(move |ctx, _, position| {
             ctx.dispatch_typed_action(WorkspaceAction::ToggleTabGroupRightClickMenu {
                 group_id,
@@ -19649,8 +19649,7 @@ impl Workspace {
             let mut slots: Vec<TabBarSlot> = Vec::with_capacity(self.tabs.len());
             for (idx, tab) in self.tabs.iter().enumerate() {
                 let group_id = if grouped_tabs_enabled {
-                    tab.group_id
-                        .filter(|gid| self.tab_groups.contains_key(gid))
+                    tab.group_id.filter(|gid| self.tab_groups.contains_key(gid))
                 } else {
                     None
                 };
@@ -19685,7 +19684,10 @@ impl Workspace {
                 };
                 // Insert ghost slot before this slot's first tab if the drag
                 // would land here.
-                if ghost.as_ref().is_some_and(|g| g.insertion_index == start_index) {
+                if ghost
+                    .as_ref()
+                    .is_some_and(|g| g.insertion_index == start_index)
+                {
                     tab_bar.add_child(self.render_ghost_tab_slot(appearance, ctx));
                 }
 
@@ -19711,20 +19713,23 @@ impl Workspace {
                         let i = *index;
                         let is_transferred = transferred_tab_index == Some(i);
                         if !is_transferred
-                            && self.hovered_tab_index.as_ref().is_some_and(|hovered_index| {
-                                match hovered_index {
+                            && self
+                                .hovered_tab_index
+                                .as_ref()
+                                .is_some_and(|hovered_index| match hovered_index {
                                     TabBarHoverIndex::BeforeTab(idx) => i == *idx,
                                     TabBarHoverIndex::OverTab(_) => false,
-                                }
-                            })
+                                })
                         {
                             tab_bar.add_child(self.render_tab_hover_indicator(appearance));
                         }
                         if is_transferred {
                             tab_bar.add_child(
-                                ConstrainedBox::new(
-                                    self.render_tab_in_tab_bar(i, tab_bar_state, ctx),
-                                )
+                                ConstrainedBox::new(self.render_tab_in_tab_bar(
+                                    i,
+                                    tab_bar_state,
+                                    ctx,
+                                ))
                                 .with_width(0.)
                                 .finish(),
                             );
