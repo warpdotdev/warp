@@ -1,7 +1,5 @@
-use std::{
-    cmp::Ordering,
-    ops::{Add, AddAssign, Sub},
-};
+use std::cmp::Ordering;
+use std::ops::{Add, AddAssign, Sub};
 
 /// A point within a document. The exact coordinate system (whether or not rows
 /// are soft-wrapped, what the unit for characters is) is unspecified.

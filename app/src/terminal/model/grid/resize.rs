@@ -2,17 +2,13 @@
 // Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
 
 use string_offset::ByteOffset;
-use warp_terminal::model::{
-    grid::{
-        cell::{self, LineLength as _},
-        Dimensions as _,
-    },
-    Point, VisiblePoint, VisibleRow,
-};
-
-use crate::terminal::{model::grid::Cursor, SizeInfo};
+use warp_terminal::model::grid::cell::{self, LineLength as _};
+use warp_terminal::model::grid::Dimensions as _;
+use warp_terminal::model::{Point, VisiblePoint, VisibleRow};
 
 use super::{FullGridClearBehavior, GridHandler};
+use crate::terminal::model::grid::Cursor;
+use crate::terminal::SizeInfo;
 
 impl GridHandler {
     /// Resize terminal to new dimensions.
@@ -73,6 +69,16 @@ impl GridHandler {
             // We can delegate to the old grid resizing logic, as there's no
             // flat storage for the alt screen.
             self.grid.resize(false, num_rows, num_cols, self.finished);
+
+            // Keep flat_storage's column count in sync so that rows
+            // scrolled into it later (via scroll_region_up) match the
+            // width the iterator expects. Without this, rows from the
+            // wider/narrower grid get pushed with process_grapheme_info_
+            // unchecked and RowIterator::next panics.
+            if !self.ansi_handler_state.is_alt_screen {
+                self.flat_storage.set_columns(num_cols);
+            }
+
             return;
         }
 

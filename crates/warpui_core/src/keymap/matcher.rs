@@ -1,10 +1,14 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use itertools::Either;
+
 use super::{
     BindingLens, Context, CustomTag, EditableBinding, EditableBindingLens, FixedBinding, Keymap,
     Keystroke, Trigger,
 };
-use crate::{actions::StandardAction, Action, EntityId};
-use itertools::Either;
-use std::{collections::HashMap, sync::Arc};
+use crate::actions::StandardAction;
+use crate::{Action, EntityId};
 
 #[derive(Default)]
 pub struct Matcher {
@@ -374,5 +378,5 @@ impl Matcher {
 }
 
 #[cfg(test)]
-#[path = "matcher_test.rs"]
+#[path = "matcher_tests.rs"]
 mod tests;

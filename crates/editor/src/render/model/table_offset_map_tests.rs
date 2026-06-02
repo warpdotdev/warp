@@ -1,7 +1,7 @@
-use super::*;
-use markdown_parser::Hyperlink;
-use markdown_parser::parse_inline_markdown;
 use markdown_parser::weight::CustomWeight;
+use markdown_parser::{Hyperlink, parse_inline_markdown};
+
+use super::*;
 
 #[test]
 fn test_simple_table() {

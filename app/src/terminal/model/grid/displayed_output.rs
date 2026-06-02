@@ -569,5 +569,5 @@ impl DisplayedOutput {
 }
 
 #[cfg(test)]
-#[path = "displayed_output_test.rs"]
+#[path = "displayed_output_tests.rs"]
 mod tests;

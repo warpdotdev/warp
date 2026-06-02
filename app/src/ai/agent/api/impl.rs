@@ -1,13 +1,15 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use crate::{ai::agent::redaction, terminal::model::session::SessionType};
 use futures_util::StreamExt;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 
+use super::convert_to::convert_input;
+use super::{ConvertToAPITypeError, RequestParams, ResponseStream};
+use crate::ai::agent::redaction;
 use crate::server::server_api::ServerApi;
-
-use super::{convert_to::convert_input, ConvertToAPITypeError, RequestParams, ResponseStream};
+use crate::terminal::model::session::SessionType;
 
 pub async fn generate_multi_agent_output(
     server_api: Arc<ServerApi>,
@@ -51,10 +53,10 @@ pub async fn generate_multi_agent_output(
         redaction::redact_inputs(&mut params.input);
     }
 
-    let mut api_keys = params.api_keys;
-    if let Some(api_keys) = &mut api_keys {
-        api_keys.allow_use_of_warp_credits = params.allow_use_of_warp_credits_with_byok;
-    }
+    let api_keys = api_keys_with_warp_credit_fallback_setting(
+        params.api_keys,
+        params.allow_use_of_warp_credits,
+    );
 
     let request = api::Request {
         task_context: Some(api::request::TaskContext {
@@ -104,7 +106,9 @@ pub async fn generate_multi_agent_output(
                 FeatureFlag::SummarizationViaMessageReplacement.is_enabled(),
             supports_bundled_skills: FeatureFlag::BundledSkills.is_enabled(),
             supports_research_agent: params.research_agent_enabled,
-            supports_orchestration_v2: FeatureFlag::OrchestrationV2.is_enabled(),
+            supports_orchestration_v2: params.orchestration_enabled
+                && FeatureFlag::OrchestrationV2.is_enabled(),
+            custom_model_providers: params.custom_model_providers,
         }),
         metadata: Some(api::request::Metadata {
             logging: logging_metadata,
@@ -150,6 +154,22 @@ pub async fn generate_multi_agent_output(
     }
 }
 
+fn api_keys_with_warp_credit_fallback_setting(
+    api_keys: Option<api::request::settings::ApiKeys>,
+    allow_use_of_warp_credits: bool,
+) -> Option<api::request::settings::ApiKeys> {
+    match api_keys {
+        Some(mut api_keys) => {
+            api_keys.allow_use_of_warp_credits = allow_use_of_warp_credits;
+            Some(api_keys)
+        }
+        None if allow_use_of_warp_credits => Some(api::request::settings::ApiKeys {
+            allow_use_of_warp_credits: true,
+            ..Default::default()
+        }),
+        None => None,
+    }
+}
 fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
     let mut supported_tools = vec![
         api::ToolType::Grep,
@@ -191,8 +211,10 @@ fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
             // through RemoteServerClient. The host_id is only populated
             // after a successful connection handshake, so its presence is a
             // sufficient proxy for client availability.
-            // SearchCodebase remains disabled (follow-up work).
             supported_tools.extend(&[api::ToolType::ReadFiles, api::ToolType::ApplyFileDiffs]);
+            if FeatureFlag::RemoteCodebaseIndexing.is_enabled() {
+                supported_tools.push(api::ToolType::SearchCodebase);
+            }
         }
         Some(SessionType::WarpifiedRemote { host_id: None }) => {
             // Feature flag off or not yet connected — no remote tools.
@@ -254,6 +276,9 @@ fn get_supported_cli_agent_tools(params: &RequestParams) -> Vec<api::ToolType> {
         }
         Some(SessionType::WarpifiedRemote { host_id: Some(_) }) => {
             supported_cli_agent_tools.push(api::ToolType::ReadFiles);
+            if FeatureFlag::RemoteCodebaseIndexing.is_enabled() {
+                supported_cli_agent_tools.push(api::ToolType::SearchCodebase);
+            }
         }
         Some(SessionType::WarpifiedRemote { host_id: None }) => {}
     }

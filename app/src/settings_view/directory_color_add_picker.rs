@@ -6,24 +6,22 @@ use ai::index::full_source_code_embedding::manager::{
 };
 use settings::Setting;
 use warp_util::path::user_friendly_path;
+use warpui::elements::{
+    Border, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable,
+    MainAxisSize, MouseStateHandle, ParentElement, Text,
+};
+use warpui::platform::Cursor;
 use warpui::{
-    elements::{
-        Border, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable,
-        MainAxisSize, MouseStateHandle, ParentElement, Text,
-    },
-    platform::Cursor,
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::{
-    ai::persisted_workspace::{PersistedWorkspace, PersistedWorkspaceEvent},
-    appearance::Appearance,
-    ui_components::icons,
-    view_components::action_button::{ActionButton, SecondaryTheme},
-    view_components::{DropdownItem, FilterableDropdown},
-    workspace::tab_settings::{
-        DirectoryTabColor, DirectoryTabColors, TabSettings, TabSettingsChangedEvent,
-    },
+use crate::ai::persisted_workspace::{PersistedWorkspace, PersistedWorkspaceEvent};
+use crate::appearance::Appearance;
+use crate::ui_components::icons;
+use crate::view_components::action_button::{ActionButton, SecondaryTheme};
+use crate::view_components::{DropdownItem, FilterableDropdown};
+use crate::workspace::tab_settings::{
+    DirectoryTabColor, DirectoryTabColors, TabSettings, TabSettingsChangedEvent,
 };
 
 const ADD_DIRECTORY_LABEL: &str = "+ Add directory…";
@@ -86,8 +84,8 @@ impl DirectoryColorAddPicker {
             // cache in `refresh_items`, so the noisier events (`Modified`/`Queried`) are
             // cheap when nothing relevant has changed.
             match event {
-                CodebaseIndexManagerEvent::NewIndexCreated
-                | CodebaseIndexManagerEvent::SyncStateUpdated
+                CodebaseIndexManagerEvent::NewIndexCreated { .. }
+                | CodebaseIndexManagerEvent::SyncStateUpdated { .. }
                 | CodebaseIndexManagerEvent::RemoveExpiredIndexMetadata { .. }
                 | CodebaseIndexManagerEvent::IndexMetadataUpdated { .. } => {
                     me.refresh_items(ctx);

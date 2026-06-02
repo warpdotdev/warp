@@ -1,9 +1,8 @@
-use std::path::Path;
-
 use ai::skills::{ParsedSkill, SkillProvider, SkillReference};
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
-use crate::ai::skills::SkillDescriptor;
+use crate::ai::skills::{SkillDescriptor, SkillPathQuery};
 
 pub struct SkillManager {}
 
@@ -14,21 +13,34 @@ impl SkillManager {
 
     pub fn get_skills_for_working_directory(
         &self,
-        _working_directory: Option<&Path>,
+        _working_directory: Option<&LocalOrRemotePath>,
         _ctx: &AppContext,
     ) -> Vec<SkillDescriptor> {
         vec![]
     }
 
-    pub fn skill_by_path(&self, _skill_path: &Path) -> Option<&ParsedSkill> {
+    pub fn skill_by_path<P: SkillPathQuery + ?Sized>(
+        &self,
+        _skill_path: &P,
+    ) -> Option<&ParsedSkill> {
         None
     }
-
-    pub fn reference_for_skill_path(&self, skill_path: &Path) -> SkillReference {
-        SkillReference::Path(skill_path.to_path_buf())
+    pub fn reference_for_skill_path<P: SkillPathQuery + ?Sized>(
+        &self,
+        skill_path: &P,
+    ) -> SkillReference {
+        SkillReference::Path(skill_path.to_skill_location())
     }
 
     pub fn skill_by_reference(&self, _reference: &SkillReference) -> Option<&ParsedSkill> {
+        None
+    }
+
+    pub fn active_skill_by_reference(
+        &self,
+        _reference: &SkillReference,
+        _ctx: &AppContext,
+    ) -> Option<&ParsedSkill> {
         None
     }
 

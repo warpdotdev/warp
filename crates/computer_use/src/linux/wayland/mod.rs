@@ -11,14 +11,13 @@ mod screenshot;
 mod session;
 
 use async_trait::async_trait;
-use pathfinder_geometry::vector::Vector2I;
-use warpui::r#async::Timer;
-
-use crate::{Action, ActionResult, Options};
-
 use keyboard::Keyboard;
 use mouse::Mouse;
+use pathfinder_geometry::vector::Vector2I;
 use session::PortalSession;
+use warpui_core::r#async::Timer;
+
+use crate::{Action, ActionResult, Options};
 
 /// An actor that performs computer use actions on Wayland via XDG portals.
 pub struct Actor {

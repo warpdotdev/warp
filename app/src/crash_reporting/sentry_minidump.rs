@@ -8,28 +8,22 @@
 //! * Startup via our command-line parsing, rather than a separate hook
 //! * Use of anonymous, temporary crash dump files, to ensure they're cleaned up
 
-use std::{
-    collections::HashMap,
-    fs::File,
-    io::{self, Read as _, Seek as _, Write},
-    path::{Path, PathBuf},
-    process,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{self, Read as _, Seek as _, Write};
+use std::path::{Path, PathBuf};
+use std::process;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context as _;
 use command::blocking::Command;
 use crash_handler::{CrashContext, CrashHandler};
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
-use sentry::{
-    protocol::{Attachment, AttachmentType},
-    Breadcrumb, Level,
-};
+use sentry::protocol::{Attachment, AttachmentType};
+use sentry::{Breadcrumb, Level};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_core::report_error;
@@ -164,6 +158,15 @@ pub fn run_server(socket_path: &Path) -> anyhow::Result<()> {
             send_crash_report(crash_details, result.ok());
 
             minidumper::LoopAction::Exit
+        }
+
+        fn on_client_disconnected(&self, num_clients: usize) -> minidumper::LoopAction {
+            if num_clients == 0 {
+                log::info!("All clients disconnected, shutting down minidump server");
+                minidumper::LoopAction::Exit
+            } else {
+                minidumper::LoopAction::Continue
+            }
         }
 
         fn on_message(&self, _kind: u32, buffer: Vec<u8>) {

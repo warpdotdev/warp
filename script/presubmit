@@ -6,17 +6,20 @@
 set -e
 cd "$(dirname "$0")/.."
 
-FMT_COMMAND="cargo fmt"
+FMT_COMMAND="./script/format"
 echo "Running $FMT_COMMAND..."
 set -e
 EXIT_CODE=0
-$FMT_COMMAND -- --check || EXIT_CODE=$?
+$FMT_COMMAND --check || EXIT_CODE=$?
 if [[ $EXIT_CODE -ne 0 ]]; then
     echo 'Run `'"$FMT_COMMAND"'` to fix.'
     exit $EXIT_CODE
 fi
 
-echo "Cargo fmt succeeded..."
+echo "Rust formatting succeeded..."
+echo "Checking for inline Rust test modules..."
+./script/check_no_inline_test_modules
+echo "Inline Rust test module check succeeded..."
 
 echo "Running clippy..."
 # Exclude warp_completer because we run clippy on it with default features (rather than all features) below.

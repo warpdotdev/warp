@@ -1,41 +1,37 @@
+use ai::LLMId;
+use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::vec2f;
+use ui_components::button::State as ButtonState;
+use ui_components::{button, Component as _, Options as _};
+use warp_core::features::FeatureFlag;
+use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::icons::Icon;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::Fill;
+use warpui_core::elements::{
+    AnchorPair, Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Dismiss, Empty, Flex, FormattedTextElement, Hoverable,
+    Icon as WarpUiIcon, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
+    OffsetType, ParentElement, ParentOffsetBounds, PositioningAxis, Radius, SavePosition,
+    ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Stack, Text, XAxisAnchor, YAxisAnchor,
+};
+use warpui_core::fonts::{Properties, Weight};
+use warpui_core::keymap::Keystroke;
+use warpui_core::platform::Cursor;
+use warpui_core::scene::DropShadow;
+use warpui_core::text_layout::TextAlignment;
+use warpui_core::ui_components::components::{UiComponent as _, UiComponentStyles};
+use warpui_core::{
+    AppContext, Element, Entity, Gradient, SingletonEntity as _, TypedActionView, View, ViewContext,
+};
+
 use super::two_line_button::{render_two_line_button, TwoLineButtonSpec};
+use super::OnboardingSlide;
 use crate::model::{OnboardingAuthState, OnboardingStateEvent, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
 use crate::telemetry::OnboardingEvent;
-use warp_core::send_telemetry_from_ctx;
-
-use super::OnboardingSlide;
 use crate::visuals::agent_visual;
-use pathfinder_geometry::vector::vec2f;
-use ui_components::{button, Component as _, Options as _};
-use warp_core::features::FeatureFlag;
-use warp_core::ui::{
-    appearance::Appearance,
-    theme::{color::internal_colors, Fill},
-};
-use warpui::{
-    elements::{
-        AnchorPair, Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
-        CornerRadius, CrossAxisAlignment, Dismiss, Empty, Flex, FormattedTextElement, Hoverable,
-        Icon as WarpUiIcon, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
-        OffsetType, ParentElement, ParentOffsetBounds, PositioningAxis, Radius, SavePosition,
-        ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Stack, Text, XAxisAnchor, YAxisAnchor,
-    },
-    fonts::Properties,
-    fonts::Weight,
-    keymap::Keystroke,
-    platform::Cursor,
-    scene::DropShadow,
-    text_layout::TextAlignment,
-    ui_components::components::{UiComponent as _, UiComponentStyles},
-    AppContext, Element, Entity, Gradient, SingletonEntity as _, TypedActionView, View,
-    ViewContext,
-};
-
-use ai::LLMId;
-use pathfinder_color::ColorU;
-use ui_components::button::State as ButtonState;
-use warp_core::ui::icons::Icon;
 
 /// high-contrast "inverted" fill (foreground color)
 struct UpgradeButtonTheme;
@@ -152,7 +148,7 @@ pub enum AgentSlideEvent {
 }
 
 pub struct AgentSlide {
-    onboarding_state: warpui::ModelHandle<OnboardingStateModel>,
+    onboarding_state: warpui_core::ModelHandle<OnboardingStateModel>,
 
     /// Mouse state handles for each model row.
     model_mouse_states: Vec<MouseStateHandle>,
@@ -201,7 +197,7 @@ fn sorted_models(models: &[OnboardingModelInfo]) -> Vec<OnboardingModelInfo> {
 
 impl AgentSlide {
     pub(crate) fn new(
-        onboarding_state: warpui::ModelHandle<OnboardingStateModel>,
+        onboarding_state: warpui_core::ModelHandle<OnboardingStateModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let model_count = onboarding_state.as_ref(ctx).models().len();
@@ -234,7 +230,7 @@ impl AgentSlide {
                         me.show_plan_activated_toast = true;
                         // Auto-dismiss after the configured duration.
                         let _ = ctx.spawn(
-                            warpui::r#async::Timer::after(PLAN_ACTIVATED_TOAST_DURATION),
+                            warpui_core::r#async::Timer::after(PLAN_ACTIVATED_TOAST_DURATION),
                             |me: &mut Self, _, ctx| {
                                 if me.show_plan_activated_toast {
                                     me.show_plan_activated_toast = false;
@@ -1362,7 +1358,7 @@ impl View for AgentSlide {
         let mut stack = Stack::new();
         stack.add_child(slide);
         stack.add_child(
-            warpui::elements::Align::new(bottom_overlay)
+            warpui_core::elements::Align::new(bottom_overlay)
                 .bottom_center()
                 .finish(),
         );

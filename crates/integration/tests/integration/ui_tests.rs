@@ -209,6 +209,9 @@ integration_tests! {
     test_secrets_are_always_redacted_in_ai_inputs,
 
     test_active_session_follows_focus,
+    test_tab_context_menu_copies_metadata,
+    test_vertical_tab_context_menu_copies_metadata,
+    test_vertical_pane_context_menu_copies_metadata,
 
     test_focus_panes_on_hover,
 
@@ -228,7 +231,7 @@ integration_tests! {
     test_close_notebook_tab,
     test_open_in_warp_banner,
     test_close_notebook_window,
-    test_backspace_inside_rendered_mermaid_block_is_atomic,
+    test_backspace_inside_raw_mermaid_block_edits_text_without_removing_block,
 
     test_open_workflow_in_pane,
     test_create_personal_workflow_pane_from_command_palette,
@@ -321,6 +324,8 @@ integration_tests! {
     test_goto_line_jumps_to_line,
     test_goto_line_with_column,
     test_goto_line_clamps_out_of_range,
+    test_code_editor_line_numbers_default_to_absolute,
+    test_code_editor_relative_line_numbers_follow_cursor,
 
     // Keyboard protocol tests
     test_keyboard_protocol_disabled_shift_enter,

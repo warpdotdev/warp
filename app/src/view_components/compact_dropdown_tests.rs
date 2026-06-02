@@ -1,11 +1,12 @@
 use warp_core::ui::appearance::Appearance;
-use warpui::{platform::WindowStyle, App, View};
-
-use crate::{menu::MenuVariant, ui_components::icons::Icon};
+use warpui::platform::WindowStyle;
+use warpui::{App, View};
 
 use super::{CompactDropdown, CompactDropdownItem};
+use crate::menu::MenuVariant;
+use crate::ui_components::icons::Icon;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct TestAction;
 
 /// Baseline test that the view can render.

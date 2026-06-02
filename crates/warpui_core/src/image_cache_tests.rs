@@ -1,13 +1,11 @@
-use std::{borrow::Cow, rc::Rc};
+use std::borrow::Cow;
+use std::rc::Rc;
 
 use rust_embed::RustEmbed;
 
-use crate::{
-    r#async::executor::{Background, Foreground},
-    AssetProvider,
-};
-
 use super::*;
+use crate::r#async::executor::{Background, Foreground};
+use crate::AssetProvider;
 
 #[derive(Clone, Copy, RustEmbed)]
 #[folder = "test_data"]
@@ -382,6 +380,43 @@ fn test_svg_text_rasterizes_with_loaded_system_fonts() {
 
     let image_type =
         ImageType::try_from_bytes(svg.as_bytes()).expect("SVG with installed font should parse");
+    let image = image_type
+        .to_image(
+            Vector2I::new(160, 40),
+            FitType::Contain,
+            true,
+            AnimatedImageBehavior::FullAnimation,
+        )
+        .expect("SVG should rasterize");
+    let Image::Static(image) = image else {
+        panic!("Expected static image");
+    };
+
+    assert!(image
+        .rgba_bytes()
+        .chunks_exact(4)
+        .any(|pixel| pixel[3] != 0));
+}
+
+#[test]
+fn test_svg_text_rasterizes_with_bundled_sans_serif_fallback() {
+    let image_type = ImageType::try_from_bytes(
+        br##"<svg width="160" height="40" viewBox="0 0 160 40" xmlns="http://www.w3.org/2000/svg">
+  <text x="10" y="24" font-family="sans-serif" font-size="20" fill="#000000">Warp</text>
+</svg>
+"##,
+    )
+    .expect("SVG should parse");
+    let ImageType::Svg { svg } = &image_type else {
+        panic!("Expected SVG image type");
+    };
+
+    assert!(svg.fontdb().faces().any(|face| {
+        face.families
+            .iter()
+            .any(|(family, _)| family.as_str() == "Roboto")
+    }));
+
     let image = image_type
         .to_image(
             Vector2I::new(160, 40),

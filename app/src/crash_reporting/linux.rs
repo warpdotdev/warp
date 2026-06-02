@@ -16,11 +16,7 @@ pub fn get_virtualized_environment() -> Option<VirtualEnvironment> {
         }
     };
 
-    // Test specifically for WSL based on existence of a particular file under
-    // /proc.
-    //
-    // See: https://superuser.com/questions/1749781/how-can-i-check-if-the-environment-is-wsl-from-a-shell-script
-    if std::path::Path::new("/proc/sys/fs/binfmt_misc/WSLInterop").exists() {
+    if command::wsl::is_wsl() {
         return Some(VirtualEnvironment {
             name: "wsl".to_owned(),
         });

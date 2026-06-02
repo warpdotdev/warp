@@ -1,26 +1,24 @@
 //! Test helpers for all render model tests.
 
-use parking_lot::Once;
-use std::{mem, sync::Arc};
-use vec1::{Vec1, vec1};
+use std::mem;
+use std::sync::Arc;
 
-use crate::content::text::BufferBlockStyle;
 use ordered_float::OrderedFloat;
-use warpui::elements::ListIndentLevel;
-use warpui::{
-    color::ColorU,
-    elements::{Border, Fill},
-    fonts::{FamilyId, Weight},
-    geometry::vector::vec2f,
-    text_layout::{CaretPosition, Glyph, Line, Run, TextFrame},
-    units::{IntoPixels, Pixels},
-};
+use parking_lot::Once;
+use vec1::{Vec1, vec1};
+use warpui_core::color::ColorU;
+use warpui_core::elements::{Border, Fill, ListIndentLevel};
+use warpui_core::fonts::{FamilyId, Weight};
+use warpui_core::geometry::vector::vec2f;
+use warpui_core::text_layout::{CaretPosition, Glyph, Line, Run, TextFrame};
+use warpui_core::units::{IntoPixels, Pixels};
 
 use super::{
     BlockItem, BrokenLinkStyle, CheckBoxStyle, DEFAULT_BLOCK_SPACINGS, HorizontalRuleStyle,
     InlineCodeStyle, OffsetMap, PARAGRAPH_MIN_HEIGHT, Paragraph, ParagraphStyles, RichTextStyles,
     TEXT_SPACING, TableStyle,
 };
+use crate::content::text::BufferBlockStyle;
 
 pub const TEST_BASELINE_OFFSET: f32 = 0.7;
 
@@ -241,7 +239,7 @@ pub fn layout(text: &str, styles: &RichTextStyles, max_width: impl IntoPixels) -
                 width: line_width.as_f32(),
                 trailing_whitespace_width: 0.,
                 runs: vec![Run {
-                    font_id: warpui::fonts::FontId(0),
+                    font_id: warpui_core::fonts::FontId(0),
                     styles: Default::default(),
                     glyphs: mem::take(&mut glyphs_acc),
                     width: line_width.as_f32(),
@@ -280,7 +278,7 @@ pub fn layout(text: &str, styles: &RichTextStyles, max_width: impl IntoPixels) -
             width: line_width.as_f32(),
             trailing_whitespace_width: 0.,
             runs: vec![Run {
-                font_id: warpui::fonts::FontId(0),
+                font_id: warpui_core::fonts::FontId(0),
                 styles: Default::default(),
                 glyphs: glyphs_acc,
                 width: line_width.as_f32(),

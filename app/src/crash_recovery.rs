@@ -379,10 +379,8 @@ fn spawn_recovery_process(
 
 #[cfg(windows)]
 fn wait_for_parent_crash(args: &warp_cli::AppArgs) {
-    use windows::Win32::{
-        Foundation::{GetLastError, WAIT_FAILED, WAIT_OBJECT_0},
-        System::Threading::{GetProcessId, WaitForSingleObject, INFINITE},
-    };
+    use windows::Win32::Foundation::{GetLastError, WAIT_FAILED, WAIT_OBJECT_0};
+    use windows::Win32::System::Threading::{GetProcessId, WaitForSingleObject, INFINITE};
 
     let parent_handle = match args.parent.handle {
         Some(handle) => handle.into_inner(),

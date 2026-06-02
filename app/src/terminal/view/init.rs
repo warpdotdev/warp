@@ -1,45 +1,35 @@
+use warp_core::context_flag::ContextFlag;
+use warpui::keymap::{
+    BindingDescription, ContextPredicate, EditableBinding, FixedBinding, PerPlatformKeystroke,
+};
+use warpui::platform::OperatingSystem;
+use warpui::units::IntoLines;
+use warpui::AppContext;
+
 use super::{
     AgentOnboardingVersion, AskAISource, ContextMenuAction, OnboardingIntention, OnboardingVersion,
     TerminalAction,
 };
-
 use crate::ai::predict::prompt_suggestions::ACCEPT_PROMPT_SUGGESTION_KEYBINDING;
-use crate::server::telemetry::ToggleBlockFilterSource;
-
-use crate::server::telemetry::InteractionSource;
+use crate::channel::{Channel, ChannelState};
+use crate::features::FeatureFlag;
+use crate::server::telemetry::{InteractionSource, ToggleBlockFilterSource};
 use crate::settings_view::flags;
 use crate::terminal::input::{
     SET_INPUT_MODE_AGENT_ACTION_NAME, SET_INPUT_MODE_TERMINAL_ACTION_NAME,
 };
-use crate::terminal::shared_session::SharedSessionActionSource;
+use crate::terminal::model::escape_sequences::{self, EscCodes};
+use crate::terminal::model::selection::SelectionDirection;
+use crate::terminal::shared_session::{SharedSessionActionSource, SharedSessionStatus};
 use crate::terminal::ssh::error::{SshErrorBlockAction, SSH_ERROR_BLOCK_VISIBLE_KEY};
 use crate::terminal::view::passive_suggestions::PromptSuggestionResolution;
 use crate::terminal::view::{
     LONG_RUNNING_AGENT_REQUESTED_COMMAND_CONTEXT_KEY,
     LONG_RUNNING_AGENT_REQUESTED_COMMAND_USER_TOOK_OVER_CONTEXT_KEY,
 };
+use crate::terminal::TerminalView;
 use crate::util::bindings;
-use crate::util::bindings::{cmd_or_ctrl_shift, is_binding_pty_compliant};
-use crate::{
-    channel::{Channel, ChannelState},
-    features::FeatureFlag,
-    terminal::model::{
-        escape_sequences::{self, EscCodes},
-        selection::SelectionDirection,
-    },
-    terminal::shared_session::SharedSessionStatus,
-    terminal::TerminalView,
-    util::bindings::CustomAction,
-};
-use warp_core::context_flag::ContextFlag;
-use warpui::keymap::ContextPredicate;
-use warpui::keymap::{BindingDescription, PerPlatformKeystroke};
-use warpui::platform::OperatingSystem;
-use warpui::{
-    keymap::{EditableBinding, FixedBinding},
-    units::IntoLines,
-    AppContext,
-};
+use crate::util::bindings::{cmd_or_ctrl_shift, is_binding_pty_compliant, CustomAction};
 
 pub const TOGGLE_BLOCK_FILTER_KEYBINDING: &str =
     "terminal:toggle_block_filter_on_selected_or_last_block";
@@ -60,6 +50,7 @@ pub const INPUT_BOX_VISIBLE_KEY: &str = "InputVisible";
 pub const KEYBOARD_PROTOCOL_ENABLED_KEY: &str = "KeyboardProtocolEnabled";
 pub const CLI_AGENT_SESSION_ACTIVE_KEY: &str = "CLIAgentSessionActive";
 pub const ROOT_CLOUD_MODE_PANE_KEY: &str = "RootCloudModePane";
+pub const CAN_SHOW_CONVERSATION_DETAILS_KEY: &str = "CanShowConversationDetails";
 
 /// Some keybindings will do different things in different contexts. We break
 /// these into their own function to ensure we pay special attention to
@@ -315,19 +306,31 @@ pub fn init(app: &mut AppContext) {
     ]);
 
     app.register_editable_bindings([
-        // Ctrl-G: open rich input for CLI agents before the keystroke reaches the PTY.
+        // Ctrl-G: toggle CLI agent rich input.
+        // Three contexts match this binding:
+        // 1. Terminal context when CLI agent footer is visible (opens rich input)
+        // 2. EditorView context when rich input is already open (closes rich input, fix for #9286)
+        // 3. Terminal context when rich input is open (closes rich input regardless
+        //    of focus location or active-block state; fix for #9916)
         EditableBinding::new(
             OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING,
             "Toggle CLI Agent Rich Input",
-            TerminalAction::OpenCLIAgentRichInput,
+            TerminalAction::ToggleCLIAgentRichInput,
         )
         .with_key_binding("ctrl-g")
         .with_context_predicate(
-            id!("Terminal")
+            // Case 1: Open from terminal during CLI agent session
+            (id!("Terminal")
                 & !id!("IMEOpen")
                 & (id!("LongRunningCommand") | id!("AltScreen"))
                 & id!(flags::CLI_AGENT_FOOTER_ENABLED)
-                & id!(flags::CLI_AGENT_RICH_INPUT_CHIP_ENABLED),
+                & id!(flags::CLI_AGENT_RICH_INPUT_CHIP_ENABLED))
+            // Case 2: Close from focused editor when rich input is open
+            | (id!("EditorView") & !id!("IMEOpen") & id!(flags::CLI_AGENT_RICH_INPUT_OPEN))
+            // Case 3: Close from terminal context when rich input is open (covers
+            // cases where the active block is no longer long-running and focus is
+            // not on the editor — see #9916).
+            | (id!("Terminal") & !id!("IMEOpen") & id!(flags::CLI_AGENT_RICH_INPUT_OPEN)),
         ),
         EditableBinding::new(
             "terminal:warpify_subshell",
@@ -1085,6 +1088,15 @@ pub fn init(app: &mut AppContext) {
     )
     .with_enabled(|| FeatureFlag::Projects.is_enabled())
     .with_context_predicate(id!("Workspace") & id!(flags::IS_ANY_AI_ENABLED))]);
+
+    #[cfg(not(target_arch = "wasm32"))]
+    app.register_editable_bindings([EditableBinding::new(
+        "terminal:toggle_conversation_details_panel",
+        "Toggle Conversation Details Panel",
+        TerminalAction::ToggleConversationDetailsPanel,
+    )
+    .with_group(bindings::BindingGroup::WarpAi.as_str())
+    .with_context_predicate(id!("Terminal") & id!(CAN_SHOW_CONVERSATION_DETAILS_KEY))]);
 
     // Register bindings for starting a new cloud agent conversation.
     {

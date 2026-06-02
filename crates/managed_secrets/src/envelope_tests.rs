@@ -1,10 +1,10 @@
 use std::io;
 
-use tink_proto::{KeysetInfo, keyset_info::KeyInfo};
-
-use crate::ManagedSecretValue;
+use tink_proto::KeysetInfo;
+use tink_proto::keyset_info::KeyInfo;
 
 use super::UploadKey;
+use crate::ManagedSecretValue;
 
 #[test]
 fn test_import_public_keyset() {

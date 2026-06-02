@@ -1,10 +1,10 @@
 ---
 name: triage-issue-local
 specializes: triage-issue
-description: Repo-specific triage guidance for warp-external. Only the categories declared overridable by the core triage-issue skill may be specialized here.
+description: Repo-specific triage guidance for warp. Only the categories declared overridable by the core triage-issue skill may be specialized here.
 ---
 
-# Repo-specific triage guidance for `warp-external`
+# Repo-specific triage guidance for `warp`
 
 This file is a companion to the core `triage-issue` skill. It does not
 redefine the triage output schema, safety rules, or follow-up-question
@@ -13,7 +13,7 @@ marks as overridable.
 
 ## Heuristics
 
-- `warp-external` is the public-facing Warp desktop client repository. Treat public issue reports as potentially incomplete and avoid asking for secrets, tokens, private workspace names, private repository names, or account identifiers in the public issue thread.
+- `warp` is the public-facing Warp desktop client repository. Treat public issue reports as potentially incomplete and avoid asking for secrets, tokens, private workspace names, private repository names, or account identifiers in the public issue thread.
 - Distinguish the user's observed Warp behavior from their guesses about Rust modules, UI components, server behavior, feature flags, or product intent.
 - For issue reports that mention another terminal, editor, shell, or CLI tool, identify whether the problem is Warp-specific or generally reproducible outside Warp before assigning Warp ownership.
 - When the issue includes screenshots, videos, logs, stack traces, or command output, use them as primary evidence and ask follow-up questions only for missing details that cannot be inferred from that evidence.

@@ -1,4 +1,5 @@
-use std::{collections::HashMap, env};
+use std::collections::HashMap;
+use std::env;
 
 use anyhow::Result;
 use clap::Parser;
@@ -38,6 +39,7 @@ pub fn main() -> Result<()> {
             logfile_name: "warp_integration.log".into(),
             server_config: WarpServerConfig {
                 firebase_auth_api_key: "".into(),
+                iap_config: None,
                 // Use an IP in the IANA testing range, with the TCP discard port, to
                 // black-hole server traffic.
                 server_root_url: "http://192.0.2.0:9".into(),
@@ -206,6 +208,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_warp_auto_title_disabled);
     register_test!(test_warp_honors_user_title_bash);
     register_test!(test_warp_honors_user_title_zsh);
+    register_test!(test_osc7_updates_current_working_directory);
     register_test!(test_input_focused_after_executing_command);
     register_test!(test_new_session_focuses_input);
     register_test!(test_executable_completions);
@@ -263,11 +266,20 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_ssh_into_sh);
     register_test!(test_ssh_into_ash);
     register_test!(test_ssh_with_shell_override);
+
+    // Remote server integration tests
+    register_test!(test_remote_server_connect_bash);
+    register_test!(test_remote_server_connect_zsh);
+    register_test!(test_remote_server_navigate_to_repo);
+    register_test!(test_remote_server_completions);
+    register_test!(test_remote_server_file_operations);
+    register_test!(test_remote_server_lazy_load_directory);
     register_test!(test_custom_open_completions_menu_binding);
     register_test!(test_color_overrides_in_prompt_dont_crash);
     register_test!(test_copy_prompt_from_block_honor_ps1_disabled);
     register_test!(test_copy_prompt_from_block_honor_ps1_enabled);
     register_test!(test_copy_prompt_from_input_honor_ps1_disabled);
+    register_test!(test_warp_prompt_unsets_zsh_rprompt);
     register_test!(test_copy_prompt_from_input_honor_ps1_enabled);
     register_test!(test_copy_rprompt_from_input_honor_ps1_enabled);
     register_test!(test_rprompt_doesnt_show_when_not_enough_space);
@@ -336,6 +348,9 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_context_chips_prompt_at_bootstrap);
 
     register_test!(test_active_session_follows_focus);
+    register_test!(test_tab_context_menu_copies_metadata);
+    register_test!(test_vertical_tab_context_menu_copies_metadata);
+    register_test!(test_vertical_pane_context_menu_copies_metadata);
 
     register_test!(test_focus_panes_on_hover);
 
@@ -355,7 +370,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_close_notebook_tab);
     register_test!(test_open_in_warp_banner);
     register_test!(test_close_notebook_window);
-    register_test!(test_backspace_inside_rendered_mermaid_block_is_atomic);
+    register_test!(test_backspace_inside_raw_mermaid_block_edits_text_without_removing_block);
 
     // Workflow tests
     register_test!(test_open_workflow_in_pane);
@@ -435,6 +450,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_goto_line_jumps_to_line);
     register_test!(test_goto_line_with_column);
     register_test!(test_goto_line_clamps_out_of_range);
+    register_test!(test_code_editor_line_numbers_default_to_absolute);
+    register_test!(test_code_editor_relative_line_numbers_follow_cursor);
 
     // Keyboard protocol tests
     register_test!(test_keyboard_protocol_disabled_shift_enter);

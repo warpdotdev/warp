@@ -1,5 +1,6 @@
 pub mod app_id;
 pub mod assertions;
+pub mod r#async;
 pub mod channel;
 pub mod command;
 pub mod context_flag;
@@ -19,7 +20,6 @@ pub use settings;
 pub use settings::{
     define_setting, define_settings_group, implement_setting_for_enum, maybe_define_setting,
 };
-pub mod host_id;
 pub mod session_id;
 pub mod sync_queue;
 pub mod telemetry;
@@ -27,5 +27,8 @@ pub mod ui;
 pub mod user_preferences;
 
 pub use app_id::AppId;
-pub use host_id::HostId;
 pub use session_id::SessionId;
+pub use warp_util::host_id::HostId;
+// Re-export warpui_core so that it can be referenced safely from the
+// telemetry macros.
+pub use warpui_core;

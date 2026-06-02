@@ -2,7 +2,8 @@
 //! untokenized input.
 use itertools::Itertools;
 
-use super::{registry::CommandRegistry, Command};
+use super::registry::CommandRegistry;
+use super::Command;
 
 /// Returns the highest-precedence matching `Command` signature object for the given `input`, if
 /// any, along with the index of the token in `input` matched to the returned `Command`.
@@ -144,5 +145,5 @@ fn deepest_matching_subcommand_signature<'a>(
 }
 
 #[cfg(test)]
-#[path = "lookup_test.rs"]
+#[path = "lookup_tests.rs"]
 mod test;

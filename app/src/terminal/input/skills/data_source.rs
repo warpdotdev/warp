@@ -1,10 +1,9 @@
-use std::path::PathBuf;
-
 use ai::skills::{SkillProvider, SkillReference, SkillScope};
 use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
 use ordered_float::OrderedFloat;
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::Fill;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, Flex, Highlight, ParentElement, Shrinkable, Text,
 };
@@ -23,9 +22,9 @@ use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::result_renderer::ItemHighlightState;
 use crate::search::{SearchItem, SyncDataSource};
 use crate::terminal::cli_agent_sessions::{CLIAgentInputState, CLIAgentSessionsModel};
-use crate::terminal::input::inline_menu::styles as inline_styles;
 use crate::terminal::input::inline_menu::{
-    default_navigation_message_items, InlineMenuAction, InlineMenuMessageArgs, InlineMenuType,
+    default_navigation_message_items, styles as inline_styles, InlineMenuAction,
+    InlineMenuMessageArgs, InlineMenuType,
 };
 use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
@@ -104,12 +103,11 @@ impl SkillSelectorDataSource {
         self.include_bundled = include_bundled;
     }
 
-    /// Get the current working directory from the active session
-    fn get_current_working_directory(&self, app: &AppContext) -> Option<PathBuf> {
+    /// Get the current working directory location from the active session.
+    fn get_current_working_directory(&self, app: &AppContext) -> Option<LocalOrRemotePath> {
         self.active_session
             .as_ref(app)
-            .current_working_directory()
-            .map(PathBuf::from)
+            .current_working_directory_location(app)
     }
 }
 
@@ -123,8 +121,7 @@ impl SyncDataSource for SkillSelectorDataSource {
     ) -> Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper> {
         let cwd = self.get_current_working_directory(app);
         let cli_agent_providers = self.active_cli_agent_providers(app);
-        let skills =
-            SkillManager::as_ref(app).get_skills_for_working_directory(cwd.as_deref(), app);
+        let skills = SkillManager::as_ref(app).get_skills_for_working_directory(cwd.as_ref(), app);
 
         // Filter out bundled skills when in open mode, since they cannot be opened.
         // When CLI agent input is open, filter to skills that exist in a supported

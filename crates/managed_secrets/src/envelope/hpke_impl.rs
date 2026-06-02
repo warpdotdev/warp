@@ -2,15 +2,15 @@
 //!
 //! Supports both encryption (public key manager) and decryption (private key manager).
 
-use hpke::{
-    Deserializable, OpModeR, OpModeS, Serializable,
-    aead::{AesGcm128, AesGcm256, ChaCha20Poly1305},
-    kdf::HkdfSha256,
-    kem::X25519HkdfSha256,
-};
-use rand::{SeedableRng as _, rngs::StdRng};
+use hpke::aead::{AesGcm128, AesGcm256, ChaCha20Poly1305};
+use hpke::kdf::HkdfSha256;
+use hpke::kem::X25519HkdfSha256;
+use hpke::{Deserializable, OpModeR, OpModeS, Serializable};
+use rand::SeedableRng as _;
+use rand::rngs::StdRng;
 use tink_core::TinkError;
-use tink_proto::{HpkeAead, HpkeKdf, HpkeKem, prost::Message};
+use tink_proto::prost::Message;
+use tink_proto::{HpkeAead, HpkeKdf, HpkeKem};
 
 pub const HPKE_PUBLIC_KEY_TYPE_URL: &str = "type.googleapis.com/google.crypto.tink.HpkePublicKey";
 pub const HPKE_PRIVATE_KEY_TYPE_URL: &str = "type.googleapis.com/google.crypto.tink.HpkePrivateKey";

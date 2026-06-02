@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use enum_iterator::{cardinality, Sequence};
-
 #[cfg(feature = "test-util")]
 pub use overrides::{get_overrides, set_overrides};
 
@@ -114,10 +113,6 @@ pub enum FeatureFlag {
     /// Enables the settings file feature.
     SettingsFile,
 
-    /// Enables the settings import onboarding block and pre-parsing
-    /// configs on app startup.
-    SettingsImport,
-
     /// Enables rect selection.
     RectSelection,
 
@@ -142,19 +137,12 @@ pub enum FeatureFlag {
     /// Routes SSH sessions through the tmux-backed SSH wrapper.
     SSHTmuxWrapper,
 
-    /// Reduces the amount of horizontal padding in the blocklist
-    /// from 20px to 16px.
-    LessHorizontalTerminalPadding,
-
     /// Enables the shell selector, allowing us to open a new tab in
     /// a shell other than the default shell.
     ShellSelector,
 
     /// Enables writing to long-running commands in shared sessions.
     SharedSessionWriteToLongRunningCommands,
-
-    /// Replaces the bookmark button with a "save as workflow" button.
-    BlockToolbeltSaveAsWorkflow,
 
     /// Lazily builds scenes at render time instead of eagerly when a view
     /// changes.
@@ -164,12 +152,6 @@ pub enum FeatureFlag {
     /// corresponding `use_acls` flag in the session sharing server is disabled.
     /// https://github.com/warpdotdev/session-sharing-server/blob/b6590ebd0b0e7f6847d6b2228b4e77d63939ce22/server/Cargo.toml#L13
     SessionSharingAcls,
-
-    /// Removes the extraneous padding from the alt-screen that we previously had
-    /// to keep consistent size between blocklist and alt-screen.
-    ///
-    /// See plan here: https://docs.google.com/document/d/1TBPSWNfh4KylkEgL5o5xyYgK_KQzUQk1oxjuIx2ipXw
-    RemoveAltScreenPadding,
 
     /// Enables the full-screen "zen mode" setting, where we hide the tab bar if there's only one
     /// tab.
@@ -269,6 +251,9 @@ pub enum FeatureFlag {
     /// Enables full source code embedding of repos when using codebase context.
     FullSourceCodeEmbedding,
 
+    /// Enables codebase indexing inside remote server daemon processes.
+    RemoteCodebaseIndexing,
+
     /// If enabled, command palette searches will use Tantivy search instead of the default fuzzy search.
     UseTantivySearch,
 
@@ -325,9 +310,6 @@ pub enum FeatureFlag {
     /// Enables inline review comments on specific lines of code.
     ContextLineReviewComments,
 
-    /// Enables the natural language classification model.
-    NLDClassifierModelEnabled,
-
     /// Enables the fast-forward autoexecute button
     FastForwardAutoexecuteButton,
 
@@ -369,9 +351,6 @@ pub enum FeatureFlag {
 
     /// Enables new Search Codebase UI
     SearchCodebaseUI,
-
-    /// Enables return changed lines on apply diff result
-    ChangedLinesOnlyApplyDiffResult,
 
     /// Enables us to render linked code blocks
     LinkedCodeBlocks,
@@ -422,9 +401,6 @@ pub enum FeatureFlag {
     /// Allows opening file links using the $EDITOR environment variable.
     AllowOpeningFileLinksUsingEditorEnv,
 
-    /// Enables improvements to our natural language detection functionality.
-    NldImprovements,
-
     /// Enables the ability to undo closed panes.
     UndoClosedPanes,
 
@@ -469,6 +445,9 @@ pub enum FeatureFlag {
 
     /// Enables find/search in code review pane
     CodeReviewFind,
+
+    /// Enables asynchronous find in terminal, running search on a background thread.
+    AsyncFind,
 
     /// Enables using Agent Mode in shared sessions.
     AgentSharedSessions,
@@ -679,6 +658,9 @@ pub enum FeatureFlag {
     /// When enabled, the HOA onboarding flow is suppressed.
     OpenWarpLaunchModal,
 
+    /// Enables the orchestration launch modal announcing multi-agent orchestration features.
+    OrchestrationLaunchModal,
+
     /// Updated tab styling (background colors, border, close button positioning, margins).
     NewTabStyling,
 
@@ -706,14 +688,15 @@ pub enum FeatureFlag {
     /// content changes via auto-reload.
     CodeReviewScrollPreservation,
 
-    /// Enables orchestration mode (multi-agent parallel execution).
-    Orchestration,
-
     /// Enables server-side durable messaging for orchestration (v2).
     /// When enabled, messages and events are stored in Postgres and the client
     /// opens a persistent SSE connection to the server to receive events in
     /// real time.
     OrchestrationV2,
+
+    /// Re-enables local Claude Code and Codex child harnesses in orchestration
+    /// flows while the default behavior temporarily keeps them disabled.
+    LocalClaudeCodexChildHarnesses,
 
     /// Gates client-side support for the `orchestrate` tool, which batches
     /// multiple child agents into a single tool call with an inline
@@ -729,6 +712,20 @@ pub enum FeatureFlag {
     /// behavior between siblings.
     OrchestrationPillBar,
 
+    /// Enables the orchestration pill bar in shared session viewers (web and
+    /// native). When enabled, viewing a shared session that used orchestration
+    /// shows a pill bar above the agent view header with the orchestrator and
+    /// each child agent. Clicking a child pill joins the child's shared session
+    /// and switches the view to its transcript.
+    OrchestrationViewerPillBar,
+
+    /// Replaces `OrchestrationViewerModel`'s REST polling loop with an SSE-driven
+    /// `ancestor_run_id` stream consumed via `OrchestrationEventStreamer`'s new
+    /// viewer-mode entry. Off by default; flipping it on activates the
+    /// per-orchestrator viewer-mode consumer and the broadcast `ChildSpawned`
+    /// / `ChildStatusChanged` events. See `specs/orch-viewer-polling/TECH.md`.
+    OrchestrationViewerStreamer,
+
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
     PendingUserQueryIndicator,
@@ -736,6 +733,8 @@ pub enum FeatureFlag {
     /// Gates the `/queue` slash command, which lets users queue a follow-up prompt
     /// while the agent is mid-response.
     QueueSlashCommand,
+    /// Extends queued prompts to Cloud Mode setup and follow-up draining.
+    QueuedPromptsV2,
 
     /// Enables an agent tool for the CLI subagent to explicitly transfer command control to the
     /// user.
@@ -812,6 +811,11 @@ pub enum FeatureFlag {
     /// When enabled, solo users (not on a team) can use BYO API keys.
     SoloUserByok,
 
+    /// Enables the Custom Inference settings UI for adding user-provided third-party / OpenAI-compatible inference endpoints.
+    CustomInferenceEndpoints,
+    /// Enables Custom Inference endpoints for enterprise users.
+    CustomInferenceEndpointsEnterprise,
+
     /// Replaces the in-block warpification banner with a warpify footer.
     WarpifyFooter,
 
@@ -853,6 +857,34 @@ pub enum FeatureFlag {
     ConfigurableContextWindow,
     /// Enables continuing cloud mode conversations in the cloud after an execution ends.
     HandoffCloudCloud,
+
+    /// Enables the local-to-cloud Oz handoff entry points (footer chip and
+    /// `/move-to-cloud` slash command) that fork the active local Oz
+    /// conversation into a fresh cloud agent run with the current workspace
+    /// snapshot attached. Requires `OzHandoff` to also be enabled.
+    HandoffLocalCloud,
+
+    /// Enables creating API keys scoped to named agents in the API key
+    /// management UI. When enabled the "Team" option in the key-type
+    /// selector is replaced with "Agent" and users can pick which agent
+    /// identity the key authenticates as.
+    NamedAgents,
+    /// Gates the driver behavior that writes GitHub credentials to disk
+    /// (`~/.git-credentials`, `~/.config/gh/hosts.yaml`) and runs the
+    /// background refresh loop that keeps them fresh during a task run.
+    GitCredentialRefresh,
+
+    /// Gates the v2 billing and usage page redesign.
+    BillingAndUsagePageV2,
+
+    /// Replaces the raw harness CLI command with a styled header showing CLI name + status icon.
+    HarnessSessionHeader,
+
+    /// Enables the code review view for remote sessions.
+    RemoteCodeReview,
+
+    /// Gates the Grouped Tabs feature.
+    GroupedTabs,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -892,21 +924,16 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::RetryTruncatedCodeResponses,
     FeatureFlag::ContextLineReviewComments,
     FeatureFlag::RunGeneratorsWithCmdExe,
-    FeatureFlag::NLDClassifierModelEnabled,
     FeatureFlag::Projects,
     FeatureFlag::ProviderCommand,
-    FeatureFlag::ArtifactCommand,
     FeatureFlag::MarkdownImages,
     FeatureFlag::FileAndDiffSetComments,
     FeatureFlag::FileGlobV2Warnings,
     FeatureFlag::SummarizationViaMessageReplacement,
     FeatureFlag::LocalComputerUse,
-    FeatureFlag::OzPlatformSkills,
-    FeatureFlag::AgentViewBlockContext,
     FeatureFlag::OzLaunchModal,
-    FeatureFlag::OzChangelogUpdates,
-    FeatureFlag::PendingUserQueryIndicator,
     FeatureFlag::QueueSlashCommand,
+    FeatureFlag::QueuedPromptsV2,
     // These are enabled via 100% experiment on prod warp-server,
     // but we need to enable here for dogfood builds.
     FeatureFlag::CrossRepoContext,
@@ -914,36 +941,23 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::FullSourceCodeEmbedding,
     FeatureFlag::CodebaseIndexSpeedbump,
     // End manually enabled Code features.
-    FeatureFlag::DirectoryTabColors,
     FeatureFlag::EditableMarkdownMermaid,
     FeatureFlag::CodeReviewScrollPreservation,
-    FeatureFlag::OzIdentityFederation,
-    FeatureFlag::AgentHarness,
-    FeatureFlag::OzHandoff,
-    FeatureFlag::ConversationApi,
     FeatureFlag::RememberFastForwardState,
-    FeatureFlag::HOANotifications,
-    FeatureFlag::OrchestrationV2,
-    FeatureFlag::RunAgentsTool,
     FeatureFlag::GeminiNotifications,
     FeatureFlag::LocalDockerSandbox,
-    FeatureFlag::VerticalTabsSummaryMode,
-    FeatureFlag::CloudModeSetupV2,
-    FeatureFlag::ConfigurableContextWindow,
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
-    FeatureFlag::CloudModeInputV2,
-    FeatureFlag::DragTabsToWindows,
+    FeatureFlag::RemoteCodebaseIndexing,
+    FeatureFlag::GroupedTabs,
+    FeatureFlag::AsyncFind,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
 pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
-    FeatureFlag::Orchestration,
-    FeatureFlag::BlocklistMarkdownTableRendering,
-    FeatureFlag::MarkdownTables,
-    FeatureFlag::OzIdentityFederation,
-    FeatureFlag::GitOperationsInCodeReview,
+    #[cfg(target_os = "macos")]
+    FeatureFlag::DragTabsToWindows,
 ];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
@@ -962,7 +976,7 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
 ];
 
 /// Flags that we want to allow to switch at runtime (assuming RuntimeFeatureFlags is set)
-pub const RUNTIME_FEATURE_FLAGS: &[FeatureFlag] = &[];
+pub const RUNTIME_FEATURE_FLAGS: &[FeatureFlag] = &[FeatureFlag::LocalClaudeCodexChildHarnesses];
 
 impl FeatureFlag {
     pub fn is_enabled(&self) -> bool {
@@ -1036,9 +1050,9 @@ impl FeatureFlag {
                 Some("Enables rendering markdown tables inline in AI block list responses.")
             }
             MarkdownTables => Some("Enables rendering and interaction support for markdown tables in notebooks."),
-            OzIdentityFederation => Some("Enables automatic authentication from Oz to AWS and GCP"),
             SettingsFile => Some("Enables configuring Warp via a user-editable `settings.toml` file, with hot reload and error reporting for invalid values."),
             GitOperationsInCodeReview => Some("Enables commit, push, and create-PR actions directly from the code review panel."),
+            OrchestrationV2 => Some("Enables orchestration of teams of agents with dedicated UI, lifecycle events and inter-agent messaging."),
             _ => None,
         }
     }
@@ -1062,7 +1076,8 @@ mod overrides {
 /// should use overrides instead of globally modifying flags with [`super::FeatureFlag::set_enabled`].
 #[cfg(feature = "test-util")]
 mod overrides {
-    use std::{cell::RefCell, collections::HashMap};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
 
     use super::FeatureFlag;
 
@@ -1193,5 +1208,5 @@ impl From<TriState> for Option<bool> {
 }
 
 #[cfg(test)]
-#[path = "features_test.rs"]
+#[path = "features_tests.rs"]
 mod tests;

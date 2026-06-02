@@ -1,9 +1,11 @@
+use std::path::{Path, PathBuf};
+
+use warp_util::standardized_path::StandardizedPath;
+
 use crate::entry::{DirectoryEntry, Entry, FileId, FileMetadata};
 use crate::file_tree_store::{FileTreeEntry, FileTreeEntryState};
 use crate::file_tree_update::*;
 use crate::local_model::LocalRepoMetadataModel;
-use std::path::{Path, PathBuf};
-use warp_util::standardized_path::StandardizedPath;
 
 // ── Helpers ──────────────────────────────────────────────────────────
 

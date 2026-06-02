@@ -1,19 +1,16 @@
 use std::sync::Arc;
 
-use crate::{
-    ai::blocklist::inline_action::inline_action_icons::icon_size,
-    ui_components::icons::Icon,
-    view_components::action_button::{
-        ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, KeystrokeSource,
-    },
-};
 use warp_core::ui::appearance::Appearance;
-use warpui::{
-    elements::{
-        ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, MainAxisAlignment,
-        MainAxisSize, ParentElement,
-    },
-    Action, AppContext, Element, TypedActionView, View, ViewContext, ViewHandle,
+use warpui::elements::{
+    ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, MainAxisAlignment,
+    MainAxisSize, ParentElement,
+};
+use warpui::{Action, AppContext, Element, TypedActionView, View, ViewContext, ViewHandle};
+
+use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{
+    ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, KeystrokeSource,
 };
 const BUTTON_MARGIN: f32 = 8.;
 
@@ -124,6 +121,30 @@ impl CompactibleActionButton {
         });
         self.expanded_button.update(ctx, |button, ctx| {
             button.set_adjoined_side(adjoined_side, ctx);
+        });
+    }
+
+    /// Sets the disabled state on both the compact and expanded buttons.
+    pub fn set_disabled<T: View>(&mut self, disabled: bool, ctx: &mut ViewContext<T>) {
+        self.compact_button.update(ctx, |button, ctx| {
+            button.set_disabled(disabled, ctx);
+        });
+        self.expanded_button.update(ctx, |button, ctx| {
+            button.set_disabled(disabled, ctx);
+        });
+    }
+
+    /// Sets the tooltip on both buttons. Passing `None` clears the compact
+    /// button's hover affordance; use [`set_label`](Self::set_label) to
+    /// preserve the label tooltip.
+    pub fn set_tooltip<T: View>(&mut self, tooltip: Option<String>, ctx: &mut ViewContext<T>) {
+        let compact_tooltip = tooltip.clone();
+        let expanded_tooltip = tooltip;
+        self.compact_button.update(ctx, |button, ctx| {
+            button.set_tooltip(compact_tooltip, ctx);
+        });
+        self.expanded_button.update(ctx, |button, ctx| {
+            button.set_tooltip(expanded_tooltip, ctx);
         });
     }
 

@@ -1,49 +1,86 @@
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
+
+use anyhow::Result;
+use cfg_if::cfg_if;
+use itertools::Itertools;
+use lazy_static::lazy_static;
+use onboarding::{
+    AgentOnboardingEvent, AgentOnboardingView, OnboardingIntention, SelectedSettings,
+};
+use parking_lot::Mutex;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use serde::{Deserialize, Serialize};
+use session_sharing_protocol::common::SessionId;
+use settings::Setting as _;
+use url::Url;
+use warp_core::context_flag::ContextFlag;
+use warp_core::user_preferences::GetUserPreferences as _;
+use warp_graphql::billing::StripeSubscriptionPlan;
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::{
+    Border, ChildAnchor, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Stack,
+};
+use warpui::keymap::{EditableBinding, FixedBinding};
+use warpui::platform::{WindowBounds, WindowStyle};
+use warpui::presenter::ChildView;
+use warpui::rendering::OnGPUDeviceSelected;
+use warpui::windowing::WindowManager;
+use warpui::{
+    id, AddWindowOptions, AppContext, DisplayId, Element, Entity, EntityId, FocusContext,
+    NextNewWindowsHasThisWindowsBoundsUponClose, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle, WindowId,
+};
+
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::blocklist::SerializedBlockListItem;
+use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
+use crate::ai::onboarding::{build_onboarding_models, current_onboarding_auth_state};
+use crate::app_state::{AppState, PaneUuid, WindowSnapshot};
 use crate::appearance::Appearance;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
-use crate::auth::auth_override_warning_modal::AuthOverrideWarningModalVariant;
+use crate::auth::auth_override_warning_modal::{
+    AuthOverrideWarningModal, AuthOverrideWarningModalEvent, AuthOverrideWarningModalVariant,
+};
 use crate::auth::auth_state::AuthState;
-use crate::auth::auth_view_modal::AuthRedirectPayload;
+use crate::auth::auth_view_modal::{AuthRedirectPayload, AuthView, AuthViewVariant};
 use crate::auth::login_slide::{LoginSlideEvent, LoginSlideSource, LoginSlideView};
 use crate::auth::needs_sso_link_view::NeedsSsoLinkView;
 use crate::auth::paste_auth_token_modal::{PasteAuthTokenModalEvent, PasteAuthTokenModalView};
+#[cfg(target_family = "wasm")]
+use crate::auth::web_handoff::{WebHandoffEvent, WebHandoffView};
 use crate::auth::{AuthStateProvider, LoginFailureReason};
-use crate::autoupdate::{AutoupdateState, AutoupdateStateEvent};
+use crate::autoupdate::{AutoupdateState, AutoupdateStateEvent, RequestType, UpdateReady};
+use crate::changelog_model::ChangelogRequestType;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{GenericStringObjectFormat, JsonObjectType, ObjectType};
 use crate::drive::export::ExportManager;
 use crate::drive::items::WarpDriveItemId;
 use crate::drive::{CloudObjectTypeAndId, OpenWarpDriveObjectArgs, OpenWarpDriveObjectSettings};
 use crate::experiments::{BlockOnboarding, Experiment};
+use crate::features::FeatureFlag;
 use crate::interval_timer::IntervalTimer;
 use crate::launch_configs::launch_config;
 use crate::linear::LinearIssueWork;
 use crate::notebooks::manager::NotebookSource;
-use crate::settings::apply_onboarding_settings;
-use crate::settings::cloud_preferences_syncer::{
-    CloudPreferencesSyncer, CloudPreferencesSyncerEvent,
-};
-use crate::settings::AISettings;
-use crate::workspace::tab_settings::TabSettings;
-use onboarding::{
-    AgentOnboardingEvent, AgentOnboardingView, OnboardingIntention, SelectedSettings,
-};
-
+use crate::pane_group::{NewTerminalOptions, PanesLayout};
 use crate::persistence::ModelEvent;
-use crate::report_if_error;
+use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::experiments::is_free_user_no_ai_experiment_active;
 use crate::server::ids::SyncId;
 use crate::server::server_api::auth::UserAuthenticationError;
-use crate::server::server_api::ServerApiProvider;
-use crate::server::telemetry::LaunchConfigUiLocation;
-use crate::settings::QuakeModeSettings;
-use crate::settings::ThemeSettings;
-use crate::settings_view::flags;
+use crate::server::server_api::{ServerApi, ServerApiProvider, ServerTime};
+use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
+use crate::settings::cloud_preferences_syncer::{
+    CloudPreferencesSyncer, CloudPreferencesSyncerEvent,
+};
+use crate::settings::{apply_onboarding_settings, AISettings, QuakeModeSettings, ThemeSettings};
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
-use crate::settings_view::OpenTeamsSettingsModalArgs;
-use crate::settings_view::SettingsSection;
+use crate::settings_view::{flags, OpenTeamsSettingsModalArgs, SettingsSection};
 use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::keys_settings::KeysSettings;
@@ -57,69 +94,16 @@ use crate::util::traffic_lights::{traffic_light_data, TrafficLightData, TrafficL
 use crate::view_components::DismissibleToast;
 use crate::window_settings::WindowSettings;
 use crate::workspace::hoa_onboarding::mark_hoa_onboarding_completed;
-use crate::workspace::WorkspaceAction;
+use crate::workspace::tab_settings::TabSettings;
+use crate::workspace::view::OnboardingTutorial;
+use crate::workspace::{PaneViewLocator, Workspace, WorkspaceAction, WorkspaceRegistry};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::{
-    app_state::{AppState, PaneUuid, WindowSnapshot},
-    autoupdate::{RequestType, UpdateReady},
-    changelog_model::ChangelogRequestType,
-    pane_group::{NewTerminalOptions, PanesLayout},
-    send_telemetry_from_ctx,
-    server::{server_api::ServerTime, telemetry::TelemetryEvent},
-    UpdateQuakeModeEventArg,
+    report_if_error, send_telemetry_from_app_ctx, send_telemetry_from_ctx, ChannelState,
+    GlobalResourceHandles, GlobalResourceHandlesProvider, UpdateQuakeModeEventArg,
 };
-use crate::{
-    auth::auth_override_warning_modal::{AuthOverrideWarningModal, AuthOverrideWarningModalEvent},
-    auth::auth_view_modal::{AuthView, AuthViewVariant},
-    server::server_api::ServerApi,
-    workspace::{view::OnboardingTutorial, PaneViewLocator, Workspace, WorkspaceRegistry},
-};
-use crate::{features::FeatureFlag, ChannelState};
-use crate::{send_telemetry_from_app_ctx, GlobalResourceHandles, GlobalResourceHandlesProvider};
-use anyhow::Result;
-use cfg_if::cfg_if;
-use itertools::Itertools;
-use lazy_static::lazy_static;
-use parking_lot::Mutex;
-use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
-use serde::{Deserialize, Serialize};
-use session_sharing_protocol::common::SessionId;
-use settings::Setting as _;
-use std::path::Path;
-use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
-use std::{collections::HashMap, path::PathBuf};
-use url::Url;
-use warp_core::context_flag::ContextFlag;
-use warp_core::user_preferences::GetUserPreferences as _;
-use warpui::clipboard::ClipboardContent;
-use warpui::keymap::{EditableBinding, FixedBinding};
-use warpui::windowing::WindowManager;
-
-use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
-use crate::ai::onboarding::{
-    apply_free_tier_default_model_override, build_onboarding_models, current_onboarding_auth_state,
-};
-use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
-use warp_graphql::billing::StripeSubscriptionPlan;
-
-use warpui::elements::{
-    Border, ChildAnchor, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Stack,
-};
-use warpui::rendering::OnGPUDeviceSelected;
-use warpui::{id, AddWindowOptions, DisplayId, SingletonEntity};
-use warpui::{
-    platform::{WindowBounds, WindowStyle},
-    presenter::ChildView,
-    AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle, WindowId,
-};
-use warpui::{FocusContext, NextNewWindowsHasThisWindowsBoundsUponClose};
-
-#[cfg(target_family = "wasm")]
-use crate::auth::web_handoff::{WebHandoffEvent, WebHandoffView};
 
 const WINDOW_TITLE: &str = "Warp";
 
@@ -332,6 +316,10 @@ pub fn init(app: &mut AppContext) {
     app.add_action(
         "root_view:handle_pane_navigation_event",
         RootView::focus_pane,
+    );
+    app.add_action(
+        "root_view:activate_tab_by_pane_group_id",
+        RootView::activate_tab_by_pane_group_id,
     );
     app.add_action("root_view:close_window", RootView::close_window);
     app.add_action("root_view:minimize_window", RootView::minimize_window);
@@ -1509,6 +1497,8 @@ pub enum NewWorkspaceSource {
         options: Box<NewTerminalOptions>,
         initial_query: Option<String>,
     },
+    /// Starts the workspace with the Cloud Agent setup tab.
+    AmbientAgent,
     /// A tab is being transferred from another window via the transferable views framework.
     /// The workspace will create a placeholder tab, which will be replaced by the transferred
     /// PaneGroup after window creation.
@@ -1798,7 +1788,21 @@ impl RootView {
             ctx.focus(onboarding_view);
         }
 
+        // For users who bypass onboarding (already logged in, or onboarding flags not active),
+        // start autoupdate polling immediately. For new users in onboarding, this is a no-op;
+        // polling will be started once onboarding completes.
+        root_view.start_autoupdate_polling(ctx);
+
         root_view
+    }
+
+    /// Starts the autoupdate polling loop, but only if we are already in the `Terminal` state
+    /// (i.e. onboarding has completed or was not shown). Safe to call unconditionally — it is
+    /// a no-op when still in a pre-terminal state.
+    fn start_autoupdate_polling(&self, ctx: &mut ViewContext<Self>) {
+        if matches!(self.auth_onboarding_state, AuthOnboardingState::Terminal(_)) {
+            AutoupdateState::handle(ctx).update(ctx, |state, ctx| state.start_polling(ctx));
+        }
     }
 
     /// Used for integration tests.
@@ -1915,10 +1919,8 @@ impl RootView {
 
         let themes = onboarding_theme_picker_themes();
         let onboarding_view = ctx.add_typed_action_view(move |ctx| {
-            let (mut models, default_model_id) =
-                build_onboarding_models(LLMPreferences::as_ref(ctx));
-            let default_model_id =
-                apply_free_tier_default_model_override(&mut models, default_model_id, ctx);
+            let (models, default_model_id) =
+                build_onboarding_models(LLMPreferences::as_ref(ctx), ctx);
 
             let workspace_enforces_autonomy = UserWorkspaces::as_ref(ctx)
                 .ai_autonomy_settings()
@@ -1961,10 +1963,8 @@ impl RootView {
             &LLMPreferences::handle(ctx),
             move |_, llm_preferences, event, ctx| match event {
                 LLMPreferencesEvent::UpdatedAvailableLLMs => {
-                    let (mut models, default_model_id) =
-                        build_onboarding_models(llm_preferences.as_ref(ctx));
-                    let default_model_id =
-                        apply_free_tier_default_model_override(&mut models, default_model_id, ctx);
+                    let (models, default_model_id) =
+                        build_onboarding_models(llm_preferences.as_ref(ctx), ctx);
                     onboarding_view_clone.update(ctx, |onboarding_view, ctx| {
                         onboarding_view.set_onboarding_models(models, default_model_id, ctx);
                     })
@@ -2112,6 +2112,7 @@ impl RootView {
                 self.auth_onboarding_state = AuthOnboardingState::Terminal(workspace);
                 ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
                 self.start_pending_tutorial(ctx);
+                self.start_autoupdate_polling(ctx);
                 self.focus(ctx);
                 ctx.notify();
             }
@@ -2155,16 +2156,6 @@ impl RootView {
                 mark_local_onboarding_completed(ctx);
                 if FeatureFlag::HOAOnboardingFlow.is_enabled() {
                     mark_hoa_onboarding_completed(ctx);
-                }
-
-                // Terminal-intent users should not see the conversation list
-                // auto-opened for discoverability.
-                if matches!(selected_settings, SelectedSettings::Terminal { .. }) {
-                    AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                        report_if_error!(settings
-                            .has_auto_opened_conversation_list
-                            .set_value(true, ctx));
-                    });
                 }
 
                 let is_logged_in = AuthStateProvider::as_ref(ctx).get().is_logged_in();
@@ -2246,6 +2237,7 @@ impl RootView {
                 self.auth_onboarding_state = AuthOnboardingState::Terminal(workspace);
                 ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
                 self.start_pending_tutorial(ctx);
+                self.start_autoupdate_polling(ctx);
                 ctx.notify();
             }
             AgentOnboardingEvent::OnboardingSkipped => {
@@ -2267,6 +2259,7 @@ impl RootView {
                 let workspace = target.to_workspace(ctx);
                 self.auth_onboarding_state = AuthOnboardingState::Terminal(workspace);
                 ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
+                self.start_autoupdate_polling(ctx);
                 ctx.notify();
             }
             AgentOnboardingEvent::UpgradeRequested => {
@@ -2440,6 +2433,20 @@ impl RootView {
         if let AuthOnboardingState::Terminal(workspace) = &self.auth_onboarding_state {
             workspace.update(ctx, |view, ctx| {
                 view.focus_pane(*pane_view_locator, ctx);
+            });
+        }
+        true
+    }
+
+    fn activate_tab_by_pane_group_id(
+        &mut self,
+        pane_group_id: &EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        ctx.windows().show_window_and_focus_app(ctx.window_id());
+        if let AuthOnboardingState::Terminal(workspace) = &self.auth_onboarding_state {
+            workspace.update(ctx, |view, ctx| {
+                view.activate_tab_by_pane_group_id(*pane_group_id, ctx);
             });
         }
         true
@@ -2958,6 +2965,7 @@ impl RootView {
                         .complete_auth_and_create_workspace(ctx);
                 }
 
+                self.start_autoupdate_polling(ctx);
                 self.focus(ctx);
             }
             AuthManagerEvent::AuthFailed(err) => match err {
@@ -3009,6 +3017,7 @@ impl RootView {
                     ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
                     self.start_pending_tutorial(ctx);
                 }
+                self.start_autoupdate_polling(ctx);
                 self.focus(ctx);
             }
             AuthManagerEvent::LoginOverrideDetected(interrupted_auth_payload) => {
@@ -3152,9 +3161,10 @@ impl RootView {
         key_code: &warpui::platform::keyboard::KeyCode,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
-        use crate::settings::AISettings;
         use voice_input::{VoiceInput, VoiceInputState, VoiceInputToggledFrom};
         use warpui::event::KeyState;
+
+        use crate::settings::AISettings;
 
         // Check that the released key matches the configured voice input toggle key.
         let ai_settings = AISettings::as_ref(ctx);
@@ -3224,12 +3234,10 @@ impl RootView {
             && FeatureFlag::TabConfigs.is_enabled()
         {
             let intention = tutorial.intention();
-            // Terminal-intent users skip the session config modal.
             if matches!(intention, OnboardingIntention::AgentDrivenDevelopment) {
                 workspace.update(ctx, |view, ctx| {
-                    view.set_pending_onboarding_intention(intention);
                     view.open_vertical_tabs_panel_if_enabled(ctx);
-                    view.show_session_config_modal(ctx);
+                    view.start_agent_onboarding_tutorial(tutorial, ctx);
                 });
             } else {
                 workspace.update(ctx, |view, ctx| {

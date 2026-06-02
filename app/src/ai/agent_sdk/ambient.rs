@@ -3,55 +3,50 @@ use std::io::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::ai::agent::extract_user_query_mode;
+use anyhow::{anyhow, Context as _};
+use comfy_table::Cell;
+use futures::{future, StreamExt};
+use serde::Serialize;
+use warp_cli::agent::{Harness, OutputFormat, Prompt, RunCloudArgs};
+use warp_cli::json_filter::JsonOutput;
+use warp_cli::task::{
+    ArtifactTypeArg, ExecutionLocationArg, ListTasksArgs, MessageCommand, MessageDeliveredArgs,
+    MessageListArgs, MessageReadArgs, MessageSendArgs, MessageWatchArgs, RunSortByArg,
+    RunSourceArg, RunStateArg, TaskGetArgs,
+};
+use warp_cli::{GlobalOptions, SortOrderArg};
+use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
+use warpui::platform::TerminationMode;
+use warpui::r#async::{Spawnable, Timer};
+use warpui::{AppContext, ModelContext, SingletonEntity};
+
+use super::common::{parse_ambient_task_id, EnvironmentChoice, ResolveConfigurationError};
+use crate::ai::agent::{extract_user_query_mode, UserQueryMode};
+use crate::ai::agent_sdk::driver::attachments::{
+    process_attachment, MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY,
+};
 use crate::ai::ambient_agents::spawn::{
     spawn_task, AmbientAgentEvent, SessionJoinInfo, TASK_STATUS_POLLING_DURATION,
 };
 use crate::ai::ambient_agents::task::HarnessConfig;
-use crate::ai::ambient_agents::AmbientAgentTaskState;
-use crate::ai::ambient_agents::{AgentConfigSnapshot, AmbientAgentTask, AmbientAgentTaskId};
+use crate::ai::ambient_agents::{
+    AgentConfigSnapshot, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
+};
 use crate::ai::artifacts::Artifact;
 use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ai::{
     AIClient, AgentMessageHeader, AgentRunEvent, AgentSource, ArtifactType, ExecutionLocation,
     ListAgentMessagesRequest, ReadAgentMessageResponse, RunSortBy, RunSortOrder,
     SendAgentMessageRequest, SendAgentMessageResponse, SpawnAgentRequest, TaskListFilter,
 };
 use crate::server::server_api::ServerApi;
+use crate::terminal::shared_session;
+use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{
-    terminal::shared_session, util::time_format::format_approx_duration_from_now_utc,
-    ServerApiProvider,
-};
-use anyhow::{anyhow, Context as _};
-use comfy_table::Cell;
-use futures::{future, StreamExt};
-use serde::Serialize;
-
-use warp_cli::{
-    agent::{Harness, OutputFormat, Prompt, RunCloudArgs},
-    json_filter::JsonOutput,
-    task::{
-        ArtifactTypeArg, ExecutionLocationArg, ListTasksArgs, MessageCommand, MessageDeliveredArgs,
-        MessageListArgs, MessageReadArgs, MessageSendArgs, MessageWatchArgs, RunSortByArg,
-        RunSortOrderArg, RunSourceArg, RunStateArg, TaskGetArgs,
-    },
-    GlobalOptions,
-};
-use warp_core::channel::ChannelState;
-use warp_core::features::FeatureFlag;
-use warpui::r#async::Timer;
-use warpui::{
-    platform::TerminationMode, r#async::Spawnable, AppContext, ModelContext, SingletonEntity,
-};
-
-use crate::ai::agent_sdk::driver::attachments::{
-    process_attachment, MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY,
-};
-use crate::cloud_object::model::persistence::CloudModel;
-use crate::server::ids::{ServerId, SyncId};
-
-use super::common::{parse_ambient_task_id, EnvironmentChoice, ResolveConfigurationError};
+use crate::ServerApiProvider;
 
 const MAX_LINE_WIDTH: usize = 90;
 const STREAM_RETRY_BACKOFF_STEPS: &[u64] = &[1, 2, 5, 10];
@@ -186,10 +181,10 @@ fn sort_by_from_arg(arg: RunSortByArg) -> RunSortBy {
     }
 }
 
-fn sort_order_from_arg(arg: RunSortOrderArg) -> RunSortOrder {
+fn sort_order_from_arg(arg: SortOrderArg) -> RunSortOrder {
     match arg {
-        RunSortOrderArg::Asc => RunSortOrder::Asc,
-        RunSortOrderArg::Desc => RunSortOrder::Desc,
+        SortOrderArg::Asc => RunSortOrder::Asc,
+        SortOrderArg::Desc => RunSortOrder::Desc,
     }
 }
 
@@ -267,11 +262,8 @@ impl AmbientAgentRunner {
                 );
                 return;
             }
-
-            // TODO: Consider making the server's prompt field optional when skill is provided,
-            // rather than sending an empty string for skill-only invocations.
-            let prompt_string = match prompt {
-                Some(Prompt::PlainText(text)) => text,
+            let prompt = match prompt {
+                Some(Prompt::PlainText(text)) => Some(text),
                 Some(Prompt::SavedPrompt(id)) => {
                     // Resolve the saved prompt to pass along as the ambient agent query.
                     // We look up the prompt text here, rather than passing along the saved prompt ID,
@@ -295,7 +287,7 @@ impl AmbientAgentRunner {
 
                     match workflow {
                         Some(cloud_workflow) => match cloud_workflow.model().data.prompt() {
-                            Some(prompt_text) => prompt_text.to_string(),
+                            Some(prompt_text) => Some(prompt_text.to_string()),
                             None => {
                                 super::report_fatal_error(
                                     anyhow::anyhow!("'{id}' is not a saved prompt"),
@@ -313,8 +305,7 @@ impl AmbientAgentRunner {
                         }
                     }
                 }
-                // Skill-only invocation: use empty prompt, skill provides instructions
-                None => String::new(),
+                None => None,
             };
 
             let loaded_file = match args.config_file.file.as_deref() {
@@ -417,10 +408,13 @@ impl AmbientAgentRunner {
 
             let harness_override = (args.harness != Harness::Oz).then_some(HarnessConfig {
                 harness_type: args.harness,
+                model_id: None,
+                reasoning_level: None,
             });
             let harness_auth_secrets = args.claude_auth_secret.clone().map(|name| {
                 crate::ai::ambient_agents::task::HarnessAuthSecretsConfig {
                     claude_auth_secret_name: Some(name),
+                    codex_auth_secret_name: None,
                 }
             });
 
@@ -472,7 +466,13 @@ impl AmbientAgentRunner {
                 None
             };
 
-            let (prompt, mode) = extract_user_query_mode(prompt_string);
+            let (prompt, mode) = match prompt {
+                Some(prompt) => {
+                    let (prompt, mode) = extract_user_query_mode(prompt);
+                    (Some(prompt), mode)
+                }
+                None => (None, UserQueryMode::Normal),
+            };
             let request = SpawnAgentRequest {
                 prompt,
                 mode,
@@ -483,12 +483,17 @@ impl AmbientAgentRunner {
                     (_, true) => Some(false),
                     _ => None,
                 },
+                agent_identity_uid: args.agent_uid,
                 skill,
                 attachments,
                 interactive: None,
                 parent_run_id: None,
                 runtime_skills: vec![],
                 referenced_attachments: vec![],
+                conversation_id: args.conversation,
+                initial_snapshot_token: None,
+                snapshot_disabled: None,
+                orchestration_handoff: None,
             };
 
             let should_open = args.open;
@@ -842,6 +847,10 @@ impl AmbientAgentRunner {
                     MAX_LINE_WIDTH,
                 );
                 table.add_row(vec![title_cell]);
+            }
+
+            if let Some(executor) = task.executor_display_name() {
+                table.add_row(vec![format!("Executed as: {executor}")]);
             }
 
             // Agent config snapshot (if available)

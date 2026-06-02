@@ -1,13 +1,9 @@
-use crate::{
-    content::text::{BlockHeaderSize, BufferBlockStyle},
-    extract_block,
-    render::model::{BlockItem, RenderState, viewport::ViewportItem},
-};
-
-use super::{
-    RenderContext, RenderableBlock,
-    placeholder::{BlockPlaceholder, Options},
-};
+use super::placeholder::{BlockPlaceholder, Options};
+use super::{RenderContext, RenderableBlock};
+use crate::content::text::{BlockHeaderSize, BufferBlockStyle};
+use crate::extract_block;
+use crate::render::model::viewport::ViewportItem;
+use crate::render::model::{BlockItem, RenderState};
 
 pub struct RenderableHeader {
     viewport_item: ViewportItem,
@@ -31,8 +27,8 @@ impl RenderableBlock for RenderableHeader {
     fn layout(
         &mut self,
         model: &RenderState,
-        ctx: &mut warpui::LayoutContext,
-        app: &warpui::AppContext,
+        ctx: &mut warpui_core::LayoutContext,
+        app: &warpui_core::AppContext,
     ) {
         self.placeholder
             .layout(&self.viewport_item, model, ctx, app, |block| {
@@ -53,7 +49,12 @@ impl RenderableBlock for RenderableHeader {
             });
     }
 
-    fn paint(&mut self, model: &RenderState, ctx: &mut RenderContext, _app: &warpui::AppContext) {
+    fn paint(
+        &mut self,
+        model: &RenderState,
+        ctx: &mut RenderContext,
+        _app: &warpui_core::AppContext,
+    ) {
         let content = model.content();
         let (paragraph, header_size) = extract_block!(
             self.viewport_item, content,

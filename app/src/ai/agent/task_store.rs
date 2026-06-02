@@ -2,18 +2,11 @@ use std::collections::HashMap;
 
 use warp_multi_agent_api as api;
 
-use crate::ai::{
-    agent::{AIAgentContext, AIAgentInput},
-    skills::SkillDescriptor,
-};
-
-use super::{
-    task::{
-        helper::{MessageExt, ToolCallExt},
-        Task, TaskId,
-    },
-    AIAgentExchange, AIAgentExchangeId, AIAgentOutputMessageType,
-};
+use super::task::helper::{MessageExt, ToolCallExt};
+use super::task::{Task, TaskId};
+use super::{AIAgentExchange, AIAgentExchangeId, AIAgentOutputMessageType};
+use crate::ai::agent::{AIAgentContext, AIAgentInput};
+use crate::ai::skills::SkillDescriptor;
 
 #[derive(Debug, Clone)]
 struct ExchangeRef {
@@ -27,6 +20,11 @@ pub struct TaskStore {
     root_task_id: TaskId,
     tasks: HashMap<TaskId, Task>,
     linearized_refs: Vec<ExchangeRef>,
+    /// If the root task was upgraded from an optimistic (client-generated) ID
+    /// to a server-assigned ID, stores the original optimistic ID so that
+    /// deferred event handlers referencing the stale ID can still resolve
+    /// the task via `root_task_id`.
+    optimistic_root_task_id: Option<TaskId>,
 }
 
 impl TaskStore {
@@ -36,6 +34,7 @@ impl TaskStore {
             tasks: HashMap::new(),
             linearized_refs: Vec::new(),
             root_task_id: root_task_id.clone(),
+            optimistic_root_task_id: None,
         };
         store.tasks.insert(root_task_id, root_task);
         store.rebuild_linearized_refs_index();
@@ -49,6 +48,7 @@ impl TaskStore {
             tasks,
             linearized_refs: Vec::new(),
             root_task_id,
+            optimistic_root_task_id: None,
         };
         store.rebuild_linearized_refs_index();
         store
@@ -59,7 +59,10 @@ impl TaskStore {
     }
 
     pub fn get(&self, task_id: &TaskId) -> Option<&Task> {
-        self.tasks.get(task_id)
+        self.tasks.get(task_id).or_else(|| {
+            let old_id = self.optimistic_root_task_id.as_ref()?;
+            (old_id == task_id).then(|| self.tasks.get(&self.root_task_id))?
+        })
     }
 
     pub fn tasks(&self) -> impl Iterator<Item = &Task> {
@@ -142,6 +145,9 @@ impl TaskStore {
         self.remove(&old_root_id);
 
         let new_root_id = root_task.id().clone();
+        if old_root_id != new_root_id {
+            self.optimistic_root_task_id = Some(old_root_id);
+        }
         self.root_task_id = new_root_id;
         self.insert(root_task);
     }
@@ -330,9 +336,8 @@ impl TaskStore {
 
 #[cfg(test)]
 mod testing {
-    use crate::ai::agent::task::TaskId;
-
     use super::TaskStore;
+    use crate::ai::agent::task::TaskId;
 
     impl TaskStore {
         pub fn contains(&self, task_id: &TaskId) -> bool {

@@ -7,7 +7,7 @@ mod mouse;
 mod screenshot;
 
 use async_trait::async_trait;
-use warpui::r#async::Timer;
+use warpui_core::r#async::Timer;
 use windows::Win32::System::StationsAndDesktops::{
     CloseDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS, HDESK, OpenInputDesktop,
 };

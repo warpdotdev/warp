@@ -1,37 +1,30 @@
-use crate::server::telemetry::ImageProtocol;
-use crate::terminal::model::session::Sessions;
-
-use crate::terminal::event::{
-    AfterBlockCompletedEvent, BlockCompletedEvent, BlockMetadataReceivedEvent, Event,
-    ExecutedExecutorCommandEvent, InitSshEvent, InitSubshellEvent, SourcedRcFileInSubshellEvent,
-    TerminalMode,
-};
-
-use crate::terminal::ClipboardType;
-use async_channel::Receiver;
-use instant::Instant;
 use std::sync::Arc;
 
-use crate::remote_server::manager::RemoteServerManager;
-use warpui::SingletonEntity;
-use warpui::{Entity, ModelContext, ModelHandle};
+use async_channel::Receiver;
+use instant::Instant;
+use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
-use super::event::SshLoginStatus;
+use super::event::{BootstrappedEvent, SshLoginStatus};
+use super::model::ansi;
 use super::model::ansi::{FinishUpdateValue, WarpificationUnavailableReason};
 use super::model::block::BlockId;
 use super::model::completions::ShellCompletion;
-use super::model::terminal_model::{ExitReason, TmuxControlModeContext, TmuxInstallationState};
-use super::model::tmux::commands::TmuxCommand;
-use super::{
-    event::BootstrappedEvent,
-    model::{
-        ansi,
-        session::{IsLegacySSHSession, SessionId, SessionInfo},
-        terminal_model::{CommandType, HandlerEvent},
-    },
+use super::model::session::{IsLegacySSHSession, SessionId, SessionInfo};
+use super::model::terminal_model::{
+    CommandType, ExitReason, HandlerEvent, TmuxControlModeContext, TmuxInstallationState,
 };
+use super::model::tmux::commands::TmuxCommand;
 use crate::features::FeatureFlag;
+use crate::remote_server::manager::RemoteServerManager;
+use crate::server::telemetry::ImageProtocol;
+use crate::terminal::event::{
+    AfterBlockCompletedEvent, BlockCompletedEvent, BlockMetadataReceivedEvent,
+    BlockWorkingDirectoryUpdatedEvent, Event, ExecutedExecutorCommandEvent, InitSshEvent,
+    InitSubshellEvent, SourcedRcFileInSubshellEvent, TerminalMode,
+};
+use crate::terminal::model::session::Sessions;
 use crate::terminal::shell::ShellType;
+use crate::terminal::ClipboardType;
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 /// Model that dispatches events that have been emitted by the [`crate::terminal::TerminalModel`],
@@ -232,6 +225,9 @@ impl ModelEventDispatcher {
             Event::BlockMetadataReceived(block_metadata_received_event) => {
                 ModelEvent::BlockMetadataReceived(block_metadata_received_event)
             }
+            Event::BlockWorkingDirectoryUpdated(block_working_directory_updated_event) => {
+                ModelEvent::BlockWorkingDirectoryUpdated(block_working_directory_updated_event)
+            }
             Event::BackgroundBlockStarted => ModelEvent::BackgroundBlockStarted,
             Event::ClipboardStore(clipboard_type, text) => {
                 ModelEvent::ClipboardStore(clipboard_type, text)
@@ -311,6 +307,13 @@ impl ModelEventDispatcher {
     /// For legacy SSH sessions with the `SshRemoteServer` flag, this also
     /// sends the `SessionBootstrapped` notification to the remote server via
     /// the manager.
+    ///
+    /// The `SessionBootstrapped` notification is sent **before** initializing
+    /// the session so the daemon creates the `LocalCommandExecutor` before any
+    /// subscriber (e.g. `TerminalView::handle_session_bootstrapped`) can queue
+    /// a `RunCommand` request. Without this ordering, a race exists where the
+    /// daemon receives `RunCommand` before the executor is ready, producing
+    /// "No executor for RunCommand, session was never initialized" errors.
     fn complete_bootstrapped_session(
         &mut self,
         event: BootstrappedEvent,
@@ -333,16 +336,11 @@ impl ModelEventDispatcher {
             session_info.shell.shell_path().clone(),
         );
 
-        self.sessions.update(ctx, |sessions, ctx| {
-            sessions.initialize_bootstrapped_session(
-                *session_info,
-                spawning_command,
-                restored_block_commands,
-                rcfiles_duration_seconds,
-                ctx,
-            );
-        });
-
+        // Send the SessionBootstrapped notification to the daemon BEFORE
+        // initializing the session. `initialize_bootstrapped_session` emits
+        // `SessionsEvent::SessionBootstrapped`, which causes subscribers to
+        // immediately queue `RunCommand` requests (e.g. `load_external_commands`).
+        // The daemon must have the executor ready before those requests arrive.
         if FeatureFlag::SshRemoteServer.is_enabled() && is_legacy_ssh {
             RemoteServerManager::handle(ctx).update(ctx, |mgr, _ctx| {
                 mgr.notify_session_bootstrapped(
@@ -352,6 +350,16 @@ impl ModelEventDispatcher {
                 );
             });
         }
+
+        self.sessions.update(ctx, |sessions, ctx| {
+            sessions.initialize_bootstrapped_session(
+                *session_info,
+                spawning_command,
+                restored_block_commands,
+                rcfiles_duration_seconds,
+                ctx,
+            );
+        });
     }
 
     /// Emits an event so `TerminalView` can render the remote server block.
@@ -390,6 +398,9 @@ pub enum ModelEvent {
     },
     /// Sent when a new block is created.
     BlockMetadataReceived(BlockMetadataReceivedEvent),
+    /// Sent when an existing block's working directory has been updated
+    /// outside of the precmd path (e.g. via an OSC 7 escape sequence).
+    BlockWorkingDirectoryUpdated(BlockWorkingDirectoryUpdatedEvent),
     /// Sent after a background block is started and added to the block list.
     BackgroundBlockStarted,
     ClipboardStore(ClipboardType, String),

@@ -3,12 +3,9 @@
 use chrono::Local;
 use warp_util::path::user_friendly_path;
 
+use super::context_chip::{GeneratorContext, ShellCommand, ShellCommandGenerator};
+use super::ChipValue;
 use crate::terminal::shell::ShellType;
-
-use super::{
-    context_chip::{GeneratorContext, ShellCommand, ShellCommandGenerator},
-    ChipValue,
-};
 
 #[cfg(test)]
 #[path = "builtins_tests.rs"]
@@ -147,10 +144,17 @@ pub fn shell_git_branch() -> ShellCommandGenerator {
 }
 
 pub fn shell_other_git_branches() -> ShellCommandGenerator {
-    const SH_COMMAND: &str = "git --no-optional-locks branch --no-color --sort=-committerdate";
+    const SH_COMMAND: &str = "git --no-optional-locks branch --no-color --sort=-committerdate; \
+        printf '\\036\\n'; \
+        git --no-optional-locks worktree list --porcelain";
+    let pwsh_command = safe_git_powershell(
+        "git --no-optional-locks branch --no-color --sort=-committerdate; \
+        [char]30; \
+        git --no-optional-locks worktree list --porcelain",
+    );
 
     let command = ShellCommand::shell_specific([
-        (ShellType::PowerShell, SH_COMMAND.to_string()),
+        (ShellType::PowerShell, pwsh_command),
         (ShellType::Bash, SH_COMMAND.to_string()),
         (ShellType::Zsh, SH_COMMAND.to_string()),
         (ShellType::Fish, SH_COMMAND.to_string()),
@@ -177,24 +181,6 @@ pub fn shell_git_line_changes() -> ShellCommandGenerator {
     ]);
 
     ShellCommandGenerator::new(command, Some(vec!["git".to_owned()]))
-}
-
-pub fn github_pull_request_url() -> ShellCommandGenerator {
-    // `gh pr view` exits non-zero both when there is no PR for the current branch and when the
-    // command actually fails. We inspect its output so that "no PR found" is treated as an empty
-    // success, while auth/config/network failures still propagate as real failures.
-    const SH_COMMAND: &str = include_str!("scripts/github_pull_request_prompt_chip.sh");
-    const FISH_COMMAND: &str = include_str!("scripts/github_pull_request_prompt_chip.fish");
-    const PWSH_COMMAND: &str = include_str!("scripts/github_pull_request_prompt_chip.ps1");
-
-    let command = ShellCommand::shell_specific([
-        (ShellType::PowerShell, PWSH_COMMAND.to_string()),
-        (ShellType::Bash, SH_COMMAND.to_string()),
-        (ShellType::Zsh, SH_COMMAND.to_string()),
-        (ShellType::Fish, FISH_COMMAND.to_string()),
-    ]);
-
-    ShellCommandGenerator::new(command, Some(vec!["gh".to_owned(), "git".to_owned()]))
 }
 
 pub fn kubernetes_current_context() -> ShellCommandGenerator {

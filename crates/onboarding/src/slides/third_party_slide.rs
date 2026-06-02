@@ -1,25 +1,25 @@
+use ui_components::{button, Component as _, Options as _};
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::color::internal_colors;
+use warpui_core::elements::{
+    ClippedScrollStateHandle, Container, CrossAxisAlignment, Flex, FormattedTextElement,
+    MainAxisSize, MouseStateHandle, ParentElement,
+};
+use warpui_core::fonts::Weight;
+use warpui_core::keymap::Keystroke;
+use warpui_core::prelude::Align;
+use warpui_core::text_layout::TextAlignment;
+use warpui_core::ui_components::components::{UiComponent as _, UiComponentStyles};
+use warpui_core::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
+    ViewContext,
+};
+
 use super::toggle_card::{render_toggle_card, ToggleCardSpec};
 use super::OnboardingSlide;
 use crate::model::{OnboardingStateEvent, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
 use crate::OnboardingIntention;
-
-use ui_components::{button, Component as _, Options as _};
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::prelude::Align;
-use warpui::{
-    elements::{
-        ClippedScrollStateHandle, Container, CrossAxisAlignment, Flex, FormattedTextElement,
-        MainAxisSize, MouseStateHandle, ParentElement,
-    },
-    fonts::Weight,
-    keymap::Keystroke,
-    text_layout::TextAlignment,
-    ui_components::components::{UiComponent as _, UiComponentStyles},
-    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
-    ViewContext,
-};
 
 /// Which setting card is currently expanded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

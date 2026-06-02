@@ -1,40 +1,57 @@
-use warp_core::ui::{appearance::Appearance, Icon};
+use std::collections::HashMap;
+
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::Icon;
+use warpui::elements::ParentElement;
+use warpui::prelude::{
+    ConstrainedBox, Container, CrossAxisAlignment, Cursor, Flex, Hoverable, MouseStateHandle, Text,
+};
 use warpui::{
-    elements::ParentElement,
-    prelude::{
-        ConstrainedBox, Container, CrossAxisAlignment, Cursor, Empty, Flex, Hoverable,
-        MouseStateHandle, Text,
-    },
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
-use crate::{
-    ai::blocklist::{
-        agent_view::{agent_view_bg_color, AgentViewController},
-        inline_action::inline_action_icons,
-        BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-    },
-    terminal::view::ambient_agent::{
-        is_cloud_agent_pre_first_exchange, AmbientAgentViewModel, AmbientAgentViewModelEvent,
-    },
-};
+use crate::ai::blocklist::agent_view::{agent_view_bg_color, AgentViewController};
+use crate::ai::blocklist::inline_action::inline_action_icons;
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SetupCommandGroupId(u64);
+
+impl SetupCommandGroupId {
+    fn initial() -> Self {
+        Self(0)
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct SetupCommandState {
     did_execute_a_setup_command: bool,
-    should_expand_setup_commands: bool,
+    current_group_id: SetupCommandGroupId,
+    next_group_id: u64,
+    expanded_groups: HashMap<SetupCommandGroupId, bool>,
+    running_group_id: Option<SetupCommandGroupId>,
 }
 
 impl Default for SetupCommandState {
     fn default() -> Self {
+        let current_group_id = SetupCommandGroupId::initial();
+        let mut expanded_groups = HashMap::new();
+        expanded_groups.insert(current_group_id, true);
         Self {
             did_execute_a_setup_command: false,
-            should_expand_setup_commands: true,
+            current_group_id,
+            next_group_id: 1,
+            expanded_groups,
+            running_group_id: Some(current_group_id),
         }
     }
 }
 
 impl SetupCommandState {
+    pub fn current_group_id(&self) -> SetupCommandGroupId {
+        self.current_group_id
+    }
     pub fn did_execute_a_setup_command(&self) -> bool {
         self.did_execute_a_setup_command
     }
@@ -43,23 +60,49 @@ impl SetupCommandState {
         self.did_execute_a_setup_command = value;
     }
 
-    pub fn should_expand(&self) -> bool {
-        self.should_expand_setup_commands
+    pub fn should_expand(&self, group_id: SetupCommandGroupId) -> bool {
+        self.expanded_groups.get(&group_id).copied().unwrap_or(true)
     }
 
-    pub fn set_should_expand(&mut self, value: bool) {
-        self.should_expand_setup_commands = value;
+    pub fn set_should_expand(&mut self, group_id: SetupCommandGroupId, value: bool) {
+        self.expanded_groups.insert(group_id, value);
+    }
+
+    pub fn is_running(&self, group_id: SetupCommandGroupId) -> bool {
+        self.running_group_id == Some(group_id)
+    }
+
+    pub fn should_suppress_input_sync_for_current_group(&self) -> bool {
+        self.current_group_id != SetupCommandGroupId::initial()
+            && self.is_running(self.current_group_id)
+    }
+
+    pub fn start_new_group(&mut self) -> SetupCommandGroupId {
+        let group_id = SetupCommandGroupId(self.next_group_id);
+        self.next_group_id += 1;
+        self.current_group_id = group_id;
+        self.did_execute_a_setup_command = false;
+        self.expanded_groups.insert(group_id, true);
+        self.running_group_id = Some(group_id);
+        group_id
+    }
+
+    pub fn finish_group(&mut self, group_id: SetupCommandGroupId) {
+        if self.running_group_id == Some(group_id) {
+            self.running_group_id = None;
+        }
     }
 }
 
 pub struct CloudModeSetupTextBlock {
+    group_id: SetupCommandGroupId,
     ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
-    agent_view_controller: ModelHandle<AgentViewController>,
     mouse_state: MouseStateHandle,
 }
 
 impl CloudModeSetupTextBlock {
     pub fn new(
+        group_id: SetupCommandGroupId,
         ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
         agent_view_controller: ModelHandle<AgentViewController>,
         ctx: &mut ViewContext<Self>,
@@ -78,16 +121,10 @@ impl CloudModeSetupTextBlock {
                     } = event
                     {
                         if *updated_conversation_id == conversation_id {
-                            if me
-                                .ambient_agent_view_model
-                                .as_ref(ctx)
-                                .setup_command_state()
-                                .should_expand()
-                            {
-                                me.ambient_agent_view_model.update(ctx, |model, ctx| {
-                                    model.set_setup_command_visibility(false, ctx);
-                                });
-                            }
+                            me.ambient_agent_view_model.update(ctx, |model, ctx| {
+                                model.finish_setup_command_group(me.group_id, ctx);
+                                model.set_setup_command_group_visibility(me.group_id, false, ctx);
+                            });
                             ctx.unsubscribe_to_model(&history_model);
                         }
                     }
@@ -102,8 +139,8 @@ impl CloudModeSetupTextBlock {
         });
 
         Self {
+            group_id,
             ambient_agent_view_model,
-            agent_view_controller,
             mouse_state: Default::default(),
         }
     }
@@ -119,15 +156,11 @@ impl View for CloudModeSetupTextBlock {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        if !self.ambient_agent_view_model.as_ref(app).is_agent_running() {
-            return Empty::new().finish();
-        }
-
         let chevron_icon = if self
             .ambient_agent_view_model
             .as_ref(app)
             .setup_command_state()
-            .should_expand()
+            .should_expand(self.group_id)
         {
             Icon::ChevronDown
         } else {
@@ -145,11 +178,12 @@ impl View for CloudModeSetupTextBlock {
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(
                     Text::new(
-                        if is_cloud_agent_pre_first_exchange(
-                            Some(&self.ambient_agent_view_model),
-                            &self.agent_view_controller,
-                            app,
-                        ) {
+                        if self
+                            .ambient_agent_view_model
+                            .as_ref(app)
+                            .setup_command_state()
+                            .is_running(self.group_id)
+                        {
                             "Running setup commands..."
                         } else {
                             "Ran setup commands"
@@ -180,11 +214,12 @@ impl View for CloudModeSetupTextBlock {
             ctx.dispatch_typed_action(CloudModeSetupTextBlockAction::ToggleSetupCommandVisibility);
         });
 
-        super::cloud_mode_setup_row_spacing(
+        super::cloud_mode_setup_text_row_spacing(
             expandable.finish(),
             &self.ambient_agent_view_model,
             app,
         )
+        .with_margin_top(8.)
         .finish()
     }
 }
@@ -201,8 +236,9 @@ impl TypedActionView for CloudModeSetupTextBlock {
         match action {
             CloudModeSetupTextBlockAction::ToggleSetupCommandVisibility => {
                 self.ambient_agent_view_model.update(ctx, |model, ctx| {
-                    model.set_setup_command_visibility(
-                        !model.setup_command_state().should_expand(),
+                    model.set_setup_command_group_visibility(
+                        self.group_id,
+                        !model.setup_command_state().should_expand(self.group_id),
                         ctx,
                     );
                 });
@@ -210,3 +246,7 @@ impl TypedActionView for CloudModeSetupTextBlock {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "setup_command_text_tests.rs"]
+mod tests;

@@ -1,6 +1,7 @@
 //! Contains the legacy implementation of argument suggestion generation that depends on the legacy
 //! command signature struct (`warp_command_signatures::Signature`).
-use std::{borrow::Cow, collections::HashMap};
+use std::borrow::Cow;
+use std::collections::HashMap;
 
 use itertools::Itertools;
 use smol_str::SmolStr;
@@ -11,31 +12,25 @@ use warp_command_signatures::{
 use warp_core::features::FeatureFlag;
 use warp_util::path::ShellFamily;
 
-use crate::completer::{
-    context::CompletionContext,
-    engine::{
-        self,
-        path::{sorted_directories_relative_to, sorted_paths_relative_to, EngineFileType},
-    },
-    matchers::MatchStrategy,
-    suggest::{
-        CompleterOptions, CompletionsFallbackStrategy, MatchedSuggestion, Suggestion,
-        SuggestionType,
-    },
-    CommandExitStatus, GeneratorContext, LocationType,
+use super::add_extra_positional;
+use crate::completer::context::CompletionContext;
+use crate::completer::engine::path::{
+    sorted_cd_directories, sorted_directories_relative_to, sorted_paths_relative_to, EngineFileType,
 };
-
+use crate::completer::engine::{self};
+use crate::completer::matchers::MatchStrategy;
+use crate::completer::suggest::{
+    CompleterOptions, CompletionsFallbackStrategy, MatchedSuggestion, Suggestion, SuggestionType,
+};
+use crate::completer::{CommandExitStatus, GeneratorContext, LocationType};
 use crate::meta::{Span, Spanned};
+use crate::parsers::hir::{Command, ShellCommand};
+use crate::parsers::ArgumentError::{
+    MissingMandatoryPositional, MissingValueForName, UnexpectedArgument,
+};
 use crate::parsers::{
     ClassifiedCommand, ParseError, ParseErrorReason, ParsedToken, SignatureAtTokenIndex,
 };
-
-use crate::parsers::{
-    hir::{Command, ShellCommand},
-    ArgumentError::{MissingMandatoryPositional, MissingValueForName, UnexpectedArgument},
-};
-
-use super::add_extra_positional;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn complete(
@@ -668,10 +663,19 @@ async fn generate_suggestions_for_argument_type(
             type_name: TemplateType::Folders { .. },
             filter_name,
         }) => {
+            let is_cd = tokens_from_command.first().is_some_and(|t| *t == "cd");
             let path_suggestions = match ctx.path_completion_context() {
                 Some(path_completion_context) => {
-                    sorted_directories_relative_to(parsed_token, matcher, path_completion_context)
+                    if is_cd {
+                        sorted_cd_directories(parsed_token, matcher, path_completion_context).await
+                    } else {
+                        sorted_directories_relative_to(
+                            parsed_token,
+                            matcher,
+                            path_completion_context,
+                        )
                         .await
+                    }
                 }
                 None => Vec::new(),
             };

@@ -1,13 +1,11 @@
 use std::collections::HashMap;
 
 use lazy_static::lazy_static;
-use warpui::keymap::Keystroke;
-use warpui::platform::OperatingSystem;
+use warpui_core::keymap::Keystroke;
+use warpui_core::platform::OperatingSystem;
 
-use super::{
-    mouse::{MouseAction, MouseButton, MouseState},
-    TermMode,
-};
+use super::mouse::{MouseAction, MouseButton, MouseState};
+use super::TermMode;
 
 mod kitty_keyboard_protocol;
 
@@ -596,5 +594,5 @@ fn meta_keystroke_to_escape_sequence(
 }
 
 #[cfg(test)]
-#[path = "escape_sequences_test.rs"]
+#[path = "escape_sequences_tests.rs"]
 mod tests;

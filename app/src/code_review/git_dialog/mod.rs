@@ -13,40 +13,36 @@ use std::path::PathBuf;
 
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
+use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
+use warpui::elements::{
+    Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Flex, Hoverable,
+    Icon as IconElement, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, Radius, ScrollbarWidth, Stack, Text,
+};
+use warpui::keymap::{self, FixedBinding};
+use warpui::platform::Cursor;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable,
-        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Flex, Hoverable,
-        Icon as IconElement, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
-        ParentAnchor, ParentElement, ParentOffsetBounds, Radius, ScrollbarWidth, Stack, Text,
-    },
-    keymap::{self, FixedBinding},
-    platform::Cursor,
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
     AppContext, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
+use crate::code::editor::{add_color, remove_color};
+use crate::code_review::telemetry_event::{
+    CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind,
+};
+use crate::settings::AISettings;
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_shell::LocalShellState;
-use crate::{
-    code::editor::{add_color, remove_color},
-    code_review::telemetry_event::{CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind},
-    settings::AISettings,
-    ui_components::{
-        dialog::{dialog_styles, Dialog},
-        icons::Icon,
-    },
-    util::git::{Commit, FileChangeEntry},
-    view_components::{
-        action_button::{ActionButton, ButtonSize, NakedTheme, SecondaryTheme},
-        DismissibleToast,
-    },
-    workspace::ToastStack,
-    workspaces::user_workspaces::UserWorkspaces,
-};
-use warp_core::send_telemetry_from_ctx;
+use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::ui_components::icons::Icon;
+use crate::util::git::{Commit, FileChangeEntry};
+use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme, SecondaryTheme};
+use crate::view_components::DismissibleToast;
+use crate::workspace::ToastStack;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub(crate) mod commit;
 pub(crate) mod pr;
@@ -134,8 +130,7 @@ fn show_toast(msg: impl Into<String>, ctx: &mut ViewContext<GitDialog>) {
 ///
 /// Folds the parent feature flag, the user's dedicated per-feature AI toggle
 /// (which itself requires active AI / auth / remote-session org policy to
-/// allow AI), and an enterprise check with the same Warp-plan exception and
-/// dogfood override as `share_block_modal.rs::should_send_title_gen_request`.
+/// allow AI), and the current team's Git Operations AI tier policy.
 ///
 /// When this returns `false`, call sites skip AI entirely: commit.rs opens
 /// with the manual-type placeholder and pr.rs goes straight to
@@ -143,7 +138,7 @@ fn show_toast(msg: impl Into<String>, ctx: &mut ViewContext<GitDialog>) {
 fn should_send_git_ops_ai_request(app: &AppContext) -> bool {
     FeatureFlag::GitOperationsInCodeReview.is_enabled()
         && AISettings::as_ref(app).is_git_operations_autogen_enabled(app)
-        && UserWorkspaces::as_ref(app).ai_allowed_for_current_team()
+        && UserWorkspaces::as_ref(app).is_git_operations_ai_enabled()
 }
 
 /// Maps a raw git error string to a user-friendly toast message. Known
@@ -817,6 +812,7 @@ impl TypedActionView for GitDialog {
                     };
                     send_telemetry_from_ctx!(
                         CodeReviewTelemetryEvent::GitDialogCompleted {
+                            is_local: Some(true),
                             operation,
                             status: GitDialogStatus::Cancelled,
                             error: None,

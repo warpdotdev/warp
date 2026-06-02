@@ -1,16 +1,9 @@
-use crate::elements::{Fill, DEFAULT_UI_LINE_HEIGHT_RATIO};
-use crate::fonts::{
-    Cache as FontCache, FamilyId, Properties, RequestedFallbackFontSource, TextLayoutSystem,
-};
-use crate::geometry::rect::RectF;
-use crate::geometry::vector::vec2f;
-use crate::platform::LineStyle;
-use crate::scene::{Border, CornerRadius, Dash};
-use crate::{
-    fonts::{FontId, GlyphId},
-    scene::GlyphFade,
-    Scene,
-};
+use std::borrow::Borrow;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::ops::Range;
+use std::sync::Arc;
+
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
@@ -18,14 +11,18 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 use rangemap::RangeMap;
 use smallvec::SmallVec;
-use std::{
-    borrow::Borrow,
-    collections::HashMap,
-    hash::{Hash, Hasher},
-    ops::Range,
-    sync::Arc,
-};
 use vec1::{vec1, Vec1};
+
+use crate::elements::{Fill, DEFAULT_UI_LINE_HEIGHT_RATIO};
+use crate::fonts::{
+    Cache as FontCache, FamilyId, FontId, GlyphId, Properties, RequestedFallbackFontSource,
+    TextLayoutSystem,
+};
+use crate::geometry::rect::RectF;
+use crate::geometry::vector::vec2f;
+use crate::platform::LineStyle;
+use crate::scene::{Border, CornerRadius, Dash, GlyphFade};
+use crate::Scene;
 
 type StyleRun = (Range<usize>, StyleAndFont);
 
@@ -1416,6 +1413,17 @@ impl Line {
             _ => available_width,
         };
 
+        // When start-clipping with an ellipsis we reserved `ellipsis_width` of
+        // space at the LEFT for the ellipsis glyph. Visible glyphs need to be
+        // offset by that amount so they stay flush with the right edge and do
+        // not overlap the ellipsis. This is constant for the entire paint, so
+        // hoist it out of the per-glyph loop.
+        let start_ellipsis_offset = if is_start_clipping && ellipsis_width > 0. {
+            ellipsis_width
+        } else {
+            0.
+        };
+
         'runs: for run in run_iter {
             let mut glyph_color = default_color;
             // We define foreground_color to overwrite syntax_color since the
@@ -1473,7 +1481,11 @@ impl Line {
                 remaining_width -= glyph.width;
 
                 let glyph_origin = if is_start_clipping {
-                    line_origin + vec2f(remaining_width, glyph.position_along_baseline.y())
+                    line_origin
+                        + vec2f(
+                            remaining_width + start_ellipsis_offset,
+                            glyph.position_along_baseline.y(),
+                        )
                 } else {
                     line_origin + glyph.position_along_baseline
                 };
@@ -1540,5 +1552,5 @@ impl CaretPosition {
 }
 
 #[cfg(test)]
-#[path = "text_layout_test.rs"]
+#[path = "text_layout_tests.rs"]
 mod tests;

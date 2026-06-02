@@ -2,30 +2,25 @@
 //!
 //! Queries are not rendered in blocks corresponding to requested command or requested action responses.
 
-use warp_core::{features::FeatureFlag, ui::theme::color::internal_colors};
-use warpui::{
-    elements::{
-        Container, CornerRadius, Flex, MainAxisAlignment, MainAxisSize, ParentElement, Radius,
-        Shrinkable, Wrap,
-    },
-    fonts::{Properties, Style, Weight},
-    ui_components::{
-        chip::Chip,
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    AppContext, Element, SingletonEntity,
-};
-
-use crate::ai::blocklist::block::view_impl::common::UserQueryProps;
-use crate::ai::blocklist::AttachmentType;
-use crate::appearance::Appearance;
-use crate::{
-    ai::blocklist::block::{DetectedLinksState, SecretRedactionState},
-    ui_components::{blended_colors, icons::Icon},
-};
 use pathfinder_color::ColorU;
+use warp_core::features::FeatureFlag;
+use warp_core::ui::theme::color::internal_colors;
+use warpui::elements::{
+    Container, CornerRadius, DispatchEventResult, EventHandler, Flex, MainAxisAlignment,
+    MainAxisSize, ParentElement, Radius, Shrinkable, Wrap,
+};
+use warpui::fonts::{Properties, Style, Weight};
+use warpui::ui_components::chip::Chip;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, SingletonEntity};
 
 use super::common::{render_query_text, render_user_avatar, FindContext};
+use crate::ai::blocklist::block::view_impl::common::UserQueryProps;
+use crate::ai::blocklist::block::{AIBlockAction, DetectedLinksState, SecretRedactionState};
+use crate::ai::blocklist::AttachmentType;
+use crate::appearance::Appearance;
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
 
 /// Data required to render the AI block query component.
 #[derive(Copy, Clone, Debug)]
@@ -126,13 +121,13 @@ fn render_attachments(
     attachments: &[(AttachmentType, String)],
     appearance: &Appearance,
 ) -> Box<dyn Element> {
+    let mut image_index = 0;
     let chips = attachments.iter().map(|(attachment_type, file_name)| {
         let icon = match attachment_type {
             AttachmentType::Image => Icon::Image,
             AttachmentType::File => Icon::File,
         };
-
-        Chip::new(
+        let chip = Chip::new(
             file_name.clone(),
             UiComponentStyles {
                 margin: Some(Coords {
@@ -157,7 +152,22 @@ fn render_attachments(
             blended_colors::text_sub(appearance.theme(), appearance.theme().background()).into(),
         ))
         .build()
-        .finish()
+        .finish();
+
+        if matches!(attachment_type, AttachmentType::Image) {
+            let clicked_image_index = image_index;
+            image_index += 1;
+            EventHandler::new(chip)
+                .on_left_mouse_down(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AIBlockAction::OpenSubmittedAttachmentLightbox {
+                        image_index: clicked_image_index,
+                    });
+                    DispatchEventResult::StopPropagation
+                })
+                .finish()
+        } else {
+            chip
+        }
     });
 
     if attachments.is_empty() {

@@ -1,26 +1,19 @@
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::{io, process};
+
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
-use std::{
-    ffi::OsString,
-    io,
-    path::{Path, PathBuf},
-    process,
-};
 use typed_path::UnixPathBuf;
 use warp_core::channel::{Channel, ChannelState};
 use warp_util::path::{canonicalize_git_bash_path, is_msys2_path, warp_shell_path};
 
-use crate::{
-    terminal::{
-        available_shells::AvailableShell,
-        bootstrap::init_shell_script_for_shell,
-        local_tty::docker_sandbox::DockerSandboxShellStarter,
-        shell::{ShellName, ShellType},
-        ShellLaunchData,
-    },
-    util::path::resolve_executable,
-};
-
+use crate::terminal::available_shells::AvailableShell;
+use crate::terminal::bootstrap::init_shell_script_for_shell;
+use crate::terminal::local_tty::docker_sandbox::DockerSandboxShellStarter;
+use crate::terminal::shell::{ShellName, ShellType};
+use crate::terminal::ShellLaunchData;
+use crate::util::path::resolve_executable;
 #[cfg(windows)]
 use crate::util::windows::{powershell_5_path, powershell_7_path, wsl_path};
 
@@ -418,6 +411,15 @@ impl From<ShellStarterSource> for ShellStarterSourceOrWslName {
 }
 
 impl DirectShellStarter {
+    #[cfg(test)]
+    pub fn new_for_test(shell_type: ShellType, shell_path: PathBuf, args: Vec<OsString>) -> Self {
+        Self {
+            shell_type,
+            shell_path,
+            args,
+        }
+    }
+
     pub fn shell_path(&self) -> &Path {
         &self.shell_path
     }

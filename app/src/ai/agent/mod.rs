@@ -12,50 +12,48 @@ mod task_store;
 pub(super) mod telemetry;
 pub(super) mod util;
 
-// Re-export types that were moved to the ai crate.
-pub use ai::agent::{action::*, action_result::*, AIAgentCitation, FileLocations};
-use warp_core::features::FeatureFlag;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Display;
+use std::ops::{AddAssign, Deref, DerefMut, Range};
+use std::sync::Arc;
+use std::time::Duration;
 
-#[cfg(test)]
-mod suggestion_test;
+// Re-export types that were moved to the ai crate.
+pub use ai::agent::action::*;
+pub use ai::agent::action_result::*;
+use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
+pub use ai::agent::{AIAgentCitation, FileLocations};
+use ai::skills::ParsedSkill;
+use chrono::{DateTime, Local, TimeDelta};
+use comment::ReviewComment;
+use derivative::Derivative;
+use markdown_parser::{parse_markdown, FormattedTable, FormattedText, FormattedTextInline};
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use session_sharing_protocol::common::ParticipantId;
+use task::TaskId;
+pub use telemetry::AIIdentifiers;
+use uuid::Uuid;
+use warp_core::features::FeatureFlag;
+use warp_editor::render::model::LineCount;
+use warp_multi_agent_api::{diff_hunk as diff_hunk_api, AgentEvent, AgentType};
+
+pub use self::api::{MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError};
+use super::llms::LLMId;
 use crate::ai::block_context::BlockContext;
 use crate::ai::blocklist::block::view_impl::output::are_all_text_sections_empty;
 use crate::ai::skills::SkillDescriptor;
+use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::code::editor_management::CodeSource;
 use crate::code_review::comments::{
     AttachedReviewComment as CodeReviewComment, ReviewCommentBatch,
 };
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::server_api::AIApiError;
-use ai::skills::ParsedSkill;
-use chrono::{DateTime, Local, TimeDelta};
-use comment::ReviewComment;
-use task::TaskId;
-pub use telemetry::AIIdentifiers;
-
-use warp_editor::render::model::LineCount;
-
-use parking_lot::RwLock;
-use std::collections::{HashMap, HashSet};
-use std::fmt::Display;
-use std::ops::{AddAssign, Deref, DerefMut, Range};
-use std::sync::Arc;
-use std::time::Duration;
-use uuid::Uuid;
-use warp_multi_agent_api::{diff_hunk as diff_hunk_api, AgentEvent, AgentType};
-
-pub use self::api::{MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError};
-use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingChipType;
 use crate::TelemetryEvent;
-use derivative::Derivative;
-use markdown_parser::{parse_markdown, FormattedTable, FormattedText, FormattedTextInline};
-use serde::{Deserialize, Serialize};
-use session_sharing_protocol::common::ParticipantId;
-
-use super::llms::LLMId;
 
 /// A server supplied ID for a specific AI generated output.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
@@ -84,6 +82,8 @@ impl ServerOutputId {
 pub enum CancellationReason {
     /// The user explicitly cancelled without providing a follow-up.
     ManuallyCancelled,
+    /// Warp automatically cancelled the local run so it could continue in Cloud Mode.
+    AutomaticCloudHandoff,
 
     /// The user submitted a follow-up query during streaming which implicitly cancelled the current one.
     FollowUpSubmitted {
@@ -108,6 +108,7 @@ impl Display for CancellationReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CancellationReason::ManuallyCancelled => write!(f, "manual cancellation"),
+            CancellationReason::AutomaticCloudHandoff => write!(f, "automatic cloud handoff"),
             CancellationReason::FollowUpSubmitted { .. } => write!(f, "follow-up submission"),
             CancellationReason::UserCommandExecuted => write!(f, "user command execution"),
             CancellationReason::Reverted => write!(f, "revert"),
@@ -617,7 +618,10 @@ impl AIAgentOutput {
 /// Represents user visible errors.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum RenderableAIError {
-    QuotaLimit,
+    QuotaLimit {
+        #[serde(default)]
+        user_display_message: Option<String>,
+    },
     ServerOverloaded,
     InternalWarpError,
     ContextWindowExceeded(String),
@@ -661,7 +665,11 @@ impl RenderableAIError {
 impl From<&AIApiError> for RenderableAIError {
     fn from(value: &AIApiError) -> Self {
         match value {
-            AIApiError::QuotaLimit => Self::QuotaLimit,
+            AIApiError::QuotaLimit {
+                user_display_message,
+            } => Self::QuotaLimit {
+                user_display_message: user_display_message.clone(),
+            },
             AIApiError::ServerOverloaded => Self::ServerOverloaded,
             _ => Self::Other {
                 error_message: format!("Request failed with error: {value:?}"),
@@ -675,7 +683,15 @@ impl From<&AIApiError> for RenderableAIError {
 impl Display for RenderableAIError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::QuotaLimit => write!(f, "Quota limit reached."),
+            Self::QuotaLimit {
+                user_display_message,
+            } => {
+                if let Some(message) = user_display_message {
+                    write!(f, "{message}")
+                } else {
+                    write!(f, "Quota limit reached.")
+                }
+            }
             Self::ServerOverloaded => {
                 write!(f, "Warp is currently overloaded. Please try again later.")
             }
@@ -739,6 +755,7 @@ impl ProgrammingLanguage {
                 "css" => Some("css"),
                 "c" => Some("c"),
                 "json" => Some("json"),
+                "jq" => Some("jq"),
                 "hcl" | "terraform" | "tf" => Some("hcl"),
                 "lua" => Some("lua"),
                 "ruby" | "rb" => Some("rb"),
@@ -1520,9 +1537,12 @@ pub enum SubagentType {
     Summarization,
     ConversationSearch {
         query: Option<String>,
-        /// The ID of the conversation being searched. None when searching the
-        /// current conversation.
+        /// Search targets are mutually exclusive; at most one of `conversation_id` or
+        /// `agent_run_id` should be populated for a single conversation search subagent.
+        /// The ID of the conversation being searched.
         conversation_id: Option<String>,
+        /// The ID of the agent run being searched.
+        agent_run_id: Option<String>,
     },
     WarpDocumentationSearch,
     Unknown,
@@ -2017,6 +2037,30 @@ pub enum AIAgentContext {
         branch: Option<String>,
     },
 
+    /// Information about the git repository in the current working directory.
+    Repository {
+        /// The repository name (e.g. "warp-internal").
+        name: String,
+        /// The repository owner/organization (e.g. "warpdotdev"), if determinable from the remote URL.
+        owner: Option<String>,
+    },
+
+    /// Information about the GitHub pull request associated with the current branch.
+    PullRequest {
+        /// The pull request number.
+        #[serde(default, deserialize_with = "deserialize_pull_request_number")]
+        number: i32,
+        /// The pull request state (for example, `OPEN`, `MERGED`, or `CLOSED`).
+        #[serde(default)]
+        state: String,
+        /// Whether the pull request is marked as draft.
+        #[serde(default)]
+        draft: bool,
+        /// The pull request's base branch.
+        #[serde(default)]
+        base_branch: String,
+    },
+
     /// List of available skills is provided to the agent during initialization
     /// or when updated.
     Skills {
@@ -2025,6 +2069,37 @@ pub enum AIAgentContext {
 
     #[serde(untagged)]
     Block(Box<BlockContext>),
+}
+
+fn deserialize_pull_request_number<'de, D>(deserializer: D) -> Result<i32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Null => Ok(0),
+        serde_json::Value::String(s) => {
+            if !s.chars().all(|c| c.is_ascii_digit()) {
+                return Ok(0);
+            }
+            Ok(s.parse()
+                .ok()
+                .filter(|number| *number > 0)
+                .unwrap_or_default())
+        }
+        serde_json::Value::Number(n) => {
+            let Some(number) = n.as_i64() else {
+                return Ok(0);
+            };
+            Ok(i32::try_from(number)
+                .ok()
+                .filter(|number| *number > 0)
+                .unwrap_or_default())
+        }
+        value => Err(serde::de::Error::custom(format!(
+            "expected string or number for pull request number, got {value}"
+        ))),
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -2454,6 +2529,7 @@ pub enum AIAgentInput {
 
     SummarizeConversation {
         prompt: Option<String>,
+        context: Arc<[AIAgentContext]>,
     },
 
     /// Invoke a skill. The skill content is passed as instructions to the agent.
@@ -2499,6 +2575,15 @@ pub enum AIAgentInput {
         trigger: Option<PassiveSuggestionTrigger>,
         suggestion: PassiveSuggestionResultType,
         context: Arc<[AIAgentContext]>,
+    },
+
+    /// Piggybacked orchestration config update from the plan card.
+    /// Sent on the next outbound request after the user edits the
+    /// config block or toggles approval.
+    OrchestrationConfigUpdate {
+        plan_id: String,
+        config: OrchestrationConfig,
+        status: OrchestrationConfigStatus,
     },
 }
 
@@ -2593,6 +2678,7 @@ impl Display for AIAgentInput {
                 write!(f, "EventsFromAgents({} events)", events.len())
             }
             Self::PassiveSuggestionResult { .. } => write!(f, "PassiveSuggestionResult"),
+            Self::OrchestrationConfigUpdate { .. } => write!(f, "OrchestrationConfigUpdate"),
         }
     }
 }
@@ -2650,7 +2736,8 @@ impl AIAgentInput {
             | Self::StartFromAmbientRunPrompt { .. }
             | Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
-            | Self::PassiveSuggestionResult { .. } => None,
+            | Self::PassiveSuggestionResult { .. }
+            | Self::OrchestrationConfigUpdate { .. } => None,
         }
     }
 
@@ -2745,9 +2832,10 @@ impl AIAgentInput {
             | Self::InvokeSkill { context, .. }
             | Self::StartFromAmbientRunPrompt { context, .. }
             | Self::PassiveSuggestionResult { context, .. } => Some(context),
-            Self::SummarizeConversation { .. }
-            | Self::MessagesReceivedFromAgents { .. }
-            | Self::EventsFromAgents { .. } => None,
+            Self::SummarizeConversation { context, .. } => Some(context),
+            Self::MessagesReceivedFromAgents { .. }
+            | Self::EventsFromAgents { .. }
+            | Self::OrchestrationConfigUpdate { .. } => None,
         }
     }
 
@@ -2778,7 +2866,8 @@ impl AIAgentInput {
             | Self::StartFromAmbientRunPrompt { .. }
             | Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
-            | Self::PassiveSuggestionResult { .. } => None,
+            | Self::PassiveSuggestionResult { .. }
+            | Self::OrchestrationConfigUpdate { .. } => None,
         }
     }
 
@@ -2996,25 +3085,7 @@ pub struct RequestMetadata {
     pub is_auto_resume_after_error: bool,
 }
 
-/// A globally unique ID for a suggested objects.
-///
-/// This is used for telemetry purposes to track and connect both:
-/// - Suggested objects generated by the AI agent
-/// - The corresponding objects stored in the cloud (if the suggestion was accepted)
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SuggestedLoggingId(String);
-
-impl Display for SuggestedLoggingId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<String> for SuggestedLoggingId {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
+pub use cloud_object_models::SuggestedLoggingId;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SuggestedRule {
@@ -3060,5 +3131,5 @@ impl Suggestions {
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

@@ -2,9 +2,9 @@ use std::{fs, process};
 
 use clap::{Parser, Subcommand};
 use futures::executor::block_on;
+use input_classifier::test_utils::CompletionContext;
 use input_classifier::{
     ClassificationResult, Context, HeuristicClassifier, InputClassifier, InputType,
-    test_utils::CompletionContext,
 };
 
 /// Convert HSL to RGB values (0-255 range)
@@ -66,13 +66,22 @@ fn get_binary_confidence_color(is_correct: bool, is_low_confidence: bool) -> Str
         "\x1b[31m".to_string() // Red for incorrect
     }
 }
-use warp_completer::{ParsedTokensSnapshot, util::parse_current_commands_and_tokens};
-
-#[cfg(feature = "fasttext")]
-use input_classifier::FasttextClassifier;
-
 #[cfg(feature = "onnx")]
 use input_classifier::{OnnxClassifier, OnnxModel};
+use warp_completer::ParsedTokensSnapshot;
+use warp_completer::util::parse_current_commands_and_tokens;
+#[cfg(feature = "onnx")]
+fn default_onnx_model() -> Option<OnnxModel> {
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "nld_classifier_v1")] {
+            Some(OnnxModel::BertTinyV1)
+        } else if #[cfg(feature = "nld_classifier_v2")] {
+            Some(OnnxModel::BertTinyV2)
+        } else {
+            None
+        }
+    }
+}
 
 #[derive(Parser)]
 struct InputSource {
@@ -97,11 +106,6 @@ struct Args {
     /// Use heuristic classifier
     #[arg(long)]
     heuristic: bool,
-
-    /// Use fasttext classifier
-    #[cfg(feature = "fasttext")]
-    #[arg(long)]
-    fasttext: bool,
 
     /// Use ONNX classifier
     #[cfg(feature = "onnx")]
@@ -135,17 +139,6 @@ fn create_classifiers(args: &Args) -> Vec<(&'static str, Box<dyn InputClassifier
     let mut classifiers: Vec<(&'static str, Box<dyn InputClassifier>)> = Vec::new();
 
     // Default to all available classifiers if none specified
-    let fasttext_specified = {
-        #[cfg(feature = "fasttext")]
-        {
-            args.fasttext
-        }
-        #[cfg(not(feature = "fasttext"))]
-        {
-            false
-        }
-    };
-
     let onnx_specified = {
         #[cfg(feature = "onnx")]
         {
@@ -157,27 +150,19 @@ fn create_classifiers(args: &Args) -> Vec<(&'static str, Box<dyn InputClassifier
         }
     };
 
-    let use_all = !args.heuristic && !fasttext_specified && !onnx_specified;
+    let use_all = !args.heuristic && !onnx_specified;
 
     if args.heuristic || use_all {
         classifiers.push(("heuristic", Box::new(HeuristicClassifier)));
     }
 
-    #[cfg(feature = "fasttext")]
-    if args.fasttext || use_all {
-        match FasttextClassifier::new() {
-            Ok(classifier) => {
-                classifiers.push(("fasttext", Box::new(classifier)));
-            }
-            Err(e) => {
-                eprintln!("Warning: Failed to initialize FastText classifier: {e}");
-            }
-        }
-    }
-
     #[cfg(feature = "onnx")]
     if args.onnx || use_all {
-        match OnnxClassifier::new(OnnxModel::BertTiny) {
+        let Some(model) = default_onnx_model() else {
+            eprintln!("Warning: No ONNX model feature is enabled for the ONNX classifier");
+            return classifiers;
+        };
+        match OnnxClassifier::new(model) {
             Ok(classifier) => {
                 classifiers.push(("onnx", Box::new(classifier)));
             }
@@ -247,10 +232,13 @@ async fn handle_classify(
             }
             Err(_) => {
                 // Fallback to detect_input_type if classify_input fails
-                let result = classifier
+                let classification = classifier
                     .detect_input_type(parsed_input.clone(), &context)
                     .await;
-                println!("  {name}: {result} (probabilities unavailable)");
+                println!(
+                    "  {}: {} (probabilities unavailable)",
+                    name, classification.input_type
+                );
             }
         }
     }
@@ -302,10 +290,10 @@ async fn handle_verify(
                 }
                 Err(_) => {
                     // Fallback to detect_input_type if classify_input fails
-                    let result = classifier
+                    let classification = classifier
                         .detect_input_type(parsed_input.clone(), &context)
                         .await;
-                    let is_correct = result == expected;
+                    let is_correct = classification.input_type == expected;
                     if is_correct {
                         correct_count += 1;
                     }
