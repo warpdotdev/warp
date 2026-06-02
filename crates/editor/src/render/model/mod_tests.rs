@@ -28,7 +28,8 @@ use crate::content::text::{
 };
 use crate::render::model::test_utils::{TEST_STYLES, laid_out_paragraph, mock_paragraph};
 use crate::render::model::{
-    Height, LayoutSummary, LineCount, RenderedSelection, SoftWrapPoint, TEXT_SPACING,
+    Height, LayoutSummary, LineCount, RenderLineLocation, RenderedSelection, SoftWrapPoint,
+    TEXT_SPACING,
 };
 
 #[test]
@@ -1421,4 +1422,239 @@ fn test_link_at_offset_uses_cached_cell_links() {
     );
     assert_eq!(table.link_at_offset(CharOffset::from(0)), None);
     assert_eq!(table.link_at_offset(CharOffset::from(3)), None);
+}
+
+// ---------------------------------------------------------------------------
+// Inline comment block primitive (per-view EmbeddedComment) — VAL-ISOLATION-002
+// ---------------------------------------------------------------------------
+
+/// A minimal app-supplied child for an inline comment block. Model unit tests never render, so
+/// `element` is unreachable; only the reserved height/size matter for layout.
+#[derive(Debug)]
+struct MockCommentItem {
+    height: Pixels,
+}
+
+impl super::LaidOutEmbeddedItem for MockCommentItem {
+    fn height(&self) -> Pixels {
+        self.height
+    }
+
+    fn size(&self) -> warpui_core::geometry::vector::Vector2F {
+        vec2f(100.0, self.height.as_f32())
+    }
+
+    fn first_line_bound(&self) -> warpui_core::geometry::vector::Vector2F {
+        vec2f(100.0, self.height.as_f32())
+    }
+
+    fn element(
+        &self,
+        _state: &RenderState,
+        _viewport_item: crate::render::model::viewport::ViewportItem,
+        _model: Option<&dyn crate::editor::EmbeddedItemModel>,
+        _ctx: &warpui_core::AppContext,
+    ) -> Box<dyn crate::render::element::RenderableBlock> {
+        unimplemented!("inline comment element is not rendered in model unit tests")
+    }
+
+    fn spacing(&self) -> super::BlockSpacing {
+        super::BlockSpacing::default()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+fn comment_block(line: usize, height: f32) -> super::CommentBlock {
+    super::CommentBlock::new(
+        super::RenderLineLocation::Current(LineCount(line)),
+        Arc::new(MockCommentItem {
+            height: height.into_pixels(),
+        }),
+    )
+}
+
+fn temporary_block() -> BlockItem {
+    let paragraph = layout_paragraph("\n", &TEST_STYLES, &BufferBlockStyle::PlainText, 80.);
+    BlockItem::TemporaryBlock {
+        paragraph_block: ParagraphBlock::new(vec1![paragraph]),
+        text_decoration: Vec::new(),
+        decoration: None,
+    }
+}
+
+fn count_comments(rs: &RenderState) -> usize {
+    rs.content()
+        .block_items()
+        .filter(|item| matches!(item, BlockItem::EmbeddedComment(_)))
+        .count()
+}
+
+fn count_temps(rs: &RenderState) -> usize {
+    rs.content()
+        .block_items()
+        .filter(|item| matches!(item, BlockItem::TemporaryBlock { .. }))
+        .count()
+}
+
+/// Returns each block's kind and its content-space top offset, in tree order.
+fn block_kinds_with_offsets(rs: &RenderState) -> Vec<(&'static str, Pixels)> {
+    use super::positioned::PositionedCursor;
+    let content = rs.content.borrow();
+    let mut cursor = content.cursor::<LineCount, LayoutSummary>();
+    cursor.descend_to_first_item(&content, |_| true);
+    let mut out = Vec::new();
+    while let Some(positioned) = cursor.positioned_item() {
+        let kind = match positioned.item {
+            BlockItem::TemporaryBlock { .. } => "temp",
+            BlockItem::EmbeddedComment(_) => "comment",
+            _ => "other",
+        };
+        out.push((kind, positioned.start_y_offset));
+        cursor.next();
+    }
+    out
+}
+
+/// Content-space top offset of each `Paragraph` block, in tree order.
+fn paragraph_offsets(rs: &RenderState) -> Vec<Pixels> {
+    use super::positioned::PositionedCursor;
+    let content = rs.content.borrow();
+    let mut cursor = content.cursor::<LineCount, LayoutSummary>();
+    cursor.descend_to_first_item(&content, |_| true);
+    let mut out = Vec::new();
+    while let Some(positioned) = cursor.positioned_item() {
+        if matches!(positioned.item, BlockItem::Paragraph(_)) {
+            out.push(positioned.start_y_offset);
+        }
+        cursor.next();
+    }
+    out
+}
+
+fn five_line_render_state() -> RenderState {
+    let mut render_state =
+        RenderState::new_for_test(TEST_STYLES, 200.0.into_pixels(), 200.0.into_pixels());
+    let mut content = SumTree::new();
+    for len in 1..=5usize {
+        content.push(mock_paragraph(20.0, 0., len));
+    }
+    render_state.set_content(content);
+    render_state
+}
+
+#[test]
+fn embedded_comment_block_reserves_height_and_pushes_following_content() {
+    let render_state = five_line_render_state();
+
+    let baseline_total = render_state.height();
+    let baseline_paragraphs = paragraph_offsets(&render_state);
+    assert_eq!(baseline_paragraphs.len(), 5, "five paragraphs expected");
+
+    let height = 50.0;
+    let reserved = height.into_pixels();
+    render_state.apply_comment_blocks(vec![comment_block(2, height)]);
+
+    // Total content height grows by exactly the reserved height.
+    assert_eq!(render_state.height(), baseline_total + reserved);
+
+    // The comment is anchored below line 2: paragraphs 1-2 are unchanged, and every paragraph
+    // below is pushed down by exactly the reserved height (the comment carries no characters or
+    // lines, so it adds space without renumbering the lines below it).
+    let shifted_paragraphs = paragraph_offsets(&render_state);
+    assert_eq!(shifted_paragraphs[0], baseline_paragraphs[0]);
+    assert_eq!(shifted_paragraphs[1], baseline_paragraphs[1]);
+    for i in 2..5 {
+        assert_eq!(
+            shifted_paragraphs[i],
+            baseline_paragraphs[i] + reserved,
+            "paragraph {i} should be pushed down by the comment height"
+        );
+    }
+
+    // The block is locatable in content space: it sits at the old top of paragraph 3 (i.e. the
+    // bottom of line 2) and reserves the supplied height.
+    let position = render_state
+        .comment_block_position(RenderLineLocation::Current(LineCount(2)))
+        .expect("comment block should be present at line 2");
+    assert_eq!(position.content_height, reserved);
+    assert_eq!(position.start_y_offset, baseline_paragraphs[2]);
+}
+
+#[test]
+fn embedded_comment_block_does_not_displace_temporary_blocks() {
+    let render_state = five_line_render_state();
+
+    // Install diff removed-line temporary blocks at line 2.
+    let mut temp = std::collections::HashMap::new();
+    temp.insert(LineCount(2), vec![temporary_block(), temporary_block()]);
+    render_state.reset_temporary_block(temp);
+
+    let before = block_kinds_with_offsets(&render_state);
+    let temp_before: Vec<_> = before.iter().filter(|(k, _)| *k == "temp").collect();
+    assert_eq!(temp_before.len(), 2, "two temporary blocks expected");
+    let total_before = render_state.height();
+
+    // Insert a comment below the temporary blocks; their set and positions must be unchanged.
+    let comment_height = 40.0;
+    render_state.apply_comment_blocks(vec![comment_block(4, comment_height)]);
+
+    let after = block_kinds_with_offsets(&render_state);
+    let temp_after: Vec<_> = after.iter().filter(|(k, _)| *k == "temp").collect();
+
+    assert_eq!(
+        temp_after, temp_before,
+        "temporary blocks must not move or change count when a comment is inserted"
+    );
+    assert_eq!(count_comments(&render_state), 1, "comment block present");
+    assert_eq!(
+        render_state.height(),
+        total_before + comment_height.into_pixels()
+    );
+}
+
+#[test]
+fn embedded_comment_block_survives_temporary_block_reset() {
+    let render_state = five_line_render_state();
+
+    // A comment block exists first.
+    let comment_height = 60.0;
+    render_state.apply_comment_blocks(vec![comment_block(2, comment_height)]);
+
+    let position_before = render_state
+        .comment_block_position(RenderLineLocation::Current(LineCount(2)))
+        .expect("comment present before refresh");
+
+    // Removed-line temporary blocks live below the comment.
+    let install_temp = || {
+        let mut temp = std::collections::HashMap::new();
+        temp.insert(LineCount(4), vec![temporary_block(), temporary_block()]);
+        temp
+    };
+
+    render_state.reset_temporary_block(install_temp());
+    assert_eq!(count_comments(&render_state), 1);
+    assert_eq!(count_temps(&render_state), 2);
+    assert_eq!(
+        render_state.comment_block_position(RenderLineLocation::Current(LineCount(2))),
+        Some(position_before),
+    );
+
+    // A second diff refresh re-runs the temporary-block reset. Because EmbeddedComment is a
+    // distinct variant (not matched by `reset_temporary_block`), it must survive untouched while
+    // the temporary blocks are rebuilt.
+    render_state.reset_temporary_block(install_temp());
+    assert_eq!(
+        count_comments(&render_state),
+        1,
+        "comment block must survive a diff refresh"
+    );
+    assert_eq!(count_temps(&render_state), 2, "temporary blocks rebuilt");
+    assert_eq!(
+        render_state.comment_block_position(RenderLineLocation::Current(LineCount(2))),
+        Some(position_before),
+        "comment anchor/position unchanged across diff refresh"
+    );
 }
