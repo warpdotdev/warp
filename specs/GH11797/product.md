@@ -40,7 +40,7 @@ Warp currently supports prompt chips for Git and SVN but has no equivalent for `
 
 7. **JjDirtyItems — workspace changes.** The chip shows the number of files with outstanding changes in the working copy, as reported by `jj diff --summary`. When there are no changes, the chip is hidden. Example: `3` (three files changed).
 
-8. **Prompt rendering — JjBookmark.** The chip renders as `jj:(<value>)` in the prompt, using `input_prompt_branch` (or a new `input_prompt_jj` theme color if available) for the prefix `jj:(` and suffix `)`, and `input_prompt_branch` for the value text. The font weight is Semibold.
+8. **Prompt rendering — JjBookmark.** The chip renders as `jj:(<value>)` in the prompt, using `input_prompt_branch` for the prefix `jj:(`, suffix `)`, and value text. The font weight is Semibold.
 
 9. **Prompt rendering — JjDirtyItems.** The chip renders as `±<value>` using `input_prompt_svn` for the prefix and value color, mirroring `SvnDirtyItems`.
 

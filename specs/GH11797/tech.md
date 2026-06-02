@@ -106,7 +106,9 @@ Self::ShellGitBranch | Self::SvnBranch | Self::JjBookmark => Some(Icon::GitBranc
 Self::GitDiffStats | Self::SvnDirtyItems | Self::JjDirtyItems => Some(Icon::File),
 ```
 
-**1g. `render_text_from_kind()` (~line 627):** Add match arms for both variants, mirroring `SvnBranch`/`SvnDirtyItems` rendering with `input_prompt_svn` color.
+**1g. `render_text_from_kind()` (~line 627):** Add match arms for both variants, mirroring `SvnBranch`/`SvnDirtyItems` rendering:
+- `JjBookmark`: prefix `jj:(` and suffix `)` use `input_prompt_branch` (matching `ShellGitBranch`'s use of `input_prompt_git`).
+- `JjDirtyItems`: prefix `±` uses `input_prompt_svn`.
 
 **1h. `available_chips()` (~line 539):** Add `ContextChipKind::JjBookmark,` and `ContextChipKind::JjDirtyItems,` to the list.
 
