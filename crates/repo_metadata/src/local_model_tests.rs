@@ -1243,7 +1243,7 @@ fn added_symlinked_skill_directory_refreshes_provider_without_canonical_tree_mut
         let mut definitions = StandingQueryDefinitions::default();
         definitions.set_project_skill_provider_paths([PathBuf::from(".agents/skills")]);
         let update = RepoUpdate {
-            added: vec![linked_skill],
+            added: vec![linked_skill.clone()],
             ..Default::default()
         };
         let (mutations, discovered, removed_roots) = block_on(
@@ -1256,6 +1256,12 @@ fn added_symlinked_skill_directory_refreshes_provider_without_canonical_tree_mut
             content
                 == &StandingQueryContent::directory(
                     StandardizedPath::try_from_local(&provider).unwrap(),
+                )
+        }));
+        assert!(discovered.project_skills().any(|content| {
+            content
+                == &StandingQueryContent::file(
+                    StandardizedPath::try_from_local(&linked_skill.join("SKILL.md")).unwrap(),
                 )
         }));
     });

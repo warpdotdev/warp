@@ -820,6 +820,50 @@ fn find_skill_files_in_tree_returns_remote_skill_paths_for_remote_repos() {
     });
 }
 
+#[cfg(unix)]
+#[test]
+fn find_skill_files_in_tree_deduplicates_locally_hydrated_symlink_results() {
+    VirtualFS::test(
+        "find_local_symlinked_skill_deduplication",
+        |dirs, mut vfs| {
+            vfs.mkdir("repo/.agents/skills")
+                .mkdir("target")
+                .with_files(vec![Stub::FileWithContent(
+                    "target/SKILL.md",
+                    "---\nname: linked\ndescription: test\n---\n# linked",
+                )]);
+            let repo = dirs.tests().join("repo");
+            let provider = repo.join(".agents/skills");
+            let linked_directory = provider.join("linked");
+            let linked_file = linked_directory.join("SKILL.md");
+            std::os::unix::fs::symlink(dirs.tests().join("target"), &linked_directory).unwrap();
+
+            App::test((), |mut app| async move {
+                app.add_singleton_model(|_| DetectedRepositories::default());
+                let model_handle = app.add_singleton_model(RepoMetadataModel::new);
+                model_handle.update(&mut app, |model, ctx| {
+                    let key = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+                    let mut results =
+                        project_standing_results([
+                            StandardizedPath::try_from_local(&linked_file).unwrap()
+                        ]);
+                    results.insert_project_skill(StandingQueryContent::directory(
+                        StandardizedPath::try_from_local(&provider).unwrap(),
+                    ));
+                    model.insert_test_standing_results(key, results, ctx);
+                });
+
+                model_handle.read(&app, |model, ctx| {
+                    let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
+                    assert_eq!(
+                        find_project_skill_files_in_tree(&repo_id, model, ctx),
+                        vec![LocalOrRemotePath::Local(linked_file)]
+                    );
+                });
+            });
+        },
+    );
+}
 #[test]
 fn find_skill_files_in_tree_includes_ignored_skill_files() {
     VirtualFS::test("find_skills_ignored", |dirs, mut vfs| {

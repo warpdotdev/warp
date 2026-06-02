@@ -142,6 +142,22 @@ impl StandingQueryResults {
         }
     }
 
+    pub(crate) fn record_symlinked_project_skill_directory(
+        &mut self,
+        path: &Path,
+        definitions: &StandingQueryDefinitions,
+    ) {
+        if !definitions.is_direct_project_skill_provider_child(path) {
+            return;
+        }
+
+        let skill_file = path.join("SKILL.md");
+        if skill_file.is_file() {
+            self.project_skills.insert(StandingQueryContent::file(
+                StandardizedPath::from_local_absolute_unchecked(&skill_file),
+            ));
+        }
+    }
     pub fn insert_project_skill(&mut self, content: StandingQueryContent) {
         self.project_skills.insert(content);
     }

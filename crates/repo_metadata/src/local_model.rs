@@ -786,6 +786,10 @@ impl LocalRepoMetadataModel {
                             path_to_add,
                             standing_query_definitions,
                         );
+                        standing_results.record_symlinked_project_skill_directory(
+                            path_to_add,
+                            standing_query_definitions,
+                        );
                     }
                     Err(e) => {
                         log::warn!("Failed to build subtree for directory {path_to_add:?}: {e:?}");

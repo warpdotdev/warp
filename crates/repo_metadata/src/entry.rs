@@ -119,6 +119,9 @@ impl Entry {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_symlink() && path.is_dir() {
+                state
+                    .results
+                    .record_symlinked_project_skill_directory(&path, state.definitions);
                 continue;
             }
             let path = if path.is_symlink() {
@@ -391,6 +394,12 @@ impl Entry {
                         // since canonicalization would point at the real file.
                         let canonical_path = if entry_path.is_symlink() {
                             if entry_path.is_dir() {
+                                if let Some(state) = standing_queries.as_deref_mut() {
+                                    state.results.record_symlinked_project_skill_directory(
+                                        &entry_path,
+                                        state.definitions,
+                                    );
+                                }
                                 None
                             } else {
                                 Some(entry_path)

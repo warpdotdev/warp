@@ -54,11 +54,14 @@ pub(super) fn find_project_skill_files_in_tree(
         }
     }
 
-    skill_files.extend(
+    for symlinked_skill_file in
         find_symlinked_skill_files_in_local_provider_directories(local_provider_directories)
-            .into_iter()
-            .map(LocalOrRemotePath::Local),
-    );
+    {
+        let symlinked_skill_file = LocalOrRemotePath::Local(symlinked_skill_file);
+        if !skill_files.contains(&symlinked_skill_file) {
+            skill_files.push(symlinked_skill_file);
+        }
+    }
     skill_files
 }
 
