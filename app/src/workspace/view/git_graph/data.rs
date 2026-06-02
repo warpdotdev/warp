@@ -222,15 +222,49 @@ pub(crate) async fn load_commit_graph(
     Ok(parse_commit_log(&stdout))
 }
 
+/// How long the manual-refresh `git fetch` may run before we give up. A private
+/// repo whose remote is unreachable (e.g. no VPN) would otherwise hang the fetch
+/// on the TCP connect indefinitely; after this the future is dropped — which
+/// kills the git child via `kill_on_drop` — and the caller falls back to a local
+/// reload while surfacing a "couldn't reach remote" banner.
+#[cfg(not(target_family = "wasm"))]
+const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Fetches from the configured remotes and prunes deleted remote-tracking refs
 /// (`git fetch --prune`). Used by the manual refresh button so the graph picks
 /// up new remote commits and drops branches that were deleted on the remote.
-/// Callers treat failure as fail-soft: a repo with no remote, an offline
-/// machine, or an auth failure must not block the local reload that follows.
+///
+/// A repo with no remote configured returns `Ok` (nothing to fetch is not a
+/// failure). A genuine fetch failure — unreachable remote, auth rejection, or
+/// the [`FETCH_TIMEOUT`] elapsing — returns `Err`; callers treat that as
+/// fail-soft (still reload the local graph) but surface it to the user.
 #[cfg(not(target_family = "wasm"))]
 pub(crate) async fn fetch_remotes(repo_root: &Path) -> Result<()> {
-    warp_util::git::run_git_command(repo_root, &["fetch", "--prune"]).await?;
-    Ok(())
+    use futures::future::Either;
+    use warpui::r#async::Timer;
+
+    // A repo with no remote has nothing to fetch — don't run `git fetch` (which
+    // would error) so we never surface a spurious "couldn't reach remote" banner
+    // on a purely local repo.
+    let remotes = warp_util::git::run_git_command(repo_root, &["remote"])
+        .await
+        .unwrap_or_default();
+    if remotes.trim().is_empty() {
+        return Ok(());
+    }
+
+    // Bound the fetch so an unreachable remote can't hang the refresh forever.
+    let fetch = warp_util::git::run_git_command(repo_root, &["fetch", "--prune"]);
+    let timeout = Timer::after(FETCH_TIMEOUT);
+    futures::pin_mut!(fetch);
+    futures::pin_mut!(timeout);
+    match futures::future::select(fetch, timeout).await {
+        Either::Left((result, _)) => result.map(|_| ()),
+        Either::Right(_) => Err(anyhow::anyhow!(
+            "git fetch timed out after {}s",
+            FETCH_TIMEOUT.as_secs()
+        )),
+    }
 }
 
 /// A branch ref usable for filtering the graph.

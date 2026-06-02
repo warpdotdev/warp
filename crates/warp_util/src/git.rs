@@ -33,6 +33,12 @@ pub async fn run_git_command_with_env(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("GIT_OPTIONAL_LOCKS", "0")
+        // Warp's git commands run headless — there is no visible terminal for
+        // the user to type credentials into. Without this, an auth-requiring
+        // remote operation (e.g. `fetch` on a private repo with no cached
+        // credentials) blocks forever waiting on a prompt the user never sees.
+        // `0` makes git fail fast with an error instead of hanging.
+        .env("GIT_TERMINAL_PROMPT", "0")
         .kill_on_drop(true);
     if let Some(path_env) = path_env {
         cmd.env("PATH", path_env);

@@ -332,7 +332,8 @@ pub(crate) struct GitGraphView {
     /// True while a write op is running (reentrancy guard: blocks a second op and
     /// dims the panel).
     op_running: bool,
-    /// Last write-op error, shown in a dismissable banner at the top of the panel.
+    /// Last git error (write op, or a failed refresh fetch), shown in a
+    /// dismissable banner at the top of the panel.
     op_error: Option<String>,
     /// Mouse state of the op-error banner's dismiss button.
     op_error_dismiss_mouse_state: MouseStateHandle,
@@ -556,16 +557,27 @@ impl GitGraphView {
         #[cfg(not(target_family = "wasm"))]
         if let Some(repo) = self.current_repo_path() {
             self.state = LoadState::Loading;
+            // Clear any stale fetch error so a previously-failed refresh doesn't
+            // keep showing the banner once a later fetch reaches the remote.
+            self.op_error = None;
             ctx.notify();
             let expected = repo.clone();
             ctx.spawn(
                 async move { super::data::fetch_remotes(&repo).await },
-                move |view, _result, ctx| {
-                    // Fetch result intentionally ignored (fail-soft). Only skip
-                    // the reload if the user switched repos while fetching.
-                    if view.current_repo_path().as_deref() == Some(expected.as_path()) {
-                        view.discover(false, ctx);
+                move |view, result, ctx| {
+                    // Ignore the result if the user switched repos mid-fetch.
+                    if view.current_repo_path().as_deref() != Some(expected.as_path()) {
+                        return;
                     }
+                    // Fail-soft: a failed fetch (unreachable remote / auth /
+                    // timeout) still reloads the local graph, but we surface a
+                    // banner so the user knows the remote wasn't reached rather
+                    // than silently showing stale data.
+                    if result.is_err() {
+                        view.op_error =
+                            Some("Couldn't reach remote — showing local graph.".to_string());
+                    }
+                    view.discover(false, ctx);
                 },
             );
             return;
