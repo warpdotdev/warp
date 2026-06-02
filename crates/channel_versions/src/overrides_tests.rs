@@ -1,14 +1,13 @@
 use chrono::{DateTime, Utc};
 
-use crate::{ChannelVersion, ChannelVersions};
-
 use super::*;
+use crate::{ChannelVersion, ChannelVersions};
 
 #[test]
 fn test_only_first_override_is_applied() {
     #[cfg(target_os = "macos")]
     let predicate = OverridePredicate::TargetOS(TargetOS::MacOS);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     let predicate = OverridePredicate::TargetOS(TargetOS::Linux);
     #[cfg(target_os = "windows")]
     let predicate = OverridePredicate::TargetOS(TargetOS::Windows);
@@ -130,7 +129,7 @@ fn test_unknown_target_is_ignored() {
 fn test_cli_version_override_is_applied() {
     #[cfg(target_os = "macos")]
     let predicate = OverridePredicate::TargetOS(TargetOS::MacOS);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     let predicate = OverridePredicate::TargetOS(TargetOS::Linux);
     #[cfg(target_os = "windows")]
     let predicate = OverridePredicate::TargetOS(TargetOS::Windows);
@@ -174,7 +173,7 @@ fn test_cli_version_override_is_applied() {
 fn test_cli_version_preserved_when_override_omits_it() {
     #[cfg(target_os = "macos")]
     let predicate = OverridePredicate::TargetOS(TargetOS::MacOS);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     let predicate = OverridePredicate::TargetOS(TargetOS::Linux);
     #[cfg(target_os = "windows")]
     let predicate = OverridePredicate::TargetOS(TargetOS::Windows);

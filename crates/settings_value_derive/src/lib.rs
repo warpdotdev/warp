@@ -310,7 +310,7 @@ fn derive_named_struct(
             }
         } else if field_has_default {
             // Field has #[serde(default)]: same semantics — default when
-            // absent, fail when present but unparseable.
+            // absent, fail when present but unparsable.
             quote! {
                 #ident: match obj.get(#key) {
                     Some(v) => <#ty as ::settings_value::SettingsValue>::from_file_value(v)?,

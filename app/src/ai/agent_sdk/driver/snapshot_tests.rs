@@ -86,6 +86,10 @@ impl HarnessSupportClient for TestClient {
         unimplemented!("not used by upload_snapshot_from_declarations_file")
     }
 
+    async fn fetch_transcript(&self) -> Result<bytes::Bytes> {
+        unimplemented!("not used by upload_snapshot_from_declarations_file")
+    }
+
     async fn get_block_snapshot_upload_target(
         &self,
         _conversation_id: &AIConversationId,
@@ -112,6 +116,18 @@ impl HarnessSupportClient for TestClient {
         unimplemented!("not used by upload_snapshot_from_declarations_file")
     }
 
+    async fn report_clean_shutdown(&self) -> Result<()> {
+        unimplemented!("not used by upload_snapshot_from_declarations_file")
+    }
+
+    async fn report_error_shutdown(
+        &self,
+        _error_category: String,
+        _error_message: String,
+    ) -> Result<()> {
+        unimplemented!("not used by upload_snapshot_from_declarations_file")
+    }
+
     async fn get_snapshot_upload_targets(
         &self,
         request: &SnapshotUploadRequest,
@@ -131,15 +147,12 @@ impl HarnessSupportClient for TestClient {
                 url: format!("{}/upload/{}", self.server_base_url, f.filename),
                 method: "PUT".to_string(),
                 headers: HashMap::new(),
+                fields: Vec::new(),
             })
             .collect();
         let keep = targets.len().saturating_sub(self.drop_trailing_targets);
         targets.truncate(keep);
         Ok(targets)
-    }
-
-    async fn fetch_transcript(&self) -> Result<bytes::Bytes> {
-        unimplemented!("not used by upload_snapshot_from_declarations_file")
     }
 
     fn http_client(&self) -> &http_client::Client {
@@ -248,7 +261,6 @@ fn run(
         .block_on(upload_snapshot_from_declarations_file(
             &declarations_path,
             client,
-            &fake_task_id(),
         ))
         .expect("pipeline returned None");
     let summary = SnapshotSummary::from_entries(&outcome.entries, outcome.manifest_uploaded);
@@ -276,7 +288,7 @@ fn parse_declarations_ignores_blank_lines() {
         "{\"version\":1,\"kind\":\"file\",\"path\":\"/abs/file.txt\"}\n",
         "\n",
     );
-    let entries = parse_declarations(contents, &fake_task_id());
+    let entries = parse_declarations(contents);
     assert_eq!(
         entries,
         vec![
@@ -302,7 +314,7 @@ fn parse_declarations_skips_malformed_lines_without_aborting() {
         "{\"version\":1,\"kind\":\"file\"}\n",
         "{\"version\":1,\"kind\":\"file\",\"path\":\"/abs/also-good\",\"extra\":true}\n",
     );
-    let entries = parse_declarations(contents, &fake_task_id());
+    let entries = parse_declarations(contents);
     assert_eq!(
         entries,
         vec![
@@ -325,7 +337,7 @@ fn parse_declarations_skips_missing_or_unsupported_versions() {
         "{\"version\":2,\"kind\":\"repo\",\"path\":\"/abs/unsupported-version\"}\n",
         "{\"version\":1,\"kind\":\"file\",\"path\":\"/abs/good\"}\n",
     );
-    let entries = parse_declarations(contents, &fake_task_id());
+    let entries = parse_declarations(contents);
     assert_eq!(
         entries,
         vec![DeclarationEntry {
@@ -342,7 +354,7 @@ fn parse_declarations_tolerates_crlf_line_endings() {
         "{\"version\":1,\"kind\":\"repo\",\"path\":\"/abs/good\"}\r\n",
         "{\"version\":1,\"kind\":\"file\",\"path\":\"/abs/also-good\"}\r\n",
     );
-    let entries = parse_declarations(contents, &fake_task_id());
+    let entries = parse_declarations(contents);
     assert_eq!(
         entries,
         vec![
@@ -365,7 +377,7 @@ fn parse_declarations_skips_lines_with_empty_path() {
         "{\"version\":1,\"kind\":\"file\",\"path\":\"   \"}\n",
         "{\"version\":1,\"kind\":\"repo\",\"path\":\"/abs/still-good\"}\n",
     );
-    let entries = parse_declarations(contents, &fake_task_id());
+    let entries = parse_declarations(contents);
     assert_eq!(
         entries,
         vec![DeclarationEntry {
@@ -382,7 +394,7 @@ fn parse_declarations_deduplicates_kind_path_pairs() {
         "{\"version\":1,\"kind\":\"repo\",\"path\":\"/abs/repo\"}\n",
         "{\"version\":1,\"kind\":\"file\",\"path\":\"/abs/repo\"}\n",
     );
-    let entries = parse_declarations(contents, &fake_task_id());
+    let entries = parse_declarations(contents);
     assert_eq!(
         entries,
         vec![
@@ -406,11 +418,7 @@ fn upload_skipped_when_declarations_file_missing() {
     let client = TestClient::new(server.url());
     let outcome = Runtime::new()
         .unwrap()
-        .block_on(upload_snapshot_from_declarations_file(
-            &missing,
-            client,
-            &fake_task_id(),
-        ));
+        .block_on(upload_snapshot_from_declarations_file(&missing, client));
     assert!(
         outcome.is_none(),
         "missing declarations file should skip the upload"
@@ -426,11 +434,7 @@ fn upload_skipped_when_declarations_file_empty() {
     let client = TestClient::new(server.url());
     let outcome = Runtime::new()
         .unwrap()
-        .block_on(upload_snapshot_from_declarations_file(
-            &decl,
-            client,
-            &fake_task_id(),
-        ));
+        .block_on(upload_snapshot_from_declarations_file(&decl, client));
     assert!(outcome.is_none(), "empty declarations file should skip");
 }
 
@@ -447,11 +451,7 @@ fn upload_skipped_when_declarations_file_has_no_valid_jsonl_entries() {
     let client = TestClient::new(server.url());
     let outcome = Runtime::new()
         .unwrap()
-        .block_on(upload_snapshot_from_declarations_file(
-            &decl,
-            client,
-            &fake_task_id(),
-        ));
+        .block_on(upload_snapshot_from_declarations_file(&decl, client));
     assert!(
         outcome.is_none(),
         "declarations file with no valid entries should skip"
@@ -631,10 +631,12 @@ fn e2e_gather_failed_entry_captured_in_manifest() {
 #[test]
 fn e2e_read_failed_for_missing_file_continues_pipeline() {
     // Point a `file` entry at a path that doesn't exist → read_failed, with a clean repo also
-    // included so we verify the pipeline didn't abort after the read failure.
+    // included so we verify the pipeline didn't abort after the read failure. Keep the missing
+    // file outside the repo so the repo-overlap filter does not strip it before gather.
     let tempdir = snaptest_tempdir();
     init_git_repo(tempdir.path(), false);
-    let missing_file = tempdir.path().join("does-not-exist.txt");
+    let missing_dir = snaptest_tempdir();
+    let missing_file = missing_dir.path().join("does-not-exist.txt");
     let decl_dir = snaptest_tempdir();
 
     let mut server = Server::new();
@@ -978,7 +980,6 @@ fn e2e_get_snapshot_upload_targets_failure_returns_none() {
         .block_on(upload_snapshot_from_declarations_file(
             &declarations_path,
             client,
-            &fake_task_id(),
         ));
     assert!(
         outcome.is_none(),
@@ -1022,7 +1023,6 @@ fn e2e_short_response_leaves_trailing_file_without_target() {
         .block_on(upload_snapshot_from_declarations_file(
             &declarations_path,
             client,
-            &fake_task_id(),
         ))
         .expect("pipeline returned None");
     let summary = SnapshotSummary::from_entries(&outcome.entries, outcome.manifest_uploaded);
@@ -1181,4 +1181,285 @@ fn e2e_per_run_cap_drops_excess_blobs_as_skipped() {
         );
     }
     upload_mock.assert();
+}
+
+// ------------------------------------------------------------------------------------------------
+// REMOTE-1465: repo-overlap dedup + DeclarationsWriterHandle.
+// ------------------------------------------------------------------------------------------------
+
+/// Build a `DeclarationEntry` without exposing the private type to call sites.
+fn repo_entry(path: &str) -> DeclarationEntry {
+    DeclarationEntry {
+        kind: EntryKind::Repo,
+        path: path.to_string(),
+    }
+}
+
+fn file_entry(path: &str) -> DeclarationEntry {
+    DeclarationEntry {
+        kind: EntryKind::File,
+        path: path.to_string(),
+    }
+}
+
+#[test]
+fn drop_files_covered_by_repos_keeps_everything_when_no_repos_declared() {
+    let entries = vec![
+        file_entry("/abs/outside.txt"),
+        file_entry("/other/also-outside.txt"),
+    ];
+    let after = drop_files_covered_by_repos(entries.clone());
+    assert_eq!(after, entries);
+}
+
+#[test]
+fn drop_files_covered_by_repos_drops_file_inside_repo_keeps_file_outside() {
+    let entries = vec![
+        repo_entry("/workspace/my-repo"),
+        file_entry("/workspace/my-repo/src/foo.rs"),
+        file_entry("/tmp/outside.txt"),
+    ];
+    let after = drop_files_covered_by_repos(entries);
+    assert_eq!(
+        after,
+        vec![
+            repo_entry("/workspace/my-repo"),
+            file_entry("/tmp/outside.txt"),
+        ]
+    );
+}
+
+#[test]
+fn drop_files_covered_by_repos_handles_nested_repo_paths() {
+    // A file under /a/b/sub should be filtered by either /a or /a/b/sub.
+    let entries = vec![
+        repo_entry("/a"),
+        repo_entry("/a/b/sub"),
+        file_entry("/a/b/sub/file.txt"),
+        file_entry("/a/top.txt"),
+        file_entry("/unrelated.txt"),
+    ];
+    let after = drop_files_covered_by_repos(entries);
+    assert_eq!(
+        after,
+        vec![
+            repo_entry("/a"),
+            repo_entry("/a/b/sub"),
+            file_entry("/unrelated.txt"),
+        ]
+    );
+}
+
+/// Parse the declarations file written by `DeclarationsWriterHandle` into the paths we care
+/// about for assertions, ignoring any lines the helper tests weren't asked to produce.
+fn parsed_file_paths(path: &Path) -> Vec<String> {
+    let contents = fs::read_to_string(path).unwrap_or_default();
+    let entries = parse_declarations(&contents);
+    entries
+        .into_iter()
+        .filter(|e| e.kind == EntryKind::File)
+        .map(|e| e.path)
+        .collect()
+}
+
+#[test]
+fn declarations_writer_appends_unique_absolute_paths_once() {
+    let tempdir = snaptest_tempdir();
+    let workspace = tempdir.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let decl_path = tempdir.path().join("declarations.jsonl");
+    let task_id = fake_task_id();
+
+    let rt = Runtime::new().unwrap();
+    rt.block_on(async {
+        let handle =
+            DeclarationsWriterHandle::new_at_path(decl_path.clone(), workspace.clone(), task_id);
+        let path_one = workspace.join("one.txt");
+        let path_two = workspace.join("two.txt");
+        handle.append(vec![
+            path_one.to_string_lossy().into_owned(),
+            path_two.to_string_lossy().into_owned(),
+            // Duplicate: should still only produce one entry per unique path.
+            path_one.to_string_lossy().into_owned(),
+        ]);
+        handle.flush().await;
+        // A second batch that re-declares path_one should also be a no-op.
+        handle.append(vec![path_one.to_string_lossy().into_owned()]);
+        handle.flush().await;
+    });
+
+    let paths = parsed_file_paths(&decl_path);
+    assert_eq!(
+        paths,
+        vec![
+            workspace.join("one.txt").to_string_lossy().into_owned(),
+            workspace.join("two.txt").to_string_lossy().into_owned(),
+        ]
+    );
+}
+
+#[test]
+fn declarations_writer_resolves_relative_paths_against_working_dir() {
+    let tempdir = snaptest_tempdir();
+    let workspace = tempdir.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let decl_path = tempdir.path().join("declarations.jsonl");
+    let task_id = fake_task_id();
+
+    let rt = Runtime::new().unwrap();
+    rt.block_on(async {
+        let handle =
+            DeclarationsWriterHandle::new_at_path(decl_path.clone(), workspace.clone(), task_id);
+        handle.append(vec!["notes/relative.txt".to_string()]);
+        handle.flush().await;
+    });
+
+    let paths = parsed_file_paths(&decl_path);
+    assert_eq!(
+        paths,
+        vec![workspace
+            .join("notes/relative.txt")
+            .to_string_lossy()
+            .into_owned()]
+    );
+}
+
+#[test]
+fn declarations_writer_continues_after_per_path_write_failures() {
+    // Pre-create a directory at the declarations file path so the first append's open call
+    // fails. Once we remove the directory, a subsequent append must succeed, proving the
+    // writer task absorbed the failure and kept servicing commands.
+    let tempdir = snaptest_tempdir();
+    let workspace = tempdir.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let decl_path = tempdir.path().join("declarations.jsonl");
+    fs::create_dir(&decl_path).unwrap();
+    let task_id = fake_task_id();
+
+    let rt = Runtime::new().unwrap();
+    rt.block_on(async {
+        let handle =
+            DeclarationsWriterHandle::new_at_path(decl_path.clone(), workspace.clone(), task_id);
+        handle.append(vec![workspace
+            .join("first.txt")
+            .to_string_lossy()
+            .into_owned()]);
+        handle.flush().await;
+        // Replace the staged directory so the next append's open call can succeed.
+        fs::remove_dir(&decl_path).unwrap();
+        handle.append(vec![workspace
+            .join("second.txt")
+            .to_string_lossy()
+            .into_owned()]);
+        handle.flush().await;
+    });
+
+    let paths = parsed_file_paths(&decl_path);
+    assert_eq!(
+        paths,
+        vec![workspace.join("second.txt").to_string_lossy().into_owned()],
+        "writer task should absorb the first failure and process the second append"
+    );
+}
+
+#[test]
+fn declarations_writer_preempts_paths_inside_existing_repo() {
+    let tempdir = snaptest_tempdir();
+    // Simulate an existing repo by creating the `.git` directory the ancestor walker checks.
+    let repo = tempdir.path().join("existing-repo");
+    fs::create_dir_all(repo.join(".git")).unwrap();
+    let inside = repo.join("inside.txt");
+    let outside = tempdir.path().join("outside.txt");
+    let decl_path = tempdir.path().join("declarations.jsonl");
+    let task_id = fake_task_id();
+
+    let rt = Runtime::new().unwrap();
+    rt.block_on(async {
+        let handle = DeclarationsWriterHandle::new_at_path(
+            decl_path.clone(),
+            tempdir.path().to_path_buf(),
+            task_id,
+        );
+        handle.append(vec![
+            inside.to_string_lossy().into_owned(),
+            outside.to_string_lossy().into_owned(),
+        ]);
+        handle.flush().await;
+    });
+
+    let paths = parsed_file_paths(&decl_path);
+    assert_eq!(paths, vec![outside.to_string_lossy().into_owned()]);
+}
+
+#[test]
+fn e2e_repo_plus_inside_and_outside_files_filters_overlap() {
+    // The writer-written declarations file feeds straight into the upload pipeline. Pair one
+    // `repo` with two `file` entries (one inside the repo, one outside). The gather-time
+    // overlap filter should drop the inside-repo file entry before upload so only the repo's
+    // patch + the outside-repo file + the manifest land on the server.
+    let repo_dir = snaptest_tempdir();
+    init_git_repo(repo_dir.path(), true);
+    let inside_file = repo_dir.path().join("new-untracked.txt");
+    fs::write(&inside_file, b"tracked-or-not, handled by the patch\n").unwrap();
+
+    let outside_dir = snaptest_tempdir();
+    let outside_file = outside_dir.path().join("standalone_log.txt");
+    fs::write(&outside_file, b"agent-produced log\n").unwrap();
+
+    let decl_dir = snaptest_tempdir();
+    let decl_path = decl_dir.path().join("snapshot-declarations.jsonl");
+    let contents = format!(
+        concat!(
+            "{{\"version\":1,\"kind\":\"repo\",\"path\":{repo:?}}}\n",
+            "{{\"version\":1,\"kind\":\"file\",\"path\":{inside:?}}}\n",
+            "{{\"version\":1,\"kind\":\"file\",\"path\":{outside:?}}}\n",
+        ),
+        repo = repo_dir.path().to_string_lossy(),
+        inside = inside_file.to_string_lossy(),
+        outside = outside_file.to_string_lossy(),
+    );
+    fs::write(&decl_path, contents).unwrap();
+
+    let mut server = Server::new();
+    let patch_mock = server
+        .mock("PUT", upload_path(r".+\.patch"))
+        .with_status(200)
+        .expect(1)
+        .create();
+    let file_mock = server
+        .mock("PUT", upload_path("standalone_log\\.txt"))
+        .with_status(200)
+        .expect(1)
+        .create();
+    let manifest_mock = server
+        .mock("PUT", upload_path("snapshot_state\\.json"))
+        .match_body(Matcher::PartialJson(serde_json::json!({
+            "files": [
+                {
+                    "path": outside_file.to_string_lossy(),
+                    "status": "uploaded",
+                    "uploaded": true,
+                }
+            ],
+        })))
+        .with_status(200)
+        .expect(1)
+        .create();
+
+    let client = TestClient::new(server.url());
+    let outcome = Runtime::new()
+        .unwrap()
+        .block_on(upload_snapshot_from_declarations_file(&decl_path, client))
+        .expect("pipeline returned None");
+    let summary = SnapshotSummary::from_entries(&outcome.entries, outcome.manifest_uploaded);
+
+    assert!(summary.all_uploaded(), "expected all uploads to succeed");
+    // repo patch + outside file + manifest = 3 uploaded entries total; the inside-repo file
+    // entry was filtered before gather so it never hits the entries list.
+    assert_eq!(summary.uploaded, 3);
+    assert_eq!(summary.total, 3);
+    assert!(outcome.manifest_uploaded);
+    patch_mock.assert();
+    file_mock.assert();
+    manifest_mock.assert();
 }

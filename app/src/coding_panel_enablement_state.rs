@@ -1,6 +1,11 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CodingPanelEnablementState {
     Enabled,
+    /// An SSH command has been detected at preexec time but the remote
+    /// session has not finished bootstrapping yet. The file tree should
+    /// show a loading state immediately to avoid flickering the stale
+    /// local tree.
+    PendingRemoteSession,
     /// The active session is on a remote host.
     ///
     /// `has_remote_server` is `true` when the session is registered with

@@ -123,6 +123,7 @@ pub enum AgentHarness {
     Oz,
     ClaudeCode,
     Gemini,
+    Codex,
     #[cynic(fallback)]
     Other(String),
 }
@@ -165,5 +166,6 @@ pub struct ConversationUsage {
 pub struct ConversationUsageMetadata {
     pub context_window_usage: f64,
     pub credits_spent: f64,
+    pub platform_credits_spent: f64,
     pub summarized: bool,
 }

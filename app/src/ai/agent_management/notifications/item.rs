@@ -42,12 +42,23 @@ impl NotificationFilter {
     }
 }
 
-/// Identifies the agent that produced a notification.
+/// Identifies the agent that produced a notification, including whether the run was
+/// ambient (cloud) or local. The `is_ambient` flag drives the cloud-lobe rendering in
+/// [`render_agent_avatar`].
 #[derive(Debug, Clone, Copy)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum NotificationSourceAgent {
-    Oz,
-    CLI(CLIAgent),
+    Oz { is_ambient: bool },
+    CLI { agent: CLIAgent, is_ambient: bool },
+}
+
+impl NotificationSourceAgent {
+    pub fn is_ambient(&self) -> bool {
+        match self {
+            NotificationSourceAgent::Oz { is_ambient }
+            | NotificationSourceAgent::CLI { is_ambient, .. } => *is_ambient,
+        }
+    }
 }
 
 /// Identifies the conversation or session a notification belongs to.

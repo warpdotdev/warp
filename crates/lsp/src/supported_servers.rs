@@ -1,4 +1,13 @@
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
 use std::sync::Arc;
+
+#[cfg(not(target_arch = "wasm32"))]
+use command::r#async::Command;
+use itertools::Itertools;
+use serde::{Deserialize, Serialize};
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 
 use crate::servers::clangd::ClangdCandidate;
 use crate::servers::go::GoPlsCandidate;
@@ -8,14 +17,6 @@ use crate::servers::typescript_language_server::TypeScriptLanguageServerCandidat
 #[cfg(not(target_arch = "wasm32"))]
 use crate::CommandBuilder;
 use crate::{LanguageId, LanguageServerCandidate};
-#[cfg(not(target_arch = "wasm32"))]
-use command::r#async::Command;
-use itertools::Itertools;
-use serde::{Deserialize, Serialize};
-#[cfg(not(target_arch = "wasm32"))]
-use std::path::PathBuf;
-use strum::IntoEnumIterator;
-use strum_macros::EnumIter;
 
 /// Configuration for a custom LSP binary installation.
 ///

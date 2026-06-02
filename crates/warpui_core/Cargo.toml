@@ -25,7 +25,7 @@ async-channel.workspace = true
 async-executor = "1.4.1"
 async-task.workspace = true
 async-fs.workspace = true
-bounded-vec-deque = "0.1"
+bounded-vec-deque.workspace = true
 bytes.workspace = true
 cfg-if.workspace = true
 chrono = "0.4"
@@ -94,7 +94,7 @@ ctrlc.workspace = true
 font-kit.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
-[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))'.dependencies]
 arboard = { workspace = true, features = ["image-data"] }
 
 [target.'cfg(target_family = "wasm")'.dependencies]

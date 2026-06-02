@@ -7,48 +7,42 @@ pub mod test;
 #[cfg(target_family = "wasm")]
 pub mod wasm;
 
+use std::any::Any;
+use std::collections::HashSet;
+use std::ops::Range;
+use std::path::Path;
+use std::rc::Rc;
+use std::sync::Arc;
+
+use anyhow::Result;
 pub use app::AppCallbacks;
+use async_task::Runnable;
 use derivative::Derivative;
 pub use file_picker::{
     FilePickerCallback, FilePickerConfiguration, FileType, SaveFilePickerCallback,
     SaveFilePickerConfiguration,
 };
+use lazy_static::lazy_static;
+use pathfinder_geometry::rect::{RectF, RectI};
+use pathfinder_geometry::vector::{Vector2F, Vector2I};
 use serde::{Deserialize, Serialize};
 use warp_util::path::ShellFamily;
 
-use crate::fonts::SubpixelAlignment;
+use crate::accessibility::AccessibilityContent;
+use crate::fonts::canvas::RasterFormat;
+use crate::fonts::{
+    FamilyId, FontId, GlyphId, Metrics, Properties, RasterizedGlyph, SubpixelAlignment,
+};
 use crate::keymap::Keystroke;
 use crate::modals::{AlertDialog, ModalId};
-use crate::notification::{NotificationSendError, RequestPermissionsOutcome};
-
+use crate::notification::{NotificationSendError, RequestPermissionsOutcome, UserNotification};
 use crate::rendering::{GPUPowerPreference, OnGPUDeviceSelected};
-use crate::text_layout::{ClipConfig, StyleAndFont, TextAlignment, TextFrame};
-use crate::{
-    accessibility::AccessibilityContent,
-    fonts::{
-        canvas::RasterFormat, FamilyId, FontId, GlyphId, Metrics, Properties, RasterizedGlyph,
-    },
-    notification::UserNotification,
-    text_layout::Line,
-    windowing::WindowCallbacks,
-    Scene, WindowId,
-};
+use crate::text_layout::{ClipConfig, Line, StyleAndFont, TextAlignment, TextFrame};
+use crate::windowing::WindowCallbacks;
 use crate::{
     geometry, rendering, AppContext, ApplicationBundleInfo, Clipboard, DisplayId, DisplayIdx,
-    OptionalPlatformWindow,
+    OptionalPlatformWindow, Scene, WindowId,
 };
-use anyhow::Result;
-use async_task::Runnable;
-use lazy_static::lazy_static;
-use pathfinder_geometry::vector::Vector2I;
-use pathfinder_geometry::{
-    rect::{RectF, RectI},
-    vector::Vector2F,
-};
-use std::any::Any;
-use std::collections::HashSet;
-use std::path::Path;
-use std::{ops::Range, rc::Rc, sync::Arc};
 
 #[cfg(not(target_family = "wasm"))]
 lazy_static! {
@@ -585,6 +579,13 @@ pub trait WindowManager {
     fn hide_window(&self, window_id: WindowId);
     fn set_window_bounds(&self, window_id: WindowId, bound: RectF);
 
+    /// Sets the per-window opacity, where `1.0` is fully opaque and `0.0` is fully
+    /// transparent. Unlike `hide_window`, this leaves the window in the window list
+    /// and does not change focus, key, or z-order. Useful for cheaply hiding a
+    /// window during a drag without triggering AppKit's `orderOut:` machinery.
+    /// Default is a no-op on platforms that don't support per-window alpha.
+    fn set_window_alpha(&self, _window_id: WindowId, _alpha: f32) {}
+
     /// Sets the background blur radius for all windows to the given `blur_radius_pixels` value.
     fn set_all_windows_background_blur_radius(&self, blur_radius_pixels: u8);
 
@@ -669,7 +670,7 @@ impl OperatingSystem {
         cfg_if::cfg_if! {
             if #[cfg(target_family = "wasm")] {
                 wasm::current_platform()
-            } else if #[cfg(target_os = "linux")] {
+            } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
                 OperatingSystem::Linux
             } else if #[cfg(target_os = "macos")] {
                 OperatingSystem::Mac

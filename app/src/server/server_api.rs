@@ -10,61 +10,57 @@ pub mod referral;
 pub mod team;
 pub mod workspace;
 
-use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::get_relevant_files::api::{GetRelevantFiles, GetRelevantFilesResponse};
-use crate::ai::predict::generate_ai_input_suggestions;
-use crate::ai::predict::generate_ai_input_suggestions::GenerateAIInputSuggestionsRequest;
-use crate::ai::predict::generate_am_query_suggestions;
-use crate::ai::predict::generate_am_query_suggestions::GenerateAMQuerySuggestionsRequest;
-use crate::ai::predict::predict_am_queries::{PredictAMQueriesRequest, PredictAMQueriesResponse};
-use crate::ai::voice::transcribe::{TranscribeRequest, TranscribeResponse};
-use crate::auth::auth_manager::AuthManager;
-use crate::auth::auth_state::AuthState;
-use crate::server::graphql::default_request_options;
-use crate::server::server_api::presigned_upload::HttpStatusError;
-use ai::AIClient;
-use auth::{AuthClient, AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT_ID_HEADER};
-use base64::prelude::BASE64_URL_SAFE;
-use base64::Engine;
-use block::BlockClient;
-use channel_versions::ChannelVersions;
-use futures::StreamExt;
-use object::ObjectClient;
-use prost::Message;
-use referral::ReferralsClient;
-use team::TeamClient;
-use url::Url;
-use warp_core::context_flag::ContextFlag;
-use warp_core::errors::{register_error, AnyhowErrorExt, ErrorExt};
-use warp_managed_secrets::client::ManagedSecretsClient;
-use warpui::{r#async::BoxFuture, ModelContext};
-use workspace::WorkspaceClient;
-
-use crate::server::telemetry::TelemetryApi;
-use crate::settings::PrivacySettingsSnapshot;
-use crate::settings_view;
-
-use crate::ChannelState;
-
-use ::http::header::CONTENT_LENGTH;
-use anyhow::{anyhow, Context, Result};
-use chrono::{DateTime, FixedOffset};
-use instant::Instant;
-use parking_lot::{Mutex, RwLock};
-use reqwest::StatusCode;
-use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use warp_core::telemetry::TelemetryEvent;
-use warpui::Entity;
-use warpui::SingletonEntity;
 
-use super::experiments::ServerExperiment;
-use super::experiments::ServerExperiments;
+use ::http::header::CONTENT_LENGTH;
+use ai::AIClient;
+use anyhow::{anyhow, Context, Result};
+use auth::{AuthClient, AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT_ID_HEADER};
+use base64::prelude::BASE64_URL_SAFE;
+use base64::Engine;
+use block::BlockClient;
+use channel_versions::ChannelVersions;
+use chrono::{DateTime, FixedOffset};
+use futures::StreamExt;
+use instant::Instant;
+use object::ObjectClient;
+use parking_lot::{Mutex, RwLock};
+use prost::Message;
+use referral::ReferralsClient;
+use reqwest::StatusCode;
+use serde::{Deserialize, Serialize};
+use team::TeamClient;
+use url::Url;
+use warp_core::context_flag::ContextFlag;
+use warp_core::errors::{register_error, AnyhowErrorExt, ErrorExt};
+use warp_core::telemetry::TelemetryEvent;
+use warp_managed_secrets::client::ManagedSecretsClient;
+use warpui::r#async::BoxFuture;
+use warpui::{Entity, ModelContext, SingletonEntity};
+use workspace::WorkspaceClient;
+
+use super::experiments::{ServerExperiment, ServerExperiments};
 use super::graphql::GraphQLError;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::get_relevant_files::api::{GetRelevantFiles, GetRelevantFilesResponse};
+use crate::ai::predict::generate_ai_input_suggestions::GenerateAIInputSuggestionsRequest;
+use crate::ai::predict::generate_am_query_suggestions::GenerateAMQuerySuggestionsRequest;
+use crate::ai::predict::predict_am_queries::{PredictAMQueriesRequest, PredictAMQueriesResponse};
+use crate::ai::predict::{generate_ai_input_suggestions, generate_am_query_suggestions};
+use crate::ai::voice::transcribe::{TranscribeRequest, TranscribeResponse};
+use crate::auth::auth_manager::AuthManager;
+use crate::auth::auth_state::AuthState;
+use crate::auth::UserUid;
+use crate::server::graphql::default_request_options;
+use crate::server::iap::{IapManager, IapState};
+use crate::server::server_api::presigned_upload::HttpStatusError;
+use crate::server::telemetry::TelemetryApi;
+use crate::settings::PrivacySettingsSnapshot;
+use crate::{settings_view, ChannelState};
 
 pub const FETCH_CHANNEL_VERSIONS_TIMEOUT: std::time::Duration = Duration::from_secs(60);
 
@@ -153,10 +149,18 @@ pub enum DeserializationError {
     Transport(reqwest::Error),
 }
 
+#[derive(Deserialize, Debug)]
+struct OutOfCreditsResponse {
+    #[serde(default, rename = "userDisplayMessage")]
+    user_display_message: Option<String>,
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum AIApiError {
     #[error("Request failed due to lack of AI quota.")]
-    QuotaLimit,
+    QuotaLimit {
+        user_display_message: Option<String>,
+    },
 
     #[error("Warp is currently overloaded. Please try again later.")]
     ServerOverloaded,
@@ -186,7 +190,12 @@ pub enum AIApiError {
 
 impl From<http_client::ResponseError> for AIApiError {
     fn from(err: http_client::ResponseError) -> Self {
-        Self::from_response_error(err.source, &err.headers)
+        let http_client::ResponseError {
+            source,
+            headers,
+            body,
+        } = err;
+        Self::from_response_error(source, &headers, body)
     }
 }
 
@@ -205,11 +214,15 @@ impl From<serde_json::Error> for AIApiError {
 impl AIApiError {
     /// Converts a reqwest error to an AIApiError, using response headers to distinguish
     /// between different types of 429 errors.
-    fn from_response_error(err: reqwest::Error, headers: &::http::HeaderMap) -> Self {
+    fn from_response_error(
+        err: reqwest::Error,
+        headers: &::http::HeaderMap,
+        body: Option<String>,
+    ) -> Self {
         // For HTTP 429 errors, check the X-Warp-Error-Code header to distinguish
         // between out-of-credits and server-overload.
         if err.status() == Some(http::StatusCode::TOO_MANY_REQUESTS) {
-            return Self::error_for_429(headers);
+            return Self::error_for_429(headers, body);
         }
 
         Self::from_transport_error(err)
@@ -245,13 +258,18 @@ impl AIApiError {
     }
 
     /// Returns the appropriate error for a 429 response by checking the X-Warp-Error-Code header.
-    fn error_for_429(headers: &::http::HeaderMap) -> Self {
+    fn error_for_429(headers: &::http::HeaderMap, body: Option<String>) -> Self {
         if headers
             .get(WARP_ERROR_CODE_HEADER)
             .and_then(|v| v.to_str().ok())
             == Some(WARP_ERROR_CODE_OUT_OF_CREDITS)
         {
-            AIApiError::QuotaLimit
+            let user_display_message = body
+                .and_then(|body| serde_json::from_str::<OutOfCreditsResponse>(&body).ok())
+                .and_then(|r| r.user_display_message);
+            AIApiError::QuotaLimit {
+                user_display_message,
+            }
         } else {
             AIApiError::ServerOverloaded
         }
@@ -263,8 +281,12 @@ impl AIApiError {
         match err {
             reqwest_eventsource::Error::InvalidStatusCode(
                 http::StatusCode::TOO_MANY_REQUESTS,
-                ref res,
-            ) => Self::error_for_429(res.headers()),
+                res,
+            ) => {
+                let headers = res.headers().clone();
+                let body = res.text().await.ok();
+                Self::error_for_429(&headers, body)
+            }
             reqwest_eventsource::Error::InvalidStatusCode(status, res) => Self::ErrorStatus(
                 status,
                 res.text()
@@ -315,9 +337,9 @@ impl ErrorExt for AIApiError {
             AIApiError::Other(error) => error.is_actionable(),
             AIApiError::Stream { source, .. } => source.is_actionable(),
             AIApiError::ErrorStatus(_, _) => self.is_retryable(),
-            AIApiError::QuotaLimit | AIApiError::ServerOverloaded | AIApiError::NoContextFound => {
-                false
-            }
+            AIApiError::QuotaLimit { .. }
+            | AIApiError::ServerOverloaded
+            | AIApiError::NoContextFound => false,
         }
     }
 }
@@ -370,6 +392,10 @@ pub enum ServerApiEvent {
         #[cfg_attr(target_family = "wasm", allow(dead_code))]
         token: String,
     },
+    /// An IAP (Identity-Aware Proxy) challenge was received, indicating that
+    /// the cached IAP credentials are stale. The UI thread should trigger a
+    /// refresh via [`super::iap::IapManager::start_refresh`].
+    IapChallengeReceived,
 }
 
 impl fmt::Debug for ServerApiEvent {
@@ -382,6 +408,7 @@ impl fmt::Debug for ServerApiEvent {
                 .debug_struct("AccessTokenRefreshed")
                 .field("token", &"<redacted>")
                 .finish(),
+            Self::IapChallengeReceived => f.write_str("IapChallengeReceived"),
         }
     }
 }
@@ -406,6 +433,8 @@ pub struct ServerApi {
     ambient_agent_task_id: Arc<RwLock<Option<AmbientAgentTaskId>>>,
     /// The source of agent runs (e.g. CLI, GitHub Action). Set once at startup and immutable.
     agent_source: Option<ai::AgentSource>,
+    /// IAP credential cache for staging server access. [`None`] on production builds.
+    iap_state: Option<Arc<super::iap::IapState>>,
 
     #[cfg(feature = "agent_mode_evals")]
     eval_user_id: Option<i32>,
@@ -416,6 +445,27 @@ impl ServerApi {
         auth_state: Arc<AuthState>,
         event_sender: async_channel::Sender<ServerApiEvent>,
         agent_source: Option<ai::AgentSource>,
+        iap_state: Option<Arc<IapState>>,
+    ) -> Self {
+        let mut client = http_client::Client::new();
+        if let Some(state) = iap_state.as_ref() {
+            client.set_iap_token_provider(state.clone());
+        }
+        Self::new_with_parts(
+            Arc::new(client),
+            auth_state,
+            event_sender,
+            agent_source,
+            iap_state,
+        )
+    }
+
+    fn new_with_parts(
+        client: Arc<http_client::Client>,
+        auth_state: Arc<AuthState>,
+        event_sender: async_channel::Sender<ServerApiEvent>,
+        agent_source: Option<ai::AgentSource>,
+        iap_state: Option<Arc<IapState>>,
     ) -> Self {
         // We generate a random user ID for evals so we can run evals in parallel.
         #[cfg(feature = "agent_mode_evals")]
@@ -427,7 +477,7 @@ impl ServerApi {
         let oauth_client = Self::create_oauth_client();
 
         Self {
-            client: Arc::new(http_client::Client::new()),
+            client,
             auth_state,
             event_sender,
             telemetry_api: TelemetryApi::new(),
@@ -436,6 +486,7 @@ impl ServerApi {
             ambient_workload_token: Arc::new(Mutex::new(None)),
             ambient_agent_task_id: Arc::new(RwLock::new(None)),
             agent_source,
+            iap_state,
             #[cfg(feature = "agent_mode_evals")]
             eval_user_id,
         }
@@ -444,27 +495,119 @@ impl ServerApi {
     #[cfg(test)]
     fn new_for_test() -> Self {
         let (tx, _) = async_channel::unbounded();
+        let auth_state = Arc::new(AuthState::new_for_test());
+        let client = Arc::new(http_client::Client::new_for_test());
 
-        let oauth_client = Self::create_oauth_client();
+        Self::new_with_parts(client, auth_state, tx, None, None)
+    }
 
-        Self {
-            client: Arc::new(http_client::Client::new_for_test()),
-            auth_state: Arc::new(AuthState::new_for_test()),
-            event_sender: tx,
-            telemetry_api: TelemetryApi::new(),
-            last_server_time: Arc::new(Mutex::new(None)),
-            oauth_client,
-            ambient_workload_token: Arc::new(Mutex::new(None)),
-            ambient_agent_task_id: Arc::new(RwLock::new(None)),
-            agent_source: None,
-            #[cfg(feature = "agent_mode_evals")]
-            eval_user_id: None,
+    #[cfg(test)]
+    fn new_for_test_with_bearer_token(
+        bearer_token: Option<String>,
+        event_sender: async_channel::Sender<ServerApiEvent>,
+    ) -> Self {
+        let auth_state = Arc::new(AuthState::new_logged_out_for_test());
+        if let Some(bearer_token) = bearer_token {
+            auth_state.set_remote_server_bearer_token(bearer_token);
         }
+        Self::new_with_parts(
+            Arc::new(http_client::Client::new_for_test()),
+            auth_state,
+            event_sender,
+            None,
+            None,
+        )
+    }
+
+    pub fn allowed_to_refresh_token(&self) -> bool {
+        self.auth_state
+            .credentials()
+            .is_none_or(|credentials| !credentials.is_externally_managed())
+    }
+
+    fn access_token_ignoring_validity(&self) -> Option<String> {
+        self.auth_state.get_access_token_ignoring_validity()
+    }
+
+    pub(super) fn anonymous_id(&self) -> String {
+        self.auth_state.anonymous_id()
+    }
+
+    fn user_id(&self) -> Option<UserUid> {
+        self.auth_state.user_id()
     }
 
     /// Sets the ambient agent task ID to be sent with all subsequent requests.
     pub fn set_ambient_agent_task_id(&self, task_id: Option<AmbientAgentTaskId>) {
         *self.ambient_agent_task_id.write() = task_id;
+    }
+
+    /// Inspects a response for the IAP challenge header and emits an
+    /// `IapChallengeReceived` event if detected. Returns `true` if the
+    /// response was an IAP challenge.
+    ///
+    /// TODO(isaiah): implement retries on IAP challenge failures so the
+    /// triggering request transparently succeeds after the refresh
+    /// completes instead of bubbling up a one-off error to the caller.
+    fn check_for_iap_challenge(&self, response: &http_client::Response) -> bool {
+        if self.iap_state.is_none() {
+            return false;
+        }
+        if http_client::iap::is_iap_challenge(response.status(), response.headers()) {
+            log::warn!(
+                "Received IAP challenge (status {}); notifying IapManager",
+                response.status()
+            );
+            if let Err(err) = self
+                .event_sender
+                .try_send(ServerApiEvent::IapChallengeReceived)
+            {
+                log::warn!("Failed to enqueue IapChallengeReceived event: {err}");
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Wraps an eventsource stream so that any `InvalidStatusCode` error
+    /// carrying an IAP challenge header triggers an `IapChallengeReceived`
+    /// event. The original error is passed through unchanged — the
+    /// stream is not transparently reconnected after the refresh.
+    ///
+    /// TODO(isaiah): implement retries on IAP challenge failures so
+    /// streams transparently reconnect after the refresh completes.
+    fn wrap_eventsource_with_iap_detection(
+        &self,
+        stream: http_client::EventSourceStream,
+    ) -> http_client::EventSourceStream {
+        if self.iap_state.is_none() {
+            return stream;
+        }
+        let event_sender = self.event_sender.clone();
+        let wrapped = stream.map(move |event| {
+            if let Err(reqwest_eventsource::Error::InvalidStatusCode(status, ref response)) = event
+            {
+                if http_client::iap::is_iap_challenge(status, response.headers()) {
+                    log::warn!(
+                        "Received IAP challenge on eventsource (status {status}); notifying IapManager"
+                    );
+                    if let Err(err) = event_sender.try_send(ServerApiEvent::IapChallengeReceived) {
+                        log::warn!(
+                            "Failed to enqueue IapChallengeReceived event from eventsource: {err}"
+                        );
+                    }
+                }
+            }
+            event
+        });
+        cfg_if::cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                wrapped.boxed_local()
+            } else {
+                wrapped.boxed()
+            }
+        }
     }
 
     /// Returns ambient agent headers to attach to requests.
@@ -488,6 +631,16 @@ impl ServerApi {
             .chain(task_id.map(|id| (CLOUD_AGENT_ID_HEADER, id)))
             .chain(agent_source.map(|s| (AGENT_SOURCE_HEADER, s)))
             .collect())
+    }
+
+    async fn ambient_agent_headers_for_task(
+        &self,
+        task_id: &AmbientAgentTaskId,
+    ) -> Result<Vec<(&'static str, String)>> {
+        let mut headers = self.ambient_agent_headers().await?;
+        headers.retain(|(name, _)| *name != CLOUD_AGENT_ID_HEADER);
+        headers.push((CLOUD_AGENT_ID_HEADER, task_id.to_string()));
+        Ok(headers)
     }
 
     fn create_oauth_client() -> self::auth::OAuth2Client {
@@ -528,7 +681,7 @@ impl ServerApi {
         Box::pin(async move {
             let operation_name = operation.operation_name().map(Cow::into_owned);
             let auth_token = self
-                .get_or_refresh_access_token()
+                .access_token()
                 .await
                 .context("Failed to get access token for GraphQL request")?;
 
@@ -554,7 +707,16 @@ impl ServerApi {
                     let _ = event_sender.try_send(ServerApiEvent::StagingAccessBlocked);
                     anyhow::bail!(GraphQLError::StagingAccessBlocked)
                 }
-                Err(err) => anyhow::bail!(err),
+                Err(GraphQLError::IapChallengeBlocked) => {
+                    let _ = event_sender.try_send(ServerApiEvent::IapChallengeReceived);
+                    anyhow::bail!(GraphQLError::IapChallengeBlocked)
+                }
+                Err(err) => {
+                    if !self.allowed_to_refresh_token() && Self::is_graphql_auth_rejection(&err) {
+                        anyhow::bail!("server rejected authentication credentials");
+                    }
+                    anyhow::bail!(err)
+                }
             };
 
             if let Some(errors) = response.errors.as_ref() {
@@ -571,8 +733,12 @@ impl ServerApi {
                     .iter()
                     .any(|error| error.message.contains("User not in context: Not found"))
                 {
-                    log::error!("GraphQL request failed due to unauthenticated user");
-                    let _ = event_sender.try_send(ServerApiEvent::UserAccountDisabled);
+                    if self.allowed_to_refresh_token() {
+                        log::error!("GraphQL request failed due to unauthenticated user");
+                        let _ = event_sender.try_send(ServerApiEvent::UserAccountDisabled);
+                    } else {
+                        anyhow::bail!("server rejected authentication credentials");
+                    }
                 }
             }
 
@@ -603,6 +769,18 @@ impl ServerApi {
                 }
             })
         })
+    }
+
+    fn is_graphql_auth_rejection(err: &GraphQLError) -> bool {
+        match err {
+            GraphQLError::HttpError { status, .. } => {
+                *status == StatusCode::UNAUTHORIZED || *status == StatusCode::FORBIDDEN
+            }
+            GraphQLError::RequestError(_)
+            | GraphQLError::StagingAccessBlocked
+            | GraphQLError::IapChallengeBlocked
+            | GraphQLError::ResponseError(_) => false,
+        }
     }
 
     /// Sends a GET request to a public API endpoint.
@@ -650,6 +828,7 @@ impl ServerApi {
         if response.status().is_success() {
             Ok(response)
         } else {
+            self.check_for_iap_challenge(&response);
             // Put `HttpStatusError` in the error chain so shared retry classifiers
             // (`is_transient_http_error`) can distinguish transient 5xx / 408 / 429
             // from permanent 4xx without string-matching the Display output.
@@ -708,6 +887,75 @@ impl ServerApi {
             request = request.header(name, value);
         }
 
+        Ok(self.wrap_eventsource_with_iap_detection(request.eventsource()))
+    }
+
+    /// Opens an SSE stream against the ancestor-scoped endpoint that serves
+    /// every direct child of the supplied parent run. Mirrors
+    /// [`Self::stream_agent_events`] in transport, auth, and header handling.
+    pub async fn stream_agent_events_for_ancestor(
+        &self,
+        ancestor_run_id: &str,
+        since_sequence: i64,
+    ) -> Result<http_client::EventSourceStream> {
+        debug_assert!(
+            !ancestor_run_id.is_empty(),
+            "ancestor_run_id must not be empty"
+        );
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .context("Failed to get access token for SSE stream")?;
+
+        let url = format!(
+            "{}/api/v1/agent/events/stream?ancestor_run_id={}&since={since_sequence}",
+            ChannelState::rtc_http_url(),
+            urlencoding::encode(ancestor_run_id),
+        );
+
+        let mut request = self.client.get(&url);
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+
+        for (name, value) in self.ambient_agent_headers().await? {
+            request = request.header(name, value);
+        }
+
+        Ok(request.eventsource())
+    }
+
+    pub async fn stream_agent_events_for_task(
+        &self,
+        task_id: &AmbientAgentTaskId,
+        run_ids: &[String],
+        since_sequence: i64,
+    ) -> Result<http_client::EventSourceStream> {
+        debug_assert!(!run_ids.is_empty(), "run_ids must not be empty");
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .context("Failed to get access token for SSE stream")?;
+
+        let run_ids_param: String = run_ids
+            .iter()
+            .map(|id| format!("run_ids[]={}", urlencoding::encode(id)))
+            .collect::<Vec<_>>()
+            .join("&");
+        let url = format!(
+            "{}/api/v1/agent/events/stream?{run_ids_param}&since={since_sequence}",
+            ChannelState::rtc_http_url()
+        );
+
+        let mut request = self.client.get(&url);
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+
+        for (name, value) in self.ambient_agent_headers_for_task(task_id).await? {
+            request = request.header(name, value);
+        }
+
         Ok(request.eventsource())
     }
 
@@ -744,6 +992,7 @@ impl ServerApi {
         if response.status().is_success() {
             Ok(response)
         } else {
+            self.check_for_iap_challenge(&response);
             Err(Self::error_from_response(response).await)
         }
     }
@@ -774,7 +1023,13 @@ impl ServerApi {
             }
         }
         if status == StatusCode::TOO_MANY_REQUESTS && is_out_of_credits {
-            return AIApiError::QuotaLimit.into();
+            let user_display_message = serde_json::from_str::<OutOfCreditsResponse>(&response_text)
+                .ok()
+                .and_then(|r| r.user_display_message);
+            return AIApiError::QuotaLimit {
+                user_display_message,
+            }
+            .into();
         }
 
         // Try to deserialize error response as { "error": "message" }
@@ -802,6 +1057,57 @@ impl ServerApi {
             .with_context(|| format!("Failed to deserialize response from {url}"))
     }
 
+    /// Sends a PUT request to a public API endpoint and returns the raw response on success.
+    async fn put_public_api_response<B>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<http_client::Response>
+    where
+        B: Serialize,
+    {
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .context("Failed to get access token for API request")?;
+
+        let url = format!("{}/api/v1/{}", ChannelState::server_root_url(), path);
+
+        let mut request = self.client.put(&url).json(body);
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+
+        for (name, value) in self.ambient_agent_headers().await? {
+            request = request.header(name, value);
+        }
+
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("Failed to send API request to {url}"))?;
+
+        if response.status().is_success() {
+            Ok(response)
+        } else {
+            Err(Self::error_from_response(response).await)
+        }
+    }
+
+    /// Sends a PUT request to a public API endpoint.
+    async fn put_public_api<B, R>(&self, path: &str, body: &B) -> Result<R>
+    where
+        B: Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        let response = self.put_public_api_response(path, body).await?;
+        let url = response.url().clone();
+        response
+            .json::<R>()
+            .await
+            .with_context(|| format!("Failed to deserialize response from {url}"))
+    }
+
     /// Sends a POST request to a public API endpoint that returns no response body.
     async fn post_public_api_unit<B>(&self, path: &str, body: &B) -> Result<()>
     where
@@ -809,6 +1115,36 @@ impl ServerApi {
     {
         self.post_public_api_response(path, body).await?;
         Ok(())
+    }
+
+    /// Sends a DELETE request to a public API endpoint that returns no response body.
+    async fn delete_public_api_unit(&self, path: &str) -> Result<()> {
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .context("Failed to get access token for API request")?;
+
+        let url = format!("{}/api/v1/{}", ChannelState::server_root_url(), path);
+
+        let mut request = self.client.delete(&url);
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+
+        for (name, value) in self.ambient_agent_headers().await? {
+            request = request.header(name, value);
+        }
+
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("Failed to send API request to {url}"))?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(Self::error_from_response(response).await)
+        }
     }
 
     /// Sends a PATCH request to a public API endpoint that returns no response body.
@@ -860,7 +1196,7 @@ impl ServerApi {
                     // content-type is sufficient (elides the content-length requirement), but
                     // since this request has no body, it makes more sense to set content-length.
                     .header(CONTENT_LENGTH, 0)
-                    .header(EXPERIMENT_ID_HEADER, self.auth_state.anonymous_id());
+                    .header(EXPERIMENT_ID_HEADER, self.anonymous_id());
 
                 let response = request.send().await;
                 if let Err(err) = response {
@@ -881,8 +1217,8 @@ impl ServerApi {
         event: impl TelemetryEvent,
         settings_snapshot: PrivacySettingsSnapshot,
     ) -> Result<()> {
-        let user_id = self.auth_state.user_id();
-        let anonymous_id = self.auth_state.anonymous_id();
+        let user_id = self.user_id();
+        let anonymous_id = self.anonymous_id();
         self.telemetry_api
             .send_telemetry_event(user_id, anonymous_id, event, settings_snapshot)
             .await
@@ -946,7 +1282,8 @@ impl ServerApi {
         .json(request)
         .send()
         .await?
-        .error_for_status()?
+        .error_for_status_with_body()
+        .await?
         .json()
         .await?;
         Ok(response)
@@ -970,7 +1307,8 @@ impl ServerApi {
         .json(request)
         .send()
         .await?
-        .error_for_status()?
+        .error_for_status_with_body()
+        .await?
         .json()
         .await?;
 
@@ -1007,7 +1345,8 @@ impl ServerApi {
         .json(request)
         .send()
         .await?
-        .error_for_status()?
+        .error_for_status_with_body()
+        .await?
         .json()
         .await?;
         Ok(response)
@@ -1030,7 +1369,8 @@ impl ServerApi {
         .json(request)
         .send()
         .await?
-        .error_for_status()?
+        .error_for_status_with_body()
+        .await?
         .json()
         .await?;
         Ok(response)
@@ -1117,11 +1457,16 @@ impl ServerApi {
             }
         );
 
-        let ambient_workload_token = self
-            .get_or_create_ambient_workload_token()
-            .await
-            .map_err(Into::into)
-            .map_err(Arc::new)?;
+        let ambient_workload_token = if is_passive {
+            // Do not include cloud agent workload metadata in passive suggestion requests - they
+            // read from the main conversation, but cannot modify it.
+            None
+        } else {
+            self.get_or_create_ambient_workload_token()
+                .await
+                .map_err(Into::into)
+                .map_err(Arc::new)?
+        };
 
         let mut request_builder = self
             .client
@@ -1147,7 +1492,8 @@ impl ServerApi {
             }
         }
 
-        let output_stream = request.eventsource().filter_map(|event| async {
+        let raw_stream = self.wrap_eventsource_with_iap_detection(request.eventsource());
+        let output_stream = raw_stream.filter_map(|event| async {
             let result = match event {
                 Ok(reqwest_eventsource::Event::Message(message_event)) => {
                     match BASE64_URL_SAFE.decode(message_event.data.trim_matches('"')) {
@@ -1207,6 +1553,10 @@ impl ServerApi {
         log::info!("Sending server time request to {}", &time_endpoint);
         let res = self.client.get(&time_endpoint).send().await?;
 
+        if !res.status().is_success() {
+            self.check_for_iap_challenge(&res);
+        }
+
         match res.status() {
             StatusCode::OK => {
                 let time_response: TimeResponse = res.json().await?;
@@ -1260,7 +1610,7 @@ impl ServerApi {
             .client
             .get(url.as_str())
             .timeout(FETCH_CHANNEL_VERSIONS_TIMEOUT)
-            .header(EXPERIMENT_ID_HEADER, self.auth_state.anonymous_id());
+            .header(EXPERIMENT_ID_HEADER, self.anonymous_id());
 
         // Authorization for /client_version is optional. Attach authorization header if an access
         // token is present. First, try to get a valid token. If our cached one is expired, try to
@@ -1270,12 +1620,15 @@ impl ServerApi {
             .await
             .ok()
             .and_then(|token| token.bearer_token())
-            .or_else(|| self.auth_state.get_access_token_ignoring_validity());
+            .or_else(|| self.access_token_ignoring_validity());
         if let Some(token_str) = auth_token {
             request_builder = request_builder.bearer_auth(token_str);
         }
 
         let response = request_builder.send().await?;
+        if !response.status().is_success() {
+            self.check_for_iap_challenge(&response);
+        }
         let versions: ChannelVersions = response.json().await?;
         log::info!("Received channel versions from Warp server: {versions}");
         Ok(versions)
@@ -1290,13 +1643,17 @@ pub struct ServerApiProvider {
 
 impl ServerApiProvider {
     /// Constructs a new ServerApiProvider.
+    #[cfg_attr(target_family = "wasm", allow(unused_variables))]
     pub fn new(
         auth_state: Arc<AuthState>,
         agent_source: Option<ai::AgentSource>,
+        iap_state: Option<Arc<super::iap::IapState>>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let (event_sender, event_receiver) = async_channel::bounded(10);
-        let mut server_api = ServerApi::new(auth_state.clone(), event_sender, agent_source);
+
+        let mut server_api =
+            ServerApi::new(auth_state.clone(), event_sender, agent_source, iap_state);
 
         if ContextFlag::NetworkLogConsole.is_enabled() {
             super::network_logging::init(
@@ -1328,6 +1685,10 @@ impl ServerApiProvider {
                         AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
                             auth_manager.set_needs_reauth(true, ctx);
                         });
+                    }
+                    ServerApiEvent::IapChallengeReceived => {
+                        IapManager::handle(ctx)
+                            .update(ctx, |manager, ctx| manager.handle_challenge(ctx));
                     }
                     // Re-emit the event for subscribers.
                     // TODO: we probably want a different type for the event emitted to subscribers
@@ -1422,3 +1783,7 @@ impl Entity for ServerApiProvider {
 }
 
 impl SingletonEntity for ServerApiProvider {}
+
+#[cfg(test)]
+#[path = "server_api_tests.rs"]
+mod tests;

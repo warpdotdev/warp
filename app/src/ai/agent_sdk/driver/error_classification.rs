@@ -1,9 +1,9 @@
-use crate::ai::blocklist::task_status_sync_model::classify_renderable_error;
-use crate::server::server_api::ai::TaskStatusUpdate;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
 use super::terminal::ShareSessionError;
 use super::AgentDriverError;
+use crate::ai::blocklist::local_agent_task_sync_model::classify_renderable_error;
+use crate::server::server_api::ai::TaskStatusUpdate;
 
 /// Classify an `AgentDriverError` into a task state and a `TaskStatusUpdate`
 /// suitable for reporting via `update_agent_task`.
@@ -171,7 +171,7 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
         // --- Conversation errors ---
         // Delegate to classify_renderable_error for proper ERROR vs FAILED
         // distinction and PlatformErrorCode. This is a belt-and-suspenders
-        // fallback — TaskStatusSyncModel handles most conversation errors,
+        // fallback — LocalAgentTaskSyncModel handles most conversation errors,
         // but the driver catches them too if the conversation ends with an error.
         AgentDriverError::ConversationError { error } => {
             let (state, update) = classify_renderable_error(error);
@@ -248,7 +248,11 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::InternalError,
             ),
         ),
-        AgentDriverError::ConversationHarnessMismatch { conversation_id, expected, got } => (
+        AgentDriverError::ConversationHarnessMismatch {
+            conversation_id,
+            expected,
+            got,
+        } => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
                 format!(
@@ -258,7 +262,11 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
-        AgentDriverError::TaskHarnessMismatch { task_id, expected, got } => (
+        AgentDriverError::TaskHarnessMismatch {
+            task_id,
+            expected,
+            got,
+        } => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
                 format!(
@@ -268,7 +276,10 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
-        AgentDriverError::ConversationResumeStateMissing { harness, conversation_id } => (
+        AgentDriverError::ConversationResumeStateMissing {
+            harness,
+            conversation_id,
+        } => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
                 format!(
@@ -299,6 +310,41 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
+        AgentDriverError::HarnessAuthCheckFailed { harness, detail } => {
+            let message = format!(
+                "Harness '{harness}' authentication check failed: login credentials \
+                 are invalid or expired. Verify that the authentication secret \
+                 configured for this harness is correct."
+            );
+            log::error!("Preflight detail for {harness}: {detail}");
+            (
+                AgentTaskState::Failed,
+                TaskStatusUpdate::with_error_code(
+                    message,
+                    PlatformErrorCode::AuthenticationRequired,
+                ),
+            )
+        }
+        AgentDriverError::HarnessRuntimeFailureDetected {
+            harness,
+            pattern,
+            excerpt,
+        } => {
+            let message = format!(
+                "Harness '{harness}' could not make a successful API request. \
+                 Matched failure pattern '{pattern}' in harness output: \"{excerpt}\". \
+                 This usually means the API key is invalid, out of credits, or the \
+                 account is misconfigured."
+            );
+            log::error!("Runtime failure for {harness}: pattern={pattern}, excerpt={excerpt}");
+            (
+                AgentTaskState::Failed,
+                TaskStatusUpdate::with_error_code(
+                    message,
+                    PlatformErrorCode::AuthenticationRequired,
+                ),
+            )
+        }
     }
 }
 

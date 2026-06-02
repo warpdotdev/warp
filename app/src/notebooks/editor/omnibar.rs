@@ -2,40 +2,35 @@
 //! like formatting and changing block types.
 
 use itertools::Itertools;
-use pathfinder_geometry::{rect::RectF, vector::Vector2F};
-use warp_editor::{
-    content::text::{
-        BlockType as ContentBlockType, BufferBlockStyle, BufferTextStyle, TextStyles,
-        TextStylesWithMetadata,
-    },
-    model::RichTextEditorModel,
-    render::model::RenderState,
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::Vector2F;
+use warp_editor::content::text::{
+    BlockType as ContentBlockType, BufferBlockStyle, BufferTextStyle, TextStyles,
+    TextStylesWithMetadata,
 };
+use warp_editor::model::RichTextEditorModel;
+use warp_editor::render::model::RenderState;
+use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
+use warpui::elements::{
+    AnchorPair, Border, ConstrainedBox, Container, CornerRadius, DropShadow, Flex, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, OffsetType, ParentElement, Point,
+    PositionedElementOffsetBounds, PositioningAxis, Radius, Rect, XAxisAnchor, YAxisAnchor,
+};
+use warpui::presenter::ChildView;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole},
-    elements::{
-        AnchorPair, Border, ConstrainedBox, Container, CornerRadius, DropShadow, Flex,
-        MainAxisSize, MouseStateHandle, OffsetPositioning, OffsetType, ParentElement, Point,
-        PositionedElementOffsetBounds, PositioningAxis, Radius, Rect, XAxisAnchor, YAxisAnchor,
-    },
-    presenter::ChildView,
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
     AppContext, Element, Entity, ModelHandle, SingletonEntity, SizeConstraint, TypedActionView,
     View, ViewContext, ViewHandle,
 };
 
-use crate::{
-    appearance::Appearance,
-    menu::MenuVariant,
-    ui_components::{buttons::icon_button, icons::Icon},
-    view_components::{CompactDropdown, CompactDropdownEvent, CompactDropdownItem},
-};
-
-use super::{
-    model::{NotebooksEditorModel, RichTextEditorModelEvent},
-    view::EditorViewAction,
-    BlockType,
-};
+use super::model::{NotebooksEditorModel, RichTextEditorModelEvent};
+use super::view::EditorViewAction;
+use super::BlockType;
+use crate::appearance::Appearance;
+use crate::menu::MenuVariant;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::view_components::{CompactDropdown, CompactDropdownEvent, CompactDropdownItem};
 
 const OMNIBAR_HEIGHT: f32 = 32.;
 const OMNIBAR_PADDING: f32 = 4.;
@@ -377,7 +372,7 @@ impl View for Omnibar {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum OmnibarAction {
     /// Toggle bold styling on the selected text.
     BoldSelection,

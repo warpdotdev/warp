@@ -1,24 +1,18 @@
-#![allow(deprecated)]
+use std::fmt::Write;
+use std::path::Path;
 
-use instant::Instant;
-use std::slice;
-use std::{fmt::Write, path::Path};
-
-use cocoa::{
-    base::{id, nil},
-    foundation::{NSAutoreleasePool, NSString},
-};
 use command::r#async::Command;
-use warpui::{platform::mac::make_nsstring, ApplicationBundleInfo};
+use instant::Instant;
+use objc2::rc::{autoreleasepool, Retained};
+use objc2_app_kit::NSWorkspace;
+use objc2_foundation::{NSBundle, NSString, NSURL};
+use warp_core::channel::ChannelState;
+use warp_core::AppId;
+use warpui::ApplicationBundleInfo;
 
 use super::*;
 
-// Functions implemented in objC files.
-extern "C" {
-    fn get_default_app_bundle_for_file(file_path: id) -> id;
-}
-
-/// The exeutable we use to launch the editor.
+/// The executable we use to launch the editor.
 #[derive(Debug)]
 pub enum OpenFileInEditorMethod {
     // A custom binary (e.g. the code CLI tool for VSCode).
@@ -333,7 +327,7 @@ pub fn open_file_path_with_line_and_col(
         let editor = if with_editor.is_some_and(|editor| editor.is_installed(ctx)) {
             with_editor
         } else {
-            let app_bundle_id = unsafe { default_app_to_open_path(full_path) };
+            let app_bundle_id = default_app_to_open_path(full_path);
             app_bundle_id
                 .as_deref()
                 .and_then(Editor::new_from_identifier)
@@ -344,27 +338,63 @@ pub fn open_file_path_with_line_and_col(
                 return;
             }
         }
+
+        // NSWorkspace's default-app routing can hand files to a sibling
+        // Warp channel (e.g. Stable handling files while Preview is running).
+        // When the resolved default is a different Warp, open with the
+        // running channel's bundle directly.
+        let bundle_id = default_app_to_open_path(full_path);
+        if let Some(bundle_id) = bundle_id.as_deref() {
+            let current = ChannelState::app_id().to_string();
+            if bundle_id != current
+                && is_warp_bundle(bundle_id)
+                && open_with_bundle(&current, full_path)
+            {
+                return;
+            }
+        }
     }
     ctx.open_file_path(full_path);
 }
 
+fn is_warp_bundle(bundle_id: &str) -> bool {
+    AppId::parse(bundle_id)
+        .map(|id| id.qualifier() == "dev" && id.organization() == "warp")
+        .unwrap_or(false)
+}
+
+fn open_with_bundle(bundle_id: &str, path: &Path) -> bool {
+    // Wait for `open` to exit; a non-zero status needs to bubble up so
+    // the caller's ctx.open_file_path fallback still runs.
+    command::blocking::Command::new("/usr/bin/open")
+        .args(["-b", bundle_id])
+        .arg(path)
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 // Get the Mac default app for opening the file path.
 //
-// The NSString returned by `-[NSBundle bundleIdentifier]` is autoreleased by
-// Cocoa. We wrap the call in a local pool so the autoreleased string (and the
-// one we pass in via `make_nsstring`) are drained before we return, and copy
-// the UTF-8 bytes out into an owned `String` so no dangling pointer escapes.
-unsafe fn default_app_to_open_path(file_path: &Path) -> Option<String> {
-    let pool = NSAutoreleasePool::new(nil);
-    let bundle_id = get_default_app_bundle_for_file(make_nsstring(file_path.to_string_lossy()));
-    let result = if bundle_id == nil {
-        None
-    } else {
-        let cstr = bundle_id.UTF8String() as *const u8;
-        std::str::from_utf8(slice::from_raw_parts(cstr, bundle_id.len()))
-            .ok()
-            .map(ToOwned::to_owned)
-    };
-    pool.drain();
-    result
+// We open a local autorelease pool around the lookup so any temporaries AppKit
+// hands back (e.g. from the Launch Services lookup inside
+// `URLForApplicationToOpenURL:`) are drained before we return, and copy the
+// bundle identifier into an owned `String` so nothing tied to the pool escapes.
+fn default_app_to_open_path(file_path: &Path) -> Option<String> {
+    autoreleasepool(|_| {
+        let file_path = NSString::from_str(&file_path.to_string_lossy());
+        get_default_app_bundle_for_file(&file_path).map(|bundle_id| bundle_id.to_string())
+    })
 }
+
+// Returns the bundle identifier of the application macOS would use to open the
+// given file, or `None` if there is no registered handler.
+fn get_default_app_bundle_for_file(file_path: &NSString) -> Option<Retained<NSString>> {
+    let file_url = NSURL::fileURLWithPath(file_path);
+    let app_url = NSWorkspace::sharedWorkspace().URLForApplicationToOpenURL(&file_url)?;
+    let app_bundle = NSBundle::bundleWithURL(&app_url)?;
+    app_bundle.bundleIdentifier()
+}
+
+#[cfg(test)]
+#[path = "mac_tests.rs"]
+mod tests;

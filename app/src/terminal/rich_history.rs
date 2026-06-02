@@ -1,19 +1,17 @@
-use crate::input_suggestions::AIQueryHistoryEntryDetails;
-use std::{borrow::Cow, ops::Sub};
-use warpui::{
-    elements::{
-        Align, ConstrainedBox, Container, CrossAxisAlignment, Flex, Icon, ParentElement, Shrinkable,
-    },
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
-    AppContext, Element, SingletonEntity,
+use std::borrow::Cow;
+use std::ops::Sub;
+
+use warpui::elements::{
+    Align, ConstrainedBox, Container, CrossAxisAlignment, Flex, Icon, ParentElement, Shrinkable,
 };
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, SingletonEntity};
 
 use super::HistoryEntry;
-use crate::{
-    appearance::Appearance,
-    ui_components::icons::Icon as UiIcon,
-    util::time_format::{format_approx_duration_from_now, human_readable_precise_duration},
-};
+use crate::appearance::Appearance;
+use crate::input_suggestions::AIQueryHistoryEntryDetails;
+use crate::ui_components::icons::Icon as UiIcon;
+use crate::util::time_format::{format_approx_duration_from_now, human_readable_precise_duration};
 
 /// Vertical spacing between line items in rich history details.
 pub(crate) const DETAILS_PARAGRAPH_SPACING: f32 = 8.;

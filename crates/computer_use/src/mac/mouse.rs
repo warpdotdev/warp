@@ -1,17 +1,16 @@
-use instant::Instant;
 use std::time::Duration;
 
+use instant::Instant;
 use objc2_core_foundation::CGPoint;
 use objc2_core_graphics::{
     CGEvent, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGEventType, CGMouseButton,
     CGScrollEventUnit,
 };
 use pathfinder_geometry::vector::Vector2I;
-use warpui::r#async::Timer;
-
-use crate::{MouseButton, ScrollDirection, ScrollDistance};
+use warpui_core::r#async::Timer;
 
 use super::util::main_display_scale_factor;
+use crate::{MouseButton, ScrollDirection, ScrollDistance};
 
 const POSITION_POLL_INTERVAL: Duration = Duration::from_micros(500);
 const POSITION_TIMEOUT: Duration = Duration::from_millis(100);

@@ -13,44 +13,42 @@ use std::path::PathBuf;
 
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
+use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
+use warpui::elements::{
+    Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Flex, Hoverable,
+    Icon as IconElement, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, Radius, ScrollbarWidth, Stack, Text,
+};
+use warpui::keymap::{self, FixedBinding};
+use warpui::platform::Cursor;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable,
-        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Flex, Hoverable,
-        Icon as IconElement, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
-        ParentAnchor, ParentElement, ParentOffsetBounds, Radius, ScrollbarWidth, Stack, Text,
-    },
-    keymap::{self, FixedBinding},
-    platform::Cursor,
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
     AppContext, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
+use crate::code::editor::{add_color, remove_color};
+use crate::code_review::telemetry_event::{
+    CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind,
+};
+use crate::settings::AISettings;
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_shell::LocalShellState;
-use crate::{
-    code::editor::{add_color, remove_color},
-    settings::AISettings,
-    ui_components::{
-        dialog::{dialog_styles, Dialog},
-        icons::Icon,
-    },
-    util::git::{Commit, FileChangeEntry},
-    view_components::{
-        action_button::{ActionButton, ButtonSize, NakedTheme, SecondaryTheme},
-        DismissibleToast,
-    },
-    workspace::ToastStack,
-    workspaces::user_workspaces::UserWorkspaces,
-};
+use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::ui_components::icons::Icon;
+use crate::util::git::{Commit, FileChangeEntry};
+use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme, SecondaryTheme};
+use crate::view_components::DismissibleToast;
+use crate::workspace::ToastStack;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub(crate) mod commit;
 pub(crate) mod pr;
 pub(crate) mod push;
 
-pub use commit::{CommitState, CommitSubAction};
+pub use commit::{CommitIntent, CommitState, CommitSubAction};
 pub use pr::{PrState, PrSubAction};
 pub use push::{PushState, PushSubAction};
 
@@ -132,8 +130,7 @@ fn show_toast(msg: impl Into<String>, ctx: &mut ViewContext<GitDialog>) {
 ///
 /// Folds the parent feature flag, the user's dedicated per-feature AI toggle
 /// (which itself requires active AI / auth / remote-session org policy to
-/// allow AI), and an enterprise check with the same Warp-plan exception and
-/// dogfood override as `share_block_modal.rs::should_send_title_gen_request`.
+/// allow AI), and the current team's Git Operations AI tier policy.
 ///
 /// When this returns `false`, call sites skip AI entirely: commit.rs opens
 /// with the manual-type placeholder and pr.rs goes straight to
@@ -141,7 +138,7 @@ fn show_toast(msg: impl Into<String>, ctx: &mut ViewContext<GitDialog>) {
 fn should_send_git_ops_ai_request(app: &AppContext) -> bool {
     FeatureFlag::GitOperationsInCodeReview.is_enabled()
         && AISettings::as_ref(app).is_git_operations_autogen_enabled(app)
-        && UserWorkspaces::as_ref(app).ai_allowed_for_current_team()
+        && UserWorkspaces::as_ref(app).is_git_operations_ai_enabled()
 }
 
 /// Maps a raw git error string to a user-friendly toast message. Known
@@ -482,7 +479,6 @@ pub enum GitDialogMode {
 pub struct GitDialog {
     repo_path: PathBuf,
     branch_name: String,
-    parent_branch_name: Option<String>,
     mode: GitDialogMode,
     loading: bool,
     confirm_button: ViewHandle<ActionButton>,
@@ -494,7 +490,6 @@ impl GitDialog {
     pub fn new_for_commit(
         repo_path: PathBuf,
         branch_name: String,
-        parent_branch_name: Option<String>,
         allow_create_pr: bool,
         has_upstream: bool,
         ctx: &mut ViewContext<Self>,
@@ -509,7 +504,6 @@ impl GitDialog {
         let this = Self {
             repo_path,
             branch_name,
-            parent_branch_name,
             mode: GitDialogMode::Commit(state),
             loading: false,
             confirm_button,
@@ -536,7 +530,6 @@ impl GitDialog {
         Self {
             repo_path,
             branch_name,
-            parent_branch_name: None,
             mode: GitDialogMode::Push(state),
             loading: false,
             confirm_button,
@@ -548,16 +541,15 @@ impl GitDialog {
     pub fn new_for_pr(
         repo_path: PathBuf,
         branch_name: String,
-        parent_branch_name: Option<String>,
+        base_branch_name: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let (confirm_button, cancel_button, close_button) =
             Self::build_dialog_buttons(pr::confirm_label_for(), Some(pr::confirm_icon_for()), ctx);
-        let state = pr::new_state(&repo_path, parent_branch_name.as_deref(), ctx);
+        let state = pr::new_state(&repo_path, base_branch_name, ctx);
         Self {
             repo_path,
             branch_name,
-            parent_branch_name,
             mode: GitDialogMode::CreatePr(state),
             loading: false,
             confirm_button,
@@ -672,6 +664,20 @@ impl GitDialog {
         }
     }
 
+    fn header_icon(&self) -> Icon {
+        match &self.mode {
+            GitDialogMode::Commit(_) => Icon::GitCommit,
+            GitDialogMode::Push(state) => {
+                if state.publish {
+                    Icon::UploadCloud
+                } else {
+                    Icon::ArrowUp
+                }
+            }
+            GitDialogMode::CreatePr(_) => Icon::Github,
+        }
+    }
+
     fn render_body(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         match &self.mode {
@@ -685,6 +691,7 @@ impl GitDialog {
     /// it in centered overlay chrome with a blurred background.
     fn render_dialog(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
 
         let close = ChildView::new(&self.close_button).finish();
         let cancel = ChildView::new(&self.cancel_button).finish();
@@ -693,6 +700,25 @@ impl GitDialog {
             .finish();
 
         let body = self.render_body(app);
+
+        let surface2 = theme.surface_2();
+        let icon_color = theme.main_text_color(surface2).into_solid();
+        let header_icon = Container::new(
+            ConstrainedBox::new(
+                IconElement::new(
+                    <Icon as Into<&'static str>>::into(self.header_icon()),
+                    icon_color,
+                )
+                .finish(),
+            )
+            .with_width(16.)
+            .with_height(16.)
+            .finish(),
+        )
+        .with_uniform_padding(8.)
+        .with_background(surface2)
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+        .finish();
 
         let dialog = Dialog::new(
             self.title().to_string(),
@@ -703,6 +729,7 @@ impl GitDialog {
                 ..dialog_styles(appearance)
             },
         )
+        .with_header_icon(header_icon)
         .with_close_button(close)
         .with_child(body)
         .with_separator()
@@ -768,6 +795,30 @@ impl TypedActionView for GitDialog {
         match action {
             GitDialogAction::Cancel => {
                 if !self.loading {
+                    let operation = match &self.mode {
+                        GitDialogMode::Commit(state) => match state.intent {
+                            CommitIntent::CommitOnly => GitOperationKind::CommitOnly,
+                            CommitIntent::CommitAndPush => GitOperationKind::CommitAndPush,
+                            CommitIntent::CommitAndCreatePr => GitOperationKind::CommitAndCreatePr,
+                        },
+                        GitDialogMode::Push(state) => {
+                            if state.publish {
+                                GitOperationKind::Publish
+                            } else {
+                                GitOperationKind::Push
+                            }
+                        }
+                        GitDialogMode::CreatePr(_) => GitOperationKind::CreatePr,
+                    };
+                    send_telemetry_from_ctx!(
+                        CodeReviewTelemetryEvent::GitDialogCompleted {
+                            is_local: Some(true),
+                            operation,
+                            status: GitDialogStatus::Cancelled,
+                            error: None,
+                        },
+                        ctx
+                    );
                     ctx.emit(GitDialogEvent::Cancelled);
                 }
             }

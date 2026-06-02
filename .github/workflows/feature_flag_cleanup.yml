@@ -63,7 +63,7 @@ jobs:
               * "date_enabled" - the date on which the feature flag was enabled by default
               * "enabling_commit" - the Git commit in which the feature flag was enabled by default
             * You are running as part of a GitHub automation and must not commit or push any changes. Another agent will process the file you produce.
-          warp_api_key: ${{ secrets.WARP_API_KEY }}
+          warp_api_key: ${{ secrets.OSS_WARP_API_KEY }}
           share: team
 
       - name: Upload feature flag log
@@ -178,7 +178,7 @@ jobs:
 
             You are running as part of a GitHub automation that runs with a read-only token and will package your changes into a patch for a separate job to commit. Do not create a branch, do not commit, do not push, do not create a PR, and do not call `gh`. Leave your changes in the working tree only.
           share: team
-          warp_api_key: ${{ secrets.WARP_API_KEY }}
+          warp_api_key: ${{ secrets.OSS_WARP_API_KEY }}
 
       - name: Generate cleanup patch
         env:
@@ -227,11 +227,18 @@ jobs:
         run: |
           git apply --binary --whitespace=nowarn "$RUNNER_TEMP/cleanup.patch"
 
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ secrets.OZ_MGMT_GHA_APP_ID }}
+          private-key: ${{ secrets.OZ_MGMT_GHA_PRIVATE_KEY }}
+
       - name: Create Pull Request
         id: create_pr
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
-          token: ${{ github.token }}
+          token: ${{ steps.app-token.outputs.token }}
           base: ${{ github.event.repository.default_branch }}
           commit-message: "Clean up ${{ needs.analyze.outputs.flag_name }} feature flag"
           branch: "oz-agent/cleanup-feature-flag-${{ needs.analyze.outputs.flag_name }}"

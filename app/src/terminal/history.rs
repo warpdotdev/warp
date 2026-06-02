@@ -1,31 +1,23 @@
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
 use chrono::{DateTime, Local, TimeZone as _};
 use futures::Future;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
-
 use warp_core::command::ExitCode;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
-use super::{
-    model::block::{AgentInteractionMetadata, Block, SerializedAIMetadata, SerializedBlock},
-    shell::ShellType,
-};
-use crate::{
-    cloud_object::{
-        model::{persistence::CloudModel, view::CloudViewModel},
-        Space,
-    },
-    server::ids::{ClientId, HashableId as _, SyncId},
-    terminal::model::session::{Session, SessionId},
-    util::dedupe_from_last,
-    workflows::{
-        local_workflows::LocalWorkflows, workflow::Workflow, WorkflowId, WorkflowSource,
-        WorkflowType,
-    },
-};
+use super::model::block::{AgentInteractionMetadata, Block, SerializedAIMetadata, SerializedBlock};
+use super::shell::ShellType;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::model::view::CloudViewModel;
+use crate::cloud_object::Space;
+use crate::server::ids::{ClientId, HashableId as _, SyncId};
+use crate::terminal::model::session::{Session, SessionId};
+use crate::util::dedupe_from_last;
+use crate::workflows::local_workflows::LocalWorkflows;
+use crate::workflows::workflow::Workflow;
+use crate::workflows::{WorkflowId, WorkflowSource, WorkflowType};
 
 mod up_arrow;
 pub(crate) use up_arrow::UpArrowHistoryConfig;

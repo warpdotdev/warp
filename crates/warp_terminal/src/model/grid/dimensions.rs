@@ -1,3 +1,6 @@
+// The code in this file is adapted from the alacritty_terminal crate under the
+// Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
+
 /// Grid dimensions.
 pub trait Dimensions {
     /// Total number of lines in the buffer, this includes scrollback and visible lines.

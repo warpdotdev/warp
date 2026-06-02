@@ -1,11 +1,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use async_trait::async_trait;
+
 #[cfg(feature = "local_fs")]
 use crate::install::{fetch_latest_metadata_from_github, install_from_github, AssetKind};
 use crate::language_server_candidate::{LanguageServerCandidate, LanguageServerMetadata};
 use crate::CommandBuilder;
-use async_trait::async_trait;
 
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 pub struct RustAnalyzerCandidate {
@@ -136,6 +137,13 @@ impl LanguageServerCandidate for RustAnalyzerCandidate {
         metadata: LanguageServerMetadata,
         _executor: &CommandBuilder,
     ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !cfg!(target_os = "freebsd"),
+            "rust-analyzer is not auto-installable on FreeBSD: upstream \
+             GitHub releases publish no FreeBSD asset. Install it via \
+             `rustup component add rust-analyzer` or `pkg install \
+             rust-analyzer` and warp will pick it up off PATH."
+        );
         let asset_kind = AssetKind::from_filename(asset_name()).ok_or_else(|| {
             anyhow::anyhow!("Unsupported archive format for asset: {}", asset_name())
         })?;
@@ -144,6 +152,11 @@ impl LanguageServerCandidate for RustAnalyzerCandidate {
     }
 
     async fn fetch_latest_server_metadata(&self) -> anyhow::Result<LanguageServerMetadata> {
+        anyhow::ensure!(
+            !cfg!(target_os = "freebsd"),
+            "rust-analyzer release metadata is unavailable on FreeBSD: \
+             upstream GitHub releases publish no FreeBSD asset."
+        );
         fetch_latest_metadata_from_github(
             &self.client,
             "rust-lang",

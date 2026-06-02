@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use crate::{request_context::RequestContext, scalars::Time, schema};
+use crate::request_context::RequestContext;
+use crate::scalars::Time;
+use crate::schema;
 
 /*
 query GetConversationUsage(
@@ -23,6 +25,7 @@ query GetConversationUsage(
           usageMetadata {
             contextWindowUsage
             creditsSpent
+            platformCreditsSpent
             summarized
             tokenUsage { modelId totalTokens }
             warpTokenUsage { modelId totalTokens tokenUsageByCategory { category tokens } }
@@ -112,6 +115,7 @@ pub struct ConversationUsage {
 pub struct ConversationUsageMetadata {
     pub context_window_usage: f64,
     pub credits_spent: f64,
+    pub platform_credits_spent: f64,
     pub summarized: bool,
     pub token_usage: Vec<ModelTokenUsage>,
     pub warp_token_usage: Vec<TokenUsage>,
@@ -168,6 +172,7 @@ impl From<&ConversationUsageMetadata> for persistence::model::ConversationUsageM
             was_summarized: gql.summarized,
             context_window_usage: gql.context_window_usage as f32,
             credits_spent: gql.credits_spent as f32,
+            platform_credits_spent: gql.platform_credits_spent as f32,
             credits_spent_for_last_block: None,
             token_usage: convert_token_usage(&gql.warp_token_usage, &gql.byok_token_usage),
             tool_usage_metadata: (&gql.tool_usage_metadata).into(),

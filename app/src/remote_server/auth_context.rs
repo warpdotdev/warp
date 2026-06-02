@@ -10,10 +10,19 @@ use crate::server::server_api::auth::AuthClient;
 pub fn server_api_auth_context(
     auth_state: Arc<AuthState>,
     auth_client: Arc<dyn AuthClient>,
+    crash_reporting_enabled: bool,
 ) -> RemoteServerAuthContext {
     let token_auth_state = auth_state.clone();
     let token_auth_client = auth_client;
-    let identity_auth_state = auth_state;
+    let identity_auth_state = auth_state.clone();
+    let user_id_auth_state = auth_state.clone();
+    let user_email_auth_state = auth_state;
+
+    let user_id = user_id_auth_state
+        .user_id()
+        .map(|uid| uid.as_string())
+        .unwrap_or_default();
+    let user_email = user_email_auth_state.user_email().unwrap_or_default();
 
     RemoteServerAuthContext::new(
         move || -> BoxFuture<'static, Option<String>> {
@@ -30,6 +39,9 @@ pub fn server_api_auth_context(
             })
         },
         move || remote_server_identity_key(&identity_auth_state),
+        user_id,
+        user_email,
+        crash_reporting_enabled,
     )
 }
 

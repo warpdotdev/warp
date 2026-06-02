@@ -35,11 +35,11 @@ First, ensure you've set up your environment.
 By default, it is located at `C:\Program Files (x86)\Inno Setup 6\ISCC.exe`.
 2. Compile the installer:
 ```shell
-iscc .\script\windows\windows-installer.iss`.
+iscc .\script\windows\windows-installer.iss
 ```
 3. Run the generated executable:
 ```shell
-.\script\windows\Output\Warp-Windows-Setup.exe`.
+.\script\windows\Output\Warp-Windows-Setup.exe
 ```
 
 The script begins with a series of preprocessor definitions.

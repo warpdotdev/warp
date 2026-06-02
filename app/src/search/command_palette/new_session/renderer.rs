@@ -1,13 +1,10 @@
+use warpui::elements::{Container, Flex, Highlight, ParentElement, Text};
+use warpui::fonts::{Properties, Weight};
+use warpui::Element;
+
 use super::new_session_option::NewSessionOption;
-
-use crate::search::command_palette::styles::SEARCH_ITEM_TEXT_PADDING;
-use warpui::{
-    elements::{Container, Flex, Highlight, ParentElement, Text},
-    fonts::{Properties, Weight},
-    Element,
-};
-
 use crate::appearance::Appearance;
+use crate::search::command_palette::styles::SEARCH_ITEM_TEXT_PADDING;
 use crate::search::result_renderer::ItemHighlightState;
 
 impl NewSessionOption {

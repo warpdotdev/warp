@@ -3,11 +3,14 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
+use settings::macros::{define_settings_group, maybe_define_setting, register_settings_events};
+use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
 use warp_core::features::FeatureFlag;
 use warp_core::report_if_error;
-use warp_core::user_preferences::GetUserPreferences as _;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, UpdateModel};
 
+use super::cloud_preferences_syncer::CloudPreferencesSyncer;
 use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
 use crate::auth::auth_state::AuthState;
 use crate::auth::AuthStateProvider;
@@ -19,15 +22,6 @@ use crate::server::server_api::auth::MockAuthClient;
 use crate::server::server_api::auth::{AuthClient, SyncedUserSettings};
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::safe_mode_settings::SafeModeSettings;
-
-use settings::{
-    macros::{define_settings_group, maybe_define_setting, register_settings_events},
-    RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
-};
-
-use serde::{Deserialize, Serialize};
-
-use super::cloud_preferences_syncer::CloudPreferencesSyncer;
 use crate::workspaces::workspace::EnterpriseSecretRegex;
 
 pub trait RegexDisplayInfo {
@@ -248,44 +242,14 @@ impl PrivacySettings {
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
 
-        let is_telemetry_enabled: bool = ctx
-            .private_user_preferences()
-            .read_value(TELEMETRY_ENABLED_DEFAULTS_KEY)
-            .unwrap_or_default()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or(true);
-
-        let is_crash_reporting_enabled: bool = ctx
-            .private_user_preferences()
-            .read_value(CRASH_REPORTING_ENABLED_DEFAULTS_KEY)
-            .unwrap_or_default()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or(true);
-
-        let is_cloud_conversation_storage_enabled: bool = ctx
-            .private_user_preferences()
-            .read_value(CLOUD_CONVERSATION_STORAGE_ENABLED_DEFAULTS_KEY)
-            .unwrap_or_default()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or(true);
-
-        // Make sure the user-preferences stores match what's in memory.
-        // Needed for warp drive preferences to work and no harm in doing in general.
-        let _ = ctx.private_user_preferences().write_value(
-            TELEMETRY_ENABLED_DEFAULTS_KEY,
-            serde_json::to_string(&is_telemetry_enabled)
-                .expect("is_telemetry_enabled is a boolean."),
-        );
-        let _ = ctx.private_user_preferences().write_value(
-            CRASH_REPORTING_ENABLED_DEFAULTS_KEY,
-            serde_json::to_string(&is_crash_reporting_enabled)
-                .expect("is_crash_reporting_enabled is a boolean."),
-        );
-        let _ = ctx.private_user_preferences().write_value(
-            CLOUD_CONVERSATION_STORAGE_ENABLED_DEFAULTS_KEY,
-            serde_json::to_string(&is_cloud_conversation_storage_enabled)
-                .expect("is_cloud_conversation_storage_enabled is a boolean."),
-        );
+        // Initialize from `WarpDrivePrivacySettings`, which is the source of truth for these
+        // booleans.
+        let warp_drive_privacy = WarpDrivePrivacySettings::as_ref(ctx);
+        let is_telemetry_enabled = *warp_drive_privacy.is_telemetry_enabled.value();
+        let is_crash_reporting_enabled = *warp_drive_privacy.is_crash_reporting_enabled.value();
+        let is_cloud_conversation_storage_enabled = *warp_drive_privacy
+            .is_cloud_conversation_storage_enabled
+            .value();
 
         // Listen for changes to the cloud model and update ourselves when they happen.
         ctx.subscribe_to_model(&WarpDrivePrivacySettings::handle(ctx), |me, event, ctx| {

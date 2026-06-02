@@ -1,6 +1,7 @@
-use warpui::color::ColorU;
+use warpui_core::color::ColorU;
 
-use super::{blend::Blend, coloru_with_opacity, Rgb};
+use super::blend::Blend;
+use super::{coloru_with_opacity, Rgb};
 
 /// Offset to the relative luminance when computing the contrast ratio per the formula defined in
 /// the [W3C Spec](https://www.w3.org/TR/WCAG20-TECHS/G17.html). This offset is included to
@@ -11,7 +12,7 @@ const LUMINANCE_OFFSET_FOR_CONTRAST_RATIO: f32 = 0.05;
 
 /// Returns a new foreground color that when rendered against `background_color` would have a
 /// contrast of at least `minimum_allowed_contrast`. NOTE the `background_color` must be fully
-/// opaque in in order to perform proper contrast checking.
+/// opaque in order to perform proper contrast checking.
 ///
 /// If `foreground_color` already meets the minimum contrast, it is returned unchanged.
 ///

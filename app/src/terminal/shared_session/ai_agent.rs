@@ -1,5 +1,6 @@
 use anyhow::Result;
-use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
+use base64::engine::general_purpose::STANDARD_NO_PAD;
+use base64::Engine as _;
 use prost::Message;
 use warp_multi_agent_api::ResponseEvent;
 

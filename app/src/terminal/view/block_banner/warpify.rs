@@ -1,29 +1,20 @@
 use pathfinder_color::ColorU;
-use warpui::{
-    elements::{
-        Align, ConstrainedBox, Container, CrossAxisAlignment, Flex, HighlightedHyperlink,
-        MouseStateHandle, ParentElement, Shrinkable,
-    },
-    fonts::Weight,
-    keymap::Keystroke,
-    ui_components::{
-        button::ButtonVariant,
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    AppContext, Element,
+use warpui::elements::{
+    Align, ConstrainedBox, Container, CrossAxisAlignment, Flex, HighlightedHyperlink,
+    MouseStateHandle, ParentElement, Shrinkable,
 };
-
-use crate::{
-    appearance::Appearance,
-    terminal::{
-        ssh::warpify::warpify_description,
-        view::{RememberForWarpification, TerminalAction},
-    },
-    themes::theme::Fill,
-    ui_components::blended_colors,
-};
+use warpui::fonts::Weight;
+use warpui::keymap::Keystroke;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element};
 
 use super::{render_block_banner, BLOCK_BANNER_DESCRIPTION_MAX_HEIGHT};
+use crate::appearance::Appearance;
+use crate::terminal::ssh::warpify::warpify_description;
+use crate::terminal::view::{RememberForWarpification, TerminalAction};
+use crate::themes::theme::Fill;
+use crate::ui_components::blended_colors;
 
 const CLOSE_BUTTON_DIAMETER: f32 = 20.0;
 const STANDARD_PADDING: f32 = 8.0;
@@ -138,7 +129,7 @@ impl WarpifyBannerState {
 }
 
 /// This banner is shown when the user runs a command which is recognized as a subshell-compatible
-/// command. It asks if they want to boostrap a subshell and, if so, whether we should ask again
+/// command. It asks if they want to bootstrap a subshell and, if so, whether we should ask again
 /// next time they run the same command.
 pub fn render_warpification_banner(
     state: &WarpifyBannerState,

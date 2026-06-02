@@ -1,28 +1,23 @@
-use crate::keyboard::{remove_custom_keybinding, write_custom_keybinding, UserDefinedKeybinding};
-use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
+use std::borrow::Cow;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
 use enum_iterator::{all, Sequence};
 use fuzzy_match::match_indices_case_insensitive;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-
 use regex::Regex;
-use std::borrow::Cow;
-use std::{
-    cmp::Ordering,
-    collections::{HashMap, HashSet},
-    sync::Arc,
+use warpui::actions::StandardAction;
+use warpui::keymap::{
+    BindingDescription, BindingId, BindingLens, CustomTag, DescriptionContext, EditableBindingLens,
+    IsBindingValid, Keystroke, Trigger,
 };
-use warpui::keymap::{BindingId, IsBindingValid};
 use warpui::platform::OperatingSystem;
-use warpui::{
-    actions::StandardAction,
-    keymap::{
-        BindingDescription, BindingLens, CustomTag, DescriptionContext, EditableBindingLens,
-        Keystroke, Trigger,
-    },
-    Action,
-};
-use warpui::{AppContext, SingletonEntity};
+use warpui::{Action, AppContext, SingletonEntity};
+
+use crate::keyboard::{remove_custom_keybinding, write_custom_keybinding, UserDefinedKeybinding};
+use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
 
 pub const MAC_MENUS_CONTEXT: DescriptionContext = DescriptionContext::Custom("mac_menus");
 
@@ -406,9 +401,9 @@ pub fn custom_tag_to_keystroke(custom: CustomTag) -> Option<Keystroke> {
         }
         CustomAction::ToggleProjectExplorer => {
             if OperatingSystem::get().is_mac() {
-                Keystroke::parse("ctrl-2").ok()
+                Keystroke::parse("ctrl-1").ok()
             } else {
-                Keystroke::parse("ctrl-shift-2").ok()
+                Keystroke::parse("alt-1").ok()
             }
         }
         CustomAction::OpenRepository => {
@@ -428,9 +423,9 @@ pub fn custom_tag_to_keystroke(custom: CustomTag) -> Option<Keystroke> {
         }
         CustomAction::ToggleConversationListView => {
             if OperatingSystem::get().is_mac() {
-                Keystroke::parse("ctrl-1").ok()
+                Keystroke::parse("ctrl-2").ok()
             } else {
-                Keystroke::parse("alt-1").ok()
+                Keystroke::parse("alt-2").ok()
             }
         }
         CustomAction::NewTerminalTab

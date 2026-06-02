@@ -200,5 +200,5 @@ impl EventStore {
 }
 
 #[cfg(test)]
-#[path = "event_store_test.rs"]
+#[path = "event_store_tests.rs"]
 mod tests;

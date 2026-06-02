@@ -1,10 +1,12 @@
 //! File type detection utilities for determining if files can be opened in Warp.
 
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+pub use warp_util::file_type::{is_binary_file, is_file_content_binary, is_markdown_file};
+
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::{settings::EditorChoice, Editor, EditorSettings};
-use serde::{Deserialize, Serialize};
-use std::path::Path;
-pub use warp_util::file_type::{is_binary_file, is_file_content_binary, is_markdown_file};
 
 #[derive(
     Debug,
@@ -59,8 +61,7 @@ pub enum FileTarget {
 /// Checks if a file is a code file with language support.
 #[cfg(feature = "local_fs")]
 pub fn is_supported_code_file(path: impl AsRef<Path>) -> bool {
-    let path = path.as_ref();
-    languages::language_by_filename(path).is_some()
+    languages::language_by_local_filename(path.as_ref()).is_some()
 }
 
 #[cfg(not(feature = "local_fs"))]
@@ -79,6 +80,62 @@ pub fn is_supported_image_file(path: impl AsRef<Path>) -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+/// Returns true if `path` looks like a shell script the user intends to run when
+/// "Open with Warp" is invoked from Finder/another app via a `file://` URL.
+///
+/// Policy: extension in {sh, bash, zsh, fish, ksh} with the user-execute bit set on Unix,
+/// or extension in {ps1, bat, cmd} on Windows (no x-bit concept). On Unix, files with no
+/// extension but a `#!` shebang and the user-execute bit set also qualify.
+///
+/// Narrow on purpose: this only affects the URI entry point, not "Open in New Tab" from
+/// other UI surfaces, which still want shell scripts viewable in the editor.
+/// Returns true if `path` exists and starts with a `#!` shebang. Reads only the
+/// first two bytes — the URI entry point is reached from a `file://` URL, so the
+/// file is attacker-controlled in size and `std::fs::read` would risk an OOM.
+pub(crate) fn starts_with_shebang(path: &Path) -> bool {
+    use std::io::Read;
+    let mut prefix = [0u8; 2];
+    match std::fs::File::open(path) {
+        Ok(mut file) => file.read_exact(&mut prefix).is_ok() && prefix == [b'#', b'!'],
+        Err(_) => false,
+    }
+}
+
+#[cfg(unix)]
+pub fn is_runnable_shell_script(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Match the documented routing policy: only the owner's execute bit counts.
+    // A file `chmod 070` belongs to a group, not to the user invoking Warp.
+    let has_user_x_bit = std::fs::metadata(path)
+        .map(|m| m.permissions().mode() & 0o100 != 0)
+        .unwrap_or(false);
+    if !has_user_x_bit {
+        return false;
+    }
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+    if let Some(ext) = ext.as_deref() {
+        return matches!(ext, "sh" | "bash" | "zsh" | "fish" | "ksh" | "command");
+    }
+    starts_with_shebang(path)
+}
+
+#[cfg(windows)]
+pub fn is_runnable_shell_script(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .is_some_and(|ext| matches!(ext.as_str(), "ps1" | "bat" | "cmd"))
+}
+
+#[cfg(not(any(unix, windows)))]
+pub fn is_runnable_shell_script(_path: &Path) -> bool {
+    false
 }
 
 /// Determines if a file can be opened in Warp and returns its type.
@@ -177,171 +234,5 @@ pub fn resolve_file_target_with_editor_choice(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[cfg(feature = "local_fs")]
-    use settings::Setting as _;
-    use std::path::Path;
-
-    #[test]
-    fn test_binary_files_not_openable() {
-        assert!(is_file_openable_in_warp(Path::new("image.png")).is_none());
-        assert!(is_file_openable_in_warp(Path::new("video.mp4")).is_none());
-        assert!(is_file_openable_in_warp(Path::new("binary.exe")).is_none());
-        assert!(is_file_openable_in_warp(Path::new("archive.zip")).is_none());
-    }
-
-    #[test]
-    #[cfg(feature = "local_fs")]
-    fn test_open_code_panels_file_editor_default_is_warp() {
-        use crate::util::file::external_editor::settings::OpenCodePanelsFileEditor;
-
-        assert_eq!(
-            OpenCodePanelsFileEditor::default_value(),
-            EditorChoice::Warp
-        );
-    }
-
-    #[test]
-    #[cfg(feature = "local_fs")]
-    fn test_resolve_file_target_markdown_viewer_precedence() {
-        let target = resolve_file_target_with_editor_choice(
-            Path::new("README.md"),
-            EditorChoice::ExternalEditor(Editor::VSCode),
-            true, /* prefer_markdown_viewer */
-            EditorLayout::SplitPane,
-            None,
-        );
-
-        assert_eq!(target, FileTarget::MarkdownViewer(EditorLayout::SplitPane));
-    }
-
-    #[test]
-    #[cfg(feature = "local_fs")]
-    fn test_resolve_file_target_warp_uses_default_layout() {
-        let target = resolve_file_target_with_editor_choice(
-            Path::new("data.txt"),
-            EditorChoice::Warp,
-            true, /* prefer_markdown_viewer */
-            EditorLayout::NewTab,
-            None,
-        );
-
-        assert_eq!(target, FileTarget::CodeEditor(EditorLayout::NewTab));
-    }
-
-    #[test]
-    #[cfg(feature = "local_fs")]
-    fn test_resolve_file_target_binary_is_system_generic() {
-        let target = resolve_file_target_with_editor_choice(
-            Path::new("image.png"),
-            EditorChoice::Warp,
-            true, /* prefer_markdown_viewer */
-            EditorLayout::SplitPane,
-            None,
-        );
-
-        assert_eq!(target, FileTarget::SystemGeneric);
-    }
-
-    #[test]
-    #[cfg(feature = "local_fs")]
-    fn test_resolve_file_target_binary_uses_env_editor() {
-        let target = resolve_file_target_with_editor_choice(
-            Path::new("image.png"),
-            EditorChoice::EnvEditor,
-            true, /* prefer_markdown_viewer */
-            EditorLayout::SplitPane,
-            None,
-        );
-        assert_eq!(target, FileTarget::EnvEditor);
-    }
-
-    #[test]
-    fn test_markdown_files() {
-        assert_eq!(
-            is_file_openable_in_warp(Path::new("README.md")),
-            Some(OpenableFileType::Markdown)
-        );
-        assert_eq!(
-            is_file_openable_in_warp(Path::new("doc.markdown")),
-            Some(OpenableFileType::Markdown)
-        );
-        assert_eq!(
-            is_file_openable_in_warp(Path::new("README")),
-            Some(OpenableFileType::Markdown)
-        );
-        assert_eq!(
-            is_file_openable_in_warp(Path::new("CHANGELOG")),
-            Some(OpenableFileType::Markdown)
-        );
-    }
-
-    #[test]
-    #[cfg(feature = "local_fs")]
-    fn test_code_files() {
-        assert_eq!(
-            is_file_openable_in_warp(Path::new("main.rs")),
-            Some(OpenableFileType::Code)
-        );
-        assert_eq!(
-            is_file_openable_in_warp(Path::new("app.js")),
-            Some(OpenableFileType::Code)
-        );
-        assert_eq!(
-            is_file_openable_in_warp(Path::new("script.py")),
-            Some(OpenableFileType::Code)
-        );
-        assert_eq!(
-            is_file_openable_in_warp(Path::new("config.json")),
-            Some(OpenableFileType::Code)
-        );
-    }
-
-    #[test]
-    #[cfg(not(feature = "local_fs"))]
-    fn test_code_files() {
-        assert_eq!(
-            is_file_openable_in_warp(Path::new("main.rs")),
-            Some(OpenableFileType::Text)
-        );
-        assert_eq!(
-            is_file_openable_in_warp(Path::new("app.js")),
-            Some(OpenableFileType::Text)
-        );
-        assert_eq!(
-            is_file_openable_in_warp(Path::new("script.py")),
-            Some(OpenableFileType::Text)
-        );
-        assert_eq!(
-            is_file_openable_in_warp(Path::new("config.json")),
-            Some(OpenableFileType::Text)
-        );
-    }
-
-    #[test]
-    fn test_text_files() {
-        // Files that are text but don't have language support
-        assert_eq!(
-            is_file_openable_in_warp(Path::new("data.txt")),
-            Some(OpenableFileType::Text)
-        );
-        assert_eq!(
-            is_file_openable_in_warp(Path::new("data.csv")),
-            Some(OpenableFileType::Text)
-        );
-        assert_eq!(
-            is_file_openable_in_warp(Path::new("file.svg")),
-            Some(OpenableFileType::Text)
-        );
-    }
-
-    #[test]
-    fn test_is_supported_code_file() {
-        assert!(is_supported_code_file(Path::new("main.rs")));
-        assert!(is_supported_code_file(Path::new("app.js")));
-        assert!(is_supported_code_file(Path::new("script.py")));
-        assert!(!is_supported_code_file(Path::new("data.txt")));
-        assert!(!is_supported_code_file(Path::new("image.png")));
-    }
-}
+#[path = "openable_file_type_tests.rs"]
+mod tests;

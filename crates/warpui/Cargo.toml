@@ -71,10 +71,63 @@ core-graphics = "0.25.0"
 core-text = "21.0.0"
 dispatch = "0.2.0"
 font-kit.workspace = true
-foreign-types = "0.5.0"
 libc.workspace = true
-metal = "0.33.0"
 objc.workspace = true
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = [
+    "NSAlert",
+    "NSApplication",
+    "NSButton",
+    "NSCell",
+    "NSControl",
+    "NSCursor",
+    "NSEvent",
+    "NSImage",
+    "NSMenu",
+    "NSMenuItem",
+    "NSPasteboard",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSScreen",
+    "NSView",
+    "NSWindow",
+    "objc2-quartz-core",
+] }
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSData",
+    "NSGeometry",
+    "NSString",
+    "NSURL",
+    "NSValue",
+    "objc2-core-foundation",
+] }
+objc2-metal = { workspace = true, features = [
+    "MTLDevice",
+    "MTLCommandQueue",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLRenderCommandEncoder",
+    "MTLRenderPass",
+    "MTLRenderPipeline",
+    "MTLLibrary",
+    "MTLBuffer",
+    "MTLTexture",
+    "MTLResource",
+    "MTLAllocation",
+    "MTLArgument",
+    "MTLDrawable",
+    "MTLPixelFormat",
+    "MTLTypes",
+    "dispatch2",
+] }
+objc2-quartz-core = { workspace = true, features = [
+    "CALayer",
+    "CAMetalLayer",
+    "objc2-core-foundation",
+    "objc2-metal",
+] }
+dispatch2 = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 rand.workspace = true
@@ -113,7 +166,7 @@ web-sys.workspace = true
 workspace = true
 features = ["fragile-send-sync-non-atomic-wasm", "webgl"]
 
-[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))'.dependencies]
 arboard = { workspace = true, features = [
     "wayland-data-control",
     "image-data",
@@ -121,7 +174,7 @@ arboard = { workspace = true, features = [
 native-dialog = "0.7.0"
 open = "5.0.0"
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 blocking.workspace = true
 dirs.workspace = true
 fontconfig = { version = "0.8.0", features = ["dlopen"] }
@@ -139,7 +192,7 @@ x11rb.workspace = true
 x11-dl = "2.21.0"
 zbus.workspace = true
 
-[target.'cfg(target_os = "linux")'.dev-dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dev-dependencies]
 virtual-fs.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -148,7 +201,9 @@ winreg.workspace = true
 windows = { workspace = true, features = [
     "Win32_Graphics_Dwm",
     "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Gdi",
     "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
     "Win32_Networking",
     "Win32_System_Com",
     "Win32_Networking_NetworkListManager",

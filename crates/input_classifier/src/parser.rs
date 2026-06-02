@@ -1,4 +1,6 @@
-use std::{iter::Peekable, mem, str::Chars};
+use std::iter::Peekable;
+use std::mem;
+use std::str::Chars;
 
 use itertools::Itertools;
 
@@ -33,7 +35,7 @@ fn convert_char_to_delimiter(c: char) -> Option<WordDelimiter> {
     }
 }
 
-/// Parse a sentence into tokens for natural language classificiation.
+/// Parse a sentence into tokens for natural language classification.
 /// The main difference from the default "split_whitespace" parser is
 /// for matching double quotes and single quotes, we would keep their
 /// closed content as one token.

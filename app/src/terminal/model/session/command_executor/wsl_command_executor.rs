@@ -1,14 +1,16 @@
-use super::{CommandExecutor, CommandOutput, ExecuteCommandOptions};
-use crate::env_vars::{serialize_variables_for_shell, EnvVarValue};
-use crate::safe_warn;
-use crate::terminal::shell::{Shell, ShellType};
+use std::any::Any;
+use std::borrow::Cow;
+use std::collections::HashMap;
+
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use command::r#async::Command;
 use itertools::Itertools as _;
-use std::any::Any;
-use std::borrow::Cow;
-use std::collections::HashMap;
+
+use super::{CommandExecutor, CommandOutput, ExecuteCommandOptions};
+use crate::env_vars::{serialize_variables_for_shell, EnvVarValue};
+use crate::safe_warn;
+use crate::terminal::shell::{Shell, ShellType};
 
 /// `CommandExecutor` implementation that executes the given `command` in a WSL instance via the
 /// `wsl.exe` executable.

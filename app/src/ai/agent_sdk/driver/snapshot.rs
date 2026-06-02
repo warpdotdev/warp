@@ -30,15 +30,23 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use command::r#async::Command;
 use command::Stdio;
 use futures::future::join_all;
+use tokio::fs::{self as tokio_fs, OpenOptions};
+use tokio::io::AsyncWriteExt as _;
+use tokio::sync::{mpsc, oneshot};
 use warp_core::report_error;
+use warpui::r#async::executor::Background;
 use warpui::r#async::FutureExt as _;
 
 use crate::ai::agent_sdk::retry::with_bounded_retry;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::server::server_api::ai::{
+    AIClient, InitialSnapshotToken, SnapshotUploadFileInfo as AiSnapshotUploadFileInfo,
+    UploadLocalHandoffSnapshotRequest,
+};
 use crate::server::server_api::harness_support::{
     upload_to_target, HarnessSupportClient, SnapshotFileInfo, SnapshotUploadRequest, UploadTarget,
 };
@@ -99,6 +107,15 @@ struct DeclarationLine {
     path: String,
 }
 
+/// Serialize-only sibling of [`DeclarationLine`] used by the writer task to emit `file`
+/// entries with a fixed `version` and `kind`.
+#[derive(serde::Serialize)]
+struct FileDeclaration<'a> {
+    version: u32,
+    kind: &'a str,
+    path: &'a str,
+}
+
 /// Invoke `snapshot-declarations.sh` to (re)generate the declarations file consumed by the
 /// rest of the upload pipeline.
 ///
@@ -107,10 +124,11 @@ struct DeclarationLine {
 /// from `task_id`. The script appends to the file if it already exists, so
 /// repeated invocations within a single run accumulate repos instead of clobbering.
 ///
-/// A missing env var, a missing script, a non-zero exit status, a spawn failure, or a runtime
-/// exceeding `script_timeout` are each logged at `log::error!` and returned without aborting the
-/// caller — if a previous invocation already produced a declarations file on disk it remains
-/// usable; otherwise the upload pipeline becomes a no-op.
+/// A missing env var is expected in some paths and is logged at `log::info!`. A missing script,
+/// a non-zero exit status, a spawn failure, or a runtime exceeding `script_timeout` are each
+/// logged at `log::error!` and returned without aborting the caller — if a previous invocation
+/// already produced a declarations file on disk it remains usable; otherwise the upload pipeline
+/// becomes a no-op.
 ///
 /// Exposed as a standalone helper so future call sites can trigger declarations generation at
 /// other points in the run lifecycle (e.g. periodic mid-run snapshots).
@@ -120,7 +138,7 @@ pub(super) async fn run_declarations_script(
     script_timeout: Duration,
 ) {
     let Some(script_path) = std::env::var_os(DECLARATIONS_SCRIPT_PATH_ENV_VAR) else {
-        log::error!(
+        log::info!(
             "{DECLARATIONS_SCRIPT_PATH_ENV_VAR} is not set; skipping snapshot declarations script (task {task_id})"
         );
         return;
@@ -199,7 +217,7 @@ fn resolve_declarations_path(task_id: Option<&AmbientAgentTaskId>) -> PathBuf {
 /// 3. `{DEFAULT_DECLARATIONS_DIR}/{DEFAULT_DECLARATIONS_FILENAME}` as a final fallback.
 fn resolve_declarations_path_with_override(
     task_id: Option<&AmbientAgentTaskId>,
-    override_path: Option<std::ffi::OsString>,
+    override_path: Option<OsString>,
 ) -> PathBuf {
     if let Some(override_path) = override_path {
         return PathBuf::from(override_path);
@@ -216,31 +234,28 @@ fn resolve_declarations_path_with_override(
 ///
 /// Returns `None` when the file is missing, unreadable, or yields no valid entries; logs a
 /// WARN describing why in each case. A returned `Some(entries)` is guaranteed non-empty.
-fn read_and_parse_declarations(
-    path: &Path,
-    task_id: &AmbientAgentTaskId,
-) -> Option<Vec<DeclarationEntry>> {
+fn read_and_parse_declarations(path: &Path) -> Option<Vec<DeclarationEntry>> {
     let contents = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             log::warn!(
-                "Snapshot declarations file not found at '{}'; skipping upload (task {task_id})",
+                "Snapshot declarations file not found at '{}'; skipping upload",
                 path.display()
             );
             return None;
         }
         Err(e) => {
             log::warn!(
-                "Failed to read snapshot declarations file '{}': {e:#}; skipping upload (task {task_id})",
+                "Failed to read snapshot declarations file '{}': {e:#}; skipping upload",
                 path.display()
             );
             return None;
         }
     };
-    let entries = parse_declarations(&contents, task_id);
+    let entries = parse_declarations(&contents);
     if entries.is_empty() {
         log::warn!(
-            "Snapshot declarations file '{}' has no valid entries; skipping upload (task {task_id})",
+            "Snapshot declarations file '{}' has no valid entries; skipping upload",
             path.display()
         );
         return None;
@@ -254,7 +269,7 @@ fn read_and_parse_declarations(
 /// and `path` (absolute path). Blank lines are ignored. Malformed lines (invalid JSON, missing
 /// fields, unsupported versions, unknown kind, non-absolute path) are logged at WARN and skipped;
 /// they never abort parsing.
-fn parse_declarations(contents: &str, task_id: &AmbientAgentTaskId) -> Vec<DeclarationEntry> {
+fn parse_declarations(contents: &str) -> Vec<DeclarationEntry> {
     let mut entries = Vec::new();
     let mut seen = HashSet::new();
     for (index, raw) in contents.lines().enumerate() {
@@ -267,26 +282,26 @@ fn parse_declarations(contents: &str, task_id: &AmbientAgentTaskId) -> Vec<Decla
             Ok(declaration) => declaration,
             Err(e) => {
                 log::warn!(
-                    "Malformed snapshot declarations JSONL line {line_number}: {e:#}: {raw:?} (task {task_id})"
+                    "Malformed snapshot declarations JSONL line {line_number}: {e:#}: {raw:?}"
                 );
                 continue;
             }
         };
         if declaration.version != Some(DECLARATION_VERSION) {
             log::warn!(
-                "Malformed snapshot declarations line {line_number} (missing or unsupported version): {raw:?} (task {task_id})"
+                "Malformed snapshot declarations line {line_number} (missing or unsupported version): {raw:?}"
             );
             continue;
         }
         if declaration.path.is_empty() {
             log::warn!(
-                "Malformed snapshot declarations line {line_number} (missing path): {raw:?} (task {task_id})"
+                "Malformed snapshot declarations line {line_number} (missing path): {raw:?}"
             );
             continue;
         }
         if !Path::new(&declaration.path).is_absolute() {
             log::warn!(
-                "Malformed snapshot declarations line {line_number} (non-absolute path): {raw:?} (task {task_id})"
+                "Malformed snapshot declarations line {line_number} (non-absolute path): {raw:?}"
             );
             continue;
         }
@@ -295,7 +310,7 @@ fn parse_declarations(contents: &str, task_id: &AmbientAgentTaskId) -> Vec<Decla
             "file" => EntryKind::File,
             other => {
                 log::warn!(
-                    "Malformed snapshot declarations line {line_number} (unknown kind '{other}'): {raw:?} (task {task_id})"
+                    "Malformed snapshot declarations line {line_number} (unknown kind '{other}'): {raw:?}"
                 );
                 continue;
             }
@@ -309,6 +324,243 @@ fn parse_declarations(contents: &str, task_id: &AmbientAgentTaskId) -> Vec<Decla
         });
     }
     entries
+}
+
+/// Drop `file` declarations whose path is already covered by a declared `repo` path so the
+/// gather step does not double-upload files the repo patch already carries.
+fn drop_files_covered_by_repos(entries: Vec<DeclarationEntry>) -> Vec<DeclarationEntry> {
+    let repo_paths: Vec<PathBuf> = entries
+        .iter()
+        .filter(|entry| entry.kind == EntryKind::Repo)
+        .map(|entry| PathBuf::from(&entry.path))
+        .collect();
+    if repo_paths.is_empty() {
+        return entries;
+    }
+    entries
+        .into_iter()
+        .filter(|entry| {
+            if entry.kind != EntryKind::File {
+                return true;
+            }
+            let file_path = Path::new(&entry.path);
+            for repo in &repo_paths {
+                if file_path.starts_with(repo) {
+                    log::info!(
+                        "Dropping file declaration '{}' covered by repo '{}'",
+                        entry.path,
+                        repo.display()
+                    );
+                    return false;
+                }
+            }
+            true
+        })
+        .collect()
+}
+
+// --- Declarations writer: SDK driver → declarations file ---
+
+/// Commands accepted by the async declarations writer task.
+enum WriterCommand {
+    /// Append `file` entries for the given paths to the declarations file.
+    Append(Vec<String>),
+    /// Acknowledge once every previously-queued command has finished its fs writes.
+    Flush(oneshot::Sender<()>),
+}
+
+/// Handle used by the SDK driver to enqueue `file` declaration appends from the subscription
+/// thread without ever touching the filesystem inline.
+///
+/// The handle owns an unbounded `mpsc` sender into a dedicated writer task spawned by
+/// [`DeclarationsWriterHandle::new`]. The writer task owns the `seen: HashSet<String>` and
+/// the resolved declarations path, and processes commands sequentially, which serializes
+/// writes within the process. Handles are cheaply cloneable because the underlying sender is;
+/// dropping every handle closes the channel and lets the writer task exit cleanly.
+#[derive(Clone)]
+pub(super) struct DeclarationsWriterHandle {
+    tx: mpsc::UnboundedSender<WriterCommand>,
+}
+
+impl DeclarationsWriterHandle {
+    /// Spawn the writer task on `background` and return a fire-and-forget handle.
+    pub(super) fn new(
+        task_id: AmbientAgentTaskId,
+        working_dir: PathBuf,
+        background: &Background,
+    ) -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let declarations_path = resolve_declarations_path(Some(&task_id));
+        background
+            .spawn(writer_task(rx, declarations_path, working_dir, task_id))
+            .detach();
+        Self { tx }
+    }
+
+    /// Test-facing constructor that bypasses env-var-dependent path resolution and uses
+    /// `tokio::spawn` directly so tests can run without standing up a `Background`.
+    #[cfg(all(test, not(windows)))]
+    pub(super) fn new_at_path(
+        declarations_path: PathBuf,
+        working_dir: PathBuf,
+        task_id: AmbientAgentTaskId,
+    ) -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(writer_task(rx, declarations_path, working_dir, task_id));
+        Self { tx }
+    }
+
+    /// Enqueue `paths` for appending as `file` entries.
+    ///
+    /// Non-blocking; the subscription handler can call this from a sync context. Empty
+    /// input is a no-op.
+    pub(super) fn append(&self, paths: Vec<String>) {
+        if paths.is_empty() {
+            return;
+        }
+        if let Err(e) = self.tx.send(WriterCommand::Append(paths)) {
+            log::warn!("Declarations writer channel closed; dropping append: {e}");
+        }
+    }
+
+    /// Awaits until every previously-queued `append` has finished its fs writes.
+    ///
+    /// Called once from `AgentDriver::run_snapshot_upload` immediately before
+    /// `snapshot::run_declarations_script`, so no driver-side write is in flight when the
+    /// bash script starts its own appends.
+    pub(super) async fn flush(&self) {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        if self.tx.send(WriterCommand::Flush(ack_tx)).is_err() {
+            // Writer task has already exited; nothing is queued, nothing to drain.
+            return;
+        }
+        if ack_rx.await.is_err() {
+            log::warn!("Declarations writer flush oneshot dropped without ack");
+        }
+    }
+}
+
+/// Writer task loop: owns the `seen` set, lazily opens the file per write, and services
+/// `Append` and `Flush` commands in order.
+async fn writer_task(
+    mut rx: mpsc::UnboundedReceiver<WriterCommand>,
+    declarations_path: PathBuf,
+    working_dir: PathBuf,
+    task_id: AmbientAgentTaskId,
+) {
+    let mut seen: HashSet<String> = HashSet::new();
+    while let Some(cmd) = rx.recv().await {
+        match cmd {
+            WriterCommand::Append(paths) => {
+                for path in paths {
+                    process_append_path(
+                        path,
+                        &declarations_path,
+                        &working_dir,
+                        &task_id,
+                        &mut seen,
+                    )
+                    .await;
+                }
+            }
+            WriterCommand::Flush(ack) => {
+                let _ = ack.send(());
+            }
+        }
+    }
+}
+
+/// Normalize, preempt against existing repos, and write one JSONL line for `raw_path`.
+/// All failures log at WARN and return without advancing `seen`.
+async fn process_append_path(
+    raw_path: String,
+    declarations_path: &Path,
+    working_dir: &Path,
+    task_id: &AmbientAgentTaskId,
+    seen: &mut HashSet<String>,
+) {
+    let candidate = Path::new(&raw_path);
+    let absolute = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        working_dir.join(candidate)
+    };
+    if !absolute.is_absolute() {
+        log::warn!(
+            "Skipping non-absolute file-edit path {absolute:?} for declarations (task {task_id})"
+        );
+        return;
+    }
+    let Some(absolute_str) = absolute.to_str().map(str::to_owned) else {
+        log::warn!(
+            "Skipping non-UTF-8 file-edit path {absolute:?} for declarations (task {task_id})"
+        );
+        return;
+    };
+    if seen.contains(&absolute_str) {
+        return;
+    }
+    if path_is_under_existing_repo(&absolute).await {
+        log::debug!(
+            "Skipping file declaration for '{absolute_str}': already inside an existing git repo (task {task_id})"
+        );
+        seen.insert(absolute_str);
+        return;
+    }
+    match append_declaration_line(declarations_path, &absolute_str).await {
+        Ok(()) => {
+            seen.insert(absolute_str);
+        }
+        Err(e) => {
+            log::warn!(
+                "Failed to append file declaration for '{absolute_str}': {e:#} (task {task_id})"
+            );
+        }
+    }
+}
+
+/// Walk ancestors of `path` and return `true` if any of them already contains a `.git`
+/// directory. Cheap enough to run per path: one `stat(2)` per ancestor up to `/`.
+async fn path_is_under_existing_repo(path: &Path) -> bool {
+    let mut current = path.parent();
+    while let Some(dir) = current {
+        let git_dir = dir.join(".git");
+        if tokio_fs::try_exists(&git_dir).await.unwrap_or(false) {
+            return true;
+        }
+        current = dir.parent();
+    }
+    false
+}
+
+/// Open the declarations file in append-create mode and write one JSONL line for `path`.
+/// The serialized shape matches the schema the parser expects.
+async fn append_declaration_line(declarations_path: &Path, path: &str) -> Result<()> {
+    if let Some(parent) = declarations_path.parent() {
+        tokio_fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("create_dir_all {}", parent.display()))?;
+    }
+    let mut line = serde_json::to_string(&FileDeclaration {
+        version: DECLARATION_VERSION,
+        kind: "file",
+        path,
+    })
+    .context("serialize file declaration")?;
+    line.push('\n');
+    let mut file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(declarations_path)
+        .await
+        .with_context(|| format!("open declarations file {}", declarations_path.display()))?;
+    file.write_all(line.as_bytes())
+        .await
+        .with_context(|| format!("write declarations file {}", declarations_path.display()))?;
+    file.flush()
+        .await
+        .with_context(|| format!("flush declarations file {}", declarations_path.display()))?;
+    Ok(())
 }
 
 // --- Gather phase: upload blobs and per-entry results ---
@@ -447,7 +699,7 @@ pub(super) async fn upload_snapshot_from_declarations(
     task_id: &AmbientAgentTaskId,
 ) {
     let declarations_path = resolve_declarations_path(Some(task_id));
-    let _ = upload_snapshot_from_declarations_file(&declarations_path, client, task_id).await;
+    let _ = upload_snapshot_from_declarations_file(&declarations_path, client).await;
 }
 
 /// Internal entry that reads from an explicit path and returns the structured outcome so tests
@@ -456,13 +708,10 @@ pub(super) async fn upload_snapshot_from_declarations(
 async fn upload_snapshot_from_declarations_file(
     path: &Path,
     client: Arc<dyn HarnessSupportClient>,
-    task_id: &AmbientAgentTaskId,
 ) -> Option<SnapshotOutcome> {
-    log::info!(
-        "Snapshot upload starting from {} (task {task_id})",
-        path.display()
-    );
-    let declarations = read_and_parse_declarations(path, task_id)?;
+    log::info!("Snapshot upload starting from {}", path.display());
+    let declarations = read_and_parse_declarations(path)?;
+    let declarations = drop_files_covered_by_repos(declarations);
     let (repo_count, file_count) = declarations
         .iter()
         .fold((0usize, 0usize), |(r, f), e| match e.kind {
@@ -470,12 +719,147 @@ async fn upload_snapshot_from_declarations_file(
             EntryKind::File => (r, f + 1),
         });
     log::info!(
-        "Snapshot declarations: {} entries ({repo_count} repo, {file_count} file) (task {task_id})",
+        "Snapshot declarations: {} entries ({repo_count} repo, {file_count} file)",
         declarations.len(),
     );
-    let outcome = run_pipeline(declarations, client, task_id).await?;
-    log_snapshot_outcome(&outcome, task_id);
+    let outcome = run_pipeline(declarations, client).await?;
+    log_snapshot_outcome(&outcome);
     Some(outcome)
+}
+
+/// Build the snapshot for a local-to-cloud handoff: gather repo patches and orphan file
+/// contents, allocate an initial snapshot token plus presigned upload URLs via
+/// `AIClient::upload_local_handoff_snapshot`, and upload the artifacts.
+///
+/// Returns:
+/// - `Ok(Some(initial_snapshot_token))` when a token was minted **and the manifest landed in GCS**.
+///   Individual blob uploads may still have failed; the manifest catalogues their status so the
+///   cloud agent rehydrates against whatever did land, matching the cloud→cloud best-effort
+///   posture.
+/// - `Ok(None)` when the workspace was empty (no repos, no orphan files) **or** when the
+///   manifest itself failed to upload. Without the manifest the snapshot is unusable, so
+///   callers should spawn the cloud agent without an initial snapshot token instead of pointing
+///   it at an incomplete prefix. Manifest-upload failures are also routed through
+///   `report_error!` so on-call alerting catches the silent regression.
+/// - `Err(_)` only for hard failures of `upload_local_handoff_snapshot` itself (auth, etc.).
+pub(crate) async fn upload_snapshot_for_handoff(
+    repo_paths: Vec<PathBuf>,
+    orphan_file_paths: Vec<PathBuf>,
+    client: Arc<dyn AIClient>,
+    http: &http_client::Client,
+) -> Result<Option<InitialSnapshotToken>> {
+    if repo_paths.is_empty() && orphan_file_paths.is_empty() {
+        log::info!("Handoff snapshot has no declarations; skipping upload");
+        return Ok(None);
+    }
+
+    let declarations: Vec<DeclarationEntry> = repo_paths
+        .into_iter()
+        .map(|path| DeclarationEntry {
+            kind: EntryKind::Repo,
+            path: path.display().to_string(),
+        })
+        .chain(orphan_file_paths.into_iter().map(|path| DeclarationEntry {
+            kind: EntryKind::File,
+            path: path.display().to_string(),
+        }))
+        .collect();
+
+    let GatheredSnapshot {
+        manifest_filename,
+        mut upload_files,
+        mut repos,
+        mut files,
+        mut pre_upload_entries,
+    } = gather_snapshot_entries(declarations).await;
+
+    apply_per_run_cap(
+        &mut upload_files,
+        &mut repos,
+        &mut files,
+        &mut pre_upload_entries,
+    );
+
+    let mut file_infos: Vec<SnapshotFileInfo> = upload_files
+        .iter()
+        .map(|file| SnapshotFileInfo {
+            filename: file.filename.clone(),
+            mime_type: file.mime_type.clone(),
+        })
+        .collect();
+    file_infos.push(SnapshotFileInfo {
+        filename: manifest_filename.clone(),
+        mime_type: "application/json".to_string(),
+    });
+
+    let upload_request = UploadLocalHandoffSnapshotRequest {
+        files: file_infos
+            .iter()
+            .map(|file| AiSnapshotUploadFileInfo {
+                filename: file.filename.clone(),
+                mime_type: file.mime_type.clone(),
+            })
+            .collect(),
+    };
+    let response = client
+        .upload_local_handoff_snapshot(upload_request)
+        .await
+        .context("failed to allocate initial snapshot token")?;
+    log::info!(
+        "Initial snapshot token allocated; expires_at={}, uploads={}",
+        response.expires_at,
+        response.uploads.len(),
+    );
+    let initial_snapshot_token = response.initial_snapshot_token;
+
+    // Server returns `uploads` aligned by index with the request `files` array (and does
+    // not echo per-entry filenames), so we zip them positionally into a filename-keyed map.
+    // Any request file the server omits lands in `upload_entry` with no target and is
+    // marked `skipped` downstream.
+    if response.uploads.len() != file_infos.len() {
+        log::warn!(
+            "Handoff snapshot upload-target response length {} does not match request length {}; \
+             extras will be marked skipped",
+            response.uploads.len(),
+            file_infos.len(),
+        );
+    }
+    let mut target_map: HashMap<String, UploadTarget> = HashMap::new();
+    for (file, target) in file_infos.iter().zip(response.uploads.into_iter()) {
+        target_map.insert(file.filename.clone(), target);
+    }
+
+    let Some(outcome) = upload_prepared_snapshot_files(
+        http,
+        manifest_filename,
+        upload_files,
+        repos,
+        files,
+        pre_upload_entries,
+        target_map,
+    )
+    .await
+    else {
+        // Manifest serialization failed (already reported via `report_error!` inside
+        // the helper). Without a manifest the snapshot is unusable, so refuse the token.
+        return Ok(None);
+    };
+
+    let summary = SnapshotSummary::from_entries(&outcome.entries, outcome.manifest_uploaded);
+    log_snapshot_outcome(&outcome);
+    if !summary.manifest_uploaded {
+        // Without the manifest the cloud agent has no catalogue to rehydrate from, even
+        // when individual blobs landed. Alert on-call and refuse the token so we don't
+        // silently spawn a cloud agent with no recoverable state.
+        report_error!(anyhow::anyhow!(
+            "Handoff snapshot manifest failed to upload (blobs: {}/{}); cloud agent will start with no rehydration content",
+            summary.uploaded,
+            summary.total,
+        ));
+        return Ok(None);
+    }
+
+    Ok(Some(initial_snapshot_token))
 }
 
 /// Core upload pipeline.
@@ -486,7 +870,6 @@ async fn upload_snapshot_from_declarations_file(
 async fn run_pipeline(
     declarations: Vec<DeclarationEntry>,
     client: Arc<dyn HarnessSupportClient>,
-    task_id: &AmbientAgentTaskId,
 ) -> Option<SnapshotOutcome> {
     let GatheredSnapshot {
         manifest_filename,
@@ -494,11 +877,10 @@ async fn run_pipeline(
         repos,
         files,
         pre_upload_entries,
-    } = gather_snapshot_entries(declarations, task_id).await;
+    } = gather_snapshot_entries(declarations).await;
 
     upload_gathered_snapshot(
         client,
-        task_id,
         manifest_filename,
         upload_files,
         repos,
@@ -516,10 +898,7 @@ struct GatheredSnapshot {
     pre_upload_entries: Vec<EntryResult>,
 }
 
-async fn gather_snapshot_entries(
-    declarations: Vec<DeclarationEntry>,
-    task_id: &AmbientAgentTaskId,
-) -> GatheredSnapshot {
+async fn gather_snapshot_entries(declarations: Vec<DeclarationEntry>) -> GatheredSnapshot {
     let mut used_filenames = HashSet::new();
     let manifest_filename = unique_filename("snapshot_state.json", &mut used_filenames);
 
@@ -542,7 +921,6 @@ async fn gather_snapshot_entries(
                     &mut upload_files,
                     &mut repos,
                     &mut pre_upload_entries,
-                    task_id,
                 )
                 .await;
             }
@@ -553,7 +931,6 @@ async fn gather_snapshot_entries(
                     &mut upload_files,
                     &mut files,
                     &mut pre_upload_entries,
-                    task_id,
                 )
                 .await;
             }
@@ -571,7 +948,6 @@ async fn gather_snapshot_entries(
 
 async fn upload_gathered_snapshot(
     client: Arc<dyn HarnessSupportClient>,
-    task_id: &AmbientAgentTaskId,
     manifest_filename: String,
     mut upload_files: Vec<SnapshotUploadFile>,
     mut repos: Vec<RepoManifestEntry>,
@@ -587,7 +963,6 @@ async fn upload_gathered_snapshot(
         &mut repos,
         &mut files,
         &mut pre_upload_entries,
-        task_id,
     );
 
     // Ask the server for presigned URLs for every filename we intend to upload —
@@ -619,16 +994,14 @@ async fn upload_gathered_snapshot(
             Err(e) => {
                 // Pipeline-abort: route through report_error! so Sentry captures the structured
                 // error chain and on-call alerting can fire.
-                report_error!(e.context(format!(
-                    "Failed to get snapshot upload targets; skipping upload (task {task_id})"
-                )));
+                report_error!(e.context("Failed to get snapshot upload targets; skipping upload"));
                 return None;
             }
         };
         if targets.len() != chunk.len() {
             log::warn!(
                 "Snapshot upload-target response length {} does not match request length {}; \
-                 extras will be marked skipped (task {task_id})",
+                 extras will be marked skipped",
                 targets.len(),
                 chunk.len(),
             );
@@ -637,14 +1010,33 @@ async fn upload_gathered_snapshot(
             target_map.insert(file.filename.clone(), target);
         }
     }
+    upload_prepared_snapshot_files(
+        client.http_client(),
+        manifest_filename,
+        upload_files,
+        repos,
+        files,
+        pre_upload_entries,
+        target_map,
+    )
+    .await
+}
 
+async fn upload_prepared_snapshot_files(
+    http: &http_client::Client,
+    manifest_filename: String,
+    upload_files: Vec<SnapshotUploadFile>,
+    mut repos: Vec<RepoManifestEntry>,
+    mut files: Vec<FileManifestEntry>,
+    pre_upload_entries: Vec<EntryResult>,
+    target_map: HashMap<String, UploadTarget>,
+) -> Option<SnapshotOutcome> {
     // Upload non-manifest blobs concurrently, each with bounded retries on transient errors.
-    let http = client.http_client();
     let upload_futures = upload_files
         .iter()
-        .map(|file| upload_entry(http, file, &target_map, task_id));
+        .map(|file| upload_entry(http, file, &target_map));
     let upload_entries: Vec<EntryResult> = join_all(upload_futures).await;
-    fold_upload_results(&mut repos, &mut files, &upload_entries, task_id);
+    fold_upload_results(&mut repos, &mut files, &upload_entries);
 
     // Build and upload the manifest last, with the real outcomes baked in.
     let manifest = SnapshotManifest {
@@ -656,9 +1048,8 @@ async fn upload_gathered_snapshot(
         Ok(b) => b,
         Err(e) => {
             // Pipeline-abort: route through report_error! so Sentry captures it.
-            report_error!(anyhow::Error::from(e).context(format!(
-                "Failed to serialize snapshot manifest; skipping upload (task {task_id})"
-            )));
+            report_error!(anyhow::Error::from(e)
+                .context("Failed to serialize snapshot manifest; skipping upload"));
             return None;
         }
     };
@@ -671,9 +1062,7 @@ async fn upload_gathered_snapshot(
                 Err(e) => {
                     // Capture the full chain for the manifest's `error` field, then surface it
                     // to Sentry via report_error!.
-                    let e = e.context(format!(
-                        "Failed to upload manifest '{manifest_filename}' (task {task_id})"
-                    ));
+                    let e = e.context(format!("Failed to upload manifest '{manifest_filename}'"));
                     let msg = format!("{e:#}");
                     report_error!(e);
                     (false, Some(msg))
@@ -714,7 +1103,6 @@ async fn gather_repo(
     upload_files: &mut Vec<SnapshotUploadFile>,
     repos: &mut Vec<RepoManifestEntry>,
     pre_upload_entries: &mut Vec<EntryResult>,
-    task_id: &AmbientAgentTaskId,
 ) {
     let repo = Path::new(repo_path);
     let metadata = repo_metadata(repo).await;
@@ -756,7 +1144,7 @@ async fn gather_repo(
         }
         Err(e) => {
             let err_str = format!("{e:#}");
-            log::warn!("Failed to snapshot repo '{repo_path}': {err_str} (task {task_id})");
+            log::warn!("Failed to snapshot repo '{repo_path}': {err_str}");
             repos.push(RepoManifestEntry {
                 path: repo_path.to_string(),
                 repo_name: metadata.repo_name,
@@ -783,7 +1171,6 @@ async fn gather_file(
     upload_files: &mut Vec<SnapshotUploadFile>,
     files: &mut Vec<FileManifestEntry>,
     pre_upload_entries: &mut Vec<EntryResult>,
-    task_id: &AmbientAgentTaskId,
 ) {
     let path = Path::new(file_path);
     match tokio::fs::read(path).await {
@@ -812,7 +1199,7 @@ async fn gather_file(
         }
         Err(e) => {
             let err_str = format!("Failed to read file '{file_path}': {e:#}");
-            log::warn!("{err_str} (task {task_id})");
+            log::warn!("{err_str}");
             files.push(FileManifestEntry {
                 path: file_path.to_string(),
                 snapshot_file: None,
@@ -836,13 +1223,9 @@ async fn upload_entry(
     http: &http_client::Client,
     file: &SnapshotUploadFile,
     target_map: &HashMap<String, UploadTarget>,
-    task_id: &AmbientAgentTaskId,
 ) -> EntryResult {
     let Some(target) = target_map.get(&file.filename) else {
-        log::warn!(
-            "No upload target for file '{}', skipping (task {task_id})",
-            file.filename
-        );
+        log::warn!("No upload target for file '{}', skipping", file.filename);
         return EntryResult {
             label: file.filename.clone(),
             status: EntryStatus::Skipped,
@@ -860,10 +1243,7 @@ async fn upload_entry(
         },
         Err(e) => {
             let msg = format!("{e:#}");
-            log::warn!(
-                "Failed to upload '{}': {msg} (task {task_id})",
-                file.filename
-            );
+            log::warn!("Failed to upload '{}': {msg}", file.filename);
             EntryResult {
                 label: file.filename.clone(),
                 status: EntryStatus::Failed,
@@ -879,7 +1259,6 @@ fn fold_upload_results(
     repos: &mut [RepoManifestEntry],
     files: &mut [FileManifestEntry],
     upload_entries: &[EntryResult],
-    task_id: &AmbientAgentTaskId,
 ) {
     for entry in upload_entries {
         if let Some(repo_entry) = repos
@@ -903,7 +1282,7 @@ fn fold_upload_results(
                 }
                 EntryStatus::GatherFailed | EntryStatus::ReadFailed => {
                     log::error!(
-                        "fold_upload_results: unexpected pre-upload status {:?} for repo patch '{}' (task {task_id})",
+                        "fold_upload_results: unexpected pre-upload status {:?} for repo patch '{}'",
                         entry.status,
                         entry.label
                     );
@@ -930,7 +1309,7 @@ fn fold_upload_results(
                 }
                 EntryStatus::GatherFailed | EntryStatus::ReadFailed => {
                     log::error!(
-                        "fold_upload_results: unexpected pre-upload status {:?} for file '{}' (task {task_id})",
+                        "fold_upload_results: unexpected pre-upload status {:?} for file '{}'",
                         entry.status,
                         entry.label
                     );
@@ -949,7 +1328,6 @@ fn apply_per_run_cap(
     repos: &mut [RepoManifestEntry],
     files: &mut [FileManifestEntry],
     pre_upload_entries: &mut Vec<EntryResult>,
-    task_id: &AmbientAgentTaskId,
 ) {
     let blob_limit = MAX_SNAPSHOT_FILES_PER_RUN.saturating_sub(1);
     if upload_files.len() <= blob_limit {
@@ -958,7 +1336,7 @@ fn apply_per_run_cap(
     let total_including_manifest = upload_files.len() + 1;
     let dropped = upload_files.split_off(blob_limit);
     log::warn!(
-        "Snapshot exceeds per-run cap of {MAX_SNAPSHOT_FILES_PER_RUN} files ({total_including_manifest} declared); dropping {} blob(s) from upload (task {task_id})",
+        "Snapshot exceeds per-run cap of {MAX_SNAPSHOT_FILES_PER_RUN} files ({total_including_manifest} declared); dropping {} blob(s) from upload",
         dropped.len(),
     );
     let err_msg = format!("exceeded per-run snapshot cap of {MAX_SNAPSHOT_FILES_PER_RUN} files");
@@ -1011,13 +1389,14 @@ fn merge_content_type(target: &UploadTarget, mime_type: &str) -> UploadTarget {
         url: target.url.clone(),
         method: target.method.clone(),
         headers,
+        fields: target.fields.clone(),
     }
 }
 
 /// Log the final outcome at INFO when everything uploaded, WARN otherwise. The log line
 /// includes per-entry statuses so operators can diagnose partial state without parsing any
 /// downstream logs.
-fn log_snapshot_outcome(outcome: &SnapshotOutcome, task_id: &AmbientAgentTaskId) {
+fn log_snapshot_outcome(outcome: &SnapshotOutcome) {
     let summary = SnapshotSummary::from_entries(&outcome.entries, outcome.manifest_uploaded);
     let manifest_bit = if summary.manifest_uploaded {
         "manifest: uploaded"
@@ -1025,7 +1404,7 @@ fn log_snapshot_outcome(outcome: &SnapshotOutcome, task_id: &AmbientAgentTaskId)
         "manifest: failed"
     };
     let header = format!(
-        "Snapshot upload: {}/{} uploaded (failed: {}, skipped: {}, gather_failed: {}, read_failed: {}; {manifest_bit}) (task {task_id})",
+        "Snapshot upload: {}/{} uploaded (failed: {}, skipped: {}, gather_failed: {}, read_failed: {}; {manifest_bit})",
         summary.uploaded,
         summary.total,
         summary.failed,

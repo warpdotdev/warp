@@ -2,9 +2,11 @@
 
 set -e
 
+. "$PWD/script/warp_sudo"
+
 # Update the apt cache before installing dependencies.  It can be slow, so the install scripts
 # don't do it (to avoid doing it more than once).
-sudo apt update -y
+warp_sudo apt update -y
 
 # Install all dependencies needed to build, run, and test Warp.
 "$PWD"/script/linux/install_test_deps

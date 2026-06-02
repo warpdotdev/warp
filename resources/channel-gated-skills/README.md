@@ -19,7 +19,7 @@ channel-gated-skills/
 ```
 
 > **Stable-ready skills** do not belong here. Place them in the always-bundled
-> `resources/skills/` directory instead. The build script will error if a
+> `resources/bundled/skills/` directory instead. The build script will error if a
 > `stable/` directory exists under `channel-gated-skills/`.
 
 ## Progressive gating
@@ -31,7 +31,7 @@ Gating is **progressive**: earlier gates include all skills from later gates.
 | `local`   | `dogfood` | `dogfood/` + `preview/`       |
 | `dev`     | `dogfood` | `dogfood/` + `preview/`       |
 | `preview` | `preview` | `preview/`                    |
-| `stable`  | —         | *(none — use resources/skills/)* |
+| `stable`  | —         | *(none — use resources/bundled/skills/)* |
 
 A skill placed in `preview/` is bundled on **all** non-stable builds
 (dogfood, preview). A skill placed in `dogfood/` is bundled on dogfood

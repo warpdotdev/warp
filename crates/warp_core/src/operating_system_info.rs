@@ -1,14 +1,14 @@
 //! Module containing operating system information such as the name, category, and version.
 
-use serde::Serialize;
-use serde_with::SerializeDisplay;
 use std::fmt::{Display, Formatter};
 use std::sync::OnceLock;
 
+use serde::Serialize;
+use serde_with::SerializeDisplay;
 #[cfg(target_family = "wasm")]
-use warpui::platform::wasm;
+use warpui_core::platform::wasm;
 #[cfg(target_family = "wasm")]
-use warpui::platform::OperatingSystem;
+use warpui_core::platform::OperatingSystem;
 
 static OS_INFO: OnceLock<Result<OperatingSystemInfo, OperatingSystemInfoError>> = OnceLock::new();
 
@@ -131,7 +131,7 @@ pub enum OperatingSystemCategory {
 impl OperatingSystemCategory {
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     fn new() -> Option<Self> {
-        if cfg!(target_os = "linux") {
+        if cfg!(any(target_os = "linux", target_os = "freebsd")) {
             Some(OperatingSystemCategory::Linux)
         } else if cfg!(target_os = "macos") {
             Some(OperatingSystemCategory::Mac)

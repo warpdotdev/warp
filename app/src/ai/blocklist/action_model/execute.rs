@@ -11,6 +11,7 @@ pub(super) mod read_mcp_resource;
 pub(super) mod read_skill;
 pub(super) mod request_computer_use;
 pub(super) mod request_file_edits;
+pub(super) mod run_agents;
 pub(super) mod search_codebase;
 pub(super) mod send_message;
 pub(super) mod shell_command;
@@ -20,6 +21,11 @@ pub(super) mod suggest_prompt;
 pub(super) mod upload_artifact;
 pub(super) mod use_computer;
 
+use std::any::Any;
+use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
+
 use ai::agent::action_result::{InsertReviewCommentsResult, RequestCommandOutputResult};
 pub use ask_user_question::AskUserQuestionExecutor;
 pub(crate) use call_mcp_tool::coerce_integer_args;
@@ -28,76 +34,72 @@ use create_documents::CreateDocumentsExecutor;
 use edit_documents::EditDocumentsExecutor;
 use fetch_conversation::FetchConversationExecutor;
 use file_glob::FileGlobExecutor;
-use futures::{future::BoxFuture, FutureExt};
+use futures::future::BoxFuture;
+#[cfg(feature = "local_fs")]
+use futures::AsyncReadExt;
+use futures::FutureExt;
 use grep::GrepExecutor;
+#[cfg(feature = "local_fs")]
+use mime_guess::from_path;
 use parking_lot::FairMutex;
 use read_documents::ReadDocumentsExecutor;
 pub(super) use read_files::ReadFilesExecutor;
 use read_mcp_resource::ReadMCPResourceExecutor;
 use read_skill::ReadSkillExecutor;
 use request_computer_use::RequestComputerUseExecutor;
-pub(crate) use request_file_edits::apply_edits;
-pub(crate) use request_file_edits::FileReadResult;
-pub(crate) use request_file_edits::MalformedFinalLineProxyEvent;
+pub(crate) use request_file_edits::{apply_edits, FileReadResult, MalformedFinalLineProxyEvent};
 pub use request_file_edits::{
     EditAcceptAndContinueClickedEvent, EditAcceptClickedEvent, EditResolvedEvent, EditStats,
     RequestFileEditsExecutor, RequestFileEditsFormatKind, RequestFileEditsTelemetryEvent,
 };
+#[cfg(test)]
+pub use run_agents::{compose_run_agents_child_prompt, run_agents_to_start_agent_mode};
+pub use run_agents::{RunAgentsExecutor, RunAgentsExecutorEvent, RunAgentsSpawningSnapshot};
 pub use send_message::SendMessageToAgentExecutor;
 use serde::{Deserialize, Serialize};
 pub use shell_command::{ShellCommandExecutor, ShellCommandExecutorEvent};
-pub use start_agent::{StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest};
+pub use start_agent::{
+    StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest, StartAgentRequestId,
+};
 pub use suggest_new_conversation::NewConversationDecision;
 use suggest_new_conversation::SuggestNewConversationExecutor;
 pub use suggest_prompt::PromptSuggestionExecutor;
 use upload_artifact::UploadArtifactExecutor;
 use use_computer::UseComputerExecutor;
-use warp_core::{execution_mode::AppExecutionMode, features::FeatureFlag};
-
-#[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::is_binary_file;
-#[cfg(feature = "local_fs")]
-use futures::AsyncReadExt;
-use std::{any::Any, path::PathBuf, pin::Pin, sync::Arc};
+use warp_core::execution_mode::AppExecutionMode;
+use warp_core::features::FeatureFlag;
 #[cfg(feature = "local_fs")]
 use warp_files::{FileModel, TextFileReadResult};
 #[cfg(feature = "local_fs")]
 use warp_util::file::FileLoadError;
 #[cfg(feature = "local_fs")]
 use warp_util::file_type::is_buffer_binary;
-use warpui::{
-    r#async::{Spawnable, SpawnableOutput},
-    AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity,
-};
+use warpui::r#async::{Spawnable, SpawnableOutput};
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
+use self::search_codebase::SearchCodebaseExecutor;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
+    AIAgentActionType, AIAgentActionTypeDiscriminants, CancellationReason, FileContext,
+    FileLocations, ServerOutputId,
+};
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
+#[cfg(feature = "local_fs")]
+use crate::ai::{agent::AnyFileContent, paths::host_native_absolute_path};
+use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model::session::{ExecuteCommandOptions, Session};
+use crate::terminal::model_events::ModelEventDispatcher;
+use crate::terminal::shell::ShellType;
+use crate::terminal::{ShellLaunchData, TerminalModel};
 #[cfg(feature = "local_fs")]
 use crate::util::image::{
     is_supported_image_mime_type, process_image_for_agent, ProcessImageResult,
 };
 #[cfg(feature = "local_fs")]
-use mime_guess::from_path;
-
-use self::search_codebase::SearchCodebaseExecutor;
-#[cfg(feature = "local_fs")]
-use crate::ai::{agent::AnyFileContent, paths::host_native_absolute_path};
-use crate::{
-    ai::{
-        agent::{
-            conversation::AIConversationId, AIAgentAction, AIAgentActionId, AIAgentActionResult,
-            AIAgentActionResultType, AIAgentActionType, CancellationReason, FileContext,
-            FileLocations, ServerOutputId,
-        },
-        ambient_agents::AmbientAgentTaskId,
-        get_relevant_files::controller::GetRelevantFilesController,
-    },
-    terminal::{
-        model::session::{active_session::ActiveSession, ExecuteCommandOptions, Session},
-        model_events::ModelEventDispatcher,
-        shell::ShellType,
-        ShellLaunchData, TerminalModel,
-    },
-    BlocklistAIHistoryModel,
-};
+use crate::util::openable_file_type::is_binary_file;
+use crate::BlocklistAIHistoryModel;
 
 /// Types of actions that can be executed in parallel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,6 +260,7 @@ pub struct BlocklistAIActionExecutor {
     read_skill_executor: ModelHandle<ReadSkillExecutor>,
     fetch_conversation_executor: ModelHandle<FetchConversationExecutor>,
     start_agent_executor: ModelHandle<StartAgentExecutor>,
+    run_agents_executor: ModelHandle<RunAgentsExecutor>,
     send_message_executor: ModelHandle<SendMessageToAgentExecutor>,
     ask_user_question_executor: ModelHandle<AskUserQuestionExecutor>,
     /// The actions currently executing asynchronously, keyed by action ID.
@@ -323,6 +326,8 @@ impl BlocklistAIActionExecutor {
         let read_skill_executor = ctx.add_model(|_| ReadSkillExecutor::new());
         let fetch_conversation_executor = ctx.add_model(|_| FetchConversationExecutor::new());
         let start_agent_executor = ctx.add_model(StartAgentExecutor::new);
+        let run_agents_executor = ctx
+            .add_model(|_| RunAgentsExecutor::new(start_agent_executor.clone(), terminal_view_id));
         let send_message_executor = ctx.add_model(|_| SendMessageToAgentExecutor::new());
         let ask_user_question_executor =
             ctx.add_model(|_| AskUserQuestionExecutor::new(terminal_view_id));
@@ -348,6 +353,7 @@ impl BlocklistAIActionExecutor {
             read_skill_executor,
             fetch_conversation_executor,
             start_agent_executor,
+            run_agents_executor,
             send_message_executor,
             ask_user_question_executor,
         }
@@ -385,6 +391,10 @@ impl BlocklistAIActionExecutor {
         &self.start_agent_executor
     }
 
+    pub fn run_agents_executor(&self) -> &ModelHandle<RunAgentsExecutor> {
+        &self.run_agents_executor
+    }
+
     pub fn action_phase(&self, action: &AIAgentAction, ctx: &AppContext) -> RunningActionPhase {
         match &action.action {
             AIAgentActionType::ReadFiles(..)
@@ -418,6 +428,9 @@ impl BlocklistAIActionExecutor {
         id: Option<AmbientAgentTaskId>,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.send_message_executor.update(ctx, |executor, _| {
+            executor.set_ambient_agent_task_id(id);
+        });
         self.request_computer_use_executor
             .update(ctx, |executor, _| {
                 executor.set_ambient_agent_task_id(id);
@@ -513,6 +526,9 @@ impl BlocklistAIActionExecutor {
                 .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
             AIAgentActionType::AskUserQuestion { .. } => self
                 .ask_user_question_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::RunAgents(_) => self
+                .run_agents_executor
                 .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
         }
     }
@@ -699,6 +715,10 @@ impl BlocklistAIActionExecutor {
                 .ask_user_question_executor
                 .update(ctx, |executor, ctx| executor.execute(input, ctx))
                 .into(),
+            AIAgentActionType::RunAgents(_) => self
+                .run_agents_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
         };
 
         let action_id = action_clone.id.clone();
@@ -789,6 +809,11 @@ impl BlocklistAIActionExecutor {
             return;
         }
         if let Some(running) = self.async_executing_actions.remove(action_id) {
+            let action_kind = AIAgentActionTypeDiscriminants::from(&running.action.action);
+            log::info!(
+                "Canceling running async action of type {action_kind:?} action_id={action_id:?}, reason={reason:?}, backtrace=\n{}",
+                std::backtrace::Backtrace::force_capture()
+            );
             if running.is_shell_command_action() {
                 self.shell_command_executor.update(ctx, |executor, ctx| {
                     executor.cancel_execution(&running.action.id, ctx);
@@ -898,6 +923,9 @@ impl BlocklistAIActionExecutor {
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
             AIAgentActionType::AskUserQuestion { .. } => self
                 .ask_user_question_executor
+                .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
+            AIAgentActionType::RunAgents(_) => self
+                .run_agents_executor
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
         }
     }

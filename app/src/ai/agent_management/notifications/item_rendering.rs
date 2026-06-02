@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use pathfinder_color::ColorU;
+use warp_core::ui::appearance::Appearance as CoreAppearance;
 use warp_core::ui::icons::Icon;
+use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{Fill, WarpTheme};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
@@ -13,9 +15,6 @@ use warpui::fonts::Weight;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{View, ViewContext, ViewHandle};
 
-use warp_core::ui::appearance::Appearance as CoreAppearance;
-use warp_core::ui::theme::color::internal_colors;
-
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent_management::notifications::item::NotificationSourceAgent;
 use crate::ai::agent_management::notifications::{NotificationCategory, NotificationItem};
@@ -25,9 +24,7 @@ use crate::ai::artifacts::{
 };
 use crate::appearance::Appearance;
 use crate::send_telemetry_from_ctx;
-use crate::ui_components::icon_with_status::{
-    render_icon_with_status, IconWithStatusSizing, IconWithStatusVariant,
-};
+use crate::ui_components::icon_with_status::{render_icon_with_status, IconWithStatusVariant};
 use crate::util::time_format::format_elapsed_since;
 use crate::view_components::action_button::ActionButtonTheme;
 use crate::workspace::WorkspaceAction;
@@ -399,14 +396,8 @@ fn render_message_text(message: &str, expanded: bool, appearance: &Appearance) -
         .finish()
 }
 
-const NOTIFICATION_AVATAR_SIZING: IconWithStatusSizing = IconWithStatusSizing {
-    icon_size: 16.,
-    padding: 8.,
-    badge_icon_size: 12.,
-    badge_padding: 2.,
-    overall_size_override: None,
-    badge_offset: (6., 6.),
-};
+/// Total size of the agent avatar component rendered alongside each notification.
+const NOTIFICATION_AVATAR_SIZE: f32 = 32.;
 
 fn render_agent_avatar(
     agent: NotificationSourceAgent,
@@ -415,18 +406,20 @@ fn render_agent_avatar(
 ) -> Box<dyn Element> {
     let status = notification_category_to_conversation_status(category);
     let variant = match agent {
-        NotificationSourceAgent::Oz => IconWithStatusVariant::OzAgent {
+        NotificationSourceAgent::Oz { is_ambient } => IconWithStatusVariant::OzAgent {
             status: Some(status),
-            is_ambient: false,
+            is_ambient,
         },
-        NotificationSourceAgent::CLI(cli) => IconWithStatusVariant::CLIAgent {
-            agent: cli,
+        NotificationSourceAgent::CLI { agent, is_ambient } => IconWithStatusVariant::CLIAgent {
+            agent,
             status: Some(status),
+            is_ambient,
         },
     };
     render_icon_with_status(
         variant,
-        &NOTIFICATION_AVATAR_SIZING,
+        NOTIFICATION_AVATAR_SIZE,
+        0.,
         theme,
         theme.surface_2(),
     )

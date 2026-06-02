@@ -3,13 +3,13 @@
 
 mod api;
 
-pub use api::*;
+use std::sync::Arc;
 
+pub use api::*;
 use chrono::NaiveDateTime;
 use itertools::Itertools;
 use parking_lot::FairMutex;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::terminal::model::block::BlockState;
@@ -209,5 +209,5 @@ pub fn create_generate_ai_input_suggestions_request(
 }
 
 #[cfg(test)]
-#[path = "generate_ai_input_suggestions_test.rs"]
+#[path = "generate_ai_input_suggestions_tests.rs"]
 mod tests;

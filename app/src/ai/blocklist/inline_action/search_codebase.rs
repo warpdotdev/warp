@@ -2,47 +2,35 @@ use std::ops::Range;
 use std::sync::{Arc, RwLock};
 
 use warp_core::ui::appearance::Appearance;
+use warpui::elements::{
+    Container, CornerRadius, CrossAxisAlignment, Element, Flex, FormattedTextElement,
+    MainAxisAlignment, ParentElement, Radius, SelectableArea, SelectionHandle, Shrinkable,
+};
 use warpui::ui_components::components::UiComponentStyles;
 use warpui::{
-    elements::{
-        Container, CornerRadius, CrossAxisAlignment, Element, Flex, FormattedTextElement,
-        MainAxisAlignment, ParentElement, Radius, SelectableArea, SelectionHandle, Shrinkable,
-    },
     AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
 use super::search_results_common::{
     render_collapsible_search_results, CollapsibleSearchResultsState,
 };
+use crate::ai::agent::icons::yellow_running_icon;
+use crate::ai::agent::FileContext;
+use crate::ai::blocklist::action_model::AIActionStatus;
+use crate::ai::blocklist::block::find::FindState;
+use crate::ai::blocklist::block::secret_redaction::SecretRedactionState;
+use crate::ai::blocklist::block::view_impl::output::{
+    render_read_files_text, LinkActionConstructors, RenderContext, RenderReadFileArg,
+};
+use crate::ai::blocklist::block::view_impl::{FindContext, WithContentItemSpacing};
+use crate::ai::blocklist::inline_action::inline_action_header::{
+    INLINE_ACTION_HEADER_VERTICAL_PADDING, INLINE_ACTION_HORIZONTAL_PADDING,
+};
+use crate::ai::blocklist::inline_action::inline_action_icons::cancelled_icon;
 use crate::ai::blocklist::TextLocation;
-use crate::ai::{
-    agent::icons::yellow_running_icon,
-    blocklist::inline_action::{
-        inline_action_header::{
-            INLINE_ACTION_HEADER_VERTICAL_PADDING, INLINE_ACTION_HORIZONTAL_PADDING,
-        },
-        inline_action_icons::cancelled_icon,
-    },
-};
-use crate::ai::{
-    agent::FileContext,
-    blocklist::{
-        action_model::AIActionStatus,
-        block::{
-            find::FindState,
-            secret_redaction::SecretRedactionState,
-            view_impl::{
-                output::{
-                    render_read_files_text, LinkActionConstructors, RenderContext,
-                    RenderReadFileArg,
-                },
-                FindContext, WithContentItemSpacing,
-            },
-        },
-    },
-};
+use crate::terminal::find::TerminalFindModel;
 use crate::terminal::view::RichContentLink;
-use crate::terminal::{find::TerminalFindModel, ShellLaunchData};
+use crate::terminal::ShellLaunchData;
 use crate::util::link_detection::{
     detect_links, DetectedLinkType, DetectedLinksState, LinkLocation,
 };

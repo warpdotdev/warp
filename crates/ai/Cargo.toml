@@ -38,7 +38,7 @@ sentry = { workspace = true, optional = true }
 shellexpand.workspace = true
 strum.workspace = true
 strum_macros.workspace = true
-warpui.workspace = true
+warpui_core.workspace = true
 warpui_extras = { workspace = true, features = ["default"] }
 warp_graphql.workspace = true
 warp_multi_agent_api.workspace = true

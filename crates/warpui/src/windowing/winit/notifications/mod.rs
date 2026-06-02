@@ -1,12 +1,14 @@
 //! Module to display system desktop notifications through the winit windowing backend.
 
-use crate::platform::NotificationInfo;
-use crate::platform::{RequestNotificationPermissionsCallback, SendNotificationErrorCallback};
-use crate::windowing::winit::app::CustomEvent;
-use crate::{notification, WindowId};
 use winit::event_loop::EventLoopProxy;
 
-#[cfg_attr(target_os = "linux", path = "linux.rs")]
+use crate::platform::{
+    NotificationInfo, RequestNotificationPermissionsCallback, SendNotificationErrorCallback,
+};
+use crate::windowing::winit::app::CustomEvent;
+use crate::{notification, WindowId};
+
+#[cfg_attr(any(target_os = "linux", target_os = "freebsd"), path = "linux.rs")]
 #[cfg_attr(target_os = "windows", path = "windows.rs")]
 #[cfg_attr(target_family = "wasm", path = "wasm.rs")]
 mod imp;

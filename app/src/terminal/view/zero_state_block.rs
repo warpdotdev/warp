@@ -1,43 +1,38 @@
 use settings::Setting;
-use warp_core::{report_if_error, ui::Icon};
+use warp_core::report_if_error;
+use warp_core::ui::Icon;
+use warpui::elements::{
+    ChildAnchor, Container, CrossAxisAlignment, Flex, MainAxisSize, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, Shrinkable, Stack, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::Keystroke;
+use warpui::prelude::{vec2f, ConstrainedBox, Cursor, Empty, Hoverable, MouseStateHandle};
+use warpui::scene::{Border, CornerRadius, Radius};
+use warpui::ui_components::checkbox::Checkbox;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        ChildAnchor, Container, CrossAxisAlignment, Flex, MainAxisSize, OffsetPositioning,
-        ParentAnchor, ParentElement, ParentOffsetBounds, Shrinkable, Stack, Text,
-    },
-    fonts::{Properties, Weight},
-    keymap::Keystroke,
-    prelude::{vec2f, ConstrainedBox, Cursor, Empty, Hoverable, MouseStateHandle},
-    scene::{Border, CornerRadius, Radius},
-    ui_components::{
-        checkbox::Checkbox,
-        components::{UiComponent, UiComponentStyles},
-    },
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
-use crate::{
-    ai::blocklist::agent_view::{
-        AgentViewController, AgentViewControllerEvent, ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
-        ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
-    },
-    appearance::Appearance,
-    settings::{AISettings, AISettingsChangedEvent, InputModeSettings},
-    terminal::{
-        self,
-        event::BlockType,
-        input::message_bar::{common::render_standard_message, Message, MessageItem},
-        model_events::{ModelEvent, ModelEventDispatcher},
-        settings::{TerminalSettings, TerminalSettingsChangedEvent},
-        view::TerminalAction,
-    },
-    ui_components::blended_colors,
-    util::bindings::keybinding_name_to_keystroke,
-    workspace::tab_settings::TabSettings,
-    workspace::tab_settings::TabSettingsChangedEvent,
-    workspace::view::TOGGLE_RIGHT_PANEL_BINDING_NAME,
-    WorkspaceAction,
+use crate::ai::blocklist::agent_view::{
+    AgentViewController, AgentViewControllerEvent, ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
+    ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
 };
+use crate::appearance::Appearance;
+use crate::settings::{AISettings, AISettingsChangedEvent, InputModeSettings};
+use crate::terminal::event::BlockType;
+use crate::terminal::input::message_bar::common::render_standard_message;
+use crate::terminal::input::message_bar::{Message, MessageItem};
+use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::terminal::settings::{TerminalSettings, TerminalSettingsChangedEvent};
+use crate::terminal::view::TerminalAction;
+use crate::terminal::{self};
+use crate::ui_components::blended_colors;
+use crate::util::bindings::keybinding_name_to_keystroke;
+use crate::workspace::tab_settings::{TabSettings, TabSettingsChangedEvent};
+use crate::workspace::view::TOGGLE_RIGHT_PANEL_BINDING_NAME;
+use crate::WorkspaceAction;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalViewZeroStateAction {

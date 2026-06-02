@@ -45,8 +45,16 @@ Schedule an agent to summarize feedback every day at 8am UTC:
 
 ```sh
 $ {{warp_cli_binary_name}} schedule create --cron "0 8 * * *" \
+    --name "GitHub issue summary" \
     --prompt "Collect all feedback from new GitHub issues and provide a summary report" \
     --environment UA17BXYZ
+```
+
+List and inspect scheduled agents:
+
+```sh
+$ {{warp_cli_binary_name}} schedule list
+$ {{warp_cli_binary_name}} schedule get <schedule-id>
 ```
 
 Create a secret for cloud agents to use:
@@ -104,7 +112,11 @@ curl -L -X GET {{warp_server_url}}/api/v1/agent/runs/5972cca4-a410-42af-930a-e56
 You can trigger Oz cloud agents from GitHub Actions workflows. This enables automation like:
 * Triaging issues when they're created or labeled
 * Running checks on pull requests
-* Scheduling periodic tasks via workflow dispatch
+* Responding to CI events or deployment triggers
+
+Use GitHub Actions when the trigger itself lives in GitHub: An event like an issue being opened, a PR being labeled, a push, or a CI workflow completing.
+
+For periodic/recurring work, prefer `{{warp_cli_binary_name}} schedule create` to enhance scheduled run tracking with the Oz platform.
 
 The agent will have access to the `gh` CLI to communicate back to the repository. Prefer prompting the agent to use `gh` vs. requiring the agent to respond with structured output for the GitHub workflow to parse.
 

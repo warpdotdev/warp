@@ -1,31 +1,28 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use parking_lot::FairMutex;
 use warp_core::ui::appearance::Appearance;
-use warpui::{
-    r#async::SpawnedFutureHandle, AppContext, EntityId, SingletonEntity as _, ViewContext,
-    ViewHandle,
-};
-
-use crate::terminal::{
-    model::{
-        ansi::SystemDetails,
-        block::BlockId,
-        session::SessionId,
-        terminal_model::{SubshellInitializationInfo, TmuxInstallationState},
-    },
-    settings::TerminalSettings,
-    shell::ShellType,
-    ssh::{error::SshErrorBlock, install_tmux::SshInstallTmuxBlock, warpify::SshWarpifyBlock},
-    TerminalModel, TerminalView,
-};
-use std::{collections::HashMap, sync::Arc};
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::{AppContext, EntityId, SingletonEntity as _, ViewContext, ViewHandle};
 
 use super::success_block::WarpifySuccessBlock;
+use crate::terminal::model::ansi::SystemDetails;
+use crate::terminal::model::block::BlockId;
+use crate::terminal::model::session::SessionId;
+use crate::terminal::model::terminal_model::{SubshellInitializationInfo, TmuxInstallationState};
+use crate::terminal::settings::TerminalSettings;
+use crate::terminal::shell::ShellType;
+use crate::terminal::ssh::error::SshErrorBlock;
+use crate::terminal::ssh::install_tmux::SshInstallTmuxBlock;
+use crate::terminal::ssh::warpify::SshWarpifyBlock;
+use crate::terminal::{TerminalModel, TerminalView};
 
 /// A unique identifier for a subshell separator.
 pub type SeparatorId = usize;
 
 /// These are elements in the BlockList which are similar to inline banners but are smaller, and
-/// only meant to render in compact mode when their in-padding flag couterparts don't have enough
+/// only meant to render in compact mode when their in-padding flag counterparts don't have enough
 /// space in the padding to render.
 #[derive(Default)]
 struct SubshellSeparatorState {

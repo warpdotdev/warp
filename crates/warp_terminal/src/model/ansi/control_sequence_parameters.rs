@@ -1,14 +1,19 @@
+// The code in this file is adapted from the vte crate (an Alacritty project)
+// under the Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
+
 //! This module exports abstractions for parameters of control sequence actions;
 //! e.g. actions to be executed after receiving a control sequence from the pty.
 //!
 //! Examples of such actions include repositioning the cursor, changing text
 //! styles, and setting terminal modes.
+use std::convert::TryFrom;
+use std::{iter, str};
+
 use anyhow::bail;
 use get_size::GetSize;
 use log::trace;
 use pathfinder_color::ColorU;
 use serde::{Deserialize, Serialize};
-use std::{convert::TryFrom, iter, str};
 use thiserror::Error;
 use vte::ParamsIter;
 

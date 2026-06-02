@@ -1,9 +1,10 @@
-use std::{collections::HashMap, ops::Range};
+use std::collections::HashMap;
+use std::ops::Range;
 
 use arborium::tree_sitter::{Node, Query, QueryCursor, Tree};
 use streaming_iterator::StreamingIterator;
 use warp_editor::content::buffer::Buffer;
-use warpui::text::point::Point;
+use warpui_core::text::point::Point;
 
 use super::highlight_query::TextBuffer;
 

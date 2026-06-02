@@ -1,39 +1,41 @@
-use anyhow::{anyhow, Result};
 use core::fmt;
-use itertools::Itertools;
-use std::{
-    collections::HashMap,
-    error,
-    hash::{DefaultHasher, Hash, Hasher},
-    rc::Rc,
-    sync::{Arc, LazyLock},
-};
-use strum_macros::EnumIter;
+use std::collections::HashMap;
+use std::error;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::rc::Rc;
+use std::sync::{Arc, LazyLock};
 
-use crate::{
-    assets::asset_cache::{Asset, AssetCache, AssetSource, AssetState},
-    util::parse_u32,
-    Entity, SingletonEntity,
-};
-use image::{
-    codecs::{gif::GifDecoder, webp::WebPDecoder},
-    imageops::FilterType,
-    AnimationDecoder, DynamicImage, Frame, ImageBuffer, ImageFormat,
-};
+use anyhow::{anyhow, Result};
+use image::codecs::gif::GifDecoder;
+use image::codecs::webp::WebPDecoder;
+use image::imageops::FilterType;
+use image::{AnimationDecoder, DynamicImage, Frame, ImageBuffer, ImageFormat};
+use itertools::Itertools;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use pathfinder_geometry::vector::Vector2I;
-use resvg::{
-    tiny_skia::{self, IntSize},
-    usvg,
-};
+use resvg::tiny_skia::{self, IntSize};
+use resvg::usvg;
+use strum_macros::EnumIter;
+
+use crate::assets::asset_cache::{Asset, AssetCache, AssetSource, AssetState};
+use crate::util::parse_u32;
+use crate::{Entity, SingletonEntity};
 
 const MIN_REFRESH_DELAY_MS: u32 = 50;
 
 static SVG_FONT_DB: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
     let mut fontdb = usvg::fontdb::Database::new();
     fontdb.load_system_fonts();
+    load_svg_fallback_fonts(&mut fontdb);
     Arc::new(fontdb)
 });
+
+fn load_svg_fallback_fonts(fontdb: &mut usvg::fontdb::Database) {
+    fontdb.load_font_data(
+        include_bytes!("../../../app/assets/bundled/fonts/roboto/Roboto-Regular.ttf").to_vec(),
+    );
+    fontdb.set_sans_serif_family("Roboto");
+}
 
 pub fn prewarm_svg_font_db() {
     LazyLock::force(&SVG_FONT_DB);
@@ -949,6 +951,17 @@ impl ImageCache {
                 AssetState::Loaded { data: image }
             }
         }
+    }
+
+    pub fn image_size(
+        &self,
+        asset_source: AssetSource,
+        asset_cache: &AssetCache,
+    ) -> Option<Vector2I> {
+        let AssetState::Loaded { data } = asset_cache.load_asset::<ImageType>(asset_source) else {
+            return None;
+        };
+        data.image_size()
     }
 }
 

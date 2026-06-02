@@ -16,7 +16,7 @@ We defined `CloudEnvVarCollection` in `mod.rs`, which implements the `GenericClo
 
 The implementation of EVCs as a Warp Drive object is in `app/src/drive/items/env_var_collection.rs`, where code for the Warp Drive preview and click action is located.
 
-Code relevant to edit collisions and fetching EVCs from the server is in `app/src/server/server_api.rs` and `app/src/server/update_manager.rs`. We aimed to maintain a similar liveness property to workflows, meaning a concurrent edit made by another user requires one to check out the other's edit before committing their own.
+Code relevant to edit collisions and fetching EVCs from the server is in `app/src/server/server_api.rs` and `app/src/server/cloud_objects/update_manager.rs`. We aimed to maintain a similar liveness property to workflows, meaning a concurrent edit made by another user requires one to check out the other's edit before committing their own.
 
 ## Client Side
 
@@ -31,12 +31,12 @@ We'll describe our core UI components by line-by-lining each file in the view di
 - `env_var_collection.rs` — Contains the core functions and implementation of the `EnvVarCollectionView`. Functions like "open_new_env_var_collection" and "load" (which loads an existing EVC or reloads an open EVC after a collision) are documented with descriptions of their relevance.
 - `secrets.rs` — separate section below as it's a crucial flow
 - `command_dialog`
-    - `view.rs` — Defines the view for the command dialog.
+    - `command_dialog_view.rs` — Defines the view for the command dialog.
     - `mod.rs` — Contains functionality related to the command dialog i.e. (listening to events from the dialog)
 - `unsaved_changes_dialog.rs` — Contains code related to the dialog presented when a user tries to close the pane without saving changes.
 - `menus.rs` — Defines menu-related code for EVCs. This includes secret menus (linked to the key icon or a rendered secret/command) and pane-bound menus (overflow menu with object-specific actions and the context menu with split pane actions, triggered on right-click).
 - `editors.rs` — Defines code for initializing editors, handling their events (such as tab navigation), and rendering the "metadata" section.
-- `section_headers_and_footers.rs` — Contains render functions for components like the trash overflow banner or the save button in the footer.
+- `fixed_view_components.rs` — Contains render functions for components like the trash overflow banner or the save button in the footer.
 - `active_env_var_collection_data.rs` — Tracks the currently open EVC, including the current revision and saving status.
 
 ### Secrets

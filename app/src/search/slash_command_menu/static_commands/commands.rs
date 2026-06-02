@@ -1,18 +1,20 @@
-use std::{collections::HashMap, sync::LazyLock};
+use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 
-use crate::search::slash_command_menu::{static_commands::Argument, StaticCommand};
-
 use super::Availability;
+use crate::search::slash_command_menu::static_commands::Argument;
+use crate::search::slash_command_menu::StaticCommand;
+use crate::ui_components::color_dot;
 
 pub static AGENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/agent",
     description: "Start a new conversation",
     icon_path: "bundled/svg/oz.svg",
-    availability: Availability::AI_ENABLED,
+    availability: Availability::AI_ENABLED.union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: false,
     argument: Some(Argument::optional().with_execute_on_selection()),
 });
@@ -21,14 +23,14 @@ pub static CLOUD_AGENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand
     name: "/cloud-agent",
     description: "Start a new cloud agent conversation",
     icon_path: "bundled/svg/oz-cloud.svg",
-    availability: Availability::AI_ENABLED,
+    availability: Availability::AI_ENABLED.union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: false,
     argument: Some(Argument::optional().with_execute_on_selection()),
 });
 
 pub const ADD_MCP: StaticCommand = StaticCommand {
     name: "/add-mcp",
-    description: "Add new MCP server",
+    description: "Add a new MCP server via the MCP settings page",
     icon_path: "bundled/svg/dataflow.svg",
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: false,
@@ -135,6 +137,25 @@ pub static RENAME_TAB: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand 
     argument: Some(Argument::required().with_hint_text("<tab name>")),
 });
 
+static SET_TAB_COLOR_HINT: LazyLock<String> = LazyLock::new(|| {
+    let mut hint = String::from("<");
+    for color in color_dot::TAB_COLOR_OPTIONS {
+        hint.push_str(&color.to_string().to_ascii_lowercase());
+        hint.push('|');
+    }
+    hint.push_str("none>");
+    hint
+});
+
+pub static SET_TAB_COLOR: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
+    name: "/set-tab-color",
+    description: "Set the color of the current tab",
+    icon_path: "bundled/svg/ellipse.svg",
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: Some(Argument::required().with_hint_text(SET_TAB_COLOR_HINT.as_str())),
+});
+
 pub static FORK: LazyLock<StaticCommand> = LazyLock::new(|| {
     let hint_text = "<optional prompt to send in forked conversation>";
     StaticCommand {
@@ -144,10 +165,27 @@ pub static FORK: LazyLock<StaticCommand> = LazyLock::new(|| {
         availability: Availability::AGENT_VIEW
             | Availability::ACTIVE_CONVERSATION
             | Availability::NO_LRC_CONTROL
-            | Availability::AI_ENABLED,
+            | Availability::AI_ENABLED
+            | Availability::NOT_CLOUD_AGENT,
         auto_enter_ai_mode: true,
         argument: Some(Argument::optional().with_hint_text(hint_text)),
     }
+});
+
+pub static MOVE_TO_CLOUD: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
+    name: "/handoff",
+    description: "Hand off this conversation to a cloud agent",
+    icon_path: "bundled/svg/upload-cloud-01.svg",
+    availability: Availability::AGENT_VIEW
+        | Availability::ACTIVE_CONVERSATION
+        | Availability::AI_ENABLED
+        | Availability::NOT_CLOUD_AGENT,
+    auto_enter_ai_mode: false,
+    argument: Some(
+        Argument::optional()
+            .with_hint_text("<optional follow-up prompt>")
+            .with_execute_on_selection(),
+    ),
 });
 
 pub const OPEN_CODE_REVIEW: StaticCommand = StaticCommand {
@@ -251,7 +289,9 @@ pub static NEW: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/new",
     description: "Start a new conversation (alias for /agent)",
     icon_path: "bundled/svg/new-conversation.svg",
-    availability: Availability::NO_LRC_CONTROL | Availability::AI_ENABLED,
+    availability: Availability::NO_LRC_CONTROL
+        | Availability::AI_ENABLED
+        | Availability::NOT_CLOUD_AGENT,
     auto_enter_ai_mode: false,
     argument: Some(Argument::optional().with_execute_on_selection()),
 });
@@ -265,11 +305,46 @@ pub static MODEL: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     argument: None,
 });
 
+pub static HOST: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
+    name: "/host",
+    description: "Switch the cloud agent execution host",
+    icon_path: "bundled/svg/oz-cloud.svg",
+    availability: Availability::AGENT_VIEW
+        | Availability::AI_ENABLED
+        | Availability::CLOUD_AGENT_V2,
+    auto_enter_ai_mode: true,
+    argument: None,
+});
+
+pub static HARNESS: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
+    name: "/harness",
+    description: "Switch the cloud agent harness",
+    icon_path: "bundled/svg/oz.svg",
+    availability: Availability::AGENT_VIEW
+        | Availability::AI_ENABLED
+        | Availability::CLOUD_AGENT_V2,
+    auto_enter_ai_mode: true,
+    argument: None,
+});
+
+pub static ENVIRONMENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
+    name: "/environment",
+    description: "Switch the cloud agent environment",
+    icon_path: "bundled/svg/globe-04.svg",
+    availability: Availability::AGENT_VIEW
+        | Availability::AI_ENABLED
+        | Availability::CLOUD_AGENT_V2,
+    auto_enter_ai_mode: true,
+    argument: None,
+});
+
 pub static PROFILE: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/profile",
     description: "Switch the active execution profile",
     icon_path: "bundled/svg/psychology.svg",
-    availability: Availability::AGENT_VIEW | Availability::AI_ENABLED,
+    availability: Availability::AGENT_VIEW
+        | Availability::AI_ENABLED
+        | Availability::NOT_CLOUD_AGENT,
     auto_enter_ai_mode: true,
     argument: None,
 });
@@ -312,7 +387,8 @@ pub static COMPACT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     availability: Availability::AGENT_VIEW
         | Availability::ACTIVE_CONVERSATION
         | Availability::NO_LRC_CONTROL
-        | Availability::AI_ENABLED,
+        | Availability::AI_ENABLED
+        | Availability::NOT_CLOUD_AGENT,
     auto_enter_ai_mode: true,
     argument: Some(
         Argument::optional().with_hint_text("<optional custom summarization instructions>"),
@@ -326,7 +402,8 @@ pub static COMPACT_AND: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand
     availability: Availability::AGENT_VIEW
         | Availability::ACTIVE_CONVERSATION
         | Availability::NO_LRC_CONTROL
-        | Availability::AI_ENABLED,
+        | Availability::AI_ENABLED
+        | Availability::NOT_CLOUD_AGENT,
     auto_enter_ai_mode: true,
     argument: Some(Argument::optional().with_hint_text("<prompt to send after compaction>")),
 });
@@ -338,7 +415,8 @@ pub static QUEUE: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     availability: Availability::AGENT_VIEW
         | Availability::ACTIVE_CONVERSATION
         | Availability::NO_LRC_CONTROL
-        | Availability::AI_ENABLED,
+        | Availability::AI_ENABLED
+        | Availability::NOT_CLOUD_AGENT,
     auto_enter_ai_mode: true,
     argument: Some(Argument::required().with_hint_text("<prompt to send when agent is done>")),
 });
@@ -352,7 +430,8 @@ pub static FORK_AND_COMPACT: LazyLock<StaticCommand> = LazyLock::new(|| {
         availability: Availability::AGENT_VIEW
             | Availability::ACTIVE_CONVERSATION
             | Availability::NO_LRC_CONTROL
-            | Availability::AI_ENABLED,
+            | Availability::AI_ENABLED
+            | Availability::NOT_CLOUD_AGENT,
         auto_enter_ai_mode: true,
         argument: Some(Argument::optional().with_hint_text(hint_text)),
     }
@@ -364,10 +443,25 @@ pub const FORK_FROM: StaticCommand = StaticCommand {
     icon_path: "bundled/svg/arrow-split.svg",
     availability: Availability::AGENT_VIEW
         .union(Availability::NO_LRC_CONTROL)
-        .union(Availability::AI_ENABLED),
+        .union(Availability::AI_ENABLED)
+        .union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: true,
     argument: None,
 };
+
+pub static CONTINUE_LOCALLY: LazyLock<StaticCommand> = LazyLock::new(|| {
+    let hint_text = "<optional prompt to send in forked conversation>";
+    StaticCommand {
+        name: "/continue-locally",
+        description: "Continue this cloud conversation locally",
+        icon_path: "bundled/svg/arrow-split.svg",
+        availability: Availability::AGENT_VIEW
+            | Availability::ACTIVE_CONVERSATION
+            | Availability::AI_ENABLED,
+        auto_enter_ai_mode: true,
+        argument: Some(Argument::optional().with_hint_text(hint_text)),
+    }
+});
 
 pub const USAGE: StaticCommand = StaticCommand {
     name: "/usage",
@@ -382,7 +476,7 @@ pub const REMOTE_CONTROL: StaticCommand = StaticCommand {
     name: "/remote-control",
     description: "Start remote control for this session",
     icon_path: "bundled/svg/phone-01.svg",
-    availability: Availability::AI_ENABLED,
+    availability: Availability::AI_ENABLED.union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: false,
     argument: None,
 };
@@ -391,7 +485,9 @@ pub const COST: StaticCommand = StaticCommand {
     name: "/cost",
     description: "Toggle credit usage details",
     icon_path: "bundled/svg/bar-chart-04.svg",
-    availability: Availability::AGENT_VIEW.union(Availability::AI_ENABLED),
+    availability: Availability::AGENT_VIEW
+        .union(Availability::AI_ENABLED)
+        .union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: false,
     argument: None,
 };
@@ -418,7 +514,9 @@ pub const REWIND: StaticCommand = StaticCommand {
     name: "/rewind",
     description: "Rewind to a previous point in the conversation",
     icon_path: "bundled/svg/clock-rewind.svg",
-    availability: Availability::AGENT_VIEW.union(Availability::AI_ENABLED),
+    availability: Availability::AGENT_VIEW
+        .union(Availability::AI_ENABLED)
+        .union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: true,
     argument: None,
 };
@@ -427,7 +525,9 @@ pub const EXPORT_TO_CLIPBOARD: StaticCommand = StaticCommand {
     name: "/export-to-clipboard",
     description: "Export current conversation to clipboard in markdown format",
     icon_path: "bundled/svg/copy.svg",
-    availability: Availability::AGENT_VIEW.union(Availability::AI_ENABLED),
+    availability: Availability::AGENT_VIEW
+        .union(Availability::AI_ENABLED)
+        .union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: true,
     argument: None,
 };
@@ -436,7 +536,9 @@ pub static EXPORT_TO_FILE: LazyLock<StaticCommand> = LazyLock::new(|| StaticComm
     name: "/export-to-file",
     description: "Export current conversation to a markdown file",
     icon_path: "bundled/svg/download-01.svg",
-    availability: Availability::AGENT_VIEW | Availability::AI_ENABLED,
+    availability: Availability::AGENT_VIEW
+        | Availability::AI_ENABLED
+        | Availability::NOT_CLOUD_AGENT,
     auto_enter_ai_mode: true,
     argument: Some(Argument::optional().with_hint_text("<optional filename>")),
 });
@@ -526,6 +628,7 @@ fn all_commands() -> Vec<StaticCommand> {
         NEW.clone(),
         PLAN.clone(),
         RENAME_TAB.clone(),
+        SET_TAB_COLOR.clone(),
         USAGE,
         CONVERSATIONS,
         EXPORT_TO_CLIPBOARD,
@@ -570,7 +673,11 @@ fn all_commands() -> Vec<StaticCommand> {
     }
 
     if !cfg!(target_family = "wasm") {
-        commands.extend([FORK.clone(), FORK_AND_COMPACT.clone()]);
+        commands.extend([
+            FORK.clone(),
+            FORK_AND_COMPACT.clone(),
+            CONTINUE_LOCALLY.clone(),
+        ]);
 
         if FeatureFlag::ForkFromCommand.is_enabled() {
             commands.push(FORK_FROM);
@@ -596,6 +703,13 @@ fn all_commands() -> Vec<StaticCommand> {
         commands.push(CLOUD_AGENT.clone());
     }
 
+    if FeatureFlag::OzHandoff.is_enabled()
+        && FeatureFlag::HandoffLocalCloud.is_enabled()
+        && cfg!(all(feature = "local_fs", not(target_family = "wasm")))
+    {
+        commands.push(MOVE_TO_CLOUD.clone());
+    }
+
     if FeatureFlag::InlineProfileSelector.is_enabled() {
         commands.push(PROFILE.clone());
     }
@@ -609,7 +723,7 @@ fn all_commands() -> Vec<StaticCommand> {
         commands.push(OPEN_REPO);
     }
 
-    if FeatureFlag::Orchestration.is_enabled() {
+    if FeatureFlag::OrchestrationV2.is_enabled() {
         commands.push(ORCHESTRATE.clone());
     }
 
@@ -617,75 +731,15 @@ fn all_commands() -> Vec<StaticCommand> {
         commands.push(OPEN_SETTINGS_FILE);
     }
 
+    if FeatureFlag::CloudModeInputV2.is_enabled() {
+        commands.push(HOST.clone());
+        commands.push(HARNESS.clone());
+        commands.push(ENVIRONMENT.clone());
+    }
+
     commands
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::HashSet;
-
-    use super::*;
-
-    #[test]
-    fn command_names_are_unique() {
-        let names = COMMAND_REGISTRY.all_commands().map(|command| command.name);
-        let mut seen = HashSet::new();
-        for name in names {
-            assert!(seen.insert(name), "duplicate slash command name: {name}");
-        }
-    }
-
-    #[test]
-    fn rename_tab_command_requires_argument() {
-        let command = COMMAND_REGISTRY
-            .get_command_with_name(RENAME_TAB.name)
-            .expect("expected /rename-tab to be registered");
-        let argument = command
-            .argument
-            .as_ref()
-            .expect("expected /rename-tab to require an argument");
-
-        assert!(!argument.is_optional);
-        assert!(!argument.should_execute_on_selection);
-        assert_eq!(argument.hint_text, Some("<tab name>"));
-    }
-
-    #[test]
-    fn strip_command_prefix_matches_orchestrate() {
-        let result = strip_command_prefix("/orchestrate deploy services", "/orchestrate");
-        assert_eq!(result, Some("deploy services".to_string()));
-    }
-
-    #[test]
-    fn strip_command_prefix_no_match() {
-        let result = strip_command_prefix("just a normal query", "/plan");
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn strip_command_prefix_empty() {
-        let result = strip_command_prefix("", "/plan");
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn strip_command_prefix_no_trailing_space() {
-        // "/plan" alone (no trailing space) should NOT be stripped
-        let result = strip_command_prefix("/plan", "/plan");
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn strip_command_prefix_trailing_space_only() {
-        // "/plan " with nothing after should strip to empty string
-        let result = strip_command_prefix("/plan ", "/plan");
-        assert_eq!(result, Some(String::new()));
-    }
-
-    #[test]
-    fn strip_command_prefix_substring_not_matched() {
-        // "/planning" should not match "/plan"
-        let result = strip_command_prefix("/planning something", "/plan");
-        assert_eq!(result, None);
-    }
-}
+#[path = "commands_tests.rs"]
+mod tests;

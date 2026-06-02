@@ -1,21 +1,25 @@
-use super::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
-use super::telemetry::{
-    BlocklistOrchestrationTelemetryEvent, TeamAgentCommunicationFailedEvent,
-    TeamAgentCommunicationFailureReason, TeamAgentCommunicationKind,
-    TeamAgentCommunicationTransport, TeamAgentOrchestrationVersion,
-};
-use crate::ai::agent::{
-    conversation::{AIConversationId, ConversationStatus},
-    task::TaskId,
-    AIAgentExchangeId, AIAgentInput, AIAgentOutputMessageType, LifecycleEventType,
-    ReceivedMessageInput,
-};
 use std::collections::{HashMap, HashSet};
+
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_multi_agent_api as api;
 use warpui::{Entity, ModelContext, SingletonEntity};
+
+use super::history_model::{
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
+};
+use super::telemetry::{
+    BlocklistOrchestrationTelemetryEvent, TeamAgentCommunicationFailedEvent,
+    TeamAgentCommunicationFailureReason, TeamAgentCommunicationKind,
+    TeamAgentCommunicationTransport, TeamAgentOrchestrationVersion,
+};
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{
+    AIAgentExchangeId, AIAgentInput, AIAgentOutputMessageType, LifecycleEventType,
+    ReceivedMessageInput,
+};
 
 const MAX_RETRY_ATTEMPTS: i32 = 3;
 const MAX_PENDING_LIFECYCLE_EVENTS_PER_TARGET: usize = 200;
@@ -56,10 +60,14 @@ impl LifecycleEventDetailStage {
 #[derive(Debug, Clone)]
 pub enum PendingEventDetail {
     Message {
+        #[cfg_attr(not(test), allow(dead_code))]
+        sequence: i64,
         message_id: String,
         addresses: Vec<String>,
         subject: String,
         message_body: String,
+        #[cfg_attr(not(test), allow(dead_code))]
+        occurred_at: String,
     },
     Lifecycle {
         event: api::AgentEvent,
@@ -95,6 +103,8 @@ pub enum OrchestrationEventServiceEvent {
 
 /// Synchronous state manager for orchestration event queuing, delivery
 /// tracking, lifecycle dispatch, and readiness detection.
+// TODO(QUALITY-733): Remove the legacy v1 orchestration event-service paths once v2 delivery no
+// longer reuses this service for local queueing and controller injection.
 pub struct OrchestrationEventService {
     pending_events: HashMap<AIConversationId, Vec<PendingEvent>>,
     awaiting_server_echo_events: HashMap<AIConversationId, Vec<PendingEvent>>,
@@ -185,6 +195,65 @@ impl OrchestrationEventService {
             LifecycleEventType::Errored,
             result,
         );
+    }
+
+    pub fn emit_child_killed(
+        &mut self,
+        child_conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) -> SendEventResult {
+        let (source_agent_id, parent_conversation_id) = {
+            let history_model = BlocklistAIHistoryModel::as_ref(ctx);
+            let Some(child_conversation) = history_model.conversation(&child_conversation_id)
+            else {
+                return SendEventResult::Error("Child conversation not found".to_string());
+            };
+            if !child_conversation.status().is_in_progress() {
+                return SendEventResult::LifecycleDropped;
+            }
+            let Some(source_agent_id) = child_conversation.orchestration_agent_id() else {
+                return SendEventResult::Error(
+                    "Child conversation has no agent identifier".to_string(),
+                );
+            };
+            let parent_conversation_id =
+                child_conversation.parent_conversation_id().or_else(|| {
+                    child_conversation
+                        .parent_agent_id()
+                        .and_then(|agent_id| history_model.conversation_id_for_agent_id(agent_id))
+                });
+            let Some(parent_conversation_id) = parent_conversation_id else {
+                return SendEventResult::LifecycleDropped;
+            };
+            (source_agent_id, parent_conversation_id)
+        };
+
+        let occurred_at = chrono::Utc::now();
+        let occurred_at_proto = prost_types::Timestamp {
+            seconds: occurred_at.timestamp(),
+            nanos: occurred_at.timestamp_subsec_nanos() as i32,
+        };
+        let event_id = Uuid::new_v4().to_string();
+        let event = build_lifecycle_event(
+            event_id.clone(),
+            source_agent_id.clone(),
+            LifecycleEventType::Cancelled,
+            occurred_at_proto,
+            &LifecycleEventDetailPayload::default(),
+        );
+        self.enqueue_lifecycle_event(
+            parent_conversation_id,
+            PendingEvent {
+                event_id,
+                source_agent_id,
+                attempt_count: 0,
+                detail: PendingEventDetail::Lifecycle { event },
+            },
+        );
+        ctx.emit(OrchestrationEventServiceEvent::EventsReady {
+            conversation_id: parent_conversation_id,
+        });
+        SendEventResult::LifecycleSent
     }
 
     fn dispatch_lifecycle_event(
@@ -340,9 +409,12 @@ impl OrchestrationEventService {
         match event {
             BlocklistAIHistoryEvent::UpdatedConversationStatus {
                 conversation_id,
-                is_restored,
+                update,
                 ..
-            } => self.on_conversation_status_updated(*conversation_id, *is_restored, ctx),
+            } => {
+                let is_restored = matches!(update, ConversationStatusUpdate::Restored);
+                self.on_conversation_status_updated(*conversation_id, is_restored, ctx)
+            }
             BlocklistAIHistoryEvent::UpdatedStreamingExchange {
                 conversation_id,
                 exchange_id,
@@ -357,42 +429,7 @@ impl OrchestrationEventService {
             } => {
                 for conversation_id in conversation_ids {
                     self.sync_conversation_status(*conversation_id, ctx);
-                    // Under V1 local lifecycle dispatch, child status
-                    // transitions are forwarded to the parent via
-                    // `lifecycle_subscription_routes`. That map is not
-                    // persisted, so re-register subscriptions for each
-                    // restored child whose parent is loaded locally so that
-                    // child status transitions continue to propagate after
-                    // a restart. V2 uses the server event log and does not
-                    // need this.
-                    if !FeatureFlag::OrchestrationV2.is_enabled() {
-                        let parent_agent_id = {
-                            let history_model = BlocklistAIHistoryModel::as_ref(ctx);
-                            let Some(child_conv) = history_model.conversation(conversation_id)
-                            else {
-                                continue;
-                            };
-                            if !child_conv.is_child_agent_conversation() {
-                                continue;
-                            }
-                            child_conv
-                                .parent_conversation_id()
-                                .and_then(|pid| history_model.conversation(&pid))
-                                .and_then(|p| p.server_conversation_token())
-                                .map(|t| t.as_str().to_string())
-                        };
-                        if let Some(parent_agent_id) = parent_agent_id {
-                            // `None` event-type filter = subscribe to all
-                            // lifecycle types. The original filter (if any)
-                            // is not persisted; subscribing broader than the
-                            // original is acceptable per the tech spec.
-                            self.register_lifecycle_subscription(
-                                *conversation_id,
-                                parent_agent_id,
-                                None,
-                            );
-                        }
-                    }
+                    self.restore_v1_lifecycle_subscription(*conversation_id, ctx);
                 }
             }
             BlocklistAIHistoryEvent::RemoveConversation {
@@ -451,6 +488,38 @@ impl OrchestrationEventService {
             .insert(conversation_id, conversation.status().clone());
     }
 
+    fn restore_v1_lifecycle_subscription(
+        &mut self,
+        source_conversation_id: AIConversationId,
+        ctx: &ModelContext<Self>,
+    ) {
+        // TODO(QUALITY-733): Remove restored v1 lifecycle subscriptions once legacy
+        // orchestration lifecycle dispatch is deleted.
+        if FeatureFlag::OrchestrationV2.is_enabled() {
+            return;
+        }
+
+        let target_agent_id = {
+            let history_model = BlocklistAIHistoryModel::as_ref(ctx);
+            let Some(conversation) = history_model.conversation(&source_conversation_id) else {
+                return;
+            };
+            if !conversation.is_child_agent_conversation() {
+                return;
+            }
+
+            conversation
+                .parent_conversation_id()
+                .and_then(|parent_id| history_model.conversation(&parent_id))
+                .and_then(|parent| parent.orchestration_agent_id())
+                .or_else(|| conversation.parent_agent_id().map(str::to_string))
+        };
+
+        if let Some(target_agent_id) = target_agent_id {
+            self.register_lifecycle_subscription(source_conversation_id, target_agent_id, None);
+        }
+    }
+
     fn on_conversation_status_updated(
         &mut self,
         conversation_id: AIConversationId,
@@ -492,6 +561,8 @@ impl OrchestrationEventService {
         if FeatureFlag::OrchestrationV2.is_enabled() {
             return;
         }
+        // TODO(QUALITY-733): Remove legacy v1 lifecycle dispatch once all child-agent lifecycle
+        // events are delivered through the v2 event log.
 
         #[allow(deprecated)]
         match (previous_status.as_ref(), &current_status) {
@@ -747,6 +818,7 @@ impl OrchestrationEventService {
         // We keep `message_id` stable across targets so dedupe/threading can reason
         // about a single message delivered to multiple recipients.
         let message_id = Uuid::new_v4().to_string();
+        let occurred_at = chrono::Utc::now().to_rfc3339();
 
         for (_, target_conversation_id) in resolved_targets {
             let event_id = Uuid::new_v4().to_string();
@@ -756,10 +828,12 @@ impl OrchestrationEventService {
                 source_agent_id: sender_agent_id.to_string(),
                 attempt_count: 0,
                 detail: PendingEventDetail::Message {
+                    sequence: 0,
                     message_id: message_id.clone(),
                     addresses: target_agent_ids.to_vec(),
                     subject: subject.clone(),
                     message_body: message_body.clone(),
+                    occurred_at: occurred_at.clone(),
                 },
             };
             self.pending_events
@@ -890,6 +964,13 @@ impl OrchestrationEventService {
         ctx.emit(OrchestrationEventServiceEvent::EventsReady { conversation_id });
     }
 
+    #[cfg(any(test, not(target_family = "wasm")))]
+    pub fn has_pending_events(&self, conversation_id: AIConversationId) -> bool {
+        self.pending_events
+            .get(&conversation_id)
+            .is_some_and(|events| !events.is_empty())
+    }
+
     /// Drain and return all pending events for a conversation.
     fn drain_pending_events(&mut self, conversation_id: &AIConversationId) -> Vec<PendingEvent> {
         self.pending_events
@@ -933,10 +1014,12 @@ impl OrchestrationEventService {
         for event in &deliverable {
             match &event.detail {
                 PendingEventDetail::Message {
+                    sequence: _,
                     message_id,
                     addresses,
                     subject,
                     message_body,
+                    occurred_at: _,
                 } => messages.push(ReceivedMessageInput {
                     message_id: message_id.clone(),
                     sender_agent_id: event.source_agent_id.clone(),

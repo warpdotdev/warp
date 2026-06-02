@@ -1,21 +1,17 @@
+use std::fmt::Write;
+
 use itertools::Itertools;
 use settings::ToggleableSetting as _;
-use std::fmt::Write;
-use warpui::{
-    modals::{AlertDialogWithCallbacks, AppModalCallback, ModalButton},
-    AppContext, EntityId, SingletonEntity, ViewContext, WeakViewHandle, WindowId,
-};
+use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback, ModalButton};
+use warpui::{AppContext, EntityId, SingletonEntity, ViewContext, WeakViewHandle, WindowId};
 
-use crate::{
-    code::editor_management::{CodeEditorStatus, CodeEditorSummary},
-    pane_group::{CodePane, PaneGroup, PaneId, TerminalPane},
-    report_if_error, send_telemetry_from_app_ctx,
-    server::telemetry::CloseTarget,
-    session_management::{RunningSessionSummary, SessionNavigationData},
-    terminal::general_settings::GeneralSettings,
-    workspace::Workspace,
-    TelemetryEvent,
-};
+use crate::code::editor_management::{CodeEditorStatus, CodeEditorSummary};
+use crate::pane_group::{CodePane, PaneGroup, PaneId, TerminalPane};
+use crate::server::telemetry::CloseTarget;
+use crate::session_management::{RunningSessionSummary, SessionNavigationData};
+use crate::terminal::general_settings::GeneralSettings;
+use crate::workspace::Workspace;
+use crate::{report_if_error, send_telemetry_from_app_ctx, TelemetryEvent};
 
 /// Scope of what's being quit/closed.
 #[derive(Clone)]
@@ -468,7 +464,7 @@ impl<'a> QuitWarningDialog<'a> {
             shown = true;
         } else if cfg!(all(
             not(target_family = "wasm"),
-            any(target_os = "linux", windows)
+            any(target_os = "linux", target_os = "freebsd", windows)
         )) {
             // Find a window to show the Warp-native modal in. If there is no active window, use
             // one of the windows with a running process.

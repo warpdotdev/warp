@@ -1,17 +1,25 @@
 //! Banner shown when the remote-server binary check, installation, or connection fails on the remote host.
 //! We fall back to the existing Warpification behavior and display this banner so the user knows why advanced features are unavailable.
 
+use remote_server::transport::UserFacingError;
 use warp_core::ui::theme::color::internal_colors;
-use warpui::{
-    elements::{
-        ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable, MainAxisAlignment,
-        MainAxisSize, MouseStateHandle, ParentElement, Shrinkable, Text,
-    },
-    platform::Cursor,
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
+use warp_core::ui::theme::AnsiColorIdentifier;
+use warpui::elements::{
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
 };
+use warpui::platform::Cursor;
+use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
-use crate::{terminal::model::session::SessionId, ui_components::icons::Icon, Appearance};
+use crate::terminal::model::session::SessionId;
+use crate::ui_components::icons::Icon;
+use crate::Appearance;
+
+const BANNER_TITLE: &str = "Couldn't connect to the Warp SSH extension";
+
+const BANNER_BODY: &str =
+    "While advanced features like file browsing and code review are currently \
+    disabled, the rest of your Warpified experience is fully available.";
 
 #[derive(Clone, Debug)]
 pub enum SshRemoteServerFailedBannerAction {
@@ -25,13 +33,15 @@ pub enum SshRemoteServerFailedBannerEvent {
 
 pub struct SshRemoteServerFailedBanner {
     session_id: SessionId,
+    error: UserFacingError,
     close_mouse_state: MouseStateHandle,
 }
 
 impl SshRemoteServerFailedBanner {
-    pub fn new(session_id: SessionId) -> Self {
+    pub fn new(session_id: SessionId, error: UserFacingError) -> Self {
         Self {
             session_id,
+            error,
             close_mouse_state: MouseStateHandle::default(),
         }
     }
@@ -68,27 +78,54 @@ impl View for SshRemoteServerFailedBanner {
         .with_margin_right(8.)
         .finish();
 
-        // Title
         let title = Text::new(
-            "SSH extension couldn't be installed",
+            BANNER_TITLE.to_string(),
             appearance.ui_font_family(),
             font_size,
         )
         .with_color(fg_color)
         .finish();
 
-        // Description
         let body = Text::new(
-            "The binary could not be written or executed on the remote host. \
-             This may be due to permission restrictions or missing dependencies. \
-             While advanced features like file browsing and code review are currently \
-             disabled, the rest of your Warpified experience is fully available.",
+            BANNER_BODY.to_string(),
             appearance.ui_font_family(),
             small_font_size,
         )
         .soft_wrap(true)
         .with_color(muted_color)
         .finish();
+
+        let error_container = {
+            let ansi_red = AnsiColorIdentifier::Red.to_ansi_color(&theme.terminal_colors().normal);
+            let error_bg = theme.ansi_overlay_1(ansi_red);
+            let error_text_color = theme.ansi_fg_red();
+
+            let error_description = if let Some(detail) = &self.error.detail {
+                format!("{}. {}", self.error.body, detail)
+            } else {
+                format!("{}.", self.error.body)
+            };
+
+            let error_text = Text::new(
+                error_description,
+                appearance.ui_font_family(),
+                small_font_size,
+            )
+            .soft_wrap(true)
+            .with_color(error_text_color)
+            .finish();
+
+            let error_box = Container::new(error_text)
+                .with_background(error_bg)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+                .with_uniform_padding(12.)
+                .finish();
+
+            Container::new(error_box)
+                .with_margin_top(8.)
+                .with_horizontal_margin(24.)
+                .finish()
+        };
 
         // Close (X) button
         let close_icon_color = muted_color;
@@ -131,11 +168,15 @@ impl View for SshRemoteServerFailedBanner {
             .with_margin_left(24.)
             .finish();
 
-        let content = Flex::column()
+        let mut content = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(header_row)
-            .with_child(body_container)
-            .finish();
+            .with_child(body_container);
+
+        content = content.with_child(error_container);
+
+        let content = content.finish();
 
         Container::new(content)
             .with_background(internal_colors::fg_overlay_1(theme))

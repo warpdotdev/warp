@@ -126,47 +126,44 @@ impl TextFileAccumulator {
         }
     }
 
-    /// Emits a [`TextFileSegment`] for the current range (if non-empty, or if
-    /// this is the final flush of a whole-file read) and resets per-range state.
+    /// Emits a [`TextFileSegment`] for the current range and resets per-range
+    /// state. Always produces a segment — even when the buffer is empty (e.g.
+    /// the requested range was entirely past EOF).
     fn flush_range(&mut self, final_flush: bool) {
-        let should_emit = !self.buf.is_empty() || (final_flush && self.whole_file);
+        let range = self.effective_ranges[self.range_idx].clone();
+        let line_range = if self.whole_file && !self.truncated {
+            None
+        } else if self.truncated {
+            Some(range.start..self.last_line)
+        } else {
+            Some(range)
+        };
 
-        if should_emit {
-            let range = self.effective_ranges[self.range_idx].clone();
-            let line_range = if self.whole_file && !self.truncated {
-                None
-            } else if self.truncated {
-                Some(range.start..self.last_line)
-            } else {
-                Some(range)
-            };
+        self.total_bytes_read += self.buf_bytes;
+        let mut content = std::mem::take(&mut self.buf).join("\n");
 
-            self.total_bytes_read += self.buf_bytes;
-            let mut content = std::mem::take(&mut self.buf).join("\n");
-
-            // If this is the final flush of a non-truncated whole-file read
-            // and the last line in the file had a trailing newline, preserve
-            // it. This ensures round-tripping file content through the
-            // accumulator doesn't silently drop a trailing newline (which
-            // would otherwise cause data loss when the content is written
-            // back to disk, e.g. during remote diff application).
-            //
-            // We skip this for truncated reads (the content is incomplete, so
-            // appending a newline would be misleading) and for ranged reads
-            // (which extract a slice, not the full file).
-            if final_flush && self.whole_file && !self.truncated && self.last_line_had_newline {
-                content.push('\n');
-                self.total_bytes_read += 1;
-            }
-
-            self.segments.push(TextFileSegment {
-                file_name: self.file_name.clone(),
-                content,
-                line_range,
-                last_modified: self.last_modified,
-                line_count: 0, // Set in finalize()
-            });
+        // If this is the final flush of a non-truncated whole-file read
+        // and the last line in the file had a trailing newline, preserve
+        // it. This ensures round-tripping file content through the
+        // accumulator doesn't silently drop a trailing newline (which
+        // would otherwise cause data loss when the content is written
+        // back to disk, e.g. during remote diff application).
+        //
+        // We skip this for truncated reads (the content is incomplete, so
+        // appending a newline would be misleading) and for ranged reads
+        // (which extract a slice, not the full file).
+        if final_flush && self.whole_file && !self.truncated && self.last_line_had_newline {
+            content.push('\n');
+            self.total_bytes_read += 1;
         }
+
+        self.segments.push(TextFileSegment {
+            file_name: self.file_name.clone(),
+            content,
+            line_range,
+            last_modified: self.last_modified,
+            line_count: 0, // Set in finalize()
+        });
 
         self.buf.clear();
         self.buf_bytes = 0;
