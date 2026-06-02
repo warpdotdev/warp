@@ -13,7 +13,7 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui_core::{AppContext, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::file_tree_store::FileTreeState;
-use crate::file_tree_update::RepoMetadataUpdate;
+use crate::file_tree_update::{MetadataUpdateType, RepoMetadataUpdate};
 use crate::local_model::{
     GetContentsArgs, IndexedRepoState, LocalRepoMetadataModel, RepoContent, RepositoryMetadataEvent,
 };
@@ -36,9 +36,9 @@ pub enum RepoMetadataEvent {
     /// A file tree entry was updated.
     FileTreeEntryUpdated {
         id: RepositoryIdentifier,
-        /// Applied incremental metadata when available.
-        /// `None` indicates an update that consumers should handle conservatively.
-        update: Option<RepoMetadataUpdate>,
+        /// Specifies whether this event contains a precise delta or requires a conservative
+        /// refresh because the entry was replaced without one.
+        update_type: MetadataUpdateType,
     },
     /// Updating a repository failed.
     UpdatingRepositoryFailed { id: RepositoryIdentifier },
@@ -115,10 +115,10 @@ impl RepoMetadataModel {
                         .collect(),
                 }
             }
-            RepositoryMetadataEvent::FileTreeEntryUpdated { path, update } => {
+            RepositoryMetadataEvent::FileTreeEntryUpdated { path, update_type } => {
                 RepoMetadataEvent::FileTreeEntryUpdated {
                     id: RepositoryIdentifier::local(path.clone()),
-                    update: update.clone(),
+                    update_type: update_type.clone(),
                 }
             }
             RepositoryMetadataEvent::UpdatingRepositoryFailed { path } => {
@@ -160,10 +160,10 @@ impl RepoMetadataModel {
                         .collect(),
                 }
             }
-            RemoteRepositoryMetadataEvent::FileTreeEntryUpdated { id, update } => {
+            RemoteRepositoryMetadataEvent::FileTreeEntryUpdated { id, update_type } => {
                 RepoMetadataEvent::FileTreeEntryUpdated {
                     id: RepositoryIdentifier::Remote(id.clone()),
-                    update: update.clone(),
+                    update_type: update_type.clone(),
                 }
             }
         };

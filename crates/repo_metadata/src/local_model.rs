@@ -48,7 +48,7 @@ use crate::file_tree_store::{
 };
 use crate::file_tree_update::{
     flatten_entry_metadata, DirectoryNodeMetadata, FileNodeMetadata, FileTreeEntryUpdate,
-    RepoMetadataUpdate, RepoNodeMetadata,
+    MetadataUpdateType, RepoMetadataUpdate, RepoNodeMetadata,
 };
 
 /// Maximum depth to traverse when building file trees
@@ -75,9 +75,9 @@ pub enum RepositoryMetadataEvent {
     /// The file tree's [`Entry`] was updated.
     FileTreeEntryUpdated {
         path: StandardizedPath,
-        /// Applied incremental metadata when this update is represented as a delta.
-        /// `None` indicates a conservative lazy-load or opaque entry update.
-        update: Option<RepoMetadataUpdate>,
+        /// Specifies whether this event contains a precise delta or requires a conservative
+        /// refresh because the entry was replaced without one.
+        update_type: MetadataUpdateType,
     },
     UpdatingRepositoryFailed {
         path: StandardizedPath,
@@ -366,7 +366,7 @@ impl LocalRepoMetadataModel {
                             .expect("update tracking was enabled");
                             ctx.emit(RepositoryMetadataEvent::FileTreeEntryUpdated {
                                 path: repo_path,
-                                update: Some(update.clone()),
+                                update_type: MetadataUpdateType::IncrementalUpdate(update.clone()),
                             });
                             if model.emit_incremental_updates {
                                 ctx.emit(RepositoryMetadataEvent::IncrementalUpdateReady {
@@ -600,7 +600,7 @@ impl LocalRepoMetadataModel {
 
         ctx.emit(RepositoryMetadataEvent::FileTreeEntryUpdated {
             path: repo_root.clone(),
-            update: None,
+            update_type: MetadataUpdateType::FullReplace,
         });
         Ok(())
     }

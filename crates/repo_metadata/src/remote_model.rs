@@ -13,7 +13,7 @@ use warpui_core::ModelContext;
 
 use super::local_model::collect_contents_recursive;
 use crate::file_tree_store::{FileTreeEntry, FileTreeState};
-use crate::file_tree_update::RepoMetadataUpdate;
+use crate::file_tree_update::{MetadataUpdateType, RepoMetadataUpdate};
 use crate::local_model::{GetContentsArgs, IndexedRepoState, RepoContent};
 use crate::repository_identifier::RemoteRepositoryIdentifier;
 
@@ -31,9 +31,9 @@ pub enum RemoteRepositoryMetadataEvent {
     /// The file tree entry for a remote repository was updated.
     FileTreeEntryUpdated {
         id: RemoteRepositoryIdentifier,
-        /// Applied incremental metadata when this update is represented as a delta.
-        /// `None` indicates an opaque whole-entry replacement.
-        update: Option<RepoMetadataUpdate>,
+        /// Specifies whether this event contains a precise delta or an opaque whole-entry
+        /// replacement.
+        update_type: MetadataUpdateType,
     },
 }
 
@@ -152,7 +152,7 @@ impl RemoteRepoMetadataModel {
             state.entry = entry;
             ctx.emit(RemoteRepositoryMetadataEvent::FileTreeEntryUpdated {
                 id: id.clone(),
-                update: None,
+                update_type: MetadataUpdateType::FullReplace,
             });
         }
     }
@@ -218,7 +218,7 @@ impl RemoteRepoMetadataModel {
             state.entry.apply_repo_metadata_update(update);
             ctx.emit(RemoteRepositoryMetadataEvent::FileTreeEntryUpdated {
                 id,
-                update: Some(update.clone()),
+                update_type: MetadataUpdateType::IncrementalUpdate(update.clone()),
             });
         }
     }
