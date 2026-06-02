@@ -81,6 +81,8 @@ pub enum FindTaskMessage {
     },
     /// The work queue has drained (current batch of work is complete).
     Done,
+    /// Invalid regex error; contains the error message.
+    InvalidRegex(String),
 }
 
 /// Configuration for an async find run.
@@ -417,6 +419,8 @@ pub struct AsyncFindController {
     /// time and skips messages that arrive after a newer generation has started,
     /// preventing stale `Done` messages from prematurely ending a new scan.
     generation: u64,
+    /// Stores the last error message from an invalid regex.
+    last_error: Option<String>,
 }
 
 impl AsyncFindController {
@@ -437,6 +441,7 @@ impl AsyncFindController {
             current_find_options: None,
             cached_focused_match: None,
             generation: 0,
+            last_error: None,
         }
     }
 
@@ -475,6 +480,21 @@ impl AsyncFindController {
     /// Returns the currently focused match index (0-based), if any.
     pub fn focused_match_index(&self) -> Option<usize> {
         self.focused_match_index
+    }
+
+    /// Returns the last error message, if any.
+    pub fn last_error(&self) -> Option<&String> {
+        self.last_error.as_ref()
+    }
+
+    /// Sets the last error (used internally).
+    pub fn set_last_error(&mut self, err: Option<String>) {
+        self.last_error = err;
+    }
+
+    /// Takes and clears the last error, returning it.
+    pub fn take_last_error(&mut self) -> Option<String> {
+        self.last_error.take()
     }
 
     /// Focuses the next or previous match based on the given direction.
@@ -555,6 +575,7 @@ impl AsyncFindController {
             self.cached_focused_match = None;
             return;
         };
+        self.prune_stale_total_indices();
         let mut current_idx = 0;
 
         // Determine grid iteration order within each terminal block.
@@ -875,6 +896,15 @@ impl AsyncFindController {
                     }
                 }
             }
+            FindTaskMessage::InvalidRegex(err) => {
+                log::error!("[async_find] regex error: {}", err);
+                self.last_error = Some(err.clone());
+                self.status = AsyncFindStatus::Complete;
+                // Clear any existing results; the query could not be parsed.
+                self.block_results.clear();
+                self.focused_match_index = None;
+                self.cached_focused_match = None;
+            }
             FindTaskMessage::Done => {
                 self.status = AsyncFindStatus::Complete;
             }
@@ -1032,6 +1062,20 @@ impl AsyncFindController {
             self.focused_match_index = self.focused_match_index.map(|i| i.min(total - 1));
         }
         self.update_cached_focused_match();
+    }
+
+        // Prune stale total indices for removed blocks and AI views.
+    fn prune_stale_total_indices(&mut self) {
+        let model = self.terminal_model.lock();
+        // Prune terminal block total indices for blocks that no longer exist.
+        self.block_results
+            .terminal_total_indices
+            .retain(|block_index, _| model.block_list().block_at(*block_index).is_some());
+        // Prune AI total indices for rich‑content views that have been unregistered.
+        // This prevents stale entries from persisting after a view is removed.
+        self.block_results
+            .ai_total_indices
+            .retain(|view_id, _| self.rich_content_views.contains_key(view_id));
     }
 
     /// Filters existing results for a query refinement.
