@@ -80,11 +80,14 @@ Warp is a terminal, so users can run `git log --graph`, but:
     behind a confirmation or an input/save dialog; browsing never does.
 
 ### Write operations (right-click context menus, gated by `FeatureFlag::GitGraphWrite`)
-19. Right-clicking a commit row, or a tag / local-branch / remote-branch badge,
-    opens a context menu matching the target kind:
+19. Right-clicking a commit row, the short hash, or a tag / local-branch /
+    remote-branch badge, opens a context menu matching the target kind:
     - **Commit**: Add Tag…, Create Branch…, Checkout…, Cherry Pick…, Revert…,
       Drop…, Merge into current branch…, Rebase current branch on this Commit…,
       Reset current branch to this Commit…, Copy Commit Hash, Copy Commit Subject.
+    - **Short hash** (the 7-char hash left of the subject): a focused menu with a
+      single "Copy Short Hash to Clipboard" — the 7-char hash shown, distinct
+      from the commit menu's "Copy Commit Hash" which copies the full hash.
     - **Tag**: View Details, Delete Tag…, Push Tag…, Create Archive, Copy Tag Name.
     - **Remote branch**: Checkout Branch…, Delete Remote Branch…, Merge into
       current branch…, Pull into current branch…, Create Archive, Unselect in

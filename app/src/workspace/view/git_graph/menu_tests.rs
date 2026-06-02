@@ -84,6 +84,22 @@ fn commit_copy_actions_carry_hash_and_subject() {
 }
 
 #[test]
+fn short_hash_menu_copies_seven_char_hash_regardless_of_write_flag() {
+    // A right-click on the short hash yields a single copy item carrying the
+    // 7-char short hash (not the full 40-char commit hash); copying is read-only
+    // so the write flag doesn't change it.
+    let kind = MenuKind::ShortHash { index: 0 };
+    for write_enabled in [true, false] {
+        let items = build_menu(&kind, &commit(), write_enabled);
+        assert_eq!(labels(&items), vec!["Copy Short Hash to Clipboard"]);
+        assert_eq!(
+            items[0].item_on_select_action(),
+            Some(&GitGraphAction::CopyToClipboard("abcdef1".into()))
+        );
+    }
+}
+
+#[test]
 fn tag_menu_full_and_read_only() {
     let full = build_tag_menu(3, "v1.0", true);
     assert_eq!(

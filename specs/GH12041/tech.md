@@ -134,10 +134,11 @@ library), so write operations add no new IO mechanism.
   `split_remote_ref` (`origin/x` → remote+branch), `archive_format_from_path`
   (extension → zip/tar.gz). Notable argv: Drop = `rebase --onto <h>^ <h>`,
   DeleteRemoteBranch = `push <remote> --delete <branch>`.
-- **`menu.rs`** — pure builders turning a `MenuKind` (Commit / Tag / RemoteBranch
-  / LocalBranch, each carrying the anchor row index; LocalBranch also carries
-  `is_current`, set from the HEAD vs LocalBranch badge, to drop self-only ops on
-  the current branch) + the anchor commit + `write_enabled` into
+- **`menu.rs`** — pure builders turning a `MenuKind` (Commit / ShortHash / Tag /
+  RemoteBranch / LocalBranch, each carrying the anchor row index; LocalBranch also
+  carries `is_current`, set from the HEAD vs LocalBranch badge, to drop self-only
+  ops on the current branch; ShortHash yields a single read-only "Copy Short Hash
+  to Clipboard" for the 7-char hash) + the anchor commit + `write_enabled` into
   `Vec<MenuItem<GitGraphAction>>`, grouped to match the
   screenshots (groups joined by separators, empty groups dropped). Read-only
   items (copy / view-details / unselect) are unconditional; mutating items are
@@ -152,9 +153,10 @@ library), so write operations add no new IO mechanism.
   open target (`open_menu` + `menu_offset`), a `DialogState` (None / Input /
   Confirm / ResetMode) with a single-line `EditorView` (`dialog_input`), and
   `op_running` / `op_error`. Right-click is wired on the commit row (→
-  `MenuKind::Commit`) and on each ref badge (→ Tag / RemoteBranch / LocalBranch;
-  the badge handler sits above the row so it takes precedence); both compute the
-  offset relative to the panel's `SavePosition` id. New
+  `MenuKind::Commit`), on the short-hash text (→ `MenuKind::ShortHash`), and on
+  each ref badge (→ Tag / RemoteBranch / LocalBranch); the short-hash and badge
+  handlers sit above the row so they take precedence; all compute the offset
+  relative to the panel's `SavePosition` id. New
   `GitGraphAction`s: `OpenMenu` / `CopyToClipboard` / `PromptInput` / `SubmitInput`
   / `PromptResetMode` / `BeginWriteOp` (confirm-then-run) / `RunOp` (run now) /
   `BeginArchive` (OS save dialog) / `CancelDialog` / `DismissOpError`. `run_op`

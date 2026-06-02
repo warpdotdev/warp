@@ -2235,18 +2235,38 @@ fn render_commit_text(
     let dim = theme.sub_text_color(theme.background());
     let fg = theme.foreground();
 
+    // The short hash carries its own right-click menu (copy the 7-char hash),
+    // mirroring the ref badges: its handler sits above the row's commit menu so
+    // a right-click landing on the hash copies exactly what's shown rather than
+    // the commit menu's full 40-char hash.
+    let short_hash = {
+        let position_id = position_id.to_string();
+        let hash_label = Container::new(
+            Text::new_inline(commit.short_hash.clone(), font, size)
+                .with_color(dim.into())
+                .finish(),
+        )
+        .with_padding_right(8.)
+        .finish();
+        Hoverable::new(MouseStateHandle::default(), move |_| hash_label)
+            .on_right_click(move |ctx, _app, position| {
+                let Some(bounds) = ctx.element_position_by_id(&position_id) else {
+                    return;
+                };
+                let offset = position - bounds.origin();
+                ctx.dispatch_typed_action(GitGraphAction::OpenMenu {
+                    kind: MenuKind::ShortHash { index },
+                    x: offset.x(),
+                    y: offset.y(),
+                });
+            })
+            .finish()
+    };
+
     let mut row = Flex::row()
         .with_main_axis_size(MainAxisSize::Max)
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_child(
-            Container::new(
-                Text::new_inline(commit.short_hash.clone(), font, size)
-                    .with_color(dim.into())
-                    .finish(),
-            )
-            .with_padding_right(8.)
-            .finish(),
-        );
+        .with_child(short_hash);
 
     for ref_label in &commit.refs {
         row = row.with_child(render_ref_badge(
