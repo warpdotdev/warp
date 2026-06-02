@@ -426,6 +426,7 @@ fn updated_file_contexts_from_editor_buffers(
 
             let mut file_location = file_location.clone();
             file_location.expand_surrounding_context(APPLY_DIFF_RESULT_CONTEXT_LINES);
+            clamp_to_file_context_range_start(&mut file_location);
 
             if file_location.lines.is_empty() {
                 return vec![UpdatedFileContext {
@@ -467,6 +468,13 @@ fn updated_file_contexts_from_editor_buffers(
                 .collect_vec()
         })
         .collect()
+}
+
+fn clamp_to_file_context_range_start(file_location: &mut FileLocations) {
+    for range in &mut file_location.lines {
+        range.start = range.start.max(1);
+        range.end = range.end.max(range.start);
+    }
 }
 
 impl Entity for RequestFileEditsExecutor {

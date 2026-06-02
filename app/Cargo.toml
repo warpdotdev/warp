@@ -543,7 +543,6 @@ default = [
     "allow_opening_file_links_using_editor_env",
     "read_image_files",
     "selection_as_context",
-    "changed_lines_only_apply_diff_result",
     "undo_closed_panes",
     "revert_diff_hunk",
     "code_review_save_changes",
@@ -878,7 +877,6 @@ expand_edit_to_pane = []
 fallback_model_load_output_messaging = []
 profiles_design_revamp = []
 search_codebase_ui = []
-changed_lines_only_apply_diff_result = []
 linked_code_blocks = []
 tabbed_editor_view = []
 selection_as_context = []
