@@ -7,11 +7,10 @@
 #     requested-changes review and have gone inactive.
 #   - Posts reminder comments at 7, 14, and 26 days of author inactivity, then closes
 #     the PR at 30 days — but only after the day-26 final warning has been posted.
-#   - Inactivity is author-driven: a head-branch commit or a comment/review by the PR
-#     author resets the timer; maintainer/third-party/bot comments do not.
-#   - Reminder progress is tracked via hidden marker comments, so no datastore is needed.
-#
-# Spec: specs/stale-pr-cleanup/PRODUCT.md, specs/stale-pr-cleanup/TECH.md
+#   - Inactivity is author-driven: a head-branch push (GitHub-recorded) or a comment by
+#     the PR author resets the timer; maintainer/third-party/bot comments do not.
+#   - Reminder progress is tracked via marker comments authored by github-actions[bot],
+#     so no datastore is needed.
 #
 # Modes (workflow_dispatch `mode` input; scheduled runs use `full`):
 #   - dry-run:        log eligible PRs and intended actions, write nothing.
@@ -48,6 +47,7 @@ jobs:
         with:
           script: |
             const { owner, repo } = context.repo;
+            // Default to "full" if unset, because scheduled (cron) runs don't provide inputs
             const mode = (context.payload.inputs && context.payload.inputs.mode) || 'full';
             const canRemind = mode === 'reminder-only' || mode === 'full';
             const canClose = mode === 'full';
@@ -58,6 +58,7 @@ jobs:
             const CLOSE_DAY = 30;
             const EXTERNAL_LABEL = 'external-contributor';
             const EXEMPT_LABEL = 'no-autoclose';
+            const BOT_LOGIN = 'github-actions[bot]';
             const markerFor = (stage) => `<!-- stale-requested-changes:stage=${stage} -->`;
 
             const now = Date.now();
@@ -103,6 +104,7 @@ jobs:
               const author = pr.user && pr.user.login;
               if (pr.draft) continue;
               if (pr.user && pr.user.type === 'Bot') continue;
+              // Skip internal member PRs and PRs with the no-autoclose label
               if (!labels.includes(EXTERNAL_LABEL)) continue;
               if (labels.includes(EXEMPT_LABEL)) continue;
 
@@ -114,17 +116,37 @@ jobs:
               });
               if (!hasActiveChangesRequested(reviews)) continue;
 
-              const [commits, issueComments, reviewComments] = await Promise.all([
-                github.paginate(github.rest.pulls.listCommits, { owner, repo, pull_number: pr.number, per_page: 100 }),
+              const [issueComments, reviewComments] = await Promise.all([
                 github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pr.number, per_page: 100 }),
                 github.paginate(github.rest.pulls.listReviewComments, { owner, repo, pull_number: pr.number, per_page: 100 }),
               ]);
 
-              // Author-driven last activity: PR creation, any head-branch commit, and
-              // comments/reviews authored by the PR author. Everyone else is ignored.
+              // Server-recorded head-branch push time. commit.pushedDate and the
+              // force-push event timestamp are GitHub-controlled, so a backdated or
+              // force-pushed commit still resets the timer (unlike commit author/committer
+              // dates, which the contributor controls).
+              const pushData = await github.graphql(
+                `query($owner: String!, $repo: String!, $number: Int!) {
+                  repository(owner: $owner, name: $repo) {
+                    pullRequest(number: $number) {
+                      commits(last: 1) { nodes { commit { pushedDate committedDate } } }
+                      timelineItems(last: 50, itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT]) {
+                        nodes { ... on HeadRefForcePushedEvent { createdAt } }
+                      }
+                    }
+                  }
+                }`,
+                { owner, repo, number: pr.number }
+              );
+              const prGraph = pushData.repository.pullRequest;
+              const headCommit = (prGraph.commits.nodes[0] || {}).commit || {};
+
+              // Author-driven last activity: PR creation, head-branch push, and comments
+              // by the PR author. Maintainer/third-party/bot activity is ignored.
               let lastActivity = ts(pr.created_at);
-              for (const c of commits) {
-                lastActivity = Math.max(lastActivity, ts(c.commit && c.commit.committer && c.commit.committer.date), ts(c.commit && c.commit.author && c.commit.author.date));
+              lastActivity = Math.max(lastActivity, ts(headCommit.pushedDate || headCommit.committedDate));
+              for (const ev of prGraph.timelineItems.nodes) {
+                lastActivity = Math.max(lastActivity, ts(ev.createdAt));
               }
               for (const c of issueComments) {
                 if (c.user && c.user.login === author) lastActivity = Math.max(lastActivity, ts(c.created_at));
@@ -132,16 +154,14 @@ jobs:
               for (const c of reviewComments) {
                 if (c.user && c.user.login === author) lastActivity = Math.max(lastActivity, ts(c.created_at));
               }
-              for (const r of reviews) {
-                if (r.user && r.user.login === author) lastActivity = Math.max(lastActivity, ts(r.submitted_at));
-              }
 
               const inactiveDays = (now - lastActivity) / DAY_MS;
 
-              // A stage counts as sent only when its marker comment was posted in the
-              // current window (at/after the last activity); older markers are stale.
+              // A stage counts as sent only when its marker comment was posted by our own
+              // workflow identity in the current window (at/after the last activity).
               const sentStages = new Set();
               for (const c of issueComments) {
+                if (!c.user || c.user.login !== BOT_LOGIN) continue;
                 if (ts(c.created_at) < lastActivity) continue;
                 for (const stage of REMINDER_DAYS) {
                   if ((c.body || '').includes(markerFor(stage))) sentStages.add(stage);
