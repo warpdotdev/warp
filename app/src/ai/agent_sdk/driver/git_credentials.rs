@@ -151,6 +151,15 @@ pub(crate) fn write_git_credentials(credentials: &[GitCredential]) -> Result<()>
     Ok(())
 }
 
+pub(crate) fn configure_git_credentials(credentials: &[GitCredential]) -> Result<()> {
+    if credentials.is_empty() {
+        return Ok(());
+    }
+    setup_git_config(credentials);
+    configure_git_identity(credentials);
+    write_git_credentials(credentials)
+}
+
 /// Run a git config command, logging a warning on failure rather than
 /// propagating the error (git may not be installed in all sandboxes).
 fn run_git_config(key: &str, value: &str) {

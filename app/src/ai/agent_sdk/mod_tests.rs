@@ -1,13 +1,16 @@
+use super::{
+    command_requires_auth, command_to_telemetry_event, reconcile_task_harness,
+    skill_needs_sandbox_repo_clone,
+};
 use serde_json::json;
 use warp_cli::agent::Harness;
 use warp_cli::artifact::{
     ArtifactCommand, DownloadArtifactArgs, GetArtifactArgs, UploadArtifactArgs,
 };
+use warp_cli::skill::SkillSpec;
 use warp_cli::task::{MessageCommand, MessageSendArgs, MessageWatchArgs, TaskCommand};
 use warp_cli::CliCommand;
 use warp_core::telemetry::TelemetryEvent;
-
-use super::{command_requires_auth, command_to_telemetry_event, reconcile_task_harness};
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
 
@@ -19,6 +22,35 @@ fn logout_does_not_require_auth() {
 #[test]
 fn login_does_not_require_auth() {
     assert!(!command_requires_auth(&CliCommand::Login));
+}
+
+#[test]
+fn sandboxed_fully_qualified_skill_needs_repo_clone() {
+    let skill = SkillSpec::with_org_and_repo(
+        "warpdotdev".to_string(),
+        "sentry-memory-triage-bot".to_string(),
+        "triage".to_string(),
+    );
+
+    assert!(skill_needs_sandbox_repo_clone(true, Some(&skill)));
+}
+
+#[test]
+fn non_sandboxed_fully_qualified_skill_does_not_need_sandbox_repo_clone() {
+    let skill = SkillSpec::with_org_and_repo(
+        "warpdotdev".to_string(),
+        "sentry-memory-triage-bot".to_string(),
+        "triage".to_string(),
+    );
+
+    assert!(!skill_needs_sandbox_repo_clone(false, Some(&skill)));
+}
+
+#[test]
+fn sandboxed_repo_only_skill_does_not_need_early_credential_bootstrap() {
+    let skill = SkillSpec::with_repo("sentry-memory-triage-bot".to_string(), "triage".to_string());
+
+    assert!(!skill_needs_sandbox_repo_clone(true, Some(&skill)));
 }
 
 #[test]
