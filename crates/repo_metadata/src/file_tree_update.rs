@@ -8,6 +8,15 @@
 use warp_util::standardized_path::StandardizedPath;
 
 use crate::entry::{DirectoryEntry, Entry, FileMetadata};
+/// Describes how a file-tree entry update should be interpreted by consumers.
+#[derive(Debug, Clone)]
+pub enum MetadataUpdateType {
+    /// The updated entry was replaced without a precise metadata delta.
+    /// Consumers should refresh any derived state conservatively.
+    FullReplace,
+    /// The updated entry includes a precise incremental metadata delta.
+    IncrementalUpdate(RepoMetadataUpdate),
+}
 
 /// Mirrors `RepoMetadataUpdate` proto.
 ///

@@ -9,13 +9,14 @@ use std::sync::Arc;
 
 use futures::future::{self, BoxFuture, FutureExt as _};
 use warp_core::HostId;
-use warpui::ModelContext;
+use warpui_core::ModelContext;
 
 use super::local_model::collect_contents_recursive;
 use crate::file_tree_store::{FileTreeEntry, FileTreeState};
-use crate::file_tree_update::RepoMetadataUpdate;
+use crate::file_tree_update::{MetadataUpdateType, RepoMetadataUpdate};
 use crate::local_model::{GetContentsArgs, IndexedRepoState, RepoContent};
 use crate::repository_identifier::RemoteRepositoryIdentifier;
+use crate::RepoMetadataError;
 
 /// Events emitted by the [`RemoteRepoMetadataModel`].
 #[derive(Debug)]
@@ -29,7 +30,12 @@ pub enum RemoteRepositoryMetadataEvent {
         ids: Vec<RemoteRepositoryIdentifier>,
     },
     /// The file tree entry for a remote repository was updated.
-    FileTreeEntryUpdated { id: RemoteRepositoryIdentifier },
+    FileTreeEntryUpdated {
+        id: RemoteRepositoryIdentifier,
+        /// Specifies whether this event contains a precise delta or an opaque whole-entry
+        /// replacement.
+        update_type: MetadataUpdateType,
+    },
 }
 
 /// Client-side model for remote repository metadata.
@@ -86,14 +92,25 @@ impl RemoteRepoMetadataModel {
     }
 
     /// Returns repository contents for the specified remote repository.
+    ///
+    /// Returns an error if the number of results exceeds MAX_REPO_CONTENTS_RESULTS.
+    /// Returns an error if the repository is not indexed, indexing is pending, or indexing failed.
     pub fn get_repo_contents(
         &self,
         id: &RemoteRepositoryIdentifier,
         args: GetContentsArgs,
-    ) -> Option<Vec<RepoContent<'_>>> {
-        let state = match self.repositories.get(id)? {
-            IndexedRepoState::Indexed(state) => state,
-            IndexedRepoState::Pending(_) | IndexedRepoState::Failed(_) => return None,
+    ) -> Result<Vec<RepoContent<'_>>, RepoMetadataError> {
+        let state = match self.repositories.get(id) {
+            Some(IndexedRepoState::Indexed(state)) => state,
+            Some(IndexedRepoState::Pending(_)) => {
+                return Err(RepoMetadataError::RepositoryIndexingPending);
+            }
+            Some(IndexedRepoState::Failed(_)) => {
+                return Err(RepoMetadataError::RepositoryIndexingFailed);
+            }
+            None => {
+                return Err(RepoMetadataError::RepositoryNotIndexed);
+            }
         };
         let mut contents = Vec::new();
         collect_contents_recursive(
@@ -101,8 +118,8 @@ impl RemoteRepoMetadataModel {
             state.entry.root_directory(),
             &mut contents,
             &args,
-        );
-        Some(contents)
+        )?;
+        Ok(contents)
     }
 
     /// Returns all tracked remote repository identifiers, including those in
@@ -145,7 +162,10 @@ impl RemoteRepoMetadataModel {
     ) {
         if let Some(IndexedRepoState::Indexed(state)) = self.repositories.get_mut(id) {
             state.entry = entry;
-            ctx.emit(RemoteRepositoryMetadataEvent::FileTreeEntryUpdated { id: id.clone() });
+            ctx.emit(RemoteRepositoryMetadataEvent::FileTreeEntryUpdated {
+                id: id.clone(),
+                update_type: MetadataUpdateType::FullReplace,
+            });
         }
     }
 
@@ -208,12 +228,15 @@ impl RemoteRepoMetadataModel {
 
         if let Some(IndexedRepoState::Indexed(state)) = self.repositories.get_mut(&id) {
             state.entry.apply_repo_metadata_update(update);
-            ctx.emit(RemoteRepositoryMetadataEvent::FileTreeEntryUpdated { id });
+            ctx.emit(RemoteRepositoryMetadataEvent::FileTreeEntryUpdated {
+                id,
+                update_type: MetadataUpdateType::IncrementalUpdate(update.clone()),
+            });
         }
     }
 }
 
-impl warpui::Entity for RemoteRepoMetadataModel {
+impl warpui_core::Entity for RemoteRepoMetadataModel {
     type Event = RemoteRepositoryMetadataEvent;
 }
 

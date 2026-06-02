@@ -1,5 +1,3 @@
-pub(super) mod user_persistence;
-
 use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,13 +6,13 @@ use anyhow::{anyhow, Result};
 use settings::Setting as _;
 #[cfg(target_family = "wasm")]
 use url::Url;
-use user_persistence::PersistedUser;
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_graphql::mutations::create_anonymous_user::{
     AnonymousUserType, CreateAnonymousUserResult,
 };
+use warp_server_auth::user::persistence::PersistedUser;
 use warpui::clipboard::ClipboardContent;
 use warpui::{Entity, ModelContext, SingletonEntity, UpdateModel};
 
@@ -22,6 +20,7 @@ use super::auth_state::{AuthState, PersistAction};
 use super::auth_view_modal::{AuthRedirectPayload, AuthViewVariant};
 use super::credentials::{Credentials, FirebaseToken, LoginToken};
 use super::user::User;
+use super::user_properties::UserProperties;
 use super::{AuthStateProvider, UserUid};
 use crate::ai::llms::LLMPreferences;
 use crate::ai::persisted_workspace::PersistedWorkspace;
@@ -119,13 +118,15 @@ impl AuthManager {
     pub fn new_for_test(ctx: &mut ModelContext<Self>) -> Self {
         use crate::server::server_api::ServerApiProvider;
 
-        let server_api = ServerApiProvider::as_ref(ctx).get();
+        let server_api_provider = ServerApiProvider::as_ref(ctx);
+        let server_api = server_api_provider.get();
+        let auth_client = server_api_provider.get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
 
         Self {
             auth_state,
-            server_api: server_api.clone(),
-            auth_client: server_api,
+            server_api,
+            auth_client,
             pending_auth_state: None,
         }
     }
@@ -326,12 +327,15 @@ impl AuthManager {
         match fetch_user_result {
             Ok(fetch_user_result) => {
                 let FetchUserResult {
-                    user,
+                    user_output,
                     credentials,
-                    server_experiments,
                     from_refresh,
-                    llms,
                 } = fetch_user_result;
+                let UserProperties {
+                    user,
+                    server_experiments,
+                    llms,
+                } = user_output.into();
 
                 self.set_and_persist(Some(user.clone()), Some(credentials), ctx);
 

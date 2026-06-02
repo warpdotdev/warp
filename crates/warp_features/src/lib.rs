@@ -352,9 +352,6 @@ pub enum FeatureFlag {
     /// Enables new Search Codebase UI
     SearchCodebaseUI,
 
-    /// Enables return changed lines on apply diff result
-    ChangedLinesOnlyApplyDiffResult,
-
     /// Enables us to render linked code blocks
     LinkedCodeBlocks,
 
@@ -736,6 +733,8 @@ pub enum FeatureFlag {
     /// Gates the `/queue` slash command, which lets users queue a follow-up prompt
     /// while the agent is mid-response.
     QueueSlashCommand,
+    /// Extends queued prompts to Cloud Mode setup and follow-up draining.
+    QueuedPromptsV2,
 
     /// Enables an agent tool for the CLI subagent to explicitly transfer command control to the
     /// user.
@@ -933,7 +932,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::SummarizationViaMessageReplacement,
     FeatureFlag::LocalComputerUse,
     FeatureFlag::OzLaunchModal,
-    FeatureFlag::QueueSlashCommand,
     // These are enabled via 100% experiment on prod warp-server,
     // but we need to enable here for dogfood builds.
     FeatureFlag::CrossRepoContext,
@@ -948,16 +946,17 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::LocalDockerSandbox,
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
-    FeatureFlag::DragTabsToWindows,
     FeatureFlag::RemoteCodebaseIndexing,
     FeatureFlag::GroupedTabs,
     FeatureFlag::AsyncFind,
-    FeatureFlag::OrchestrationViewerStreamer,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
-pub const PREVIEW_FLAGS: &[FeatureFlag] = &[];
+pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
+    #[cfg(target_os = "macos")]
+    FeatureFlag::DragTabsToWindows,
+];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
 /// NOTE: if you are promoting a feature from Preview to launch, you'll likely

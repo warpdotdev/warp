@@ -11,7 +11,7 @@ use std::sync::Arc;
 use futures::future::{self, BoxFuture, FutureExt as _};
 use warp_core::{safe_warn, send_telemetry_from_ctx};
 use warp_util::sync::Condition;
-use warpui::ModelHandle;
+use warpui_core::ModelHandle;
 
 /// Represents either a file or directory in a repository.
 #[derive(Debug, Clone)]
@@ -32,7 +32,7 @@ cfg_if::cfg_if! {
         use crate::entry::repo_watch_filter;
         use crate::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
-        use warpui::SingletonEntity as _;
+        use warpui_core::SingletonEntity as _;
 
         /// Duration between filesystem watch events in seconds
         const FILESYSTEM_WATCHER_DEBOUNCE_SECS: u64 = 1;
@@ -40,7 +40,7 @@ cfg_if::cfg_if! {
 }
 
 use ignore::gitignore::Gitignore;
-use warpui::ModelContext;
+use warpui_core::ModelContext;
 
 use crate::file_tree_store::{
     FileTreeDirectoryEntryState, FileTreeEntry, FileTreeEntryState, FileTreeFileMetadata,
@@ -48,7 +48,7 @@ use crate::file_tree_store::{
 };
 use crate::file_tree_update::{
     flatten_entry_metadata, DirectoryNodeMetadata, FileNodeMetadata, FileTreeEntryUpdate,
-    RepoMetadataUpdate, RepoNodeMetadata,
+    MetadataUpdateType, RepoMetadataUpdate, RepoNodeMetadata,
 };
 
 /// Maximum depth to traverse when building file trees
@@ -56,6 +56,10 @@ const MAX_TREE_DEPTH: usize = 200;
 
 /// Maximum number of files to index per repository to guard against really large codebases
 const MAX_FILES_PER_REPO: usize = 100_000;
+
+/// Maximum number of results to return from get_repo_contents to prevent accidentally
+/// materializing the entire repository
+const MAX_REPO_CONTENTS_RESULTS: usize = 100;
 
 #[derive(Debug)]
 /// Events emitted by the LocalRepoMetadataModel.
@@ -75,6 +79,9 @@ pub enum RepositoryMetadataEvent {
     /// The file tree's [`Entry`] was updated.
     FileTreeEntryUpdated {
         path: StandardizedPath,
+        /// Specifies whether this event contains a precise delta or requires a conservative
+        /// refresh because the entry was replaced without one.
+        update_type: MetadataUpdateType,
     },
     UpdatingRepositoryFailed {
         path: StandardizedPath,
@@ -358,13 +365,14 @@ impl LocalRepoMetadataModel {
                                 &mut state.entry,
                                 mutations,
                                 lazy_load,
-                                model.emit_incremental_updates,
-                            );
+                                true,
+                            )
+                            .expect("update tracking was enabled");
                             ctx.emit(RepositoryMetadataEvent::FileTreeEntryUpdated {
                                 path: repo_path,
+                                update_type: MetadataUpdateType::IncrementalUpdate(update.clone()),
                             });
-
-                            if let Some(update) = update {
+                            if model.emit_incremental_updates {
                                 ctx.emit(RepositoryMetadataEvent::IncrementalUpdateReady {
                                     update,
                                 });
@@ -418,7 +426,7 @@ impl LocalRepoMetadataModel {
             ));
         }
 
-        // Register this path with the watcher if we have one
+        // Register this path with the watcher if we have one.
         #[cfg(feature = "local_fs")]
         {
             if let Some(ref watcher) = self.watcher {
@@ -596,6 +604,7 @@ impl LocalRepoMetadataModel {
 
         ctx.emit(RepositoryMetadataEvent::FileTreeEntryUpdated {
             path: repo_root.clone(),
+            update_type: MetadataUpdateType::FullReplace,
         });
         Ok(())
     }
@@ -684,10 +693,10 @@ impl LocalRepoMetadataModel {
     /// No filesystem I/O — only tree-structure operations. When `lazy_load` is
     /// true, additions are skipped if the parent directory has not been expanded.
     ///
-    /// When `emit_updates` is true,
-    /// from the mutations that were actually applied (filtering out any skipped
-    /// by `lazy_load`), suitable for sending to the remote client. When false,
-    /// no update tracking is performed and the function returns `None`.
+    /// When `emit_updates` is true, returns a [`RepoMetadataUpdate`] built from the mutations
+    /// that were actually applied (filtering out any skipped by `lazy_load`), suitable for
+    /// consumers and the remote client. When false, no update tracking is performed and the
+    /// function returns `None`.
     pub(crate) fn apply_file_tree_mutations(
         root_entry: &mut FileTreeEntry,
         mutations: Vec<FileTreeMutation>,
@@ -1052,15 +1061,25 @@ impl LocalRepoMetadataModel {
     }
 
     /// Returns repository contents (files and optionally directories) in a given repository.
+    ///
+    /// Returns an error if the number of results exceeds MAX_REPO_CONTENTS_RESULTS.
+    /// Returns an error if the repository is not indexed, indexing is pending, or indexing failed.
     pub fn get_repo_contents(
         &self,
         repo_path: &StandardizedPath,
         args: GetContentsArgs,
-    ) -> Option<Vec<RepoContent<'_>>> {
-        let state = match self.repositories.get(repo_path)? {
-            IndexedRepoState::Indexed(state) => state,
-            IndexedRepoState::Pending(_) => return None,
-            IndexedRepoState::Failed(_) => return None,
+    ) -> Result<Vec<RepoContent<'_>>, RepoMetadataError> {
+        let state = match self.repositories.get(repo_path) {
+            Some(IndexedRepoState::Indexed(state)) => state,
+            Some(IndexedRepoState::Pending(_)) => {
+                return Err(RepoMetadataError::RepositoryIndexingPending);
+            }
+            Some(IndexedRepoState::Failed(_)) => {
+                return Err(RepoMetadataError::RepositoryIndexingFailed);
+            }
+            None => {
+                return Err(RepoMetadataError::RepositoryNotIndexed);
+            }
         };
         let mut contents = Vec::new();
         collect_contents_recursive(
@@ -1068,8 +1087,8 @@ impl LocalRepoMetadataModel {
             state.entry.root_directory(),
             &mut contents,
             &args,
-        );
-        Some(contents)
+        )?;
+        Ok(contents)
     }
 
     /// Change the indexing state of `repo_path` to `state`.
@@ -1123,25 +1142,32 @@ impl LocalRepoMetadataModel {
     }
 }
 
-impl warpui::Entity for LocalRepoMetadataModel {
+impl warpui_core::Entity for LocalRepoMetadataModel {
     type Event = RepositoryMetadataEvent;
 }
 
 /// Helper function to recursively collect contents (files and optionally directories) from an Entry tree.
+/// Returns an error if the number of results exceeds MAX_REPO_CONTENTS_RESULTS.
 pub(crate) fn collect_contents_recursive<'a>(
     entry: &'a FileTreeEntry,
     current_path: &'a StandardizedPath,
     contents: &mut Vec<RepoContent<'a>>,
     args: &GetContentsArgs,
-) {
+) -> Result<(), RepoMetadataError> {
     if !args.include_ignored && entry.ignored(current_path) {
-        return;
+        return Ok(());
     }
 
     match entry.get(current_path) {
         Some(FileTreeEntryState::File(metadata)) => {
             let content = RepoContent::File(metadata);
             if args.filter.as_ref().is_none_or(|f| f(&content)) {
+                // Check limit before adding
+                if contents.len() >= MAX_REPO_CONTENTS_RESULTS {
+                    return Err(RepoMetadataError::ExceededMaxResultSize(
+                        MAX_REPO_CONTENTS_RESULTS,
+                    ));
+                }
                 contents.push(content);
             }
         }
@@ -1149,16 +1175,23 @@ pub(crate) fn collect_contents_recursive<'a>(
             if args.include_folders {
                 let content = RepoContent::Directory(dir);
                 if args.filter.as_ref().is_none_or(|f| f(&content)) {
+                    // Check limit before adding
+                    if contents.len() >= MAX_REPO_CONTENTS_RESULTS {
+                        return Err(RepoMetadataError::ExceededMaxResultSize(
+                            MAX_REPO_CONTENTS_RESULTS,
+                        ));
+                    }
                     contents.push(content);
                 }
             }
 
             for child in entry.child_paths(current_path) {
-                collect_contents_recursive(entry, child, contents, args);
+                collect_contents_recursive(entry, child, contents, args)?;
             }
         }
         None => {}
     }
+    Ok(())
 }
 
 // Test helpers

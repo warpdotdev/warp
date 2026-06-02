@@ -5,13 +5,13 @@ use warp_graphql::scalars::Time;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::auth::AuthStateProvider;
-use crate::server::server_api::auth::AuthClient;
+use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::ServerApiProvider;
 
 const PAGE_SIZE: i32 = 20;
 
 pub struct UsageHistoryModel {
-    auth_client: Arc<dyn AuthClient>,
+    ai_client: Arc<dyn AIClient>,
     entries: Vec<warp_graphql::queries::get_conversation_usage::ConversationUsage>,
     is_loading: bool,
     // Whether the server indicated that there may be more entries to load.
@@ -26,9 +26,9 @@ impl SingletonEntity for UsageHistoryModel {}
 
 impl UsageHistoryModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         Self {
-            auth_client,
+            ai_client,
             entries: Vec::new(),
             is_loading: false,
             has_more_entries: true,
@@ -97,7 +97,7 @@ impl UsageHistoryModel {
     ) {
         // If no time stamp is provided for pagination, we can assume that this is the first page of results.
         let is_initial_load = last_updated_end_timestamp.is_none();
-        let auth_client = self.auth_client.clone();
+        let ai_client = self.ai_client.clone();
 
         if is_initial_load {
             self.is_loading = true;
@@ -106,7 +106,7 @@ impl UsageHistoryModel {
 
         ctx.spawn(
             async move {
-                auth_client
+                ai_client
                     .get_conversation_usage_history(
                         Some(30),
                         Some(limit),

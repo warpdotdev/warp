@@ -7,6 +7,7 @@ use crate::ai::agent::CancellationReason;
 use crate::ai::blocklist::block::{
     FinishReason, PendingUserQueryBlock, PendingUserQueryBlockEvent,
 };
+use crate::ai::blocklist::QueuedQueryModel;
 use crate::auth::AuthStateProvider;
 use crate::terminal::view::PendingUserQueryKind;
 use crate::terminal::TerminalView;
@@ -99,6 +100,25 @@ impl TerminalView {
             PendingUserQueryKind::CloudMode,
             ctx,
         );
+    }
+
+    pub(in crate::terminal::view) fn remove_cloud_mode_queue_row(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::QueuedPromptsV2.is_enabled() {
+            return;
+        }
+        let Some(conversation_id) = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        else {
+            return;
+        };
+        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+            model.remove_initial_cloud_mode_row(conversation_id, ctx);
+        });
     }
 
     /// Removes the pending user query block, if one exists. No-op if none is present.

@@ -41,6 +41,7 @@ pub struct ObjectUpdateSuccess {
     pub revision_ts: Time,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(cynic::InlineFragments, Debug, Clone)]
 pub enum CloudObject {
     AIConversation(AIConversation),
@@ -52,6 +53,7 @@ pub enum CloudObject {
     Unknown,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(cynic::InlineFragments, Debug, Clone)]
 pub enum CloudObjectWithDescendants {
     AIConversation(AIConversation),

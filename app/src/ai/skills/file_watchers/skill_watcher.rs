@@ -13,7 +13,9 @@ use remote_server::proto::{
 };
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::repository::{Repository, SubscriberId};
-use repo_metadata::{DirectoryWatcher, RepoMetadataModel, RepositoryIdentifier, RepositoryUpdate};
+use repo_metadata::{
+    DirectoryWatcher, MetadataUpdateType, RepoMetadataModel, RepositoryIdentifier, RepositoryUpdate,
+};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 use watcher::{BulkFilesystemWatcherEvent, HomeDirectoryWatcher, HomeDirectoryWatcherEvent};
@@ -22,9 +24,9 @@ use super::subscribers::{
     HomeSkillSubscriber, ProjectSkillSubscriber, SkillRepositoryMessage, SymlinkSkillSubscriber,
 };
 use super::utils::{
-    find_skill_files_in_tree, find_symlinked_skill_files_in_tree, is_home_provider_path,
-    is_home_skill_directory, is_skill_file, read_local_project_skills_from_filesystem,
-    read_skills_from_directories, read_skills_from_files,
+    find_project_skill_files_in_tree, is_home_provider_path, is_home_skill_directory,
+    is_skill_file, read_local_project_skills_from_filesystem, read_skills_from_directories,
+    read_skills_from_files, update_might_affect_project_skills,
 };
 use crate::remote_server::manager::RemoteServerManager;
 use crate::warp_managed_paths_watcher::{
@@ -45,8 +47,8 @@ type ProjectSkillContentsFuture =
 pub struct SkillWatcher {
     // Channel for sending repository messages from subscribers.
     repository_message_tx: Sender<SkillRepositoryMessage>,
-    /// Last known project skill files by repository. Project skill counts are small,
-    /// so repo metadata changes trigger a full refresh instead of a subtree diff.
+    /// Last known project skill files by repository. Relevant repo metadata changes trigger a
+    /// full refresh; precise unrelated incremental deltas are ignored.
     project_skill_files_by_repo: HashMap<RepositoryIdentifier, HashSet<LocalOrRemotePath>>,
     /// Latest full project-skill refresh generation by repository. Repo metadata refreshes
     /// hydrate project skills asynchronously, so results from superseded tree snapshots
@@ -89,15 +91,7 @@ impl SkillWatcher {
         let skill_files: Vec<PathBuf> = repo_paths
             .iter()
             .filter_map(|repo_path| RepositoryIdentifier::try_local(repo_path))
-            .flat_map(|repo_id| {
-                let mut skill_files = find_skill_files_in_tree(&repo_id, repo_metadata, ctx);
-                skill_files.extend(
-                    find_symlinked_skill_files_in_tree(&repo_id, repo_metadata, ctx)
-                        .into_iter()
-                        .map(LocalOrRemotePath::Local),
-                );
-                skill_files
-            })
+            .flat_map(|repo_id| find_project_skill_files_in_tree(&repo_id, repo_metadata, ctx))
             .filter_map(|path| path.to_local_path().map(Path::to_path_buf))
             .collect();
         read_skills_from_files(skill_files)
@@ -196,7 +190,22 @@ impl SkillWatcher {
                 RepoMetadataEvent::RepositoryUpdated { id } => {
                     me.refresh_project_skills_for_repo(id, ctx);
                 }
-                RepoMetadataEvent::FileTreeEntryUpdated { id } => {
+                RepoMetadataEvent::FileTreeEntryUpdated {
+                    id,
+                    update_type: MetadataUpdateType::IncrementalUpdate(update),
+                } => {
+                    if update_might_affect_project_skills(
+                        id,
+                        update,
+                        me.project_skill_files_by_repo.get(id),
+                    ) {
+                        me.refresh_project_skills_for_repo(id, ctx);
+                    }
+                }
+                RepoMetadataEvent::FileTreeEntryUpdated {
+                    id,
+                    update_type: MetadataUpdateType::FullReplace,
+                } => {
                     me.refresh_project_skills_for_repo(id, ctx);
                 }
                 RepoMetadataEvent::RepositoryRemoved { id } => {
@@ -232,13 +241,9 @@ impl SkillWatcher {
         let refresh_generation = self.advance_project_skill_refresh_generation(repo_id);
         let current_skill_files: HashSet<LocalOrRemotePath> = {
             let repo_metadata = RepoMetadataModel::as_ref(ctx);
-            let mut skill_files = find_skill_files_in_tree(repo_id, repo_metadata, ctx);
-            skill_files.extend(
-                find_symlinked_skill_files_in_tree(repo_id, repo_metadata, ctx)
-                    .into_iter()
-                    .map(LocalOrRemotePath::Local),
-            );
-            skill_files.into_iter().collect()
+            find_project_skill_files_in_tree(repo_id, repo_metadata, ctx)
+                .into_iter()
+                .collect()
         };
 
         let previous_skill_files = self
@@ -264,11 +269,9 @@ impl SkillWatcher {
                 });
         }
 
-        // Project skill counts are expected to be small, so repo metadata updates
-        // intentionally trigger a full refresh instead of attempting to diff the
-        // changed subtree. This keeps local and remote project-skill behavior on
-        // the same RepoMetadataModel path and avoids a separate FileWatcher update
-        // path for local repos.
+        // Project skill counts are expected to be small, so initial discovery and
+        // skill-relevant repo metadata updates trigger a full refresh rather than
+        // attempting to maintain project-skill state incrementally.
         self.spawn_read_project_skills_from_files(
             repo_id.clone(),
             refresh_generation,

@@ -17,8 +17,8 @@ use warp::integration_testing::view_getters::{
     single_input_view_for_tab, single_terminal_view_for_tab,
 };
 use warp::terminal::shell::ShellType;
-use warpui::integration::TestStep;
-use warpui::{async_assert_eq, Event};
+use warpui_core::integration::TestStep;
+use warpui_core::{async_assert_eq, Event};
 
 use super::new_builder;
 use crate::Builder;

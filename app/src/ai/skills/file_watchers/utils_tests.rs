@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use repo_metadata::entry::{DirectoryEntry, Entry, FileMetadata};
 use repo_metadata::file_tree_store::FileTreeState;
 use repo_metadata::file_tree_update::{
@@ -15,8 +17,9 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 
 use super::{
-    extract_skill_parent_directory, find_skill_files_in_tree, is_home_provider_path,
+    extract_skill_parent_directory, find_project_skill_files_in_tree, is_home_provider_path,
     is_home_skill_directory, is_skill_file, read_skills_from_files,
+    update_might_affect_project_skills,
 };
 
 // ============================================================================
@@ -543,7 +546,7 @@ fn find_skill_files_in_tree_finds_root_skills() {
 
             model_handle.read(&app, |model, ctx| {
                 let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
-                let skill_files = find_skill_files_in_tree(&repo_id, model, ctx);
+                let skill_files = find_project_skill_files_in_tree(&repo_id, model, ctx);
                 assert_eq!(skill_files.len(), 2);
                 assert!(skill_files.contains(&LocalOrRemotePath::Local(
                     repo.join(".agents/skills/root-skill-1/SKILL.md")
@@ -564,6 +567,134 @@ fn find_skill_files_in_tree_finds_root_skills() {
             });
         });
     });
+}
+
+#[test]
+fn update_relevance_ignores_unrelated_local_file_updates() {
+    let repo_path = StandardizedPath::try_new("/repo").unwrap();
+    let repo_id = RepositoryIdentifier::local(repo_path.clone());
+    let update = RepoMetadataUpdate {
+        repo_path: repo_path.clone(),
+        remove_entries: Vec::new(),
+        update_entries: vec![FileTreeEntryUpdate {
+            parent_path_to_replace: StandardizedPath::try_new("/repo/src").unwrap(),
+            subtree_metadata: vec![RepoNodeMetadata::File(FileNodeMetadata {
+                path: StandardizedPath::try_new("/repo/src/main.rs").unwrap(),
+                extension: Some("rs".to_string()),
+                ignored: false,
+            })],
+        }],
+    };
+
+    assert!(!update_might_affect_project_skills(&repo_id, &update, None));
+}
+
+#[test]
+fn update_relevance_detects_local_skill_and_provider_directory_updates() {
+    let repo_path = StandardizedPath::try_new("/repo").unwrap();
+    let repo_id = RepositoryIdentifier::local(repo_path.clone());
+    let skill_update = RepoMetadataUpdate {
+        repo_path: repo_path.clone(),
+        remove_entries: Vec::new(),
+        update_entries: vec![FileTreeEntryUpdate {
+            parent_path_to_replace: StandardizedPath::try_new("/repo/.agents/skills/review")
+                .unwrap(),
+            subtree_metadata: vec![RepoNodeMetadata::File(FileNodeMetadata {
+                path: StandardizedPath::try_new("/repo/.agents/skills/review/SKILL.md").unwrap(),
+                extension: Some("md".to_string()),
+                ignored: false,
+            })],
+        }],
+    };
+    let provider_update = RepoMetadataUpdate {
+        repo_path,
+        remove_entries: Vec::new(),
+        update_entries: vec![FileTreeEntryUpdate {
+            parent_path_to_replace: StandardizedPath::try_new("/repo").unwrap(),
+            subtree_metadata: vec![RepoNodeMetadata::Directory(DirectoryNodeMetadata {
+                path: StandardizedPath::try_new("/repo/.agents/skills").unwrap(),
+                ignored: false,
+                loaded: true,
+            })],
+        }],
+    };
+
+    assert!(update_might_affect_project_skills(
+        &repo_id,
+        &skill_update,
+        None
+    ));
+    assert!(update_might_affect_project_skills(
+        &repo_id,
+        &provider_update,
+        None
+    ));
+}
+
+#[test]
+fn update_relevance_detects_removal_of_known_skill_ancestor() {
+    let repo_path = StandardizedPath::try_new("/repo").unwrap();
+    let repo_id = RepositoryIdentifier::local(repo_path.clone());
+    let known_skill = LocalOrRemotePath::Local(
+        StandardizedPath::try_new("/repo/.agents/skills/review/SKILL.md")
+            .unwrap()
+            .to_local_path_lossy(),
+    );
+    let known_skill_files = HashSet::from([known_skill]);
+    let update = RepoMetadataUpdate {
+        repo_path,
+        remove_entries: vec![StandardizedPath::try_new("/repo/.agents/skills/review").unwrap()],
+        update_entries: Vec::new(),
+    };
+
+    assert!(update_might_affect_project_skills(
+        &repo_id,
+        &update,
+        Some(&known_skill_files)
+    ));
+}
+
+#[test]
+fn update_relevance_filters_remote_updates_by_skill_file_paths() {
+    let host_id = HostId::new("test-host".to_string());
+    let repo_path = StandardizedPath::try_new("/repo").unwrap();
+    let repo_id = RepositoryIdentifier::Remote(RemotePath::new(host_id, repo_path.clone()));
+    let unrelated_update = RepoMetadataUpdate {
+        repo_path: repo_path.clone(),
+        remove_entries: Vec::new(),
+        update_entries: vec![FileTreeEntryUpdate {
+            parent_path_to_replace: StandardizedPath::try_new("/repo/src").unwrap(),
+            subtree_metadata: vec![RepoNodeMetadata::File(FileNodeMetadata {
+                path: StandardizedPath::try_new("/repo/src/main.rs").unwrap(),
+                extension: Some("rs".to_string()),
+                ignored: false,
+            })],
+        }],
+    };
+    let skill_update = RepoMetadataUpdate {
+        repo_path,
+        remove_entries: Vec::new(),
+        update_entries: vec![FileTreeEntryUpdate {
+            parent_path_to_replace: StandardizedPath::try_new("/repo/.claude/skills/review")
+                .unwrap(),
+            subtree_metadata: vec![RepoNodeMetadata::File(FileNodeMetadata {
+                path: StandardizedPath::try_new("/repo/.claude/skills/review/SKILL.md").unwrap(),
+                extension: Some("md".to_string()),
+                ignored: false,
+            })],
+        }],
+    };
+
+    assert!(!update_might_affect_project_skills(
+        &repo_id,
+        &unrelated_update,
+        None
+    ));
+    assert!(update_might_affect_project_skills(
+        &repo_id,
+        &skill_update,
+        None
+    ));
 }
 
 #[test]
@@ -696,7 +827,7 @@ fn find_skill_files_in_tree_finds_subdirectory_skills() {
 
             model_handle.read(&app, |model, ctx| {
                 let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
-                let skill_files = find_skill_files_in_tree(&repo_id, model, ctx);
+                let skill_files = find_project_skill_files_in_tree(&repo_id, model, ctx);
                 assert_eq!(skill_files.len(), 2);
                 assert!(skill_files.contains(&LocalOrRemotePath::Local(
                     repo.join(".agents/skills/root-skill/SKILL.md")
@@ -767,7 +898,7 @@ fn find_skill_files_in_tree_returns_remote_skill_paths_for_remote_repos() {
         });
 
         model_handle.read(&app, |model, ctx| {
-            let skill_files = find_skill_files_in_tree(&repo_id, model, ctx);
+            let skill_files = find_project_skill_files_in_tree(&repo_id, model, ctx);
             assert_eq!(
                 skill_files,
                 vec![LocalOrRemotePath::Remote(RemotePath::new(
@@ -839,7 +970,7 @@ fn find_skill_files_in_tree_includes_ignored_skill_files() {
             model_handle.read(&app, |model, ctx| {
                 let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
                 assert_eq!(
-                    find_skill_files_in_tree(&repo_id, model, ctx),
+                    find_project_skill_files_in_tree(&repo_id, model, ctx),
                     vec![LocalOrRemotePath::Local(
                         repo.join(".agents/skills/ignored-skill/SKILL.md")
                     )]
@@ -891,7 +1022,7 @@ fn find_skill_files_in_tree_empty_repo() {
 
             model_handle.read(&app, |model, ctx| {
                 let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
-                let skill_files = find_skill_files_in_tree(&repo_id, model, ctx);
+                let skill_files = find_project_skill_files_in_tree(&repo_id, model, ctx);
                 assert!(skill_files.is_empty());
             });
         });

@@ -14,7 +14,7 @@ use instant::Instant;
 use repo_metadata::entry::IgnoredPathStrategy;
 use repo_metadata::Repository;
 use warp_core::safe_error;
-use warpui::{Entity, ModelContext, ModelHandle};
+use warpui_core::{Entity, ModelContext, ModelHandle};
 
 use super::fragment_metadata::{
     FragmentMetadata, LeafToFragmentMetadata, LeafToFragmentMetadataUpdates,
@@ -51,8 +51,8 @@ cfg_if::cfg_if! {
         };
         use warp_core::send_telemetry_from_ctx;
         use warp_core::interval_timer::IntervalTimer;
-        use warpui::r#async::Timer;
-        use warpui::SingletonEntity;
+        use warpui_core::r#async::Timer;
+        use warpui_core::SingletonEntity;
         use warp_core::sync_queue::SyncQueue;
         use sha2::Digest;
     }

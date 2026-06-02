@@ -150,7 +150,6 @@ use crate::server::graphql::schema::{
 };
 use crate::server::graphql::{get_request_context, get_user_facing_error_message};
 use crate::server::ids::{ClientId, HashableId, ServerId, ServerIdAndType, SyncId, ToServerId};
-use crate::server::server_api::auth::AuthClient;
 use crate::server::server_api::ServerApi;
 use crate::server::sync_queue::SerializedModel;
 use crate::settings::Preference;

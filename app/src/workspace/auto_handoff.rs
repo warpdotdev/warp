@@ -173,8 +173,7 @@ impl AutoCloudHandoffController {
         let skip_reason = {
             let history = BlocklistAIHistoryModel::as_ref(ctx);
             let conversation = history.conversation(&conversation_id)?;
-            let can_handoff_to_cloud = AISettings::as_ref(ctx)
-                .is_cloud_handoff_enabled_for_conversation(Some(conversation), ctx);
+            let can_handoff_to_cloud = AISettings::as_ref(ctx).is_cloud_handoff_enabled(ctx);
             AutoCloudHandoffEligibility::from_conversation(
                 conversation,
                 can_handoff_to_cloud,

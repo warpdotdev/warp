@@ -1,6 +1,7 @@
 use chrono::Utc;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
+use warp_server_client::auth::AgentIdentity;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Empty, Expanded, Fill, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle,
@@ -22,7 +23,6 @@ use crate::editor::{
     TextOptions,
 };
 use crate::modal::{Modal, ModalViewState};
-use crate::server::server_api::auth::{AgentIdentity, AuthClient};
 use crate::util::truncation::truncate_from_end;
 use crate::view_components::dropdown::{DROPDOWN_PADDING, TOP_MENU_BAR_HEIGHT};
 use crate::view_components::{Dropdown as DropdownView, DropdownItem};
@@ -277,9 +277,10 @@ impl CreateApiKeyModal {
         self.is_loading_agents = true;
         ctx.notify();
 
-        let server_api = crate::server::server_api::ServerApiProvider::as_ref(ctx).get();
+        let auth_client =
+            crate::server::server_api::ServerApiProvider::as_ref(ctx).get_auth_client();
         ctx.spawn(
-            async move { server_api.list_agent_identities().await },
+            async move { auth_client.list_agent_identities().await },
             |me, res, ctx| {
                 me.is_loading_agents = false;
                 match res {
@@ -377,9 +378,10 @@ impl CreateApiKeyModal {
             None
         };
 
-        let server_api = crate::server::server_api::ServerApiProvider::as_ref(ctx).get();
+        let auth_client =
+            crate::server::server_api::ServerApiProvider::as_ref(ctx).get_auth_client();
         ctx.spawn(
-            async move { server_api.create_api_key(final_name, team_id, agent_uid, expires_at).await },
+            async move { auth_client.create_api_key(final_name, team_id, agent_uid, expires_at).await },
             |me, res, ctx| {
                 match res {
                     Ok(warp_graphql::mutations::generate_api_key::GenerateApiKeyResult::GenerateApiKeyOutput(output)) => {

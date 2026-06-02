@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use warpui::r#async::executor::Background;
+use warpui_core::r#async::executor::Background;
 
 use super::LogManager;
 use crate::{path_with_suffix, RotationConfig};

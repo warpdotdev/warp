@@ -175,8 +175,8 @@ impl TerminalManager {
         resources: TerminalViewResources,
         initial_size: Vector2F,
         window_id: WindowId,
-        is_cloud_mode: bool,
         enable_orchestration_polling: bool,
+        is_cloud_mode: bool,
         ctx: &mut AppContext,
     ) -> Self {
         // Create all the necessary channels we need for communication.
@@ -298,20 +298,28 @@ impl TerminalManager {
 
     /// Create a new terminal manager for viewing a shared session. See
     /// [`Self::enable_orchestration_polling`] for the meaning of the flag.
+    ///
+    /// `is_cloud_mode` controls whether the resulting `TerminalView` is
+    /// constructed with an `ambient_agent_view_model`. This must be `true` for
+    /// shared-session viewers that represent the local pane of a cloud
+    /// orchestration parent agent, so the snapshot/restore path can emit a
+    /// `LeafContents::AmbientAgent` rather than falling through to an empty
+    /// terminal pane.
     pub fn new(
         session_id: SessionId,
         resources: TerminalViewResources,
         initial_size: Vector2F,
         window_id: WindowId,
         enable_orchestration_polling: bool,
+        is_cloud_mode: bool,
         ctx: &mut AppContext,
     ) -> Self {
         let mut terminal_manager = Self::new_internal(
             resources,
             initial_size,
             window_id,
-            false,
             enable_orchestration_polling,
+            is_cloud_mode,
             ctx,
         );
 
@@ -338,8 +346,8 @@ impl TerminalManager {
             resources,
             initial_size,
             window_id,
-            true,
             enable_orchestration_polling,
+            true, // is_cloud_mode
             ctx,
         )
     }
