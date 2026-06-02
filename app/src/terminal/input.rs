@@ -130,7 +130,9 @@ use super::shell::ShellType;
 use super::universal_developer_input::{
     UniversalDeveloperInputButtonBar, UniversalDeveloperInputButtonBarEvent,
 };
-use super::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
+use super::view::ambient_agent::{
+    is_cloud_agent_pre_first_exchange, AmbientAgentViewModel, AmbientAgentViewModelEvent,
+};
 use super::view::inline_banner::{
     PromptSuggestionBannerState, ZeroStatePromptSuggestionTriggeredFrom,
     ZeroStatePromptSuggestionType,
@@ -6650,20 +6652,6 @@ impl Input {
         });
     }
 
-    fn should_block_cloud_mode_setup_submission(&self, app: &AppContext) -> bool {
-        if !FeatureFlag::CloudModeSetupV2.is_enabled() {
-            return false;
-        }
-
-        self.ambient_agent_view_model()
-            .is_some_and(|ambient_agent_model| {
-                let ambient_agent_model = ambient_agent_model.as_ref(app);
-                ambient_agent_model.is_ambient_agent()
-                    && !ambient_agent_model.is_configuring_ambient_agent()
-                    && !ambient_agent_model.is_agent_running()
-            })
-    }
-
     /// Try to execute a command in the local session that was
     /// requested by a shared session participant (sharer or viewer).
     ///
@@ -11183,9 +11171,26 @@ impl Input {
             pending_command_execution_request: None,
         });
 
-        // Set the server-assigned replica ID on the input buffer.
+        // Reinitializing for the server replica ID empties the buffer. During cloud setup the
+        // sharer's input sync is skipped, so preserve the viewer's in-progress follow-up instead
+        // of discarding it.
+        let cloud_setup_pre_first_exchange = FeatureFlag::CloudModeSetupV2.is_enabled()
+            && is_cloud_agent_pre_first_exchange(
+                self.ambient_agent_view_model(),
+                &self.agent_view_controller,
+                &self.model.lock(),
+                ctx,
+            );
+        let preserved_text = if cloud_setup_pre_first_exchange {
+            self.editor().as_ref(ctx).buffer_text(ctx)
+        } else {
+            String::new()
+        };
         self.editor().update(ctx, |editor, ctx| {
             editor.reinitialize_buffer(Some(replica_id), ctx);
+            if !preserved_text.is_empty() {
+                editor.set_buffer_text(&preserved_text, ctx);
+            }
         });
     }
 
@@ -12717,7 +12722,16 @@ impl Input {
             self.input_suggestions.update(ctx, |suggestions, ctx| {
                 suggestions.confirm(ctx);
             });
-        } else if self.should_block_cloud_mode_setup_submission(ctx) {
+        } else if FeatureFlag::CloudModeSetupV2.is_enabled()
+            && is_cloud_agent_pre_first_exchange(
+                self.ambient_agent_view_model(),
+                &self.agent_view_controller,
+                &self.model.lock(),
+                ctx,
+            )
+        {
+            // During cloud-mode setup, non-queued submissions (e.g. third-party harness runs that
+            // don't queue) are dropped rather than sent as live prompts the sharer can't accept.
             return;
         } else if FeatureFlag::HandoffCloudCloud.is_enabled()
             && self
@@ -13416,17 +13430,20 @@ impl Input {
             return false;
         }
 
-        let should_queue = self
-            .ambient_agent_view_model()
-            .is_some_and(|ambient_agent_model| {
-                let ambient_agent_model = ambient_agent_model.as_ref(ctx);
-                ambient_agent_model.is_ambient_agent()
-                    && !ambient_agent_model.is_configuring_ambient_agent()
-                    && !ambient_agent_model.is_agent_running()
-                    // Third-party (non-Oz) harnesses don't support prompt queueing, so leave the
-                    // input alone; the submission then falls through to being blocked during setup.
-                    && !ambient_agent_model.is_third_party_harness()
-            });
+        // Third-party (non-Oz) harnesses don't support prompt queueing, so leave the input
+        // alone; the submission then falls through to being blocked during setup.
+        let is_third_party_harness =
+            self.ambient_agent_view_model()
+                .is_some_and(|ambient_agent_model| {
+                    ambient_agent_model.as_ref(ctx).is_third_party_harness()
+                });
+        let should_queue = !is_third_party_harness
+            && is_cloud_agent_pre_first_exchange(
+                self.ambient_agent_view_model(),
+                &self.agent_view_controller,
+                &self.model.lock(),
+                ctx,
+            );
         if !should_queue {
             return false;
         }
@@ -14216,8 +14233,20 @@ impl Input {
         // off the screen because we were forcing the long running command to be the same
         // size of the cleared input box.
         if let BlockType::User(user_block) = &block_completed_event.block_type {
+            // During cloud-mode setup (before the first exchange) the cloud agent (sharer) runs
+            // environment setup commands the viewer never requested. Each completed setup block
+            // would otherwise reinitialize the buffer and wipe a follow-up the viewer is composing,
+            // so skip the clear for that window.
+            let cloud_setup_pre_first_exchange = FeatureFlag::CloudModeSetupV2.is_enabled()
+                && is_cloud_agent_pre_first_exchange(
+                    self.ambient_agent_view_model(),
+                    &self.agent_view_controller,
+                    &self.model.lock(),
+                    ctx,
+                );
             // Only clear the input buffer for user-executed commands, not agent-executed ones.
-            let should_clear_buffer = !user_block.was_part_of_agent_interaction;
+            let should_clear_buffer =
+                !user_block.was_part_of_agent_interaction && !cloud_setup_pre_first_exchange;
             let latest_block_id = self.model.lock().block_list().active_block_id().clone();
             let input_contents_before_prompt_chip_command =
                 self.input_contents_before_prompt_chip_command.take();

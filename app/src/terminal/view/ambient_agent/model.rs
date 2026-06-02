@@ -519,7 +519,7 @@ impl AmbientAgentViewModel {
 
     /// True when the run is configured to use a non-Oz execution harness and the
     /// required feature flags are enabled.
-    pub(in crate::terminal) fn is_third_party_harness(&self) -> bool {
+    pub fn is_third_party_harness(&self) -> bool {
         FeatureFlag::AgentHarness.is_enabled() && self.selected_harness() != Harness::Oz
     }
 
