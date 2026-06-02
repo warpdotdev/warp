@@ -83,6 +83,12 @@ pub enum ClientEvent {
     CodebaseIndexStatusUpdated { status: RemoteCodebaseIndexStatus },
     /// A server message could not be decoded and had no parseable request_id.
     MessageDecodingError,
+    /// The writer task failed while writing a host-scoped request before it
+    /// could be handed off to the daemon. The manager owns host-scoped
+    /// lifecycle tracking, so it handles retrying this request through another
+    /// connected session for the same host (or failing the request if none
+    /// exists).
+    HostScopedWriteFailed { request_id: RequestId },
     /// A buffer was updated on the server (file changed on disk).
     BufferUpdated {
         path: String,
@@ -260,6 +266,7 @@ impl RemoteServerClient {
                 writer,
                 outbound_rx,
                 Arc::clone(&pending_requests),
+                event_tx.clone(),
             ))
             .detach();
         executor
@@ -771,11 +778,27 @@ impl RemoteServerClient {
         pending_requests: Arc<
             DashMap<RequestId, oneshot::Sender<Result<ServerMessage, ClientError>>>,
         >,
+        event_tx: async_channel::Sender<ClientEvent>,
     ) {
         let mut writer = futures::io::BufWriter::new(writer);
         while let Ok(msg) = outbound_rx.recv().await {
+            let request_id = RequestId::from(msg.request_id.clone());
+            let is_host_scoped = matches!(
+                &msg.message,
+                Some(crate::proto::client_message::Message::HostScoped(_))
+            );
             if let Err(e) = protocol::write_client_message(&mut writer, &msg).await {
-                let request_id = RequestId::from(msg.request_id);
+                if is_host_scoped
+                    && event_tx
+                        .try_send(ClientEvent::HostScopedWriteFailed {
+                            request_id: request_id.clone(),
+                        })
+                        .is_err()
+                {
+                    log::warn!(
+                        "Failed to notify manager about host-scoped write failure: request_id={request_id}"
+                    );
+                }
                 if !e.is_write_recoverable() {
                     log::error!("Writer task fatal error: request_id={request_id} error={e}");
                     pending_requests.clear();

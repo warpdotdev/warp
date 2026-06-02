@@ -1306,28 +1306,16 @@ impl ServerModel {
         };
         if let Some(target) = conn_id {
             if let Some(conn_tx) = self.connection_senders.get(&target) {
-                if let Err(e) = conn_tx.try_send(msg) {
+                if let Err(e) = conn_tx.try_send(msg.clone()) {
                     log::warn!("Daemon: failed to send to conn {target}: {e}");
+                    if is_host_scoped_response {
+                        self.send_host_scoped_response_via_alternate_connection(target, msg);
+                    }
                 }
             } else if is_host_scoped_response {
                 // Target connection is gone. Deliver the host-scoped
                 // response through any other open connection.
-                if let Some((&alt_id, alt_tx)) = self.connection_senders.iter().next() {
-                    log::info!(
-                        "Daemon: failover delivery for request_id={} from disconnected \
-                         conn {target} to conn {alt_id}",
-                        msg.request_id
-                    );
-                    if let Err(e) = alt_tx.try_send(msg) {
-                        log::warn!("Daemon: failover delivery failed to conn {alt_id}: {e}");
-                    }
-                } else {
-                    log::warn!(
-                        "Daemon: cannot deliver host-scoped response for request_id={}, \
-                         no connections available",
-                        msg.request_id
-                    );
-                }
+                self.send_host_scoped_response_via_alternate_connection(target, msg);
             } else {
                 log::debug!("Daemon: no sender for conn {target} (already disconnected)");
             }
@@ -1339,6 +1327,36 @@ impl ServerModel {
                 }
             }
         }
+    }
+
+    /// Delivers a host-scoped response through a connected proxy other than
+    /// `target`. Used when the original connection has disappeared or its
+    /// outbound channel rejects the response.
+    fn send_host_scoped_response_via_alternate_connection(
+        &self,
+        target: ConnectionId,
+        msg: ServerMessage,
+    ) {
+        for (&alt_id, alt_tx) in &self.connection_senders {
+            if alt_id == target {
+                continue;
+            }
+            log::info!(
+                "Daemon: failover delivery for request_id={} from conn {target} to conn {alt_id}",
+                msg.request_id
+            );
+            match alt_tx.try_send(msg.clone()) {
+                Ok(()) => return,
+                Err(e) => {
+                    log::warn!("Daemon: failover delivery failed to conn {alt_id}: {e}");
+                }
+            }
+        }
+        log::warn!(
+            "Daemon: cannot deliver host-scoped response for request_id={}, \
+             no alternate connections available",
+            msg.request_id
+        );
     }
 
     /// Spawns an abortable future tied to `request_id` and wires up automatic

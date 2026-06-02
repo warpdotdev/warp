@@ -266,6 +266,7 @@ fn client_event_kind(event: &ClientEvent) -> &'static str {
             "codebase_index_statuses_snapshot"
         }
         ClientEvent::CodebaseIndexStatusUpdated { .. } => "codebase_index_status_updated",
+        ClientEvent::HostScopedWriteFailed { .. } => "host_scoped_write_failed",
         ClientEvent::BufferUpdated { .. } => "buffer_updated",
         ClientEvent::BufferConflictDetected { .. } => "buffer_conflict_detected",
         ClientEvent::DiffStateSnapshotReceived { .. } => "diff_state_snapshot",
@@ -662,6 +663,15 @@ pub enum HostRequestError {
 /// Tracks an in-flight host-scoped request on the manager.
 struct PendingHostRequest {
     host_id: HostId,
+    /// The session this request was most recently queued on. If that client's
+    /// writer reports that the request failed before reaching the daemon, the
+    /// manager retries the same request ID on another connected session for
+    /// the host.
+    dispatched_session_id: SessionId,
+    /// Original host-scoped message, including request ID, retained so a
+    /// writer failure before daemon receipt can be retried through a sibling
+    /// connection without changing the caller-visible request lifecycle.
+    msg: crate::proto::ClientMessage,
     /// Oneshot sender to resolve the caller's future with the raw
     /// `ServerMessage`. The caller parses the response variant.
     result_tx: oneshot::Sender<Result<crate::proto::ServerMessage, HostRequestError>>,
@@ -1002,11 +1012,57 @@ impl RemoteServerManager {
         &self,
         host_id: &HostId,
     ) -> Option<(SessionId, &Arc<RemoteServerClient>)> {
+        self.any_connected_session_for_host_excluding(host_id, None)
+    }
+
+    /// Returns an arbitrary connected `(session_id, client)` pair for the
+    /// given host, excluding `excluded_session_id` if provided.
+    fn any_connected_session_for_host_excluding(
+        &self,
+        host_id: &HostId,
+        excluded_session_id: Option<SessionId>,
+    ) -> Option<(SessionId, &Arc<RemoteServerClient>)> {
         let sessions = self.host_to_sessions.get(host_id)?;
-        sessions
-            .iter()
-            .copied()
-            .find_map(|sid| self.client_for_session(sid).map(|client| (sid, client)))
+        sessions.iter().copied().find_map(|sid| {
+            (Some(sid) != excluded_session_id)
+                .then(|| self.client_for_session(sid).map(|client| (sid, client)))
+                .flatten()
+        })
+    }
+
+    /// Queues a host-scoped request on a connected session for `host_id`.
+    ///
+    /// Returns the session that accepted the message into its outbound queue.
+    /// `exclude_session_id` is used when retrying after that session's writer
+    /// reported that the request did not reach the daemon.
+    fn dispatch_host_scoped_request(
+        &self,
+        host_id: &HostId,
+        msg: &crate::proto::ClientMessage,
+        exclude_session_id: Option<SessionId>,
+    ) -> Option<SessionId> {
+        let Some(sessions) = self.host_to_sessions.get(host_id) else {
+            return None;
+        };
+        let request_id = crate::protocol::RequestId::from(msg.request_id.clone());
+        for session_id in sessions.iter().copied() {
+            if Some(session_id) == exclude_session_id {
+                continue;
+            }
+            let Some(client) = self.client_for_session(session_id) else {
+                continue;
+            };
+            match client.send_host_scoped(msg.clone()) {
+                Ok(()) => return Some(session_id),
+                Err(err) => {
+                    log::warn!(
+                        "Host-scoped request dispatch failed on session {session_id:?}: \
+                         host={host_id} request_id={request_id} error={err}"
+                    );
+                }
+            }
+        }
+        None
     }
 
     /// Sends a host-scoped request to any connected session for the given host.
@@ -1036,10 +1092,6 @@ impl RemoteServerManager {
         // failure paths below resolve the receiver and hand it back.
         let (result_tx, result_rx) = oneshot::channel();
 
-        let Some(client) = self.client_for_host(host_id).cloned() else {
-            let _ = result_tx.send(Err(HostRequestError::AllSessionsDisconnected));
-            return result_rx;
-        };
 
         let request_id = crate::protocol::RequestId::from(msg.request_id.clone());
 
@@ -1053,14 +1105,15 @@ impl RemoteServerManager {
         // the `spawn_stream_local` handler in `mark_session_connected`, which
         // cannot run until this synchronous `&mut self` method returns. So the
         // insert below always happens before any matching response is matched.
-        if client.send_host_scoped(msg).is_err() {
+        let Some(dispatched_session_id) = self.dispatch_host_scoped_request(host_id, &msg, None)
+        else {
             log::warn!(
                 "Host-scoped request dispatch failed (outbound channel closed): \
                  host={host_id} request_id={request_id}"
             );
             let _ = result_tx.send(Err(HostRequestError::AllSessionsDisconnected));
             return result_rx;
-        }
+        };
 
         // Arm a timeout so a request the daemon accepts but never answers
         // doesn't hang the caller forever (and leak the pending entry). The
@@ -1073,6 +1126,8 @@ impl RemoteServerManager {
             request_id,
             PendingHostRequest {
                 host_id: host_id.clone(),
+                dispatched_session_id,
+                msg,
                 result_tx,
                 timeout_abort,
             },
@@ -1200,6 +1255,57 @@ impl RemoteServerManager {
                     .result_tx
                     .send(Err(HostRequestError::AllSessionsDisconnected));
             }
+        }
+    }
+
+    /// Handles a client writer failure for a host-scoped request that was
+    /// queued on `session_id` but did not reach the daemon. Retries the same
+    /// request ID through another connected session for the host if possible;
+    /// otherwise fails the caller immediately instead of waiting for timeout.
+    fn handle_host_scoped_write_failed(
+        &mut self,
+        session_id: SessionId,
+        request_id: crate::protocol::RequestId,
+    ) {
+        let Some(mut pending) = self.pending_host_requests.remove(&request_id) else {
+            log::debug!(
+                "Ignoring host-scoped write failure for non-pending request: \
+                 session={session_id:?} request_id={request_id}"
+            );
+            return;
+        };
+
+        if pending.dispatched_session_id != session_id {
+            // Stale failure from an earlier dispatch attempt; the request has
+            // already been retried elsewhere.
+            self.pending_host_requests.insert(request_id, pending);
+            return;
+        }
+
+        if let Some(new_session_id) = self.dispatch_host_scoped_request(
+            &pending.host_id,
+            &pending.msg,
+            Some(session_id),
+        ) {
+            log::info!(
+                "Retried host-scoped request after writer failure: \
+                 host={} request_id={} old_session={session_id:?} new_session={new_session_id:?}",
+                pending.host_id,
+                request_id
+            );
+            pending.dispatched_session_id = new_session_id;
+            self.pending_host_requests.insert(request_id, pending);
+        } else {
+            log::warn!(
+                "Host-scoped request failed before reaching daemon and no alternate \
+                 session is available: host={} request_id={} session={session_id:?}",
+                pending.host_id,
+                request_id
+            );
+            pending.cancel_timeout();
+            let _ = pending
+                .result_tx
+                .send(Err(HostRequestError::AllSessionsDisconnected));
         }
     }
 
@@ -2685,6 +2791,9 @@ impl RemoteServerManager {
             }
             ClientEvent::MessageDecodingError => {
                 ctx.emit(RemoteServerManagerEvent::ServerMessageDecodingError { session_id });
+            }
+            ClientEvent::HostScopedWriteFailed { request_id } => {
+                self.handle_host_scoped_write_failed(session_id, request_id);
             }
             ClientEvent::BufferUpdated {
                 path,
