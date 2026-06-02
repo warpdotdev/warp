@@ -1,5 +1,5 @@
-use warpui::keymap::Keystroke;
-use warpui::platform::OperatingSystem;
+use warpui_core::keymap::Keystroke;
+use warpui_core::platform::OperatingSystem;
 
 use super::*;
 use crate::model::indexing::Point;

@@ -33,7 +33,7 @@ vte.workspace = true
 warp_completer.workspace = true
 warp_core.workspace = true
 warp_util.workspace = true
-warpui.workspace = true
+warpui_core.workspace = true
 
 [dev-dependencies]
 unicode-segmentation = "1.11.0"

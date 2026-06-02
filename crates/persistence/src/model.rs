@@ -1358,6 +1358,8 @@ pub struct ConversationUsageMetadata {
     pub context_window_usage: f32,
     pub credits_spent: f32,
     #[serde(default)]
+    pub platform_credits_spent: f32,
+    #[serde(default)]
     pub credits_spent_for_last_block: Option<f32>,
     #[serde(default)]
     pub token_usage: Vec<ModelTokenUsage>,

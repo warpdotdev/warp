@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use ignore::gitignore::Gitignore;
 use warp_util::standardized_path::StandardizedPath;
-use warpui::ModelHandle;
+use warpui_core::ModelHandle;
 
 use crate::file_tree_store::file_tree_state::FileTreeMapStore;
 use crate::{BuildTreeError, Entry, FileId, FileMetadata, Repository};
