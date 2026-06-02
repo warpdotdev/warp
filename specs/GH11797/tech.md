@@ -59,13 +59,13 @@ end
 
 ```powershell
 # PowerShell:
-$_jj_bm = jj log -r @ --no-graph --ignore-working-copy \
+$_jj_bm = jj log -r @ --no-graph --ignore-working-copy `
     --template 'if(bookmarks,bookmarks,"")' 2>$null
 if ($_jj_bm) { $_jj_bm }
 else {
-    $_jj_cid = jj log -r @ --no-graph --ignore-working-copy \
+    $_jj_cid = jj log -r @ --no-graph --ignore-working-copy `
         --template 'change_id.short(8)' 2>$null
-    $_jj_abm = jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' \
+    $_jj_abm = jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' `
         --no-graph --ignore-working-copy --template 'bookmarks' 2>$null
     if ($_jj_abm) { "$_jj_cid on $_jj_abm" } else { $_jj_cid }
 }
