@@ -1,6 +1,5 @@
 //! A reusable warning callout component with optional action button.
 use markdown_parser::{FormattedText, FormattedTextInline, FormattedTextLine};
-
 use warp_core::ui::color::blend::Blend;
 use warpui::color::ColorU;
 use warpui::elements::{
