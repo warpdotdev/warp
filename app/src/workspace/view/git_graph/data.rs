@@ -146,10 +146,14 @@ pub(crate) fn parse_decorate(decorate: &str) -> Vec<RefLabel> {
                     name: "HEAD".to_string(),
                 });
             }
-            if let Some(tag) = token.strip_prefix("refs/tags/") {
+            // git --decorate=full prefixes tag refs with "tag: " to set them
+            // apart from branches, e.g. "tag: refs/tags/v1.0"; strip both the
+            // "tag: " marker and the "refs/tags/" ref prefix to get the name.
+            if let Some(rest) = token.strip_prefix("tag: ") {
+                let name = rest.strip_prefix("refs/tags/").unwrap_or(rest);
                 return Some(RefLabel {
                     kind: RefKind::Tag,
-                    name: tag.to_string(),
+                    name: name.to_string(),
                 });
             }
             if let Some(remote) = token.strip_prefix("refs/remotes/") {

@@ -122,7 +122,7 @@ fn parse_decorate_detached_head() {
 #[test]
 fn parse_decorate_mixed_kinds() {
     let refs =
-        parse_decorate("HEAD -> refs/heads/main, refs/remotes/origin/main, refs/tags/v1.0.0");
+        parse_decorate("HEAD -> refs/heads/main, refs/remotes/origin/main, tag: refs/tags/v1.0.0");
     assert_eq!(refs.len(), 3);
     assert_eq!(
         (refs[0].kind, refs[0].name.as_str()),
@@ -136,6 +136,17 @@ fn parse_decorate_mixed_kinds() {
         (refs[2].kind, refs[2].name.as_str()),
         (RefKind::Tag, "v1.0.0")
     );
+}
+
+#[test]
+fn parse_decorate_tag_carries_tag_prefix() {
+    // git --decorate=full prefixes tag refs with "tag: " (both lightweight and
+    // annotated tags). Without stripping that prefix the tag is dropped, so it
+    // never renders in the graph.
+    let refs = parse_decorate("tag: refs/tags/v2.0");
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0].kind, RefKind::Tag);
+    assert_eq!(refs[0].name, "v2.0");
 }
 
 #[test]
