@@ -20,13 +20,17 @@ use session_sharing_protocol::common::{
     ControlActionFailureReason, ControlActionRequestId, FeatureSupport, InputOperationId,
     InputOperationSeqNo, InputUpdate, OrderedTerminalEvent, OrderedTerminalEventType,
     ParticipantId, ParticipantList, ParticipantPresenceUpdate, Role, RoleRequestId,
-    RoleRequestResponse, Selection, SelectionUpdate, SessionId, UniversalDeveloperInputContext,
-    UniversalDeveloperInputContextUpdate, UserID, WindowSize, WriteToPtyFailureReason,
-    WriteToPtyRequestId,
+    RoleRequestResponse, Scrollback, Selection, SelectionUpdate, SessionId,
+    UniversalDeveloperInputContext, UniversalDeveloperInputContextUpdate, UserID, WindowSize,
+    WriteToPtyFailureReason, WriteToPtyRequestId,
 };
+#[cfg(not(any(test, feature = "integration_tests")))]
+use session_sharing_protocol::common::{SelectedAgentModel, TelemetryContext};
+#[cfg(not(any(test, feature = "integration_tests")))]
+use session_sharing_protocol::sharer::InitPayload;
 use session_sharing_protocol::sharer::{
     AddGuestsResponse, DownstreamMessage, FailedToAddGuestsReason, FailedToInitializeSessionReason,
-    LinkAccessLevelUpdateResponse, ReconnectPayload, ReconnectToken, RemoveGuestResponse,
+    Lifetime, LinkAccessLevelUpdateResponse, ReconnectPayload, ReconnectToken, RemoveGuestResponse,
     RoleUpdateReason, SessionEndedReason, SessionRetentionReason, SessionSourceType,
     SessionTerminatedReason, TeamAccessLevelUpdateResponse, UpdatePendingUserRoleResponse,
     UpstreamMessage,
@@ -35,12 +39,6 @@ use warp_core::features::FeatureFlag;
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, ModelHandle, RequestState, RetryOption, SingletonEntity};
 use websocket::{Message, Sink, Stream, WebSocket, WebsocketMessage as _};
-#[cfg(not(any(test, feature = "integration_tests")))]
-use {
-    crate::{report_error, server::telemetry::telemetry_context},
-    session_sharing_protocol::common::{Scrollback, TelemetryContext},
-    session_sharing_protocol::sharer::{InitPayload, Lifetime},
-};
 
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::editor::{CrdtOperation, ReplicaId};
@@ -53,9 +51,14 @@ use crate::terminal::shared_session::{
 };
 use crate::terminal::TerminalModel;
 use crate::throttle::throttle;
+#[cfg(not(any(test, feature = "integration_tests")))]
+use crate::{report_error, server::telemetry::telemetry_context};
 
 /// The amount of time we will wait to batch consecutive PTY read events before sending an event to the server
 const PTY_READS_BATCH_THRESHOLD: Duration = Duration::from_millis(50);
+#[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
+const CREATE_SESSION_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
+const AMBIENT_CREATE_SESSION_MAX_ATTEMPTS: usize = 3;
 /// Exponential backoff when retrying reconnection. This configuration has us retry for ~128 seconds before giving up,
 /// where the last interval between retries is 26s.
 /// We should be somewhat generous with the amount of retries allowed when a sharer wants to recover their session,
@@ -103,6 +106,107 @@ struct CachedLatestState {
     selection: Selection,
     universal_developer_input_context: Option<UniversalDeveloperInputContext>,
 }
+#[derive(Clone)]
+#[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
+struct StartupConfig {
+    scrollback: Scrollback,
+    window_size: WindowSize,
+    init_block_id: BlockId,
+    input_replica_id: ReplicaId,
+    universal_developer_input_context: UniversalDeveloperInputContext,
+    lifetime: Lifetime,
+    source: SharedSessionSource,
+    selected_model_id: String,
+}
+
+struct StartupRetryState {
+    current_attempt: usize,
+    max_attempts: usize,
+    timeout_abort_handle: Option<AbortHandle>,
+    transport_abort_handle: Option<AbortHandle>,
+}
+
+impl StartupRetryState {
+    fn new(max_attempts: usize) -> Self {
+        Self {
+            current_attempt: 0,
+            max_attempts,
+            timeout_abort_handle: None,
+            transport_abort_handle: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum StartupFailure {
+    Transport,
+    InitializeSend,
+    WebsocketClosedBeforeStarted,
+    WebsocketError,
+    Timeout,
+    ServerRejected(FailedToInitializeSessionReason),
+}
+
+impl StartupFailure {
+    fn is_retryable(&self) -> bool {
+        match self {
+            Self::Transport
+            | Self::InitializeSend
+            | Self::WebsocketClosedBeforeStarted
+            | Self::WebsocketError
+            | Self::Timeout => true,
+            Self::ServerRejected(reason) => matches!(
+                reason,
+                FailedToInitializeSessionReason::InternalServerError { .. }
+            ),
+        }
+    }
+
+    fn failed_reason(&self) -> FailedToInitializeSessionReason {
+        match self {
+            Self::ServerRejected(reason) => reason.clone(),
+            Self::WebsocketClosedBeforeStarted => {
+                FailedToInitializeSessionReason::InternalServerError {
+                    details: "Websocket closed before starting session".to_string(),
+                }
+            }
+            Self::Timeout => FailedToInitializeSessionReason::InternalServerError {
+                details: "Timed out creating shared session".to_string(),
+            },
+            Self::Transport | Self::InitializeSend | Self::WebsocketError => {
+                FailedToInitializeSessionReason::internal_server_error_without_details()
+            }
+        }
+    }
+
+    fn diagnostic_label(&self) -> &'static str {
+        match self {
+            Self::Transport => "transport_error",
+            Self::InitializeSend => "initialize_send_error",
+            Self::WebsocketClosedBeforeStarted => "websocket_closed_before_started",
+            Self::WebsocketError => "websocket_error",
+            Self::Timeout => "timeout",
+            Self::ServerRejected(FailedToInitializeSessionReason::InternalServerError {
+                ..
+            }) => "server_internal_error",
+            Self::ServerRejected(FailedToInitializeSessionReason::ScrollbackTooLarge {}) => {
+                "scrollback_too_large"
+            }
+            Self::ServerRejected(FailedToInitializeSessionReason::NoUserQuotaRemaining {
+                ..
+            }) => "no_user_quota_remaining",
+            Self::ServerRejected(FailedToInitializeSessionReason::UserNotFound) => "user_not_found",
+        }
+    }
+}
+
+fn startup_max_attempts(source: &SharedSessionSource) -> usize {
+    if matches!(source.source_type, SessionSourceType::AmbientAgent { .. }) {
+        AMBIENT_CREATE_SESSION_MAX_ATTEMPTS
+    } else {
+        1
+    }
+}
 
 pub struct Network {
     model: Arc<FairMutex<TerminalModel>>,
@@ -136,6 +240,8 @@ pub struct Network {
     reconnect_token: Option<ReconnectToken>,
     sharer_id: Option<ParticipantId>,
     source: Option<SharedSessionSource>,
+    startup_config: Option<StartupConfig>,
+    startup_retry: Option<StartupRetryState>,
 
     /// HashMap from event_no to the event. We keep these in memory to support reconnections
     /// until the server acks that they have been processed and are safe to remove.
@@ -188,6 +294,8 @@ impl Network {
             reconnect_token: None,
             sharer_id: None,
             source: None,
+            startup_config: None,
+            startup_retry: None,
             unacked_terminal_events: HashMap::new(),
             next_buffer_seq_no: (init_block_id, InputOperationSeqNo::zero()),
         };
@@ -239,7 +347,7 @@ impl Network {
         let heartbeat = ctx.add_model(|_| Heartbeat::default());
         ctx.subscribe_to_model(&heartbeat, Self::handle_heartbeat_event);
 
-        let network = Network {
+        let mut network = Network {
             heartbeat,
             event_no: EventNumber::new(),
             selection_event_no: EventNumber::new(),
@@ -262,6 +370,8 @@ impl Network {
             reconnect_token: None,
             sharer_id: None,
             source: Some(source.clone()),
+            startup_config: None,
+            startup_retry: None,
             unacked_terminal_events: HashMap::new(),
             next_buffer_seq_no: (init_block_id.clone(), InputOperationSeqNo::zero()),
         };
@@ -287,8 +397,6 @@ impl Network {
             network.start_websocket(
                 ws_proxy_rx,
                 scrollback,
-                active_prompt,
-                selection,
                 window_size,
                 init_block_id,
                 input_replica_id,
@@ -611,11 +719,9 @@ impl Network {
     #[cfg(not(any(test, feature = "integration_tests")))]
     #[allow(clippy::too_many_arguments)]
     fn start_websocket(
-        &self,
+        &mut self,
         ws_proxy_rx: async_channel::Receiver<UpstreamMessage>,
         scrollback: Scrollback,
-        active_prompt: ActivePrompt,
-        selection: Selection,
         window_size: WindowSize,
         init_block_id: BlockId,
         input_replica_id: ReplicaId,
@@ -625,9 +731,6 @@ impl Network {
         source: SharedSessionSource,
         ctx: &mut ModelContext<Self>,
     ) {
-        let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
-        let anonymous_id = AuthStateProvider::as_ref(ctx).get().anonymous_id();
-
         // Get the selected model before spawning the async task
         let llm_prefs = crate::ai::llms::LLMPreferences::as_ref(ctx);
         let selected_model_id: String = llm_prefs
@@ -635,10 +738,72 @@ impl Network {
             .id
             .clone()
             .into();
+        self.startup_config = Some(StartupConfig {
+            scrollback,
+            window_size,
+            init_block_id,
+            input_replica_id,
+            universal_developer_input_context,
+            lifetime,
+            source: source.clone(),
+            selected_model_id,
+        });
+        self.startup_retry = Some(StartupRetryState::new(startup_max_attempts(&source)));
+        self.ws_proxy_rx = ws_proxy_rx;
+        self.start_create_session_attempt(ctx);
+    }
 
-        ctx.spawn(
+    #[cfg(not(any(test, feature = "integration_tests")))]
+    fn start_create_session_attempt(&mut self, ctx: &mut ModelContext<Self>) {
+        if !matches!(self.stage, Stage::BeforeStarted) {
+            return;
+        }
+        let Some(config) = self.startup_config.clone() else {
+            log::error!("Cannot create shared session without startup config");
+            return;
+        };
+
+        self.abort_startup_handles();
+        self.close_startup_transport(ctx);
+
+        let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
+        self.ws_proxy_tx = ws_proxy_tx;
+        self.ws_proxy_rx = ws_proxy_rx.clone();
+
+        let Some(startup_retry) = self.startup_retry.as_mut() else {
+            log::error!("Cannot create shared session without startup retry state");
+            return;
+        };
+        startup_retry.current_attempt += 1;
+        let attempt = startup_retry.current_attempt;
+        let max_attempts = startup_retry.max_attempts;
+        let source_type = match &config.source.source_type {
+            SessionSourceType::User => "user",
+            SessionSourceType::AmbientAgent { .. } => "ambient_agent",
+        };
+        let source_task_id = config.source.orchestrator_task_id().map(str::to_owned);
+        log::info!(
+            "Shared session sharer lifecycle: event=create_attempt_started session_id={:?} source_type={source_type} source_task_id={source_task_id:?} attempt={attempt} max_attempts={max_attempts}",
+            self.session_id
+        );
+
+        if max_attempts > 1 {
+            let timeout_handle = ctx.spawn(
+                async move { Timer::after(CREATE_SESSION_ATTEMPT_TIMEOUT).await },
+                move |network, _, ctx| {
+                    network.handle_startup_attempt_timeout(attempt, ctx);
+                },
+            );
+            if let Some(startup_retry) = self.startup_retry.as_mut() {
+                startup_retry.timeout_abort_handle = Some(timeout_handle.abort_handle());
+            }
+        }
+
+        let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
+        let anonymous_id = AuthStateProvider::as_ref(ctx).get().anonymous_id();
+        let connect_handle = ctx.spawn(
             async move {
-                log::info!("Connecting to session sharing server");
+                log::info!("Preparing shared session creation auth");
                 let Some(create_endpoint) = connect_endpoint("/sessions/create".to_owned()) else {
                     anyhow::bail!("This channel does not support session-sharing.");
                 };
@@ -650,33 +815,46 @@ impl Network {
                         .ok()
                         .and_then(|token| token.bearer_token()),
                 };
+                log::info!("Connecting to session sharing server");
                 let socket = WebSocket::connect(create_endpoint, None).await?;
                 log::info!("Connected to session sharing server; preparing initialization");
                 anyhow::Ok((socket.split().await, user_id))
             },
             move |network, conn, ctx| match conn {
                 Ok(((sink, stream), user_id)) => {
+                    if !network.is_current_startup_attempt(attempt) {
+                        return;
+                    }
+                    network.clear_startup_transport_handle(attempt);
                     // We don't use the `send_message_to_server` API here
                     // because we don't want to buffer this message.
-
-                    use session_sharing_protocol::common::SelectedAgentModel;
+                    let Some(config) = network.startup_config.clone() else {
+                        log::error!("Cannot initialize shared session without startup config");
+                        network.handle_startup_failure(StartupFailure::InitializeSend, ctx);
+                        return;
+                    };
+                    let universal_developer_input_context = network
+                        .cached_latest_state
+                        .universal_developer_input_context
+                        .clone()
+                        .unwrap_or_else(|| config.universal_developer_input_context.clone());
 
                     let message = UpstreamMessage::Initialize(InitPayload {
-                        scrollback,
-                        active_prompt,
-                        window_size,
+                        scrollback: config.scrollback,
+                        active_prompt: network.cached_latest_state.prompt.clone(),
+                        window_size: config.window_size,
                         user_id,
-                        selection,
-                        init_block_id: init_block_id.into(),
-                        input_replica_id: input_replica_id.into(),
+                        selection: network.cached_latest_state.selection.clone(),
+                        init_block_id: config.init_block_id.into(),
+                        input_replica_id: config.input_replica_id.into(),
                         telemetry_context: Some(TelemetryContext(telemetry_context().as_value())),
                         universal_developer_input_context: Some(UniversalDeveloperInputContext {
-                            selected_model: Some(SelectedAgentModel::new(selected_model_id)),
+                            selected_model: Some(SelectedAgentModel::new(config.selected_model_id)),
                             ..universal_developer_input_context
                         }),
-                        lifetime,
-                        source_type: source.source_type,
-                        source_task_id: source.source_task_id,
+                        lifetime: config.lifetime,
+                        source_type: config.source.source_type,
+                        source_task_id: config.source.source_task_id,
                         feature_support: FeatureSupport {
                             supports_agent_view: FeatureFlag::AgentView.is_enabled(),
                             supports_full_role: true,
@@ -685,23 +863,150 @@ impl Network {
                     });
                     if let Err(e) = network.ws_proxy_tx.try_send(message) {
                         log::error!("Sharer failed to send initialization message: {e}");
+                        network.handle_startup_failure(StartupFailure::InitializeSend, ctx);
                         return;
                     }
                     log::info!("Sent session sharing initialization message");
-
-                    network.on_websocket_connected(ws_proxy_rx, sink, stream, ctx);
+                    network.on_websocket_connected(
+                        Some(attempt),
+                        ws_proxy_rx.clone(),
+                        sink,
+                        stream,
+                        ctx,
+                    );
                 }
                 Err(e) => {
-                    network.log_diagnostic("initial_websocket_connect_failed", "outcome=transport_error");
+                    if !network.is_current_startup_attempt(attempt) {
+                        return;
+                    }
+                    network.clear_startup_transport_handle(attempt);
+                    network.log_diagnostic(
+                        "initial_websocket_connect_failed",
+                        "outcome=transport_error",
+                    );
                     let cause = Arc::new(e.context("Failed to create shared session"));
-                    report_error!(&*cause);
-                    ctx.emit(NetworkEvent::FailedToCreateSharedSession {
-                        reason: FailedToInitializeSessionReason::internal_server_error_without_details(),
-                        cause: Some(cause),
-                    });
+                    network.handle_startup_failure_with_cause(
+                        StartupFailure::Transport,
+                        Some(cause),
+                        ctx,
+                    );
                 }
             },
         );
+        if let Some(startup_retry) = self.startup_retry.as_mut() {
+            startup_retry.transport_abort_handle = Some(connect_handle.abort_handle());
+        }
+    }
+
+    #[cfg(not(any(test, feature = "integration_tests")))]
+    fn handle_startup_attempt_timeout(&mut self, attempt: usize, ctx: &mut ModelContext<Self>) {
+        if !self.is_current_startup_attempt(attempt) || !matches!(self.stage, Stage::BeforeStarted)
+        {
+            return;
+        }
+        self.handle_startup_failure(StartupFailure::Timeout, ctx);
+    }
+
+    fn is_current_startup_attempt(&self, attempt: usize) -> bool {
+        self.startup_retry
+            .as_ref()
+            .is_some_and(|startup_retry| startup_retry.current_attempt == attempt)
+    }
+
+    fn should_retry_startup_failure(&self, failure: &StartupFailure) -> bool {
+        failure.is_retryable()
+            && self.startup_retry.as_ref().is_some_and(|startup_retry| {
+                startup_retry.current_attempt < startup_retry.max_attempts
+            })
+    }
+
+    fn abort_startup_handles(&mut self) {
+        if let Some(startup_retry) = self.startup_retry.as_mut() {
+            if let Some(handle) = startup_retry.timeout_abort_handle.take() {
+                handle.abort();
+            }
+            if let Some(handle) = startup_retry.transport_abort_handle.take() {
+                handle.abort();
+            }
+        }
+    }
+
+    #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
+    fn clear_startup_transport_handle(&mut self, attempt: usize) {
+        if !self.is_current_startup_attempt(attempt) {
+            return;
+        }
+        if let Some(startup_retry) = self.startup_retry.as_mut() {
+            startup_retry.transport_abort_handle.take();
+        }
+    }
+
+    fn close_startup_transport(&mut self, ctx: &mut ModelContext<Self>) {
+        self.ws_proxy_tx.close();
+        self.heartbeat.update(ctx, |heartbeat, _| {
+            heartbeat.stop();
+        });
+    }
+
+    fn handle_startup_failure(&mut self, failure: StartupFailure, ctx: &mut ModelContext<Self>) {
+        self.handle_startup_failure_with_cause(failure, None, ctx);
+    }
+
+    fn handle_startup_failure_with_cause(
+        &mut self,
+        failure: StartupFailure,
+        cause: Option<Arc<anyhow::Error>>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !matches!(self.stage, Stage::BeforeStarted) {
+            return;
+        }
+
+        let attempt = self
+            .startup_retry
+            .as_ref()
+            .map_or(0, |startup_retry| startup_retry.current_attempt);
+        let max_attempts = self
+            .startup_retry
+            .as_ref()
+            .map_or(1, |startup_retry| startup_retry.max_attempts);
+        let reason = failure.diagnostic_label();
+        if self.should_retry_startup_failure(&failure) {
+            self.log_diagnostic(
+                "create_attempt_failed",
+                format_args!(
+                    "attempt={attempt} max_attempts={max_attempts} reason={reason} outcome=retry_pending"
+                ),
+            );
+            self.abort_startup_handles();
+            self.close_startup_transport(ctx);
+
+            #[cfg(not(any(test, feature = "integration_tests")))]
+            self.start_create_session_attempt(ctx);
+            return;
+        }
+
+        self.log_diagnostic(
+            "create_failed",
+            format_args!(
+                "attempt={attempt} max_attempts={max_attempts} reason={reason} outcome=final_failure"
+            ),
+        );
+        self.stage = Stage::Finished;
+        self.abort_startup_handles();
+        self.close_startup_transport(ctx);
+        self.startup_config = None;
+        self.startup_retry = None;
+
+        #[cfg(not(any(test, feature = "integration_tests")))]
+        if let Some(cause) = cause.as_ref() {
+            report_error!(&**cause);
+        }
+
+        ctx.emit(NetworkEvent::FailedToCreateSharedSession {
+            reason: failure.failed_reason(),
+            cause,
+        });
     }
 
     /// Initiates attempts to reconnect to the server, with retries.
@@ -790,7 +1095,7 @@ impl Network {
                             return;
                         }
 
-                        network.on_websocket_connected(ws_proxy_rx, sink, stream, ctx);
+                        network.on_websocket_connected(None, ws_proxy_rx, sink, stream, ctx);
                     }
                     RequestState::RequestFailedRetryPending(e) => {
                         network.log_diagnostic(
@@ -822,6 +1127,7 @@ impl Network {
     /// The stream is for receiving messages from the server.
     fn on_websocket_connected(
         &mut self,
+        startup_attempt: Option<usize>,
         ws_proxy_rx: async_channel::Receiver<UpstreamMessage>,
         mut sink: impl Sink,
         stream: impl Stream,
@@ -834,19 +1140,37 @@ impl Network {
         // Handle any messages we receive over the websocket.
         ctx.spawn_stream_local(
             stream,
-            |network, message, ctx| match message {
+            move |network, message, ctx| match message {
                 Ok(message) => {
+                    if startup_attempt
+                        .is_some_and(|attempt| !network.is_current_startup_attempt(attempt))
+                    {
+                        return;
+                    }
                     network.heartbeat.update(ctx, |heartbeat, ctx| {
                         heartbeat.reset_idle_timeout(ctx);
                     });
                     network.process_websocket_message(message, ctx);
                 }
                 Err(e) => {
+                    if startup_attempt
+                        .is_some_and(|attempt| !network.is_current_startup_attempt(attempt))
+                    {
+                        return;
+                    }
                     network.log_diagnostic("websocket_error", "direction=downstream");
                     log::error!("Got error from shared session sharer websocket: {e}");
+                    if startup_attempt.is_some() && matches!(network.stage, Stage::BeforeStarted) {
+                        network.handle_startup_failure(StartupFailure::WebsocketError, ctx);
+                    }
                 }
             },
-            |network, ctx| {
+            move |network, ctx| {
+                if startup_attempt
+                    .is_some_and(|attempt| !network.is_current_startup_attempt(attempt))
+                {
+                    return;
+                }
                 let stage = network.diagnostic_stage();
                 network.log_diagnostic("websocket_closed", format_args!("stage={stage}"));
                 log::info!("Session sharing server closed websocket to sharer");
@@ -863,38 +1187,60 @@ impl Network {
                     // If the websocket is closed while we were waiting for it to start, emit an error.
                     // This is unexpected; we expect to get [`DownstreamMessage::FailedToInitializeSession`]
                     // to get a possibly-more explicit reason.
-                    ctx.emit(NetworkEvent::FailedToCreateSharedSession {
-                        reason: FailedToInitializeSessionReason::InternalServerError {
-                            details: "Websocket closed before starting session".to_string(),
-                        },
-                        cause: None,
-                    });
+                    network
+                        .handle_startup_failure(StartupFailure::WebsocketClosedBeforeStarted, ctx);
                 }
             },
         );
 
         // Spawn a task to send messages back up the websocket to the server.
-        ctx.spawn(async move {
-            let mut ws_proxy_rx = pin!(ws_proxy_rx);
-            while let Some(message) = ws_proxy_rx.next().await {
-                let serialized = message.to_json();
-                match serialized {
-                    Ok(serialized) => {
-                        if let Err(e) = sink.send(Message::new(serialized)).await {
-                            // Errors are not typically retryable. For a case like no network connection, 
-                            // sink.send will succeed and the message will actually be sent when connection is restored.
-                            log::warn!("Failed to send message over shared session websocket as sharer: {e}. Terminating connection.");
-                            break;
+        ctx.spawn(
+            async move {
+                let mut startup_send_failed = false;
+                let mut ws_proxy_rx = pin!(ws_proxy_rx);
+                while let Some(message) = ws_proxy_rx.next().await {
+                    let is_startup_initialize = matches!(message, UpstreamMessage::Initialize(_));
+                    let serialized = message.to_json();
+                    match serialized {
+                        Ok(serialized) => {
+                            if let Err(e) = sink.send(Message::new(serialized)).await {
+                                // Errors are not typically retryable after startup. For a case like no
+                                // network connection, sink.send will succeed and the message will
+                                // actually be sent when connection is restored.
+                                log::warn!("Failed to send message over shared session websocket as sharer: {e}. Terminating connection.");
+                                startup_send_failed = is_startup_initialize;
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to serialize message to send over shared session websocket as sharer: {e}");
+                            if is_startup_initialize {
+                                startup_send_failed = true;
+                                break;
+                            }
                         }
                     }
-                    Err(e) => log::warn!("Failed to serialize message to send over shared session websocket as sharer: {e}")
                 }
-            }
-            log::info!("Closing websocket to session sharing server as sharer");
-            if let Err(e) = sink.close().await {
-                log::error!("Failed to close session sharing websocket as sharer due to {e}");
-            }
-        }, |_, _, _| {});
+                log::info!("Closing websocket to session sharing server as sharer");
+                if let Err(e) = sink.close().await {
+                    log::error!("Failed to close session sharing websocket as sharer due to {e}");
+                }
+                startup_send_failed
+            },
+            move |network, startup_send_failed, ctx| {
+                if !startup_send_failed {
+                    return;
+                }
+                if startup_attempt
+                    .is_some_and(|attempt| !network.is_current_startup_attempt(attempt))
+                {
+                    return;
+                }
+                if startup_attempt.is_some() && matches!(network.stage, Stage::BeforeStarted) {
+                    network.handle_startup_failure(StartupFailure::InitializeSend, ctx);
+                }
+            },
+        );
     }
 
     fn process_websocket_message(&mut self, message: Message, ctx: &mut ModelContext<Self>) {
@@ -918,6 +1264,21 @@ impl Network {
                     return;
                 }
                 log::info!("Successfully created shared session.");
+                let attempt = self
+                    .startup_retry
+                    .as_ref()
+                    .map_or(1, |startup_retry| startup_retry.current_attempt);
+                let max_attempts = self
+                    .startup_retry
+                    .as_ref()
+                    .map_or(1, |startup_retry| startup_retry.max_attempts);
+                self.log_diagnostic(
+                    "create_succeeded",
+                    format_args!("attempt={attempt} max_attempts={max_attempts}"),
+                );
+                self.abort_startup_handles();
+                self.startup_config = None;
+                self.startup_retry = None;
 
                 self.session_id = Some(session_id);
                 self.reconnect_token = Some(reconnect_token);
@@ -939,11 +1300,7 @@ impl Network {
             }
             DownstreamMessage::FailedToInitializeSession { reason } => {
                 log::warn!("Failed to initialize session: {reason:?}");
-                self.close_without_reconnection();
-                ctx.emit(NetworkEvent::FailedToCreateSharedSession {
-                    reason,
-                    cause: None,
-                });
+                self.handle_startup_failure(StartupFailure::ServerRejected(reason), ctx);
             }
             DownstreamMessage::SessionReconnected {
                 last_received_event_no,

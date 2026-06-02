@@ -8,17 +8,24 @@ use session_sharing_protocol::common::{
     ActivePrompt, OrderedTerminalEvent, OrderedTerminalEventType, ParticipantId, Selection,
     SessionId,
 };
-use session_sharing_protocol::sharer::{DownstreamMessage, ReconnectToken, UpstreamMessage};
+use session_sharing_protocol::sharer::{
+    DownstreamMessage, FailedToInitializeSessionReason, QuotaType, ReconnectToken, UpstreamMessage,
+};
 use warpui::{App, ModelHandle};
 use websocket::{Message, WebsocketMessage as _};
 
-use super::{Network, PtyBytesBatchStatus, Stage};
+use super::{
+    startup_max_attempts, Network, PtyBytesBatchStatus, Stage, StartupFailure, StartupRetryState,
+    AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+};
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
 use crate::editor::ReplicaId;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::terminal::shared_session::{SharedSessionScrollbackType, MAX_BYTES_SHAREABLE};
+use crate::terminal::shared_session::{
+    SharedSessionScrollbackType, SharedSessionSource, MAX_BYTES_SHAREABLE,
+};
 use crate::terminal::TerminalModel;
 use crate::test_util::assert_eventually;
 
@@ -32,6 +39,82 @@ fn is_upstream_message_pty_bytes_read(
         event_no,
         event_type: OrderedTerminalEventType::PtyBytesRead { bytes },
     }) if event_no == expected_event_no && bytes == compressed_bytes)
+}
+
+#[test]
+fn test_startup_max_attempts_only_retries_ambient_agent_sources() {
+    assert_eq!(
+        startup_max_attempts(&SharedSessionSource::ambient_agent(Some(
+            "task-id".to_string()
+        ))),
+        AMBIENT_CREATE_SESSION_MAX_ATTEMPTS
+    );
+    assert_eq!(startup_max_attempts(&SharedSessionSource::user(None)), 1);
+}
+
+#[test]
+fn test_startup_failure_retryability() {
+    assert!(StartupFailure::Transport.is_retryable());
+    assert!(StartupFailure::InitializeSend.is_retryable());
+    assert!(StartupFailure::WebsocketClosedBeforeStarted.is_retryable());
+    assert!(StartupFailure::WebsocketError.is_retryable());
+    assert!(StartupFailure::Timeout.is_retryable());
+    assert!(
+        StartupFailure::ServerRejected(FailedToInitializeSessionReason::InternalServerError {
+            details: "transient".to_string(),
+        })
+        .is_retryable()
+    );
+
+    assert!(!StartupFailure::ServerRejected(
+        FailedToInitializeSessionReason::ScrollbackTooLarge {}
+    )
+    .is_retryable());
+    assert!(!StartupFailure::ServerRejected(
+        FailedToInitializeSessionReason::NoUserQuotaRemaining {
+            quota_type: QuotaType::SessionsCreated,
+        }
+    )
+    .is_retryable());
+    assert!(
+        !StartupFailure::ServerRejected(FailedToInitializeSessionReason::UserNotFound)
+            .is_retryable()
+    );
+}
+
+#[test]
+fn test_should_retry_startup_failure_respects_attempt_budget() {
+    App::test((), |mut app| async move {
+        let network = create_network(&mut app, false).0;
+
+        network.update(&mut app, |network, _| {
+            network.startup_retry = Some(StartupRetryState {
+                current_attempt: 1,
+                max_attempts: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+                timeout_abort_handle: None,
+                transport_abort_handle: None,
+            });
+            assert!(network.should_retry_startup_failure(&StartupFailure::Timeout));
+
+            network.startup_retry = Some(StartupRetryState {
+                current_attempt: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+                max_attempts: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+                timeout_abort_handle: None,
+                transport_abort_handle: None,
+            });
+            assert!(!network.should_retry_startup_failure(&StartupFailure::Timeout));
+
+            network.startup_retry = Some(StartupRetryState::new(1));
+            network.startup_retry.as_mut().unwrap().current_attempt = 1;
+            assert!(
+                !network.should_retry_startup_failure(&StartupFailure::ServerRejected(
+                    FailedToInitializeSessionReason::InternalServerError {
+                        details: "transient".to_string(),
+                    }
+                ))
+            );
+        });
+    });
 }
 
 fn is_upstream_message_command_executed(
