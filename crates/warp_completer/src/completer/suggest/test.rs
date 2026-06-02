@@ -51,7 +51,7 @@ fn suggestions_for_test<T: CompletionContext>(
     options: CompleterOptions,
     ctx: &T,
 ) -> Option<SuggestionResults> {
-    warpui::r#async::block_on(suggestions(line, pos, None, options, ctx))
+    warpui_core::r#async::block_on(suggestions(line, pos, None, options, ctx))
 }
 
 /// Runs the completer at the end of the given line and returns the associated

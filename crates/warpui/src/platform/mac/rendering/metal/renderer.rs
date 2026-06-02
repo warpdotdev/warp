@@ -1,15 +1,24 @@
 use std::collections::HashMap;
+use std::ffi::c_void;
 use std::fs::File;
 use std::io::Write;
 use std::mem;
-use std::os::raw::c_void;
+use std::ptr::NonNull;
 use std::sync::Once;
 
-use metal::{
-    Function, MTLBlendFactor, MTLBlendOperation, MTLIndexType, MTLPrimitiveType,
-    MTLResourceOptions, RenderPipelineDescriptor,
+use dispatch2::DispatchData;
+use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
+use objc2_foundation::NSString;
+use objc2_metal::{
+    MTLBlendFactor, MTLBlendOperation, MTLBuffer, MTLClearColor, MTLCommandBuffer,
+    MTLCommandEncoder, MTLCommandQueue, MTLDevice, MTLDrawable, MTLFunction, MTLIndexType,
+    MTLLibrary, MTLLoadAction, MTLOrigin, MTLPixelFormat, MTLPrimitiveType, MTLRegion,
+    MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLRenderPipelineDescriptor,
+    MTLRenderPipelineState, MTLResourceOptions, MTLScissorRect, MTLSize, MTLStoreAction,
+    MTLTexture, MTLTextureDescriptor, MTLViewport,
 };
-use objc::{msg_send, sel, sel_impl};
+use objc2_quartz_core::CAMetalDrawable;
 use pathfinder_color::{ColorF, ColorU};
 use pathfinder_geometry::rect::{RectF, RectI};
 use pathfinder_geometry::vector::{vec2f, Vector2F};
@@ -30,19 +39,23 @@ static WRITE_LIB_TO_FILE: Once = Once::new();
 
 /// A structure to help manage a single rendering pass.
 struct RenderPass<'a> {
-    drawable: &'a metal::MetalDrawableRef,
-    buffer: &'a metal::CommandBufferRef,
-    encoder: &'a metal::RenderCommandEncoderRef,
+    drawable: &'a ProtocolObject<dyn CAMetalDrawable>,
+    buffer: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
+    encoder: Retained<ProtocolObject<dyn MTLRenderCommandEncoder>>,
     encoding_finished: bool,
 }
 
 impl<'a> RenderPass<'a> {
     fn new(
-        command_queue: &'a mut metal::CommandQueue,
-        drawable: &'a metal::MetalDrawableRef,
+        command_queue: &ProtocolObject<dyn MTLCommandQueue>,
+        drawable: &'a ProtocolObject<dyn CAMetalDrawable>,
     ) -> Self {
-        let buffer = command_queue.new_command_buffer();
-        let encoder = buffer.new_render_command_encoder(Self::create_descriptor(drawable));
+        let buffer = command_queue
+            .commandBuffer()
+            .expect("command queue should always vend a command buffer");
+        let encoder = buffer
+            .renderCommandEncoderWithDescriptor(&Self::create_descriptor(drawable))
+            .expect("command buffer should always vend a render command encoder");
         Self {
             drawable,
             buffer,
@@ -63,24 +76,25 @@ impl<'a> RenderPass<'a> {
         should_capture: bool,
         presents_with_transaction: bool,
     ) -> Option<CapturedFrame> {
-        self.encoder.end_encoding();
+        self.encoder.endEncoding();
         self.encoding_finished = true;
 
         // If we're able to do asynchronous presentation, do so - it allows us to avoid
         // blocking on the GPU for the duration of the frame.
         if !should_capture && !presents_with_transaction {
-            self.buffer.present_drawable(self.drawable);
+            self.buffer
+                .presentDrawable(ProtocolObject::from_ref(self.drawable));
             self.buffer.commit();
             return None;
         }
 
         // Otherwise, commit the buffer and wait for it to complete before continuing.
         self.buffer.commit();
-        self.buffer.wait_until_completed();
+        self.buffer.waitUntilCompleted();
 
         let capture = if should_capture {
             let texture = self.drawable.texture();
-            capture_frame(texture, drawable_size)
+            capture_frame(&texture, drawable_size)
         } else {
             None
         };
@@ -90,16 +104,22 @@ impl<'a> RenderPass<'a> {
     }
 
     /// Creates a descriptor for a pass that renders into the provided drawable.
-    fn create_descriptor(drawable: &metal::MetalDrawableRef) -> &metal::RenderPassDescriptorRef {
-        let descriptor = metal::RenderPassDescriptor::new();
+    fn create_descriptor(
+        drawable: &ProtocolObject<dyn CAMetalDrawable>,
+    ) -> Retained<MTLRenderPassDescriptor> {
+        let descriptor = MTLRenderPassDescriptor::new();
 
-        let color_attachment = descriptor.color_attachments().object_at(0).expect(
-            "should always be able to get a color attachment for a CAMetalLayer's drawable",
-        );
-        color_attachment.set_texture(Some(drawable.texture()));
-        color_attachment.set_load_action(metal::MTLLoadAction::Clear);
-        color_attachment.set_store_action(metal::MTLStoreAction::Store);
-        color_attachment.set_clear_color(metal::MTLClearColor::new(0., 0., 0., 0.));
+        // SAFETY: index 0 is always a valid color attachment slot for a CAMetalLayer's drawable.
+        let color_attachment = unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(0) };
+        color_attachment.setTexture(Some(&drawable.texture()));
+        color_attachment.setLoadAction(MTLLoadAction::Clear);
+        color_attachment.setStoreAction(MTLStoreAction::Store);
+        color_attachment.setClearColor(MTLClearColor {
+            red: 0.,
+            green: 0.,
+            blue: 0.,
+            alpha: 0.,
+        });
 
         descriptor
     }
@@ -110,33 +130,33 @@ impl Drop for RenderPass<'_> {
         // Make sure that `end_encoding()` is called, even if a panic occurs
         // during rendering.
         if !self.encoding_finished {
-            self.encoder.end_encoding();
+            self.encoder.endEncoding();
         }
     }
 }
 
 /// A set of resources necessary for rendering that retain state across frames.
 struct Resources {
-    draw_rects_pipeline_state: metal::RenderPipelineState,
-    draw_images_pipeline_state: metal::RenderPipelineState,
-    draw_glyphs_pipeline_state: metal::RenderPipelineState,
-    quad_vertices: metal::Buffer,
-    quad_indices: metal::Buffer,
-    glyph_cache: GlyphCache<metal::Texture>,
-    texture_cache: TextureCache<metal::Texture>,
+    draw_rects_pipeline_state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    draw_images_pipeline_state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    draw_glyphs_pipeline_state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    quad_vertices: Retained<ProtocolObject<dyn MTLBuffer>>,
+    quad_indices: Retained<ProtocolObject<dyn MTLBuffer>>,
+    glyph_cache: GlyphCache<Retained<ProtocolObject<dyn MTLTexture>>>,
+    texture_cache: TextureCache<Retained<ProtocolObject<dyn MTLTexture>>>,
 }
 
 /// A structure that manages rendering scenes using a particular hardware
 /// device.
 pub struct Renderer {
     resources: Resources,
-    command_queue: metal::CommandQueue,
+    command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
 }
 
 impl Renderer {
     pub fn new(
-        device: &metal::Device,
-        color_pixel_format: metal::MTLPixelFormat,
+        device: &ProtocolObject<dyn MTLDevice>,
+        color_pixel_format: MTLPixelFormat,
         glyph_config: rendering::GlyphConfig,
     ) -> Self {
         let library = if cfg!(feature = "enable-metal-frame-capture") {
@@ -145,39 +165,61 @@ impl Renderer {
                 let mut file = File::create(&temp_lib_path).unwrap();
                 file.write_all(METAL_LIB_BYTES).unwrap();
             });
-            device.new_library_with_file(temp_lib_path).unwrap()
+            let path = NSString::from_str(temp_lib_path.to_str().unwrap());
+            // `newLibraryWithURL:` is the non-deprecated replacement, but we
+            // load the shader library from a file path here.
+            #[allow(deprecated)]
+            let library = device.newLibraryWithFile_error(&path).unwrap();
+            library
         } else {
-            device.new_library_with_data(METAL_LIB_BYTES).unwrap()
+            let data = DispatchData::from_static_bytes(METAL_LIB_BYTES);
+            device.newLibraryWithData_error(&data).unwrap()
         };
 
-        let rect_vertex_shader = library.get_function("rect_vertex_shader", None).unwrap();
-        let rect_fragment_shader = library.get_function("rect_fragment_shader", None).unwrap();
+        let rect_vertex_shader = library
+            .newFunctionWithName(&NSString::from_str("rect_vertex_shader"))
+            .unwrap();
+        let rect_fragment_shader = library
+            .newFunctionWithName(&NSString::from_str("rect_fragment_shader"))
+            .unwrap();
         let rect_pipeline = Self::create_pipeline(
             "Rects",
             color_pixel_format,
             &rect_vertex_shader,
             &rect_fragment_shader,
         );
-        let draw_rects_pipeline_state = device.new_render_pipeline_state(&rect_pipeline).unwrap();
+        let draw_rects_pipeline_state = device
+            .newRenderPipelineStateWithDescriptor_error(&rect_pipeline)
+            .unwrap();
 
-        let image_fragment_shader = library.get_function("image_fragment_shader", None).unwrap();
+        let image_fragment_shader = library
+            .newFunctionWithName(&NSString::from_str("image_fragment_shader"))
+            .unwrap();
         let image_pipeline = Self::create_pipeline(
             "Images",
             color_pixel_format,
             &rect_vertex_shader,
             &image_fragment_shader,
         );
-        let draw_images_pipeline_state = device.new_render_pipeline_state(&image_pipeline).unwrap();
+        let draw_images_pipeline_state = device
+            .newRenderPipelineStateWithDescriptor_error(&image_pipeline)
+            .unwrap();
 
-        let glyph_vertex_shader = library.get_function("glyph_vertex_shader", None).unwrap();
-        let glyph_fragment_shader = library.get_function("glyph_fragment_shader", None).unwrap();
+        let glyph_vertex_shader = library
+            .newFunctionWithName(&NSString::from_str("glyph_vertex_shader"))
+            .unwrap();
+        let glyph_fragment_shader = library
+            .newFunctionWithName(&NSString::from_str("glyph_fragment_shader"))
+            .unwrap();
         let glyph_pipeline = Self::create_pipeline(
             "Glyphs",
             color_pixel_format,
             &glyph_vertex_shader,
             &glyph_fragment_shader,
         );
-        let draw_glyphs_pipeline_state = device.new_render_pipeline_state(&glyph_pipeline).unwrap();
+        let draw_glyphs_pipeline_state = device
+            .newRenderPipelineStateWithDescriptor_error(&glyph_pipeline)
+            .unwrap();
 
         let quad_vertices = new_metal_buffer(
             device,
@@ -208,30 +250,33 @@ impl Renderer {
                 glyph_cache,
                 texture_cache: TextureCache::new(),
             },
-            command_queue: device.new_command_queue(),
+            command_queue: device
+                .newCommandQueue()
+                .expect("device should always vend a command queue"),
         }
     }
 
     fn create_pipeline(
         label: &str,
-        color_pixel_format: metal::MTLPixelFormat,
-        vertex_shader: &Function,
-        fragment_shader: &Function,
-    ) -> RenderPipelineDescriptor {
-        let pipeline = metal::RenderPipelineDescriptor::new();
-        pipeline.set_label(label);
-        pipeline.set_vertex_function(Some(vertex_shader));
-        pipeline.set_fragment_function(Some(fragment_shader));
+        color_pixel_format: MTLPixelFormat,
+        vertex_shader: &ProtocolObject<dyn MTLFunction>,
+        fragment_shader: &ProtocolObject<dyn MTLFunction>,
+    ) -> Retained<MTLRenderPipelineDescriptor> {
+        let pipeline = MTLRenderPipelineDescriptor::new();
+        pipeline.setLabel(Some(&NSString::from_str(label)));
+        pipeline.setVertexFunction(Some(vertex_shader));
+        pipeline.setFragmentFunction(Some(fragment_shader));
 
-        let attachment = pipeline.color_attachments().object_at(0).unwrap();
-        attachment.set_pixel_format(color_pixel_format);
-        attachment.set_blending_enabled(true);
-        attachment.set_rgb_blend_operation(MTLBlendOperation::Add);
-        attachment.set_alpha_blend_operation(MTLBlendOperation::Add);
-        attachment.set_source_rgb_blend_factor(MTLBlendFactor::SourceAlpha);
-        attachment.set_source_alpha_blend_factor(MTLBlendFactor::One);
-        attachment.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-        attachment.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+        // SAFETY: index 0 is always a valid color attachment slot for a render pipeline.
+        let attachment = unsafe { pipeline.colorAttachments().objectAtIndexedSubscript(0) };
+        attachment.setPixelFormat(color_pixel_format);
+        attachment.setBlendingEnabled(true);
+        attachment.setRgbBlendOperation(MTLBlendOperation::Add);
+        attachment.setAlphaBlendOperation(MTLBlendOperation::Add);
+        attachment.setSourceRGBBlendFactor(MTLBlendFactor::SourceAlpha);
+        attachment.setSourceAlphaBlendFactor(MTLBlendFactor::One);
+        attachment.setDestinationRGBBlendFactor(MTLBlendFactor::OneMinusSourceAlpha);
+        attachment.setDestinationAlphaBlendFactor(MTLBlendFactor::OneMinusSourceAlpha);
 
         pipeline
     }
@@ -247,9 +292,9 @@ impl Renderer {
             .glyph_cache
             .update_config(&scene.rendering_config().glyphs);
 
-        let render_pass = RenderPass::new(&mut self.command_queue, ctx.drawable);
+        let render_pass = RenderPass::new(&self.command_queue, ctx.drawable);
 
-        Frame::new(scene, render_pass.encoder, &mut self.resources, ctx).draw();
+        Frame::new(scene, &render_pass.encoder, &mut self.resources, ctx).draw();
 
         render_pass.finish_with_capture(
             ctx.drawable_size,
@@ -264,7 +309,7 @@ impl Renderer {
 /// image.
 pub struct Frame<'a> {
     scene: &'a Scene,
-    command_encoder: &'a metal::RenderCommandEncoderRef,
+    command_encoder: &'a ProtocolObject<dyn MTLRenderCommandEncoder>,
     resources: &'a mut Resources,
     ctx: &'a MetalDrawContext<'a>,
 }
@@ -272,7 +317,7 @@ pub struct Frame<'a> {
 impl<'a> Frame<'a> {
     fn new(
         scene: &'a Scene,
-        command_encoder: &'a metal::RenderCommandEncoderRef,
+        command_encoder: &'a ProtocolObject<dyn MTLRenderCommandEncoder>,
         resources: &'a mut Resources,
         ctx: &'a MetalDrawContext<'a>,
     ) -> Self {
@@ -285,7 +330,7 @@ impl<'a> Frame<'a> {
     }
 
     fn draw(&mut self) {
-        self.command_encoder.set_viewport(metal::MTLViewport {
+        self.command_encoder.setViewport(MTLViewport {
             originX: 0.0,
             originY: 0.0,
             width: self.ctx.drawable_size.x() as f64,
@@ -303,26 +348,24 @@ impl<'a> Frame<'a> {
                 let device_bounds = RectF::new(Vector2F::zero(), self.ctx.drawable_size);
                 let bounds = (bounds * self.scene.scale_factor()).intersection(device_bounds);
                 if let Some(intersection) = bounds {
-                    self.command_encoder
-                        .set_scissor_rect(metal::MTLScissorRect {
-                            x: intersection.origin_x().round() as u64,
-                            y: intersection.origin_y().round() as u64,
-                            width: intersection.width().round() as u64,
-                            height: intersection.height().round() as u64,
-                        });
+                    self.command_encoder.setScissorRect(MTLScissorRect {
+                        x: intersection.origin_x().round() as usize,
+                        y: intersection.origin_y().round() as usize,
+                        width: intersection.width().round() as usize,
+                        height: intersection.height().round() as usize,
+                    });
                 } else {
                     // The layer's clip bounds don't intersect the window bounds
                     // at all; we can skip drawing anything in this layer.
                     continue;
                 }
             } else {
-                self.command_encoder
-                    .set_scissor_rect(metal::MTLScissorRect {
-                        x: 0_u64,
-                        y: 0_u64,
-                        width: self.ctx.drawable_size.x() as u64,
-                        height: self.ctx.drawable_size.y() as u64,
-                    });
+                self.command_encoder.setScissorRect(MTLScissorRect {
+                    x: 0_usize,
+                    y: 0_usize,
+                    width: self.ctx.drawable_size.x() as usize,
+                    height: self.ctx.drawable_size.y() as usize,
+                });
             }
             self.draw_rects(layer);
             self.draw_images(layer);
@@ -396,64 +439,83 @@ impl<'a> Frame<'a> {
             MTLResourceOptions::StorageModeManaged,
         );
 
-        self.command_encoder
-            .set_vertex_buffer(1, Some(per_rect_uniforms_buffer.as_ref()), 0);
-
         let uniforms = shader::Uniforms::new(self.ctx.drawable_size.into());
-        self.command_encoder.set_vertex_bytes(
-            2,
-            mem::size_of::<shader::Uniforms>() as u64,
-            [uniforms].as_ptr() as *const _,
-        );
-        self.command_encoder.set_fragment_bytes(
-            0,
-            mem::size_of::<shader::Uniforms>() as u64,
-            [uniforms].as_ptr() as *const _,
-        );
+        let uniforms_ptr = NonNull::from(&uniforms).cast::<c_void>();
+        let uniforms_len = mem::size_of::<shader::Uniforms>();
+
+        // SAFETY: the per-rect uniform buffer and `uniforms` value outlive this encoded draw
+        // call, and the bound buffer/byte sizes and indices match the shader bindings.
+        unsafe {
+            self.command_encoder.setVertexBuffer_offset_atIndex(
+                Some(&per_rect_uniforms_buffer),
+                0,
+                1,
+            );
+            self.command_encoder
+                .setVertexBytes_length_atIndex(uniforms_ptr, uniforms_len, 2);
+            self.command_encoder
+                .setFragmentBytes_length_atIndex(uniforms_ptr, uniforms_len, 0);
+        }
 
         let (_, texture) = self
             .resources
             .texture_cache
             .get_or_insert_by_asset(asset, |asset| {
-                let width = asset.size().x() as u64;
-                let height = asset.size().y() as u64;
+                let width = asset.size().x() as usize;
+                let height = asset.size().y() as usize;
 
-                let texture_descriptor = metal::TextureDescriptor::new();
-                texture_descriptor.set_pixel_format(metal::MTLPixelFormat::RGBA8Unorm);
-                texture_descriptor.set_width(width);
-                texture_descriptor.set_height(height);
-                let texture = self.ctx.device.new_texture(&texture_descriptor);
-                let region = metal::MTLRegion {
-                    origin: metal::MTLOrigin { x: 0, y: 0, z: 0 },
-                    size: metal::MTLSize {
+                let texture_descriptor = MTLTextureDescriptor::new();
+                texture_descriptor.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
+                // SAFETY: width/height come from a decoded asset and are within Metal limits.
+                unsafe {
+                    texture_descriptor.setWidth(width);
+                    texture_descriptor.setHeight(height);
+                }
+                let texture = self
+                    .ctx
+                    .device
+                    .newTextureWithDescriptor(&texture_descriptor)
+                    .expect("device should create an RGBA8 texture");
+                let region = MTLRegion {
+                    origin: MTLOrigin { x: 0, y: 0, z: 0 },
+                    size: MTLSize {
                         width,
                         height,
                         depth: 1,
                     },
                 };
 
-                let bytes_per_row: u64 = 4 * width;
-                texture.replace_region(
-                    region,
-                    0,
-                    asset.rgba_bytes().as_ptr() as *const c_void,
-                    bytes_per_row,
-                );
+                let bytes_per_row: usize = 4 * width;
+                // SAFETY: rgba_bytes holds width*height*4 bytes laid out to match the region
+                // and row stride.
+                unsafe {
+                    texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
+                        region,
+                        0,
+                        NonNull::new(asset.rgba_bytes().as_ptr() as *mut c_void)
+                            .expect("asset rgba bytes pointer is non-null"),
+                        bytes_per_row,
+                    );
+                }
 
                 texture
             });
 
-        self.command_encoder
-            .set_fragment_texture(0, Some(texture.as_ref()));
+        // SAFETY: the bound texture and quad index buffer outlive this encoded draw call.
+        unsafe {
+            self.command_encoder
+                .setFragmentTexture_atIndex(Some(&**texture), 0);
 
-        self.command_encoder.draw_indexed_primitives_instanced(
-            MTLPrimitiveType::Triangle,
-            6,
-            MTLIndexType::UInt16,
-            self.resources.quad_indices.as_ref(),
-            0,
-            per_rect_uniforms.len() as u64,
-        );
+            self.command_encoder
+                .drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount(
+                    MTLPrimitiveType::Triangle,
+                    6,
+                    MTLIndexType::UInt16,
+                    &self.resources.quad_indices,
+                    0,
+                    per_rect_uniforms.len(),
+                );
+        }
     }
 
     fn draw_images(&mut self, layer: &Layer) {
@@ -463,9 +525,15 @@ impl<'a> Frame<'a> {
         }
 
         self.command_encoder
-            .set_render_pipeline_state(&self.resources.draw_images_pipeline_state);
-        self.command_encoder
-            .set_vertex_buffer(0, Some(self.resources.quad_vertices.as_ref()), 0);
+            .setRenderPipelineState(&self.resources.draw_images_pipeline_state);
+        // SAFETY: index 0 binds the shared quad vertex buffer, which outlives the draw calls.
+        unsafe {
+            self.command_encoder.setVertexBuffer_offset_atIndex(
+                Some(&self.resources.quad_vertices),
+                0,
+                0,
+            );
+        }
 
         for image in &layer.images {
             self.render_image_or_icon(Some(image), None);
@@ -484,9 +552,15 @@ impl<'a> Frame<'a> {
         }
 
         self.command_encoder
-            .set_render_pipeline_state(&self.resources.draw_rects_pipeline_state);
-        self.command_encoder
-            .set_vertex_buffer(0, Some(self.resources.quad_vertices.as_ref()), 0);
+            .setRenderPipelineState(&self.resources.draw_rects_pipeline_state);
+        // SAFETY: index 0 binds the shared quad vertex buffer, which outlives the draw call.
+        unsafe {
+            self.command_encoder.setVertexBuffer_offset_atIndex(
+                Some(&self.resources.quad_vertices),
+                0,
+                0,
+            );
+        }
 
         let mut per_rect_uniforms = Vec::new();
         for rect in &layer.rects {
@@ -590,29 +664,33 @@ impl<'a> Frame<'a> {
             MTLResourceOptions::StorageModeManaged,
         );
 
-        self.command_encoder
-            .set_vertex_buffer(1, Some(per_rect_uniforms_buffer.as_ref()), 0);
-
         let uniforms = shader::Uniforms::new(self.ctx.drawable_size.into());
-        self.command_encoder.set_vertex_bytes(
-            2,
-            mem::size_of::<shader::Uniforms>() as u64,
-            [uniforms].as_ptr() as *const _,
-        );
-        self.command_encoder.set_fragment_bytes(
-            0,
-            mem::size_of::<shader::Uniforms>() as u64,
-            [uniforms].as_ptr() as *const _,
-        );
+        let uniforms_ptr = NonNull::from(&uniforms).cast::<c_void>();
+        let uniforms_len = mem::size_of::<shader::Uniforms>();
 
-        self.command_encoder.draw_indexed_primitives_instanced(
-            MTLPrimitiveType::Triangle,
-            6,
-            MTLIndexType::UInt16,
-            self.resources.quad_indices.as_ref(),
-            0,
-            per_rect_uniforms.len() as u64,
-        );
+        // SAFETY: the per-rect uniform buffer and `uniforms` value outlive this encoded draw
+        // call, and the bound buffer/byte sizes and indices match the shader bindings.
+        unsafe {
+            self.command_encoder.setVertexBuffer_offset_atIndex(
+                Some(&per_rect_uniforms_buffer),
+                0,
+                1,
+            );
+            self.command_encoder
+                .setVertexBytes_length_atIndex(uniforms_ptr, uniforms_len, 2);
+            self.command_encoder
+                .setFragmentBytes_length_atIndex(uniforms_ptr, uniforms_len, 0);
+
+            self.command_encoder
+                .drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount(
+                    MTLPrimitiveType::Triangle,
+                    6,
+                    MTLIndexType::UInt16,
+                    &self.resources.quad_indices,
+                    0,
+                    per_rect_uniforms.len(),
+                );
+        }
     }
 
     fn draw_glyphs(&mut self, layer: &Layer) {
@@ -622,9 +700,15 @@ impl<'a> Frame<'a> {
         }
 
         self.command_encoder
-            .set_render_pipeline_state(&self.resources.draw_glyphs_pipeline_state);
-        self.command_encoder
-            .set_vertex_buffer(0, Some(self.resources.quad_vertices.as_ref()), 0);
+            .setRenderPipelineState(&self.resources.draw_glyphs_pipeline_state);
+        // SAFETY: index 0 binds the shared quad vertex buffer, which outlives the draw calls.
+        unsafe {
+            self.command_encoder.setVertexBuffer_offset_atIndex(
+                Some(&self.resources.quad_vertices),
+                0,
+                0,
+            );
+        }
 
         let scale_factor = self.scene.scale_factor();
 
@@ -710,15 +794,9 @@ impl<'a> Frame<'a> {
                 MTLResourceOptions::StorageModeManaged,
             );
 
-            self.command_encoder
-                .set_vertex_buffer(1, Some(per_glyph_uniforms_buffer.as_ref()), 0);
-
             let uniforms = shader::Uniforms::new(self.ctx.drawable_size.into());
-            self.command_encoder.set_vertex_bytes(
-                2,
-                mem::size_of::<shader::Uniforms>() as u64,
-                [uniforms].as_ptr() as *const _,
-            );
+            let uniforms_ptr = NonNull::from(&uniforms).cast::<c_void>();
+            let uniforms_len = mem::size_of::<shader::Uniforms>();
 
             let texture = self
                 .resources
@@ -726,16 +804,29 @@ impl<'a> Frame<'a> {
                 .texture(&texture_id)
                 .expect("texture ID should be in atlas");
 
-            self.command_encoder.set_fragment_texture(0, Some(texture));
-
-            self.command_encoder.draw_indexed_primitives_instanced(
-                MTLPrimitiveType::Triangle,
-                6,
-                MTLIndexType::UInt16,
-                self.resources.quad_indices.as_ref(),
-                0,
-                per_glyph_uniforms.len() as u64,
-            );
+            // SAFETY: the per-glyph uniform buffer, `uniforms` value, bound texture, and quad
+            // index buffer outlive this encoded draw call, and the bound sizes/indices match the
+            // shader bindings.
+            unsafe {
+                self.command_encoder.setVertexBuffer_offset_atIndex(
+                    Some(&per_glyph_uniforms_buffer),
+                    0,
+                    1,
+                );
+                self.command_encoder
+                    .setVertexBytes_length_atIndex(uniforms_ptr, uniforms_len, 2);
+                self.command_encoder
+                    .setFragmentTexture_atIndex(Some(&**texture), 0);
+                self.command_encoder
+                    .drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount(
+                        MTLPrimitiveType::Triangle,
+                        6,
+                        MTLIndexType::UInt16,
+                        &self.resources.quad_indices,
+                        0,
+                        per_glyph_uniforms.len(),
+                    );
+            }
         }
     }
 }
@@ -747,15 +838,20 @@ impl Drop for Frame<'_> {
 }
 
 fn new_metal_buffer<T>(
-    device: &metal::Device,
+    device: &ProtocolObject<dyn MTLDevice>,
     data: &[T],
     options: MTLResourceOptions,
-) -> metal::Buffer {
-    device.new_buffer_with_data(
-        data.as_ptr() as *const c_void,
-        std::mem::size_of_val(data) as u64,
-        options,
-    )
+) -> Retained<ProtocolObject<dyn MTLBuffer>> {
+    // SAFETY: `data` points to `size_of_val(data)` initialized bytes; Metal copies them into the
+    // new buffer, so the pointer only needs to be valid for the duration of this call.
+    unsafe {
+        device.newBufferWithBytes_length_options(
+            NonNull::new(data.as_ptr() as *mut c_void).expect("buffer data pointer is non-null"),
+            std::mem::size_of_val(data),
+            options,
+        )
+    }
+    .expect("device should create a buffer")
 }
 
 mod shader {
@@ -924,8 +1020,8 @@ mod shader {
 }
 
 pub(super) struct MetalDrawContext<'a> {
-    pub(super) device: &'a metal::Device,
-    pub(super) drawable: &'a metal::MetalDrawableRef,
+    pub(super) device: &'a ProtocolObject<dyn MTLDevice>,
+    pub(super) drawable: &'a ProtocolObject<dyn CAMetalDrawable>,
     pub(super) drawable_size: Vector2F,
     rasterize_glyph_fn: &'a RasterizeGlyphFn<'a>,
     glyph_raster_bounds_fn: &'a GlyphRasterBoundsFn<'a>,
@@ -965,18 +1061,17 @@ impl super::super::Renderer for Renderer {
             log::error!("Metal renderer called with non-metal device");
             return;
         };
+        let metal_device: &ProtocolObject<dyn MTLDevice> = metal_device;
 
-        let (drawable, presents_with_transaction) = unsafe {
-            let native_view = window.native_view();
-            let layer: &metal::MetalLayerRef = msg_send![native_view, layer];
-            let presents_with_transaction = layer.presents_with_transaction();
-            let drawable: &metal::MetalDrawableRef = msg_send![layer, nextDrawable];
-            (drawable, presents_with_transaction)
-        };
+        let metal_layer = window.metal_layer();
+        let presents_with_transaction = metal_layer.presentsWithTransaction();
+        let drawable = metal_layer
+            .nextDrawable()
+            .expect("CAMetalLayer with allowsNextDrawableTimeout disabled always vends a drawable");
 
         let ctx = &MetalDrawContext {
             device: metal_device,
-            drawable,
+            drawable: &drawable,
             drawable_size: window.physical_size(),
             rasterize_glyph_fn: &|glyph_key, scale, subpixel_alignment, glyph_config, format| {
                 font_cache.rasterized_glyph(
@@ -1010,35 +1105,48 @@ impl super::super::Renderer for Renderer {
 fn insert_glyph_into_texture(
     region: AllocatedRegion,
     glyph: &RasterizedGlyph,
-    texture: &mut metal::Texture,
+    texture: &mut Retained<ProtocolObject<dyn MTLTexture>>,
 ) {
-    let region = metal::MTLRegion {
-        origin: metal::MTLOrigin {
-            x: region.pixel_region.origin_x() as u64,
-            y: region.pixel_region.origin_y() as u64,
+    let region = MTLRegion {
+        origin: MTLOrigin {
+            x: region.pixel_region.origin_x() as usize,
+            y: region.pixel_region.origin_y() as usize,
             z: 0,
         },
-        size: metal::MTLSize {
-            width: region.pixel_region.width() as u64,
-            height: region.pixel_region.height() as u64,
+        size: MTLSize {
+            width: region.pixel_region.width() as usize,
+            height: region.pixel_region.height() as usize,
             depth: 1,
         },
     };
 
-    let bytes_per_row: u64 = 4 * (glyph.canvas.size.x() as u64);
-    texture.replace_region(
-        region,
-        0,
-        glyph.canvas.pixels.as_slice().as_ptr() as *const c_void,
-        bytes_per_row,
-    );
+    let bytes_per_row: usize = 4 * (glyph.canvas.size.x() as usize);
+    // SAFETY: the glyph canvas holds at least `bytes_per_row * region.height` bytes laid out to
+    // match the destination region.
+    unsafe {
+        texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
+            region,
+            0,
+            NonNull::new(glyph.canvas.pixels.as_slice().as_ptr() as *mut c_void)
+                .expect("glyph canvas pixel pointer is non-null"),
+            bytes_per_row,
+        );
+    }
 }
 
 /// Creates a new texture atlas for use in the cache.
-fn create_new_texture_atlas(atlas_size: usize, device: &metal::Device) -> metal::Texture {
-    let texture_descriptor = metal::TextureDescriptor::new();
-    texture_descriptor.set_pixel_format(metal::MTLPixelFormat::RGBA8Unorm);
-    texture_descriptor.set_width(atlas_size as u64);
-    texture_descriptor.set_height(atlas_size as u64);
-    device.new_texture(&texture_descriptor)
+fn create_new_texture_atlas(
+    atlas_size: usize,
+    device: &ProtocolObject<dyn MTLDevice>,
+) -> Retained<ProtocolObject<dyn MTLTexture>> {
+    let texture_descriptor = MTLTextureDescriptor::new();
+    texture_descriptor.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
+    // SAFETY: `atlas_size` is a fixed, valid texture dimension within Metal limits.
+    unsafe {
+        texture_descriptor.setWidth(atlas_size);
+        texture_descriptor.setHeight(atlas_size);
+    }
+    device
+        .newTextureWithDescriptor(&texture_descriptor)
+        .expect("device should create an atlas texture")
 }

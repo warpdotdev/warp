@@ -237,12 +237,12 @@ impl LocalDiffStateModel {
                         ctx.emit(DiffStateModelEvent::SingleFileUpdated { path, diff });
                     }
                     Err(err) => {
-                        log::error!("File invalidation error: {err}");
+                        warp_core::report_error!(err.as_ref());
                         send_telemetry_from_ctx!(
                             CodeReviewTelemetryEvent::LoadDiffFailed {
                                 is_local: Some(true),
                                 mode: me.mode.clone(),
-                                error: err.to_string(),
+                                error: err.kind.to_string(),
                                 // Per-file invalidation errors are not tied to a full
                                 // tracked load, so `load_duration` is intentionally `None`.
                                 load_duration: None,
@@ -1418,7 +1418,7 @@ impl LocalDiffStateModel {
             self.load_diffs_for_current_repo(false, false, ctx);
         }
         if let Some(metadata) = self.metadata.clone() {
-            ctx.emit(DiffStateModelEvent::MetadataRefreshed(metadata));
+            ctx.emit(DiffStateModelEvent::MetadataRefreshed(Box::new(metadata)));
         }
     }
 

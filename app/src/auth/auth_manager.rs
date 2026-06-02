@@ -1,5 +1,3 @@
-pub(super) mod user_persistence;
-
 use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,13 +6,13 @@ use anyhow::{anyhow, Result};
 use settings::Setting as _;
 #[cfg(target_family = "wasm")]
 use url::Url;
-use user_persistence::PersistedUser;
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_graphql::mutations::create_anonymous_user::{
     AnonymousUserType, CreateAnonymousUserResult,
 };
+use warp_server_auth::user::persistence::PersistedUser;
 use warpui::clipboard::ClipboardContent;
 use warpui::{Entity, ModelContext, SingletonEntity, UpdateModel};
 

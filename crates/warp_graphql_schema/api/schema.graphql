@@ -790,7 +790,12 @@ type ConversationUsageMetadata {
   """Token usage using a user's API key, keyed by model."""
   byokTokenUsage: [TokenUsage!]!
   contextWindowUsage: Float!
+
+  """The total number of inference credits spent so far in the conversation"""
   creditsSpent: Float!
+
+  """The total number of platform credits spent so far in the conversation."""
+  platformCreditsSpent: Float!
   summarized: Boolean!
 
   """
@@ -1379,6 +1384,7 @@ union FreeAvailableModelsResult = FreeAvailableModelsOutput | UserFacingError
 
 type GcpProviderConfig {
   projectNumber: String!
+  serviceAccountEmail: String
   workloadIdentityFederationPoolId: String!
   workloadIdentityFederationProviderId: String!
 }

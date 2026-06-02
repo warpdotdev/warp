@@ -1,17 +1,18 @@
-use ai::api_keys::ApiKeyManager;
 use std::collections::HashMap;
 
+use ai::api_keys::ApiKeyManager;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, SingletonEntity};
 
 use super::{
     artifact_from_fork_proto, footer_model_token_usage, AIConversation,
-    AIConversationAutoexecuteMode, AIConversationId,
+    AIConversationAutoexecuteMode, AIConversationId, ConversationStatus, RestoreConversationError,
 };
 use crate::ai::artifacts::Artifact;
 use crate::ai::llms::LLMPreferences;
-use crate::auth::{auth_manager::AuthManager, AuthStateProvider};
+use crate::auth::auth_manager::AuthManager;
+use crate::auth::AuthStateProvider;
 use crate::network::NetworkStatus;
 use crate::persistence::model::AgentConversationData;
 use crate::server::server_api::ServerApiProvider;
@@ -201,6 +202,32 @@ fn child_conversation_detection_uses_parent_agent_id() {
     assert_eq!(conversation.parent_conversation_id(), None);
 }
 
+/// When the persisted task list is empty (e.g. a child conversation persisted
+/// before any server response), restoring via `new_restored_synthesizing_on_empty`
+/// must produce a fresh in-progress optimistic root, mirroring
+/// `AIConversation::new()`.
+#[test]
+fn restored_conversation_with_empty_task_list_creates_in_progress_optimistic_root() {
+    let conversation =
+        AIConversation::new_restored_synthesizing_on_empty(AIConversationId::new(), vec![], None)
+            .expect("empty task list must synthesize an optimistic root");
+
+    let root_task = conversation
+        .get_root_task()
+        .expect("synthesized root task should exist");
+    assert!(root_task.is_root_task());
+    assert!(
+        root_task.source().is_none(),
+        "synthesized root is optimistic and has no api::Task source"
+    );
+    assert!(
+        !root_task.id().to_string().is_empty(),
+        "synthesized optimistic root must have a non-empty UUID id"
+    );
+    assert_eq!(conversation.status(), &ConversationStatus::InProgress);
+    assert!(conversation.status_error_message().is_none());
+}
+
 #[test]
 fn update_cost_and_usage_resolves_custom_endpoint_alias_for_footer_usage() {
     App::test((), |mut app| async move {
@@ -359,6 +386,7 @@ fn footer_model_token_usage_keeps_custom_endpoint_usage_distinct_from_same_label
         assert_eq!(custom_usage.byok_tokens, 0);
     });
 }
+
 #[allow(deprecated)]
 #[test]
 fn footer_model_token_usage_preserves_unresolved_custom_endpoint_usage_with_fallback_label() {
@@ -407,8 +435,11 @@ fn footer_model_token_usage_preserves_unresolved_custom_endpoint_usage_with_fall
     });
 }
 
+/// The legacy `AgentConversationData.root_task_is_optimistic` flag must be
+/// ignored on restore. A non-empty task list always produces a real
+/// server-backed root regardless of whether the flag is set.
 #[test]
-fn restored_conversation_uses_persisted_optimistic_root_task() {
+fn restored_conversation_ignores_legacy_root_task_is_optimistic_flag_with_non_empty_tasks() {
     let conversation_data: AgentConversationData = serde_json::from_str(
         r#"{"server_conversation_token":null,"root_task_is_optimistic":true}"#,
     )
@@ -421,8 +452,118 @@ fn restored_conversation_uses_persisted_optimistic_root_task() {
 
     assert_eq!(root_task.id().to_string(), "root-task");
     assert!(root_task.is_root_task());
-    assert!(root_task.is_optimistic_root_task());
+    assert!(
+        root_task.source().is_some(),
+        "with a real task list, the legacy optimistic flag must be ignored",
+    );
+}
+
+/// The legacy `root_task_is_optimistic` flag is ignored when restoring an
+/// empty task list via `new_restored_synthesizing_on_empty`.
+#[test]
+fn restored_conversation_ignores_legacy_root_task_is_optimistic_flag_with_empty_tasks() {
+    let conversation_data: AgentConversationData = serde_json::from_str(
+        r#"{"server_conversation_token":null,"root_task_is_optimistic":true}"#,
+    )
+    .unwrap();
+
+    let conversation = AIConversation::new_restored_synthesizing_on_empty(
+        AIConversationId::new(),
+        vec![],
+        Some(conversation_data),
+    )
+    .expect("empty task list must synthesize an optimistic root regardless of legacy flag");
+
+    let root_task = conversation
+        .get_root_task()
+        .expect("synthesized root task should exist");
+    assert!(root_task.is_root_task());
     assert!(root_task.source().is_none());
+    assert_eq!(conversation.status(), &ConversationStatus::InProgress);
+}
+
+/// Strict `new_restored` returns `NoRootTask` for an empty task list.
+#[test]
+fn new_restored_with_empty_task_list_returns_no_root_task_error() {
+    let result = AIConversation::new_restored(AIConversationId::new(), vec![], None);
+    assert!(
+        matches!(result, Err(RestoreConversationError::NoRootTask)),
+        "empty task list via strict new_restored must return NoRootTask; got {result:?}",
+    );
+}
+
+/// When multiple parentless tasks exist (e.g. a legacy orphan optimistic
+/// stub alongside the real server root), `new_restored` must prefer the
+/// candidate whose `messages` is non-empty. Each ordering runs in a loop to
+/// surface any nondeterminism in candidate selection.
+#[test]
+fn test_new_restored_prefers_parentless_task_with_messages_over_empty_stub() {
+    let stub = api::Task {
+        id: "optimistic-stub-uuid".to_string(),
+        messages: vec![],
+        dependencies: None,
+        description: String::new(),
+        summary: String::new(),
+        server_data: String::new(),
+    };
+    let real = api::Task {
+        id: "server-root-id".to_string(),
+        messages: vec![user_query_message("user-msg", "request-1", "real query")],
+        dependencies: None,
+        description: String::new(),
+        summary: String::new(),
+        server_data: String::new(),
+    };
+
+    // Stub appears first in the vec.
+    for _ in 0..50 {
+        let conversation = AIConversation::new_restored(
+            AIConversationId::new(),
+            vec![stub.clone(), real.clone()],
+            None,
+        )
+        .expect("restore with stub + real parentless tasks must succeed");
+        let root_task = conversation
+            .get_root_task()
+            .expect("restored conversation must have a root task");
+        assert_eq!(
+            root_task.id().to_string(),
+            "server-root-id",
+            "expected the real (non-empty) parentless task to win when stub is first",
+        );
+        let source = root_task
+            .source()
+            .expect("chosen root must have api::Task source");
+        assert!(
+            !source.messages.is_empty(),
+            "chosen root must have non-empty messages",
+        );
+    }
+
+    // Real appears first in the vec.
+    for _ in 0..50 {
+        let conversation = AIConversation::new_restored(
+            AIConversationId::new(),
+            vec![real.clone(), stub.clone()],
+            None,
+        )
+        .expect("restore with real + stub parentless tasks must succeed");
+        let root_task = conversation
+            .get_root_task()
+            .expect("restored conversation must have a root task");
+        assert_eq!(
+            root_task.id().to_string(),
+            "server-root-id",
+            "expected the real (non-empty) parentless task to win when real is first",
+        );
+        let source = root_task
+            .source()
+            .expect("chosen root must have api::Task source");
+        assert!(
+            !source.messages.is_empty(),
+            "chosen root must have non-empty messages",
+        );
+    }
 }
 
 #[test]

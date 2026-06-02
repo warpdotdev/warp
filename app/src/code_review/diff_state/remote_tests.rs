@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use warp_core::SessionId;
+use remote_server::manager::RemoteServerManagerEvent;
 use warp_util::remote_path::RemotePath;
 
 use super::InternalRemoteDiffState;
@@ -27,7 +27,6 @@ impl RemoteDiffStateModel {
                     .expect("test repo path should be valid and absolute"),
             ),
             mode,
-            session_id: SessionId::default(),
             state,
             metadata,
             tracked_diff_load_start_time: None,
@@ -130,6 +129,9 @@ fn test_metadata(branch: &str) -> DiffMetadata {
         pr_info: Some(PrInfo {
             number: 42,
             url: "https://github.com/test/repo/pull/42".to_string(),
+            state: String::new(),
+            draft: false,
+            base_branch: String::new(),
         }),
     }
 }
@@ -773,4 +775,93 @@ fn empty_branch_names_become_none() {
     );
     assert_eq!(m.get_main_branch_name(), None);
     assert_eq!(m.get_current_branch_name(), None);
+}
+
+#[test]
+fn host_disconnected_for_matching_host_transitions_to_disconnected() {
+    warpui::App::test((), |mut app| async move {
+        let handle = app.add_model(|_ctx| {
+            RemoteDiffStateModel::new_for_test(
+                DiffMode::Head,
+                InternalRemoteDiffState::Loading,
+                None,
+            )
+        });
+        let connection_lost_count = Arc::new(Mutex::new(0));
+        {
+            let connection_lost_count = connection_lost_count.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&handle, move |_, event, _| {
+                    if matches!(event, DiffStateModelEvent::ConnectionLost) {
+                        *connection_lost_count
+                            .lock()
+                            .expect("connection lost count mutex should not be poisoned") += 1;
+                    }
+                });
+            });
+        }
+
+        let event = RemoteServerManagerEvent::HostDisconnected {
+            host_id: remote_server::HostId::new("test-host".to_string()),
+        };
+        handle.update(&mut app, |m, ctx| m.handle_manager_event(&event, ctx));
+
+        handle.read(&app, |m, _| {
+            assert!(matches!(m.get(), DiffState::Disconnected));
+        });
+        assert_eq!(
+            *connection_lost_count
+                .lock()
+                .expect("connection lost count mutex should not be poisoned"),
+            1
+        );
+    });
+}
+
+#[test]
+fn host_disconnected_for_other_host_is_ignored() {
+    warpui::App::test((), |mut app| async move {
+        let handle = app.add_model(|_ctx| {
+            RemoteDiffStateModel::new_for_test(
+                DiffMode::Head,
+                InternalRemoteDiffState::Loading,
+                None,
+            )
+        });
+        let event = RemoteServerManagerEvent::HostDisconnected {
+            host_id: remote_server::HostId::new("other-host".to_string()),
+        };
+        handle.update(&mut app, |m, ctx| m.handle_manager_event(&event, ctx));
+
+        handle.read(&app, |m, _| {
+            assert!(matches!(m.get(), DiffState::Loading));
+        });
+    });
+}
+
+#[test]
+fn session_disconnected_is_ignored_by_session_agnostic_model() {
+    // Per-session lifecycle events are no longer the model's concern; the
+    // manager picks a connected client at RPC dispatch time and only
+    // host-level connect/disconnect drive state transitions.
+    warpui::App::test((), |mut app| async move {
+        let handle = app.add_model(|_ctx| {
+            RemoteDiffStateModel::new_for_test(
+                DiffMode::Head,
+                InternalRemoteDiffState::Loading,
+                None,
+            )
+        });
+        let event = RemoteServerManagerEvent::SessionDisconnected {
+            session_id: warp_core::SessionId::default(),
+            host_id: remote_server::HostId::new("test-host".to_string()),
+            exit_status: None,
+            was_reconnect_attempt: false,
+        };
+        handle.update(&mut app, |m, ctx| m.handle_manager_event(&event, ctx));
+
+        handle.read(&app, |m, _| {
+            assert!(matches!(m.get(), DiffState::Loading));
+        });
+    });
 }

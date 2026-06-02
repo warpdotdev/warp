@@ -348,6 +348,8 @@ fn redact_context(context: &mut [AIAgentContext]) {
             | AIAgentContext::Codebase { .. }
             | AIAgentContext::ProjectRules { .. }
             | AIAgentContext::Git { .. }
+            | AIAgentContext::Repository { .. }
+            | AIAgentContext::PullRequest { .. }
             | AIAgentContext::File(_)
             | AIAgentContext::Skills { .. } => {}
         }

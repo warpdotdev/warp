@@ -1,9 +1,11 @@
+use settings::Setting as _;
 use warp_editor::content::buffer::ToBufferPoint;
 use warpui::integration::AssertionCallback;
-use warpui::{async_assert, async_assert_eq, App, ViewHandle, WindowId};
+use warpui::{async_assert, async_assert_eq, App, SingletonEntity, ViewHandle, WindowId};
 
 use crate::code::editor::goto_line::view::GoToLineView;
 use crate::code::editor::view::CodeEditorView;
+use crate::settings::{AppEditorSettings, CodeEditorLineNumberMode};
 
 fn file_code_editor_view(app: &App, window_id: WindowId) -> ViewHandle<CodeEditorView> {
     let views = app
@@ -38,6 +40,43 @@ pub fn goto_line_confirm(app: &mut App, window_id: WindowId, input: &str) {
     editor.update(app, |view, ctx| {
         view.goto_line_confirm_for_test(&input_owned, ctx);
     });
+}
+pub fn set_code_editor_line_number_mode(app: &mut App, mode: CodeEditorLineNumberMode) {
+    app.update(|ctx| {
+        AppEditorSettings::handle(ctx).update(ctx, |settings, ctx| {
+            settings
+                .code_editor_line_number_mode
+                .set_value(mode, ctx)
+                .expect("failed to serialize CodeEditorLineNumberModeSetting");
+            ctx.notify();
+        });
+    });
+}
+
+/// Asserts code editor line numbers with `(logical_line_number, expected_displayed_line_number)` pairs.
+pub fn assert_code_editor_line_numbers(expected: Vec<(usize, usize)>) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let editor = file_code_editor_view(app, window_id);
+        let actual = editor.read(app, |editor, ctx| {
+            expected
+                .iter()
+                .map(|(line, _)| {
+                    (
+                        *line,
+                        editor
+                            .displayed_line_number_for_test(*line, ctx)
+                            .expect("line numbers should be enabled for file code editor"),
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
+
+        async_assert_eq!(
+            actual,
+            expected,
+            "Expected code editor line numbers to match"
+        )
+    })
 }
 
 pub fn assert_goto_line_dialog_is_open(expected: bool) -> AssertionCallback {

@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -1192,6 +1191,8 @@ pub enum TelemetryQueuedQueryOrigin {
     InitialCloudMode,
     QueueSlashCommand,
     AutoQueueToggle,
+    CompactAndSlashCommand,
+    ForkAndCompactSlashCommand,
 }
 
 impl From<QueuedQueryOrigin> for TelemetryQueuedQueryOrigin {
@@ -1200,6 +1201,8 @@ impl From<QueuedQueryOrigin> for TelemetryQueuedQueryOrigin {
             QueuedQueryOrigin::InitialCloudMode => Self::InitialCloudMode,
             QueuedQueryOrigin::QueueSlashCommand => Self::QueueSlashCommand,
             QueuedQueryOrigin::AutoQueueToggle => Self::AutoQueueToggle,
+            QueuedQueryOrigin::CompactAndSlashCommand => Self::CompactAndSlashCommand,
+            QueuedQueryOrigin::ForkAndCompactSlashCommand => Self::ForkAndCompactSlashCommand,
         }
     }
 }
@@ -1493,6 +1496,7 @@ pub enum TelemetryEvent {
         direction: TabMovement,
     },
     DragAndDropTab,
+    DragAndDropTabGroup,
     TabOperations {
         action: TabTelemetryAction,
     },
@@ -1571,10 +1575,6 @@ pub enum TelemetryEvent {
     },
     CommandSearchFilterChanged {
         new_filter: Option<QueryFilter>,
-    },
-    CommandSearchAsyncQueryCompleted {
-        filters: HashSet<QueryFilter>,
-        error_payload: Option<Value>,
     },
     GlobalSearchOpened,
     GlobalSearchQueryStarted,
@@ -3245,10 +3245,6 @@ impl TelemetryEvent {
             TelemetryEvent::CommandSearchFilterChanged { new_filter } => {
                 Some(json!({ "new_filter": new_filter }))
             }
-            TelemetryEvent::CommandSearchAsyncQueryCompleted {
-                filters,
-                error_payload,
-            } => Some(json!({ "filter": filters, "error": error_payload })),
             TelemetryEvent::AICommandSearchOpened { entrypoint } => {
                 Some(json!({ "entrypoint": entrypoint }))
             }
@@ -4158,6 +4154,7 @@ impl TelemetryEvent {
             | TelemetryEvent::OpenTeamFromURI
             | TelemetryEvent::SelectNavigationPaletteItem
             | TelemetryEvent::DragAndDropTab
+            | TelemetryEvent::DragAndDropTabGroup
             | TelemetryEvent::EditedInputBeforePrecmd
             | TelemetryEvent::TriedToExecuteBeforePrecmd
             | TelemetryEvent::JumpToBookmark
@@ -4929,6 +4926,7 @@ impl TelemetryEvent {
             | TelemetryEvent::MoveActiveTab { .. }
             | TelemetryEvent::MoveTab { .. }
             | TelemetryEvent::DragAndDropTab
+            | TelemetryEvent::DragAndDropTabGroup
             | TelemetryEvent::TabOperations { .. }
             | TelemetryEvent::EditedInputBeforePrecmd
             | TelemetryEvent::TriedToExecuteBeforePrecmd
@@ -4969,7 +4967,6 @@ impl TelemetryEvent {
             | TelemetryEvent::CommandSearchExited { .. }
             | TelemetryEvent::CommandSearchResultAccepted { .. }
             | TelemetryEvent::CommandSearchFilterChanged { .. }
-            | TelemetryEvent::CommandSearchAsyncQueryCompleted { .. }
             | TelemetryEvent::AICommandSearchOpened { .. }
             | TelemetryEvent::OpenNotebook(_)
             | TelemetryEvent::EditNotebook { .. }
@@ -5497,6 +5494,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::MoveActiveTab => EnablementState::Always,
             Self::MoveTab => EnablementState::Always,
             Self::DragAndDropTab => EnablementState::Always,
+            Self::DragAndDropTabGroup => EnablementState::Always,
             Self::TabOperations => EnablementState::Always,
             Self::EditedInputBeforePrecmd => EnablementState::Always,
             Self::TriedToExecuteBeforePrecmd => EnablementState::Always,
@@ -5535,7 +5533,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::CommandSearchExited => EnablementState::Always,
             Self::CommandSearchResultAccepted => EnablementState::Always,
             Self::CommandSearchFilterChanged => EnablementState::Always,
-            Self::CommandSearchAsyncQueryCompleted => EnablementState::Always,
             Self::AICommandSearchOpened => EnablementState::Always,
             Self::OpenedAltScreenFind => EnablementState::Always,
             Self::UserInitiatedClose => EnablementState::Always,
@@ -6012,6 +6009,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::MoveActiveTab => "Move Active Tab",
             Self::MoveTab => "Move Tab",
             Self::DragAndDropTab => "Drag and Drop Tab",
+            Self::DragAndDropTabGroup => "Drag and Drop Tab Group",
             Self::TabOperations => "Tab Operations",
             Self::EditedInputBeforePrecmd => "Edited Input Before Precmd",
             Self::TriedToExecuteBeforePrecmd => "Tried to Execute Before Precmd",
@@ -6041,7 +6039,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::CommandSearchExited => "Command Search Exited",
             Self::CommandSearchResultAccepted => "Command Search Result Accepted",
             Self::CommandSearchFilterChanged => "Command Search Filter Changed",
-            Self::CommandSearchAsyncQueryCompleted => "Command Search Async Query Completed",
             Self::AICommandSearchOpened => "AI Command Search opened",
             Self::OpenNotebook => "Notebook Opened",
             Self::EditNotebook => "Notebook Edited",
@@ -6629,6 +6626,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::MoveActiveTab => "Move active tab left or right",
             Self::MoveTab => "Move tab left or right",
             Self::DragAndDropTab => "Tab dragged and dropped",
+            Self::DragAndDropTabGroup => "Tab group dragged and dropped",
             Self::TabOperations => {
                 "Took operation on a tab: change color, close tab, close adjacent tabs, etc."
             }
@@ -6684,9 +6682,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::CommandSearchResultAccepted => "Accepted command search result",
             Self::CommandSearchFilterChanged => "Changed command search filter",
-            Self::CommandSearchAsyncQueryCompleted => {
-                "Finished searching for a command in the background"
-            }
             Self::AICommandSearchOpened => {
                 "Opened the modal for AI Command Search, where you can use natural language to search for commands"
             }

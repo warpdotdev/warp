@@ -1335,8 +1335,8 @@ fn format_agent_text<W: Write>(text: &AIAgentText, w: &mut W) -> io::Result<()> 
                 }
 
                 match source {
-                    Some(CodeSource::ProjectRules { path }) => {
-                        writeln!(w, " rules_path={}", path.display())?;
+                    Some(CodeSource::ProjectRules { location }) => {
+                        writeln!(w, " rules_path={}", location.display_path())?;
                     }
                     Some(CodeSource::Link {
                         path,
@@ -1355,8 +1355,8 @@ fn format_agent_text<W: Write>(text: &AIAgentText, w: &mut W) -> io::Result<()> 
 
                         writeln!(w)?;
                     }
-                    Some(CodeSource::Skill { path, .. }) => {
-                        writeln!(w, " skill_path={}", path.display())?;
+                    Some(CodeSource::Skill { location, .. }) => {
+                        writeln!(w, " skill_path={}", location.display_path())?;
                     }
                     Some(CodeSource::AIAction { .. })
                     | Some(CodeSource::New { .. })

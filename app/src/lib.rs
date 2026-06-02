@@ -27,7 +27,6 @@ mod context_chips;
 mod crash_recovery;
 #[cfg(feature = "crash_reporting")]
 mod crash_reporting;
-mod debounce;
 mod debug_dump;
 mod default_terminal;
 mod download_method;
@@ -211,6 +210,8 @@ use terminal::session_settings::SessionSettings;
 use url::Url;
 pub use warp_core::errors::{report_error, report_if_error};
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
+// Re-export the debounce function to simplify imports.
+pub use warp_core::r#async::debounce;
 // Re-export the send_telemetry_from_ctx macro at the crate root level
 pub use warp_core::send_telemetry_from_app_ctx;
 pub use warp_core::send_telemetry_from_ctx;
@@ -277,6 +278,8 @@ use crate::root_view::{
 use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::experiments::ServerExperiments;
+#[cfg(not(target_family = "wasm"))]
+use crate::server::iap::IapManager;
 use crate::server::sync_queue::{QueueItem, SyncQueue};
 pub use crate::server::telemetry::{
     AgentModeEntrypoint, AgentModeEntrypointSelectionType, TelemetryEvent,
@@ -1133,8 +1136,23 @@ pub(crate) fn initialize_app(
     // captured by the HTTP client hooks.
     ctx.add_singleton_model(|_ctx| NetworkLogModel::default());
 
-    let server_api_provider = ctx
-        .add_singleton_model(|ctx| ServerApiProvider::new(auth_state.clone(), agent_source, ctx));
+    // Create a shared IAP state for staging builds. The same `Arc<IapState>`
+    // is handed to both `ServerApi` (for sync reads on the request path) and
+    // `IapManager` (which owns refresh logic on the main thread).
+    #[cfg(not(target_family = "wasm"))]
+    let iap_state =
+        ChannelState::iap_config().map(|cfg| Arc::new(crate::server::iap::IapState::new(&cfg)));
+    #[cfg(target_family = "wasm")]
+    let iap_state: Option<Arc<crate::server::iap::IapState>> = None;
+
+    let server_api_provider = ctx.add_singleton_model({
+        let auth_state = auth_state.clone();
+        let iap_state = iap_state.clone();
+        move |ctx| ServerApiProvider::new(auth_state, agent_source, iap_state, ctx)
+    });
+
+    #[cfg(not(target_family = "wasm"))]
+    ctx.add_singleton_model(move |ctx| IapManager::new(iap_state, ctx));
     let server_api = server_api_provider.as_ref(ctx).get();
     let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
 
@@ -1518,6 +1536,12 @@ pub(crate) fn initialize_app(
             } else {
                 RepoMetadataModel::new(ctx)
             };
+            model.register_ignored_path_interests(
+                ::ai::skills::SKILL_PROVIDER_DEFINITIONS
+                    .iter()
+                    .map(|provider| provider.skills_path.clone()),
+                ctx,
+            );
 
             // Subscribe to RemoteServerManager push events so that remote repo
             // metadata snapshots and incremental updates populate the remote
@@ -2443,6 +2467,14 @@ fn on_close_window_cancelled(
     }
 }
 
+fn is_cloud_agent_web_home_launch_url(url: &Url) -> bool {
+    url.scheme() == ChannelState::url_scheme()
+        && url.host_str() == Some("action")
+        && url.path() == "/new_cloud_agent_conversation"
+        && url
+            .query_pairs()
+            .any(|(key, value)| key == "source" && value == "web_home")
+}
 fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode: LaunchMode) {
     IntervalTimer::handle(ctx).update(ctx, |timer, _ctx| {
         timer.mark_interval_end("APP_LAUNCHED");
@@ -2460,6 +2492,12 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
 
     match launch_mode {
         LaunchMode::App { .. } | LaunchMode::Test { .. } => {
+            let should_skip_restore = launch_mode
+                .args()
+                .urls
+                .iter()
+                .any(is_cloud_agent_web_home_launch_url);
+            let app_state = if should_skip_restore { None } else { app_state };
             // Attempt to restore windows from the persisted application state.
             let arg = OpenFromRestoredArg { app_state };
             ctx.dispatch_global_action("root_view:open_from_restored", &arg);

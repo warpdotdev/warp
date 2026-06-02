@@ -145,7 +145,7 @@ pub fn init(app: &mut AppContext) {
 }
 
 /// View-level interactions for the ask-user-question UI (buttons, keyboard, and text input).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum AskUserQuestionViewAction {
     OptionToggled { option_index: usize },
     SelectionConfirmed,

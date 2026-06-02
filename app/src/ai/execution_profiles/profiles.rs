@@ -166,7 +166,7 @@ impl AIExecutionProfilesModel {
                         }
                         None => DefaultProfileState::Unsynced {
                             id: ClientProfileId::new(),
-                            profile: AIExecutionProfile::create_default_from_legacy_settings(ctx),
+                            profile: super::create_default_from_legacy_settings(ctx),
                         },
                     },
                     // When running as a CLI, we ignore the GUI default and use a more permissive default.
@@ -182,7 +182,7 @@ impl AIExecutionProfilesModel {
                     // exhaustively.
                     LaunchMode::RemoteServerProxy | LaunchMode::RemoteServerDaemon { .. } => DefaultProfileState::Unsynced {
                         id: ClientProfileId::new(),
-                        profile: AIExecutionProfile::create_default_from_legacy_settings(ctx),
+                        profile: super::create_default_from_legacy_settings(ctx),
                     },
                 };
             }
@@ -621,7 +621,10 @@ impl AIExecutionProfilesModel {
             ctx,
         );
 
-        if changed {
+        // Gate on the limit being non-empty. The limit is cleared during
+        // reconciliation, which runs inside an `LLMPreferences` update where the
+        // `LLMPreferences::as_ref` read below would panic.
+        if changed && limit.is_some() {
             let Some(profile) = self.get_profile_by_id(profile_id, ctx) else {
                 return;
             };

@@ -15,7 +15,7 @@ use warpui::{AppContext, Entity, SingletonEntity};
 use super::search_item::{CreateFileSearchItem, FileSearchItem};
 use crate::code::opened_files::{OpenedFilesInRepo, OpenedFilesModel};
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
-use crate::search::data_source::{Query, QueryResult};
+use crate::search::data_source::{Query, QueryFilter, QueryResult};
 use crate::search::files::model::FileSearchModel;
 use crate::search::files::search_item::FileSearchResult;
 use crate::search::mixer::{AsyncDataSource, BoxFuture, DataSourceRunErrorWrapper};
@@ -84,7 +84,11 @@ impl AsyncDataSource for FileDataSource {
             self.run_zero_state_query(app)
         } else {
             // Non-empty query: use fuzzy matching
-            self.run_fuzzy_search_query(app, query_text)
+            self.run_fuzzy_search_query(
+                app,
+                query_text,
+                query.filters.contains(&QueryFilter::Files),
+            )
         }
     }
 }
@@ -184,6 +188,7 @@ impl FileDataSource {
         &self,
         app: &AppContext,
         query_text: &str,
+        allow_create_file: bool,
     ) -> BoxFuture<
         'static,
         Result<Vec<QueryResult<CommandPaletteItemAction>>, DataSourceRunErrorWrapper>,
@@ -286,8 +291,8 @@ impl FileDataSource {
                 .collect();
 
             // If no files matched and we have a valid query and current directory,
-            // add a "Create <filename>..." option
-            if results.is_empty() && !query_file_name.trim().is_empty() {
+            // add a "Create a file named <filename>..." option
+            if allow_create_file && results.is_empty() && !query_file_name.trim().is_empty() {
                 if let Some(current_dir) = current_directory {
                     let create_item = CreateFileSearchItem {
                         file_name: query_file_name,

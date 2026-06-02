@@ -85,6 +85,7 @@ use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::util::link_detection::DetectedLinkType;
 use crate::util::truncation::truncate_from_end;
+use crate::view_components::dropdown::DropdownItemAction;
 use crate::workspace::WorkspaceAction;
 
 /// Helper function to create gray strikethrough highlight for secrets
@@ -730,7 +731,7 @@ pub fn render_autonomy_dropdown_setting_speedbump_footer<A>(
     app: &AppContext,
 ) -> Box<dyn Element>
 where
-    A: warpui::Action + Clone,
+    A: DropdownItemAction,
 {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
@@ -1059,6 +1060,7 @@ impl View for AIBlock {
                 action_buttons: &self.action_buttons,
                 view_screenshot_buttons: &self.view_screenshot_buttons,
                 action_model: &self.action_model,
+                active_session: &self.active_session,
                 editor_views: &self.code_editor_views,
                 current_working_directory: self.current_working_directory.as_ref(),
                 shell_launch_data: self.shell_launch_data.as_ref(),

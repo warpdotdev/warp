@@ -952,6 +952,17 @@ impl ImageCache {
             }
         }
     }
+
+    pub fn image_size(
+        &self,
+        asset_source: AssetSource,
+        asset_cache: &AssetCache,
+    ) -> Option<Vector2I> {
+        let AssetState::Loaded { data } = asset_cache.load_asset::<ImageType>(asset_source) else {
+            return None;
+        };
+        data.image_size()
+    }
 }
 
 impl Entity for ImageCache {

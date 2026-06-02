@@ -1,0 +1,37 @@
+[package]
+name = "warp_search_core"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-channel.workspace = true
+async-trait.workspace = true
+enum-iterator.workspace = true
+futures.workspace = true
+futures-util.workspace = true
+instant.workspace = true
+itertools.workspace = true
+lazy_static.workspace = true
+log.workspace = true
+ordered-float.workspace = true
+parking_lot.workspace = true
+paste = "1.0"
+pathfinder_color.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+string-offset.workspace = true
+strum.workspace = true
+strum_macros.workspace = true
+warp_core.workspace = true
+warpui_core.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+tantivy = "0.26.0"
+
+[dev-dependencies]
+warp_core = { workspace = true, features = ["test-util"] }

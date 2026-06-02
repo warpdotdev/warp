@@ -10,7 +10,7 @@ use std::path::Path;
 
 use warp_core::HostId;
 use warp_util::standardized_path::StandardizedPath;
-use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity};
+use warpui_core::{AppContext, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::file_tree_store::FileTreeState;
 use crate::file_tree_update::RepoMetadataUpdate;
@@ -295,6 +295,22 @@ impl RepoMetadataModel {
         })
     }
 
+    /// Registers component-sequence paths that should be loaded even when ignored.
+    ///
+    /// This delegates to the local model because ignored-path matching happens
+    /// while building local file trees. Remote repositories receive the resulting
+    /// file-tree metadata over the existing remote sync protocol.
+    pub fn register_ignored_path_interests(
+        &self,
+        interests: impl IntoIterator<Item = std::path::PathBuf>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let interests: Vec<_> = interests.into_iter().collect();
+        self.local.update(ctx, |local, _| {
+            local.register_ignored_path_interests(interests);
+        });
+    }
+
     /// Removes a lazily-loaded local standalone path from tracking.
     #[cfg(feature = "local_fs")]
     pub fn remove_lazy_loaded_path(&self, path: &StandardizedPath, ctx: &mut ModelContext<Self>) {
@@ -379,7 +395,7 @@ impl RepoMetadataModel {
     }
 }
 
-impl warpui::Entity for RepoMetadataModel {
+impl warpui_core::Entity for RepoMetadataModel {
     type Event = RepoMetadataEvent;
 }
 

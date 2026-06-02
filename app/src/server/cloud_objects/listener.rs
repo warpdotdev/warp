@@ -2,23 +2,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_channel::Sender;
-use chrono::{DateTime, Utc};
+pub use cloud_object_client::ObjectUpdateMessage;
 use futures_util::stream::AbortHandle;
 use instant::Instant;
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, RequestState, SingletonEntity};
 
 use super::update_manager::UpdateManager;
-use crate::cloud_object::model::actions::ObjectActionHistory;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
-use crate::cloud_object::{ServerCloudObject, ServerMetadata, ServerPermissions};
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::report_error;
-use crate::server::ids::ServerId;
 use crate::server::retry_strategies::LISTENER_RETRY_STRATEGY;
 use crate::server::server_api::object::ObjectClient;
 use crate::system::{SystemStats, SystemStatsEvent};
-use crate::workspaces::user_profiles::UserProfileWithUID;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 lazy_static::lazy_static! {
@@ -74,52 +70,6 @@ pub struct Listener {
     /// Abort handle for a pending delayed refresh spawned after a long reconnection. Tracked so
     /// that it can be cancelled if the websocket disconnects again before the refresh fires.
     pending_refresh_abort_handle: Option<AbortHandle>,
-}
-
-#[derive(Debug, Clone)]
-#[allow(clippy::enum_variant_names)]
-pub enum ObjectUpdateMessage {
-    ObjectMetadataChanged {
-        metadata: ServerMetadata,
-    },
-    ObjectPermissionsChanged,
-    // TODO(CLD-2425): Replace `ObjectPermissionsChanged` with this.
-    ObjectPermissionsChangedV2 {
-        object_uid: ServerId,
-        permissions: ServerPermissions,
-        user_profiles: Vec<UserProfileWithUID>,
-    },
-    ObjectContentChanged {
-        server_object: Box<ServerCloudObject>,
-        last_editor: Option<UserProfileWithUID>,
-    },
-    ObjectDeleted {
-        object_uid: ServerId,
-    },
-    ObjectActionOccurred {
-        history: ObjectActionHistory,
-    },
-    TeamMembershipsChanged,
-    AmbientTaskUpdated {
-        task_id: String,
-        timestamp: DateTime<Utc>,
-    },
-}
-
-impl ObjectUpdateMessage {
-    fn as_str(&self) -> &'static str {
-        use ObjectUpdateMessage::*;
-        match self {
-            ObjectMetadataChanged { .. } => "ObjectMetadataChanged",
-            ObjectPermissionsChanged => "ObjectPermissionsChanged",
-            ObjectPermissionsChangedV2 { .. } => "ObjectPermissionsChanged (V2)",
-            ObjectContentChanged { .. } => "ObjectContentChanged",
-            ObjectDeleted { .. } => "ObjectDeleted",
-            ObjectActionOccurred { .. } => "ObjectActionOccurred",
-            TeamMembershipsChanged => "TeamMembershipsChanged",
-            AmbientTaskUpdated { .. } => "AmbientTaskUpdated",
-        }
-    }
 }
 
 impl Listener {

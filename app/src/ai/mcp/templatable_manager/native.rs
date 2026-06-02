@@ -38,8 +38,8 @@ use crate::ai::mcp::templatable_manager::oauth::{
 use crate::ai::mcp::templatable_manager::FigmaMcpStatus;
 use crate::ai::mcp::{
     logs, Author, CloudMCPServer, FileBasedMCPManager, JsonTemplate, MCPGalleryManager, MCPServer,
-    MCPServerUpdate, ParsedTemplatableMCPServerResult, StaticEnvVar, TemplatableMCPServer,
-    TemplatableMCPServerInstallation, TransportType,
+    MCPServerExt, MCPServerUpdate, ParsedTemplatableMCPServerResult, StaticEnvVar,
+    TemplatableMCPServer, TemplatableMCPServerInstallation, TransportType,
 };
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
@@ -800,10 +800,11 @@ impl TemplatableMCPServerManager {
         let executor = ctx.background_executor().clone();
         let logger = match LogManager::handle(ctx).update(ctx, |mgr, _| {
             mgr.register_namespace("mcp", true);
-            mgr.register(
+            mgr.register_with_rotation(
                 "mcp",
                 logs::relative_log_file_path_from_uuid(&template_uuid),
                 executor,
+                logs::mcp_log_rotation_config(),
             )
         }) {
             Ok(logger) => logger,

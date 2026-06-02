@@ -7,7 +7,8 @@ use url::{Origin, ParseError, Url};
 
 use super::Channel;
 use crate::channel::config::{
-    ChannelConfig, McpOAuthProviderConfig, OzConfig, RudderStackDestination, WarpServerConfig,
+    ChannelConfig, IapConfig, McpOAuthProviderConfig, OzConfig, RudderStackDestination,
+    WarpServerConfig,
 };
 use crate::features::FeatureFlag;
 use crate::AppId;
@@ -213,6 +214,10 @@ impl ChannelState {
             .server_config
             .firebase_auth_api_key
             .clone()
+    }
+
+    pub fn iap_config() -> Option<IapConfig> {
+        CHANNEL_STATE.lock().config.server_config.iap_config.clone()
     }
 
     pub fn ws_server_url() -> Cow<'static, str> {
@@ -421,26 +426,17 @@ fn app_id_from_bundle() -> Option<AppId> {
     // We skip this for tests, as the call to `mainBundle` can take 30+ms,
     // which is a significant portion of the total test runtime.
     #[cfg(all(target_os = "macos", not(feature = "test-util")))]
-    #[allow(deprecated)]
-    unsafe {
-        use cocoa::base::{id, nil};
-        use cocoa::foundation::NSBundle;
-        use objc::{msg_send, sel, sel_impl};
-        use warpui::platform::mac::utils::nsstring_as_str;
+    {
+        use objc2_foundation::NSBundle;
 
-        let bundle = id::mainBundle();
-        if bundle != nil {
-            let nsstring: id = msg_send![bundle, bundleIdentifier];
-            if nsstring != nil {
-                let app_id = nsstring_as_str(nsstring)
-                    .expect("bundle IDs should always be valid UTF-8 strings");
-
-                if !app_id.is_empty() {
-                    return Some(
-                        AppId::parse(app_id)
-                            .expect("macOS bundle identifier has an unexpected format"),
-                    );
-                }
+        let bundle = NSBundle::mainBundle();
+        if let Some(bundle_identifier) = bundle.bundleIdentifier() {
+            let app_id = bundle_identifier.to_string();
+            if !app_id.is_empty() {
+                return Some(
+                    AppId::parse(&app_id)
+                        .expect("macOS bundle identifier has an unexpected format"),
+                );
             }
         }
     }

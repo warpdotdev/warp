@@ -156,6 +156,76 @@ fn adjacent_orchestration_child_navigation_uses_pinned_first_order() {
 }
 
 #[test]
+fn orchestration_aware_status_uses_aggregated_status_for_known_parent() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let (terminal_view_id, orchestrator_id, child_a, child_b) =
+            build_orchestrator_with_two_children(&mut app, &history_model);
+
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                orchestrator_id,
+                ConversationStatus::Success,
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_a,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_b,
+                ConversationStatus::Success,
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |history_model, _| {
+            let orchestrator = history_model
+                .conversation(&orchestrator_id)
+                .expect("orchestrator conversation exists");
+            assert_eq!(
+                orchestration_aware_conversation_status(history_model, orchestrator),
+                ConversationStatus::InProgress,
+            );
+        });
+    });
+}
+
+#[test]
+fn orchestration_aware_status_uses_direct_status_for_non_parent() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let terminal_view_id = EntityId::new();
+        let conversation_id = history_model.update(&mut app, |history_model, ctx| {
+            let conversation_id =
+                history_model.start_new_conversation(terminal_view_id, false, false, false, ctx);
+            history_model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::Error,
+                ctx,
+            );
+            conversation_id
+        });
+
+        history_model.read(&app, |history_model, _| {
+            let conversation = history_model
+                .conversation(&conversation_id)
+                .expect("conversation exists");
+            assert_eq!(
+                orchestration_aware_conversation_status(history_model, conversation),
+                ConversationStatus::Error,
+            );
+        });
+    });
+}
+#[test]
 fn descendant_conversation_ids_in_spawn_order_returns_empty_without_children() {
     App::test((), |mut app| async move {
         initialize_history_persistence_for_tests(&mut app);

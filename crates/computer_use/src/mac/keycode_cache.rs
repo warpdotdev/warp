@@ -8,24 +8,21 @@
 //! using GCD dispatch.
 
 use std::collections::HashMap;
+use std::ptr::NonNull;
 
-use core_foundation::base::{CFType, CFTypeRef, TCFType};
-use core_foundation::data::CFData;
 use dispatch2::run_on_main;
+use objc2_core_foundation::{CFData, CFRetained, CFString, CFType};
 use objc2_core_graphics::CGKeyCode;
 
 // Carbon Text Input Services types and functions.
-#[allow(non_camel_case_types)]
-type TISInputSourceRef = CFTypeRef;
-
 #[link(name = "Carbon", kind = "framework")]
 unsafe extern "C" {
-    fn TISCopyCurrentKeyboardInputSource() -> TISInputSourceRef;
-    fn TISCopyCurrentKeyboardLayoutInputSource() -> TISInputSourceRef;
-    fn TISGetInputSourceProperty(source: TISInputSourceRef, key: CFTypeRef) -> CFTypeRef;
+    fn TISCopyCurrentKeyboardInputSource() -> Option<NonNull<CFType>>;
+    fn TISCopyCurrentKeyboardLayoutInputSource() -> Option<NonNull<CFType>>;
+    fn TISGetInputSourceProperty(source: &CFType, key: &CFString) -> *mut CFType;
 
     // Property key for getting the keyboard layout data.
-    static kTISPropertyUnicodeKeyLayoutData: CFTypeRef;
+    static kTISPropertyUnicodeKeyLayoutData: &'static CFString;
 
     fn LMGetKbdType() -> u8;
 }
@@ -79,7 +76,7 @@ fn build_cache_on_main_thread() -> HashMap<char, CGKeyCode> {
         return cache;
     };
 
-    let layout_ptr = layout_data.as_ptr() as *const UCKeyboardLayout;
+    let layout_ptr = layout_data.byte_ptr() as *const UCKeyboardLayout;
     let keyboard_type = unsafe { LMGetKbdType() } as u32;
 
     // Iterate through all possible keycodes (0-127) and build the mapping.
@@ -103,35 +100,36 @@ fn build_cache_on_main_thread() -> HashMap<char, CGKeyCode> {
 }
 
 /// Gets the keyboard layout data from the current input source.
-unsafe fn get_keyboard_layout_data() -> Option<CFData> {
+unsafe fn get_keyboard_layout_data() -> Option<CFRetained<CFData>> {
     // TISCopy* functions follow CF "Copy" semantics - caller owns the reference.
-    // Wrap in CFType so they're released when dropped.
-    let source = unsafe { CFType::wrap_under_create_rule(TISCopyCurrentKeyboardInputSource()) };
-    let mut layout_data = unsafe {
-        TISGetInputSourceProperty(source.as_CFTypeRef(), kTISPropertyUnicodeKeyLayoutData)
+    // Wrap in CFRetained so they're released when dropped.
+    let source = unsafe {
+        CFRetained::from_raw(
+            TISCopyCurrentKeyboardInputSource().expect("Attempted to create a NULL object."),
+        )
     };
+    let mut layout_data =
+        unsafe { TISGetInputSourceProperty(&source, kTISPropertyUnicodeKeyLayoutData) };
 
     // Some keyboard layouts (e.g., Japanese, Chinese) don't have layout data on the
     // regular input source. Try the keyboard layout input source instead.
     let _layout_source;
     if layout_data.is_null() {
         // Keep this alive until we're done with layout_data.
-        _layout_source =
-            unsafe { CFType::wrap_under_create_rule(TISCopyCurrentKeyboardLayoutInputSource()) };
-        layout_data = unsafe {
-            TISGetInputSourceProperty(
-                _layout_source.as_CFTypeRef(),
-                kTISPropertyUnicodeKeyLayoutData,
+        _layout_source = unsafe {
+            CFRetained::from_raw(
+                TISCopyCurrentKeyboardLayoutInputSource()
+                    .expect("Attempted to create a NULL object."),
             )
         };
+        layout_data =
+            unsafe { TISGetInputSourceProperty(&_layout_source, kTISPropertyUnicodeKeyLayoutData) };
     }
 
-    if layout_data.is_null() {
-        return None;
-    }
+    let layout_data = NonNull::new(layout_data)?;
 
     // The returned CFData is not retained, so we need to retain it.
-    Some(unsafe { CFData::wrap_under_get_rule(layout_data as _) })
+    Some(unsafe { CFRetained::retain(layout_data.cast::<CFData>()) })
 }
 
 /// Translates a keycode to a character using UCKeyTranslate.

@@ -1,35 +1,35 @@
 use std::borrow::Cow;
 use std::rc::Rc;
 
-use warpui::color::ColorU;
-use warpui::elements::{
+use warpui_core::color::ColorU;
+use warpui_core::elements::{
     ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
     Icon, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
     Radius, Stack, Text,
 };
-use warpui::fonts::{FamilyId, Properties, Weight};
-use warpui::geometry::vector::{vec2f, Vector2F};
-use warpui::keymap::Keystroke;
-use warpui::platform::Cursor;
-use warpui::ui_components::button::{Button, ButtonVariant};
-use warpui::ui_components::checkbox::Checkbox;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ui_components::keyboard_shortcut::KeyboardShortcut;
-use warpui::ui_components::link::{Link, LinkStyles, OnClickFn};
-use warpui::ui_components::list::{List, ListStyle};
-use warpui::ui_components::progress_bar::ProgressBar;
-use warpui::ui_components::radio_buttons::{
+use warpui_core::fonts::{FamilyId, Properties, Weight};
+use warpui_core::geometry::vector::{vec2f, Vector2F};
+use warpui_core::keymap::Keystroke;
+use warpui_core::platform::Cursor;
+use warpui_core::ui_components::button::{Button, ButtonVariant};
+use warpui_core::ui_components::checkbox::Checkbox;
+use warpui_core::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui_core::ui_components::keyboard_shortcut::KeyboardShortcut;
+use warpui_core::ui_components::link::{Link, LinkStyles, OnClickFn};
+use warpui_core::ui_components::list::{List, ListStyle};
+use warpui_core::ui_components::progress_bar::ProgressBar;
+use warpui_core::ui_components::radio_buttons::{
     RadioButtonItem, RadioButtonLayout, RadioButtonStateHandle, RadioButtons,
 };
-use warpui::ui_components::slider::{Slider, SliderStateHandle};
-use warpui::ui_components::switch::{Switch, SwitchStateHandle, TRACK_COLOR};
-use warpui::ui_components::text::{Paragraph, Span, WrappableText};
-use warpui::ui_components::text_input::TextInput;
-use warpui::ui_components::toggle_menu::{
+use warpui_core::ui_components::slider::{Slider, SliderStateHandle};
+use warpui_core::ui_components::switch::{Switch, SwitchStateHandle, TRACK_COLOR};
+use warpui_core::ui_components::text::{Paragraph, Span, WrappableText};
+use warpui_core::ui_components::text_input::TextInput;
+use warpui_core::ui_components::toggle_menu::{
     ToggleMenu, ToggleMenuCallback, ToggleMenuItem, ToggleMenuStateHandle,
 };
-use warpui::ui_components::tool_tip::{Tooltip, TooltipWithSublabel};
-use warpui::{Element, View, ViewHandle};
+use warpui_core::ui_components::tool_tip::{Tooltip, TooltipWithSublabel};
+use warpui_core::{Element, View, ViewHandle};
 
 use super::color::blend::Blend;
 use super::color::contrast::MinimumAllowedContrast;
