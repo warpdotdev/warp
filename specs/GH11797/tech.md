@@ -36,7 +36,40 @@ const SH_COMMAND: &str = concat!(
 );
 ```
 
-This single shell command handles all five bookmark/change states listed in the issue description. The PowerShell variant wraps the same logic in a multi-line script.
+This single shell command handles all five bookmark/change states listed in the issue description. Fish and PowerShell need their own variants:
+
+```fish
+# Fish:
+set _jj_bm (jj log -r @ --no-graph --ignore-working-copy \
+    --template 'if(bookmarks,bookmarks,"")' 2>/dev/null)
+if test -n "$_jj_bm"
+    echo "$_jj_bm"
+else
+    set _jj_cid (jj log -r @ --no-graph --ignore-working-copy \
+        --template 'change_id.short(8)' 2>/dev/null)
+    set _jj_abm (jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' \
+        --no-graph --ignore-working-copy --template 'bookmarks' 2>/dev/null)
+    if test -n "$_jj_abm"
+        echo "$_jj_cid on $_jj_abm"
+    else
+        echo "$_jj_cid"
+    end
+end
+```
+
+```powershell
+# PowerShell:
+$_jj_bm = jj log -r @ --no-graph --ignore-working-copy \
+    --template 'if(bookmarks,bookmarks,"")' 2>$null
+if ($_jj_bm) { $_jj_bm }
+else {
+    $_jj_cid = jj log -r @ --no-graph --ignore-working-copy \
+        --template 'change_id.short(8)' 2>$null
+    $_jj_abm = jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' \
+        --no-graph --ignore-working-copy --template 'bookmarks' 2>$null
+    if ($_jj_abm) { "$_jj_cid on $_jj_abm" } else { $_jj_cid }
+}
+```
 
 ### `jj_dirty_items()`
 
